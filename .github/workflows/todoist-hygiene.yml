@@ -1,0 +1,17 @@
+name: Todoist Hygiene Check
+on:
+  schedule:
+    - cron: '30 12 * * *' # 5:30 AM PT (PDT)
+  workflow_dispatch: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python scripts/todoist-hygiene-check.py
+        env:
+          TODOIST_API_KEY: ${{ secrets.TODOIST_API_KEY }}
