@@ -24,7 +24,7 @@ if not TODOIST_API_KEY:
     print("Error: TODOIST_API_KEY environment variable not set")
     sys.exit(1)
 
-TODOIST_API_BASE = "https://api.todoist.com/rest/v2"
+TODOIST_API_BASE = "https://api.todoist.com/api/v1"
 HEADERS = {
     "Authorization": f"Bearer {TODOIST_API_KEY}",
     "Content-Type": "application/json"
