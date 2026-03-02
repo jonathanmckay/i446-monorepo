@@ -1,0 +1,7 @@
+Application ID,Applicant Name,Email,Phone,Property Address,Unit,Status,Application Date,Move-In Date,Rent,Screening Status
+APP-2024-001,John Smith,john.smith@email.com,(555) 123-4567,123 Main Street,101,In Progress,2024-12-01,2024-12-15,$2500,Pending
+APP-2024-002,Jane Doe,jane.doe@email.com,(555) 234-5678,123 Main Street,205,Pending Approval,2024-12-03,2025-01-01,$2800,Approved
+APP-2024-003,Bob Wilson,bob.wilson@email.com,(555) 345-6789,456 Oak Avenue,A,Approved,2024-12-05,2024-12-20,$1950,Approved
+APP-2024-004,Alice Johnson,alice.j@email.com,(555) 456-7890,789 Pine Road,3B,In Progress,2024-12-08,2025-01-15,$2200,Pending
+APP-2024-005,Charlie Brown,charlie.b@email.com,(555) 567-8901,456 Oak Avenue,C,Pending,2024-12-10,2025-02-01,$2100,Not Started
+

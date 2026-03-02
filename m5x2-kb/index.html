@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>McKay Capital — Operations Knowledge Base</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --surface: #f5f6f8;
+            --surface2: #eceef2;
+            --border: #e0e2e8;
+            --text: #1a1d27;
+            --text-muted: #6b7080;
+            --accent: #4a6cf7;
+            --accent-hover: #3b5de6;
+            --r202: #0d9488;
+            --r203: #dc2626;
+            --r888: #ca8a04;
+            --h5c7: #7c3aed;
+            --cross: #6b7080;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .search-container {
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+            padding: 1rem 0;
+            z-index: 100;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+        }
+
+        .search-bar {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        #search {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #search:focus {
+            border-color: var(--accent);
+        }
+
+        #search::placeholder {
+            color: var(--text-muted);
+        }
+
+        .filter-pills {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            padding: 0.35rem 0.75rem;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .pill:hover, .pill.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .category {
+            margin-bottom: 2rem;
+        }
+
+        .category-header {
+            display: flex;
+            align-items: baseline;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .category-header h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .category-desc {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            flex: 1;
+        }
+
+        .count {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            background: var(--surface);
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+        }
+
+        .sop-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .sop-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.65rem 1rem;
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--text);
+            transition: background 0.15s;
+        }
+
+        a.sop-item:hover {
+            background: var(--surface2);
+        }
+
+        .sop-name {
+            flex: 1;
+            font-size: 0.95rem;
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            letter-spacing: 0.03em;
+        }
+
+        .badge-r202 { background: rgba(13, 148, 136, 0.1); color: var(--r202); }
+        .badge-r203 { background: rgba(220, 38, 38, 0.1); color: var(--r203); }
+        .badge-r204 { background: rgba(234, 88, 12, 0.1); color: #ea580c; }
+        .badge-r888 { background: rgba(202, 138, 4, 0.1); color: var(--r888); }
+        .badge-h5c7 { background: rgba(124, 58, 237, 0.1); color: var(--h5c7); }
+        .badge-rl21 { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+        .badge-m5x2 { background: rgba(15, 23, 42, 0.1); color: #334155; }
+        .badge-c12n { background: rgba(219, 39, 119, 0.1); color: #db2777; }
+        .badge-cross { background: rgba(107, 112, 128, 0.1); color: var(--cross); }
+
+        .col-headers {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.35rem 1rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .col-name { flex: 1; }
+        .col-poc { width: 100px; text-align: left; }
+        .col-edit { width: 90px; text-align: right; }
+
+        .sop-meta {
+            display: flex;
+            align-items: center;
+            gap: 0;
+        }
+
+        .poc {
+            width: 100px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .poc.empty {
+            color: var(--border);
+        }
+
+        .last-edit {
+            width: 90px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .link-icon {
+            color: var(--accent);
+            font-size: 0.85rem;
+            opacity: 0;
+            transition: opacity 0.15s;
+            width: 20px;
+            text-align: center;
+        }
+
+        .sop-item:hover .link-icon {
+            opacity: 1;
+        }
+
+        .link-icon.file-only {
+            opacity: 0.4;
+        }
+
+        .no-link {
+            opacity: 0.6;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-muted);
+            display: none;
+        }
+
+        .stats {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .hidden { display: none !important; }
+
+        @media (max-width: 600px) {
+            .container { padding: 1rem; }
+            header h1 { font-size: 1.3rem; }
+            .category-desc { display: none; }
+            .sop-item { padding: 0.75rem; }
+            .link-icon { opacity: 1; }
+            .sop-meta, .col-poc, .col-edit { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>McKay Capital — Operations</h1>
+            <p>78 SOPs &middot; 71 linked to Google Docs</p>
+        </header>
+
+        <div class="search-container">
+            <div class="search-bar">
+                <input type="text" id="search" placeholder="Search SOPs..." autocomplete="off">
+            </div>
+            <div class="filter-pills" style="margin-top: 0.5rem;">
+                <button class="pill active" data-filter="all">All</button>
+                <button class="pill" data-filter="r202">R202</button>
+                <button class="pill" data-filter="r203">R203</button>
+                <button class="pill" data-filter="r888">R888</button>
+                <button class="pill" data-filter="h5c7">H5c7</button>
+            </div>
+        </div>
+
+        
+        <section class="category" id="roadmaps">
+            <div class="category-header">
+                <h2>🎯 Roadmaps & Goals</h2>
+                <p class="category-desc">Current quarter roadmaps and strategic plans</p>
+                <span class="count">7</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/document/d/1_hCATFznMlGzDWHKfqNH_lvWpfgLfkzHj2VsCMOhNEE/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 palouse homes leasing roadmap (r202)" data-entity="r202"><span class="sop-name"> 26.Q1 Palouse Homes Leasing Roadmap (R202)</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-15</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1Z-kkbHL05SKeTDfloiYlKZKTcGr1aa7MsJQCP8ujpAc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 palouse homes tenant relations roadmap (r202)" data-entity="r202"><span class="sop-name"> 26.Q1 Palouse Homes Tenant Relations Roadmap (R202)</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-28</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1cEbZ2WbAdNZpk7xMjVr646P37RzrbuGGXpJw2ZpC6yo/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 grounds roadmap (r203)" data-entity="r203"><span class="sop-name"> 26.Q1 Grounds Roadmap (R203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-01</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/125Nppk2LEhV6iovGf9JqfrLVK9Owbbtt0xfeefbRzl0/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 projects roadmap (r203)" data-entity="r203"><span class="sop-name"> 26.Q1 Projects Roadmap (R203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-01</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1np51NJ4SHcWVL3SeC4C6fI8gTzKaIRduNIkdXMKOFnU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 r&amp;m roadmap (r203)" data-entity="r203"><span class="sop-name"> 26.Q1 R&amp;M Roadmap (R203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-03-01</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1-r06Gr-QXM7eN7i0wzbDdn4UZhIf2bEeWEo1_5FP4TQ/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 turns roadmap (r203)" data-entity="r203"><span class="sop-name"> 26.Q1 Turns Roadmap (R203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-01-28</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/17V5Ft2GzAthpA2xll60cvl-MEI53lViwV27MSGtmqYw/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="26.q1 special projects roadmap (r204)" data-entity="r204"><span class="sop-name"> 26.Q1 Special Projects Roadmap (R204)</span><span class="badge badge-r204">R204</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-15</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+        <section class="category" id="leasing">
+            <div class="category-header">
+                <h2>🏠 Leasing & Tenants</h2>
+                <p class="category-desc">Marketing, screening, leases, move-in/out, tenant relations</p>
+                <span class="count">18</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <div class="sop-item no-link" data-name="appfolio lease creation" data-entity=""><span class="sop-name">AppFolio Lease Creation</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-06-19</span></span><span class="link-icon file-only">📎</span></div><a href="https://docs.google.com/document/d/1cMlY2haNP2v0zE7LdN53Fd1f6CkXFO_7wuTQ3cad9O0/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="reasonable accommodation" data-entity=""><span class="sop-name"> Reasonable Accommodation</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-06-05</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1ETUOIM6IOygxzdoJFOdojsvfW-rv_K_KcovL3eSlZRU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="posting an apartment on facebook marketplace" data-entity="cross"><span class="sop-name"> Posting an Apartment on Facebook Marketplace</span><span class="badge badge-cross">Cross</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-27</span></span><span class="link-icon">↗</span></a><div class="sop-item no-link" data-name="disposition sop" data-entity="r202"><span class="sop-name">Disposition SOP</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-01-02</span></span><span class="link-icon file-only">📎</span></div><div class="sop-item no-link" data-name="inter-portfolio unit transfer (r202) sop" data-entity="r202"><span class="sop-name">Inter-portfolio Unit Transfer (r202) SOP</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-01-07</span></span><span class="link-icon file-only">📎</span></div><div class="sop-item no-link" data-name="move-in checklist sop" data-entity="r202"><span class="sop-name">Move-In Checklist SOP</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-01-07</span></span><span class="link-icon file-only">📎</span></div><div class="sop-item no-link" data-name="pets sop" data-entity="r202"><span class="sop-name">Pets SOP</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-01-07</span></span><span class="link-icon file-only">📎</span></div><a href="https://docs.google.com/document/d/14LvAsq3fSmo_LnaO0FGsPpGCqk5JufrZvURtWLX0wJs/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="application screening process" data-entity="r202"><span class="sop-name"> Application Screening Process</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-04</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/164Zl6kRAn0CeGtmzKxo2cVgYNOAqvdQ0xNCsO6U5mPQ/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="early lease terminations" data-entity="r202"><span class="sop-name"> Early Lease Terminations</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-11-06</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1zsfGND8r1ALYfGaGt4kRh1tvabsKmWGPlwONSd71LTc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="focus tenant and lease compliance definitions" data-entity="r202"><span class="sop-name"> Focus tenant and lease compliance definitions</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-05-01</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1_mCkjiAA_8frydxHEhgY-a3vBLKX7MLxwNLiXqg_p88/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="lease version control" data-entity="r202"><span class="sop-name"> Lease Version Control</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-07-23</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/13QOWwlNiPDdsGGP0G4Molagd7i7L59YK6uWmr92UMPU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="marketing of vacant units" data-entity="r202"><span class="sop-name"> Marketing of Vacant Units</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-12-31</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/10hZ4QBQutbx1W495RgCE70l_SHqpjMWdVU3_cxrdc-Y/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="move-in_out condition report" data-entity="r202"><span class="sop-name"> Move-in_out condition report</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-12-19</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1lUX88Wf4ofvnb_mAVPTlHPXxhOzNgKBzc-gb3YL4muI/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="tenant communication" data-entity="r202"><span class="sop-name"> Tenant Communication</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-06-17</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1LxWQfVaxcNTC_Oel8jtUlPMFy-4Syk0bwRfCj9bYWqg/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="building manager transition (tenant facing) (r202)" data-entity="r202"><span class="sop-name"> building manager transition (tenant facing) (r202)</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-08-02</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1n8-YwGEK6acNKLHY71tRqkYO8jlXaD0QQ51nGbijesg/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="kn47 rent deposits" data-entity="r202"><span class="sop-name"> kn47 rent deposits</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-04-28</span></span><span class="link-icon">↗</span></a><div class="sop-item no-link" data-name="tenant referral program" data-entity="r202"><span class="sop-name">Tenant Referral Program</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-12-31</span></span><span class="link-icon file-only">📎</span></div><a href="https://docs.google.com/document/d/1r-3N1ofGf9bS8IjTlwBCM98gl_BPxoEQ_5QZVECL8ho/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="inter-portfolio unit transfer (r202)" data-entity="r202"><span class="sop-name"> Inter-portfolio unit transfer (r202)</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-27</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+        <section class="category" id="work_orders">
+            <div class="category-header">
+                <h2>🔧 Work Orders & Maintenance</h2>
+                <p class="category-desc">Repairs, unit turns, contractors, inspections</p>
+                <span class="count">6</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/document/d/1Q1GL6VKRA9ZJLKkKb_dCl6_2zdt_fcAygWPrWfSHJz0/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="companycam - pics or it didn’t happen" data-entity=""><span class="sop-name"> CompanyCam - Pics or it Didn’t Happen</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-06</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1bS22g4tg3HdBYVP3gOxZSBLae_aIxBVkI99nGrzYvB4/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="contractor requirements and rfis" data-entity="r203"><span class="sop-name"> Contractor requirements and RFIs</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-07-25</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1BwMPTKEbHfF--7IJHp47eZ2lEr0Tkl6OfFGbw4Y0mDg/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="renovation rework completed by maint (r203)" data-entity="r203"><span class="sop-name"> Renovation rework completed by maint (r203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-04-17</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1GhoKulBVRi7PUs4TkYH-oUmQs74OnQkqLboDF_-60Qs/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="urgent work order (r203)" data-entity="r203"><span class="sop-name"> Urgent Work Order (r203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1W7t3c76XSvyAbs96DczIMQMLnX0nGwVdieCwmuLiWlU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="work orders (w|o) - general process (r203) [wip]" data-entity="r203"><span class="sop-name"> Work Orders (W|O) - General process (r203) [WIP]</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1fJbH3OE32dzk1rHzHYbNTmHoMGdMG4HhWVI3p_vym5M/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="work orders processing (r203)" data-entity="r203"><span class="sop-name"> Work Orders processing (r203)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+        <section class="category" id="hr">
+            <div class="category-header">
+                <h2>👥 HR & People</h2>
+                <p class="category-desc">Hiring, onboarding, pay, time off, performance, exits</p>
+                <span class="count">13</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/document/d/1nbj2dIjgvjg-dJaYWoudEeQqeVO0cSix6YjXfwD0uSY/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="employee handbook version control" data-entity="r888"><span class="sop-name"> Employee Handbook Version Control</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1NWp6gQwGYtvhCL-4-sIjiLHbVi0yCaLRf5353oqTFoc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="employee relationships" data-entity="r888"><span class="sop-name"> Employee Relationships</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1wn-Pk2W9UNQZIIecY-GEF3gVW1kF0czna-RxONHagu8/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="general pay information" data-entity="r888"><span class="sop-name"> General Pay Information</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1F-coZC8_J9g2w55QIH5Ipf4e08SfsuZBdLIHkg4MPZs/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="paid sick leave" data-entity="r888"><span class="sop-name"> Paid Sick Leave</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-01-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1zdCcNBagfZkJJ3LajLrxH9aeiHA0U1UOpCP3Uons66o/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="recruiting and onboarding" data-entity="r888"><span class="sop-name"> Recruiting and Onboarding</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-10-11</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1qj_Y0Wbf02J0xOBFezvYt7oL3RUGrxL0ciypKnjlt3M/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="remote-work" data-entity="r888"><span class="sop-name"> Remote-work</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1kjzcHZVY_UG3y3i8pMIJhMEmbfa3bUOiuMzIwnU5P0Y/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="resignation and termination" data-entity="r888"><span class="sop-name"> Resignation and termination</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1dUYaYQ1ytkQAFXPU2lfDQrwQxJ6FKKyx34-qzOS52BU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="schedule_time-off policy" data-entity="r888"><span class="sop-name"> Schedule_time-off policy</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-07-17</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1ajhDmNLNgW4b8gywrV_pa4V8b6Dt37YHc8DgRmFVnNc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="employee training and development" data-entity="r203"><span class="sop-name"> Employee training and development</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1P3oy7jL-RoFPqXznEY1MfhePd_cf5htnO5xXWutsEkA/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="feedback cycle, compensation, promotions" data-entity="r203"><span class="sop-name"> Feedback cycle, compensation, promotions</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-05-14</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1KkVgkqqKd_O8AELFaal0ng4Rym6X9XJ1CyLbgOuCTFs/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="employee handbook (draft - 9.4.2023)" data-entity="r203"><span class="sop-name"> Employee Handbook (Draft - 9.4.2023)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/15Djpxx9m8SKkbnsetOoJfgPta-sx-DAQ7eNgk0EBL54/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="r203 employee handbook (v1.0 - 9.4.2023)" data-entity="r203"><span class="sop-name"> R203 Employee Handbook (v1.0 - 9.4.2023)</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-11-27</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1ZjRGpFaPg9cCJTUmz58fxCVORmwrso2_fEKeUderaeg/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="schedule for employment meeting" data-entity="r203"><span class="sop-name"> Schedule for Employment Meeting</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-06</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+        <section class="category" id="safety">
+            <div class="category-header">
+                <h2>⚠️ Safety & Compliance</h2>
+                <p class="category-desc">Required reading for all field employees</p>
+                <span class="count">20</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/document/d/1nQ8gDu0RHbVi4LsuHDgSCz-vPCoCWGOsmq8lm96Ugh0/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="dealing with threats _ aggression" data-entity=""><span class="sop-name"> Dealing with Threats _ Aggression</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1X52Av-mft_-OTqHp0Qe7KviORsMqUMwNzdY2ZaCLLPA/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="drug and alcohol policy - reasonable suspicion checklist (r888)" data-entity="r888"><span class="sop-name"> Drug and Alcohol Policy - Reasonable Suspicion Checklist (r888)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/spreadsheets/d/1gJLvdNAY8PGQnbQEe1HubheilP5WB1e8ZJjLWcv_Vdw/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="incident investigation report - template" data-entity="r888"><span class="sop-name">📊 Incident Investigation Report - template</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-11-24</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1OHmab9yuWzf7TMfnoZBzLIuMFbWxspej8VGCMEqg4rc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="respirator fit test form" data-entity="r888"><span class="sop-name"> Respirator Fit Test Form</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1suRaUYePkgAtadXJ8VTYAJNPyhG4dIGP7W6-cmBhno4/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="anti-harassment" data-entity="r888"><span class="sop-name"> Anti-harassment</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1DGDOyXDnYmZ8JCDFbuu9fryI6K3VTab6vnPEY-nlAfk/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="disciplinary action" data-entity="r888"><span class="sop-name"> Disciplinary Action</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1VvLbLl1wNxTTm7D8AeTz2zf4ci2k_t74fHi4DmsEJyM/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="drug and alcohol policy" data-entity="r888"><span class="sop-name"> Drug and Alcohol Policy</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-06</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1X7-qfRa6E0teK-M8fXbv597RHzgkQPnDXHTY1sEf1NQ/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="equal employment opportunity (eeo)" data-entity="r888"><span class="sop-name"> Equal Employment Opportunity (EEO)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1qhOfu4xAJNRJSnjOG3h2fdl3kwalK4nT84jmMQnBTtE/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="first aid training, kits, posters &amp; procedures (r888)" data-entity="r888"><span class="sop-name"> First aid training, Kits, Posters &amp; Procedures (r888)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1o4QjndlfyWxSjjuiQupzzVhvLUJAmt7zH-mlsuBq-jk/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="hazard assessment (r888)" data-entity="r888"><span class="sop-name"> Hazard Assessment (r888)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-04</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1U03QiRiWXSmhBv-w2FNu_NnGK9R_IMrUBwmb8ZSyR68/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="hearing conservation program" data-entity="r888"><span class="sop-name"> Hearing Conservation Program</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/16NMCNzR-UCeRWe8oekKU_1My7AmYRnLub0TDvoEFHME/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="incident reporting (r888)" data-entity="r888"><span class="sop-name"> Incident reporting (r888)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1nPOc30HaC_OsG2QkFKpyn3jmcpyjz0SRouX1J_Ly_Ig/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="job site access control _ keys (r888)" data-entity="r888"><span class="sop-name"> Job site access control _ keys (r888)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1CRL2rsD9hX9GsnfPb6Z72UowDY8vu8_e2ip8ycCsLC4/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="non-retaliation" data-entity="r888"><span class="sop-name"> Non-retaliation</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1EFYvjPHRN5GINATPjK4ux6S_gsE87okBNuVfkqMVAdU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="personal protective equipment (ppe)" data-entity="r888"><span class="sop-name"> Personal Protective Equipment (PPE)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1N412kV8PLvO-k9NtlDhwYwB5gyRlLVTkSeJYmPc8rC8/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="respiratory protection program" data-entity="r888"><span class="sop-name"> Respiratory Protection Program</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-04-16</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1L2k8Fk0V1c8tRXerw3LFMDPhZ-cQplhT8YxQW8zuBj0/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="safety meetings" data-entity="r888"><span class="sop-name"> Safety Meetings</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1pkYu94X1DHa-dD5dq-apNZc66NzTVAdsSs86VcGvH5w/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="workplace visitors" data-entity="r888"><span class="sop-name"> Workplace Visitors</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-07</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1EzW2atBiozP99ygKIwlpH3RsZWYk9mhvjw2k_4nhmgw/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="accident prevention program" data-entity="r888"><span class="sop-name"> ACCIDENT PREVENTION PROGRAM</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-03-25</span></span><span class="link-icon">↗</span></a><div class="sop-item no-link" data-name="safety-risk-tenant protocol sop" data-entity="r202"><span class="sop-name">Safety-Risk-Tenant Protocol SOP</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-01-07</span></span><span class="link-icon file-only">📎</span></div>
+            </div>
+        </section>
+        
+        <section class="category" id="finance">
+            <div class="category-header">
+                <h2>💰 Finance & Admin</h2>
+                <p class="category-desc">Purchasing, expenses, equipment, time tracking, documents</p>
+                <span class="count">11</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/document/d/1S0yaB1SBVi0eecMHJTbQT2Jcof2meBdPRzmpQ9vNplg/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="document management" data-entity=""><span class="sop-name"> Document Management</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-07-24</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1grCi82vJzGCAq6RyfPIBp16g1GBnF6xhwn0gABzth3Q/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="time tracking" data-entity=""><span class="sop-name"> Time tracking</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-11-06</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1IAntzCMOFhX4LdN86SCGicE5V8d9dj-KkP4fY_iwkwg/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="travel per diem" data-entity=""><span class="sop-name"> Travel per diem</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-10-08</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1NiPh3E2PMECTmKWTUsE06MvDT3Z-Fm18J-Q0a1Pvkp0/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="turn invoicing _ disbursement" data-entity=""><span class="sop-name"> Turn invoicing _ Disbursement</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-04-14</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/16DG9hp982IeeHyCH3PYJ7HhGlJZt89cIk7A9k9DGFAc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="weekly updates (r888)" data-entity="r888"><span class="sop-name"> Weekly Updates (R888)</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-05</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/spreadsheets/d/1GXVvM3j_ROekbUYJb_IZ_KwzJBscdzJ7lSGIJVHSo3Y/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="r888 external contractor walk-through sop" data-entity="r888"><span class="sop-name">📊 r888 External Contractor Walk-Through SOP</span><span class="badge badge-r888">R888</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-04-19</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1BUH31Pu0PP1EwsWJdeTZmy9TbkOZkz4tERKGXiRyJYI/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="sop: mileage tracking &amp; reimbursement" data-entity="r203"><span class="sop-name"> SOP: Mileage tracking &amp; Reimbursement</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-08</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1gZ0VaGAYwA-LztauxQKDUfsMZ2gYRpaJbRpUICqRtYM/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="company equipment" data-entity="r203"><span class="sop-name"> Company Equipment</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-08</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/10Am0KFTi5K6blEfG4Xg09yb1huyb2b5XLGOEmTVZCMY/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="purchasing within r203" data-entity="r203"><span class="sop-name"> Purchasing within R203</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-02-18</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1-AeJyCUxRf7TXB4bOirSDRQAA-HISnX9QrXhTHgEDNU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="time tracking" data-entity="r203"><span class="sop-name"> Time tracking</span><span class="badge badge-r203">R203</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-09-08</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1cGaQ8yjLgbiAkizSd5SmRKOLd2AxRTJWE6LMXhiOg_E/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="weekly updates and reporting cycle" data-entity="r202"><span class="sop-name"> Weekly Updates and Reporting Cycle</span><span class="badge badge-r202">R202</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2026-02-23</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+        <section class="category" id="guest_ops">
+            <div class="category-header">
+                <h2>🏡 Guest & Property Operations</h2>
+                <p class="category-desc">H5c7 cohousing and special properties</p>
+                <span class="count">2</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/document/d/1JqJ_iFTFfYnM9CRmzxVaq0OPO9JD0Yk-DFiz0kJzwQc/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="employee use of l925" data-entity="h5c7"><span class="sop-name"> Employee use of l925</span><span class="badge badge-h5c7">H5c7</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2024-09-02</span></span><span class="link-icon">↗</span></a><a href="https://docs.google.com/document/d/1MoLnMzqcmenNbPwGxJTLcZL3qb08q69mBg9xjOrP7IU/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="guest communication management (h5c7)" data-entity="h5c7"><span class="sop-name"> Guest Communication Management (h5c7)</span><span class="badge badge-h5c7">H5c7</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2023-05-31</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+        <section class="category" id="reference">
+            <div class="category-header">
+                <h2>📚 Reference</h2>
+                <p class="category-desc">Glossary, terms, and templates</p>
+                <span class="count">1</span>
+            </div>
+            <div class="col-headers">
+                <span class="col-name">Name</span>
+                <span class="col-poc">Owner</span>
+                <span class="col-edit">Last Edit</span>
+            </div>
+            <div class="sop-list">
+                <a href="https://docs.google.com/spreadsheets/d/18ZJ-PqRT4pEdpGC9ncIOqlh_fgUsVItqCIElih2LNng/edit?usp=drivesdk" target="_blank" class="sop-item" data-name="z. internal terms library" data-entity=""><span class="sop-name">📊 Z. Internal Terms Library</span><span class="sop-meta"><span class="poc empty">-</span><span class="last-edit">2025-10-30</span></span><span class="link-icon">↗</span></a>
+            </div>
+        </section>
+        
+
+        <div class="no-results" id="no-results">
+            No SOPs match your search.
+        </div>
+
+        <div class="stats">
+            McKay Capital &middot; Last built 2026-03-01
+        </div>
+    </div>
+
+    <script>
+        const search = document.getElementById('search');
+        const items = document.querySelectorAll('.sop-item');
+        const sections = document.querySelectorAll('.category');
+        const noResults = document.getElementById('no-results');
+        const pills = document.querySelectorAll('.pill');
+        let activeFilter = 'all';
+
+        function applyFilters() {
+            const query = search.value.toLowerCase().trim();
+            let visibleCount = 0;
+
+            items.forEach(item => {
+                const name = item.dataset.name || '';
+                const entity = item.dataset.entity || '';
+                const matchesSearch = !query || name.includes(query);
+                const matchesFilter = activeFilter === 'all' || entity === activeFilter;
+                const visible = matchesSearch && matchesFilter;
+                item.classList.toggle('hidden', !visible);
+                if (visible) visibleCount++;
+            });
+
+            sections.forEach(section => {
+                const hasVisible = section.querySelectorAll('.sop-item:not(.hidden)').length > 0;
+                section.classList.toggle('hidden', !hasVisible);
+            });
+
+            noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+        }
+
+        search.addEventListener('input', applyFilters);
+
+        pills.forEach(pill => {
+            pill.addEventListener('click', () => {
+                pills.forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                activeFilter = pill.dataset.filter;
+                applyFilters();
+            });
+        });
+
+        // Keyboard shortcut: / to focus search
+        document.addEventListener('keydown', (e) => {
+            if (e.key === '/' && document.activeElement !== search) {
+                e.preventDefault();
+                search.focus();
+            }
+            if (e.key === 'Escape') {
+                search.value = '';
+                search.blur();
+                applyFilters();
+            }
+        });
+    </script>
+    <!-- Analytics: set ANALYTICS_URL in build.py to enable -->
+</body>
+</html>
