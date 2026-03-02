@@ -32,10 +32,24 @@ HEADERS = {
 
 
 def get_all_tasks():
-    """Get all active tasks from Todoist."""
-    response = requests.get(f"{TODOIST_API_BASE}/tasks", headers=HEADERS)
-    response.raise_for_status()
-    return response.json()
+    """Get all active tasks from Todoist, handling pagination."""
+    all_tasks = []
+    cursor = None
+    while True:
+        params = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        response = requests.get(f"{TODOIST_API_BASE}/tasks", headers=HEADERS, params=params)
+        response.raise_for_status()
+        data = response.json()
+        # v1 API returns {"results": [...], "next_cursor": "..."}
+        if isinstance(data, list):
+            return data
+        all_tasks.extend(data.get("results", data.get("items", [])))
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return all_tasks
 
 
 def has_fen_estimate(content):
