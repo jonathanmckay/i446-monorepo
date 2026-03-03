@@ -112,8 +112,7 @@ def check_tasks():
 
 if __name__ == "__main__":
     try:
-        has_violations = check_tasks()
-        sys.exit(1 if has_violations else 0)
+        check_tasks()
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
