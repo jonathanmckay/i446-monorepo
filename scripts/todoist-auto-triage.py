@@ -21,7 +21,7 @@ import requests
 
 # Todoist API
 TODOIST_API_TOKEN = os.environ.get("TODOIST_API_KEY")
-TODOIST_API_BASE = "https://api.todoist.com/rest/v2"
+TODOIST_API_BASE = "https://api.todoist.com/api/v1"
 
 # Project mappings (domain code -> project ID)
 PROJECT_MAPPING = {
@@ -148,13 +148,22 @@ class TodoistTriager:
 
     def _get_inbox_tasks(self) -> List[Dict]:
         """Fetch all tasks from inbox project."""
-        url = f"{TODOIST_API_BASE}/tasks"
-        params = {"project_id": PROJECT_MAPPING["inbox"]}
-
-        response = requests.get(url, headers=self.headers, params=params)
-        response.raise_for_status()
-
-        return response.json()
+        all_tasks = []
+        cursor = None
+        while True:
+            params = {"project_id": PROJECT_MAPPING["inbox"], "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            response = requests.get(f"{TODOIST_API_BASE}/tasks", headers=self.headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, list):
+                return data
+            all_tasks.extend(data.get("results", data.get("items", [])))
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+        return all_tasks
 
     def _process_task(self, task: Dict):
         """Process a single task: route, estimate, prioritize."""
@@ -319,7 +328,7 @@ def main():
     args = parser.parse_args()
 
     if not TODOIST_API_TOKEN:
-        print("❌ Error: TODOIST_API_TOKEN environment variable not set")
+        print("❌ Error: TODOIST_API_KEY environment variable not set")
         return 1
 
     triager = TodoistTriager(TODOIST_API_TOKEN, dry_run=args.dry_run, verbose=args.verbose)
