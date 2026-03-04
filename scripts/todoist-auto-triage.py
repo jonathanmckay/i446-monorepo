@@ -17,14 +17,11 @@ import json
 import argparse
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
-from uuid import uuid4
 import requests
 
 # Todoist API
 TODOIST_API_TOKEN = os.environ.get("TODOIST_API_KEY")
-TODOIST_API_BASE = "https://api.todoist.com/api/v1"      # reads (pagination)
-TODOIST_REST_V2 = "https://api.todoist.com/rest/v2"      # writes (updates)
-TODOIST_SYNC_V9 = "https://api.todoist.com/sync/v9"      # writes (moves)
+TODOIST_API_BASE = "https://api.todoist.com/api/v1"
 
 # Project mappings (domain code -> project ID)
 PROJECT_MAPPING = {
@@ -339,46 +336,28 @@ class TodoistTriager:
         return FEN_RULES['medium_value']
 
     def _update_task(self, task_id: str, updates: Dict):
-        """Update a task via Todoist API. Separates moves from field updates."""
-        # Extract move-related fields (can't be sent in REST v2 update)
+        """Update a task via Todoist API v1. Separates moves from field updates."""
+        # Extract move-related fields (separate endpoint in v1)
         project_id = updates.pop("project_id", None)
 
-        # Update task fields (content, priority, due) via REST v2
+        # Update task fields (content, priority, due) via v1
         if updates:
-            url = f"{TODOIST_REST_V2}/tasks/{task_id}"
+            url = f"{TODOIST_API_BASE}/tasks/{task_id}"
             response = requests.post(url, headers=self.headers, json=updates)
             response.raise_for_status()
             if self.verbose:
                 print(f"  ✓ Updated fields: {list(updates.keys())}")
 
-        # Move task to project via Sync v9
+        # Move task to project via v1 move endpoint
         if project_id:
             self._move_task(task_id, project_id)
 
     def _move_task(self, task_id: str, project_id: str):
-        """Move a task to a different project via Sync v9."""
-        cmd_uuid = uuid4().hex
-        body = {
-            "commands": [{
-                "type": "item_move",
-                "args": {"id": task_id, "project_id": project_id},
-                "uuid": cmd_uuid,
-            }]
-        }
-        response = requests.post(
-            f"{TODOIST_SYNC_V9}/sync",
-            headers=self.headers,
-            json=body,
-        )
+        """Move a task to a different project via v1 move endpoint."""
+        url = f"{TODOIST_API_BASE}/tasks/{task_id}/move"
+        body = {"project_id": project_id}
+        response = requests.post(url, headers=self.headers, json=body)
         response.raise_for_status()
-
-        # Verify the command succeeded
-        result = response.json()
-        sync_status = result.get("sync_status", {})
-        if sync_status.get(cmd_uuid) != "ok":
-            error = sync_status.get(cmd_uuid, "unknown error")
-            raise RuntimeError(f"Move failed for task {task_id}: {error}")
-
         if self.verbose:
             print(f"  ✓ Moved to project {project_id}")
 
