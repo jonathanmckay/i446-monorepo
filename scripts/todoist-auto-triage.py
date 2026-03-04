@@ -17,11 +17,14 @@ import json
 import argparse
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
+from uuid import uuid4
 import requests
 
 # Todoist API
 TODOIST_API_TOKEN = os.environ.get("TODOIST_API_KEY")
-TODOIST_API_BASE = "https://api.todoist.com/api/v1"
+TODOIST_API_BASE = "https://api.todoist.com/api/v1"      # reads (pagination)
+TODOIST_REST_V2 = "https://api.todoist.com/rest/v2"      # writes (updates)
+TODOIST_SYNC_V9 = "https://api.todoist.com/sync/v9"      # writes (moves)
 
 # Project mappings (domain code -> project ID)
 PROJECT_MAPPING = {
@@ -123,15 +126,30 @@ class TodoistTriager:
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
         }
+        self.test_task_id = None
         self.stats = {
             "processed": 0,
             "routed": 0,
             "estimated": 0,
             "skipped": 0,
+            "errors": 0,
         }
 
     def run(self):
         """Run auto-triage on inbox tasks."""
+        if self.test_task_id:
+            print(f"🧪 Testing single task: {self.test_task_id}")
+            response = requests.get(
+                f"{TODOIST_API_BASE}/tasks/{self.test_task_id}",
+                headers=self.headers,
+            )
+            response.raise_for_status()
+            task = response.json()
+            print(f"📝 Task: {task['content']}")
+            self._process_task(task)
+            self._print_summary()
+            return
+
         print("🔍 Fetching inbox tasks...")
         inbox_tasks = self._get_inbox_tasks()
 
@@ -142,7 +160,18 @@ class TodoistTriager:
         print(f"📥 Found {len(inbox_tasks)} tasks in inbox")
 
         for task in inbox_tasks:
-            self._process_task(task)
+            try:
+                self._process_task(task)
+            except requests.exceptions.HTTPError as e:
+                self.stats["errors"] += 1
+                content = task.get("content", task["id"])
+                print(f"  ⚠️  HTTP error on '{content}': {e}")
+                if hasattr(e, "response") and e.response is not None:
+                    print(f"      Response: {e.response.text[:300]}")
+            except Exception as e:
+                self.stats["errors"] += 1
+                content = task.get("content", task["id"])
+                print(f"  ⚠️  Error on '{content}': {e}")
 
         self._print_summary()
 
@@ -236,7 +265,11 @@ class TodoistTriager:
                 if fen_estimate:
                     print(f"  → 分: {fen_estimate}")
 
-            if not self.dry_run:
+            if self.dry_run:
+                print(f"  [DRY RUN] Would update task {task_id}:")
+                for key, value in updates.items():
+                    print(f"    {key}: {value}")
+            else:
                 self._update_task(task_id, updates)
         else:
             self.stats["skipped"] += 1
@@ -306,11 +339,48 @@ class TodoistTriager:
         return FEN_RULES['medium_value']
 
     def _update_task(self, task_id: str, updates: Dict):
-        """Update a task via Todoist API."""
-        url = f"{TODOIST_API_BASE}/tasks/{task_id}"
+        """Update a task via Todoist API. Separates moves from field updates."""
+        # Extract move-related fields (can't be sent in REST v2 update)
+        project_id = updates.pop("project_id", None)
 
-        response = requests.post(url, headers=self.headers, json=updates)
+        # Update task fields (content, priority, due) via REST v2
+        if updates:
+            url = f"{TODOIST_REST_V2}/tasks/{task_id}"
+            response = requests.post(url, headers=self.headers, json=updates)
+            response.raise_for_status()
+            if self.verbose:
+                print(f"  ✓ Updated fields: {list(updates.keys())}")
+
+        # Move task to project via Sync v9
+        if project_id:
+            self._move_task(task_id, project_id)
+
+    def _move_task(self, task_id: str, project_id: str):
+        """Move a task to a different project via Sync v9."""
+        cmd_uuid = uuid4().hex
+        body = {
+            "commands": [{
+                "type": "item_move",
+                "args": {"id": task_id, "project_id": project_id},
+                "uuid": cmd_uuid,
+            }]
+        }
+        response = requests.post(
+            f"{TODOIST_SYNC_V9}/sync",
+            headers=self.headers,
+            json=body,
+        )
         response.raise_for_status()
+
+        # Verify the command succeeded
+        result = response.json()
+        sync_status = result.get("sync_status", {})
+        if sync_status.get(cmd_uuid) != "ok":
+            error = sync_status.get(cmd_uuid, "unknown error")
+            raise RuntimeError(f"Move failed for task {task_id}: {error}")
+
+        if self.verbose:
+            print(f"  ✓ Moved to project {project_id}")
 
     def _print_summary(self):
         """Print summary statistics."""
@@ -319,12 +389,15 @@ class TodoistTriager:
         print(f"  - Routed: {self.stats['routed']}")
         print(f"  - Estimated: {self.stats['estimated']}")
         print(f"  - Skipped: {self.stats['skipped']}")
+        if self.stats["errors"]:
+            print(f"  - Errors: {self.stats['errors']}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-triage Todoist inbox tasks")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without applying")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--task-id", help="Process a single task by ID (for testing)")
     args = parser.parse_args()
 
     if not TODOIST_API_TOKEN:
@@ -332,6 +405,8 @@ def main():
         return 1
 
     triager = TodoistTriager(TODOIST_API_TOKEN, dry_run=args.dry_run, verbose=args.verbose)
+    if args.task_id:
+        triager.test_task_id = args.task_id
     triager.run()
 
 
