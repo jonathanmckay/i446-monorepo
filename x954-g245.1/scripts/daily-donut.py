@@ -114,11 +114,11 @@ def add_sleep_minutes(date_str, project_data):
         print("No sleep data found, skipping column D update")
         return True
 
-    # Calculate target row (row 6 = 2026-01-04, per 0₦ sheet structure)
+    # Calculate target row (row 5 = 2026-01-04, per 0₦ sheet structure)
     target_date = datetime.fromisoformat(date_str)
     start_date = datetime(2026, 1, 4)
     days_diff = (target_date - start_date).days
-    target_row = 6 + days_diff
+    target_row = 5 + days_diff
 
     # AppleScript to write to column D in 0₦ sheet
     neon_file = os.path.expanduser('~/OneDrive/vault-excel/Neon分v12.2.xlsx')
