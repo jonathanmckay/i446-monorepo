@@ -121,11 +121,15 @@ def add_sleep_minutes(date_str, project_data):
     target_row = 6 + days_diff
 
     # AppleScript to write to column D in 0₦ sheet
+    neon_file = os.path.expanduser('~/OneDrive/vault-excel/Neon分v12.2.xlsx')
     applescript = f'''
 tell application "Microsoft Excel"
-    set theSheet to sheet "0₦" of workbook 1
+    open POSIX file "{neon_file}"
+    set theWorkbook to workbook "Neon分v12.2.xlsx"
+    set theSheet to sheet "0₦" of theWorkbook
     set theCell to cell "D{target_row}" of theSheet
     set value of theCell to {sleep_mins}
+    save theWorkbook
 end tell
 '''
 
