@@ -98,6 +98,57 @@ def generate_chart(date_str, project_data):
     return True
 
 
+def add_sleep_minutes(date_str, project_data):
+    """
+    Add sleep minutes to column D (睡觉) in the 0₦ sheet.
+
+    Args:
+        date_str: Date string (YYYY-MM-DD)
+        project_data: Dict of {project: minutes}
+
+    Returns:
+        bool: True if successful
+    """
+    sleep_mins = project_data.get('睡觉', 0)
+    if sleep_mins == 0:
+        print("No sleep data found, skipping column D update")
+        return True
+
+    # Calculate target row (row 6 = 2026-01-04, per 0₦ sheet structure)
+    target_date = datetime.fromisoformat(date_str)
+    start_date = datetime(2026, 1, 4)
+    days_diff = (target_date - start_date).days
+    target_row = 6 + days_diff
+
+    # AppleScript to write to column D in 0₦ sheet
+    applescript = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "0₦" of workbook 1
+    set theCell to cell "D{target_row}" of theSheet
+    set value of theCell to {sleep_mins}
+end tell
+'''
+
+    try:
+        result = subprocess.run(
+            ['osascript', '-e', applescript],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            print(f"✓ Added {sleep_mins} sleep minutes to D{target_row}")
+            return True
+        else:
+            print(f"✗ Failed to add sleep minutes: {result.stderr}")
+            return False
+
+    except Exception as e:
+        print(f"✗ Failed to add sleep minutes: {e}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate daily donut chart from Toggl data')
     parser.add_argument('date', nargs='?', help='Date (YYYY-MM-DD)')
@@ -150,7 +201,13 @@ def main():
 
     # Generate the chart
     print(f"\nGenerating donut chart...")
-    if generate_chart(date_str, project_data):
+    chart_success = generate_chart(date_str, project_data)
+
+    # Add sleep minutes to column D
+    print(f"\nAdding sleep minutes to 0₦ sheet...")
+    sleep_success = add_sleep_minutes(date_str, project_data)
+
+    if chart_success and sleep_success:
         return 0
     else:
         return 1
