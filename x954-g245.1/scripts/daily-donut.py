@@ -207,9 +207,23 @@ def main():
     print(f"\nGenerating donut chart...")
     chart_success = generate_chart(date_str, project_data)
 
-    # Add sleep minutes to column D
-    print(f"\nAdding sleep minutes to 0₦ sheet...")
-    sleep_success = add_sleep_minutes(date_str, project_data)
+    # Fetch next day's sleep data
+    next_date = target_date + timedelta(days=1)
+    next_date_str = next_date.isoformat()
+    print(f"\nFetching sleep data for {next_date_str}...")
+    try:
+        next_entries = get_entries(
+            start_date=next_date_str,
+            end_date=(next_date + timedelta(days=1)).isoformat()
+        )
+        next_project_data = get_project_breakdown(next_entries)
+    except Exception as e:
+        print(f"✗ Failed to fetch next day's sleep data: {e}")
+        next_project_data = {}
+
+    # Add sleep minutes to column D (from next day)
+    print(f"Adding sleep minutes to 0₦ sheet...")
+    sleep_success = add_sleep_minutes(date_str, next_project_data)
 
     if chart_success and sleep_success:
         return 0
