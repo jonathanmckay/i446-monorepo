@@ -20,7 +20,7 @@ This monorepo contains a collection of tools and scripts for:
 
 ### Productivity & Automation
 
-- **[x954-g245.1](./x954-g245.1/)** - "Neon Agent" - CLI/agentic interface for Excel-based goal tracking
+- **[toggl_server](./toggl_server/)** - Custom Toggl MCP server with domain code mapping
 - **[comms-launcher](./comms-launcher/)** - Opens communication channels in correct Chrome profiles
 - **new-meeting.sh** - Creates structured meeting notes
 
@@ -92,7 +92,7 @@ i446-monorepo/
 ├── comms-launcher/          # Communication channel launcher
 ├── m5x2-kb/                 # Knowledge base
 ├── scripts/                 # Utility scripts
-├── x954-g245.1/             # Neon goal tracking agent
+├── toggl_server/            # Custom Toggl MCP server
 └── x955-hcmc.2/             # Reading list collator
 ```
 
