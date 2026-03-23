@@ -1,11 +1,17 @@
 """Quick rent analysis from live AppFolio API."""
 import json
+import os
 import sys
 import requests
 
-CLIENT_ID = "YOUR_CLIENT_ID"
-CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-API_URL = "https://mckay.appfolio.com/api/v1/reports/rent_roll.json"
+CLIENT_ID = os.environ.get("APPFOLIO_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("APPFOLIO_CLIENT_SECRET")
+BASE_URL = os.environ.get("APPFOLIO_BASE_URL", "https://mckay.appfolio.com")
+API_URL = f"{BASE_URL}/api/v1/reports/rent_roll.json"
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    print("Error: APPFOLIO_CLIENT_ID and APPFOLIO_CLIENT_SECRET must be set")
+    sys.exit(1)
 
 resp = requests.get(API_URL, auth=(CLIENT_ID, CLIENT_SECRET), timeout=60)
 resp.raise_for_status()
