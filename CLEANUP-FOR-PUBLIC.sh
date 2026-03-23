@@ -85,7 +85,7 @@ echo ""
 
 # Step 6: Final check for secrets
 echo "🔍 Step 6: Scanning for remaining secrets..."
-if git log -p --all | grep -i "EF88Q~2lqQaxc9QmhNcxKSIbXBNlsrYeZS4ObaP8" > /dev/null; then
+if git log -p --all | grep -i "EF88Q~[REDACTED]" > /dev/null; then
     echo "   ❌ ERROR: OAuth secret still found in history!"
     echo "   Manual intervention required."
     exit 1

@@ -13,7 +13,7 @@
 ### 1. Revoke Compromised Credentials (DO THIS FIRST!)
 
 **Microsoft OAuth Secret Found:**
-- Secret: `EF88Q~2lqQaxc9QmhNcxKSIbXBNlsrYeZS4ObaP8`
+- Secret: `EF88Q~[REDACTED]`
 - Location: Deleted files still in git history (from retired x954-g245.1 project)
 
 **Action Required:**
