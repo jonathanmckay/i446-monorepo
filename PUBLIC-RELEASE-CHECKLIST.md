@@ -14,16 +14,15 @@
 
 **Microsoft OAuth Secret Found:**
 - Secret: `EF88Q~2lqQaxc9QmhNcxKSIbXBNlsrYeZS4ObaP8`
-- Location: Deleted files still in git history
+- Location: Deleted files still in git history (from retired x954-g245.1 project)
 
 **Action Required:**
 - [ ] Log into Azure Portal (portal.azure.com)
-- [ ] Go to App registrations → Find your OneDrive app
+- [ ] Go to App registrations → Find your old OneDrive/x954 app
 - [ ] Go to Certificates & secrets
-- [ ] Delete the old secret
-- [ ] Generate new client secret
-- [ ] Update `x954-g245.1/.env` with new secret
-- [ ] Test that OneDrive integration still works
+- [ ] Delete the old secret (or delete the entire app if no longer used)
+
+**Note:** x954-g245.1 has been retired (replaced by excel-mcp). The OAuth app is no longer needed and can be fully deleted from Azure.
 
 ### 2. Clean Git History
 
@@ -117,10 +116,6 @@ git push origin --force --tags
 Create a `.env.example` file showing what's needed:
 
 ```bash
-# x954-g245.1 (Neon Agent)
-ONEDRIVE_CLIENT_ID=your_client_id_here
-ONEDRIVE_CLIENT_SECRET=your_client_secret_here
-
 # appfolio-attrition
 APPFOLIO_CLIENT_ID=your_appfolio_client_id
 APPFOLIO_CLIENT_SECRET=your_appfolio_secret
