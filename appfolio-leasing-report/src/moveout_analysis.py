@@ -12,6 +12,8 @@ Approach:
 - Generate comparison chart.
 """
 import json
+import os
+import sys
 from collections import Counter
 from datetime import datetime, date
 
@@ -20,8 +22,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import requests
 
-AUTH = ("YOUR_CLIENT_ID", "YOUR_CLIENT_SECRET")
-BASE = "https://mckay.appfolio.com"
+CLIENT_ID = os.environ.get("APPFOLIO_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("APPFOLIO_CLIENT_SECRET")
+BASE = os.environ.get("APPFOLIO_BASE_URL", "https://mckay.appfolio.com")
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    print("Error: APPFOLIO_CLIENT_ID and APPFOLIO_CLIENT_SECRET must be set")
+    sys.exit(1)
+
+AUTH = (CLIENT_ID, CLIENT_SECRET)
 
 # --- Fetch property directory for portfolio size timeline ---
 print("Fetching property directory...")
