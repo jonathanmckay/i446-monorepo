@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "tasks": {
+    "exp roadmap": {
+      "todoist_id": "6gF8P7xPcp6vm5fR",
+      "minutes": 60
+    },
+    "email cleared out": {
+      "todoist_id": "6gF8P7xrMWQCQRg2",
+      "minutes": null
+    },
+    "all neon colors": {
+      "todoist_id": "6gF947cJW7r8gH42",
+      "minutes": 40
+    },
+    "go through hiring and set up habit": {
+      "todoist_id": "6gF947g7Vf6cW6VR",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-03-23T15:08:56.700465-07:00"
+}
