@@ -174,6 +174,9 @@ print("-" * 55)
 rates_2026 = []
 for m in range(1, 13):
     u = units_at_month(2026, m)
+    # Override with actual current portfolio size starting March 2026
+    if m >= 3:
+        u = 1035
     count = monthly_2026.get(m, 0)
     rate = (count / u) * 100 if u > 0 else 0
     rates_2026.append(rate)
@@ -186,7 +189,7 @@ later = {m: c for m, c in monthly_2026.items() if m > 4}
 if later:
     print(f"\n  Later scheduled moveouts:")
     for m in sorted(later):
-        u = units_at_month(2026, m)
+        u = 1035  # Use current portfolio size for 2026
         rate = (later[m] / u) * 100 if u > 0 else 0
         print(f"    {month_names[m-1]:<6} {u:>8} {later[m]:>10} {rate:>9.2f}%")
 
@@ -274,6 +277,11 @@ ax.set_ylim(0, max(max(rates_2025), max(rates_2026[:last_2026_month])) + 1.5)
 ax.spines["top"].set_visible(False)
 ax.spines["right"].set_visible(False)
 ax.grid(axis="y", alpha=0.3)
+
+# Add "as of" date annotation
+today_str = date.today().strftime("%B %d, %Y")
+ax.text(0.98, 0.02, f"Data as of {today_str}", transform=ax.transAxes,
+        fontsize=9, ha="right", va="bottom", color="#7f8c8d", style="italic")
 
 plt.tight_layout()
 
