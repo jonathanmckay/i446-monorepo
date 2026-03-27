@@ -20,7 +20,7 @@ CLIENT_ID = os.environ["APPFOLIO_CLIENT_ID"]
 CLIENT_SECRET = os.environ["APPFOLIO_CLIENT_SECRET"]
 BASE = os.environ.get("APPFOLIO_BASE_URL", "https://mckay.appfolio.com")
 
-OUTPUT_FILE = "attrition_summary.csv"
+OUTPUT_FILE = os.path.join(os.path.dirname(__file__), "stats", "attrition_summary.csv")
 
 
 def fetch_json_get(url, params=None):
