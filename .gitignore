@@ -70,3 +70,6 @@ yarn.lock
 *.tmp
 *.temp
 .cache/
+
+# Embedded repos (has its own git)
+quickbooks-online-mcp-server/

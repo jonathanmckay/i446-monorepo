@@ -1,4 +1,5 @@
 import datetime
+import re
 from zoneinfo import ZoneInfo
 from typing import Optional
 
@@ -74,6 +75,22 @@ def _parse_time(time_str: str, ref_date: datetime.date = None) -> datetime.datet
     return datetime.datetime.fromisoformat(time_str).replace(tzinfo=TZ)
 
 
+def _filter_entries_by_local_date(entries: list[dict], target_date: datetime.date) -> list[dict]:
+    """Filter entries whose start time falls on target_date in local timezone."""
+    result = []
+    for e in entries:
+        start_str = e.get("start", "")
+        if not start_str:
+            continue
+        try:
+            start_dt = datetime.datetime.fromisoformat(start_str).astimezone(TZ)
+            if start_dt.date() == target_date:
+                result.append(e)
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
 def _format_duration(seconds: int) -> str:
     h, remainder = divmod(abs(seconds), 3600)
     m, _ = divmod(remainder, 60)
@@ -113,6 +130,32 @@ def _format_entry(e: dict) -> str:
     return f"{start}-{stop} {desc}{proj_str} ({dur_str}){tag_str} [id:{e['id']}]"
 
 
+def _create_single_entry(
+    description: str,
+    start_dt: datetime.datetime,
+    end_dt: datetime.datetime,
+    project_id: Optional[int] = None,
+    tags: list[str] = None,
+) -> list[str]:
+    """Create one entry, splitting at midnight if needed. Returns list of result strings."""
+    results = []
+    midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, 0, tzinfo=TZ)
+    next_midnight = midnight + datetime.timedelta(minutes=1)
+
+    if start_dt.date() != end_dt.date():
+        dur1 = int((midnight - start_dt).total_seconds())
+        dur2 = int((end_dt - next_midnight).total_seconds())
+        e1 = toggl_api.create_entry(description, start_dt.isoformat(), midnight.isoformat(), dur1, project_id, tags)
+        e2 = toggl_api.create_entry(description, next_midnight.isoformat(), end_dt.isoformat(), dur2, project_id, tags)
+        results.append(f"Split at midnight: {_format_entry(e1)}")
+        results.append(f"  continued: {_format_entry(e2)}")
+    else:
+        duration = int((end_dt - start_dt).total_seconds())
+        entry = toggl_api.create_entry(description, start_dt.isoformat(), end_dt.isoformat(), duration, project_id, tags)
+        results.append(f"Created: {_format_entry(entry)}")
+    return results
+
+
 @mcp.tool()
 def toggl_create_entry(
     description: str,
@@ -144,38 +187,90 @@ def toggl_create_entry(
         if project and not project_id:
             return f"Error: unknown project code '{project}'. Valid codes: {', '.join(sorted(PROJECT_MAP.keys()))}"
 
-        # Day barrier check
-        midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, 0, tzinfo=TZ)
-        next_midnight = midnight + datetime.timedelta(minutes=1)
-
-        if start_dt.date() != end_dt.date():
-            # Split at midnight
-            dur1 = int((midnight - start_dt).total_seconds())
-            dur2 = int((end_dt - next_midnight).total_seconds())
-
-            start1_iso = start_dt.isoformat()
-            stop1_iso = midnight.isoformat()
-            start2_iso = next_midnight.isoformat()
-            stop2_iso = end_dt.isoformat()
-
-            e1 = toggl_api.create_entry(description, start1_iso, stop1_iso, dur1, project_id, tags)
-            e2 = toggl_api.create_entry(description, start2_iso, stop2_iso, dur2, project_id, tags)
-
-            return (
-                f"Split at midnight (day barrier rule):\n"
-                f"  Entry 1: {_format_entry(e1)}\n"
-                f"  Entry 2: {_format_entry(e2)}"
-            )
-
-        duration = int((end_dt - start_dt).total_seconds())
-        start_iso = start_dt.isoformat()
-        stop_iso = end_dt.isoformat()
-
-        entry = toggl_api.create_entry(description, start_iso, stop_iso, duration, project_id, tags)
-        return f"Created: {_format_entry(entry)}"
+        results = _create_single_entry(description, start_dt, end_dt, project_id, tags)
+        return "\n".join(results)
 
     except Exception as e:
         return f"Error: {e}"
+
+
+def _resolve_date(date_str: str) -> datetime.date:
+    """Resolve 'yesterday', 'today', or YYYY-MM-DD to a date object."""
+    date_str = date_str.strip().lower()
+    today = datetime.datetime.now(TZ).date()
+    if not date_str or date_str == "today":
+        return today
+    if date_str == "yesterday":
+        return today - datetime.timedelta(days=1)
+    return datetime.date.fromisoformat(date_str)
+
+
+_BATCH_ENTRY_RE = re.compile(
+    r"^(\d{2}:?\d{2})-(\d{2}:?\d{2})\s+(.+?)(?:\s+@(\S+))?\s*$"
+)
+
+
+@mcp.tool()
+def toggl_batch(entries: str, date: str = "") -> str:
+    """Create multiple time entries in one call using shorthand notation.
+
+    Each entry is comma-separated: "HHMM-HHMM description @project, ..."
+    Times can be HH:MM or HHMM format.
+
+    Args:
+        entries: Comma-separated entries, e.g. "1600-1700 work @i9, 1700-1750 math @xk87"
+        date: "yesterday", "today", or "YYYY-MM-DD" (default: today)
+    """
+    try:
+        ref_date = _resolve_date(date)
+    except ValueError:
+        return f"Error: invalid date '{date}'"
+
+    parts = [e.strip() for e in entries.split(",") if e.strip()]
+    if not parts:
+        return "Error: no entries provided"
+
+    all_results = []
+    success = 0
+    fail = 0
+
+    for part in parts:
+        # Normalize HHMM to HH:MM
+        normalized = re.sub(r"^(\d{2})(\d{2})-(\d{2})(\d{2})", r"\1:\2-\3:\4", part)
+        m = _BATCH_ENTRY_RE.match(normalized)
+        if not m:
+            all_results.append(f"SKIP: could not parse '{part}'")
+            fail += 1
+            continue
+
+        start_str, end_str, desc, proj_code = m.groups()
+        desc = desc.strip()
+
+        try:
+            start_dt = _parse_time(start_str, ref_date)
+            end_dt = _parse_time(end_str, ref_date)
+
+            if end_dt <= start_dt:
+                all_results.append(f"SKIP: {desc} — end before start")
+                fail += 1
+                continue
+
+            project_id = _resolve_project(proj_code or "")
+            if proj_code and not project_id:
+                all_results.append(f"SKIP: {desc} — unknown project '{proj_code}'")
+                fail += 1
+                continue
+
+            results = _create_single_entry(desc, start_dt, end_dt, project_id)
+            all_results.extend(results)
+            success += 1
+        except Exception as e:
+            all_results.append(f"FAIL: {desc} — {e}")
+            fail += 1
+
+    summary = f"\nBatch complete: {success} created, {fail} failed"
+    all_results.append(summary)
+    return "\n".join(all_results)
 
 
 @mcp.tool()
@@ -238,10 +333,11 @@ def toggl_today() -> str:
     """List all time entries for today."""
     try:
         today = datetime.datetime.now(TZ).date()
-        entries = toggl_api.get_entries(
-            start_date=today.isoformat(),
-            end_date=(today + datetime.timedelta(days=1)).isoformat(),
+        raw_entries = toggl_api.get_entries(
+            start_date=(today - datetime.timedelta(days=1)).isoformat(),
+            end_date=(today + datetime.timedelta(days=2)).isoformat(),
         )
+        entries = _filter_entries_by_local_date(raw_entries or [], today)
         if not entries:
             return "No entries today."
 
@@ -271,10 +367,11 @@ def toggl_date(date: str) -> str:
     """
     try:
         target_date = datetime.date.fromisoformat(date)
-        entries = toggl_api.get_entries(
-            start_date=target_date.isoformat(),
-            end_date=(target_date + datetime.timedelta(days=1)).isoformat(),
+        raw_entries = toggl_api.get_entries(
+            start_date=(target_date - datetime.timedelta(days=1)).isoformat(),
+            end_date=(target_date + datetime.timedelta(days=2)).isoformat(),
         )
+        entries = _filter_entries_by_local_date(raw_entries or [], target_date)
         if not entries:
             return f"No entries on {date}."
 
