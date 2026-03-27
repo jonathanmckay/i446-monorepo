@@ -1,0 +1,23 @@
+{
+  "users": {
+    "jm": {
+      "name": "Jonathan McKay",
+      "email": "mckay@m5x2.com",
+      "role": "admin"
+    },
+    "lx": {
+      "name": "Lexi McKay",
+      "email": "lexi@m5x2.com",
+      "role": "admin"
+    }
+  },
+  "properties": [
+    "r202", "r203", "r888", "m5c7", "portfolio", "fund-0", "fund-i",
+    "fund-ii", "fund-iii", "finance", "operations", "legal", "other"
+  ],
+  "github": {
+    "org": "mckay-capital",
+    "users": ["jonathanmckay", "lexiemckay"]
+  },
+  "port": 5556
+}
