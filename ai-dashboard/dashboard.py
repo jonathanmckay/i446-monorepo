@@ -33,13 +33,85 @@ except Exception:
 
 # Pricing
 PRICING = {
-    "opus": {"input": 15.00, "output": 75.00, "cache_write": 15.00, "cache_read": 1.50},
+    "opus": {"input": 5.00, "output": 25.00, "cache_write": 5.00, "cache_read": 0.50},
     "sonnet": {"input": 3.00, "output": 15.00, "cache_write": 3.00, "cache_read": 0.30},
 }
 
 
+def _parse_jsonl_daily_stats(since_date_str):
+    """Parse JSONL session files to get daily activity/token stats after since_date_str (YYYY-MM-DD).
+    Returns (activity_by_day, tokens_by_day, cost_by_model).
+    cost_by_model uses full pricing (input+output+cache) for accurate cost totals.
+    tokens_by_day uses input+output only to match stats-cache.json chart methodology.
+    """
+    pacific = pytz.timezone("America/Los_Angeles")
+    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
+    if not session_dir.exists():
+        return {}, {}, {}
+
+    daily_activity = defaultdict(lambda: {"messageCount": 0, "sessionCount": 0})
+    daily_tokens = defaultdict(lambda: defaultdict(int))
+    # model -> cost (for adding to total_cost)
+    extra_model_costs = defaultdict(float)
+
+    for fpath in session_dir.glob("*.jsonl"):
+        try:
+            session_counted = set()
+            with open(fpath) as fh:
+                for line in fh:
+                    obj = json.loads(line.strip())
+                    if obj.get("type") != "assistant":
+                        continue
+                    ts_str = obj.get("timestamp")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+                    if day <= since_date_str:
+                        continue
+
+                    msg = obj.get("message", {})
+                    if not isinstance(msg, dict):
+                        continue
+
+                    daily_activity[day]["messageCount"] += 1
+                    session_id = obj.get("sessionId", str(fpath))
+                    if session_id not in session_counted:
+                        session_counted.add(session_id)
+                        daily_activity[day]["sessionCount"] += 1
+
+                    usage = msg.get("usage", {})
+                    model = msg.get("model", "unknown")
+
+                    # Chart tokens: input + output only (matches stats-cache.json)
+                    daily_tokens[day][model] += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+                    # Cost: full pricing including cache tokens
+                    model_type = "opus" if "opus" in model.lower() else "sonnet"
+                    prices = PRICING[model_type]
+                    cost = (
+                        (usage.get("input_tokens", 0) / 1_000_000) * prices["input"] +
+                        (usage.get("output_tokens", 0) / 1_000_000) * prices["output"] +
+                        (usage.get("cache_read_input_tokens", 0) / 1_000_000) * prices["cache_read"] +
+                        (usage.get("cache_creation_input_tokens", 0) / 1_000_000) * prices["cache_write"]
+                    )
+                    extra_model_costs[model_type] += cost
+        except Exception:
+            continue
+
+    activity_out = {
+        day: {"date": day, "messageCount": v["messageCount"], "sessionCount": v["sessionCount"]}
+        for day, v in daily_activity.items()
+    }
+    tokens_out = {
+        day: {"date": day, "tokensByModel": dict(models)}
+        for day, models in daily_tokens.items()
+    }
+    return activity_out, tokens_out, dict(extra_model_costs)
+
+
 def get_claude_stats():
-    """Get Claude Code stats from stats-cache.json"""
+    """Get Claude Code stats from stats-cache.json, supplemented with JSONL parsing for recent days."""
     if not STATS_CACHE.exists():
         return None
 
@@ -71,10 +143,24 @@ def get_claude_stats():
         model_costs[model_type] = model_costs.get(model_type, 0) + cost
 
     # Estimate turns from total messages
-    # Claude CLI messages include user messages, assistant messages, tool calls, and tool results
-    # Estimate ~6 messages per turn (1 user + 1 assistant + ~2 tool call/result pairs)
     total_messages = data.get("totalMessages", 0)
     total_turns = total_messages // 6  # Conservative estimate
+
+    daily_activity = data.get("dailyActivity", [])
+    daily_tokens = data.get("dailyModelTokens", [])
+
+    # Supplement with JSONL-parsed data for any days after the last cache entry
+    last_cached_date = daily_activity[-1]["date"] if daily_activity else "2000-01-01"
+    today = datetime.now().strftime("%Y-%m-%d")
+    if last_cached_date < today:
+        extra_activity, extra_tokens, extra_costs = _parse_jsonl_daily_stats(last_cached_date)
+        for day in sorted(extra_activity):
+            daily_activity.append(extra_activity[day])
+        for day in sorted(extra_tokens):
+            daily_tokens.append(extra_tokens[day])
+        for model_type, cost in extra_costs.items():
+            total_cost += cost
+            model_costs[model_type] = model_costs.get(model_type, 0) + cost
 
     return {
         "total_sessions": data.get("totalSessions", 0),
@@ -82,8 +168,8 @@ def get_claude_stats():
         "total_turns": total_turns,
         "total_cost": total_cost,
         "model_costs": model_costs,
-        "daily_activity": data.get("dailyActivity", [])[-30:],  # Last 30 days
-        "daily_tokens": data.get("dailyModelTokens", [])[-30:],
+        "daily_activity": daily_activity[-30:],  # Last 30 days
+        "daily_tokens": daily_tokens[-30:],
     }
 
 
