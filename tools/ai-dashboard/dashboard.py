@@ -382,6 +382,118 @@ def get_mcp_stats(days=30):
     return {"daily": daily, "servers": servers, "total": total}
 
 
+def get_latency_stats(days=30):
+    """Compute TTFT and TTLT from Claude Code JSONL session files.
+
+    TTFT = Time to First Turn: seconds from user's first message to assistant's first response.
+    TTLT = Time to Last Turn: seconds from user's last message to assistant's final response.
+    Returns daily averages and overall percentiles for the last `days` days.
+    """
+    pacific = pytz.timezone("America/Los_Angeles")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
+    if not session_dir.exists():
+        return {"daily": [], "overall": {}}
+
+    # date -> {"ttft": [seconds, ...], "ttlt": [seconds, ...]}
+    daily_latencies = defaultdict(lambda: {"ttft": [], "ttlt": []})
+
+    for fpath in session_dir.glob("*.jsonl"):
+        try:
+            messages = []
+            with open(fpath) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    msg_type = obj.get("type")
+                    if msg_type not in ("user", "assistant"):
+                        continue
+                    ts_str = obj.get("timestamp")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    messages.append((msg_type, ts))
+
+            if len(messages) < 2:
+                continue
+
+            # For each user message, find the first and last consecutive assistant
+            # messages before the next user message.
+            #   TTFT = user_ts → first_assistant_ts  (time to first token)
+            #   TTLT = user_ts → last_assistant_ts   (time to last token / prompt → completion)
+            i = 0
+            while i < len(messages):
+                if messages[i][0] != "user":
+                    i += 1
+                    continue
+
+                user_ts = messages[i][1]
+                first_asst_ts = None
+                last_asst_ts = None
+                for j in range(i + 1, len(messages)):
+                    if messages[j][0] == "assistant":
+                        if first_asst_ts is None:
+                            first_asst_ts = messages[j][1]
+                        last_asst_ts = messages[j][1]
+                    else:
+                        break  # hit next user message
+
+                if first_asst_ts is None:
+                    i += 1
+                    continue
+
+                ttft = (first_asst_ts - user_ts).total_seconds()
+                ttlt = (last_asst_ts - user_ts).total_seconds()
+
+                if ttft <= 0 or ttft > 300 or ttlt > 300:
+                    i += 1
+                    continue
+
+                if user_ts < cutoff:
+                    i += 1
+                    continue
+
+                day = user_ts.astimezone(pacific).strftime("%Y-%m-%d")
+                daily_latencies[day]["ttft"].append(ttft)
+                daily_latencies[day]["ttlt"].append(ttlt)
+                i += 1
+
+        except Exception:
+            continue
+
+    daily = []
+    all_ttft = []
+    all_ttlt = []
+    for i in range(days):
+        date = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        d = daily_latencies.get(date, {"ttft": [], "ttlt": []})
+        entry = {
+            "date": date,
+            "avg_ttft": round(sum(d["ttft"]) / len(d["ttft"]), 1) if d["ttft"] else None,
+            "avg_ttlt": round(sum(d["ttlt"]) / len(d["ttlt"]), 1) if d["ttlt"] else None,
+        }
+        all_ttft.extend(d["ttft"])
+        all_ttlt.extend(d["ttlt"])
+        daily.append(entry)
+
+    overall = {}
+    if all_ttft:
+        s = sorted(all_ttft)
+        overall["avg_ttft"] = round(sum(s) / len(s), 1)
+        overall["median_ttft"] = round(s[len(s) // 2], 1)
+        overall["p95_ttft"] = round(s[min(int(len(s) * 0.95), len(s) - 1)], 1)
+    if all_ttlt:
+        s = sorted(all_ttlt)
+        overall["avg_ttlt"] = round(sum(s) / len(s), 1)
+        overall["median_ttlt"] = round(s[len(s) // 2], 1)
+        overall["p95_ttlt"] = round(s[min(int(len(s) * 0.95), len(s) - 1)], 1)
+
+    return {"daily": daily, "overall": overall}
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -708,6 +820,64 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        <div class="card">
+            <h2>⚡ Response Latency — TTFT &amp; TTLT (Last 30 Days)</h2>
+            <div class="grid" style="margin-bottom: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+                <div>
+                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTFT</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#FF10F0; text-shadow: 0 0 10px rgba(255,16,240,0.3);">
+                        {{ "%.1f" | format(latency.overall.avg_ttft | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median TTFT</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#FF10F0; text-shadow: 0 0 10px rgba(255,16,240,0.3);">
+                        {{ "%.1f" | format(latency.overall.median_ttft | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 TTFT</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#FF10F0; text-shadow: 0 0 10px rgba(255,16,240,0.3);">
+                        {{ "%.1f" | format(latency.overall.p95_ttft | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTLT</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#39FF14; text-shadow: 0 0 10px rgba(57,255,20,0.3);">
+                        {{ "%.1f" | format(latency.overall.avg_ttlt | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median TTLT</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#39FF14; text-shadow: 0 0 10px rgba(57,255,20,0.3);">
+                        {{ "%.1f" | format(latency.overall.median_ttlt | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 TTLT</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#39FF14; text-shadow: 0 0 10px rgba(57,255,20,0.3);">
+                        {{ "%.1f" | format(latency.overall.p95_ttlt | default(0)) }}s
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex; gap:20px; margin-bottom:12px; font-size:0.85em;">
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:24px; height:3px; background:#FF10F0; border-radius:2px;"></span>
+                    TTFT (first response)
+                </span>
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:24px; height:3px; background:#39FF14; border-radius:2px;"></span>
+                    TTLT (last response)
+                </span>
+            </div>
+            <div style="background:#fafafa; border:1px solid #e0e0e0; border-radius:12px; padding:16px; overflow:hidden;">
+                <svg id="latency-chart" width="100%" height="200" style="overflow:visible;"></svg>
+            </div>
+            <div style="margin-top:8px; font-size:0.75em; color:#999;">
+                Latency measured per Claude Code session (JSONL). TTFT = first user→assistant delta; TTLT = last user→assistant delta. Sessions with no message pairs or &gt;5 min gaps excluded.
+            </div>
+        </div>
+
         <button class="refresh" onclick="location.reload()">🔄 Refresh Data</button>
 
         <p class="last-updated">Last updated: {{ now }}</p>
@@ -975,6 +1145,107 @@ HTML_TEMPLATE = """
 
             mcpChart.appendChild(bar);
         });
+
+        // Render TTFT / TTLT line chart
+        (function() {
+            const latencyData = {{ latency_daily | tojson | safe }};
+            const svg = document.getElementById('latency-chart');
+            if (!svg) return;
+
+            const W = svg.parentElement.clientWidth - 32;
+            const H = 200;
+            const PAD = { top: 10, right: 20, bottom: 30, left: 44 };
+            svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+            svg.setAttribute('width', W);
+
+            const inner_w = W - PAD.left - PAD.right;
+            const inner_h = H - PAD.top - PAD.bottom;
+
+            const ttfts = latencyData.map(d => d.avg_ttft);
+            const ttlts = latencyData.map(d => d.avg_ttlt);
+            const allVals = [...ttfts, ...ttlts].filter(v => v !== null && v !== undefined);
+            const maxVal = Math.max(...allVals, 1);
+            const n = latencyData.length;
+
+            function xPos(i) { return PAD.left + (i / (n - 1)) * inner_w; }
+            function yPos(v) { return PAD.top + inner_h - (v / maxVal) * inner_h; }
+
+            function makePath(vals, color) {
+                const pts = vals.map((v, i) => v != null ? `${xPos(i)},${yPos(v)}` : null);
+                // Split at nulls to avoid connecting gaps
+                let d = '';
+                let inPath = false;
+                pts.forEach((p, i) => {
+                    if (p === null) { inPath = false; return; }
+                    if (!inPath) { d += `M${p}`; inPath = true; }
+                    else { d += ` L${p}`; }
+                });
+                if (!d) return;
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', d);
+                path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', color);
+                path.setAttribute('stroke-width', '2');
+                path.setAttribute('stroke-linejoin', 'round');
+                path.setAttribute('stroke-linecap', 'round');
+                svg.appendChild(path);
+
+                // Dots for data points
+                pts.forEach((p, i) => {
+                    if (!p) return;
+                    const [cx, cy] = p.split(',');
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('cx', cx);
+                    circle.setAttribute('cy', cy);
+                    circle.setAttribute('r', '3');
+                    circle.setAttribute('fill', color);
+                    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    title.textContent = `${latencyData[i].date}: ${vals[i]}s`;
+                    circle.appendChild(title);
+                    svg.appendChild(circle);
+                });
+            }
+
+            // Y axis gridlines + labels
+            const steps = 4;
+            for (let s = 0; s <= steps; s++) {
+                const v = (maxVal * s) / steps;
+                const y = yPos(v);
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', PAD.left);
+                line.setAttribute('x2', PAD.left + inner_w);
+                line.setAttribute('y1', y);
+                line.setAttribute('y2', y);
+                line.setAttribute('stroke', '#e0e0e0');
+                line.setAttribute('stroke-width', '1');
+                svg.appendChild(line);
+
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', PAD.left - 6);
+                label.setAttribute('y', y + 4);
+                label.setAttribute('text-anchor', 'end');
+                label.setAttribute('font-size', '10');
+                label.setAttribute('fill', '#999');
+                label.textContent = v.toFixed(1) + 's';
+                svg.appendChild(label);
+            }
+
+            // X axis date labels (every ~7 days)
+            latencyData.forEach((d, i) => {
+                if (i % 7 !== 0 && i !== n - 1) return;
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', xPos(i));
+                label.setAttribute('y', H - 4);
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('font-size', '9');
+                label.setAttribute('fill', '#999');
+                label.textContent = d.date.substring(5);
+                svg.appendChild(label);
+            });
+
+            makePath(ttfts, '#FF10F0');
+            makePath(ttlts, '#39FF14');
+        })();
     </script>
 </body>
 </html>
@@ -1038,6 +1309,7 @@ def dashboard():
         })
 
     mcp = get_mcp_stats()
+    latency = get_latency_stats()
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -1048,6 +1320,8 @@ def dashboard():
         daily_turns=daily_turns,
         mcp_daily=mcp["daily"],
         mcp_servers=mcp["servers"],
+        latency=latency,
+        latency_daily=latency["daily"],
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
@@ -1059,7 +1333,8 @@ def api_stats():
         "claude": get_claude_stats(),
         "copilot": get_copilot_stats(),
         "github": get_github_commits(),
-        "mcp": get_mcp_stats()
+        "mcp": get_mcp_stats(),
+        "latency": get_latency_stats(),
     })
 
 
