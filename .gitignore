@@ -73,3 +73,4 @@ yarn.lock
 
 # Embedded repos (has its own git)
 quickbooks-online-mcp-server/
+tools/personal-dashboard/.env
