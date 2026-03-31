@@ -35,7 +35,6 @@ app = Flask(__name__)
 
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 NEON_PATH = Path.home() / "OneDrive" / "vault-excel" / "Neon-current.xlsx"
-STATS_CACHE = Path.home() / ".claude" / "stats-cache.json"
 
 # ── Column mappings ────────────────────────────────────────────────────────────
 # 0分 sheet: column index (1-based) → label + domain
@@ -176,57 +175,31 @@ def load_toggl_data():
     return {k: dict(v) for k, v in result.items()}
 
 
-def _jsonl_message_counts(since_date_str):
-    """Count assistant messages per day from JSONL files after since_date_str."""
-    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
-    if not session_dir.exists():
-        return {}
-    counts = defaultdict(int)
-    for fpath in session_dir.glob("*.jsonl"):
-        try:
-            with open(fpath) as fh:
-                for line in fh:
-                    obj = json.loads(line.strip())
-                    if obj.get("type") != "assistant":
-                        continue
-                    ts_str = obj.get("timestamp")
-                    if not ts_str:
-                        continue
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    day = ts.astimezone(LOCAL_TZ).date().isoformat()
-                    if day > since_date_str:
-                        counts[day] += 1
-        except Exception:
-            continue
-    return dict(counts)
+LLM_DB = Path.home() / "vault" / "i447" / "i446" / "llm-sessions.db"
 
 
 def load_turns_data():
-    """Return {date_str: turns} using same methodology as ai-dashboard (messageCount // 6)."""
-    today = date.today().isoformat()
-    result = {}
-
-    # Use stats-cache for dates it covers
-    last_cached = "2000-01-01"
-    if STATS_CACHE.exists():
-        try:
-            with open(STATS_CACHE) as f:
-                cache = json.load(f)
-            for entry in cache.get("dailyActivity", []):
-                d = entry.get("date", "")
-                if d:
-                    result[d] = entry.get("messageCount", 0) // 6
-                    if d > last_cached:
-                        last_cached = d
-        except Exception:
-            pass
-
-    # Supplement with JSONL for days after cache cutoff
-    if last_cached < today:
-        for d, cnt in _jsonl_message_counts(last_cached).items():
-            result[d] = cnt // 6
-
-    return result
+    """Return {date_str: turns} from llm-sessions.db (ingested by ai-dashboard)."""
+    if not LLM_DB.exists():
+        return {}
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{LLM_DB}?mode=ro", uri=True)
+        cur = conn.cursor()
+        cutoff = (date.today() - timedelta(days=DAYS)).isoformat()
+        cur.execute("""
+            SELECT date(start_time, 'localtime') as d,
+                   SUM(message_count) / 6 as turns
+            FROM sessions
+            WHERE provider = 'claude'
+              AND date(start_time, 'localtime') > ?
+            GROUP BY d
+        """, (cutoff,))
+        result = {row[0]: row[1] for row in cur.fetchall()}
+        conn.close()
+        return result
+    except Exception:
+        return {}
 
 
 # ── Date range helper ──────────────────────────────────────────────────────────

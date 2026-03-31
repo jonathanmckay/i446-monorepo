@@ -110,6 +110,115 @@ def _parse_jsonl_daily_stats(since_date_str):
     return activity_out, tokens_out, dict(extra_model_costs)
 
 
+def ingest_claude_sessions():
+    """Upsert Claude Code JSONL sessions into llm-sessions.db (provider='claude').
+
+    Scans all project dirs under ~/.claude/projects/. For each JSONL file, builds
+    a session row (one row per file) with aggregated token/cost/message stats,
+    then upserts by session_id so re-runs are idempotent.
+    """
+    if not LLM_DB.exists():
+        return
+    pacific = pytz.timezone("America/Los_Angeles")
+    projects_root = Path.home() / ".claude" / "projects"
+    if not projects_root.exists():
+        return
+
+    conn = sqlite3.connect(str(LLM_DB))
+    cur = conn.cursor()
+
+    for fpath in projects_root.rglob("*.jsonl"):
+        session_id = fpath.stem
+        project_dir = fpath.parent.name
+        try:
+            messages = []
+            for line in fpath.read_text(errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    messages.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+            if not messages:
+                continue
+
+            # Timestamps
+            timestamps = [
+                datetime.fromisoformat(m["timestamp"].replace("Z", "+00:00"))
+                for m in messages if m.get("timestamp")
+            ]
+            if not timestamps:
+                continue
+            start_ts = min(timestamps).isoformat()
+            end_ts = max(timestamps).isoformat()
+            start_day = min(timestamps).astimezone(pacific).strftime("%Y-%m-%d")
+
+            # Message counts
+            user_msgs = sum(1 for m in messages if m.get("type") == "user")
+            asst_msgs = sum(1 for m in messages if m.get("type") == "assistant")
+            total_msgs = user_msgs + asst_msgs
+
+            # Tokens + cost (from assistant messages)
+            input_tok = output_tok = cache_read_tok = cache_write_tok = 0
+            cost = 0.0
+            model_seen = None
+            for m in messages:
+                if m.get("type") != "assistant":
+                    continue
+                msg = m.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
+                usage = msg.get("usage", {})
+                model_seen = msg.get("model", model_seen)
+                it = usage.get("input_tokens", 0)
+                ot = usage.get("output_tokens", 0)
+                cr = usage.get("cache_read_input_tokens", 0)
+                cw = usage.get("cache_creation_input_tokens", 0)
+                input_tok += it
+                output_tok += ot
+                cache_read_tok += cr
+                cache_write_tok += cw
+                model_type = "opus" if model_seen and "opus" in model_seen.lower() else "sonnet"
+                prices = PRICING[model_type]
+                cost += (
+                    (it / 1_000_000) * prices["input"] +
+                    (ot / 1_000_000) * prices["output"] +
+                    (cr / 1_000_000) * prices["cache_read"] +
+                    (cw / 1_000_000) * prices["cache_write"]
+                )
+
+            cur.execute("""
+                INSERT INTO sessions
+                    (session_id, provider, product, model, start_time, end_time,
+                     message_count, input_tokens, output_tokens, total_tokens,
+                     cached_tokens, cache_write_tokens, cost_usd,
+                     project_dir, user_id, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    end_time=excluded.end_time,
+                    message_count=excluded.message_count,
+                    input_tokens=excluded.input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    total_tokens=excluded.total_tokens,
+                    cached_tokens=excluded.cached_tokens,
+                    cache_write_tokens=excluded.cache_write_tokens,
+                    cost_usd=excluded.cost_usd,
+                    model=excluded.model
+            """, (
+                session_id, "claude", "cli", model_seen, start_ts, end_ts,
+                total_msgs, input_tok, output_tok, input_tok + output_tok,
+                cache_read_tok, cache_write_tok, cost,
+                project_dir, "jm", "completed"
+            ))
+        except Exception:
+            continue
+
+    conn.commit()
+    conn.close()
+
+
 def get_claude_stats():
     """Get Claude Code stats from stats-cache.json, supplemented with JSONL parsing for recent days."""
     if not STATS_CACHE.exists():
@@ -1360,6 +1469,7 @@ def format_number(value):
 @app.route('/')
 def dashboard():
     """Main dashboard page"""
+    ingest_claude_sessions()
     claude = get_claude_stats() or {}
     copilot = get_copilot_stats() or {}
     github = get_github_commits()
