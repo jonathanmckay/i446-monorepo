@@ -395,10 +395,11 @@ def get_github_commits():
                             repos.add(repo["full_name"])
 
                         for commit in repo_commits:
-                            # Only count commits where author.login matches the authenticated user
-                            # This matches GitHub's contribution graph behavior
+                            # Accept commits where author.login matches, OR where the git
+                            # author name contains "mckay" (catches unlinked local commits)
                             author_login = commit.get("author", {}).get("login", "") if commit.get("author") else ""
-                            if author_login != GITHUB_USER:
+                            git_author_name = commit.get("commit", {}).get("author", {}).get("name", "").lower()
+                            if author_login != GITHUB_USER and "mckay" not in git_author_name:
                                 continue
 
                             commit_date_str = commit.get("commit", {}).get("author", {}).get("date", "")
@@ -1545,6 +1546,29 @@ def api_stats():
         "mcp": get_mcp_stats(),
         "latency": get_latency_stats(),
     })
+
+
+@app.route('/api/turns')
+def api_turns():
+    """Pre-computed daily turns for consumption by other dashboards."""
+    claude = get_claude_stats() or {}
+    copilot = get_copilot_stats() or {}
+    result = []
+    for i in range(30):
+        d = (datetime.now() - timedelta(days=29-i)).strftime("%Y-%m-%d")
+        claude_turns = 0
+        for activity in claude.get("daily_activity", []):
+            if activity["date"] == d:
+                claude_turns = activity.get("messageCount", 0) // 6
+                break
+        copilot_turns = 0
+        for activity in copilot.get("daily_activity", []):
+            if activity["date"] == d:
+                copilot_turns = activity.get("turns", 0)
+                break
+        result.append({"date": d, "claude": claude_turns, "copilot": copilot_turns,
+                        "total": claude_turns + copilot_turns})
+    return jsonify(result)
 
 
 if __name__ == "__main__":

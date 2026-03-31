@@ -175,29 +175,13 @@ def load_toggl_data():
     return {k: dict(v) for k, v in result.items()}
 
 
-LLM_DB = Path.home() / "vault" / "i447" / "i446" / "llm-sessions.db"
-
-
 def load_turns_data():
-    """Return {date_str: turns} from llm-sessions.db (ingested by ai-dashboard)."""
-    if not LLM_DB.exists():
-        return {}
+    """Fetch pre-computed daily turns from ai-dashboard API (localhost:5555/api/turns).
+    Falls back to empty if ai-dashboard is not running."""
     try:
-        import sqlite3
-        conn = sqlite3.connect(f"file:{LLM_DB}?mode=ro", uri=True)
-        cur = conn.cursor()
-        cutoff = (date.today() - timedelta(days=DAYS)).isoformat()
-        cur.execute("""
-            SELECT date(start_time, 'localtime') as d,
-                   SUM(message_count) / 6 as turns
-            FROM sessions
-            WHERE provider = 'claude'
-              AND date(start_time, 'localtime') > ?
-            GROUP BY d
-        """, (cutoff,))
-        result = {row[0]: row[1] for row in cur.fetchall()}
-        conn.close()
-        return result
+        with urllib.request.urlopen("http://127.0.0.1:5555/api/turns", timeout=5) as resp:
+            entries = json.loads(resp.read())
+        return {e["date"]: e["claude"] for e in entries if e.get("date")}
     except Exception:
         return {}
 
