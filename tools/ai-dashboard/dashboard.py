@@ -565,7 +565,7 @@ HTML_TEMPLATE = """
             display: flex;
             flex-direction: column-reverse;
             justify-content: space-between;
-            width: 40px;
+            width: 50px;
             height: 240px;
             font-size: 0.75em;
             color: #666;
@@ -590,6 +590,7 @@ HTML_TEMPLATE = """
             display: flex;
             flex-direction: column;
             justify-content: flex-end;
+            cursor: pointer;
         }
         .bar-segment {
             width: 100%;
@@ -676,6 +677,29 @@ HTML_TEMPLATE = """
         .legend-color.copilot {
             background: linear-gradient(90deg, #00F0FF 0%, #0088FF 100%);
         }
+        .chart-tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.92);
+            color: white;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 0.85em;
+            pointer-events: none;
+            z-index: 1000;
+            white-space: nowrap;
+            display: none;
+            line-height: 1.6;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .chart-tooltip .tt-date {
+            font-weight: 700;
+            margin-bottom: 4px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+            padding-bottom: 4px;
+        }
+        .chart-tooltip .tt-claude { color: #FF6B9D; }
+        .chart-tooltip .tt-copilot { color: #00F0FF; }
+        .chart-tooltip .tt-total { color: #fff; font-weight: 700; margin-top: 2px; }
         .heatmap-tooltip {
             position: absolute;
             background: rgba(0, 0, 0, 0.9);
@@ -773,13 +797,14 @@ HTML_TEMPLATE = """
                     <span>Copilot</span>
                 </div>
             </div>
-            <div class="chart">
+            <div class="chart" style="position:relative;">
                 <div class="chart-container">
                     <div class="y-axis" id="tokens-y-axis"></div>
                     <div class="bar-chart" id="tokens-chart">
                         <!-- Will be populated by JavaScript -->
                     </div>
                 </div>
+                <div id="tokens-tooltip" class="chart-tooltip"></div>
             </div>
         </div>
 
@@ -795,13 +820,14 @@ HTML_TEMPLATE = """
                     <span>Copilot</span>
                 </div>
             </div>
-            <div class="chart">
+            <div class="chart" style="position:relative;">
                 <div class="chart-container">
                     <div class="y-axis" id="turns-y-axis"></div>
                     <div class="bar-chart" id="turns-chart">
                         <!-- Will be populated by JavaScript -->
                     </div>
                 </div>
+                <div id="turns-tooltip" class="chart-tooltip"></div>
             </div>
         </div>
 
@@ -884,28 +910,76 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        // Helper to create Y axis labels
-        function createYAxis(containerId, maxValue) {
-            const yAxis = document.getElementById(containerId);
-            const steps = 5;
-            for (let i = 0; i <= steps; i++) {
-                const label = document.createElement('div');
-                label.textContent = Math.round(maxValue * i / steps);
-                yAxis.appendChild(label);
-            }
+        // Compute a "nice" ceiling for axis max and return clean tick values
+        function niceMax(rawMax) {
+            if (rawMax <= 0) return 1;
+            const magnitude = Math.pow(10, Math.floor(Math.log10(rawMax)));
+            const residual = rawMax / magnitude;
+            let nice;
+            if (residual <= 1) nice = 1;
+            else if (residual <= 2) nice = 2;
+            else if (residual <= 5) nice = 5;
+            else nice = 10;
+            return nice * magnitude;
         }
+
+        function niceAxis(rawMax, steps = 5) {
+            if (rawMax <= 0) return { max: 1, ticks: [0, 1] };
+            const interval = niceMax(Math.ceil(rawMax / steps));
+            const nMax = interval * steps;
+            // If nMax is way too large (more than 2x raw), try fewer intervals
+            const actualMax = Math.max(interval * Math.ceil(rawMax / interval), interval);
+            const ticks = [];
+            for (let v = 0; v <= actualMax; v += interval) {
+                ticks.push(v);
+            }
+            return { max: actualMax, ticks };
+        }
+
+        function formatAxisLabel(n) {
+            if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + 'M';
+            if (n >= 1_000) return (n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 0) + 'k';
+            return n.toString();
+        }
+
+        function createYAxis(containerId, axisDef) {
+            const yAxis = document.getElementById(containerId);
+            axisDef.ticks.forEach(v => {
+                const label = document.createElement('div');
+                label.textContent = formatAxisLabel(v);
+                yAxis.appendChild(label);
+            });
+        }
+
+        // Tooltip helpers
+        function showTooltip(tooltipEl, chartEl, e, html) {
+            tooltipEl.innerHTML = html;
+            tooltipEl.style.display = 'block';
+            const chartRect = chartEl.closest('.chart').getBoundingClientRect();
+            let left = e.clientX - chartRect.left + 12;
+            let top = e.clientY - chartRect.top - 10;
+            // Keep tooltip on-screen within chart card
+            const ttWidth = tooltipEl.offsetWidth;
+            if (left + ttWidth > chartRect.width - 8) left = left - ttWidth - 24;
+            if (top < 4) top = 4;
+            tooltipEl.style.left = left + 'px';
+            tooltipEl.style.top = top + 'px';
+        }
+        function hideTooltip(tooltipEl) { tooltipEl.style.display = 'none'; }
 
         // Render tokens chart (stacked)
         const dailyTokens = {{ daily_tokens | tojson | safe }};
         const tokensChart = document.getElementById('tokens-chart');
+        const tokensTooltip = document.getElementById('tokens-tooltip');
 
-        const maxTokens = Math.max(...dailyTokens.map(d => d.total), 1);
-        createYAxis('tokens-y-axis', maxTokens);
+        const rawMaxTokens = Math.max(...dailyTokens.map(d => d.total), 1);
+        const tokensAxis = niceAxis(rawMaxTokens);
+        createYAxis('tokens-y-axis', tokensAxis);
 
         dailyTokens.forEach(day => {
             const bar = document.createElement('div');
             bar.className = 'bar';
-            const totalHeight = maxTokens > 0 ? (day.total / maxTokens) * 100 : 5;
+            const totalHeight = tokensAxis.max > 0 ? (day.total / tokensAxis.max) * 100 : 5;
             bar.style.height = totalHeight + '%';
 
             // Claude segment (bottom)
@@ -927,7 +1001,18 @@ HTML_TEMPLATE = """
                 bar.appendChild(copilotSegment);
             }
 
-            bar.title = `${day.date}:\nClaude: ${day.claude.toLocaleString()}\nCopilot: ${day.copilot.toLocaleString()}\nTotal: ${day.total.toLocaleString()}`;
+            bar.addEventListener('mouseenter', e => {
+                const html = `<div class="tt-date">${day.date}</div>`
+                    + `<div class="tt-claude">Claude: ${day.claude.toLocaleString()} tokens</div>`
+                    + `<div class="tt-copilot">Copilot: ${day.copilot.toLocaleString()} tokens</div>`
+                    + `<div class="tt-total">Total: ${day.total.toLocaleString()} tokens</div>`;
+                showTooltip(tokensTooltip, tokensChart, e, html);
+            });
+            bar.addEventListener('mousemove', e => {
+                const html = tokensTooltip.innerHTML;
+                showTooltip(tokensTooltip, tokensChart, e, html);
+            });
+            bar.addEventListener('mouseleave', () => hideTooltip(tokensTooltip));
 
             const label = document.createElement('div');
             label.className = 'bar-label';
@@ -940,14 +1025,16 @@ HTML_TEMPLATE = """
         // Render turns chart (stacked)
         const dailyTurns = {{ daily_turns | tojson | safe }};
         const turnsChart = document.getElementById('turns-chart');
+        const turnsTooltip = document.getElementById('turns-tooltip');
 
-        const maxTurns = Math.max(...dailyTurns.map(d => d.total), 1);
-        createYAxis('turns-y-axis', maxTurns);
+        const rawMaxTurns = Math.max(...dailyTurns.map(d => d.total), 1);
+        const turnsAxis = niceAxis(rawMaxTurns);
+        createYAxis('turns-y-axis', turnsAxis);
 
         dailyTurns.forEach(day => {
             const bar = document.createElement('div');
             bar.className = 'bar';
-            const totalHeight = maxTurns > 0 ? (day.total / maxTurns) * 100 : 5;
+            const totalHeight = turnsAxis.max > 0 ? (day.total / turnsAxis.max) * 100 : 5;
             bar.style.height = totalHeight + '%';
 
             // Claude segment (bottom)
@@ -969,7 +1056,18 @@ HTML_TEMPLATE = """
                 bar.appendChild(copilotSegment);
             }
 
-            bar.title = `${day.date}:\nClaude: ${day.claude}\nCopilot: ${day.copilot}\nTotal: ${day.total}`;
+            bar.addEventListener('mouseenter', e => {
+                const html = `<div class="tt-date">${day.date}</div>`
+                    + `<div class="tt-claude">Claude: ${day.claude.toLocaleString()} turns</div>`
+                    + `<div class="tt-copilot">Copilot: ${day.copilot.toLocaleString()} turns</div>`
+                    + `<div class="tt-total">Total: ${day.total.toLocaleString()} turns</div>`;
+                showTooltip(turnsTooltip, turnsChart, e, html);
+            });
+            bar.addEventListener('mousemove', e => {
+                const html = turnsTooltip.innerHTML;
+                showTooltip(turnsTooltip, turnsChart, e, html);
+            });
+            bar.addEventListener('mouseleave', () => hideTooltip(turnsTooltip));
 
             const label = document.createElement('div');
             label.className = 'bar-label';
@@ -1100,13 +1198,14 @@ HTML_TEMPLATE = """
             mcpLegend.appendChild(item);
         });
 
-        const maxMcp = Math.max(...mcpData.map(d => d.total), 1);
-        createYAxis('mcp-y-axis', maxMcp);
+        const maxMcp = Math.min(Math.max(...mcpData.map(d => d.total), 1), 300);
+        const mcpAxis = niceAxis(maxMcp);
+        createYAxis('mcp-y-axis', mcpAxis);
 
         mcpData.forEach(day => {
             const bar = document.createElement('div');
             bar.className = 'bar';
-            const totalHeight = maxMcp > 0 ? (day.total / maxMcp) * 100 : 0;
+            const totalHeight = mcpAxis.max > 0 ? Math.min((day.total / mcpAxis.max) * 100, 100) : 0;
             bar.style.height = totalHeight + '%';
 
             // Stack segments bottom-to-top in server order
