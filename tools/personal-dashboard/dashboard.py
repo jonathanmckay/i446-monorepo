@@ -120,7 +120,7 @@ def load_points_data():
         for col_idx, meta in POINTS_COLS.items():
             val = row[col_idx - 1]  # 0-based
             if val is not None and isinstance(val, (int, float)) and val > 0:
-                day_data[meta["label"]] = round(float(val), 1)
+                day_data[meta["label"]] = int(round(float(val)))
         if day_data:
             result[day_str] = day_data
 
@@ -176,25 +176,56 @@ def load_toggl_data():
     return {k: dict(v) for k, v in result.items()}
 
 
-def load_turns_data():
-    """Read stats-cache.json for turns (message count) per day."""
-    if not STATS_CACHE.exists():
+def _jsonl_message_counts(since_date_str):
+    """Count assistant messages per day from JSONL files after since_date_str."""
+    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
+    if not session_dir.exists():
         return {}
-    with open(STATS_CACHE) as f:
-        data = json.load(f)
-    today = date.today()
-    cutoff = today - timedelta(days=DAYS)
-    result = {}
-    for d in data.get("dailyActivity", []):
-        day = d.get("date", "")
-        if not day:
-            continue
+    counts = defaultdict(int)
+    for fpath in session_dir.glob("*.jsonl"):
         try:
-            dt = date.fromisoformat(day)
-        except ValueError:
+            with open(fpath) as fh:
+                for line in fh:
+                    obj = json.loads(line.strip())
+                    if obj.get("type") != "assistant":
+                        continue
+                    ts_str = obj.get("timestamp")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    day = ts.astimezone(LOCAL_TZ).date().isoformat()
+                    if day > since_date_str:
+                        counts[day] += 1
+        except Exception:
             continue
-        if cutoff < dt <= today:
-            result[day] = d.get("messageCount", 0)
+    return dict(counts)
+
+
+def load_turns_data():
+    """Return {date_str: turns} using same methodology as ai-dashboard (messageCount // 6)."""
+    today = date.today().isoformat()
+    result = {}
+
+    # Use stats-cache for dates it covers
+    last_cached = "2000-01-01"
+    if STATS_CACHE.exists():
+        try:
+            with open(STATS_CACHE) as f:
+                cache = json.load(f)
+            for entry in cache.get("dailyActivity", []):
+                d = entry.get("date", "")
+                if d:
+                    result[d] = entry.get("messageCount", 0) // 6
+                    if d > last_cached:
+                        last_cached = d
+        except Exception:
+            pass
+
+    # Supplement with JSONL for days after cache cutoff
+    if last_cached < today:
+        for d, cnt in _jsonl_message_counts(last_cached).items():
+            result[d] = cnt // 6
+
     return result
 
 
@@ -238,7 +269,7 @@ def api_data():
 
     time_datasets = []
     for code in all_projects:
-        values = [round(toggl_raw.get(d, {}).get(code, 0) / 60, 2) for d in dates]
+        values = [int(toggl_raw.get(d, {}).get(code, 0)) for d in dates]
         if any(v > 0 for v in values):
             time_datasets.append({
                 "label": code,
@@ -247,6 +278,40 @@ def api_data():
             })
 
     turns_values = [turns_raw.get(d, 0) for d in dates]
+
+    # 分/min ratio datasets (7-day rolling, exclude days with <30 min tracked)
+    RATIO_DOMAINS = [
+        {"label": "xk",  "pts_col": "xk",  "time_codes": ["xk87", "xk88"], "color": "#fd6c1d"},
+        {"label": "i9",  "pts_col": "i9",  "time_codes": ["i9"],            "color": "#2979ff"},
+        {"label": "m5",  "pts_col": "m5",  "time_codes": ["m5x2"],          "color": "#d50032"},
+    ]
+    ratio_datasets = []
+    for dom in RATIO_DOMAINS:
+        raw = []
+        for d in dates:
+            pts = points_raw.get(d, {}).get(dom["pts_col"], 0)
+            mins = sum(toggl_raw.get(d, {}).get(c, 0) for c in dom["time_codes"])
+            raw.append((pts, mins))
+        # 7-day rolling average ratio
+        rolling = []
+        for i in range(len(dates)):
+            window = raw[max(0, i - 6): i + 1]
+            total_pts = sum(p for p, _ in window)
+            total_mins = sum(m for _, m in window)
+            if total_mins >= 30:
+                rolling.append(round(total_pts / total_mins, 2))
+            else:
+                rolling.append(None)
+        ratio_datasets.append({
+            "label": dom["label"],
+            "data": rolling,
+            "borderColor": dom["color"],
+            "backgroundColor": "transparent",
+            "borderWidth": 2,
+            "pointRadius": 2,
+            "tension": 0.3,
+            "spanGaps": True,
+        })
 
     # Summary stats
     total_points = {label: sum(points_raw.get(d, {}).get(label, 0) for d in dates)
@@ -259,9 +324,10 @@ def api_data():
         "points": {"datasets": points_datasets},
         "time": {"datasets": time_datasets},
         "turns": turns_values,
+        "ratio": {"datasets": ratio_datasets},
         "summary": {
-            "total_points": {k: round(v, 1) for k, v in total_points.items() if v > 0},
-            "total_hours": {k: round(v / 60, 1) for k, v in total_time.items() if v > 0},
+            "total_points": {k: int(v) for k, v in total_points.items() if v > 0},
+            "total_mins": {k: int(v) for k, v in total_time.items() if v > 0},
             "total_turns": sum(turns_values),
         }
     })
@@ -278,9 +344,8 @@ HTML = """<!DOCTYPE html>
 body { background: #111; color: #eee; font-family: 'SF Mono', monospace; padding: 24px; }
 h1 { font-size: 18px; color: #aaa; margin-bottom: 24px; letter-spacing: 2px; }
 h2 { font-size: 13px; color: #666; margin-bottom: 12px; letter-spacing: 1px; text-transform: uppercase; }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 32px; }
+.grid { display: grid; grid-template-columns: 1fr; gap: 32px; margin-bottom: 32px; }
 .card { background: #1a1a1a; border-radius: 8px; padding: 20px; }
-.card.full { grid-column: 1 / -1; }
 .chart-wrap { height: 280px; position: relative; }
 .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .badge { background: #222; border-radius: 4px; padding: 4px 10px; font-size: 12px; }
@@ -296,11 +361,15 @@ h2 { font-size: 13px; color: #666; margin-bottom: 12px; letter-spacing: 1px; tex
     <div class="summary" id="pointsSummary"></div>
   </div>
   <div class="card">
-    <h2>Time / Day (hrs, excl. sleep)</h2>
+    <h2>Time / Day (min, excl. sleep)</h2>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
-  <div class="card full">
+  <div class="card">
+    <h2>分 / min (7-day rolling) — xk · i9 · m5</h2>
+    <div class="chart-wrap" style="height:200px"><canvas id="ratioChart"></canvas></div>
+  </div>
+  <div class="card">
     <h2>AI Turns / Day</h2>
     <div class="chart-wrap" style="height:180px"><canvas id="turnsChart"></canvas></div>
   </div>
@@ -333,6 +402,20 @@ fetch('/api/data').then(r => r.json()).then(data => {
     options: { ...CHART_DEFAULTS }
   });
 
+  // Ratio chart (line)
+  new Chart(document.getElementById('ratioChart'), {
+    type: 'line',
+    data: { labels, datasets: data.ratio.datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { color: '#666', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
+        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+      }
+    }
+  });
+
   // Turns chart (line)
   new Chart(document.getElementById('turnsChart'), {
     type: 'bar',
@@ -363,10 +446,10 @@ fetch('/api/data').then(r => r.json()).then(data => {
     ptEl.appendChild(b);
   });
   const tmEl = document.getElementById('timeSummary');
-  Object.entries(s.total_hours).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
+  Object.entries(s.total_mins).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
     const b = document.createElement('div');
     b.className = 'badge';
-    b.innerHTML = `${k} <span>${v}h</span>`;
+    b.innerHTML = `${k} <span>${v}m</span>`;
     tmEl.appendChild(b);
   });
 });
