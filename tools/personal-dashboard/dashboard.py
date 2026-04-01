@@ -175,6 +175,47 @@ def load_toggl_data():
     return {k: dict(v) for k, v in result.items()}
 
 
+def load_tasks_data():
+    """Fetch completed tasks from Todoist, return {date_str: count} for last DAYS days."""
+    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    today = date.today()
+    since = (today - timedelta(days=DAYS)).strftime("%Y-%m-%dT00:00:00Z")
+
+    result = defaultdict(int)
+    cursor = None
+
+    while True:
+        url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&limit=200"
+        if cursor:
+            url += f"&cursor={cursor}"
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except Exception:
+            break
+
+        for item in data.get("items", []):
+            completed_at = item.get("completed_at", "")
+            if not completed_at:
+                continue
+            try:
+                ts = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                d = ts.astimezone(LOCAL_TZ).date()
+                if d <= (today - timedelta(days=DAYS)) or d > today:
+                    continue
+                result[d.isoformat()] += 1
+            except (ValueError, TypeError):
+                continue
+
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+
+    return dict(result)
+
+
 def load_turns_data():
     """Fetch pre-computed daily turns from ai-dashboard API (localhost:5555/api/turns).
     Falls back to empty if ai-dashboard is not running."""
@@ -202,6 +243,7 @@ def api_data():
     points_raw = load_points_data()
     toggl_raw = load_toggl_data()
     turns_raw = load_turns_data()
+    tasks_raw = load_tasks_data()
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -235,6 +277,15 @@ def api_data():
             })
 
     turns_values = [turns_raw.get(d, 0) for d in dates]
+    tasks_values = [tasks_raw.get(d, 0) for d in dates]
+
+    # shots/task = tasks completed / turns (None when either is 0)
+    shots_per_task = []
+    for t, tr in zip(tasks_values, turns_values):
+        if t > 0 and tr > 0:
+            shots_per_task.append(round(tr / t, 1))
+        else:
+            shots_per_task.append(None)
 
     # 分/min ratio datasets (7-day rolling, exclude days with <30 min tracked)
     RATIO_DOMAINS = [
@@ -281,11 +332,14 @@ def api_data():
         "points": {"datasets": points_datasets},
         "time": {"datasets": time_datasets},
         "turns": turns_values,
+        "tasks": tasks_values,
+        "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
         "summary": {
             "total_points": {k: int(v) for k, v in total_points.items() if v > 0},
             "total_mins": {k: int(v) for k, v in total_time.items() if v > 0},
             "total_turns": sum(turns_values),
+            "total_tasks": sum(tasks_values),
         }
     })
 
@@ -329,6 +383,14 @@ h2 { font-size: 13px; color: #666; margin-bottom: 12px; letter-spacing: 1px; tex
   <div class="card">
     <h2>AI Turns / Day</h2>
     <div class="chart-wrap" style="height:180px"><canvas id="turnsChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Tasks Complete / Day</h2>
+    <div class="chart-wrap" style="height:180px"><canvas id="tasksChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Shots / Task (turns ÷ tasks, 7-day rolling)</h2>
+    <div class="chart-wrap" style="height:180px"><canvas id="shotsChart"></canvas></div>
   </div>
 </div>
 
@@ -382,6 +444,54 @@ fetch('/api/data').then(r => r.json()).then(data => {
       backgroundColor: '#2979ff44',
       borderColor: '#2979ff',
       borderWidth: 1,
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
+        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+      }
+    }
+  });
+
+  // Tasks chart
+  new Chart(document.getElementById('tasksChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{
+      label: 'tasks',
+      data: data.tasks,
+      backgroundColor: '#00e67644',
+      borderColor: '#00e676',
+      borderWidth: 1,
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
+        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+      }
+    }
+  });
+
+  // Shots/task chart (7-day rolling average)
+  const shotsRaw = data.shots_per_task;
+  const rolling7 = shotsRaw.map((_, i) => {
+    const window = shotsRaw.slice(Math.max(0, i - 6), i + 1).filter(v => v !== null);
+    return window.length > 0 ? Math.round(window.reduce((a, b) => a + b, 0) / window.length * 10) / 10 : null;
+  });
+  new Chart(document.getElementById('shotsChart'), {
+    type: 'line',
+    data: { labels, datasets: [{
+      label: 'turns/task',
+      data: rolling7,
+      borderColor: '#aa00ff',
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      pointRadius: 2,
+      tension: 0.3,
+      spanGaps: true,
     }]},
     options: {
       responsive: true, maintainAspectRatio: false,
