@@ -167,9 +167,6 @@ def load_toggl_data():
 
         proj_id = e.get("project_id")
         code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
-        # Exclude sleep from time chart
-        if code == "睡觉":
-            continue
         result[d.isoformat()][code] += dur // 60
 
     return {k: dict(v) for k, v in result.items()}
