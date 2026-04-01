@@ -433,7 +433,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
   new Chart(document.getElementById('timeChart'), {
     type: 'bar',
     data: { labels, datasets: data.time.datasets },
-    options: { ...CHART_DEFAULTS }
+    options: { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
   });
 
   // Ratio chart (line)
