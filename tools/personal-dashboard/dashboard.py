@@ -351,16 +351,30 @@ HTML = """<!DOCTYPE html>
 <title>jm dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
+:root {
+  --bg: #111; --card: #1a1a1a; --text: #eee;
+  --h1: #aaa; --h2: #666;
+  --badge-bg: #222; --badge-text: #aaa;
+  --tick: #555; --grid: #222;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f4f4; --card: #fff; --text: #111;
+    --h1: #444; --h2: #888;
+    --badge-bg: #eee; --badge-text: #555;
+    --tick: #aaa; --grid: #e0e0e0;
+  }
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #111; color: #eee; font-family: 'SF Mono', monospace; padding: 24px; }
-h1 { font-size: 18px; color: #aaa; margin-bottom: 24px; letter-spacing: 2px; }
-h2 { font-size: 13px; color: #666; margin-bottom: 12px; letter-spacing: 1px; text-transform: uppercase; }
+body { background: var(--bg); color: var(--text); font-family: 'SF Mono', monospace; padding: 24px; }
+h1 { font-size: 18px; color: var(--h1); margin-bottom: 24px; letter-spacing: 2px; }
+h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px; text-transform: uppercase; }
 .grid { display: grid; grid-template-columns: 1fr; gap: 32px; margin-bottom: 32px; }
-.card { background: #1a1a1a; border-radius: 8px; padding: 20px; }
+.card { background: var(--card); border-radius: 8px; padding: 20px; }
 .chart-wrap { height: 280px; position: relative; }
 .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.badge { background: #222; border-radius: 4px; padding: 4px 10px; font-size: 12px; }
-.badge span { color: #aaa; }
+.badge { background: var(--badge-bg); border-radius: 4px; padding: 4px 10px; font-size: 12px; }
+.badge span { color: var(--badge-text); }
 </style>
 </head>
 <body>
@@ -395,12 +409,16 @@ h2 { font-size: 13px; color: #666; margin-bottom: 12px; letter-spacing: 1px; tex
 </div>
 
 <script>
+const DARK = window.matchMedia('(prefers-color-scheme: dark)').matches;
+const TICK = DARK ? '#555' : '#aaa';
+const GRID = DARK ? '#222' : '#e0e0e0';
+
 const CHART_DEFAULTS = {
   responsive: true, maintainAspectRatio: false,
   plugins: { legend: { display: false } },
   scales: {
-    x: { stacked: true, ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
-    y: { stacked: true, ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+    x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+    y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
   }
 };
 
@@ -427,10 +445,10 @@ fetch('/api/data').then(r => r.json()).then(data => {
     data: { labels, datasets: data.ratio.datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: true, labels: { color: '#666', font: { size: 11 } } } },
+      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
       scales: {
-        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
-        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });
@@ -449,8 +467,8 @@ fetch('/api/data').then(r => r.json()).then(data => {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
-        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });
@@ -469,8 +487,8 @@ fetch('/api/data').then(r => r.json()).then(data => {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
-        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });
@@ -497,8 +515,8 @@ fetch('/api/data').then(r => r.json()).then(data => {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } },
-        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#222' } }
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });

@@ -613,11 +613,27 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='35' fill='none' stroke='%23FF10F0' stroke-width='16' stroke-dasharray='55 165' transform='rotate(-90 50 50)'/><circle cx='50' cy='50' r='35' fill='none' stroke='%2339FF14' stroke-width='16' stroke-dasharray='55 165' transform='rotate(0 50 50)'/><circle cx='50' cy='50' r='35' fill='none' stroke='%2300D4FF' stroke-width='16' stroke-dasharray='55 165' transform='rotate(90 50 50)'/><circle cx='50' cy='50' r='35' fill='none' stroke='%23FFD700' stroke-width='16' stroke-dasharray='55 165' transform='rotate(180 50 50)'/></svg>">
     <style>
+        :root {
+            --bg: #ffffff; --card-bg: #ffffff; --card-border: #e0e0e0;
+            --text: #1a1a1a; --muted: #666; --faint: #f0f0f0;
+            --chart-bg: #fafafa; --chart-border: #e0e0e0;
+            --bar-label: #333; --heatmap-empty: #ebedf0;
+            --shadow: rgba(0,0,0,0.05); --last-updated: #999;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111; --card-bg: #1a1a1a; --card-border: #2e2e2e;
+                --text: #e8e8e8; --muted: #888; --faint: #252525;
+                --chart-bg: #1e1e1e; --chart-border: #333;
+                --bar-label: #bbb; --heatmap-empty: #2d333b;
+                --shadow: rgba(0,0,0,0.3); --last-updated: #555;
+            }
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #ffffff;
-            color: #1a1a1a;
+            background: var(--bg);
+            color: var(--text);
             padding: 20px;
         }
         .container { max-width: 1400px; margin: 0 auto; }
@@ -629,19 +645,19 @@ HTML_TEMPLATE = """
             -webkit-text-fill-color: transparent;
             font-weight: 800;
         }
-        .subtitle { color: #666; margin-bottom: 30px; }
+        .subtitle { color: var(--muted); margin-bottom: 30px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px; }
         .card {
-            background: #ffffff;
-            border: 2px solid #e0e0e0;
+            background: var(--card-bg);
+            border: 2px solid var(--card-border);
             border-radius: 16px;
             padding: 24px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 8px var(--shadow);
         }
         .card h2 {
             font-size: 1.2em;
             margin-bottom: 16px;
-            color: #1a1a1a;
+            color: var(--text);
             font-weight: 700;
         }
         .metric {
@@ -649,22 +665,22 @@ HTML_TEMPLATE = """
             justify-content: space-between;
             margin-bottom: 12px;
             padding: 8px 0;
-            border-bottom: 1px solid #f0f0f0;
+            border-bottom: 1px solid var(--faint);
         }
         .metric:last-child { border-bottom: none; }
-        .metric-label { color: #666; }
+        .metric-label { color: var(--muted); }
         .metric-value {
             font-weight: 700;
-            color: #1a1a1a;
+            color: var(--text);
         }
         .cost { color: #39FF14; text-shadow: 0 0 10px rgba(57, 255, 20, 0.3); }
         .chart {
             margin-top: 20px;
             height: 350px;
-            background: #fafafa;
+            background: var(--chart-bg);
             border-radius: 12px;
             padding: 16px;
-            border: 1px solid #e0e0e0;
+            border: 1px solid var(--chart-border);
             position: relative;
         }
         .chart-container {
@@ -678,7 +694,7 @@ HTML_TEMPLATE = """
             width: 50px;
             height: 240px;
             font-size: 0.75em;
-            color: #666;
+            color: var(--muted);
             padding-right: 8px;
             text-align: right;
         }
@@ -721,7 +737,7 @@ HTML_TEMPLATE = """
             transform: translateX(-50%) rotate(-45deg);
             transform-origin: center;
             font-size: 0.65em;
-            color: #333;
+            color: var(--bar-label);
             white-space: nowrap;
         }
         .refresh {
@@ -742,7 +758,7 @@ HTML_TEMPLATE = """
         }
         .last-updated {
             text-align: center;
-            color: #999;
+            color: var(--last-updated);
             margin-top: 30px;
             font-size: 0.9em;
         }
@@ -757,9 +773,9 @@ HTML_TEMPLATE = """
             width: 12px;
             height: 12px;
             border-radius: 2px;
-            background: #eee;
+            background: var(--heatmap-empty);
         }
-        .heatmap-day.level-0 { background: #ebedf0; }
+        .heatmap-day.level-0 { background: var(--heatmap-empty); }
         .heatmap-day.level-1 { background: #9be9a8; }
         .heatmap-day.level-2 { background: #40c463; }
         .heatmap-day.level-3 { background: #30a14e; }
@@ -871,7 +887,7 @@ HTML_TEMPLATE = """
                     <span class="metric-value cost">${{ "%.2f" | format(copilot.total_cost | default(0)) }}</span>
                 </div>
                 <div class="metric">
-                    <span class="metric-label" style="font-size: 0.85em; color: #999;">
+                    <span class="metric-label" style="font-size: 0.85em; color: var(--muted);">
                         ⚠️ Input costs excluded
                     </span>
                 </div>
@@ -888,7 +904,7 @@ HTML_TEMPLATE = """
                     <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
                 </div>
                 {% if github.note %}
-                <div style="margin-top: 12px; font-size: 0.85em; color: #999;">
+                <div style="margin-top: 12px; font-size: 0.85em; color: var(--muted);">
                     {{ github.note }}
                 </div>
                 {% endif %}
@@ -960,37 +976,37 @@ HTML_TEMPLATE = """
             <h2>⚡ Response Latency — TTFT &amp; TTLT (Last 30 Days)</h2>
             <div class="grid" style="margin-bottom: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
                 <div>
-                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTFT</div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTFT</div>
                     <div style="font-size:1.6em; font-weight:700; color:#FF10F0; text-shadow: 0 0 10px rgba(255,16,240,0.3);">
                         {{ "%.1f" | format(latency.overall.avg_ttft | default(0)) }}s
                     </div>
                 </div>
                 <div>
-                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median TTFT</div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median TTFT</div>
                     <div style="font-size:1.6em; font-weight:700; color:#FF10F0; text-shadow: 0 0 10px rgba(255,16,240,0.3);">
                         {{ "%.1f" | format(latency.overall.median_ttft | default(0)) }}s
                     </div>
                 </div>
                 <div>
-                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 TTFT</div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 TTFT</div>
                     <div style="font-size:1.6em; font-weight:700; color:#FF10F0; text-shadow: 0 0 10px rgba(255,16,240,0.3);">
                         {{ "%.1f" | format(latency.overall.p95_ttft | default(0)) }}s
                     </div>
                 </div>
                 <div>
-                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTLT</div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTLT</div>
                     <div style="font-size:1.6em; font-weight:700; color:#39FF14; text-shadow: 0 0 10px rgba(57,255,20,0.3);">
                         {{ "%.1f" | format(latency.overall.avg_ttlt | default(0)) }}s
                     </div>
                 </div>
                 <div>
-                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median TTLT</div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median TTLT</div>
                     <div style="font-size:1.6em; font-weight:700; color:#39FF14; text-shadow: 0 0 10px rgba(57,255,20,0.3);">
                         {{ "%.1f" | format(latency.overall.median_ttlt | default(0)) }}s
                     </div>
                 </div>
                 <div>
-                    <div style="font-size:0.75em; color:#999; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 TTLT</div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 TTLT</div>
                     <div style="font-size:1.6em; font-weight:700; color:#39FF14; text-shadow: 0 0 10px rgba(57,255,20,0.3);">
                         {{ "%.1f" | format(latency.overall.p95_ttlt | default(0)) }}s
                     </div>
@@ -1006,10 +1022,10 @@ HTML_TEMPLATE = """
                     TTLT (last response)
                 </span>
             </div>
-            <div style="background:#fafafa; border:1px solid #e0e0e0; border-radius:12px; padding:16px; overflow:hidden;">
+            <div style="background:var(--chart-bg); border:1px solid var(--chart-border); border-radius:12px; padding:16px; overflow:hidden;">
                 <svg id="latency-chart" width="100%" height="200" style="overflow:visible;"></svg>
             </div>
-            <div style="margin-top:8px; font-size:0.75em; color:#999;">
+            <div style="margin-top:8px; font-size:0.75em; color:var(--muted);">
                 Latency measured per Claude Code session (JSONL). TTFT = first user→assistant delta; TTLT = last user→assistant delta. Sessions with no message pairs or &gt;5 min gaps excluded.
             </div>
         </div>
