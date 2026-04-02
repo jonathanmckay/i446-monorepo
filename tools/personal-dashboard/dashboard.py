@@ -219,7 +219,7 @@ def load_turns_data():
     try:
         with urllib.request.urlopen("http://127.0.0.1:5555/api/turns", timeout=5) as resp:
             entries = json.loads(resp.read())
-        return {e["date"]: e["claude"] for e in entries if e.get("date")}
+        return {e["date"]: e["total"] for e in entries if e.get("date")}
     except Exception:
         return {}
 
@@ -232,6 +232,27 @@ def last_n_days(n=DAYS):
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
+
+@app.route("/favicon.png")
+def favicon():
+    from PIL import Image, ImageDraw
+    import io
+    from flask import send_file
+    img = Image.new("RGB", (32, 32), (17, 17, 17))
+    d = ImageDraw.Draw(img)
+    d.rectangle([2, 16, 9, 31],  fill=(41, 121, 255))
+    d.rectangle([2,  8, 9, 15],  fill=(253, 108, 29))
+    d.rectangle([12, 22, 19, 31], fill=(41, 121, 255))
+    d.rectangle([12, 12, 19, 21], fill=(253, 108, 29))
+    d.rectangle([12,  4, 19, 11], fill=(213, 0, 50))
+    d.rectangle([22, 22, 29, 31], fill=(41, 121, 255))
+    d.rectangle([22, 14, 29, 21], fill=(253, 108, 29))
+    d.rectangle([22, 10, 29, 13], fill=(213, 0, 50))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
 
 @app.route("/api/data")
 def api_data():
@@ -246,15 +267,29 @@ def api_data():
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
     point_colors = {m["label"]: m["color"] for m in POINTS_COLS.values()}
 
+    # Points order: i9 bottom, xk, m5, then others
+    POINTS_PRIORITY = ["i9", "xk", "m5"]
+    def points_sort_key(label):
+        if label in POINTS_PRIORITY:
+            return (0, POINTS_PRIORITY.index(label))
+        return (1, all_point_labels.index(label))
+    ordered_point_labels = sorted(all_point_labels, key=points_sort_key)
+
     # Collect all project codes that appear in toggl data
-    all_projects = sorted(
-        {code for day_data in toggl_raw.values() for code in day_data},
-        key=lambda c: -sum(v.get(c, 0) for v in toggl_raw.values())
-    )
+    # Time order: i9 bottom, xk87, m5x2, others by volume, 睡觉 top
+    TIME_PRIORITY = ["i9", "xk87", "m5x2"]
+    all_project_codes = {code for day_data in toggl_raw.values() for code in day_data}
+    def time_sort_key(code):
+        if code in TIME_PRIORITY:
+            return (0, TIME_PRIORITY.index(code))
+        if code == "睡觉":
+            return (2, 0)
+        return (1, -sum(v.get(code, 0) for v in toggl_raw.values()))
+    all_projects = sorted(all_project_codes, key=time_sort_key)
 
     # Build chart datasets
     points_datasets = []
-    for label in all_point_labels:
+    for label in ordered_point_labels:
         values = [points_raw.get(d, {}).get(label, 0) for d in dates]
         if any(v > 0 for v in values):
             points_datasets.append({
@@ -346,6 +381,7 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>jm dashboard</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 :root {
@@ -490,11 +526,11 @@ fetch('/api/data').then(r => r.json()).then(data => {
     }
   });
 
-  // Shots/task chart (7-day rolling average)
-  const shotsRaw = data.shots_per_task;
-  const rolling7 = shotsRaw.map((_, i) => {
-    const window = shotsRaw.slice(Math.max(0, i - 6), i + 1).filter(v => v !== null);
-    return window.length > 0 ? Math.round(window.reduce((a, b) => a + b, 0) / window.length * 10) / 10 : null;
+  // Shots/task chart (7-day rolling: total turns ÷ total tasks over window)
+  const rolling7 = data.turns.map((_, i) => {
+    const t7 = data.tasks.slice(Math.max(0, i - 6), i + 1).reduce((a, b) => a + b, 0);
+    const tr7 = data.turns.slice(Math.max(0, i - 6), i + 1).reduce((a, b) => a + b, 0);
+    return t7 > 0 ? Math.round(tr7 / t7 * 10) / 10 : null;
   });
   new Chart(document.getElementById('shotsChart'), {
     type: 'line',
