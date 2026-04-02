@@ -173,12 +173,15 @@ def load_toggl_data():
 
 
 def load_tasks_data():
-    """Fetch completed tasks from Todoist, return {date_str: count} for last DAYS days."""
+    """Fetch completed tasks from Todoist, split into 0neon habits vs other tasks.
+    Returns {date_str: {"neon": count, "other": count, "total": count}}.
+    """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
     today = date.today()
     since = (today - timedelta(days=DAYS)).strftime("%Y-%m-%dT00:00:00Z")
 
-    result = defaultdict(int)
+    neon = defaultdict(int)
+    other = defaultdict(int)
     cursor = None
 
     while True:
@@ -202,7 +205,12 @@ def load_tasks_data():
                 d = ts.astimezone(LOCAL_TZ).date()
                 if d <= (today - timedelta(days=DAYS)) or d > today:
                     continue
-                result[d.isoformat()] += 1
+                day_str = d.isoformat()
+                content = item.get("content", "")
+                if "@0neon" in content:
+                    neon[day_str] += 1
+                else:
+                    other[day_str] += 1
             except (ValueError, TypeError):
                 continue
 
@@ -210,7 +218,9 @@ def load_tasks_data():
         if not cursor:
             break
 
-    return dict(result)
+    all_days = set(neon) | set(other)
+    return {d: {"neon": neon[d], "other": other[d], "total": neon[d] + other[d]}
+            for d in all_days}
 
 
 def load_turns_data():
@@ -309,7 +319,9 @@ def api_data():
             })
 
     turns_values = [turns_raw.get(d, 0) for d in dates]
-    tasks_values = [tasks_raw.get(d, 0) for d in dates]
+    tasks_neon = [tasks_raw.get(d, {}).get("neon", 0) for d in dates]
+    tasks_other = [tasks_raw.get(d, {}).get("other", 0) for d in dates]
+    tasks_values = [n + o for n, o in zip(tasks_neon, tasks_other)]
 
     # shots/task = tasks completed / turns (None when either is 0)
     shots_per_task = []
@@ -365,6 +377,8 @@ def api_data():
         "time": {"datasets": time_datasets},
         "turns": turns_values,
         "tasks": tasks_values,
+        "tasks_neon": tasks_neon,
+        "tasks_other": tasks_other,
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
         "summary": {
@@ -506,22 +520,28 @@ fetch('/api/data').then(r => r.json()).then(data => {
     }
   });
 
-  // Tasks chart
+  // Tasks chart (stacked: 0neon vs other)
   new Chart(document.getElementById('tasksChart'), {
     type: 'bar',
     data: { labels, datasets: [{
-      label: 'tasks',
-      data: data.tasks,
+      label: '0neon',
+      data: data.tasks_neon,
       backgroundColor: '#00e67644',
       borderColor: '#00e676',
+      borderWidth: 1,
+    }, {
+      label: 'other',
+      data: data.tasks_other,
+      backgroundColor: '#2979ff44',
+      borderColor: '#2979ff',
       borderWidth: 1,
     }]},
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
       scales: {
-        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });

@@ -492,6 +492,85 @@ def get_mcp_stats(days=30):
     return {"daily": daily, "servers": servers, "total": total}
 
 
+def get_skill_stats(days=30):
+    """Get slash-command (skill) invocation stats from Claude Code JSONL session logs.
+
+    Scans user messages for <command-name>/skill</command-name> tags,
+    groups by skill name and day.
+    """
+    import re
+    pacific = pytz.timezone("America/Los_Angeles")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
+    if not session_dir.exists():
+        return {"daily": [], "skills": [], "total": 0}
+
+    # Exclude built-in CLI commands that aren't user-defined skills
+    EXCLUDED = {"/clear", "/exit", "/model", "/help", "/compact", "/config", "/fast",
+                "/login", "/logout", "/status", "/doctor", "/permissions", "/memory",
+                "/review", "/cost", "/init", "/terminal-setup", "/vim", "/bug"}
+
+    daily_by_skill = defaultdict(Counter)
+    all_skills = set()
+    total = 0
+
+    for fpath in session_dir.glob("*.jsonl"):
+        try:
+            with open(fpath) as fh:
+                for line in fh:
+                    obj = json.loads(line.strip())
+                    if obj.get("type") != "user":
+                        continue
+                    ts_str = obj.get("timestamp")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts < cutoff:
+                        continue
+
+                    msg = obj.get("message", {})
+                    if not isinstance(msg, dict):
+                        continue
+                    content = msg.get("content", [])
+                    # Collect all text to search
+                    texts = []
+                    if isinstance(content, str):
+                        texts.append(content)
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, str):
+                                texts.append(block)
+                            elif isinstance(block, dict) and block.get("type") == "text":
+                                texts.append(block.get("text", ""))
+                    for text in texts:
+                        for match in re.finditer(r"<command-name>(/[^<]+)</command-name>", text):
+                            skill = match.group(1)
+                            if skill in EXCLUDED:
+                                continue
+                            day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+                            daily_by_skill[day][skill] += 1
+                            all_skills.add(skill)
+                            total += 1
+        except Exception:
+            continue
+
+    skills = sorted(all_skills)
+    daily = []
+    for i in range(days):
+        date = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        entry = {"date": date}
+        day_total = 0
+        for s in skills:
+            count = daily_by_skill.get(date, {}).get(s, 0)
+            entry[s] = count
+            day_total += count
+        entry["total"] = day_total
+        daily.append(entry)
+
+    return {"daily": daily, "skills": skills, "total": total}
+
+
 def get_latency_stats(days=30):
     """Compute TTFT and TTLT from Claude Code JSONL session files.
 
@@ -973,6 +1052,21 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="card">
+            <h2>⚡ Skill Calls / Day (Last 30 Days)</h2>
+            <div class="legend" id="skill-legend">
+                <!-- Will be populated by JavaScript -->
+            </div>
+            <div class="chart">
+                <div class="chart-container">
+                    <div class="y-axis" id="skill-y-axis"></div>
+                    <div class="bar-chart" id="skill-chart">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>⚡ Response Latency — TTFT &amp; TTLT (Last 30 Days)</h2>
             <div class="grid" style="margin-bottom: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
                 <div>
@@ -1371,6 +1465,89 @@ HTML_TEMPLATE = """
             mcpChart.appendChild(bar);
         });
 
+        // Render Skill calls chart (stacked by skill)
+        const skillData = {{ skill_daily | tojson | safe }};
+        const skillNames = {{ skill_names | tojson | safe }};
+        const skillChart = document.getElementById('skill-chart');
+        const skillLegend = document.getElementById('skill-legend');
+
+        const skillColors = {
+            '/did': { bg: 'linear-gradient(180deg, #4CAF50 0%, #81C784 100%)', shadow: 'rgba(76, 175, 80, 0.3)', label: '#4CAF50' },
+            '/tg': { bg: 'linear-gradient(180deg, #E57CD8 0%, #F0A0E8 100%)', shadow: 'rgba(229, 124, 216, 0.3)', label: '#E57CD8' },
+            '/-1g': { bg: 'linear-gradient(180deg, #FF9800 0%, #FFB74D 100%)', shadow: 'rgba(255, 152, 0, 0.3)', label: '#FF9800' },
+            '/0t': { bg: 'linear-gradient(180deg, #2196F3 0%, #64B5F6 100%)', shadow: 'rgba(33, 150, 243, 0.3)', label: '#2196F3' },
+            '/1n': { bg: 'linear-gradient(180deg, #9C27B0 0%, #BA68C8 100%)', shadow: 'rgba(156, 39, 176, 0.3)', label: '#9C27B0' },
+            '/1nd': { bg: 'linear-gradient(180deg, #00BCD4 0%, #4DD0E1 100%)', shadow: 'rgba(0, 188, 212, 0.3)', label: '#00BCD4' },
+            '/commit': { bg: 'linear-gradient(180deg, #607D8B 0%, #90A4AE 100%)', shadow: 'rgba(96, 125, 139, 0.3)', label: '#607D8B' },
+        };
+        const skillFallbackColors = [
+            { bg: 'linear-gradient(180deg, #FF5722 0%, #FF8A65 100%)', shadow: 'rgba(255, 87, 34, 0.3)', label: '#FF5722' },
+            { bg: 'linear-gradient(180deg, #795548 0%, #A1887F 100%)', shadow: 'rgba(121, 85, 72, 0.3)', label: '#795548' },
+            { bg: 'linear-gradient(180deg, #CDDC39 0%, #DCE775 100%)', shadow: 'rgba(205, 220, 57, 0.3)', label: '#CDDC39' },
+            { bg: 'linear-gradient(180deg, #3F51B5 0%, #7986CB 100%)', shadow: 'rgba(63, 81, 181, 0.3)', label: '#3F51B5' },
+        ];
+        let skillFbIdx = 0;
+        function getSkillColor(skill) {
+            if (skillColors[skill]) return skillColors[skill];
+            const c = skillFallbackColors[skillFbIdx % skillFallbackColors.length];
+            skillFbIdx++;
+            skillColors[skill] = c;
+            return c;
+        }
+
+        skillNames.forEach(skill => {
+            const color = getSkillColor(skill);
+            const item = document.createElement('div');
+            item.className = 'legend-item';
+            item.innerHTML = `<div class="legend-color" style="background: ${color.label};"></div><span>${skill}</span>`;
+            skillLegend.appendChild(item);
+        });
+
+        const maxSkill = Math.min(Math.max(...skillData.map(d => d.total), 1), 100);
+        const skillAxis = niceAxis(maxSkill);
+        createYAxis('skill-y-axis', skillAxis);
+
+        skillData.forEach(day => {
+            const bar = document.createElement('div');
+            bar.className = 'bar';
+            const totalHeight = skillAxis.max > 0 ? Math.min((day.total / skillAxis.max) * 100, 100) : 0;
+            bar.style.height = totalHeight + '%';
+
+            let isTop = true;
+            for (let i = skillNames.length - 1; i >= 0; i--) {
+                const skill = skillNames[i];
+                const count = day[skill] || 0;
+                if (count <= 0) continue;
+                const seg = document.createElement('div');
+                seg.className = 'bar-segment';
+                const segHeight = day.total > 0 ? (count / day.total) * 100 : 0;
+                seg.style.height = segHeight + '%';
+                const color = getSkillColor(skill);
+                seg.style.background = color.bg;
+                seg.style.boxShadow = `0 0 8px ${color.shadow}`;
+                if (isTop) {
+                    seg.style.borderRadius = '4px 4px 0 0';
+                    isTop = false;
+                }
+                bar.appendChild(seg);
+            }
+
+            let tooltipLines = [day.date + ':'];
+            skillNames.forEach(s => {
+                const c = day[s] || 0;
+                if (c > 0) tooltipLines.push(`${s}: ${c}`);
+            });
+            tooltipLines.push(`Total: ${day.total}`);
+            bar.title = tooltipLines.join('\\n');
+
+            const label = document.createElement('div');
+            label.className = 'bar-label';
+            label.textContent = day.date.substring(5);
+            bar.appendChild(label);
+
+            skillChart.appendChild(bar);
+        });
+
         // Render TTFT / TTLT line chart
         (function() {
             const latencyData = {{ latency_daily | tojson | safe }};
@@ -1536,6 +1713,7 @@ def dashboard():
 
     mcp = get_mcp_stats()
     latency = get_latency_stats()
+    skills = get_skill_stats()
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -1546,6 +1724,8 @@ def dashboard():
         daily_turns=daily_turns,
         mcp_daily=mcp["daily"],
         mcp_servers=mcp["servers"],
+        skill_daily=skills["daily"],
+        skill_names=skills["skills"],
         latency=latency,
         latency_daily=latency["daily"],
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1560,6 +1740,7 @@ def api_stats():
         "copilot": get_copilot_stats(),
         "github": get_github_commits(),
         "mcp": get_mcp_stats(),
+        "skills": get_skill_stats(),
         "latency": get_latency_stats(),
     })
 
