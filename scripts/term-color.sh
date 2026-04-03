@@ -10,6 +10,7 @@
 #   orange — tool use failed (non-fatal)
 #   blue  — AI done / task complete
 #   red   — AI stopped with failure
+#   gray  — idle terminal (no AI session active)
 
 COLOR=${1:-reset}
 
@@ -78,6 +79,7 @@ case "$COLOR" in
   red)    R=39835; G=0;     B=8995  ;;  # Velvet      #9b0023
   orange) R=65535; G=28013; B=0     ;;  # Lava        #ff6d00
   purple) R=15677; G=0;     B=26214 ;;  # Void        #3d0066
+  gray)   R=9252;  G=9252;  B=9766  ;;  # Slate       #242426
   reset)  R=2570;  G=2570;  B=2570  ;;  # Abyss
   *) exit 1 ;;
 esac

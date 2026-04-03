@@ -1,6 +1,6 @@
 ---
-name: 1nd
-description: Log completion of a 1₦+ weekly task and add its points to today's 0分 tab.
+name: "1nd"
+description: "Log completion of a 1₦+ weekly task and add its points to today's 0分 tab."
 user-invocable: true
 ---
 

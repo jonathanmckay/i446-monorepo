@@ -1,6 +1,6 @@
 ---
-name: tg
-description: Quick Toggl time tracking with auto-tagging. Starts/stops/creates entries using shortcode-to-project mapping.
+name: "tg"
+description: "Quick Toggl time tracking with auto-tagging. Starts/stops/creates entries using shortcode-to-project mapping."
 user-invocable: true
 ---
 

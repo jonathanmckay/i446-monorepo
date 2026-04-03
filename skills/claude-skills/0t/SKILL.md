@@ -1,6 +1,6 @@
 ---
-name: 0t
-description: Generate yesterday's Toggl donut chart and update Neon spreadsheet. Automatically gathers time entries, creates visualization, handles Excel insertion, and logs last night's sleep minutes to 0₦.
+name: "0t"
+description: "Generate yesterday's Toggl donut chart and update Neon spreadsheet. Automatically gathers time entries, creates visualization, handles Excel insertion, and logs last night's sleep minutes to 0₦."
 user-invocable: true
 ---
 

@@ -1,6 +1,6 @@
 ---
-name: 1n
-description: Generate weekly Toggl donut charts (two versions) and update Neon spreadsheet. Automatically gathers time entries for the most recent week (Sunday-Saturday), creates two visualizations with different exclusions, and handles Excel insertion.
+name: "1n"
+description: "Generate weekly Toggl donut charts (two versions) and update Neon spreadsheet. Automatically gathers time entries for the most recent week (Sunday-Saturday), creates two visualizations with different exclusions, and handles Excel insertion."
 user-invocable: true
 ---
 

@@ -1,6 +1,6 @@
 ---
-name: clean-notes
-description: Sort raw meeting notes from z_ibx/new-notes.md into their correct vault locations (d359 people docs, d358 meeting notes, o314 journal entries). Clears the inbox when done.
+name: "clean-notes"
+description: "Sort raw meeting notes from z_ibx/new-notes.md into their correct vault locations (d359 people docs, d358 meeting notes, o314 journal entries). Clears the inbox when done."
 user-invocable: true
 ---
 

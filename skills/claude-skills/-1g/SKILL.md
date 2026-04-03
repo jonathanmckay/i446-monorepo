@@ -1,6 +1,6 @@
 ---
-name: -1g
-description: Set goals for the current 2-hour block. Writes to build order and syncs to Todoist with #关键径路. Usage: /-1g [next] <goals>
+name: "-1g"
+description: "Set goals for the current 2-hour block. Writes to build order and syncs to Todoist with #关键径路. Usage: /-1g [next] <goals>"
 user-invocable: true
 ---
 
