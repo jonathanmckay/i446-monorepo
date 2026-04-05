@@ -1,6 +1,6 @@
 ---
 name: did
-description: "Mark habits or tasks as done. Supports multiple items separated by comma/semicolon. Writes to 0₦ (habits) or 0分 (Todoist tasks), completes in Todoist. Usage: /did <habit> [time], <habit2> [time2]"
+description: "Mark habits or tasks as done. Supports multiple items separated by comma/semicolon. Writes to 0₦ (habits) or 0分 (Todoist tasks), completes in Todoist. Usage: /did <habit> [time], <habit2> [time2] [yesterday|M/D]"
 user-invocable: true
 ---
 
@@ -11,13 +11,14 @@ Mark a daily habit as complete in the Neon分v12.2.xlsx spreadsheet (`0₦` shee
 ## Usage
 
 ```
-/did <habit> [time]
-/did <habit1> [time1], <habit2> [time2], ...
-/did <habit1> [time1]; <habit2> [time2]; ...
+/did <habit> [time] [date]
+/did <habit1> [time1], <habit2> [time2], ... [date]
+/did <habit1> [time1]; <habit2> [time2]; ... [date]
 ```
 
 - `<habit>` — the column header as it appears in row 1 of the `0₦` sheet (e.g. `o314`, `冥想`, `hiit`, `0t`), or a Todoist task name
 - `[time]` — optional number to write into the cell (minutes). If omitted, search today's Toggl entries for a matching description (see Step 1b). If no Toggl match, writes `1`.
+- `[date]` — optional date applied to **all** items. Can be `yesterday` or a date in `M/D` or `MM/DD` format (e.g. `3/25`). Defaults to today.
 - Multiple items can be separated by `,` or `;` — each is processed independently
 
 Examples:
@@ -26,12 +27,30 @@ Examples:
 - `/did 冥想 15` → writes 15 in the 冥想 column for today
 - `/did slack m5x2, slack github` → marks both slack habits done (writes 1 each)
 - `/did push 4; 早餐; day hci` → marks three habits done in one command
+- `/did hiit yesterday` → writes hiit for yesterday
+- `/did o314 20, 冥想 15 3/25` → writes both habits for 3/25
 
 ## Steps
 
+### Step -2: Parse global date
+
+Before doing anything else, inspect the **full raw argument string** (everything after `/did`).
+
+Check if the **last whitespace-delimited token** matches one of:
+- `yesterday`
+- A pattern like `M/D` or `MM/DD` (e.g. `3/25`, `12/01`)
+
+If it matches, strip that token from the args and resolve it to an M/D string (`targetDate`):
+- `yesterday` → subtract 1 day from today, format as `M/D` (e.g. `4/4`)
+- `M/D` or `MM/DD` → normalize to `M/D` without leading zeros (e.g. `03/25` → `3/25`)
+
+If no date token is found, set `targetDate` to today's date in `M/D` format.
+
+Carry `targetDate` through all subsequent steps. It replaces every use of "today" in the AppleScripts — substitute it as `TARGET_DATE` before running `osascript`.
+
 ### Step -1: Split multiple items
 
-If the input contains `,` or `;`, split into separate items. Trim whitespace from each. Process each item independently through Steps 0–5, then report all results together at the end.
+If the input (after stripping the date token) contains `,` or `;`, split into separate items. Trim whitespace from each. Process each item independently through Steps 0–5, then report all results together at the end.
 
 ### Step 0: Determine if this is a 0₦ habit or a Todoist task
 
@@ -45,7 +64,9 @@ Extract `<habit>` and optional `[time]` from the arguments.
 
 ### Step 1b: Auto-detect time from Toggl (if no time provided)
 
-If the user did not provide `[time]`, use `toggl_today` to fetch today's entries. Search for entries whose description contains `<habit>` (case-insensitive). Sum the duration in minutes across all matching entries. If matches are found, use that sum as `[time]`. If no matches, fall back to `1`.
+If the user did not provide `[time]`:
+- If `targetDate` is **today**, use `toggl_today` to fetch today's entries. Search for entries whose description contains `<habit>` (case-insensitive). Sum the duration in minutes across all matching entries. If matches are found, use that sum as `[time]`. If no matches, fall back to `1`.
+- If `targetDate` is **not today** (past date), skip Toggl lookup entirely and fall back to `1`.
 
 Use the `/tg` shortcode mapping to expand the habit name for matching. For example:
 - `hiit` → also match Toggl project `hcbp`
@@ -66,9 +87,7 @@ Run the following AppleScript via `osascript`. It:
 tell application "Microsoft Excel"
     set theSheet to sheet 2 of active workbook  -- 0₦ sheet (use index, not name, to avoid encoding issues)
 
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
+    set today to "TARGET_DATE"
 
     set colLetters to {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AP"}
 
@@ -107,6 +126,7 @@ end tell
 ```
 
 Before running, substitute:
+- `TARGET_DATE` → the resolved `targetDate` string (e.g. `4/4`, `3/25`)
 - `HABIT_PLACEHOLDER` → the habit name from the user's input
 - `TIME_PLACEHOLDER` → the time value (number)
 
@@ -128,9 +148,7 @@ Use AppleScript to:
 ```applescript
 tell application "Microsoft Excel"
     set theSheet to sheet 2 of active workbook
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
+    set today to "TARGET_DATE"
 
     set colLetters to {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AP"}
 
@@ -188,10 +206,10 @@ If no matching task is found, skip silently (not all habits have a Todoist task)
 
 On success, confirm in one line:
 ```
-<habit> → <time> (today) [+ todoist]
+<habit> → <time> (<targetDate>) [+ todoist]
 ```
 
-If no Todoist task was found, omit the `[+ todoist]` part. On error (habit not found, date not found), report the error clearly.
+If `targetDate` is today, show `today` instead of the date string. If no Todoist task was found, omit the `[+ todoist]` part. On error (habit not found, date not found), report the error clearly.
 
 ### Step 5: Todoist-only task
 
@@ -211,9 +229,7 @@ This step runs when `<habit>` is **not** a 0₦ column header.
 ```applescript
 tell application "Microsoft Excel"
     set theSheet to sheet "0分" of active workbook
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
+    set today to "TARGET_DATE"
     set todayRow to 0
     repeat with i from 2 to 200
         if (string value of cell ("B" & i) of theSheet) = today then
