@@ -1396,11 +1396,24 @@ def dashboard():
 
     github = get_github_activity()
 
-    # JM-only stats (reads local JSONL session files)
+    # Session stats: JM reads local JSONL; others read precomputed JSON from stats repo
     is_jm = selected_user in ("jm", "")
-    mcp = get_mcp_stats() if is_jm else {"daily": [], "servers": [], "total": 0}
-    skills = get_skill_stats() if is_jm else {"daily": [], "skills": [], "total": 0}
-    latency = get_latency_stats() if is_jm else {"daily": [], "overall": {}}
+    if is_jm:
+        mcp = get_mcp_stats()
+        skills = get_skill_stats()
+        latency = get_latency_stats()
+    else:
+        session_stats_file = STATS_REPO / selected_user / "session-stats.json"
+        if session_stats_file.exists():
+            with open(session_stats_file) as f:
+                ss = json.load(f)
+            mcp = ss.get("mcp", {"daily": [], "servers": [], "total": 0})
+            skills = ss.get("skills", {"daily": [], "skills": [], "total": 0})
+            latency = ss.get("latency", {"daily": [], "overall": {}})
+        else:
+            mcp = {"daily": [], "servers": [], "total": 0}
+            skills = {"daily": [], "skills": [], "total": 0}
+            latency = {"daily": [], "overall": {}}
 
     # Longest session info
     longest = stats.get("longestSession", {})
