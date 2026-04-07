@@ -87,6 +87,15 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/mckay/.claude/sync-stats.sh"
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
