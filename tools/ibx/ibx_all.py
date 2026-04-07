@@ -322,6 +322,19 @@ def fetch_emails():
     if not services:
         return items, per_account
 
+    # Pre-triage: intercept autosign emails before triage can move them out of INBOX
+    if _autosign_available:
+        for name, svc in services.items():
+            try:
+                unread = _ibx.fetch_inbox(svc, unread_only=True)
+                for m in unread:
+                    item = normalize_email(m, svc, name)
+                    if item and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
+                        t = threading.Thread(target=_autosign_item, args=(item,), daemon=True)
+                        t.start()
+            except Exception:
+                pass
+
     # Triage
     console.print("[dim]  triaging...[/dim]")
     for name, svc in services.items():
