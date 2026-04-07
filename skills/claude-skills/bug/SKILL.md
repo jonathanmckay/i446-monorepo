@@ -1,5 +1,5 @@
 ---
-name: "fix-this"
+name: "bug"
 description: "Investigate the current bug, implement a fix, then add a regression test to prevent it coming back."
 user-invocable: true
 ---

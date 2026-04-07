@@ -1008,5 +1008,54 @@ class TestIbxAllOptionalImport(unittest.TestCase):
         )
 
 
+class TestInboxZeroSetsBlue(unittest.TestCase):
+    """ibx_all must set terminal color to blue on inbox zero, not leave it black.
+
+    Regression: the inbox-zero early-return path printed "Inbox zero." and
+    returned without calling set_term_color("blue"), leaving the tab black.
+    """
+
+    def test_inbox_zero_path_calls_set_term_color_blue(self):
+        """AST: the if-not-all_items branch in main() must call set_term_color('blue')."""
+        import ast, pathlib
+        src = pathlib.Path(__file__).parent / "ibx_all.py"
+        tree = ast.parse(src.read_text())
+
+        main_fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "main"
+        )
+
+        # Find the `if not all_items:` block
+        inbox_zero_block = None
+        for node in ast.walk(main_fn):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+                    and isinstance(test.operand, ast.Name)
+                    and test.operand.id == "all_items"):
+                inbox_zero_block = node
+                break
+
+        self.assertIsNotNone(inbox_zero_block, "Could not find 'if not all_items:' block in main()")
+
+        # Check that set_term_color("blue") is called inside the block
+        calls = [
+            node for node in ast.walk(inbox_zero_block)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "set_term_color"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "blue"
+        ]
+        self.assertTrue(
+            calls,
+            "inbox-zero branch does not call set_term_color('blue') — "
+            "terminal tab stays black instead of turning blue on inbox zero"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

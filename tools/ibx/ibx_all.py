@@ -185,8 +185,19 @@ def _send_signing_notification(item, meta, result, signing_count):
         console.print(f"[dim yellow]  notification email failed: {e}[/dim yellow]")
 
 
+_autosign_threads: list = []  # tracked so we can join before exit
+
+def _wait_for_autosign(timeout=300):
+    """Block until all pending autosign threads finish (max timeout seconds)."""
+    pending = [t for t in _autosign_threads if t.is_alive()]
+    if pending:
+        console.print(f"[dim cyan]  ⏳ waiting for {len(pending)} lease signing(s) to complete...[/dim cyan]")
+        for t in pending:
+            t.join(timeout=timeout)
+
+
 def _autosign_item(item):
-    """Fire-and-forget: sign the lease, archive the email, log to DB."""
+    """Sign a lease, archive the email, log to DB."""
     url = _signer.extract_appfolio_url(item.get("body", ""))
     if not url:
         console.print("[yellow]  ⚠ autosign: no AppFolio URL found in email[/yellow]")
@@ -330,8 +341,9 @@ def fetch_emails():
                 for m in unread:
                     item = normalize_email(m, svc, name)
                     if item and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
-                        t = threading.Thread(target=_autosign_item, args=(item,), daemon=True)
+                        t = threading.Thread(target=_autosign_item, args=(item,))
                         t.start()
+                        _autosign_threads.append(t)
             except Exception:
                 pass
 
@@ -351,9 +363,9 @@ def fetch_emails():
             if not item:
                 continue
             if _autosign_available and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
-                # Run in background thread — don't block fetch
-                t = threading.Thread(target=_autosign_item, args=(item,), daemon=True)
+                t = threading.Thread(target=_autosign_item, args=(item,))
                 t.start()
+                _autosign_threads.append(t)
                 continue  # don't add to review queue
             items.append(item)
             count += 1
@@ -547,7 +559,9 @@ def main():
                    f"[blue]{len(slack_items)} slack[/blue])")
 
     if not all_items:
+        _wait_for_autosign()
         console.print(f"\n[dim]Inbox zero.[/dim]  {status_line}")
+        set_term_color("blue")
         return
 
     set_term_color("red")
@@ -598,6 +612,7 @@ def main():
                 skipped = []
                 index = 0
             else:
+                _wait_for_autosign()
                 console.print("[dim]Inbox zero.[/dim]")
                 stop_poll.set()
                 set_term_color("blue")
@@ -612,6 +627,7 @@ def main():
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Bye.[/dim]")
             stop_poll.set()
+            _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
 
@@ -624,6 +640,7 @@ def main():
         if cmd == "q":
             console.print("[dim]Bye.[/dim]")
             stop_poll.set()
+            _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
 
