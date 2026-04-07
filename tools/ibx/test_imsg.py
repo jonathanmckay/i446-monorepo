@@ -291,5 +291,64 @@ class TestCountImessageWithDictProcessed(unittest.TestCase):
         self.assertEqual(count, 1, "Unknown contact with unread message must be counted")
 
 
+class TestLoadProcessedMigration(unittest.TestCase):
+    """load_processed must migrate list → dict using 0, not now_ts.
+
+    Regression: old migration used now_ts so any unread message older than
+    migration time was filtered out (latest_date <= now_ts), causing ibx_status
+    to report 0 even when unread threads existed.
+    """
+
+    def test_list_migrates_to_dict_with_zero_cutoff(self):
+        """Legacy list format must migrate to {id: 0}, not {id: now_ts}."""
+        import imsg, json, tempfile
+        data = ["+15551234567", "+15559999999"]
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+            json.dump(data, f)
+            path = f.name
+        original = imsg.STATE_FILE
+        try:
+            from pathlib import Path
+            imsg.STATE_FILE = Path(path)
+            result = imsg.load_processed()
+        finally:
+            imsg.STATE_FILE = original
+            import os; os.unlink(path)
+        self.assertEqual(result, {"+15551234567": 0, "+15559999999": 0},
+                         "Migration must use 0 so old messages still surface")
+
+    def test_list_migration_zero_allows_old_messages_through_ibx_status(self):
+        """After list→dict migration with 0, messages older than migration time must be counted."""
+        import ibx_status, json, tempfile, sqlite3
+        from pathlib import Path
+        from unittest.mock import patch
+
+        old_msg_ts = 1_000_000  # very old message
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT)")
+        conn.execute("CREATE TABLE message (ROWID INTEGER PRIMARY KEY, date INTEGER, is_read INTEGER, is_from_me INTEGER)")
+        conn.execute("CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER)")
+        conn.execute("INSERT INTO chat VALUES (1, '+15551234567')")
+        conn.execute("INSERT INTO message VALUES (1, ?, 0, 0)", (old_msg_ts,))
+        conn.execute("INSERT INTO chat_message_join VALUES (1, 1)")
+        conn.commit()
+
+        # processed.json after correct migration: stored=0
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+            json.dump({"+15551234567": 0}, f)
+            proc_path = f.name
+
+        with patch("ibx_status.CHAT_DB", Path("/dev/null")), \
+             patch("ibx_status.IMSG_PROCESSED", Path(proc_path)), \
+             patch("shutil.copy2"), \
+             patch("sqlite3.connect", return_value=conn):
+            count = ibx_status.count_imessage()
+
+        import os; os.unlink(proc_path)
+        self.assertEqual(count, 1,
+                         "Message older than migration time must count when stored=0 (not now_ts)")
+
+
 if __name__ == "__main__":
     unittest.main()

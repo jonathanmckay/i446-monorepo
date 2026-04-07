@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import anthropic
+from typing import Optional
 
 SAMPLE_RATE = 16000   # Whisper works best at 16kHz
 CHANNELS = 1
@@ -55,7 +56,7 @@ DEFAULT_DOMAIN = "i9"
 
 # ── Recording ────────────────────────────────────────────────────────────────
 
-def find_device(name_fragment: str) -> int | None:
+def find_device(name_fragment: str) -> Optional[int]:
     for i, dev in enumerate(sd.query_devices()):
         if dev["max_input_channels"] > 0 and name_fragment.lower() in dev["name"].lower():
             return i
@@ -88,17 +89,19 @@ def record_audio(teams_mode: bool = False) -> np.ndarray:
                                   dtype="int16", device=mic_idx, callback=mic_cb))
     print(f"🎙  Mic: {sd.query_devices(mic_idx)['name'] if mic_idx is not None else 'default'}")
 
-    # BlackHole stream (Teams/Zoom system audio)
+    # System audio stream (Teams/Zoom)
     if teams_mode:
-        bh_idx = find_device("BlackHole")
-        if bh_idx is not None:
-            def bh_cb(indata, fc, ti, st):
+        # Prefer Teams virtual device, fall back to BlackHole
+        sys_idx = find_device("Microsoft Teams Audio") or find_device("BlackHole")
+        if sys_idx is not None:
+            sys_name = sd.query_devices(sys_idx)["name"]
+            def sys_cb(indata, fc, ti, st):
                 bh_frames.append(indata.copy())
             streams.append(sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
-                                          dtype="int16", device=bh_idx, callback=bh_cb))
-            print(f"🖥  System audio: {sd.query_devices(bh_idx)['name']}")
+                                          dtype="int16", device=sys_idx, callback=sys_cb))
+            print(f"🖥  Call audio: {sys_name}")
         else:
-            print("⚠  BlackHole not found — mic only. See setup instructions in --help.")
+            print("⚠  No call audio device found (tried Teams Audio, BlackHole) — mic only.")
 
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
@@ -331,6 +334,8 @@ def main():
     parser.add_argument("--domain", default=DEFAULT_DOMAIN,
                         choices=list(DOMAIN_MAP.keys()),
                         help="Domain for filing + Todoist labels (default: i9)")
+    parser.add_argument("--teams", action="store_true",
+                        help="Record Teams/Zoom call: mix BlackHole system audio + mic")
     parser.add_argument("--no-todos", action="store_true",
                         help="Skip Todoist task creation")
     parser.add_argument("--tx", metavar="FILE",
@@ -338,7 +343,13 @@ def main():
     parser.add_argument("--model", default=WHISPER_MODEL,
                         help=f"Whisper model (default: {WHISPER_MODEL}). "
                              "Options: tiny.en, base.en, small.en, medium.en")
+    parser.add_argument("--devices", action="store_true",
+                        help="List available audio input devices and exit")
     args = parser.parse_args()
+
+    if args.devices:
+        list_devices()
+        sys.exit(0)
 
     meeting_name = args.name
     whisper_model = args.model
@@ -348,7 +359,7 @@ def main():
         transcript = Path(args.tx).read_text()
         print(f"📄 Using transcript: {args.tx} ({len(transcript.split())} words)")
     else:
-        audio = record_audio()
+        audio = record_audio(teams_mode=args.teams)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             wav_path = Path(f.name)
         save_wav(audio, wav_path)

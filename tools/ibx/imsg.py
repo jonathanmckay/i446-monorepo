@@ -41,13 +41,12 @@ _contacts: dict[str, str] = {}
 
 def load_processed() -> dict:
     """Return {chat_identifier: latest_apple_ts_processed}.
-    Migrates legacy list format (all-time block) to dict using now as the cutoff."""
+    Migrates legacy list format (all-time block) to dict using 0 as the cutoff so
+    all unread messages for previously-seen threads still surface after migration."""
     if STATE_FILE.exists():
         data = json.loads(STATE_FILE.read_text())
         if isinstance(data, list):
-            import time
-            now_ts = int((time.time() - APPLE_EPOCH_OFFSET) * 1e9)
-            return {cid: now_ts for cid in data}
+            return {cid: 0 for cid in data}
         return data
     return {}
 
