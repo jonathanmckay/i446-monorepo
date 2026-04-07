@@ -31,21 +31,27 @@ def count_imessage() -> int:
         shutil.copy2(CHAT_DB, DB_SNAPSHOT)
         conn = sqlite3.connect(str(DB_SNAPSHOT))
         rows = conn.execute("""
-            SELECT DISTINCT c.chat_identifier
+            SELECT c.chat_identifier, MAX(m.date) as latest_date
             FROM chat c
             JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
             JOIN message m ON cmj.message_id = m.ROWID
             WHERE m.is_read = 0 AND m.is_from_me = 0
+            GROUP BY c.ROWID
         """).fetchall()
         conn.close()
-        thread_ids = {r[0] for r in rows}
-        processed = set()
+        processed = {}
         if IMSG_PROCESSED.exists():
             try:
-                processed = set(json.loads(IMSG_PROCESSED.read_text()))
+                data = json.loads(IMSG_PROCESSED.read_text())
+                if isinstance(data, dict):
+                    processed = data
+                # list format: treat as empty — all unread threads count
             except Exception:
                 pass
-        return len(thread_ids - processed)
+        return sum(
+            1 for chat_id, latest_date in rows
+            if latest_date > processed.get(chat_id, -1)
+        )
     except Exception:
         return 0
 

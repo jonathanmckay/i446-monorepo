@@ -154,6 +154,37 @@ def print_help():
 
 # ── Auto-sign ────────────────────────────────────────────────────────────────
 
+_NOTIFY_THRESHOLD = 5  # send email confirmation for first N signings
+
+def _send_signing_notification(item, meta, result, signing_count):
+    """Send mckay@m5c7.com a confirmation email for the first N auto-signings."""
+    try:
+        import email.mime.text, base64
+        svc = item["_data"]["service"]
+        unit     = meta.get("unit", "unknown unit")
+        tenants  = meta.get("tenants", "")
+        ltype    = meta.get("lease_type", "renewal")
+        status   = result.get("status", "unknown")
+        body = (
+            f"Auto-sign #{signing_count} completed.\n\n"
+            f"Unit:    {unit}\n"
+            f"Tenants: {tenants}\n"
+            f"Type:    {ltype}\n"
+            f"Status:  {status}\n"
+            f"From:    {item.get('from', '')}\n"
+            f"Subject: {item.get('preview', '')}\n\n"
+            f"(Notifications stop after {_NOTIFY_THRESHOLD} successful signings.)"
+        )
+        msg = email.mime.text.MIMEText(body)
+        msg["To"]      = "mckay@m5c7.com"
+        msg["From"]    = _ibx.SEND_FROM
+        msg["Subject"] = f"✓ Auto-signed lease: {unit}"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+    except Exception as e:
+        console.print(f"[dim yellow]  notification email failed: {e}[/dim yellow]")
+
+
 def _autosign_item(item):
     """Fire-and-forget: sign the lease, archive the email, log to DB."""
     url = _signer.extract_appfolio_url(item.get("body", ""))
@@ -178,6 +209,11 @@ def _autosign_item(item):
     icon = "✓" if status == "success" else "⚠"
     color = "green" if status == "success" else "yellow"
     console.print(f"  [{color}]{icon} lease {status}: {meta.get('unit', '')}[/{color}]")
+    # Send notification email for first N successes
+    if status == "success":
+        signing_count = _autodb.count_successful(_AUTODB_PATH)
+        if signing_count <= _NOTIFY_THRESHOLD:
+            _send_signing_notification(item, meta, result, signing_count)
     # Archive the email so it clears from inbox
     try:
         _ibx.archive(item["_data"]["service"], item["_data"]["email"]["id"])

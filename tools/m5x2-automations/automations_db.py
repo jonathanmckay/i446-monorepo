@@ -57,6 +57,12 @@ def get_signings(db_path: Path, limit: int = 200):
     return [dict(r) for r in rows]
 
 
+def count_successful(db_path: Path) -> int:
+    init_db(db_path)
+    with _conn(db_path) as conn:
+        return conn.execute("SELECT COUNT(*) FROM lease_signings WHERE status='success'").fetchone()[0]
+
+
 def get_summary(db_path: Path):
     init_db(db_path)
     with _conn(db_path) as conn:

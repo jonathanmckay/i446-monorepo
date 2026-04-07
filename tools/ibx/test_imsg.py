@@ -172,5 +172,124 @@ class TestFetchThreadMessages(unittest.TestCase):
         self.assertEqual(len(msgs), 0, "Message with no text and no attributedBody must be dropped")
 
 
+class TestCountImessageWithDictProcessed(unittest.TestCase):
+    """count_imessage must use timestamp comparison when processed.json is a dict.
+
+    Regression: processed.json migrated from list → dict format stores
+    {chat_id: migration_ts}. The old code did set(dict) → set of keys, then
+    subtracted ALL known contacts from unread threads. Any contact who had ever
+    been processed showed count=0 even when new messages arrived, causing
+    ibx_monitor to display "inbox zero" when messages were pending.
+    """
+
+    def _make_db_with_threads(self, threads):
+        """Create an in-memory SQLite DB mimicking chat.db with given thread data.
+
+        threads: list of (chat_identifier, msg_date, is_read, is_from_me)
+        """
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT)")
+        conn.execute("CREATE TABLE message (ROWID INTEGER PRIMARY KEY, date INTEGER, is_read INTEGER, is_from_me INTEGER)")
+        conn.execute("CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER)")
+        chat_ids = {}
+        msg_id = 1
+        for chat_identifier, msg_date, is_read, is_from_me in threads:
+            if chat_identifier not in chat_ids:
+                conn.execute("INSERT INTO chat (chat_identifier) VALUES (?)", (chat_identifier,))
+                chat_ids[chat_identifier] = conn.execute(
+                    "SELECT ROWID FROM chat WHERE chat_identifier=?", (chat_identifier,)
+                ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO message (ROWID, date, is_read, is_from_me) VALUES (?,?,?,?)",
+                (msg_id, msg_date, is_read, is_from_me),
+            )
+            conn.execute(
+                "INSERT INTO chat_message_join VALUES (?,?)",
+                (chat_ids[chat_identifier], msg_id),
+            )
+            msg_id += 1
+        conn.commit()
+        return conn
+
+    def test_new_message_from_known_contact_counts_as_pending(self):
+        """A contact in processed.json with a NEW message (ts > stored ts) must be counted."""
+        import ibx_status, json, tempfile, sqlite3
+
+        stored_ts = 1_000_000
+        new_msg_ts = 2_000_000  # newer than stored_ts → should show up
+
+        conn = self._make_db_with_threads([
+            ("+15551234567", new_msg_ts, 0, 0),  # unread, from them
+        ])
+
+        processed = {"+15551234567": stored_ts}
+        processed_json = json.dumps(processed)
+
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+            f.write(processed_json)
+            proc_path = f.name
+
+        with patch("ibx_status.CHAT_DB", Path("/dev/null")), \
+             patch("ibx_status.IMSG_PROCESSED", Path(proc_path)), \
+             patch("shutil.copy2"), \
+             patch("sqlite3.connect", return_value=conn):
+            count = ibx_status.count_imessage()
+
+        import os; os.unlink(proc_path)
+        self.assertEqual(
+            count, 1,
+            "count_imessage must count a contact's new message even when that "
+            "contact appears in processed.json — set(dict) subtraction was wrong."
+        )
+
+    def test_already_processed_message_not_counted(self):
+        """A message with ts <= stored processed ts must NOT be counted."""
+        import ibx_status, json, tempfile
+
+        stored_ts = 2_000_000
+        old_msg_ts = 1_000_000  # older than stored_ts → already handled
+
+        conn = self._make_db_with_threads([
+            ("+15551234567", old_msg_ts, 0, 0),
+        ])
+
+        processed = {"+15551234567": stored_ts}
+
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+            f.write(json.dumps(processed))
+            proc_path = f.name
+
+        with patch("ibx_status.CHAT_DB", Path("/dev/null")), \
+             patch("ibx_status.IMSG_PROCESSED", Path(proc_path)), \
+             patch("shutil.copy2"), \
+             patch("sqlite3.connect", return_value=conn):
+            count = ibx_status.count_imessage()
+
+        import os; os.unlink(proc_path)
+        self.assertEqual(count, 0, "Message already covered by stored ts must not be counted")
+
+    def test_unknown_contact_still_counted(self):
+        """A contact NOT in processed.json must be counted if they have unread messages."""
+        import ibx_status, json, tempfile
+
+        conn = self._make_db_with_threads([
+            ("+15559999999", 1_000_000, 0, 0),
+        ])
+
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+            f.write(json.dumps({}))  # empty processed
+            proc_path = f.name
+
+        with patch("ibx_status.CHAT_DB", Path("/dev/null")), \
+             patch("ibx_status.IMSG_PROCESSED", Path(proc_path)), \
+             patch("shutil.copy2"), \
+             patch("sqlite3.connect", return_value=conn):
+            count = ibx_status.count_imessage()
+
+        import os; os.unlink(proc_path)
+        self.assertEqual(count, 1, "Unknown contact with unread message must be counted")
+
+
 if __name__ == "__main__":
     unittest.main()
