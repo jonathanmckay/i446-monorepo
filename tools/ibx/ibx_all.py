@@ -22,6 +22,17 @@ import ibx as _ibx
 import imsg as _imsg
 import slack as _slack
 
+# ── Auto-sign integration (optional — skipped if module not found) ────────────
+_AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
+sys.path.insert(0, str(_AUTOSIGN_DIR))
+try:
+    import lease_signer as _signer
+    import automations_db as _autodb
+    from config import AUTOSIGN_SENDERS, DB_PATH as _AUTODB_PATH
+    _autosign_available = True
+except ImportError:
+    _autosign_available = False
+
 import anthropic
 from rich import box
 from rich.console import Console
@@ -141,6 +152,39 @@ def print_help():
         "[dim]or type anything → Claude[/dim]\n"
     )
 
+# ── Auto-sign ────────────────────────────────────────────────────────────────
+
+def _autosign_item(item):
+    """Fire-and-forget: sign the lease, archive the email, log to DB."""
+    url = _signer.extract_appfolio_url(item.get("body", ""))
+    if not url:
+        console.print("[yellow]  ⚠ autosign: no AppFolio URL found in email[/yellow]")
+        return
+    meta = _signer.parse_email_metadata(item)
+    console.print(f"  [dim cyan]⚙ auto-signing lease: {meta.get('unit', url[:60])}...[/dim cyan]")
+    result = _signer.sign_lease(url, headless=True)
+    status = result.get("status", "failed")
+    _autodb.log_signing(
+        _AUTODB_PATH,
+        property=meta.get("property", ""),
+        unit=meta.get("unit", ""),
+        tenants=meta.get("tenants", ""),
+        lease_type=meta.get("lease_type", "renewal"),
+        source_sender=item.get("from", ""),
+        source_subject=item.get("preview", ""),
+        appfolio_url=url,
+        status=status,
+    )
+    icon = "✓" if status == "success" else "⚠"
+    color = "green" if status == "success" else "yellow"
+    console.print(f"  [{color}]{icon} lease {status}: {meta.get('unit', '')}[/{color}]")
+    # Archive the email so it clears from inbox
+    try:
+        _ibx.archive(item["_data"]["service"], item["_data"]["email"]["id"])
+    except Exception:
+        pass
+
+
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 def do_archive(item):
@@ -255,9 +299,15 @@ def fetch_emails():
         count = 0
         for m in msgs:
             item = normalize_email(m, svc, name)
-            if item:
-                items.append(item)
-                count += 1
+            if not item:
+                continue
+            if _autosign_available and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
+                # Run in background thread — don't block fetch
+                t = threading.Thread(target=_autosign_item, args=(item,), daemon=True)
+                t.start()
+                continue  # don't add to review queue
+            items.append(item)
+            count += 1
         display = ACCOUNT_DISPLAY.get(name, name)
         per_account[display] = count
         if msgs:
