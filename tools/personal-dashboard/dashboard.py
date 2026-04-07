@@ -9,6 +9,7 @@ Then open: http://localhost:5558
 import base64
 import json
 import os
+import subprocess
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, date
@@ -35,6 +36,7 @@ app = Flask(__name__)
 
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 NEON_PATH = Path.home() / "OneDrive" / "vault-excel" / "Neon-current.xlsx"
+EMAIL_GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 
 # ── Column mappings ────────────────────────────────────────────────────────────
 # 0分 sheet: column index (1-based) → label + domain
@@ -234,6 +236,33 @@ def load_turns_data():
         return {}
 
 
+def load_email_data():
+    """Fetch email response time stats from GitHub Gist.
+    Returns {"daily": [{date, account, avg_hours, count}], "summary": {...}}.
+    """
+    try:
+        token = subprocess.check_output(
+            ["gh", "auth", "token"], text=True, timeout=5
+        ).strip()
+    except Exception:
+        token = ""
+
+    url = f"https://api.github.com/gists/{EMAIL_GIST_ID}"
+    req = urllib.request.Request(url)
+    req.add_header("Accept", "application/vnd.github+json")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            gist = json.loads(resp.read())
+        # Gist has one file; grab its content
+        file_content = next(iter(gist["files"].values()))["content"]
+        return json.loads(file_content)
+    except Exception:
+        return {"daily": [], "summary": {}}
+
+
 # ── Date range helper ──────────────────────────────────────────────────────────
 
 def last_n_days(n=DAYS):
@@ -272,6 +301,7 @@ def api_data():
     toggl_raw = load_toggl_data()
     turns_raw = load_turns_data()
     tasks_raw = load_tasks_data()
+    email_raw = load_email_data()
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -365,6 +395,33 @@ def api_data():
             "spanGaps": True,
         })
 
+    # Email response time datasets — one dataset per account
+    email_daily = email_raw.get("daily", [])
+    email_summary = email_raw.get("summary", {})
+    # Build {account: {date: avg_hours}}
+    email_by_account = defaultdict(dict)
+    for entry in email_daily:
+        acct = entry.get("account", "unknown")
+        d = entry.get("date", "")
+        avg_h = entry.get("avg_hours")
+        if d and avg_h is not None:
+            email_by_account[acct][d] = avg_h
+    # Account colors
+    EMAIL_COLORS = {"m5x2": "#d50032", "personal": "#2979ff", "gmail": "#2979ff"}
+    email_datasets = []
+    for acct, day_map in sorted(email_by_account.items()):
+        values = [day_map.get(d) for d in dates]
+        email_datasets.append({
+            "label": acct,
+            "data": values,
+            "borderColor": EMAIL_COLORS.get(acct, "#aaaaaa"),
+            "backgroundColor": "transparent",
+            "borderWidth": 2,
+            "pointRadius": 3,
+            "tension": 0.3,
+            "spanGaps": True,
+        })
+
     # Summary stats
     total_points = {label: sum(points_raw.get(d, {}).get(label, 0) for d in dates)
                     for label in all_point_labels}
@@ -381,6 +438,7 @@ def api_data():
         "tasks_other": tasks_other,
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
+        "email": {"datasets": email_datasets, "summary": email_summary},
         "summary": {
             "total_points": {k: int(v) for k, v in total_points.items() if v > 0},
             "total_mins": {k: int(v) for k, v in total_time.items() if v > 0},
@@ -390,11 +448,10 @@ def api_data():
     })
 
 
-HTML = """<!DOCTYPE html>
-<html>
-<head>
+# ── HTML templates ─────────────────────────────────────────────────────────────
+
+_SHARED_STYLE = """
 <meta charset="utf-8">
-<title>jm dashboard</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
@@ -403,6 +460,7 @@ HTML = """<!DOCTYPE html>
   --h1: #aaa; --h2: #666;
   --badge-bg: #222; --badge-text: #aaa;
   --tick: #555; --grid: #222;
+  --nav: #333; --nav-text: #aaa;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -410,52 +468,28 @@ HTML = """<!DOCTYPE html>
     --h1: #444; --h2: #888;
     --badge-bg: #eee; --badge-text: #555;
     --tick: #aaa; --grid: #e0e0e0;
+    --nav: #ddd; --nav-text: #555;
   }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--bg); color: var(--text); font-family: 'SF Mono', monospace; padding: 24px; }
-h1 { font-size: 18px; color: var(--h1); margin-bottom: 24px; letter-spacing: 2px; }
+.topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
+h1 { font-size: 18px; color: var(--h1); letter-spacing: 2px; }
 h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px; text-transform: uppercase; }
+.nav-link { font-size: 12px; color: var(--nav-text); background: var(--nav); border-radius: 4px; padding: 4px 12px; text-decoration: none; letter-spacing: 1px; }
+.nav-link:hover { opacity: 0.8; }
 .grid { display: grid; grid-template-columns: 1fr; gap: 32px; margin-bottom: 32px; }
 .card { background: var(--card); border-radius: 8px; padding: 20px; }
 .chart-wrap { height: 280px; position: relative; }
+.chart-wrap.sm { height: 200px; }
+.chart-wrap.xs { height: 180px; }
 .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .badge { background: var(--badge-bg); border-radius: 4px; padding: 4px 10px; font-size: 12px; }
 .badge span { color: var(--badge-text); }
 </style>
-</head>
-<body>
-<h1>JM · PERSONAL DASHBOARD</h1>
-<div class="grid">
-  <div class="card">
-    <h2>Points / Day</h2>
-    <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
-    <div class="summary" id="pointsSummary"></div>
-  </div>
-  <div class="card">
-    <h2>Time / Day (min, excl. sleep)</h2>
-    <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
-    <div class="summary" id="timeSummary"></div>
-  </div>
-  <div class="card">
-    <h2>分 / min (7-day rolling) — xk · i9 · m5</h2>
-    <div class="chart-wrap" style="height:200px"><canvas id="ratioChart"></canvas></div>
-  </div>
-  <div class="card">
-    <h2>AI Turns / Day</h2>
-    <div class="chart-wrap" style="height:180px"><canvas id="turnsChart"></canvas></div>
-  </div>
-  <div class="card">
-    <h2>Tasks Complete / Day</h2>
-    <div class="chart-wrap" style="height:180px"><canvas id="tasksChart"></canvas></div>
-  </div>
-  <div class="card">
-    <h2>Shots / Task (turns ÷ tasks, 7-day rolling)</h2>
-    <div class="chart-wrap" style="height:180px"><canvas id="shotsChart"></canvas></div>
-  </div>
-</div>
+"""
 
-<script>
+_SHARED_JS_HEAD = """
 const DARK = window.matchMedia('(prefers-color-scheme: dark)').matches;
 const TICK = DARK ? '#555' : '#aaa';
 const GRID = DARK ? '#222' : '#e0e0e0';
@@ -468,7 +502,43 @@ const CHART_DEFAULTS = {
     y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
   }
 };
+"""
 
+HTML = """<!DOCTYPE html>
+<html>
+<head>
+<title>jm dashboard</title>
+""" + _SHARED_STYLE + """
+</head>
+<body>
+<div class="topbar">
+  <h1>JM · PERSONAL DASHBOARD</h1>
+  <a class="nav-link" href="/more">MORE →</a>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>Points / Day</h2>
+    <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
+    <div class="summary" id="pointsSummary"></div>
+  </div>
+  <div class="card">
+    <h2>Time / Day (min, excl. sleep)</h2>
+    <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
+    <div class="summary" id="timeSummary"></div>
+  </div>
+  <div class="card">
+    <h2>Tasks Complete / Day</h2>
+    <div class="chart-wrap class="xs""><canvas id="tasksChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Email Response Time (hrs)</h2>
+    <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
+    <div class="summary" id="emailSummary"></div>
+  </div>
+</div>
+
+<script>
+""" + _SHARED_JS_HEAD + """
 fetch('/api/data').then(r => r.json()).then(data => {
   const labels = data.dates;
 
@@ -484,40 +554,6 @@ fetch('/api/data').then(r => r.json()).then(data => {
     type: 'bar',
     data: { labels, datasets: data.time.datasets },
     options: { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
-  });
-
-  // Ratio chart (line)
-  new Chart(document.getElementById('ratioChart'), {
-    type: 'line',
-    data: { labels, datasets: data.ratio.datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
-      scales: {
-        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
-      }
-    }
-  });
-
-  // Turns chart (line)
-  new Chart(document.getElementById('turnsChart'), {
-    type: 'bar',
-    data: { labels, datasets: [{
-      label: 'turns',
-      data: data.turns,
-      backgroundColor: '#2979ff44',
-      borderColor: '#2979ff',
-      borderWidth: 1,
-    }]},
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
-      }
-    }
   });
 
   // Tasks chart (stacked: 0neon vs other)
@@ -546,7 +582,125 @@ fetch('/api/data').then(r => r.json()).then(data => {
     }
   });
 
-  // Shots/task chart (7-day rolling: total turns ÷ total tasks over window)
+  // Email response time chart (line per account)
+  new Chart(document.getElementById('emailChart'), {
+    type: 'line',
+    data: { labels, datasets: data.email.datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, min: 0 }
+      }
+    }
+  });
+
+  // Summaries
+  const s = data.summary;
+  const ptEl = document.getElementById('pointsSummary');
+  Object.entries(s.total_points).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    b.innerHTML = `${k} <span>${v}</span>`;
+    ptEl.appendChild(b);
+  });
+  const tmEl = document.getElementById('timeSummary');
+  Object.entries(s.total_mins).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    b.innerHTML = `${k} <span>${v}m</span>`;
+    tmEl.appendChild(b);
+  });
+
+  // Email summary badges
+  const es = data.email.summary;
+  const emEl = document.getElementById('emailSummary');
+  const emBadges = [
+    ['7d avg', es.work_last_7d_avg_hours != null ? es.work_last_7d_avg_hours.toFixed(1) + 'h' : null],
+    ['7d med', es.work_last_7d_median_hours != null ? es.work_last_7d_median_hours.toFixed(1) + 'h' : null],
+    ['28d avg', es.work_last_28d_avg_hours != null ? es.work_last_28d_avg_hours.toFixed(1) + 'h' : null],
+    ['n', es.work_sample_count != null ? String(es.work_sample_count) : null],
+  ];
+  emBadges.forEach(([k, v]) => {
+    if (v == null) return;
+    const b = document.createElement('div');
+    b.className = 'badge';
+    b.innerHTML = `${k} <span>${v}</span>`;
+    emEl.appendChild(b);
+  });
+});
+</script>
+</body>
+</html>"""
+
+
+MORE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<title>jm dashboard · more</title>
+""" + _SHARED_STYLE + """
+</head>
+<body>
+<div class="topbar">
+  <h1>JM · MORE</h1>
+  <a class="nav-link" href="/">← MAIN</a>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>分 / min (7-day rolling) — xk · i9 · m5</h2>
+    <div class="chart-wrap sm"><canvas id="ratioChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>AI Turns / Day</h2>
+    <div class="chart-wrap xs"><canvas id="turnsChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Shots / Task (turns ÷ tasks, 7-day rolling)</h2>
+    <div class="chart-wrap xs"><canvas id="shotsChart"></canvas></div>
+  </div>
+</div>
+
+<script>
+""" + _SHARED_JS_HEAD + """
+fetch('/api/data').then(r => r.json()).then(data => {
+  const labels = data.dates;
+
+  // Ratio chart (line)
+  new Chart(document.getElementById('ratioChart'), {
+    type: 'line',
+    data: { labels, datasets: data.ratio.datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+      }
+    }
+  });
+
+  // Turns chart (bar)
+  new Chart(document.getElementById('turnsChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{
+      label: 'turns',
+      data: data.turns,
+      backgroundColor: '#2979ff44',
+      borderColor: '#2979ff',
+      borderWidth: 1,
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+      }
+    }
+  });
+
+  // Shots/task chart (7-day rolling)
   const rolling7 = data.turns.map((_, i) => {
     const t7 = data.tasks.slice(Math.max(0, i - 6), i + 1).reduce((a, b) => a + b, 0);
     const tr7 = data.turns.slice(Math.max(0, i - 6), i + 1).reduce((a, b) => a + b, 0);
@@ -573,23 +727,6 @@ fetch('/api/data').then(r => r.json()).then(data => {
       }
     }
   });
-
-  // Summaries
-  const s = data.summary;
-  const ptEl = document.getElementById('pointsSummary');
-  Object.entries(s.total_points).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
-    const b = document.createElement('div');
-    b.className = 'badge';
-    b.innerHTML = `${k} <span>${v}</span>`;
-    ptEl.appendChild(b);
-  });
-  const tmEl = document.getElementById('timeSummary');
-  Object.entries(s.total_mins).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
-    const b = document.createElement('div');
-    b.className = 'badge';
-    b.innerHTML = `${k} <span>${v}m</span>`;
-    tmEl.appendChild(b);
-  });
 });
 </script>
 </body>
@@ -599,6 +736,11 @@ fetch('/api/data').then(r => r.json()).then(data => {
 @app.route("/")
 def index():
     return render_template_string(HTML)
+
+
+@app.route("/more")
+def more():
+    return render_template_string(MORE_HTML)
 
 
 if __name__ == "__main__":
