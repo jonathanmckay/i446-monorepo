@@ -1039,24 +1039,27 @@ HTML_TEMPLATE = """
         buildYAxis('tok-y-axis', maxTok, 4);
 
         tokParsed.forEach(day => {
+            // Bar height as % of container (same pattern as personal dashboard)
+            const barPct = (day.total / maxTok) * 100;
             const wrapper = document.createElement('div');
-            wrapper.style.cssText = 'flex:1;min-width:8px;max-width:40px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;';
+            wrapper.style.cssText = `flex:1;min-width:8px;max-width:40px;height:${barPct}%;display:flex;flex-direction:column;justify-content:flex-end;position:relative;`;
 
-            const opusPct = maxTok > 0 ? (day.opus / maxTok) * 100 : 0;
-            const sonnetPct = maxTok > 0 ? (day.sonnet / maxTok) * 100 : 0;
-
-            // Sonnet on top (orange), Opus on bottom (blue)
-            if (day.sonnet > 0) {
-                const seg = document.createElement('div');
-                seg.style.cssText = `height:${sonnetPct}%;background:#FF6B35;border-radius:4px 4px 0 0;min-height:2px;`;
-                wrapper.appendChild(seg);
-            }
-            if (day.opus > 0) {
-                const seg = document.createElement('div');
-                seg.style.cssText = `height:${opusPct}%;background:#004E89;border-radius:${day.sonnet > 0 ? '0' : '4px 4px 0 0'};min-height:2px;`;
-                wrapper.appendChild(seg);
-            }
-            if (day.total === 0) {
+            if (day.total > 0) {
+                // Opus on bottom (blue) — height as % of bar
+                if (day.opus > 0) {
+                    const seg = document.createElement('div');
+                    const h = (day.opus / day.total) * 100;
+                    seg.style.cssText = `height:${h}%;background:#004E89;border-radius:${day.sonnet > 0 ? '0' : '4px 4px 0 0'};`;
+                    wrapper.appendChild(seg);
+                }
+                // Sonnet on top (orange) — height as % of bar
+                if (day.sonnet > 0) {
+                    const seg = document.createElement('div');
+                    const h = (day.sonnet / day.total) * 100;
+                    seg.style.cssText = `height:${h}%;background:#FF6B35;border-radius:4px 4px 0 0;`;
+                    wrapper.appendChild(seg);
+                }
+            } else {
                 const seg = document.createElement('div');
                 seg.style.cssText = 'height:2px;background:#eee;border-radius:4px 4px 0 0;';
                 wrapper.appendChild(seg);
