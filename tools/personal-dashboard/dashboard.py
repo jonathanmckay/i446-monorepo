@@ -175,14 +175,21 @@ def load_toggl_data():
 
 
 def load_tasks_data():
-    """Fetch completed tasks from Todoist, split into 0neon habits vs other tasks.
-    Returns {date_str: {"neon": count, "other": count, "total": count}}.
+    """Fetch completed tasks from Todoist, split by category tag in content.
+    Returns {date_str: {"neon": count, "posthoc": count, "one_n": count, "other": count, "total": count}}.
+    Categories (detected via @tag in content):
+      @0neon  → neon habits (black)
+      @posthoc → retroactive log (purple)
+      @1neon  → 1n weekly tasks (green)
+      other   → regular tasks (blue)
     """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
     today = date.today()
     since = (today - timedelta(days=DAYS)).strftime("%Y-%m-%dT00:00:00Z")
 
     neon = defaultdict(int)
+    posthoc = defaultdict(int)
+    one_n = defaultdict(int)
     other = defaultdict(int)
     cursor = None
 
@@ -211,6 +218,10 @@ def load_tasks_data():
                 content = item.get("content", "")
                 if "@0neon" in content:
                     neon[day_str] += 1
+                elif "@posthoc" in content:
+                    posthoc[day_str] += 1
+                elif "@1neon" in content:
+                    one_n[day_str] += 1
                 else:
                     other[day_str] += 1
             except (ValueError, TypeError):
@@ -220,9 +231,11 @@ def load_tasks_data():
         if not cursor:
             break
 
-    all_days = set(neon) | set(other)
-    return {d: {"neon": neon[d], "other": other[d], "total": neon[d] + other[d]}
-            for d in all_days}
+    all_days = set(neon) | set(posthoc) | set(one_n) | set(other)
+    return {d: {
+        "neon": neon[d], "posthoc": posthoc[d], "one_n": one_n[d], "other": other[d],
+        "total": neon[d] + posthoc[d] + one_n[d] + other[d],
+    } for d in all_days}
 
 
 def load_turns_data():
@@ -349,9 +362,11 @@ def api_data():
             })
 
     turns_values = [turns_raw.get(d, 0) for d in dates]
-    tasks_neon = [tasks_raw.get(d, {}).get("neon", 0) for d in dates]
-    tasks_other = [tasks_raw.get(d, {}).get("other", 0) for d in dates]
-    tasks_values = [n + o for n, o in zip(tasks_neon, tasks_other)]
+    tasks_neon    = [tasks_raw.get(d, {}).get("neon", 0)    for d in dates]
+    tasks_posthoc = [tasks_raw.get(d, {}).get("posthoc", 0) for d in dates]
+    tasks_1n      = [tasks_raw.get(d, {}).get("one_n", 0)   for d in dates]
+    tasks_other   = [tasks_raw.get(d, {}).get("other", 0)   for d in dates]
+    tasks_values  = [tasks_raw.get(d, {}).get("total", 0)   for d in dates]
 
     # shots/task = tasks completed / turns (None when either is 0)
     shots_per_task = []
@@ -395,31 +410,46 @@ def api_data():
             "spanGaps": True,
         })
 
-    # Email response time datasets — one dataset per account
+    # Email response time datasets — one line per account (response time) +
+    # one bar per account (email count, secondary y-axis)
     email_daily = email_raw.get("daily", [])
     email_summary = email_raw.get("summary", {})
-    # Build {account: {date: avg_hours}}
+    # Build {account: {date: {avg_hours, count}}}
     email_by_account = defaultdict(dict)
     for entry in email_daily:
         acct = entry.get("account", "unknown")
         d = entry.get("date", "")
-        avg_h = entry.get("avg_hours")
-        if d and avg_h is not None:
-            email_by_account[acct][d] = avg_h
+        if d:
+            email_by_account[acct][d] = {
+                "avg_hours": entry.get("avg_hours"),
+                "count": entry.get("count", 0),
+            }
     # Account colors
     EMAIL_COLORS = {"m5x2": "#d50032", "personal": "#2979ff", "gmail": "#2979ff"}
+    EMAIL_COUNT_COLORS = {"m5x2": "#d5003244", "personal": "#2979ff44", "gmail": "#2979ff44"}
     email_datasets = []
     for acct, day_map in sorted(email_by_account.items()):
-        values = [day_map.get(d) for d in dates]
+        # Line: response time (primary y)
         email_datasets.append({
+            "type": "line",
             "label": acct,
-            "data": values,
+            "data": [day_map.get(d, {}).get("avg_hours") for d in dates],
             "borderColor": EMAIL_COLORS.get(acct, "#aaaaaa"),
             "backgroundColor": "transparent",
             "borderWidth": 2,
             "pointRadius": 3,
             "tension": 0.3,
             "spanGaps": True,
+            "yAxisID": "y",
+        })
+        # Bar: email count (secondary y)
+        email_datasets.append({
+            "type": "bar",
+            "label": f"{acct} count",
+            "data": [day_map.get(d, {}).get("count", 0) for d in dates],
+            "backgroundColor": EMAIL_COUNT_COLORS.get(acct, "#aaaaaa44"),
+            "borderWidth": 0,
+            "yAxisID": "y2",
         })
 
     # Summary stats
@@ -435,6 +465,8 @@ def api_data():
         "turns": turns_values,
         "tasks": tasks_values,
         "tasks_neon": tasks_neon,
+        "tasks_posthoc": tasks_posthoc,
+        "tasks_1n": tasks_1n,
         "tasks_other": tasks_other,
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
@@ -528,7 +560,7 @@ HTML = """<!DOCTYPE html>
   </div>
   <div class="card">
     <h2>Tasks Complete / Day</h2>
-    <div class="chart-wrap class="xs""><canvas id="tasksChart"></canvas></div>
+    <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Email Response Time (hrs)</h2>
@@ -556,13 +588,25 @@ fetch('/api/data').then(r => r.json()).then(data => {
     options: { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
   });
 
-  // Tasks chart (stacked: 0neon vs other)
+  // Tasks chart (stacked: 0n=black, posthoc=purple, 1n=green, other=blue)
   new Chart(document.getElementById('tasksChart'), {
     type: 'bar',
     data: { labels, datasets: [{
-      label: '0neon',
+      label: '0n',
       data: data.tasks_neon,
-      backgroundColor: '#00e67644',
+      backgroundColor: '#333',
+      borderColor: '#555',
+      borderWidth: 1,
+    }, {
+      label: 'posthoc',
+      data: data.tasks_posthoc,
+      backgroundColor: '#aa00ff88',
+      borderColor: '#aa00ff',
+      borderWidth: 1,
+    }, {
+      label: '1n',
+      data: data.tasks_1n,
+      backgroundColor: '#00e67688',
       borderColor: '#00e676',
       borderWidth: 1,
     }, {
@@ -582,16 +626,25 @@ fetch('/api/data').then(r => r.json()).then(data => {
     }
   });
 
-  // Email response time chart (line per account)
+  // Email chart: mixed — lines for response time (hrs), bars for count/day
   new Chart(document.getElementById('emailChart'), {
-    type: 'line',
+    type: 'bar',
     data: { labels, datasets: data.email.datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            color: TICK, font: { size: 11 },
+            filter: item => !item.text.includes('count'),
+          }
+        }
+      },
       scales: {
-        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, min: 0 }
+        x: { stacked: false, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y:  { position: 'left',  min: 0, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, title: { display: true, text: 'hrs', color: TICK, font: { size: 10 } } },
+        y2: { position: 'right', min: 0, ticks: { color: TICK, font: { size: 10 } }, grid: { display: false }, title: { display: true, text: 'count', color: TICK, font: { size: 10 } } },
       }
     }
   });
