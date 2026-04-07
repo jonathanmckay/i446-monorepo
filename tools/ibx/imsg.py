@@ -56,6 +56,24 @@ def save_processed(processed: dict):
     with open(STATE_FILE, "w") as f:
         json.dump(processed, f)
 
+def mark_thread_read(chat_identifier: str):
+    """Mark all incoming messages in a chat as read in the live chat.db."""
+    try:
+        conn = sqlite3.connect(str(CHAT_DB), timeout=5)
+        conn.execute("""
+            UPDATE message SET is_read = 1
+            WHERE rowid IN (
+                SELECT cmj.message_id
+                FROM chat_message_join cmj
+                JOIN chat c ON c.rowid = cmj.chat_id
+                WHERE c.chat_identifier = ?
+            ) AND is_from_me = 0 AND is_read = 0
+        """, (chat_identifier,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Non-fatal — processed.json is the source of truth
+
 # ── Contacts ─────────────────────────────────────────────────────────────────
 
 _KNOWN_AB_CLASSES = {

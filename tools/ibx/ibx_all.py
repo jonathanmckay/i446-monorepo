@@ -152,6 +152,7 @@ def do_archive(item):
         proc = _imsg.load_processed()
         proc[thread["chat_identifier"]] = thread.get("latest_apple_ts", 0)
         _imsg.save_processed(proc)
+        _imsg.mark_thread_read(thread["chat_identifier"])
     elif t == "slack":
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])

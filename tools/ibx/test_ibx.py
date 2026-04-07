@@ -836,5 +836,35 @@ class TestImsgPollResolution(unittest.TestCase):
         )
 
 
+class TestImsgMarkReadOnArchive(unittest.TestCase):
+    """Archiving an iMessage thread must mark it as read in chat.db."""
+
+    def test_do_archive_calls_mark_thread_read(self):
+        """do_archive for an imsg item must call mark_thread_read with the chat_identifier."""
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        import ibx_all
+
+        cid = "chat;-;+15105551234"
+        item = {
+            "type": "imsg",
+            "source": "iMessage",
+            "from": "Family",
+            "preview": "哇，好幸福的一天",
+            "body": "",
+            "ts": 0.0,
+            "_data": {"thread": {"chat_identifier": cid, "latest_apple_ts": 1_000_000}},
+        }
+
+        marked = []
+        with unittest.mock.patch("imsg.load_processed", return_value={}), \
+             unittest.mock.patch("imsg.save_processed"), \
+             unittest.mock.patch("imsg.mark_thread_read", side_effect=lambda c: marked.append(c)):
+            ibx_all.do_archive(item)
+
+        self.assertEqual(marked, [cid],
+            "do_archive must call mark_thread_read so the thread loses its unread dot in Messages.app")
+
+
 if __name__ == "__main__":
     unittest.main()
