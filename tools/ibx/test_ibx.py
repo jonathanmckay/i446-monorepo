@@ -866,5 +866,73 @@ class TestImsgMarkReadOnArchive(unittest.TestCase):
             "do_archive must call mark_thread_read so the thread loses its unread dot in Messages.app")
 
 
+class TestTriagePromptDoesNotOverClassifyAsInfo(unittest.TestCase):
+    """Triage prompt must not classify tax docs or 'Action Required' emails as info-only.
+
+    Regression: the prompt previously listed 'no-reply senders' as auto-info, causing
+    AppFolio notices ('Action Required for (3) Notices' from noreply) and K-1 tax document
+    emails to be moved out of inbox before ibx0 could display them — yielding a false
+    inbox-zero.
+    """
+
+    def _get_classify_prompt(self):
+        """Extract the prompt template text from classify_email's f-string assignment."""
+        import ast, pathlib
+        src = pathlib.Path(__file__).parent / "ibx.py"
+        tree = ast.parse(src.read_text())
+        func = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "classify_email"
+        )
+        # The prompt is an f-string (JoinedStr). Collect all string literal segments from it.
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "prompt":
+                        # Gather all Constant string pieces inside the f-string
+                        parts = []
+                        for child in ast.walk(node.value):
+                            if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                                parts.append(child.value)
+                        return " ".join(parts)
+        return ""
+
+    def test_no_reply_senders_not_listed_as_auto_info(self):
+        """'no-reply senders' must not appear in the info bucket — sender domain ≠ unactionable."""
+        prompt = self._get_classify_prompt()
+        self.assertNotIn(
+            "no-reply senders", prompt,
+            "Triage prompt lists 'no-reply senders' as info — this causes AppFolio notices "
+            "and other actionable noreply emails to be silently removed from inbox."
+        )
+
+    def test_action_required_in_response_examples(self):
+        """'Action Required' must appear in the response examples so Claude keeps such emails."""
+        prompt = self._get_classify_prompt()
+        self.assertIn(
+            "Action Required", prompt,
+            "Triage prompt does not mention 'Action Required' in response criteria — "
+            "emails with that subject line may be incorrectly triaged as info."
+        )
+
+    def test_tax_documents_in_response_examples(self):
+        """Tax documents (K-1) must be listed as response so they are not triaged out."""
+        prompt = self._get_classify_prompt()
+        self.assertIn(
+            "K-1", prompt,
+            "Triage prompt does not mention tax documents (K-1) as requiring response — "
+            "K-1 delivery emails may be incorrectly triaged as info and removed from inbox."
+        )
+
+    def test_doubt_defaults_to_response(self):
+        """Prompt must include a bias toward 'response' to prevent false negatives."""
+        prompt = self._get_classify_prompt()
+        self.assertIn(
+            "doubt", prompt.lower(),
+            "Triage prompt has no 'when in doubt' fallback — borderline emails default to "
+            "being removed rather than kept."
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
