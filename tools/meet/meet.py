@@ -3,10 +3,21 @@
 meet.py — Record a meeting, transcribe, extract notes + todos, file to vault.
 
 Usage:
-    python3 meet.py "1:1 with Ashish"     # record until Ctrl+C
-    python3 meet.py "standup" --no-todos  # skip Todoist
-    python3 meet.py "retro" --tx transcript.txt  # use existing transcript
-    python3 meet.py "all-hands" --domain i9      # force domain
+    python3 meet.py "1:1 with Ashish"        # mic only (in-person)
+    python3 meet.py "standup" --teams         # Teams/Zoom call (BlackHole + mic)
+    python3 meet.py "standup" --no-todos      # skip Todoist
+    python3 meet.py "retro" --tx notes.txt    # use existing transcript
+    python3 meet.py --devices                 # list available audio devices
+
+Teams/Zoom setup (one-time):
+    1. brew install blackhole-2ch
+    2. Open Audio MIDI Setup → Create Multi-Output Device:
+          ✓ BlackHole 2ch
+          ✓ MacBook Pro Speakers (or headphones)
+       Name it "Meet Output"
+    3. Before a call: set System Output → "Meet Output"
+    4. Run: python3 meet.py "meeting name" --teams
+    The script records both BlackHole (their audio) + mic (your audio) mixed together.
 """
 
 import os
@@ -44,29 +55,80 @@ DEFAULT_DOMAIN = "i9"
 
 # ── Recording ────────────────────────────────────────────────────────────────
 
-def record_audio() -> np.ndarray:
-    """Record from mic until Ctrl+C. Returns int16 numpy array."""
-    print("🎙  Recording... press Ctrl+C to stop\n")
-    frames = []
-    stop = False
+def find_device(name_fragment: str) -> int | None:
+    for i, dev in enumerate(sd.query_devices()):
+        if dev["max_input_channels"] > 0 and name_fragment.lower() in dev["name"].lower():
+            return i
+    return None
 
-    def callback(indata, frame_count, time_info, status):
-        if not stop:
-            frames.append(indata.copy())
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
-                        dtype="int16", callback=callback):
-        try:
-            while not stop:
-                sd.sleep(500)
-        except KeyboardInterrupt:
-            stop = True
+def list_devices():
+    print("\nAvailable input devices:")
+    for i, dev in enumerate(sd.query_devices()):
+        if dev["max_input_channels"] > 0:
+            print(f"  [{i:2d}] {dev['name']}")
+    print()
 
-    if not frames:
+
+def record_audio(teams_mode: bool = False) -> np.ndarray:
+    """Record audio until Ctrl+C.
+
+    teams_mode=True: mix BlackHole (system/Teams audio) + mic.
+    teams_mode=False: mic only (default).
+    """
+    mic_frames: list = []
+    bh_frames: list = []
+    streams = []
+
+    # Mic stream
+    mic_idx = find_device("MacBook Pro Microphone") or find_device("Built-in Microphone")
+    def mic_cb(indata, fc, ti, st):
+        mic_frames.append(indata.copy())
+    streams.append(sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
+                                  dtype="int16", device=mic_idx, callback=mic_cb))
+    print(f"🎙  Mic: {sd.query_devices(mic_idx)['name'] if mic_idx is not None else 'default'}")
+
+    # BlackHole stream (Teams/Zoom system audio)
+    if teams_mode:
+        bh_idx = find_device("BlackHole")
+        if bh_idx is not None:
+            def bh_cb(indata, fc, ti, st):
+                bh_frames.append(indata.copy())
+            streams.append(sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
+                                          dtype="int16", device=bh_idx, callback=bh_cb))
+            print(f"🖥  System audio: {sd.query_devices(bh_idx)['name']}")
+        else:
+            print("⚠  BlackHole not found — mic only. See setup instructions in --help.")
+
+    print("\nRecording... press Ctrl+C to stop\n")
+    for s in streams:
+        s.start()
+    try:
+        while True:
+            sd.sleep(500)
+    except KeyboardInterrupt:
+        pass
+    for s in streams:
+        s.stop()
+        s.close()
+
+    def concat(frames):
+        return np.concatenate(frames, axis=0) if frames else None
+
+    mic_audio = concat(mic_frames)
+    bh_audio = concat(bh_frames)
+
+    if mic_audio is None and bh_audio is None:
         print("No audio captured.")
         sys.exit(1)
 
-    audio = np.concatenate(frames, axis=0)
+    if mic_audio is not None and bh_audio is not None:
+        min_len = min(len(mic_audio), len(bh_audio))
+        mixed = mic_audio[:min_len].astype(np.int32) + bh_audio[:min_len].astype(np.int32)
+        audio = np.clip(mixed, -32768, 32767).astype(np.int16)
+    else:
+        audio = mic_audio if mic_audio is not None else bh_audio
+
     duration = len(audio) / SAMPLE_RATE
     print(f"\n⏹  Stopped. {duration:.0f}s recorded.")
     return audio
