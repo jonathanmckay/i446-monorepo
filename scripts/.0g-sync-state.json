@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "write ashish update": {
-      "todoist_id": "6gJgXMM38rww5492",
-      "minutes": 60
-    },
     "progress on slt slides": {
       "todoist_id": "6gJgXMWW9rh67QcR",
       "minutes": 50
@@ -12,7 +8,11 @@
     "135分 hcb": {
       "todoist_id": "6gJgXMcj4JQmCv4R",
       "minutes": 20
+    },
+    "write ashish update": {
+      "todoist_id": "6gJgXMM38rww5492",
+      "minutes": 60
     }
   },
-  "last_sync": "2026-04-07T08:21:31.708085-07:00"
+  "last_sync": "2026-04-07T10:23:57.995073-07:00"
 }

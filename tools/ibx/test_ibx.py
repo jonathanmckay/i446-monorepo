@@ -684,6 +684,55 @@ class TestSendReplyAll(unittest.TestCase):
         self.assertIn("bob@example.com", raw,
                       "send_reply must include all Cc recipients, got:\n" + raw)
 
+    def test_reply_uses_rfc_message_id_for_threading(self):
+        """send_reply must set In-Reply-To and References to the RFC Message-ID header,
+        not the Gmail API message ID, so Gmail places the reply in the same thread."""
+        import ibx
+        fake_svc = MagicMock()
+        fake_svc.users().getProfile().execute.return_value = {"emailAddress": "mckay@m5c7.com"}
+
+        eml = {
+            "id": "18abc123def456",                        # Gmail API ID (not an RFC Message-ID)
+            "message_id": "<CABxyz@mail.gmail.com>",       # RFC Message-ID header
+            "references": "",
+            "subject": "Budget review",
+            "from": "joe@example.com",
+            "to": "mckay@m5c7.com",
+            "cc": "",
+            "thread_id": "thread1",
+        }
+        ibx.send_reply(fake_svc, eml, "Thanks Joe!")
+
+        raw = self._sent_raw(fake_svc)
+        in_reply_to = next((l for l in raw.splitlines() if l.lower().startswith("in-reply-to:")), "")
+        references = next((l for l in raw.splitlines() if l.lower().startswith("references:")), "")
+
+        self.assertIn("<CABxyz@mail.gmail.com>", in_reply_to,
+                      "In-Reply-To must use the RFC Message-ID, not the Gmail API ID.\n" + raw)
+        self.assertNotIn("18abc123def456", in_reply_to,
+                         "In-Reply-To must not contain the bare Gmail API ID.\n" + raw)
+        self.assertIn("<CABxyz@mail.gmail.com>", references,
+                      "References must include the RFC Message-ID.\n" + raw)
+
+    def test_reply_threading_falls_back_to_id_when_no_message_id(self):
+        """When message_id is absent (e.g. old cached email), send_reply must not crash."""
+        import ibx
+        fake_svc = MagicMock()
+        fake_svc.users().getProfile().execute.return_value = {"emailAddress": "mckay@m5c7.com"}
+
+        eml = {
+            "id": "18abc123def456",
+            "subject": "Test",
+            "from": "joe@example.com",
+            "to": "mckay@m5c7.com",
+            "cc": "",
+            "thread_id": "thread1",
+            # no message_id key
+        }
+        # Should not raise
+        ibx.send_reply(fake_svc, eml, "Got it.")
+        fake_svc.users().messages().send.assert_called_once()
+
     def test_reply_does_not_cc_self(self):
         """send_reply must not include the sender's own address in Cc."""
         import ibx

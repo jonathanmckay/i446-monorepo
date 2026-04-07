@@ -107,6 +107,8 @@ def get_email(service, msg_id):
     to_ = parsed.get("To", "")
     cc_ = parsed.get("Cc", "")
     date_str = parsed.get("Date", "")
+    message_id = parsed.get("Message-ID", "")
+    references = parsed.get("References", "")
     try:
         date = parsedate_to_datetime(date_str).strftime("%b %d, %I:%M%p").lower()
     except Exception:
@@ -116,6 +118,8 @@ def get_email(service, msg_id):
 
     return {
         "id": msg_id,
+        "message_id": message_id,
+        "references": references,
         "subject": subject,
         "from": from_,
         "to": to_,
@@ -376,8 +380,10 @@ def send_reply(service, eml, body_text):
     if cc_addrs:
         msg["Cc"] = ", ".join(cc_addrs)
     msg["Subject"] = "Re: " + eml["subject"]
-    msg["In-Reply-To"] = eml["id"]
-    msg["References"] = eml["id"]
+    rfc_id = eml.get("message_id") or eml["id"]
+    msg["In-Reply-To"] = rfc_id
+    existing_refs = eml.get("references", "").strip()
+    msg["References"] = (existing_refs + " " + rfc_id).strip()
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service.users().messages().send(
