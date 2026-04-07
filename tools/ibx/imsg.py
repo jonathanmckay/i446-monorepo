@@ -165,8 +165,17 @@ def build_contact_cache() -> dict[str, str]:
 # ── Database ──────────────────────────────────────────────────────────────────
 
 def snapshot_db() -> sqlite3.Connection:
-    """Copy chat.db to /tmp to avoid lock conflicts with Messages.app."""
+    """Copy chat.db (+ WAL/SHM) to /tmp to avoid lock conflicts with Messages.app.
+
+    Messages.app uses SQLite WAL mode — recent writes live in chat.db-wal and
+    haven't been checkpointed into the main file yet.  Copying all three files
+    lets SQLite replay the WAL automatically when we open the snapshot.
+    """
     shutil.copy2(CHAT_DB, DB_SNAPSHOT)
+    for suffix in ("-wal", "-shm"):
+        src = CHAT_DB.parent / (CHAT_DB.name + suffix)
+        if src.exists():
+            shutil.copy2(src, DB_SNAPSHOT.parent / (DB_SNAPSHOT.name + suffix))
     conn = sqlite3.connect(str(DB_SNAPSHOT))
     conn.row_factory = sqlite3.Row
     return conn

@@ -29,6 +29,10 @@ def count_imessage() -> int:
         return 0
     try:
         shutil.copy2(CHAT_DB, DB_SNAPSHOT)
+        for _suffix in ("-wal", "-shm"):
+            _src = CHAT_DB.parent / (CHAT_DB.name + _suffix)
+            if _src.exists():
+                shutil.copy2(_src, DB_SNAPSHOT.parent / (DB_SNAPSHOT.name + _suffix))
         conn = sqlite3.connect(str(DB_SNAPSHOT))
         rows = conn.execute("""
             SELECT c.chat_identifier, MAX(m.date) as latest_date
