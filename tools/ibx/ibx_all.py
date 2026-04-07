@@ -57,6 +57,8 @@ def normalize_email(msg_ref, service, account):
         "type": "email",
         "source": account,
         "from": email.get("from", ""),
+        "to": email.get("to", ""),
+        "cc": email.get("cc", ""),
         "preview": email.get("subject", "(no subject)"),
         "body": email.get("body", ""),
         "ts": 0.0,  # Gmail doesn't give easy sort ts; use fetch order
@@ -110,6 +112,12 @@ def display_card(item, idx, total):
     header = Text()
     header.append(f"FROM:    ", style="bold dim")
     header.append(item["from"] or "(unknown)", style="bold cyan")
+    if item.get("to"):
+        header.append(f"\nTO:      ", style="bold dim")
+        header.append(item["to"], style="dim white")
+    if item.get("cc"):
+        header.append(f"\nCC:      ", style="bold dim")
+        header.append(item["cc"], style="dim white")
     header.append(f"\nSUBJECT: ", style="bold dim")
     header.append(item["preview"], style="white")
 
@@ -444,7 +452,6 @@ def main():
 
     set_term_color("red")
     console.print(f"\n[bold]{len(all_items)} item(s)[/bold] to review {status_line}")
-    print_help()
 
     # Background poll: detect items handled outside this TUI
     resolved = set()
@@ -498,7 +505,7 @@ def main():
 
         item = all_items[index]
         display_card(item, index + 1, len(all_items))
-        console.print(f"[dim][{index + 1}/{len(all_items)}][/dim]")
+        print_help()
 
         try:
             user_input = input("> ").strip()
