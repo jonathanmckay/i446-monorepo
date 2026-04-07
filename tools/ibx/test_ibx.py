@@ -934,5 +934,79 @@ class TestTriagePromptDoesNotOverClassifyAsInfo(unittest.TestCase):
         )
 
 
+class TestIbxAllOptionalImport(unittest.TestCase):
+    """Every try/except guarding an import in ibx_all.py must catch SystemExit.
+
+    Regression: lease_signer calls sys.exit(1) when playwright is not installed.
+    The try/except ImportError block did not catch SystemExit, so ibx_all exited
+    immediately on startup, showing "0 messages" before fetching any inbox items.
+
+    This test is intentionally general: it catches the same class of bug for any
+    future optional dependency that calls sys.exit() during import.
+    """
+
+    @staticmethod
+    def _caught_names(handler):
+        """Return the set of exception class names caught by an except handler."""
+        if handler.type is None:
+            return {"bare"}
+        import ast
+        if isinstance(handler.type, ast.Tuple):
+            return {elt.id for elt in handler.type.elts if isinstance(elt, ast.Name)}
+        if isinstance(handler.type, ast.Name):
+            return {handler.type.id}
+        return set()
+
+    def test_all_import_try_blocks_catch_system_exit(self):
+        """Every try block containing an import in ibx_all.py must catch SystemExit.
+
+        Optional dependencies may call sys.exit() during import (e.g. when a
+        required sub-dependency like playwright is missing). If the guarding
+        try/except only catches ImportError, the SystemExit propagates and kills
+        the whole ibx_all process before any inbox items are fetched.
+        """
+        import ast, pathlib
+        src = pathlib.Path(__file__).parent / "ibx_all.py"
+        tree = ast.parse(src.read_text())
+
+        # Only check module-level try blocks (direct children of the module body).
+        # Function-level try/except blocks are fine to propagate SystemExit — it's
+        # the module-level ones that kill ibx_all before any inbox items are fetched.
+        failures = []
+        for node in tree.body:
+            if not isinstance(node, ast.Try):
+                continue
+            # Only care about try blocks that contain at least one import
+            has_import = any(
+                isinstance(child, (ast.Import, ast.ImportFrom))
+                for child in ast.walk(node)
+            )
+            if not has_import:
+                continue
+            caught = set()
+            for handler in node.handlers:
+                caught |= self._caught_names(handler)
+            safe = bool(caught & {"SystemExit", "BaseException", "bare"})
+            if not safe:
+                # Collect the imported names for a clear error message
+                imported = [
+                    alias.name
+                    for child in ast.walk(node)
+                    if isinstance(child, (ast.Import, ast.ImportFrom))
+                    for alias in (child.names if isinstance(child, ast.Import)
+                                  else [ast.alias(name=child.module or "?", asname=None)])
+                ]
+                failures.append(
+                    f"try block importing {imported} only catches {sorted(caught)} — "
+                    "add SystemExit so a sys.exit() inside the dependency doesn't kill ibx_all"
+                )
+
+        self.assertFalse(
+            failures,
+            "ibx_all.py has try/except import blocks that don't catch SystemExit:\n"
+            + "\n".join(f"  • {f}" for f in failures),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

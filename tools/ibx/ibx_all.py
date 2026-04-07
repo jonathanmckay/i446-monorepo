@@ -30,7 +30,7 @@ try:
     import automations_db as _autodb
     from config import AUTOSIGN_SENDERS, DB_PATH as _AUTODB_PATH
     _autosign_available = True
-except ImportError:
+except (ImportError, SystemExit, Exception):
     _autosign_available = False
 
 import anthropic
