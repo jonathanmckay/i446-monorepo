@@ -363,10 +363,11 @@ def _poll_resolved(items_snapshot, resolved, stop_event, msg_queue, interval=60)
                         resolved.add(uid)
 
                 elif item["type"] == "imsg":
-                    # Resolved if chat_identifier is now in the processed set
+                    # Resolved if the stored processed ts covers this message's latest_apple_ts
                     proc = _imsg.load_processed()
                     cid = item["_data"]["thread"]["chat_identifier"]
-                    if cid in proc:
+                    item_ts = item["_data"]["thread"].get("latest_apple_ts", 0)
+                    if proc.get(cid, -1) >= item_ts:
                         resolved.add(uid)
 
             except Exception:
@@ -396,7 +397,8 @@ def check_resolved_now(items_snapshot, resolved):
             elif item["type"] == "imsg":
                 proc = _imsg.load_processed()
                 cid = item["_data"]["thread"]["chat_identifier"]
-                if cid in proc:
+                item_ts = item["_data"]["thread"].get("latest_apple_ts", 0)
+                if proc.get(cid, -1) >= item_ts:
                     resolved.add(uid)
                     newly += 1
         except Exception:
@@ -496,7 +498,7 @@ def main():
 
         item = all_items[index]
         display_card(item, index + 1, len(all_items))
-        console.print(f"[dim][{index + 1}/{len(all_items)}][/dim] ", end="")
+        console.print(f"[dim][{index + 1}/{len(all_items)}][/dim]")
 
         try:
             user_input = input("> ").strip()

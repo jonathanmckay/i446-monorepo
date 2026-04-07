@@ -755,5 +755,86 @@ class TestSendReplyAll(unittest.TestCase):
                          "send_reply must not Cc the sender's own address")
 
 
+class TestImsgPollResolution(unittest.TestCase):
+    """Poll must not falsely resolve an iMessage item that has a newer message than what's stored."""
+
+    def _make_imsg_item(self, cid, latest_apple_ts):
+        return {
+            "type": "imsg",
+            "source": "iMessage",
+            "from": "Asha",
+            "preview": "Hey",
+            "body": "",
+            "ts": 0.0,
+            "_data": {
+                "thread": {
+                    "chat_identifier": cid,
+                    "latest_apple_ts": latest_apple_ts,
+                }
+            },
+        }
+
+    def test_poll_does_not_resolve_item_with_newer_ts_than_stored(self):
+        """If item's latest_apple_ts > stored proc ts, poll must NOT mark it resolved."""
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        import ibx_all
+
+        stored_ts = 1_000_000
+        item_ts = 2_000_000  # newer message — not yet processed
+        item = self._make_imsg_item("chat;-;+15105551234", item_ts)
+
+        resolved = set()
+
+        with unittest.mock.patch("imsg.load_processed", return_value={"chat;-;+15105551234": stored_ts}):
+            ibx_all.check_resolved_now([item], resolved)
+
+        self.assertNotIn(
+            ibx_all._item_uid(item),
+            resolved,
+            "check_resolved_now must NOT resolve an iMessage item whose latest_apple_ts is "
+            "newer than the stored processed timestamp — new message should stay visible.",
+        )
+
+    def test_poll_resolves_item_when_ts_already_covered(self):
+        """If stored proc ts >= item's latest_apple_ts, item is resolved (already archived)."""
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        import ibx_all
+
+        stored_ts = 2_000_000
+        item_ts = 1_000_000  # older — already processed
+        item = self._make_imsg_item("chat;-;+15105551234", item_ts)
+
+        resolved = set()
+
+        with unittest.mock.patch("imsg.load_processed", return_value={"chat;-;+15105551234": stored_ts}):
+            ibx_all.check_resolved_now([item], resolved)
+
+        self.assertIn(
+            ibx_all._item_uid(item),
+            resolved,
+            "check_resolved_now SHOULD resolve an item whose ts is already covered by stored proc.",
+        )
+
+    def test_poll_does_not_resolve_unseen_contact(self):
+        """An iMessage from a contact not in proc at all must not be resolved."""
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        import ibx_all
+
+        item = self._make_imsg_item("chat;-;+15105559999", 500_000)
+        resolved = set()
+
+        with unittest.mock.patch("imsg.load_processed", return_value={}):
+            ibx_all.check_resolved_now([item], resolved)
+
+        self.assertNotIn(
+            ibx_all._item_uid(item),
+            resolved,
+            "check_resolved_now must NOT resolve an iMessage from a contact not in proc at all.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
