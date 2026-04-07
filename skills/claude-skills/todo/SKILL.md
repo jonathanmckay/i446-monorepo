@@ -1,5 +1,5 @@
 ---
-name: todo
+name: "todo"
 description: "Quick-add a task to Todoist due today. Usage: /todo <task> (time) [value] @tag"
 user-invocable: true
 ---

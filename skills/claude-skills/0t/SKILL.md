@@ -111,13 +111,21 @@ osascript -e '...'
 
 **Note:** The date used for step 4d is always **today** (the actual current date when `/0t` is run), not `yesterday_date`. This is because /0t runs in the morning for yesterday, and last night's sleep is recorded under today.
 
-### Step 5: Confirm completion
+### Step 5: Mark 0t habit done
+
+After logging sleep, execute the `/did` skill for habit `0t`. Follow the full `/did` flow exactly as if the user had typed `/did 0t` — this means:
+- Write `1` to the `0t` column in today's 0₦ row (or the Toggl-derived minutes if available)
+- Close any active Todoist task labeled `0neon` whose content matches `0t`
+- Run Step 2b from the did skill (check if `0l` is also done, write completion time to AF if so)
+
+### Step 6: Confirm completion
 
 Tell the user:
 - Chart saved to Desktop
 - Chart inserted into Neon spreadsheet (sheet: 0分, cell: AI/AJ{row})
 - Total time tracked for the day
 - Sleep logged: N min → 0₦ column D (睡觉), today's row
+- 0t marked done in 0₦ + Todoist
 
 ## Example output format
 

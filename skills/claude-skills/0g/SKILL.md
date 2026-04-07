@@ -13,7 +13,7 @@ Manage daily goals in the `## 0₲` section of the build order file and sync to 
 - **Build order**: `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`
 - **Section**: `## 0₲` (stop at the next `##` or `###` heading)
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
-- **Todoist labels**: `#关键径路` on every task
+- **Todoist labels**: `#0g` on every task
 
 ## Notation Parsing
 
@@ -55,12 +55,16 @@ Preserve the `### 以后的目标` subsection and everything below it. Only repl
 For each goal, create a Todoist task:
 - **Content**: goal text (with `(N)`, `[N]`, `{N}` preserved; `@code` stripped)
 - **Project**: `0g` (ID `6XfvCQ3p8Gq6fhGR`)
-- **Labels**: `["#关键径路", "#0g"]` + the `@code` label if present (e.g. `"i9"`)
+- **Labels**: `["#0g"]` + the `@code` label if present (e.g. `"i9"`)
 - **Priority**: `p1`
 - **Due**: today
 - **Duration**: from `(N)` if present
 
-**Step 4: Confirm**
+**Step 4: Mark 0g habit done**
+
+Execute the `/did` skill for habit `0g` — follow the full `/did` flow exactly as if the user had typed `/did 0g`. This writes 1 to the `0g` column in today's 0₦ row and closes any matching 0neon Todoist task.
+
+**Step 5: Confirm**
 
 ```
 0g → N goals set + synced to todoist
@@ -80,7 +84,11 @@ If none found, report "No 0g goals in build order" and stop.
 
 For each unchecked goal, create a Todoist task (same format as above — parse annotations from the text).
 
-**Step 3: Confirm**
+**Step 3: Mark 0g habit done**
+
+Execute the `/did` skill for habit `0g` — follow the full `/did` flow exactly as if the user had typed `/did 0g`. This writes 1 to the `0g` column in today's 0₦ row and closes any matching 0neon Todoist task.
+
+**Step 4: Confirm**
 
 ```
 0g → N goals synced to todoist

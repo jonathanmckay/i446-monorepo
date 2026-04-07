@@ -1,6 +1,6 @@
 ---
-name: "clean-notes"
-description: "Sort raw meeting notes from z_ibx/new-notes.md into their correct vault locations (d359 people docs, d358 meeting notes, o314 journal entries). Clears the inbox when done."
+name: "notes"
+description: "Sort raw meeting notes from z_ibx/new-notes.md into their correct vault locations (d359 people docs, d358 meeting notes, o314 journal entries). Clears the inbox, then marks the notes habit done."
 user-invocable: true
 ---
 
@@ -8,7 +8,7 @@ user-invocable: true
 
 Sort the raw scratch-pad notes in `~/vault/z_ibx/new-notes.md` into their correct vault locations, then clear the inbox.
 
-## When invoked with `/clean-notes`
+## When invoked with `/notes`
 
 ### Step 1: Read the inbox
 
@@ -102,6 +102,10 @@ d358 (meetings):
 
 Inbox cleared.
 ```
+
+### Step 7: Mark notes habit done
+
+After reporting, execute the `/did` skill for habit `notes` — follow the full `/did` flow exactly as if the user had typed `/did notes`. This writes 1 to the `notes` column in today's 0₦ row and closes any matching 0neon Todoist task.
 
 ## Rules
 

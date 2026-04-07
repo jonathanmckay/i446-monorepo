@@ -9,6 +9,7 @@ Then open: http://localhost:5555
 
 import json
 import glob
+import os
 import sqlite3
 import subprocess
 import sys
@@ -339,6 +340,26 @@ def get_copilot_stats():
     }
 
 
+def get_permissions_stats(days=30):
+    """Get daily permission grant counts from ~/.claude/timing/permissions.jsonl"""
+    log_file = os.path.expanduser("~/.claude/timing/permissions.jsonl")
+    daily = {}
+    if os.path.exists(log_file):
+        with open(log_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    date = entry.get("date", "")
+                    if date:
+                        daily[date] = daily.get(date, 0) + 1
+                except (json.JSONDecodeError, KeyError):
+                    continue
+    return daily
+
+
 def get_github_commits():
     """Get GitHub commits with daily breakdown for heatmap"""
     try:
@@ -571,11 +592,63 @@ def get_skill_stats(days=30):
     return {"daily": daily, "skills": skills, "total": total}
 
 
+def _wait_buckets(wall_times):
+    """Split wall times into percentile buckets and return % of total wait in each."""
+    if not wall_times:
+        return None
+    s = sorted(wall_times)
+    n = len(s)
+    total = sum(s)
+    if total <= 0:
+        return None
+    p50_idx = n // 2
+    p95_idx = min(int(n * 0.95), n - 1)
+    p99_idx = min(int(n * 0.99), n - 1)
+    bucket_le_p50 = sum(s[:p50_idx + 1])
+    bucket_p50_p95 = sum(s[p50_idx + 1:p95_idx + 1])
+    bucket_p95_p99 = sum(s[p95_idx + 1:p99_idx + 1])
+    bucket_p99_max = sum(s[p99_idx + 1:])
+    return {
+        "le_p50": round(bucket_le_p50 / total * 100, 1),
+        "p50_p95": round(bucket_p50_p95 / total * 100, 1),
+        "p95_p99": round(bucket_p95_p99 / total * 100, 1),
+        "p99_max": round(bucket_p99_max / total * 100, 1),
+        "total_s": round(total, 1),
+    }
+
+
+def _load_hook_timing(days=30):
+    """Load true wall-clock turn timings from the hook-based timing log.
+    Returns {date_str: [elapsed_seconds, ...]}.
+    """
+    timing_file = Path.home() / ".claude" / "timing" / "turns.jsonl"
+    if not timing_file.exists():
+        return {}
+    cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    result = defaultdict(list)
+    try:
+        with open(timing_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                date = obj.get("date", "")
+                elapsed = obj.get("elapsed_s", 0)
+                if date > cutoff_date and 0 < elapsed <= 1800:
+                    result[date].append(elapsed)
+    except Exception:
+        pass
+    return dict(result)
+
+
 def get_latency_stats(days=30):
-    """Compute TTFT and TTLT from Claude Code JSONL session files.
+    """Compute TTFT, TTLT, and wall-clock latency from Claude Code session data.
 
     TTFT = Time to First Turn: seconds from user's first message to assistant's first response.
     TTLT = Time to Last Turn: seconds from user's last message to assistant's final response.
+    Wall = true wall-clock from hook timing log (prompt_start → stop), falls back to
+           inter-message wall-clock from JSONL timestamps.
     Returns daily averages and overall percentiles for the last `days` days.
     """
     pacific = pytz.timezone("America/Los_Angeles")
@@ -585,12 +658,15 @@ def get_latency_stats(days=30):
     if not session_dir.exists():
         return {"daily": [], "overall": {}}
 
-    # date -> {"ttft": [seconds, ...], "ttlt": [seconds, ...]}
-    daily_latencies = defaultdict(lambda: {"ttft": [], "ttlt": []})
+    # date -> {"ttft": [seconds, ...], "ttlt": [seconds, ...], "wall": [seconds, ...]}
+    daily_latencies = defaultdict(lambda: {"ttft": [], "ttlt": [], "wall": []})
 
     for fpath in session_dir.glob("*.jsonl"):
         try:
+            # Collect assistant/user messages for TTFT/TTLT
             messages = []
+            # Collect ALL timestamped messages for wall-clock
+            all_messages = []
             with open(fpath) as fh:
                 for line in fh:
                     line = line.strip()
@@ -598,21 +674,35 @@ def get_latency_stats(days=30):
                         continue
                     obj = json.loads(line)
                     msg_type = obj.get("type")
-                    if msg_type not in ("user", "assistant"):
-                        continue
                     ts_str = obj.get("timestamp")
                     if not ts_str:
                         continue
                     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    messages.append((msg_type, ts))
+                    all_messages.append((msg_type, ts))
+                    if msg_type in ("user", "assistant"):
+                        messages.append((msg_type, ts))
 
             if len(messages) < 2:
                 continue
 
-            # For each user message, find the first and last consecutive assistant
-            # messages before the next user message.
-            #   TTFT = user_ts → first_assistant_ts  (time to first token)
-            #   TTLT = user_ts → last_assistant_ts   (time to last token / prompt → completion)
+            # Build wall-clock map: for each user message index in all_messages,
+            # find the last message of any type before the next user message.
+            user_indices = [i for i, (t, _) in enumerate(all_messages) if t == "user"]
+
+            for idx, ui in enumerate(user_indices):
+                user_ts = all_messages[ui][1]
+                # Find boundary: next user message or end of list
+                end = user_indices[idx + 1] if idx + 1 < len(user_indices) else len(all_messages)
+                if end <= ui + 1:
+                    continue
+                last_any_ts = all_messages[end - 1][1]
+                wall = (last_any_ts - user_ts).total_seconds()
+                if wall <= 0 or wall > 1800 or user_ts < cutoff:
+                    continue
+                day = user_ts.astimezone(pacific).strftime("%Y-%m-%d")
+                daily_latencies[day]["wall"].append(wall)
+
+            # TTFT / TTLT: user → first/last consecutive assistant messages
             i = 0
             while i < len(messages):
                 if messages[i][0] != "user":
@@ -637,7 +727,7 @@ def get_latency_stats(days=30):
                 ttft = (first_asst_ts - user_ts).total_seconds()
                 ttlt = (last_asst_ts - user_ts).total_seconds()
 
-                if ttft <= 0 or ttft > 300 or ttlt > 300:
+                if ttft <= 0 or ttft > 1800 or ttlt > 1800:
                     i += 1
                     continue
 
@@ -653,19 +743,34 @@ def get_latency_stats(days=30):
         except Exception:
             continue
 
+    # Load hook-based timing (preferred source for wall-clock)
+    hook_timing = _load_hook_timing(days)
+
     daily = []
     all_ttft = []
     all_ttlt = []
+    all_wall = []
     for i in range(days):
         date = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
-        d = daily_latencies.get(date, {"ttft": [], "ttlt": []})
+        d = daily_latencies.get(date, {"ttft": [], "ttlt": [], "wall": []})
+        # Prefer hook timing for wall-clock when available, fall back to JSONL
+        wall_data = hook_timing.get(date, d["wall"])
         entry = {
             "date": date,
             "avg_ttft": round(sum(d["ttft"]) / len(d["ttft"]), 1) if d["ttft"] else None,
             "avg_ttlt": round(sum(d["ttlt"]) / len(d["ttlt"]), 1) if d["ttlt"] else None,
+            "avg_wall": round(sum(wall_data) / len(wall_data), 1) if wall_data else None,
+            "max_wall": round(max(wall_data), 1) if wall_data else None,
+            "n_queries": len(wall_data),
+            "p50_wall": round(sorted(wall_data)[len(wall_data) // 2], 1) if wall_data else None,
+            "p95_wall": round(sorted(wall_data)[min(int(len(wall_data) * 0.95), len(wall_data) - 1)], 1) if wall_data else None,
+            "p99_wall": round(sorted(wall_data)[min(int(len(wall_data) * 0.99), len(wall_data) - 1)], 1) if wall_data else None,
+            "wait_buckets": _wait_buckets(wall_data),
+            "hook_source": bool(hook_timing.get(date)),
         }
         all_ttft.extend(d["ttft"])
         all_ttlt.extend(d["ttlt"])
+        all_wall.extend(wall_data)
         daily.append(entry)
 
     overall = {}
@@ -679,6 +784,12 @@ def get_latency_stats(days=30):
         overall["avg_ttlt"] = round(sum(s) / len(s), 1)
         overall["median_ttlt"] = round(s[len(s) // 2], 1)
         overall["p95_ttlt"] = round(s[min(int(len(s) * 0.95), len(s) - 1)], 1)
+    if all_wall:
+        s = sorted(all_wall)
+        overall["avg_wall"] = round(sum(s) / len(s), 1)
+        overall["median_wall"] = round(s[len(s) // 2], 1)
+        overall["p95_wall"] = round(s[min(int(len(s) * 0.95), len(s) - 1)], 1)
+        overall["p99_wall"] = round(s[min(int(len(s) * 0.99), len(s) - 1)], 1)
 
     return {"daily": daily, "overall": overall}
 
@@ -808,6 +919,10 @@ HTML_TEMPLATE = """
         .bar-segment.copilot {
             background: linear-gradient(180deg, #00F0FF 0%, #0088FF 100%);
             box-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
+        }
+        .bar-segment.permissions {
+            background: linear-gradient(180deg, #FFD700 0%, #FFA500 100%);
+            box-shadow: 0 0 8px rgba(255, 215, 0, 0.3);
         }
         .bar-label {
             position: absolute;
@@ -1067,7 +1182,7 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="card">
-            <h2>⚡ Response Latency — TTFT &amp; TTLT (Last 30 Days)</h2>
+            <h2>⚡ Response Latency — TTFT, TTLT &amp; Wall-Clock (Last 30 Days)</h2>
             <div class="grid" style="margin-bottom: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
                 <div>
                     <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg TTFT</div>
@@ -1105,6 +1220,30 @@ HTML_TEMPLATE = """
                         {{ "%.1f" | format(latency.overall.p95_ttlt | default(0)) }}s
                     </div>
                 </div>
+                <div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Avg Wall</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#00D4FF; text-shadow: 0 0 10px rgba(0,212,255,0.3);">
+                        {{ "%.1f" | format(latency.overall.avg_wall | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">Median Wall</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#00D4FF; text-shadow: 0 0 10px rgba(0,212,255,0.3);">
+                        {{ "%.1f" | format(latency.overall.median_wall | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p95 Wall</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#00D4FF; text-shadow: 0 0 10px rgba(0,212,255,0.3);">
+                        {{ "%.1f" | format(latency.overall.p95_wall | default(0)) }}s
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.75em; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em;">p99 Wall</div>
+                    <div style="font-size:1.6em; font-weight:700; color:#00D4FF; text-shadow: 0 0 10px rgba(0,212,255,0.3);">
+                        {{ "%.1f" | format(latency.overall.p99_wall | default(0)) }}s
+                    </div>
+                </div>
             </div>
             <div style="display:flex; gap:20px; margin-bottom:12px; font-size:0.85em;">
                 <span style="display:flex; align-items:center; gap:6px;">
@@ -1115,12 +1254,48 @@ HTML_TEMPLATE = """
                     <span style="display:inline-block; width:24px; height:3px; background:#39FF14; border-radius:2px;"></span>
                     TTLT (last response)
                 </span>
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:24px; height:3px; background:#00D4FF; border-radius:2px;"></span>
+                    Wall-clock (full turn incl. approvals)
+                </span>
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:24px; height:3px; background:#FFD700; border-radius:2px;"></span>
+                    Daily max wall-clock
+                </span>
             </div>
             <div style="background:var(--chart-bg); border:1px solid var(--chart-border); border-radius:12px; padding:16px; overflow:hidden;">
                 <svg id="latency-chart" width="100%" height="200" style="overflow:visible;"></svg>
             </div>
             <div style="margin-top:8px; font-size:0.75em; color:var(--muted);">
-                Latency measured per Claude Code session (JSONL). TTFT = first user→assistant delta; TTLT = last user→assistant delta. Sessions with no message pairs or &gt;5 min gaps excluded.
+                Latency measured per Claude Code session (JSONL). Y-axis is log scale. TTFT = first user→assistant delta; TTLT = last user→assistant delta.
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>⏳ Wait Time Distribution (% of Total)</h2>
+            <div style="display:flex; gap:20px; margin-bottom:12px; font-size:0.85em;">
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:12px; height:12px; background:#00D4FF; border-radius:2px;"></span>
+                    ≤p50
+                </span>
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:12px; height:12px; background:#FF10F0; border-radius:2px;"></span>
+                    p50→p95
+                </span>
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:12px; height:12px; background:#FFD700; border-radius:2px;"></span>
+                    p95→p99
+                </span>
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="display:inline-block; width:12px; height:12px; background:#FF5722; border-radius:2px;"></span>
+                    p99→max
+                </span>
+            </div>
+            <div style="background:var(--chart-bg); border:1px solid var(--chart-border); border-radius:12px; padding:16px; overflow:hidden;">
+                <svg id="wait-pct-chart" width="100%" height="200" style="overflow:visible;"></svg>
+            </div>
+            <div style="margin-top:8px; font-size:0.75em; color:var(--muted);">
+                What % of total daily wait time comes from each latency tier? Hover bars for totals.
             </div>
         </div>
 
@@ -1266,20 +1441,30 @@ HTML_TEMPLATE = """
                 bar.appendChild(claudeSegment);
             }
 
-            // Copilot segment (top)
+            // Copilot segment (middle)
             if (day.copilot > 0) {
                 const copilotSegment = document.createElement('div');
                 copilotSegment.className = 'bar-segment copilot';
                 const copilotHeight = (day.copilot / day.total) * 100;
                 copilotSegment.style.height = copilotHeight + '%';
-                copilotSegment.style.borderRadius = '4px 4px 0 0';
                 bar.appendChild(copilotSegment);
+            }
+
+            // Permissions segment (top)
+            if (day.permissions > 0) {
+                const permissionsSegment = document.createElement('div');
+                permissionsSegment.className = 'bar-segment permissions';
+                const permissionsHeight = (day.permissions / day.total) * 100;
+                permissionsSegment.style.height = permissionsHeight + '%';
+                permissionsSegment.style.borderRadius = '4px 4px 0 0';
+                bar.appendChild(permissionsSegment);
             }
 
             bar.addEventListener('mouseenter', e => {
                 const html = `<div class="tt-date">${day.date}</div>`
                     + `<div class="tt-claude">Claude: ${day.claude.toLocaleString()} turns</div>`
                     + `<div class="tt-copilot">Copilot: ${day.copilot.toLocaleString()} turns</div>`
+                    + `<div class="tt-permissions">Permissions: ${(day.permissions||0).toLocaleString()}</div>`
                     + `<div class="tt-total">Total: ${day.total.toLocaleString()} turns</div>`;
                 showTooltip(turnsTooltip, turnsChart, e, html);
             });
@@ -1565,12 +1750,21 @@ HTML_TEMPLATE = """
 
             const ttfts = latencyData.map(d => d.avg_ttft);
             const ttlts = latencyData.map(d => d.avg_ttlt);
-            const allVals = [...ttfts, ...ttlts].filter(v => v !== null && v !== undefined);
+            const walls = latencyData.map(d => d.avg_wall);
+            const maxWalls = latencyData.map(d => d.max_wall);
+            const allVals = [...ttfts, ...ttlts, ...walls, ...maxWalls].filter(v => v !== null && v !== undefined);
             const maxVal = Math.max(...allVals, 1);
+            const minVal = Math.max(Math.min(...allVals.filter(v => v > 0)), 0.1);
+            const logMin = Math.log10(minVal);
+            const logMax = Math.log10(maxVal);
             const n = latencyData.length;
 
             function xPos(i) { return PAD.left + (i / (n - 1)) * inner_w; }
-            function yPos(v) { return PAD.top + inner_h - (v / maxVal) * inner_h; }
+            function yPos(v) {
+                if (v <= 0) return PAD.top + inner_h;
+                const logV = Math.log10(v);
+                return PAD.top + inner_h - ((logV - logMin) / (logMax - logMin)) * inner_h;
+            }
 
             function makePath(vals, color) {
                 const pts = vals.map((v, i) => v != null ? `${xPos(i)},${yPos(v)}` : null);
@@ -1608,10 +1802,9 @@ HTML_TEMPLATE = """
                 });
             }
 
-            // Y axis gridlines + labels
-            const steps = 4;
-            for (let s = 0; s <= steps; s++) {
-                const v = (maxVal * s) / steps;
+            // Y axis gridlines + labels (log scale)
+            const logTicks = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].filter(v => v >= minVal * 0.9 && v <= maxVal * 1.1);
+            logTicks.forEach(v => {
                 const y = yPos(v);
                 const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
                 line.setAttribute('x1', PAD.left);
@@ -1628,9 +1821,9 @@ HTML_TEMPLATE = """
                 label.setAttribute('text-anchor', 'end');
                 label.setAttribute('font-size', '10');
                 label.setAttribute('fill', '#999');
-                label.textContent = v.toFixed(1) + 's';
+                label.textContent = v >= 60 ? (v / 60).toFixed(0) + 'm' : v + 's';
                 svg.appendChild(label);
-            }
+            });
 
             // X axis date labels (every ~7 days)
             latencyData.forEach((d, i) => {
@@ -1647,6 +1840,96 @@ HTML_TEMPLATE = """
 
             makePath(ttfts, '#FF10F0');
             makePath(ttlts, '#39FF14');
+            makePath(walls, '#00D4FF');
+            makePath(maxWalls, '#FFD700');
+        })();
+
+        // % of total wait time by percentile bucket (stacked bar)
+        (function() {
+            const data = {{ latency_daily | tojson | safe }};
+            const svg = document.getElementById('wait-pct-chart');
+            if (!svg) return;
+
+            const W = svg.getBoundingClientRect().width || 800;
+            const H = 200;
+            svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+            const PAD = { top: 10, right: 10, bottom: 25, left: 45 };
+            const inner_w = W - PAD.left - PAD.right;
+            const inner_h = H - PAD.top - PAD.bottom;
+            const n = data.length;
+
+            const buckets = [
+                { key: 'le_p50',   color: '#00D4FF', label: '≤p50' },
+                { key: 'p50_p95',  color: '#FF10F0', label: 'p50→p95' },
+                { key: 'p95_p99',  color: '#FFD700', label: 'p95→p99' },
+                { key: 'p99_max',  color: '#FF5722', label: 'p99→max' },
+            ];
+
+            const barWidth = (inner_w / n) * 0.7;
+            const barGap = (inner_w / n) * 0.3;
+
+            // Y axis (always 0-100%)
+            const ySteps = 4;
+            for (let s = 0; s <= ySteps; s++) {
+                const v = (100 * s) / ySteps;
+                const y = PAD.top + inner_h - (v / 100) * inner_h;
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', PAD.left);
+                line.setAttribute('x2', PAD.left + inner_w);
+                line.setAttribute('y1', y);
+                line.setAttribute('y2', y);
+                line.setAttribute('stroke', '#e0e0e0');
+                line.setAttribute('stroke-width', '1');
+                svg.appendChild(line);
+
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', PAD.left - 6);
+                label.setAttribute('y', y + 4);
+                label.setAttribute('text-anchor', 'end');
+                label.setAttribute('font-size', '10');
+                label.setAttribute('fill', '#999');
+                label.textContent = v + '%';
+                svg.appendChild(label);
+            }
+
+            // Stacked bars
+            data.forEach((d, i) => {
+                const wb = d.wait_buckets;
+                if (!wb) return;
+                const x = PAD.left + i * (inner_w / n) + barGap / 2;
+                let yOffset = 0;
+
+                buckets.forEach(b => {
+                    const pct = wb[b.key] || 0;
+                    if (pct <= 0) return;
+                    const h = (pct / 100) * inner_h;
+                    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    rect.setAttribute('x', x);
+                    rect.setAttribute('y', PAD.top + inner_h - yOffset - h);
+                    rect.setAttribute('width', barWidth);
+                    rect.setAttribute('height', h);
+                    rect.setAttribute('fill', b.color);
+                    rect.setAttribute('opacity', '0.85');
+                    rect.setAttribute('rx', '1');
+                    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    title.textContent = `${d.date} ${b.label}: ${pct}% (total: ${wb.total_s}s)`;
+                    rect.appendChild(title);
+                    svg.appendChild(rect);
+                    yOffset += h;
+                });
+
+                // X label
+                if (i % 7 === 0 || i === n - 1) {
+                    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    label.setAttribute('x', x + barWidth / 2);
+                    label.setAttribute('y', H - 4);
+                    label.setAttribute('text-anchor', 'middle');
+                    label.setAttribute('font-size', '9');
+                    label.setAttribute('fill', '#999');
+                    label.textContent = d.date.substring(5);
+                    svg.appendChild(label);
+                }
+            });
         })();
     </script>
 </body>
@@ -1666,6 +1949,7 @@ def dashboard():
     ingest_claude_sessions()
     claude = get_claude_stats() or {}
     copilot = get_copilot_stats() or {}
+    permissions_daily = get_permissions_stats()
     github = get_github_commits()
 
     # Combine daily data for charts (last 30 days)
@@ -1704,11 +1988,14 @@ def dashboard():
             "total": claude_tokens + copilot_tokens
         })
 
+        permission_count = permissions_daily.get(date, 0)
+
         daily_turns.append({
             "date": date,
             "claude": claude_turns,
             "copilot": copilot_turns,
-            "total": claude_turns + copilot_turns
+            "permissions": permission_count,
+            "total": claude_turns + copilot_turns + permission_count
         })
 
     mcp = get_mcp_stats()
@@ -1750,6 +2037,7 @@ def api_turns():
     """Pre-computed daily turns for consumption by other dashboards."""
     claude = get_claude_stats() or {}
     copilot = get_copilot_stats() or {}
+    permissions_daily = get_permissions_stats()
     result = []
     for i in range(30):
         d = (datetime.now() - timedelta(days=29-i)).strftime("%Y-%m-%d")
@@ -1763,8 +2051,10 @@ def api_turns():
             if activity["date"] == d:
                 copilot_turns = activity.get("turns", 0)
                 break
+        permission_count = permissions_daily.get(d, 0)
         result.append({"date": d, "claude": claude_turns, "copilot": copilot_turns,
-                        "total": claude_turns + copilot_turns})
+                        "permissions": permission_count,
+                        "total": claude_turns + copilot_turns + permission_count})
     return jsonify(result)
 
 

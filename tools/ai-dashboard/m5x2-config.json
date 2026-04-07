@@ -9,7 +9,16 @@
       "name": "Louisa Xu",
       "email": "lx@m5x2.com",
       "role": "admin"
+    },
+    "ian": {
+      "name": "Ian",
+      "email": "Ian@m5x2.com",
+      "role": "member"
     }
+  },
+  "stats_repo": {
+    "remote": "git@github.com:m5x2/ai-stats.git",
+    "local_path": "~/m5x2-ai-stats"
   },
   "properties": [
     "r202", "r203", "r888", "m5c7", "portfolio", "fund-0", "fund-i",

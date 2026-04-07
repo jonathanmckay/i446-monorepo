@@ -35,7 +35,7 @@ Scan row 1 of the `1₦+` sheet (starting at column B) to find the column matchi
 
 ```applescript
 tell application "Microsoft Excel"
-    set ws to sheet "1₦+" of active workbook
+    set ws to sheet "1n+" of workbook "Neon分v12.2.xlsx"
     set colLetters to {"B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ"}
     set foundColLetter to ""
     repeat with c from 1 to count of colLetters
@@ -102,7 +102,7 @@ tell application "Microsoft Excel"
 end tell
 ```
 
-- If **no points override**: `POINTS_EXPR` = `'1₦+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (found by scanning column A downward from row 4 for the last non-empty row)
+- If **no points override**: `POINTS_EXPR` = `'1n+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (found by scanning column A downward from row 4 for the last non-empty row)
 - If **points override provided**: `POINTS_EXPR` = the literal number (e.g. `+30`)
 
 ### Step 5: Confirm

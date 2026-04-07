@@ -184,18 +184,22 @@ If the description doesn't match any shortcode and has no `@project`, **start th
 
 ## Tools
 
-Use the Toggl MCP server tools:
-- `toggl_start` — start a timer (description, project code)
-- `toggl_stop` — stop the running timer
-- `toggl_create_entry` — create a completed entry (description, project, start, end)
-- `toggl_current` — get the running timer
-- `toggl_today` — list today's entries
-- `toggl_delete` — delete an entry by ID
+Use the Toggl CLI script via Bash:
 
-Pass **project codes** (e.g., `g245`, `i9`, `m5x2`) directly — the Toggl MCP server resolves them to IDs automatically.
+```
+CLI=~/i446-monorepo/mcp/toggl_server/toggl_cli.py
+python3 $CLI start <description> [project_code] [tag1 tag2 ...]
+python3 $CLI stop
+python3 $CLI current
+python3 $CLI today
+python3 $CLI create <description> <HH:MM|HHMM> <HH:MM|HHMM> [project_code] [--date YYYY-MM-DD]
+python3 $CLI delete <entry_id>
+```
 
-For **tags**, pass tag names as a list in the `tags` parameter.
+Pass **project codes** (e.g., `g245`, `i9`, `m5x2`) directly — the CLI resolves them to IDs automatically.
+
+For **tags**, pass them as additional positional args after the project code on `start`.
 
 ## Day barrier rule
 
-Never create a time entry that crosses midnight. If a time range spans midnight, split it into two entries: one ending at 23:59 and one starting at 00:00. The Toggl MCP server enforces this automatically.
+Never create a time entry that crosses midnight. If a time range spans midnight, split it into two entries: one ending at 23:59 and one starting at 00:00. The CLI handles this automatically in `create`.
