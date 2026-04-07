@@ -1,0 +1,117 @@
+{
+  "cleanupPeriodDays": 3650,
+  "model": "sonnet",
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(curl -s -u *:api_token*api.track.toggl.com*)",
+      "Bash(osascript -e *)",
+      "Bash(python3 -c *)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "T=$(date +%s$$); echo \"$T\" > /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh purple >/dev/null 2>&1; ( sleep 10; [ \"$(cat /tmp/claude-prayer-token 2>/dev/null)\" = \"$T\" ] && { ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1; rm -f /tmp/claude-prayer-token; } ) &",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/ai-timing-log.sh prompt_start \"$SESSION_ID\" >/dev/null 2>&1",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "echo \"{\\\"context\\\": \\\"System date: $(date +%Y-%m-%d) ($(date +%A)). Use this as today's date, not the currentDate context.\\\"}\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f /tmp/claude-prayer-token ] || ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh green >/dev/null 2>&1",
+            "async": false
+          },
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.claude/timing && echo \"{\\\"event\\\":\\\"permission\\\",\\\"ts\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\\\"date\\\":\\\"$(date +%Y-%m-%d)\\\"}\" >> ~/.claude/timing/permissions.jsonl",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rm -f /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh blue >/dev/null 2>&1",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/ai-timing-log.sh stop \"$SESSION_ID\" >/dev/null 2>&1",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh orange >/dev/null 2>&1",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rm -f /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh red >/dev/null 2>&1",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
