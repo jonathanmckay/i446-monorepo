@@ -10,9 +10,18 @@ AUTOSIGN_SENDERS = [
     "andie@m5c7.com",   # add when active
 ]
 
-# AppFolio credentials (set AF_PASSWORD env var; don't hardcode password)
+# AppFolio credentials (env var AF_PASSWORD or ~/.config/m5x2/af_password)
+def _load_af_password() -> str:
+    v = os.environ.get("AF_PASSWORD", "")
+    if v:
+        return v
+    creds = Path.home() / ".config/m5x2/af_password"
+    if creds.exists():
+        return creds.read_text().strip()
+    return ""
+
 APPFOLIO_EMAIL    = "mckay@m5c7.com"
-APPFOLIO_PASSWORD = os.environ.get("AF_PASSWORD", "")
+APPFOLIO_PASSWORD = _load_af_password()
 APPFOLIO_SUBDOMAIN = "mckay"  # mckay.appfolio.com
 
 # SQLite DB

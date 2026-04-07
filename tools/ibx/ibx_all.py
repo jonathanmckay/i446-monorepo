@@ -204,8 +204,15 @@ def _autosign_item(item):
         return
     meta = _signer.parse_email_metadata(item)
     console.print(f"  [dim cyan]⚙ auto-signing lease: {meta.get('unit', url[:60])}...[/dim cyan]")
-    result = _signer.sign_lease(url, headless=True)
-    status = result.get("status", "failed")
+    try:
+        result = _signer.sign_lease(url, headless=True)
+        status = result.get("status", "failed")
+        error  = result.get("error", "")
+    except Exception as exc:
+        result = {}
+        status = "failed"
+        error  = str(exc)
+        console.print(f"  [red]✗ autosign exception: {exc}[/red]")
     _autodb.log_signing(
         _AUTODB_PATH,
         property=meta.get("property", ""),
@@ -219,7 +226,8 @@ def _autosign_item(item):
     )
     icon = "✓" if status == "success" else "⚠"
     color = "green" if status == "success" else "yellow"
-    console.print(f"  [{color}]{icon} lease {status}: {meta.get('unit', '')}[/{color}]")
+    suffix = f": {error}" if error and status != "success" else ""
+    console.print(f"  [{color}]{icon} lease {status}{suffix}: {meta.get('unit', '')}[/{color}]")
     # Send notification email for first N successes
     if status == "success":
         signing_count = _autodb.count_successful(_AUTODB_PATH)
@@ -334,6 +342,7 @@ def fetch_emails():
         return items, per_account
 
     # Pre-triage: intercept autosign emails before triage can move them out of INBOX
+    _autosign_queued_ids: set = set()
     if _autosign_available:
         for name, svc in services.items():
             try:
@@ -341,6 +350,7 @@ def fetch_emails():
                 for m in unread:
                     item = normalize_email(m, svc, name)
                     if item and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
+                        _autosign_queued_ids.add(item.get("_data", {}).get("email", {}).get("id", ""))
                         t = threading.Thread(target=_autosign_item, args=(item,))
                         t.start()
                         _autosign_threads.append(t)
@@ -363,9 +373,11 @@ def fetch_emails():
             if not item:
                 continue
             if _autosign_available and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
-                t = threading.Thread(target=_autosign_item, args=(item,))
-                t.start()
-                _autosign_threads.append(t)
+                if item.get("_data", {}).get("email", {}).get("id", "") not in _autosign_queued_ids:
+                    _autosign_queued_ids.add(item.get("_data", {}).get("email", {}).get("id", ""))
+                    t = threading.Thread(target=_autosign_item, args=(item,))
+                    t.start()
+                    _autosign_threads.append(t)
                 continue  # don't add to review queue
             items.append(item)
             count += 1

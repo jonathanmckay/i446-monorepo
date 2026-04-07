@@ -123,18 +123,18 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
                 ]
             })
 
-            response = client.messages.create(
+            response = client.beta.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=1024,
                 system=SYSTEM_PROMPT,
                 tools=[{
-                    "type": "computer_20241022",
+                    "type": "computer_20250124",
                     "name": "computer",
                     "display_width_px": 1280,
                     "display_height_px": 800,
                 }],
                 messages=messages,
-                betas=["computer-use-2024-10-22"],
+                betas=["computer-use-2025-01-24"],
             )
 
             # Collect assistant turn for message history
