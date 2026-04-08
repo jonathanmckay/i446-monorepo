@@ -109,35 +109,33 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
 
         messages = []
         max_steps = 25
+        # First message: screenshot as a user turn
+        pending_user = {
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _screenshot_b64(page)}},
+                {"type": "text", "text": f"Current URL: {page.url}\n\nWhat should I do to complete the countersigning?"}
+            ]
+        }
 
         for step in range(max_steps):
-            screenshot = _screenshot_b64(page)
-            current_url = page.url
-
-            # Build next user message
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": screenshot}},
-                    {"type": "text", "text": f"Step {step+1}. Current URL: {current_url}\n\nWhat should I do next to complete the countersigning?"}
-                ]
-            })
+            messages.append(pending_user)
+            pending_user = None
 
             response = client.beta.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=1024,
                 system=SYSTEM_PROMPT,
                 tools=[{
-                    "type": "computer_20250124",
+                    "type": "computer_20251124",
                     "name": "computer",
                     "display_width_px": 1280,
                     "display_height_px": 800,
                 }],
                 messages=messages,
-                betas=["computer-use-2025-01-24"],
+                betas=["computer-use-2025-11-24"],
             )
 
-            # Collect assistant turn for message history
             messages.append({"role": "assistant", "content": response.content})
 
             # Check text blocks for terminal states
@@ -152,17 +150,39 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
                         browser.close()
                         return result
 
-            # Execute any tool calls
+            # Execute tool calls and build tool_result responses
+            tool_results = []
             for block in response.content:
                 if block.type == "tool_use" and block.name == "computer":
                     _execute_action(page, block.input)
+                    # Take a fresh screenshot as the tool result
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _screenshot_b64(page)}},
+                            {"type": "text", "text": f"Action executed. URL: {page.url}"}
+                        ]
+                    })
 
-            if response.stop_reason == "end_turn":
-                # No DONE signal but model stopped — check if page looks complete
+            if tool_results:
+                # Next message must be the tool results
+                pending_user = {"role": "user", "content": tool_results}
+            elif response.stop_reason == "end_turn":
                 title = page.title().lower()
                 if any(w in title for w in ("signed", "complete", "thank")):
                     result = {"status": "success", "url": page.url}
                     break
+                # Model stopped without tool use or DONE — send another screenshot
+                pending_user = {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _screenshot_b64(page)}},
+                        {"type": "text", "text": f"Step {step+2}. URL: {page.url}\n\nPlease continue. What should I do next?"}
+                    ]
+                }
+            else:
+                break
 
         browser.close()
 
