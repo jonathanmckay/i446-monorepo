@@ -76,15 +76,9 @@ def fetch_outlook_items():
     console.print("\n[bold]Outlook[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "List my 20 most recent unread emails from my Outlook inbox. "
-        "For each email, output in this exact format with one blank line between each:\n\n"
-        "FROM: sender name <sender@email.com>\n"
-        "TO: recipient name <recipient@email.com>\n"
-        "SUBJECT: the subject line\n"
-        "DATE: the date/time received\n"
-        "BODY: first 2-3 sentences of the email body\n"
-        "LINK: direct Outlook link to open this email\n\n"
-        "If there are no unread emails, output exactly: NONE"
+        "List every unread email in my inbox. For each one, give me "
+        "FROM: sender name and email, SUBJECT: subject line, BODY: first sentence. "
+        "Separate each email with ---. Include all of them, do not summarize or group."
     )
 
     if not response or re.search(r'(?i)^NONE$|no unread|inbox is empty|no emails', response):
@@ -97,8 +91,11 @@ def fetch_outlook_items():
     all_links = _extract_outlook_links(response)
     link_idx = 0
 
-    # Split into blocks by double newline or by FROM: headers
-    blocks = re.split(r'\n(?=FROM:)', response)
+    # Split into blocks by --- separators or by FROM: headers (with optional markdown bold)
+    blocks = re.split(r'\n-{3,}\n', response)
+    # If no --- separators, try splitting on FROM: lines
+    if len(blocks) <= 1:
+        blocks = re.split(r'\n(?=\*?\*?FROM:)', response)
 
     for block in blocks:
         block = block.strip()
@@ -112,21 +109,35 @@ def fetch_outlook_items():
         body = ""
         link = ""
 
+        # Extract markdown footnote links [N](url) from this block
+        block_links = _extract_outlook_links(block)
+
         for line in block.splitlines():
-            if line.startswith("FROM:"):
-                from_str = line[5:].strip()
-            elif line.startswith("TO:"):
-                to_str = line[3:].strip()
-            elif line.startswith("SUBJECT:"):
-                subject = line[8:].strip()
-            elif line.startswith("DATE:"):
-                date_str = line[5:].strip()
-            elif line.startswith("BODY:"):
-                body = line[5:].strip()
-            elif line.startswith("LINK:"):
-                link = line[5:].strip()
-            elif body and not line.startswith(("FROM:", "TO:", "SUBJECT:", "DATE:", "LINK:")):
-                body += " " + line.strip()
+            line_clean = line.strip()
+            # Strip markdown bold (**) wrapping field names
+            bare = re.sub(r'\*\*', '', line_clean)
+            if re.match(r'^FROM:', bare, re.IGNORECASE):
+                from_str = re.sub(r'^FROM:\s*', '', bare, flags=re.IGNORECASE).strip()
+            elif re.match(r'^TO:', bare, re.IGNORECASE):
+                to_str = re.sub(r'^TO:\s*', '', bare, flags=re.IGNORECASE).strip()
+            elif re.match(r'^SUBJECT:', bare, re.IGNORECASE):
+                subject = re.sub(r'^SUBJECT:\s*', '', bare, flags=re.IGNORECASE).strip()
+            elif re.match(r'^DATE:', bare, re.IGNORECASE):
+                date_str = re.sub(r'^DATE:\s*', '', bare, flags=re.IGNORECASE).strip()
+            elif re.match(r'^BODY:', bare, re.IGNORECASE):
+                body = re.sub(r'^BODY:\s*', '', bare, flags=re.IGNORECASE).strip().strip('"')
+            elif re.match(r'^LINK:', bare, re.IGNORECASE):
+                link = re.sub(r'^LINK:\s*', '', bare, flags=re.IGNORECASE).strip()
+            elif body and not re.match(r'^(?:FROM|TO|SUBJECT|DATE|LINK):', bare, re.IGNORECASE):
+                body += " " + line_clean.strip('"')
+
+        # Use block's footnote links if no explicit LINK: field
+        if not link and block_links:
+            link = block_links[0]
+        # Last resort: grab from full response
+        if not link and link_idx < len(all_links):
+            link = all_links[link_idx]
+            link_idx += 1
 
         if not from_str and not subject:
             continue

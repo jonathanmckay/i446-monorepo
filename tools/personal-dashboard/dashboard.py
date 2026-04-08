@@ -488,38 +488,65 @@ def api_data():
                 "avg_hours": entry.get("avg_hours"),
                 "count": entry.get("count", 0),
             }
-    # Account colors
-    EMAIL_COLORS = {
-        "m5x2 gmail": "#d50032", "m5x2": "#d50032",
-        "s897 gmail": "#2979ff", "personal": "#2979ff", "gmail": "#2979ff",
-        "imessage": "#34c759",
+    # Add iMessage daily stats from response DB
+    import sqlite3 as _sq3
+    _imsg_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
+    if _imsg_db.exists():
+        try:
+            _conn = _sq3.connect(f"file:{_imsg_db}?mode=ro", uri=True)
+            _rows = _conn.execute(
+                "SELECT day, avg_response_hours, sent_count FROM daily_stats"
+            ).fetchall()
+            _conn.close()
+            for day, avg_h, sent in _rows:
+                if day in set(dates):
+                    email_by_account["imessage"][day] = {
+                        "avg_hours": avg_h,
+                        "count": sent,
+                    }
+        except Exception:
+            pass
+
+    # Blended average response time (purple line) + per-account count bars
+    EMAIL_BAR_COLORS = {
+        "m5x2 gmail": "#d5003266", "m5x2": "#d5003266",
+        "s897 gmail": "#1b5e2066", "personal": "#1b5e2066", "gmail": "#1b5e2066",
+        "imessage": "#34c75966",
     }
-    EMAIL_COUNT_COLORS = {
-        "m5x2 gmail": "#d5003244", "m5x2": "#d5003244",
-        "s897 gmail": "#2979ff44", "personal": "#2979ff44", "gmail": "#2979ff44",
-        "imessage": "#34c75944",
-    }
+    # Compute blended daily avg response time (minutes) across all accounts
+    blended_response = []
+    for d in dates:
+        hours_list = []
+        for acct, day_map in email_by_account.items():
+            h = day_map.get(d, {}).get("avg_hours")
+            if h is not None:
+                hours_list.append(h)
+        if hours_list:
+            blended_response.append(round(sum(hours_list) / len(hours_list) * 60, 1))
+        else:
+            blended_response.append(None)
+
     email_datasets = []
+    # Purple blended line
+    email_datasets.append({
+        "type": "line",
+        "label": "avg response",
+        "data": blended_response,
+        "borderColor": "#aa00ff",
+        "backgroundColor": "transparent",
+        "borderWidth": 2,
+        "pointRadius": 2,
+        "tension": 0.3,
+        "spanGaps": True,
+        "yAxisID": "y",
+    })
+    # Per-account count bars (stacked)
     for acct, day_map in sorted(email_by_account.items()):
-        # Line: response time (primary y)
-        email_datasets.append({
-            "type": "line",
-            "label": acct,
-            "data": [day_map.get(d, {}).get("avg_hours") for d in dates],
-            "borderColor": EMAIL_COLORS.get(acct, "#aaaaaa"),
-            "backgroundColor": "transparent",
-            "borderWidth": 2,
-            "pointRadius": 3,
-            "tension": 0.3,
-            "spanGaps": True,
-            "yAxisID": "y",
-        })
-        # Bar: email count (secondary y)
         email_datasets.append({
             "type": "bar",
-            "label": f"{acct} count",
+            "label": acct,
             "data": [day_map.get(d, {}).get("count", 0) for d in dates],
-            "backgroundColor": EMAIL_COUNT_COLORS.get(acct, "#aaaaaa44"),
+            "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
             "borderWidth": 0,
             "yAxisID": "y2",
         })
@@ -634,9 +661,10 @@ HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Tasks Complete / Day</h2>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
+    <div class="summary" id="tasksSummary"></div>
   </div>
   <div class="card">
-    <h2>Project Bocking — Comms Response Time (hrs)</h2>
+    <h2>Project Bocking — Comms Response Time</h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
     <div class="summary" id="emailSummary"></div>
   </div>
@@ -661,63 +689,51 @@ fetch('/api/data').then(r => r.json()).then(data => {
     options: { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
   });
 
-  // Tasks chart (stacked: 0n=black, posthoc=purple, 1n=green, other=blue)
+  // Tasks chart (stacked: 0n, posthoc, 1n, other — neon palette)
+  const taskSeries = [
+    { label: '0₦', data: data.tasks_neon,    bg: '#9e9e9e', border: '#bbb' },
+    { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff88', border: '#7c4dff' },
+    { label: '1₦', data: data.tasks_1n,      bg: '#00e67688', border: '#00e676' },
+    { label: 'other', data: data.tasks_other, bg: '#2979ff44', border: '#2979ff' },
+  ];
   new Chart(document.getElementById('tasksChart'), {
     type: 'bar',
-    data: { labels, datasets: [{
-      label: '0n',
-      data: data.tasks_neon,
-      backgroundColor: '#333',
-      borderColor: '#555',
-      borderWidth: 1,
-    }, {
-      label: 'posthoc',
-      data: data.tasks_posthoc,
-      backgroundColor: '#aa00ff88',
-      borderColor: '#aa00ff',
-      borderWidth: 1,
-    }, {
-      label: '1n',
-      data: data.tasks_1n,
-      backgroundColor: '#00e67688',
-      borderColor: '#00e676',
-      borderWidth: 1,
-    }, {
-      label: 'other',
-      data: data.tasks_other,
-      backgroundColor: '#2979ff44',
-      borderColor: '#2979ff',
-      borderWidth: 1,
-    }]},
+    data: { labels, datasets: taskSeries.map(s => ({
+      label: s.label, data: s.data,
+      backgroundColor: s.bg, borderColor: s.border, borderWidth: 1,
+    }))},
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
+      plugins: { legend: { display: false } },
       scales: {
         x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
         y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });
+  // Tasks legend badges
+  const tkEl = document.getElementById('tasksSummary');
+  taskSeries.forEach(s => {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.border};margin-right:4px;vertical-align:middle;"></span>${s.label}`;
+    tkEl.appendChild(b);
+  });
 
-  // Email chart: mixed — lines for response time (hrs), bars for count/day
+  // Email chart: blended response time line (purple) + per-account count bars (stacked)
   new Chart(document.getElementById('emailChart'), {
     type: 'bar',
     data: { labels, datasets: data.email.datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: true,
-          labels: {
-            color: TICK, font: { size: 11 },
-            filter: item => !item.text.includes('count'),
-          }
-        }
-      },
+      plugins: { legend: { display: false } },
       scales: {
-        x: { stacked: false, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y:  { position: 'left',  min: 0, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, title: { display: true, text: 'hrs', color: TICK, font: { size: 10 } } },
-        y2: { position: 'right', min: 0, ticks: { color: TICK, font: { size: 10 } }, grid: { display: false }, title: { display: true, text: 'count', color: TICK, font: { size: 10 } } },
+        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y:  { type: 'logarithmic', position: 'left', min: 10, max: 1440,
+              ticks: { color: TICK, font: { size: 10 }, callback: v => [10,30,60,120,300,720,1440].includes(v) ? v+'m' : '' },
+              afterBuildTicks: axis => { axis.ticks = [10,30,60,120,300,720,1440].map(v => ({value:v})); },
+              grid: { color: GRID }, title: { display: true, text: 'min', color: TICK, font: { size: 10 } } },
+        y2: { position: 'right', min: 0, stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { display: false }, title: { display: true, text: 'msgs', color: TICK, font: { size: 10 } } },
       }
     }
   });
@@ -747,45 +763,21 @@ fetch('/api/data').then(r => r.json()).then(data => {
     tmEl.appendChild(b);
   });
 
-  // Email summary badges
-  const es = data.email.summary;
+  // Email legend (same style as Points/Day)
   const emEl = document.getElementById('emailSummary');
-  const emBadges = [
-    ['7d avg', es.work_last_7d_avg_hours != null ? es.work_last_7d_avg_hours.toFixed(1) + 'h' : null],
-    ['7d med', es.work_last_7d_median_hours != null ? es.work_last_7d_median_hours.toFixed(1) + 'h' : null],
-    ['28d avg', es.work_last_28d_avg_hours != null ? es.work_last_28d_avg_hours.toFixed(1) + 'h' : null],
-    ['n', es.work_sample_count != null ? String(es.work_sample_count) : null],
+  const emLegend = [
+    ['avg response', '#aa00ff', 'line'],
+    ['m5x2 gmail', '#d50032', 'bar'],
+    ['jbm gmail', '#1b5e20', 'bar'],
+    ['imessage', '#34c759', 'bar'],
   ];
-  emBadges.forEach(([k, v]) => {
-    if (v == null) return;
+  emLegend.forEach(([label, color, type]) => {
     const b = document.createElement('div');
     b.className = 'badge';
-    b.innerHTML = `${k} <span>${v}</span>`;
-    emEl.appendChild(b);
-  });
-
-  // iMessage stats
-  const im = data.email.imessage || {};
-  const imDot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#34c759;margin-right:4px;vertical-align:middle;"></span>';
-  const imBadges = [];
-  if (im.yesterday) {
-    let txt = `↑${im.yesterday.sent} ↓${im.yesterday.received}`;
-    if (im.yesterday.responses) txt += ` (${im.yesterday.responses} replies`;
-    if (im.yesterday.avg_hours != null) txt += `, ${im.yesterday.avg_hours}h avg`;
-    if (im.yesterday.responses) txt += ')';
-    imBadges.push(['iMsg yest', txt]);
-  }
-  if (im.today) {
-    let txt = `↑${im.today.sent} ↓${im.today.received}`;
-    if (im.today.responses) txt += ` (${im.today.responses} replies`;
-    if (im.today.avg_hours != null) txt += `, ${im.today.avg_hours}h avg`;
-    if (im.today.responses) txt += ')';
-    imBadges.push(['iMsg today', txt]);
-  }
-  imBadges.forEach(([k, v]) => {
-    const b = document.createElement('div');
-    b.className = 'badge';
-    b.innerHTML = `${imDot}${k} <span>${v}</span>`;
+    const shape = type === 'line'
+      ? `<span style="display:inline-block;width:12px;height:2px;background:${color};margin-right:4px;vertical-align:middle;"></span>`
+      : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:4px;vertical-align:middle;"></span>`;
+    b.innerHTML = `${shape}${label}`;
     emEl.appendChild(b);
   });
 });
