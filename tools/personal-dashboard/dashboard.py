@@ -271,7 +271,7 @@ def load_imessage_stats():
                     COUNT(*) as cnt
                 FROM message m
                 WHERE m.date / 1000000000 + ? >= strftime('%s', ?, 'utc') - 86400*2
-                  AND m.text IS NOT NULL AND length(m.text) > 0
+                  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
                   AND m.associated_message_type = 0
                 GROUP BY day, m.is_from_me
             """, (apple_epoch, apple_epoch, yesterday_str)).fetchall()
@@ -766,13 +766,26 @@ fetch('/api/data').then(r => r.json()).then(data => {
 
   // iMessage stats
   const im = data.email.imessage || {};
+  const imDot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#34c759;margin-right:4px;vertical-align:middle;"></span>';
   const imBadges = [];
-  if (im.yesterday) imBadges.push(['iMsg yest', `↑${im.yesterday.sent} ↓${im.yesterday.received}`]);
-  if (im.today) imBadges.push(['iMsg today', `↑${im.today.sent} ↓${im.today.received}`]);
+  if (im.yesterday) {
+    let txt = `↑${im.yesterday.sent} ↓${im.yesterday.received}`;
+    if (im.yesterday.responses) txt += ` (${im.yesterday.responses} replies`;
+    if (im.yesterday.avg_hours != null) txt += `, ${im.yesterday.avg_hours}h avg`;
+    if (im.yesterday.responses) txt += ')';
+    imBadges.push(['iMsg yest', txt]);
+  }
+  if (im.today) {
+    let txt = `↑${im.today.sent} ↓${im.today.received}`;
+    if (im.today.responses) txt += ` (${im.today.responses} replies`;
+    if (im.today.avg_hours != null) txt += `, ${im.today.avg_hours}h avg`;
+    if (im.today.responses) txt += ')';
+    imBadges.push(['iMsg today', txt]);
+  }
   imBadges.forEach(([k, v]) => {
     const b = document.createElement('div');
     b.className = 'badge';
-    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#34c759;margin-right:4px;vertical-align:middle;"></span>${k} <span>${v}</span>`;
+    b.innerHTML = `${imDot}${k} <span>${v}</span>`;
     emEl.appendChild(b);
   });
 });

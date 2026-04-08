@@ -73,7 +73,7 @@ def scan_chatdb(days=LOOKBACK_DAYS):
             cmj.chat_id,
             COALESCE(c.display_name, c.chat_identifier) as chat_name,
             m.is_from_me,
-            m.text,
+            COALESCE(m.text, '') as text,
             m.date / 1000000000 + ? as unix_ts,
             datetime(m.date / 1000000000 + ?, 'unixepoch', 'localtime') as local_time,
             date(m.date / 1000000000 + ?, 'unixepoch', 'localtime') as day_str
@@ -81,8 +81,7 @@ def scan_chatdb(days=LOOKBACK_DAYS):
         JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
         JOIN chat c ON c.ROWID = cmj.chat_id
         WHERE m.date > ?
-          AND m.text IS NOT NULL
-          AND length(m.text) > 0
+          AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
           AND m.associated_message_type = 0
         ORDER BY cmj.chat_id, m.date
     """, (APPLE_EPOCH, APPLE_EPOCH, APPLE_EPOCH, cutoff_ns)).fetchall()

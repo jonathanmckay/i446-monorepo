@@ -254,9 +254,8 @@ def compute_imessage_response_times(days=DAYS):
         FROM message m
         JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
         WHERE m.date > ?
-          AND m.text IS NOT NULL
+          AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
           AND m.associated_message_type = 0
-          AND length(m.text) > 0
         ORDER BY cmj.chat_id, m.date
     """, (apple_epoch_offset, apple_epoch_offset, cutoff_ns)).fetchall()
 
