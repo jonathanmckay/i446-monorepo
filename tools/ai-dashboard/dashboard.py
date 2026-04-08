@@ -846,6 +846,8 @@ def get_greatest_hits(days=7, top_n=20):
                 user_content = all_messages[ui][2] or ""
                 if user_ts < cutoff:
                     continue
+                # Wall = user prompt → last logged message before next user prompt
+                # This captures all API calls + tool execution but NOT human idle time
                 end = user_indices[idx + 1] if idx + 1 < len(user_indices) else len(all_messages)
                 if end <= ui + 1:
                     continue

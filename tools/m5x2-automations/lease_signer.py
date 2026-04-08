@@ -15,6 +15,7 @@ Usage:
 import re
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -24,6 +25,8 @@ except ImportError:
     sys.exit(1)
 
 from config import APPFOLIO_EMAIL, APPFOLIO_PASSWORD, APPFOLIO_SUBDOMAIN
+
+_BROWSER_STATE = Path.home() / ".config/m5x2/appfolio_browser_state"
 
 
 def _wait(page, ms=1500):
@@ -176,19 +179,54 @@ def _check_success(page) -> bool:
     return any(w in text or w in title for w in indicators)
 
 
+def _launch_context(pw, headless: bool):
+    """Launch browser with persistent context (preserves cookies/2FA session)."""
+    _BROWSER_STATE.mkdir(parents=True, exist_ok=True)
+    # Clear stale lock files from previous runs
+    for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        (_BROWSER_STATE / lock).unlink(missing_ok=True)
+    ctx = pw.chromium.launch_persistent_context(
+        str(_BROWSER_STATE),
+        headless=headless,
+        viewport={"width": 1024, "height": 768},
+    )
+    return ctx
+
+
+def setup_login():
+    """Interactive: open browser so user can log in + complete 2FA. Session is saved."""
+    print("Opening AppFolio login — complete 2FA manually, then close the browser.")
+    with sync_playwright() as p:
+        ctx = _launch_context(p, headless=False)
+        page = ctx.new_page()
+        page.goto(f"https://{APPFOLIO_SUBDOMAIN}.appfolio.com", wait_until="domcontentloaded", timeout=30_000)
+        _wait(page, 3000)
+
+        # Auto-fill credentials if on login page
+        _login_if_needed(page)
+
+        print("Waiting for you to complete 2FA... (press Enter here when done)")
+        input()
+        ctx.close()
+    print("Session saved. Future sign_lease calls will reuse this session.")
+
+
 def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
     """
     Navigate to appfolio_url and countersign the lease via Playwright.
+    Uses persistent browser context to reuse 2FA session.
     Returns {"status": "success"|"failed"|"timeout"|"blocked", "url": final_url}.
     """
     if not APPFOLIO_PASSWORD:
         return {"status": "failed", "error": "AF_PASSWORD not set"}
 
+    if not _BROWSER_STATE.exists():
+        return {"status": "failed", "error": "no browser session — run: python3 lease_signer.py --login"}
+
     result = {"status": "failed", "url": appfolio_url}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        ctx = browser.new_context(viewport={"width": 1024, "height": 768})
+        ctx = _launch_context(p, headless=headless)
         page = ctx.new_page()
 
         # Step 1: Navigate to the URL (follows SendGrid redirect)
@@ -196,11 +234,20 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
             page.goto(appfolio_url, wait_until="domcontentloaded", timeout=30_000)
             _wait(page, 5000)
         except PWTimeout:
-            browser.close()
+            ctx.close()
             return {"status": "failed", "error": "page load timeout"}
 
-        # Step 2: Login if needed
-        _login_if_needed(page)
+        # Step 2: Login if needed (session may have expired)
+        if _login_if_needed(page):
+            _wait(page, 3000)
+            # Check if we hit 2FA
+            if "login" in page.url.lower() or "authenticate" in page.url.lower():
+                try:
+                    page.screenshot(path="/tmp/autosign_debug.png")
+                except Exception:
+                    pass
+                ctx.close()
+                return {"status": "failed", "error": "2FA session expired — run: python3 lease_signer.py --login"}
 
         # Step 3: Find and click countersign/sign
         if not _find_and_click_sign(page):
@@ -213,21 +260,19 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
             if _check_success(page):
                 result = {"status": "success", "url": page.url}
             else:
-                # Clicked accept but didn't see confirmation — try once more
                 time.sleep(3)
                 if _check_success(page):
                     result = {"status": "success", "url": page.url}
                 else:
                     result = {"status": "failed", "error": "clicked accept but no confirmation seen", "url": page.url}
         else:
-            # Couldn't find accept button — save screenshot for debugging
             try:
                 page.screenshot(path="/tmp/autosign_debug.png")
             except Exception:
                 pass
             result = {"status": "failed", "error": "could not find accept/sign button", "url": page.url}
 
-        browser.close()
+        ctx.close()
 
     return result
 
@@ -284,8 +329,12 @@ def parse_email_metadata(item: dict) -> dict:
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if "--login" in sys.argv:
+        setup_login()
+        sys.exit(0)
     if len(sys.argv) < 2:
         print("Usage: python3 lease_signer.py <appfolio_url>")
+        print("       python3 lease_signer.py --login  (first-time setup)")
         sys.exit(1)
     url = sys.argv[1]
     headless = "--headless" in sys.argv
