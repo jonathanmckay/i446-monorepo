@@ -154,6 +154,7 @@ def print_help():
         "[bold]r <text>[/bold] reply  "
         "[bold]s[/bold] skip  "
         "[bold]t <text>[/bold] todo  "
+        "[bold]o[/bold] open  "
         "[bold]c[/bold] check now  "
         "[bold]f[/bold] fetch new  "
         "[bold]q[/bold] quit  "
@@ -297,6 +298,29 @@ def do_reply(item, reply_text):
         _slack.send_reply(d["token"], d["thread"]["channel_id"], reply_text)
     do_archive(item)
 
+def do_open(item):
+    """Open the current item in the browser."""
+    t = item["type"]
+    if t == "email":
+        msg_id = item["_data"]["email"]["id"]
+        acct = item["_data"]["email"].get("_account", "m5c7")
+        u = ACCOUNT_GMAIL_INDEX.get(acct, 0)
+        url = f"https://mail.google.com/mail/u/{u}/#inbox/{msg_id}"
+    elif t == "outlook":
+        url = item["_data"].get("link", "")
+    elif t == "imsg":
+        # No web URL for iMessage — open Messages app
+        subprocess.run(["open", "-a", "Messages"])
+        return
+    elif t == "slack":
+        d = item["_data"]
+        ch = d["thread"]["channel_id"]
+        url = f"https://app.slack.com/client/T/{ch}"
+    else:
+        return
+    if url:
+        subprocess.run(["open", url])
+
 # ── Claude ────────────────────────────────────────────────────────────────────
 
 def ask_claude(item, user_input):
@@ -331,6 +355,12 @@ User instruction: {user_input}"""
         return {"action": "answer", "message": text}
 
 # ── Fetch all sources ─────────────────────────────────────────────────────────
+
+# Gmail account → /u/ index for web URLs
+ACCOUNT_GMAIL_INDEX = {
+    "m5c7": 0,
+    "gmail": 1,
+}
 
 # Display names for each account
 ACCOUNT_DISPLAY = {
@@ -575,10 +605,24 @@ def set_term_color(color):
 def main():
     console.print(Rule("[bold]Inbox 0[/bold]", style="dim"))
 
+    # Start Outlook fetch in background (slow — runs via workiq)
+    _outlook_result = []
+    _outlook_done = threading.Event()
+    def _bg_outlook():
+        _outlook_result.extend(fetch_outlook())
+        _outlook_done.set()
+    if _outlook_available:
+        threading.Thread(target=_bg_outlook, daemon=True).start()
+    else:
+        _outlook_done.set()
+
     email_items, per_account = fetch_emails()
     imsg_items = fetch_imsgs()
     slack_items = fetch_slack()
-    outlook_items = fetch_outlook()
+
+    # Wait up to 5s for Outlook if it hasn't finished yet, then merge what we have
+    _outlook_done.wait(timeout=5)
+    outlook_items = list(_outlook_result)
 
     # Merge: Slack sorted by ts (most recent first), emails/outlook/imsgs in fetch order
     all_items = (
@@ -637,6 +681,16 @@ def main():
         while not poll_msgs.empty():
             console.print(poll_msgs.get_nowait())
 
+        # Inject late-arriving Outlook items from the background fetch
+        if _outlook_done.is_set() and _outlook_result:
+            existing_uids = {_item_uid(it) for it in all_items + skipped}
+            existing_uids.update(resolved)
+            new_outlook = [it for it in _outlook_result if _item_uid(it) not in existing_uids]
+            if new_outlook:
+                all_items.extend(new_outlook)
+                console.print(f"[cyan]  + {len(new_outlook)} Outlook item(s) loaded[/cyan]")
+            _outlook_result.clear()
+
         # Prune any items resolved elsewhere before advancing
         all_items, gone = filter_resolved(all_items)
         skipped, gone_skipped = filter_resolved(skipped)
@@ -659,7 +713,8 @@ def main():
                 late_emails, _ = fetch_emails()
                 late_imsgs = fetch_imsgs()
                 late_slack = fetch_slack()
-                late_all = [it for it in (late_emails + late_imsgs + late_slack)
+                late_outlook = fetch_outlook()
+                late_all = [it for it in (late_emails + late_imsgs + late_slack + late_outlook)
                             if _item_uid(it) not in existing_uids]
                 if late_all:
                     all_items = late_all
@@ -697,6 +752,13 @@ def main():
             _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
+
+        elif cmd == "o":
+            try:
+                do_open(item)
+                console.print("[dim]Opened in browser.[/dim]")
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
 
         elif cmd == "a":
             try:

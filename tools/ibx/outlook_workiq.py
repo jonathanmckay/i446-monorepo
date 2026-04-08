@@ -35,11 +35,17 @@ def save_processed(proc):
         json.dump(proc, f)
 
 
+WORKIQ_BIN = os.environ.get(
+    "WORKIQ_BIN",
+    str(Path.home() / ".agency/nodejs/node-v22.21.0-darwin-arm64/bin/workiq"),
+)
+
+
 def _run_workiq(question):
     """Run workiq ask and return the response text."""
     try:
         result = subprocess.run(
-            ["workiq", "ask", "-q", question],
+            [WORKIQ_BIN, "ask", "-q", question],
             capture_output=True, text=True, timeout=120,
         )
         return result.stdout.strip()
