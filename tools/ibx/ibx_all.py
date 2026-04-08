@@ -21,6 +21,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 import ibx as _ibx
 import imsg as _imsg
 import slack as _slack
+try:
+    import outlook_workiq as _outlook
+    _outlook_available = True
+except ImportError:
+    _outlook_available = False
 
 # ── Auto-sign integration (optional — skipped if module not found) ────────────
 _AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
@@ -48,11 +53,13 @@ TYPE_STYLE = {
     "email": "bold green",
     "imsg":  "bold magenta",
     "slack": "bold blue",
+    "outlook": "bold cyan",
 }
 TYPE_LABEL = {
     "email": "EMAIL",
     "imsg":  "IMSG",
     "slack": "SLACK",
+    "outlook": "OUTLOOK",
 }
 
 # ── Normalize items ───────────────────────────────────────────────────────────
@@ -247,6 +254,8 @@ def do_archive(item):
     t = item["type"]
     if t == "email":
         _ibx.archive(item["_data"]["service"], item["_data"]["email"]["id"])
+    elif t == "outlook":
+        _outlook.archive(item["_data"]["item_id"])
     elif t == "imsg":
         thread = item["_data"]["thread"]
         proc = _imsg.load_processed()
@@ -261,6 +270,8 @@ def do_delete(item):
     t = item["type"]
     if t == "email":
         _ibx.delete(item["_data"]["service"], item["_data"]["email"]["id"])
+    elif t == "outlook":
+        _outlook.delete(item["_data"]["item_id"])
     elif t == "imsg":
         # iMessage has no true delete via our API; just mark processed
         thread = item["_data"]["thread"]
@@ -277,6 +288,8 @@ def do_reply(item, reply_text):
     t = item["type"]
     if t == "email":
         _ibx.send_reply(item["_data"]["service"], item["_data"]["email"], reply_text)
+    elif t == "outlook":
+        _outlook.reply_via_outlook(item["_data"].get("link", ""))
     elif t == "imsg":
         _imsg.reply_imessage(item["_data"]["thread"], reply_text)
     elif t == "slack":
@@ -288,7 +301,7 @@ def do_reply(item, reply_text):
 
 def ask_claude(item, user_input):
     t = item["type"]
-    type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM"}[t]
+    type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM", "outlook": "Outlook email"}[t]
     prompt = f"""You are a personal assistant for Jonathan McKay.
 Given an inbound {type_label} and a user instruction, respond with JSON only.
 
@@ -459,12 +472,24 @@ def fetch_slack():
 
     return items
 
+def fetch_outlook():
+    """Fetch Outlook emails via workiq natural language interface."""
+    if not _outlook_available:
+        return []
+    try:
+        return _outlook.fetch_outlook_items()
+    except Exception as e:
+        console.print(f"  [yellow]Outlook error: {e}[/yellow]")
+        return []
+
 # ── Background poll ───────────────────────────────────────────────────────────
 
 def _item_uid(item):
     """Stable unique ID for an item, used to track external resolution."""
     if item["type"] == "email":
         return ("email", item["_data"]["email"]["id"])
+    elif item["type"] == "outlook":
+        return ("outlook", item["_data"]["item_id"])
     elif item["type"] == "imsg":
         return ("imsg", item["_data"]["thread"]["chat_identifier"])
     elif item["type"] == "slack":
@@ -553,11 +578,13 @@ def main():
     email_items, per_account = fetch_emails()
     imsg_items = fetch_imsgs()
     slack_items = fetch_slack()
+    outlook_items = fetch_outlook()
 
-    # Merge: Slack sorted by ts (most recent first), emails/imsgs in fetch order
+    # Merge: Slack sorted by ts (most recent first), emails/outlook/imsgs in fetch order
     all_items = (
         sorted(slack_items, key=lambda x: -x["ts"]) +
         email_items +
+        outlook_items +
         imsg_items
     )
 
@@ -568,6 +595,7 @@ def main():
     ) or f"[green]0 email[/green]"
 
     status_line = (f"({email_parts}  "
+                   f"[cyan]{len(outlook_items)} outlook[/cyan]  "
                    f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
                    f"[blue]{len(slack_items)} slack[/blue])")
 
