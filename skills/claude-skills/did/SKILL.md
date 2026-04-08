@@ -59,6 +59,7 @@ Before matching against 0₦ headers, apply this alias map. If the user's input 
 | User input | 0₦ column header |
 |-----------|------------------|
 | `hcmc` | `night hcmc` |
+| `stats m5x2` | `stats m5x2` |
 
 This prevents matching the wrong column when multiple headers contain the same substring.
 
