@@ -619,26 +619,44 @@ def _wait_buckets(wall_times):
 
 def _load_hook_timing(days=30):
     """Load true wall-clock turn timings from the hook-based timing log.
+    Also reads the pending LAST_FILE for the in-progress turn.
     Returns {date_str: [elapsed_seconds, ...]}.
     """
     timing_file = Path.home() / ".claude" / "timing" / "turns.jsonl"
-    if not timing_file.exists():
-        return {}
+    last_file = Path("/tmp/claude-turn-last")
     cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     result = defaultdict(list)
-    try:
-        with open(timing_file) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                obj = json.loads(line)
-                date = obj.get("date", "")
-                elapsed = obj.get("elapsed_s", 0)
-                if date > cutoff_date and 0 < elapsed <= 1800:
-                    result[date].append(elapsed)
-    except Exception:
-        pass
+
+    # Read finalized turns
+    if timing_file.exists():
+        try:
+            with open(timing_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    date = obj.get("date", "")
+                    elapsed = obj.get("elapsed_s", 0)
+                    if date > cutoff_date and 0 < elapsed <= 7200:
+                        result[date].append(elapsed)
+        except Exception:
+            pass
+
+    # Include pending (in-progress) turn if available
+    if last_file.exists():
+        try:
+            obj = json.loads(last_file.read_text().strip())
+            date = obj.get("date", "")
+            elapsed = obj.get("elapsed_s", 0)
+            if date > cutoff_date and 0 < elapsed <= 7200:
+                result[date].append(elapsed)
+        except Exception:
+            pass
+
     return dict(result)
 
 
