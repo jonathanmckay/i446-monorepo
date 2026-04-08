@@ -794,6 +794,136 @@ def get_latency_stats(days=30):
     return {"daily": daily, "overall": overall}
 
 
+def get_greatest_hits(days=7, top_n=20):
+    """Find the top N longest wall-time turns from the last `days` days.
+    Returns list of {wall_s, prompt_preview, name, date, time} sorted by wall_s desc.
+    Calls Haiku to generate a short name for each query.
+    """
+    pacific = pytz.timezone("America/Los_Angeles")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
+    if not session_dir.exists():
+        return []
+
+    # Collect (wall_seconds, prompt_text, timestamp) for all turns
+    all_turns = []
+
+    for fpath in session_dir.glob("*.jsonl"):
+        try:
+            all_messages = []  # (type, ts, content_or_none)
+            with open(fpath) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    msg_type = obj.get("type")
+                    ts_str = obj.get("timestamp")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    # Extract user prompt text
+                    content = None
+                    if msg_type == "user":
+                        msg = obj.get("message", {})
+                        raw = msg.get("content", "")
+                        if isinstance(raw, list):
+                            # Content blocks — extract text parts
+                            content = " ".join(
+                                b.get("text", "") for b in raw
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
+                        elif isinstance(raw, str):
+                            content = raw
+                    all_messages.append((msg_type, ts, content))
+
+            if len(all_messages) < 2:
+                continue
+
+            user_indices = [i for i, (t, _, _) in enumerate(all_messages) if t == "user"]
+            for idx, ui in enumerate(user_indices):
+                user_ts = all_messages[ui][1]
+                user_content = all_messages[ui][2] or ""
+                if user_ts < cutoff:
+                    continue
+                end = user_indices[idx + 1] if idx + 1 < len(user_indices) else len(all_messages)
+                if end <= ui + 1:
+                    continue
+                last_any_ts = all_messages[end - 1][1]
+                wall = (last_any_ts - user_ts).total_seconds()
+                if wall <= 0 or wall > 3600:
+                    continue
+                # Strip system reminders and keep first 500 chars
+                preview = user_content[:500].strip()
+                if not preview or preview.startswith("<system-reminder>"):
+                    continue
+                all_turns.append((wall, preview, user_ts))
+        except Exception:
+            continue
+
+    # Sort by wall time descending, take top N
+    all_turns.sort(key=lambda x: x[0], reverse=True)
+    top = all_turns[:top_n]
+
+    if not top:
+        return []
+
+    # Call Haiku to name each query
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    hits = []
+    if api_key:
+        # Batch all prompts into a single Haiku call
+        numbered = "\n".join(
+            f"{i+1}. ({t[0]:.0f}s) {t[1][:200]}" for i, t in enumerate(top)
+        )
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content":
+                        f"Give a short 2-5 word name for each of these AI queries. "
+                        f"Return ONLY numbered lines like '1. Dashboard Bug Fix'. "
+                        f"No explanations.\n\n{numbered}"
+                    }],
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                text = resp.json()["content"][0]["text"]
+                names = {}
+                for line in text.strip().split("\n"):
+                    line = line.strip()
+                    if line and line[0].isdigit():
+                        parts = line.split(".", 1)
+                        if len(parts) == 2:
+                            names[int(parts[0].strip())] = parts[1].strip()
+        except Exception:
+            names = {}
+    else:
+        names = {}
+
+    for i, (wall, preview, ts) in enumerate(top):
+        local_ts = ts.astimezone(pacific)
+        hits.append({
+            "rank": i + 1,
+            "wall_s": round(wall),
+            "wall_fmt": f"{int(wall // 60)}m {int(wall % 60)}s",
+            "name": names.get(i + 1, preview[:40]),
+            "prompt_preview": preview[:120],
+            "date": local_ts.strftime("%a %m/%d"),
+            "time": local_ts.strftime("%H:%M"),
+        })
+
+    return hits
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -1298,6 +1428,37 @@ HTML_TEMPLATE = """
                 What % of total daily wait time comes from each latency tier? Hover bars for totals.
             </div>
         </div>
+
+        {% if greatest_hits %}
+        <div class="card">
+            <h2>🏆 Greatest Hits — Top {{ greatest_hits | length }} Longest Turns (Last 7 Days)</h2>
+            <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.85em;">
+                    <thead>
+                        <tr style="border-bottom:2px solid var(--chart-border); text-align:left;">
+                            <th style="padding:8px 12px; color:var(--muted); font-weight:600;">#</th>
+                            <th style="padding:8px 12px; color:var(--muted); font-weight:600;">Wall</th>
+                            <th style="padding:8px 12px; color:var(--muted); font-weight:600;">Name</th>
+                            <th style="padding:8px 12px; color:var(--muted); font-weight:600;">When</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for hit in greatest_hits %}
+                        <tr style="border-bottom:1px solid var(--chart-border);" title="{{ hit.prompt_preview }}">
+                            <td style="padding:8px 12px; color:var(--muted);">{{ hit.rank }}</td>
+                            <td style="padding:8px 12px; font-weight:700; color:{% if hit.wall_s >= 600 %}#FF5722{% elif hit.wall_s >= 300 %}#FFD700{% else %}#00D4FF{% endif %}; white-space:nowrap;">{{ hit.wall_fmt }}</td>
+                            <td style="padding:8px 12px;">{{ hit.name }}</td>
+                            <td style="padding:8px 12px; color:var(--muted); white-space:nowrap;">{{ hit.date }} {{ hit.time }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div style="margin-top:8px; font-size:0.75em; color:var(--muted);">
+                Hover rows for prompt preview. Names generated by Haiku. Wall time = full turn including tool approvals.
+            </div>
+        </div>
+        {% endif %}
 
         <button class="refresh" onclick="location.reload()">🔄 Refresh Data</button>
 
@@ -2001,6 +2162,7 @@ def dashboard():
     mcp = get_mcp_stats()
     latency = get_latency_stats()
     skills = get_skill_stats()
+    greatest_hits = get_greatest_hits()
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -2015,6 +2177,7 @@ def dashboard():
         skill_names=skills["skills"],
         latency=latency,
         latency_daily=latency["daily"],
+        greatest_hits=greatest_hits,
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 

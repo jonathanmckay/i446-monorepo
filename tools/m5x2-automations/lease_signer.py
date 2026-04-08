@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-lease_signer.py — CUA agent that countersigns AppFolio leases.
+lease_signer.py — Playwright automation that countersigns AppFolio leases.
 
 Flow:
   1. Follow the SendGrid-tracked AppFolio URL (redirects to actual page)
   2. Log in if the page requires it
-  3. Use Claude claude-sonnet-4-6 + Playwright screenshots to navigate
-  4. Click countersign and confirm
+  3. Click the countersign/sign link
+  4. Scroll to bottom, accept signature
   5. Return result dict for logging
 
 Usage:
   python3 lease_signer.py <appfolio_url>
 """
-import base64
 import re
 import sys
 import time
 from typing import Optional
-
-import anthropic
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -29,168 +26,206 @@ except ImportError:
 from config import APPFOLIO_EMAIL, APPFOLIO_PASSWORD, APPFOLIO_SUBDOMAIN
 
 
-SYSTEM_PROMPT = f"""You are an automation agent countersigning a lease in AppFolio Property Manager.
-AppFolio login: {APPFOLIO_EMAIL}
-
-Your job:
-1. If you see a login page, fill in email and password and submit.
-2. Look for a "Sign" or "Countersign" link/button. Click it.
-3. On the signing page: do NOT scroll through the document. Go directly to the bottom of the page where the signature acceptance area is.
-4. Click "Sign and Accept" or the equivalent acceptance button at the bottom.
-5. When you see confirmation that the document is signed/complete, respond with DONE on its own line.
-
-Critical rules:
-- Do NOT scroll through the lease. Just jump to the bottom.
-- Keep actions minimal — click the sign link, then accept at the bottom.
-- If you see a CAPTCHA or unusual blocker, respond with BLOCKED.
-- Keep responses to 1-2 sentences max, then call the tool.
-"""
+def _wait(page, ms=1500):
+    """Wait for network to settle and UI to render."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=ms)
+    except PWTimeout:
+        pass
+    time.sleep(0.3)
 
 
-def _screenshot_b64(page) -> str:
-    return base64.standard_b64encode(page.screenshot()).decode()
+def _login_if_needed(page) -> bool:
+    """Detect AppFolio login page and fill credentials. Returns True if login was performed."""
+    # Check for common login indicators
+    if "login" not in page.url.lower() and "sign_in" not in page.url.lower():
+        # Also check page content for login form
+        try:
+            email_field = page.locator('input[type="email"], input[name="email"], input[name="user[email]"], #user_email').first
+            if not email_field.is_visible(timeout=2000):
+                return False
+        except Exception:
+            return False
+
+    # Find and fill email field
+    email_selectors = [
+        'input[name="user[email]"]',
+        'input#user_email',
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[placeholder*="email" i]',
+    ]
+    for sel in email_selectors:
+        try:
+            field = page.locator(sel).first
+            if field.is_visible(timeout=1000):
+                field.fill(APPFOLIO_EMAIL)
+                break
+        except Exception:
+            continue
+
+    # Find and fill password field
+    pw_selectors = [
+        'input[name="user[password]"]',
+        'input#user_password',
+        'input[type="password"]',
+        'input[name="password"]',
+    ]
+    for sel in pw_selectors:
+        try:
+            field = page.locator(sel).first
+            if field.is_visible(timeout=1000):
+                field.fill(APPFOLIO_PASSWORD)
+                break
+        except Exception:
+            continue
+
+    # Click submit
+    submit_selectors = [
+        'input[type="submit"]',
+        'button[type="submit"]',
+        'button:has-text("Sign In")',
+        'button:has-text("Log In")',
+        'input[value="Sign In"]',
+        'input[value="Log In"]',
+    ]
+    for sel in submit_selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=1000):
+                btn.click()
+                _wait(page, 5000)
+                return True
+        except Exception:
+            continue
+
+    return False
 
 
-def _execute_action(page, action: dict):
-    """Execute a computer-use action on the Playwright page."""
-    atype = action.get("action")
-    if atype == "screenshot":
-        return  # next loop iteration will take one
+def _find_and_click_sign(page) -> bool:
+    """Find the countersign/sign action button or link on the lease page."""
+    sign_selectors = [
+        'a:has-text("Countersign")',
+        'button:has-text("Countersign")',
+        'a:has-text("Sign")',
+        'button:has-text("Sign")',
+        'a:has-text("Review and Sign")',
+        'a:has-text("Review & Sign")',
+        'a[href*="countersign"]',
+        'a[href*="sign"]',
+    ]
+    for sel in sign_selectors:
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=2000):
+                el.click()
+                _wait(page, 5000)
+                return True
+        except Exception:
+            continue
+    return False
 
-    elif atype == "left_click":
-        x, y = action["coordinate"]
-        page.mouse.click(x, y)
 
-    elif atype == "double_click":
-        x, y = action["coordinate"]
-        page.mouse.dblclick(x, y)
+def _accept_signature(page) -> bool:
+    """Scroll to bottom and click the accept/sign button."""
+    # Scroll to very bottom of the page
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    time.sleep(1)
 
-    elif atype == "right_click":
-        x, y = action["coordinate"]
-        page.mouse.click(x, y, button="right")
+    accept_selectors = [
+        'button:has-text("Sign and Accept")',
+        'button:has-text("Accept and Sign")',
+        'button:has-text("I Agree")',
+        'button:has-text("Accept")',
+        'button:has-text("Sign")',
+        'input[value*="Sign"]',
+        'input[value*="Accept"]',
+        'a:has-text("Sign and Accept")',
+        'a:has-text("Accept and Sign")',
+        # Checkbox that might need to be checked first
+        'input[type="checkbox"]#agree',
+        'input[type="checkbox"][name*="agree"]',
+    ]
 
-    elif atype == "type":
-        page.keyboard.type(action["text"])
+    # Check if there's an agreement checkbox first
+    try:
+        checkbox = page.locator('input[type="checkbox"]').first
+        if checkbox.is_visible(timeout=1000) and not checkbox.is_checked():
+            checkbox.check()
+            time.sleep(0.5)
+    except Exception:
+        pass
 
-    elif atype == "key":
-        page.keyboard.press(action["key"])
+    for sel in accept_selectors:
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=2000):
+                el.click()
+                _wait(page, 5000)
+                return True
+        except Exception:
+            continue
+    return False
 
-    elif atype == "scroll":
-        x, y = action["coordinate"]
-        page.mouse.wheel(action.get("delta_x", 0), action.get("delta_y", 0))
 
-    elif atype == "mouse_move":
-        x, y = action["coordinate"]
-        page.mouse.move(x, y)
-
-    time.sleep(0.4)  # let UI settle
+def _check_success(page) -> bool:
+    """Check if the page shows a success/completion state."""
+    indicators = ["signed", "complete", "thank you", "successfully", "confirmed"]
+    text = page.text_content("body").lower()
+    title = page.title().lower()
+    return any(w in text or w in title for w in indicators)
 
 
 def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
     """
-    Navigate to appfolio_url and countersign the lease using CUA.
+    Navigate to appfolio_url and countersign the lease via Playwright.
     Returns {"status": "success"|"failed"|"timeout"|"blocked", "url": final_url}.
     """
     if not APPFOLIO_PASSWORD:
-        return {"status": "failed", "error": "AF_PASSWORD env var not set"}
+        return {"status": "failed", "error": "AF_PASSWORD not set"}
 
-    client = anthropic.Anthropic()
-    result = {"status": "timeout", "url": appfolio_url}
+    result = {"status": "failed", "url": appfolio_url}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         ctx = browser.new_context(viewport={"width": 1024, "height": 768})
         page = ctx.new_page()
 
+        # Step 1: Navigate to the URL (follows SendGrid redirect)
         try:
             page.goto(appfolio_url, wait_until="domcontentloaded", timeout=30_000)
+            _wait(page, 5000)
         except PWTimeout:
+            browser.close()
             return {"status": "failed", "error": "page load timeout"}
 
-        messages = []
-        max_steps = 25
-        # First message: screenshot as a user turn
-        pending_user = {
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _screenshot_b64(page)}},
-                {"type": "text", "text": f"Current URL: {page.url}\n\nWhat should I do to complete the countersigning?"}
-            ]
-        }
+        # Step 2: Login if needed
+        _login_if_needed(page)
 
-        for step in range(max_steps):
-            messages.append(pending_user)
-            pending_user = None
+        # Step 3: Find and click countersign/sign
+        if not _find_and_click_sign(page):
+            # Maybe we're already on the signing page — try accept directly
+            pass
 
-            # Retry with backoff for rate limits
-            for _retry in range(5):
-                try:
-                    response = client.beta.messages.create(
-                        model="claude-sonnet-4-6",
-                        max_tokens=1024,
-                        system=SYSTEM_PROMPT,
-                        tools=[{
-                            "type": "computer_20251124",
-                            "name": "computer",
-                            "display_width_px": 1024,
-                            "display_height_px": 768,
-                        }],
-                        messages=messages,
-                        betas=["computer-use-2025-11-24"],
-                    )
-                    break
-                except anthropic.RateLimitError:
-                    if _retry == 4:
-                        raise
-                    time.sleep(30 * (_retry + 1))  # 30s, 60s, 90s, 120s
-
-            messages.append({"role": "assistant", "content": response.content})
-
-            # Check text blocks for terminal states
-            for block in response.content:
-                if hasattr(block, "text"):
-                    if "DONE" in block.text.upper():
-                        result = {"status": "success", "url": page.url}
-                        browser.close()
-                        return result
-                    if "BLOCKED" in block.text.upper():
-                        result = {"status": "blocked", "url": page.url}
-                        browser.close()
-                        return result
-
-            # Execute tool calls and build tool_result responses
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use" and block.name == "computer":
-                    _execute_action(page, block.input)
-                    # Take a fresh screenshot as the tool result
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _screenshot_b64(page)}},
-                            {"type": "text", "text": f"Action executed. URL: {page.url}"}
-                        ]
-                    })
-
-            if tool_results:
-                # Next message must be the tool results
-                pending_user = {"role": "user", "content": tool_results}
-            elif response.stop_reason == "end_turn":
-                title = page.title().lower()
-                if any(w in title for w in ("signed", "complete", "thank")):
-                    result = {"status": "success", "url": page.url}
-                    break
-                # Model stopped without tool use or DONE — send another screenshot
-                pending_user = {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _screenshot_b64(page)}},
-                        {"type": "text", "text": f"Step {step+2}. URL: {page.url}\n\nPlease continue. What should I do next?"}
-                    ]
-                }
+        # Step 4: Accept signature at bottom
+        if _accept_signature(page):
+            _wait(page, 3000)
+            if _check_success(page):
+                result = {"status": "success", "url": page.url}
             else:
-                break
+                # Clicked accept but didn't see confirmation — try once more
+                time.sleep(3)
+                if _check_success(page):
+                    result = {"status": "success", "url": page.url}
+                else:
+                    result = {"status": "failed", "error": "clicked accept but no confirmation seen", "url": page.url}
+        else:
+            # Couldn't find accept button — save screenshot for debugging
+            try:
+                page.screenshot(path="/tmp/autosign_debug.png")
+            except Exception:
+                pass
+            result = {"status": "failed", "error": "could not find accept/sign button", "url": page.url}
 
         browser.close()
 
