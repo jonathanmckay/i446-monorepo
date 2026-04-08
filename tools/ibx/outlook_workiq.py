@@ -82,9 +82,12 @@ def fetch_outlook_items():
     console.print("\n[bold]Outlook[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "List every unread email in my inbox. For each one, give me "
-        "FROM: sender name and email, SUBJECT: subject line, BODY: first sentence. "
-        "Separate each email with ---. Include all of them, do not summarize or group."
+        "List every unread email in my inbox, including both Focused and Other tabs. "
+        "For each one give me:\n"
+        "FROM: full sender name and email address\n"
+        "SUBJECT: full subject line\n"
+        "BODY: the first 3 sentences of the email body, verbatim\n"
+        "Separate each email with ---. Do not summarize, group, or omit any."
     )
 
     if not response or re.search(r'(?i)^NONE$|no unread|inbox is empty|no emails', response):
@@ -148,29 +151,25 @@ def fetch_outlook_items():
         if not from_str and not subject:
             continue
 
-        # Extract link from markdown if structured LINK: was empty
-        if not link:
-            block_links = _extract_outlook_links(block)
-            if block_links:
-                link = block_links[0]
-            elif link_idx < len(all_links):
-                link = all_links[link_idx]
-                link_idx += 1
-
         item_id = _make_item_id(from_str, subject)
 
         # Skip already-processed items
         if item_id in processed:
             continue
 
+        # Strip markdown link footnote refs from display fields
+        from_str = re.sub(r'\s*\[\d+\]\([^)]+\)', '', from_str).strip()
+        subject = re.sub(r'\s*\[\d+\]\([^)]+\)', '', subject).strip()
+        body = re.sub(r'\s*\[\d+\]\([^)]+\)', '', body).strip()
+
         items.append({
             "type": "outlook",
             "source": "outlook",
-            "from": from_str,
+            "from": from_str or "(unknown sender)",
             "to": to_str,
             "cc": "",
             "preview": subject or "(no subject)",
-            "body": body or "(no body preview available)",
+            "body": body or "(no body preview available via workiq)",
             "ts": 0.0,
             "_data": {
                 "item_id": item_id,
@@ -178,8 +177,8 @@ def fetch_outlook_items():
                 "date": date_str,
                 "email": {
                     "id": item_id,
-                    "subject": subject,
-                    "from": from_str,
+                    "subject": subject or "(no subject)",
+                    "from": from_str or "(unknown sender)",
                     "to": to_str,
                 },
             },
