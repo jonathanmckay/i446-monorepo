@@ -37,8 +37,8 @@ GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 DAYS = 30
 
 ACCOUNT_DISPLAY = {
-    "m5c7": "m5x2",
-    "gmail": "personal",
+    "m5c7": "m5x2 gmail",
+    "gmail": "s897 gmail",
 }
 
 
@@ -176,10 +176,10 @@ def build_stats(all_data):
     cutoff_7 = today - timedelta(days=7)
     cutoff_28 = today - timedelta(days=28)
 
-    work_all = [r["hours"] for r in all_data if r["account"] == "m5x2"]
-    work_7 = [r["hours"] for r in all_data if r["account"] == "m5x2"
+    work_all = [r["hours"] for r in all_data if r["account"] == "m5x2 gmail"]
+    work_7 = [r["hours"] for r in all_data if r["account"] == "m5x2 gmail"
               and date.fromisoformat(r["date"]) > cutoff_7]
-    work_28 = [r["hours"] for r in all_data if r["account"] == "m5x2"
+    work_28 = [r["hours"] for r in all_data if r["account"] == "m5x2 gmail"
                and date.fromisoformat(r["date"]) > cutoff_28]
 
     def safe_mean(lst):
@@ -221,6 +221,69 @@ def push_to_gist(payload, token):
         return resp.status
 
 
+def compute_imessage_response_times(days=DAYS):
+    """
+    Query the local iMessage database for response times.
+    For each sent message, find the preceding received message in the same chat
+    and compute the response delta in hours. Cap at 72h.
+
+    Returns list of {"date": "YYYY-MM-DD", "hours": float} dicts.
+    """
+    import sqlite3 as _sqlite3
+
+    db_path = Path.home() / "Library" / "Messages" / "chat.db"
+    if not db_path.exists():
+        print("  WARN: iMessage database not found")
+        return []
+
+    conn = _sqlite3.connect(str(db_path))
+    conn.row_factory = _sqlite3.Row
+
+    # Apple epoch: seconds since 2001-01-01 = unix 978307200
+    # message.date is in nanoseconds since Apple epoch
+    apple_epoch_offset = 978307200
+    cutoff_ns = (int(datetime.now(timezone.utc).timestamp()) - apple_epoch_offset - days * 86400) * 1_000_000_000
+
+    # Get all messages in the window, grouped by chat, ordered by date
+    rows = conn.execute("""
+        SELECT
+            cmj.chat_id,
+            m.is_from_me,
+            m.date / 1000000000 + ? as unix_ts,
+            date(m.date / 1000000000 + ?, 'unixepoch', 'localtime') as day_str
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE m.date > ?
+          AND m.text IS NOT NULL
+          AND m.associated_message_type = 0
+          AND length(m.text) > 0
+        ORDER BY cmj.chat_id, m.date
+    """, (apple_epoch_offset, apple_epoch_offset, cutoff_ns)).fetchall()
+
+    conn.close()
+
+    # Group by chat_id, then walk pairs
+    from itertools import groupby
+    response_times = []
+    for chat_id, msgs in groupby(rows, key=lambda r: r["chat_id"]):
+        msgs_list = list(msgs)
+        for i, msg in enumerate(msgs_list):
+            if not msg["is_from_me"]:
+                continue
+            # Find preceding received message
+            for j in range(i - 1, -1, -1):
+                if not msgs_list[j]["is_from_me"]:
+                    delta_hours = (msg["unix_ts"] - msgs_list[j]["unix_ts"]) / 3600
+                    if 0 < delta_hours <= 72:
+                        response_times.append({
+                            "date": msg["day_str"],
+                            "hours": round(delta_hours, 2),
+                        })
+                    break
+
+    return response_times
+
+
 def main():
     token = get_github_token()
     if not token:
@@ -240,6 +303,17 @@ def main():
             print(f"  → {len(times)} reply events")
         except Exception as e:
             print(f"  WARN: {acct['name']} failed: {e}")
+
+    # iMessage response times
+    print("Fetching iMessage...")
+    try:
+        imsg_times = compute_imessage_response_times()
+        for rec in imsg_times:
+            rec["account"] = "imessage"
+        all_data.extend(imsg_times)
+        print(f"  → {len(imsg_times)} reply events")
+    except Exception as e:
+        print(f"  WARN: iMessage failed: {e}")
 
     daily, summary = build_stats(all_data)
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")

@@ -425,8 +425,8 @@ def api_data():
                 "count": entry.get("count", 0),
             }
     # Account colors
-    EMAIL_COLORS = {"m5x2": "#d50032", "personal": "#2979ff", "gmail": "#2979ff"}
-    EMAIL_COUNT_COLORS = {"m5x2": "#d5003244", "personal": "#2979ff44", "gmail": "#2979ff44"}
+    EMAIL_COLORS = {"m5x2 gmail": "#d50032", "s897 gmail": "#2979ff", "imessage": "#34c759"}
+    EMAIL_COUNT_COLORS = {"m5x2 gmail": "#d5003244", "s897 gmail": "#2979ff44", "imessage": "#34c75944"}
     email_datasets = []
     for acct, day_map in sorted(email_by_account.items()):
         # Line: response time (primary y)
@@ -563,7 +563,7 @@ HTML = """<!DOCTYPE html>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
   </div>
   <div class="card">
-    <h2>Email Response Time (hrs)</h2>
+    <h2>Project Bocking — Comms Response Time (hrs)</h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
     <div class="summary" id="emailSummary"></div>
   </div>
