@@ -55,31 +55,24 @@ Find the correct row in the `0s897` sheet of `Neon分v12.2.xlsx`:
 Write the formatted activity list + total to **column AA** ("Event Review") of that row.
 Write the total minutes (as a number) to **column Z** ("Time") of that row.
 
-Use AppleScript to write to Excel:
+**Important — merged cells**: Columns Z, AA, and AB are merged across each week (7 rows per week). You must write to the **top-left cell** of the merged range, not the Tuesday row directly. Use AppleScript to find the merge area first:
 
 ```bash
 osascript -e '
 tell application "Microsoft Excel"
   set wb to workbook "Neon分v12.2.xlsx"
   set ws to worksheet "0s897" of wb
-  -- Find the row where column B matches the target Tuesday date
-  set targetDate to "TARGET_DATE_PLACEHOLDER"
-  set lastRow to 200
-  repeat with i from 2 to lastRow
-    set cellVal to string value of cell ("B" & i) of ws
-    if cellVal contains targetDate then
-      -- Write event review to AA
-      set value of cell ("AA" & i) of ws to "EVENT_REVIEW_PLACEHOLDER"
-      -- Write total minutes to Z
-      set value of cell ("Z" & i) of ws to TOTAL_MINUTES_PLACEHOLDER
-      exit repeat
-    end if
-  end repeat
+  -- Get the top of the merge range for the target row
+  set mergeArea to merge area of range "Z{ROW}" of ws
+  set topRow to first row index of mergeArea
+  -- Write to the top of the merged cells
+  set value of range ("Z" & topRow) of ws to TOTAL_MINUTES_PLACEHOLDER
+  set value of range ("AA" & topRow) of ws to "EVENT_REVIEW_PLACEHOLDER"
 end tell'
 ```
 
 Replace:
-- `TARGET_DATE_PLACEHOLDER` with the Tuesday date formatted to match Excel's date display (try M/D/YYYY format, e.g. `4/7/2026`)
+- `{ROW}` with the Tuesday row number (e.g. 98)
 - `EVENT_REVIEW_PLACEHOLDER` with the formatted activity list (escape quotes/newlines for AppleScript)
 - `TOTAL_MINUTES_PLACEHOLDER` with the numeric total
 
@@ -109,7 +102,7 @@ Format as bullet points matching the existing style:
 • Specific suggestion for next week
 ```
 
-Use the same AppleScript pattern as Step 4.
+Use the same AppleScript pattern as Step 4 — write to column AB at the top of the merge range (same `topRow`).
 
 ### Step 7: Report
 
