@@ -52,9 +52,19 @@ Carry `targetDate` through all subsequent steps. It replaces every use of "today
 
 If the input (after stripping the date token) contains `,` or `;`, split into separate items. Trim whitespace from each. Process each item independently through Steps 0–5, then report all results together at the end.
 
+### Step -0.5: Resolve habit aliases
+
+Before matching against 0₦ headers, apply this alias map. If the user's input (after stripping date/project tokens) exactly matches a key, replace it with the value:
+
+| User input | 0₦ column header |
+|-----------|------------------|
+| `hcmc` | `night hcmc` |
+
+This prevents matching the wrong column when multiple headers contain the same substring.
+
 ### Step 0: Determine path (habit / Todoist task / variable task)
 
-**First:** Try to match `<habit>` against the 0₦ sheet column headers (row 1). If it matches:
+**First:** Try to match `<habit>` (after alias resolution) against the 0₦ sheet column headers (row 1). If it matches:
 - If `targetDate` is **today** → proceed to Step 1 (normal habit flow).
 - If `targetDate` is a **past date** → skip Steps 1–3 entirely. Jump to [Step 6b: Posthoc habit](#step-6b-posthoc-habit).
 
@@ -308,7 +318,7 @@ This step runs when `<habit>` is **not** a 0₦ column header.
 
 3. **Determine the 0分 column.** Use the task's Todoist labels/tags to map to a 0分 column:
    - Labels containing a known domain code → use the 1nd mapping table (from the `/1nd` skill)
-   - Common mappings: `i9`/`i447`/`f693`/`f694` → AA (i9), `m5x2`/`m5` → AB (m5), `g245`/`infra` → AC (个), `hcmc` → AD (媒), `xk87`/`xk88`/`xk` → AG (xk), `s897`/`社` → AH (社), `hcb`/`hcbp` → AF (hcb)
+   - Common mappings: `i9`/`i447`/`f693`/`f694` → AA (i9), `m5x2`/`m5` → AB (m5), `g245`/`infra`/`cc` → AC (个), `hcmc` → AD (媒), `xk87`/`xk88`/`xk` → AG (xk), `s897`/`社` → AH (社), `hcb`/`hcbp` → AF (hcb)
    - If ambiguous or no label matches, ask the user which 0分 column.
 
 4. **Append points to today's 0分 row.** Use AppleScript to find today's row in 0分 (date column B, M/D format), then **append** `+N` to the existing formula in the target column. Never overwrite.
