@@ -21,11 +21,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 import ibx as _ibx
 import imsg as _imsg
 import slack as _slack
-try:
-    import outlook as _outlook
-    _outlook_available = True
-except ImportError:
-    _outlook_available = False
 
 # ── Auto-sign integration (optional — skipped if module not found) ────────────
 _AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
@@ -53,13 +48,11 @@ TYPE_STYLE = {
     "email": "bold green",
     "imsg":  "bold magenta",
     "slack": "bold blue",
-    "outlook": "bold cyan",
 }
 TYPE_LABEL = {
     "email": "EMAIL",
     "imsg":  "IMSG",
     "slack": "SLACK",
-    "outlook": "OUTLOOK",
 }
 
 # ── Normalize items ───────────────────────────────────────────────────────────
@@ -116,29 +109,6 @@ def normalize_slack(thread, token, workspace):
         "body": body,
         "ts": ts,
         "_data": {"thread": thread, "token": token, "workspace": workspace},
-    }
-
-def normalize_outlook_msg(msg_summary, token):
-    """Fetch and normalize an Outlook message into a unified item."""
-    try:
-        email = _outlook.get_email(token, msg_summary["id"])
-    except Exception:
-        return None
-    try:
-        dt = datetime.fromisoformat(msg_summary["receivedDateTime"].replace("Z", "+00:00"))
-        ts = dt.timestamp()
-    except Exception:
-        ts = 0.0
-    return {
-        "type": "outlook",
-        "source": "outlook",
-        "from": email.get("from", ""),
-        "to": email.get("to", ""),
-        "cc": email.get("cc", ""),
-        "preview": email.get("subject", "(no subject)"),
-        "body": email.get("body", ""),
-        "ts": ts,
-        "_data": {"email": email, "token": token},
     }
 
 # ── Display ───────────────────────────────────────────────────────────────────
@@ -276,8 +246,6 @@ def do_archive(item):
     t = item["type"]
     if t == "email":
         _ibx.archive(item["_data"]["service"], item["_data"]["email"]["id"])
-    elif t == "outlook":
-        _outlook.archive(item["_data"]["token"], item["_data"]["email"]["id"])
     elif t == "imsg":
         thread = item["_data"]["thread"]
         proc = _imsg.load_processed()
@@ -292,8 +260,6 @@ def do_delete(item):
     t = item["type"]
     if t == "email":
         _ibx.delete(item["_data"]["service"], item["_data"]["email"]["id"])
-    elif t == "outlook":
-        _outlook.delete(item["_data"]["token"], item["_data"]["email"]["id"])
     elif t == "imsg":
         # iMessage has no true delete via our API; just mark processed
         thread = item["_data"]["thread"]
@@ -310,8 +276,6 @@ def do_reply(item, reply_text):
     t = item["type"]
     if t == "email":
         _ibx.send_reply(item["_data"]["service"], item["_data"]["email"], reply_text)
-    elif t == "outlook":
-        _outlook.send_reply(item["_data"]["token"], item["_data"]["email"]["id"], reply_text)
     elif t == "imsg":
         _imsg.reply_imessage(item["_data"]["thread"], reply_text)
     elif t == "slack":
@@ -323,7 +287,7 @@ def do_reply(item, reply_text):
 
 def ask_claude(item, user_input):
     t = item["type"]
-    type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM", "outlook": "Outlook email"}[t]
+    type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM"}[t]
     prompt = f"""You are a personal assistant for Jonathan McKay.
 Given an inbound {type_label} and a user instruction, respond with JSON only.
 
@@ -494,53 +458,12 @@ def fetch_slack():
 
     return items
 
-def fetch_outlook():
-    """Fetch Outlook inbox messages via Microsoft Graph API."""
-    items = []
-    if not _outlook_available:
-        return items
-    console.print("\n[bold]Outlook[/bold] — connecting...", style="dim")
-    if not _outlook.APP_CONFIG_FILE.exists():
-        console.print("  [dim]no app config — skipping (create ~/.config/outlook/app.json)[/dim]")
-        return items
-
-    try:
-        token = _outlook.get_graph_token()
-        console.print("  [dim]✓ authenticated[/dim]")
-    except Exception as e:
-        console.print(f"  [yellow]✗ auth failed: {e}[/yellow]")
-        return items
-
-    # Triage
-    console.print("[dim]  triaging...[/dim]")
-    try:
-        total, moved = _outlook.triage_inbox(token)
-        if total:
-            console.print(f"  [dim]outlook: {moved}/{total} → no-response-needed[/dim]")
-    except Exception as e:
-        console.print(f"  [yellow]triage error: {e}[/yellow]")
-
-    # Fetch remaining
-    try:
-        msgs = _outlook.fetch_inbox(token, unread_only=False)
-        for m in msgs:
-            item = normalize_outlook_msg(m, token)
-            if item:
-                items.append(item)
-        console.print(f"  [dim]outlook: {len(items)} to review[/dim]")
-    except Exception as e:
-        console.print(f"  [yellow]fetch error: {e}[/yellow]")
-
-    return items
-
 # ── Background poll ───────────────────────────────────────────────────────────
 
 def _item_uid(item):
     """Stable unique ID for an item, used to track external resolution."""
     if item["type"] == "email":
         return ("email", item["_data"]["email"]["id"])
-    elif item["type"] == "outlook":
-        return ("outlook", item["_data"]["email"]["id"])
     elif item["type"] == "imsg":
         return ("imsg", item["_data"]["thread"]["chat_identifier"])
     elif item["type"] == "slack":
@@ -570,17 +493,6 @@ def _poll_resolved(items_snapshot, resolved, stop_event, msg_queue, interval=60)
                     ).execute()
                     if "INBOX" not in msg.get("labelIds", []):
                         resolved.add(uid)
-
-                elif item["type"] == "outlook":
-                    token = item["_data"]["token"]
-                    msg_id = item["_data"]["email"]["id"]
-                    try:
-                        msgs = _outlook.fetch_inbox(token, max_results=200)
-                        inbox_ids = {m["id"] for m in msgs}
-                        if msg_id not in inbox_ids:
-                            resolved.add(uid)
-                    except Exception:
-                        pass
 
                 elif item["type"] == "imsg":
                     # Resolved if the stored processed ts covers this message's latest_apple_ts
@@ -614,17 +526,6 @@ def check_resolved_now(items_snapshot, resolved):
                 if "INBOX" not in msg.get("labelIds", []):
                     resolved.add(uid)
                     newly += 1
-            elif item["type"] == "outlook":
-                token = item["_data"]["token"]
-                msg_id = item["_data"]["email"]["id"]
-                try:
-                    msgs = _outlook.fetch_inbox(token, max_results=200)
-                    inbox_ids = {m["id"] for m in msgs}
-                    if msg_id not in inbox_ids:
-                        resolved.add(uid)
-                        newly += 1
-                except Exception:
-                    pass
             elif item["type"] == "imsg":
                 proc = _imsg.load_processed()
                 cid = item["_data"]["thread"]["chat_identifier"]
@@ -651,13 +552,11 @@ def main():
     email_items, per_account = fetch_emails()
     imsg_items = fetch_imsgs()
     slack_items = fetch_slack()
-    outlook_items = fetch_outlook()
 
     # Merge: Slack sorted by ts (most recent first), emails/imsgs in fetch order
     all_items = (
         sorted(slack_items, key=lambda x: -x["ts"]) +
         email_items +
-        sorted(outlook_items, key=lambda x: -x["ts"]) +
         imsg_items
     )
 
@@ -668,7 +567,6 @@ def main():
     ) or f"[green]0 email[/green]"
 
     status_line = (f"({email_parts}  "
-                   f"[cyan]{len(outlook_items)} outlook[/cyan]  "
                    f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
                    f"[blue]{len(slack_items)} slack[/blue])")
 
