@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-04-08T06:36:32.532448-07:00"
+  "tasks": {
+    "write weekly update": {
+      "todoist_id": "6gJw7hXvfXRGXPr2",
+      "minutes": 80
+    },
+    "finish slt slides": {
+      "todoist_id": "6gJw7hgQF98QGmcR",
+      "minutes": 80
+    },
+    "skin to skin time": {
+      "todoist_id": "6gJw7hhWhM6Rvh6R",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-04-08T08:36:35.172757-07:00"
 }
