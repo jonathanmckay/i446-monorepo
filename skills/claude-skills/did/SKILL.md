@@ -339,13 +339,13 @@ tell application "Microsoft Excel"
         set theCell to range ("COL" & todayRow) of theSheet
         set oldFormula to formula of theCell
         set formula of theCell to oldFormula & "+POINTS"
-        delay 0.5
+        delay 0.1
         set newFormula to formula of theCell
         set newVal to string value of theCell
         if newFormula does not contain "+POINTS" then
             -- Retry once
             set formula of theCell to oldFormula & "+POINTS"
-            delay 0.5
+            delay 0.3
             set newFormula to formula of theCell
             set newVal to string value of theCell
         end if

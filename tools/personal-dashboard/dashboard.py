@@ -250,46 +250,66 @@ def load_turns_data():
 
 
 def load_imessage_stats():
-    """Query local iMessage DB for sent/received counts yesterday and today."""
+    """Load iMessage stats from response DB + live chat.db for today/yesterday."""
     import sqlite3
-    db_path = Path.home() / "Library" / "Messages" / "chat.db"
-    if not db_path.exists():
-        return {}
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        apple_epoch = 978307200
-        today = date.today().isoformat()
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        rows = conn.execute("""
-            SELECT
-                date(m.date / 1000000000 + ?, 'unixepoch', 'localtime') as day,
-                m.is_from_me,
-                COUNT(*) as cnt
-            FROM message m
-            WHERE m.date / 1000000000 + ? >= strftime('%s', ?, 'utc') - 86400*2
-              AND m.text IS NOT NULL AND length(m.text) > 0
-              AND m.associated_message_type = 0
-            GROUP BY day, m.is_from_me
-        """, (apple_epoch, apple_epoch, yesterday)).fetchall()
-        conn.close()
 
-        stats = {}
-        for day, is_from_me, cnt in rows:
-            if day == today:
-                key = "today"
-            elif day == yesterday:
-                key = "yesterday"
-            else:
-                continue
-            if key not in stats:
-                stats[key] = {"sent": 0, "received": 0}
-            if is_from_me:
-                stats[key]["sent"] = cnt
-            else:
-                stats[key]["received"] = cnt
-        return stats
-    except Exception:
-        return {}
+    stats = {}
+    response_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
+    today_str = date.today().isoformat()
+    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+
+    # Live counts from chat.db
+    chatdb = Path.home() / "Library" / "Messages" / "chat.db"
+    if chatdb.exists():
+        try:
+            conn = sqlite3.connect(f"file:{chatdb}?mode=ro", uri=True)
+            apple_epoch = 978307200
+            rows = conn.execute("""
+                SELECT
+                    date(m.date / 1000000000 + ?, 'unixepoch', 'localtime') as day,
+                    m.is_from_me,
+                    COUNT(*) as cnt
+                FROM message m
+                WHERE m.date / 1000000000 + ? >= strftime('%s', ?, 'utc') - 86400*2
+                  AND m.text IS NOT NULL AND length(m.text) > 0
+                  AND m.associated_message_type = 0
+                GROUP BY day, m.is_from_me
+            """, (apple_epoch, apple_epoch, yesterday_str)).fetchall()
+            conn.close()
+
+            for day, is_from_me, cnt in rows:
+                if day == today_str:
+                    key = "today"
+                elif day == yesterday_str:
+                    key = "yesterday"
+                else:
+                    continue
+                if key not in stats:
+                    stats[key] = {"sent": 0, "received": 0, "responses": 0, "avg_hours": None}
+                if is_from_me:
+                    stats[key]["sent"] = cnt
+                else:
+                    stats[key]["received"] = cnt
+        except Exception:
+            pass
+
+    # Response pair stats from imsg-responses.db
+    if response_db.exists():
+        try:
+            conn = sqlite3.connect(f"file:{response_db}?mode=ro", uri=True)
+            for day_str, key in [(today_str, "today"), (yesterday_str, "yesterday")]:
+                row = conn.execute(
+                    "SELECT response_count, avg_response_hours FROM daily_stats WHERE day = ?",
+                    (day_str,)
+                ).fetchone()
+                if row and key in stats:
+                    stats[key]["responses"] = row[0] or 0
+                    stats[key]["avg_hours"] = round(row[1], 1) if row[1] else None
+            conn.close()
+        except Exception:
+            pass
+
+    return stats
 
 
 def load_email_data():
