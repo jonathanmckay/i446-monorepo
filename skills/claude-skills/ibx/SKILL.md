@@ -1,12 +1,12 @@
 ---
 name: "ibx"
-description: "Process inbox: Gmail + iMessages + Slack in one unified queue. Opens a single interactive card TUI in a new cmux tab."
+description: "Process inbox: Gmail + Outlook + iMessages + Slack in one unified queue. Opens a single interactive card TUI in a new cmux tab."
 user-invocable: true
 ---
 
 # Inbox (/ibx)
 
-Launch the unified inbox processor — Gmail, iMessages, and Slack in one sorted queue.
+Launch the unified inbox processor — Gmail, Outlook, iMessages, and Slack in one sorted queue.
 
 ## Usage
 
