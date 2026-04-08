@@ -221,7 +221,7 @@ def classify_email(email):
 Reply with ONLY "info" or "response".
 
 - "info" = newsletters, marketing, automated status updates with no action needed, shipping tracking, social media notifications, calendar invites already accepted
-- "response" = someone asking a question, requesting action, scheduling, needs a decision, lease/legal notices, tax documents (K-1/1099/W-2), "Action Required" subjects, personal messages, anything that needs to be reviewed saved or forwarded
+- "response" = someone asking a question, requesting action, scheduling, needs a decision, lease/legal notices, tax documents (K-1/1099/W-2), "Action Required" subjects, personal messages, property management emails (introductions, maintenance, tenant issues, inspections), anything that needs to be reviewed saved or forwarded
 
 When in doubt, prefer "response" — it is safer to keep an email than to discard it.
 

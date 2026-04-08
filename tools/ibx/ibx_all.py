@@ -148,6 +148,7 @@ def print_help():
         "[bold]s[/bold] skip  "
         "[bold]t <text>[/bold] todo  "
         "[bold]c[/bold] check now  "
+        "[bold]f[/bold] fetch new  "
         "[bold]q[/bold] quit  "
         "[dim]or type anything → Claude[/dim]\n"
     )
@@ -624,6 +625,19 @@ def main():
                 skipped = []
                 index = 0
             else:
+                # One final fetch before declaring zero
+                existing_uids = {_item_uid(it) for it in all_items}
+                existing_uids.update(resolved)
+                late_emails, _ = fetch_emails()
+                late_imsgs = fetch_imsgs()
+                late_slack = fetch_slack()
+                late_all = [it for it in (late_emails + late_imsgs + late_slack)
+                            if _item_uid(it) not in existing_uids]
+                if late_all:
+                    all_items = late_all
+                    index = 0
+                    console.print(f"[green]  + {len(late_all)} new item(s) arrived[/green]")
+                    continue
                 _wait_for_autosign()
                 console.print("[dim]Inbox zero.[/dim]")
                 stop_poll.set()
@@ -689,6 +703,20 @@ def main():
                     index = len(all_items)
             else:
                 console.print("[dim]  all items still pending[/dim]")
+
+        elif cmd == "f":
+            console.print("[dim]Fetching new items...[/dim]")
+            existing_uids = {_item_uid(it) for it in all_items + skipped}
+            new_emails, new_per = fetch_emails()
+            new_imsgs = fetch_imsgs()
+            new_slack = fetch_slack()
+            new_all = new_emails + new_imsgs + new_slack
+            added = [it for it in new_all if _item_uid(it) not in existing_uids and _item_uid(it) not in resolved]
+            if added:
+                all_items.extend(added)
+                console.print(f"[green]  + {len(added)} new item(s) added to queue[/green]")
+            else:
+                console.print("[dim]  no new items[/dim]")
 
         elif cmd == "?":
             print_help()
