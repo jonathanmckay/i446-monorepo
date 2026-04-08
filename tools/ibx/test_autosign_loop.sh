@@ -46,7 +46,7 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
     restore_email
 
     echo "  Running ibx..."
-    python3 "$SCRIPT" 2>"$ERR_FILE"
+    echo "q" | python3 "$SCRIPT" 2>"$ERR_FILE"
     EXIT_CODE=$?
 
     # Check DB for success
@@ -79,7 +79,7 @@ $ERROR" --allowedTools "Read,Edit,Grep"
         echo "  Fix applied. Retrying..."
     fi
 
-    sleep 2
+    sleep 60  # wait for rate limits to clear
 done
 
 echo ""

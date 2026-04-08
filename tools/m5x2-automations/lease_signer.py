@@ -29,21 +29,21 @@ except ImportError:
 from config import APPFOLIO_EMAIL, APPFOLIO_PASSWORD, APPFOLIO_SUBDOMAIN
 
 
-SYSTEM_PROMPT = f"""You are an automation agent signing a lease renewal in AppFolio Property Manager.
+SYSTEM_PROMPT = f"""You are an automation agent countersigning a lease in AppFolio Property Manager.
 AppFolio login: {APPFOLIO_EMAIL}
 
 Your job:
-1. If you see a login page, fill in the credentials and submit.
-2. Once inside, find and click the "Countersign" or "Sign" button.
-3. If prompted for a signature field, click on it and type the owner's name or use the provided signature tool.
-4. Complete all required steps until the document shows "Signed" or "Complete".
-5. When done, respond with the word DONE on its own line.
+1. If you see a login page, fill in email and password and submit.
+2. Look for a "Sign" or "Countersign" link/button. Click it.
+3. On the signing page: do NOT scroll through the document. Go directly to the bottom of the page where the signature acceptance area is.
+4. Click "Sign and Accept" or the equivalent acceptance button at the bottom.
+5. When you see confirmation that the document is signed/complete, respond with DONE on its own line.
 
-Instructions:
-- Use tool calls to interact with the browser.
-- After each action wait briefly for the page to settle.
+Critical rules:
+- Do NOT scroll through the lease. Just jump to the bottom.
+- Keep actions minimal — click the sign link, then accept at the bottom.
 - If you see a CAPTCHA or unusual blocker, respond with BLOCKED.
-- Keep responses concise — just state what you're doing and call the tool.
+- Keep responses to 1-2 sentences max, then call the tool.
 """
 
 
@@ -99,7 +99,7 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = browser.new_context(viewport={"width": 1024, "height": 768})
         page = ctx.new_page()
 
         try:
@@ -122,19 +122,27 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
             messages.append(pending_user)
             pending_user = None
 
-            response = client.beta.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                tools=[{
-                    "type": "computer_20251124",
-                    "name": "computer",
-                    "display_width_px": 1280,
-                    "display_height_px": 800,
-                }],
-                messages=messages,
-                betas=["computer-use-2025-11-24"],
-            )
+            # Retry with backoff for rate limits
+            for _retry in range(5):
+                try:
+                    response = client.beta.messages.create(
+                        model="claude-sonnet-4-6",
+                        max_tokens=1024,
+                        system=SYSTEM_PROMPT,
+                        tools=[{
+                            "type": "computer_20251124",
+                            "name": "computer",
+                            "display_width_px": 1024,
+                            "display_height_px": 768,
+                        }],
+                        messages=messages,
+                        betas=["computer-use-2025-11-24"],
+                    )
+                    break
+                except anthropic.RateLimitError:
+                    if _retry == 4:
+                        raise
+                    time.sleep(30 * (_retry + 1))  # 30s, 60s, 90s, 120s
 
             messages.append({"role": "assistant", "content": response.content})
 
