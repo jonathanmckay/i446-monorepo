@@ -249,6 +249,49 @@ def load_turns_data():
         return {}
 
 
+def load_imessage_stats():
+    """Query local iMessage DB for sent/received counts yesterday and today."""
+    import sqlite3
+    db_path = Path.home() / "Library" / "Messages" / "chat.db"
+    if not db_path.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        apple_epoch = 978307200
+        today = date.today().isoformat()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        rows = conn.execute("""
+            SELECT
+                date(m.date / 1000000000 + ?, 'unixepoch', 'localtime') as day,
+                m.is_from_me,
+                COUNT(*) as cnt
+            FROM message m
+            WHERE m.date / 1000000000 + ? >= strftime('%s', ?, 'utc') - 86400*2
+              AND m.text IS NOT NULL AND length(m.text) > 0
+              AND m.associated_message_type = 0
+            GROUP BY day, m.is_from_me
+        """, (apple_epoch, apple_epoch, yesterday)).fetchall()
+        conn.close()
+
+        stats = {}
+        for day, is_from_me, cnt in rows:
+            if day == today:
+                key = "today"
+            elif day == yesterday:
+                key = "yesterday"
+            else:
+                continue
+            if key not in stats:
+                stats[key] = {"sent": 0, "received": 0}
+            if is_from_me:
+                stats[key]["sent"] = cnt
+            else:
+                stats[key]["received"] = cnt
+        return stats
+    except Exception:
+        return {}
+
+
 def load_email_data():
     """Fetch email response time stats from GitHub Gist.
     Returns {"daily": [{date, account, avg_hours, count}], "summary": {...}}.
@@ -315,6 +358,7 @@ def api_data():
     turns_raw = load_turns_data()
     tasks_raw = load_tasks_data()
     email_raw = load_email_data()
+    imsg_stats = load_imessage_stats()
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -478,7 +522,7 @@ def api_data():
         "tasks_other": tasks_other,
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
-        "email": {"datasets": email_datasets, "summary": email_summary},
+        "email": {"datasets": email_datasets, "summary": email_summary, "imessage": imsg_stats},
         "summary": {
             "total_points": {k: int(v) for k, v in total_points.items() if v > 0},
             "total_mins": {k: int(v) for k, v in total_time.items() if v > 0},
@@ -520,9 +564,10 @@ h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px
 .nav-link:hover { opacity: 0.8; }
 .grid { display: grid; grid-template-columns: 1fr; gap: 32px; margin-bottom: 32px; }
 .card { background: var(--card); border-radius: 8px; padding: 20px; }
-.chart-wrap { height: 280px; position: relative; }
+.chart-wrap { height: 280px; position: relative; max-width: 100%; }
 .chart-wrap.sm { height: 200px; }
 .chart-wrap.xs { height: 180px; }
+.card { overflow: hidden; }
 .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .badge { background: var(--badge-bg); border-radius: 4px; padding: 4px 10px; font-size: 12px; }
 .badge span { color: var(--badge-text); }
@@ -562,7 +607,7 @@ HTML = """<!DOCTYPE html>
     <div class="summary" id="pointsSummary"></div>
   </div>
   <div class="card">
-    <h2>Time / Day (min, excl. sleep)</h2>
+    <h2>Time / Day</h2>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
@@ -659,18 +704,26 @@ fetch('/api/data').then(r => r.json()).then(data => {
 
   // Summaries
   const s = data.summary;
+  // Build color maps from datasets
+  const ptColors = {};
+  (data.points.datasets || []).forEach(ds => { ptColors[ds.label] = ds.backgroundColor; });
+  const tmColors = {};
+  (data.time.datasets || []).forEach(ds => { tmColors[ds.label] = ds.backgroundColor; });
+
   const ptEl = document.getElementById('pointsSummary');
   Object.entries(s.total_points).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
     const b = document.createElement('div');
     b.className = 'badge';
-    b.innerHTML = `${k} <span>${v}</span>`;
+    const dot = ptColors[k] ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ptColors[k]};margin-right:4px;vertical-align:middle;"></span>` : '';
+    b.innerHTML = `${dot}${k} <span>${v}</span>`;
     ptEl.appendChild(b);
   });
   const tmEl = document.getElementById('timeSummary');
   Object.entries(s.total_mins).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
     const b = document.createElement('div');
     b.className = 'badge';
-    b.innerHTML = `${k} <span>${v}m</span>`;
+    const dot = tmColors[k] ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tmColors[k]};margin-right:4px;vertical-align:middle;"></span>` : '';
+    b.innerHTML = `${dot}${k} <span>${v}m</span>`;
     tmEl.appendChild(b);
   });
 
@@ -688,6 +741,18 @@ fetch('/api/data').then(r => r.json()).then(data => {
     const b = document.createElement('div');
     b.className = 'badge';
     b.innerHTML = `${k} <span>${v}</span>`;
+    emEl.appendChild(b);
+  });
+
+  // iMessage stats
+  const im = data.email.imessage || {};
+  const imBadges = [];
+  if (im.yesterday) imBadges.push(['iMsg yest', `↑${im.yesterday.sent} ↓${im.yesterday.received}`]);
+  if (im.today) imBadges.push(['iMsg today', `↑${im.today.sent} ↓${im.today.received}`]);
+  imBadges.forEach(([k, v]) => {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#34c759;margin-right:4px;vertical-align:middle;"></span>${k} <span>${v}</span>`;
     emEl.appendChild(b);
   });
 });

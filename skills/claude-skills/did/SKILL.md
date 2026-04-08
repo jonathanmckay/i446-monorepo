@@ -339,8 +339,17 @@ tell application "Microsoft Excel"
         set theCell to range ("COL" & todayRow) of theSheet
         set oldFormula to formula of theCell
         set formula of theCell to oldFormula & "+POINTS"
+        delay 0.5
+        set newFormula to formula of theCell
         set newVal to string value of theCell
-        return "OK: appended +POINTS to COL" & todayRow & " (verify=" & newVal & ")"
+        if newFormula does not contain "+POINTS" then
+            -- Retry once
+            set formula of theCell to oldFormula & "+POINTS"
+            delay 0.5
+            set newFormula to formula of theCell
+            set newVal to string value of theCell
+        end if
+        return "OK: appended +POINTS to COL" & todayRow & " (verify=" & newVal & ", formula=" & newFormula & ")"
     else
         return "ERROR: date TARGET_DATE not found in 0分 col B"
     end if

@@ -259,18 +259,35 @@ def get_claude_stats():
     daily_activity = data.get("dailyActivity", [])
     daily_tokens = data.get("dailyModelTokens", [])
 
-    # Supplement with JSONL-parsed data for any days after the last cache entry
+    # Supplement with JSONL-parsed data for the last cached date (often stale) and beyond
     last_cached_date = daily_activity[-1]["date"] if daily_activity else "2000-01-01"
     today = datetime.now().strftime("%Y-%m-%d")
-    if last_cached_date < today:
-        extra_activity, extra_tokens, extra_costs = _parse_jsonl_daily_stats(last_cached_date)
-        for day in sorted(extra_activity):
+    # Parse from the day BEFORE the last cached date so we re-check it
+    prev_date = (datetime.strptime(last_cached_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    extra_activity, extra_tokens, extra_costs = _parse_jsonl_daily_stats(prev_date)
+    for day in sorted(extra_activity):
+        # For the last cached date, merge with cache (take max message count)
+        existing = next((a for a in daily_activity if a["date"] == day), None)
+        if existing:
+            if extra_activity[day]["messageCount"] > existing["messageCount"]:
+                existing["messageCount"] = extra_activity[day]["messageCount"]
+                existing["sessionCount"] = max(existing["sessionCount"], extra_activity[day]["sessionCount"])
+        else:
             daily_activity.append(extra_activity[day])
-        for day in sorted(extra_tokens):
+    for day in sorted(extra_tokens):
+        existing = next((t for t in daily_tokens if t["date"] == day), None)
+        if existing:
+            # Merge token counts — take max per model
+            cached_models = existing.get("tokensByModel", {})
+            extra_models = extra_tokens[day].get("tokensByModel", {})
+            for model, count in extra_models.items():
+                cached_models[model] = max(cached_models.get(model, 0), count)
+            existing["tokensByModel"] = cached_models
+        else:
             daily_tokens.append(extra_tokens[day])
-        for model_type, cost in extra_costs.items():
-            total_cost += cost
-            model_costs[model_type] = model_costs.get(model_type, 0) + cost
+    for model_type, cost in extra_costs.items():
+        total_cost += cost
+        model_costs[model_type] = model_costs.get(model_type, 0) + cost
 
     return {
         "total_sessions": data.get("totalSessions", 0),
@@ -510,7 +527,15 @@ def get_mcp_stats(days=30):
         entry["total"] = day_total
         daily.append(entry)
 
-    return {"daily": daily, "servers": servers, "total": total}
+    # Top 8 servers by call count in last 7 days (for legend)
+    recent_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    server_7d_counts = Counter()
+    for date, counts in daily_by_server.items():
+        if date >= recent_cutoff:
+            server_7d_counts.update(counts)
+    top_servers = [s for s, _ in server_7d_counts.most_common(8)]
+
+    return {"daily": daily, "servers": servers, "top_servers": top_servers, "total": total}
 
 
 def get_skill_stats(days=30):
@@ -589,7 +614,15 @@ def get_skill_stats(days=30):
         entry["total"] = day_total
         daily.append(entry)
 
-    return {"daily": daily, "skills": skills, "total": total}
+    # Top 10 skills by call count in last 7 days (for legend)
+    recent_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    skill_7d_counts = Counter()
+    for date, counts in daily_by_skill.items():
+        if date >= recent_cutoff:
+            skill_7d_counts.update(counts)
+    top_skills = [s for s, _ in skill_7d_counts.most_common(10)]
+
+    return {"daily": daily, "skills": skills, "top_skills": top_skills, "total": total}
 
 
 def _wait_buckets(wall_times):
@@ -602,16 +635,16 @@ def _wait_buckets(wall_times):
     if total <= 0:
         return None
     p50_idx = n // 2
-    p95_idx = min(int(n * 0.95), n - 1)
+    p90_idx = min(int(n * 0.90), n - 1)
     p99_idx = min(int(n * 0.99), n - 1)
     bucket_le_p50 = sum(s[:p50_idx + 1])
-    bucket_p50_p95 = sum(s[p50_idx + 1:p95_idx + 1])
-    bucket_p95_p99 = sum(s[p95_idx + 1:p99_idx + 1])
+    bucket_p50_p90 = sum(s[p50_idx + 1:p90_idx + 1])
+    bucket_p90_p99 = sum(s[p90_idx + 1:p99_idx + 1])
     bucket_p99_max = sum(s[p99_idx + 1:])
     return {
         "le_p50": round(bucket_le_p50 / total * 100, 1),
-        "p50_p95": round(bucket_p50_p95 / total * 100, 1),
-        "p95_p99": round(bucket_p95_p99 / total * 100, 1),
+        "p50_p90": round(bucket_p50_p90 / total * 100, 1),
+        "p90_p99": round(bucket_p90_p99 / total * 100, 1),
         "p99_max": round(bucket_p99_max / total * 100, 1),
         "total_s": round(total, 1),
     }
@@ -823,12 +856,12 @@ def get_greatest_hits(days=7, top_n=20):
     if not session_dir.exists():
         return []
 
-    # Collect (wall_seconds, prompt_text, timestamp) for all turns
+    # Collect (wall_seconds, prompt_text, timestamp, tokens) for all turns
     all_turns = []
 
     for fpath in session_dir.glob("*.jsonl"):
         try:
-            all_messages = []  # (type, ts, content_or_none)
+            all_messages = []  # (type, ts, content_or_none, usage_or_none)
             with open(fpath) as fh:
                 for line in fh:
                     line = line.strip()
@@ -842,6 +875,7 @@ def get_greatest_hits(days=7, top_n=20):
                     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                     # Extract user prompt text
                     content = None
+                    usage = None
                     if msg_type == "user":
                         msg = obj.get("message", {})
                         raw = msg.get("content", "")
@@ -853,12 +887,16 @@ def get_greatest_hits(days=7, top_n=20):
                             )
                         elif isinstance(raw, str):
                             content = raw
-                    all_messages.append((msg_type, ts, content))
+                    elif msg_type == "assistant":
+                        msg = obj.get("message", {})
+                        if isinstance(msg, dict):
+                            usage = msg.get("usage", {})
+                    all_messages.append((msg_type, ts, content, usage))
 
             if len(all_messages) < 2:
                 continue
 
-            user_indices = [i for i, (t, _, _) in enumerate(all_messages) if t == "user"]
+            user_indices = [i for i, (t, _, _, _) in enumerate(all_messages) if t == "user"]
             for idx, ui in enumerate(user_indices):
                 user_ts = all_messages[ui][1]
                 user_content = all_messages[ui][2] or ""
@@ -877,7 +915,13 @@ def get_greatest_hits(days=7, top_n=20):
                 preview = user_content[:500].strip()
                 if not preview or preview.startswith("<system-reminder>"):
                     continue
-                all_turns.append((wall, preview, user_ts))
+                # Sum tokens for this turn (all assistant messages between this user msg and the next)
+                turn_tokens = 0
+                for mi in range(ui + 1, end):
+                    u = all_messages[mi][3]
+                    if u:
+                        turn_tokens += u.get("input_tokens", 0) + u.get("output_tokens", 0)
+                all_turns.append((wall, preview, user_ts, turn_tokens))
         except Exception:
             continue
 
@@ -894,7 +938,7 @@ def get_greatest_hits(days=7, top_n=20):
     if api_key:
         # Batch all prompts into a single Haiku call
         numbered = "\n".join(
-            f"{i+1}. ({t[0]:.0f}s) {t[1][:200]}" for i, t in enumerate(top)
+            f"{i+1}. ({t[0]:.0f}s) {t[1][:200]}" for i, t in enumerate(top)  # t = (wall, preview, ts, tokens)
         )
         try:
             resp = requests.post(
@@ -929,8 +973,15 @@ def get_greatest_hits(days=7, top_n=20):
     else:
         names = {}
 
-    for i, (wall, preview, ts) in enumerate(top):
+    for i, (wall, preview, ts, tokens) in enumerate(top):
         local_ts = ts.astimezone(pacific)
+        # Format token count
+        if tokens >= 1_000_000:
+            tokens_fmt = f"{tokens / 1_000_000:.1f}M"
+        elif tokens >= 1_000:
+            tokens_fmt = f"{tokens / 1_000:.0f}k"
+        else:
+            tokens_fmt = str(tokens)
         hits.append({
             "rank": i + 1,
             "wall_s": round(wall),
@@ -939,6 +990,8 @@ def get_greatest_hits(days=7, top_n=20):
             "prompt_preview": preview[:120],
             "date": local_ts.strftime("%a %m/%d"),
             "time": local_ts.strftime("%H:%M"),
+            "tokens": tokens,
+            "tokens_fmt": tokens_fmt,
         })
 
     return hits
@@ -1430,11 +1483,11 @@ HTML_TEMPLATE = """
                 </span>
                 <span style="display:flex; align-items:center; gap:6px;">
                     <span style="display:inline-block; width:12px; height:12px; background:#FF10F0; border-radius:2px;"></span>
-                    p50→p95
+                    p50→p90
                 </span>
                 <span style="display:flex; align-items:center; gap:6px;">
                     <span style="display:inline-block; width:12px; height:12px; background:#FFD700; border-radius:2px;"></span>
-                    p95→p99
+                    p90→p99
                 </span>
                 <span style="display:flex; align-items:center; gap:6px;">
                     <span style="display:inline-block; width:12px; height:12px; background:#FF5722; border-radius:2px;"></span>
@@ -1458,6 +1511,7 @@ HTML_TEMPLATE = """
                         <tr style="border-bottom:2px solid var(--chart-border); text-align:left;">
                             <th style="padding:8px 12px; color:var(--muted); font-weight:600;">#</th>
                             <th style="padding:8px 12px; color:var(--muted); font-weight:600;">Wall</th>
+                            <th style="padding:8px 12px; color:var(--muted); font-weight:600;">Tokens</th>
                             <th style="padding:8px 12px; color:var(--muted); font-weight:600;">Name</th>
                             <th style="padding:8px 12px; color:var(--muted); font-weight:600;">When</th>
                         </tr>
@@ -1467,6 +1521,7 @@ HTML_TEMPLATE = """
                         <tr style="border-bottom:1px solid var(--chart-border);" title="{{ hit.prompt_preview }}">
                             <td style="padding:8px 12px; color:var(--muted);">{{ hit.rank }}</td>
                             <td style="padding:8px 12px; font-weight:700; color:{% if hit.wall_s >= 600 %}#FF5722{% elif hit.wall_s >= 300 %}#FFD700{% else %}#00D4FF{% endif %}; white-space:nowrap;">{{ hit.wall_fmt }}</td>
+                            <td style="padding:8px 12px; color:var(--muted); white-space:nowrap;">{{ hit.tokens_fmt }}</td>
                             <td style="padding:8px 12px;">{{ hit.name }}</td>
                             <td style="padding:8px 12px; color:var(--muted); white-space:nowrap;">{{ hit.date }} {{ hit.time }}</td>
                         </tr>
@@ -1775,8 +1830,9 @@ HTML_TEMPLATE = """
             return c;
         }
 
-        // Build legend
-        mcpServers.forEach(server => {
+        // Build legend (top 8 servers by 7-day call count)
+        const mcpTopServers = {{ mcp_top_servers | tojson | safe }};
+        mcpTopServers.forEach(server => {
             const color = getServerColor(server);
             const item = document.createElement('div');
             item.className = 'legend-item';
@@ -1837,16 +1893,29 @@ HTML_TEMPLATE = """
         const skillChart = document.getElementById('skill-chart');
         const skillLegend = document.getElementById('skill-legend');
 
+        // Neon color palette mapped to meta categories:
+        // g245 (goals/tracking) = neon green, i9 (work) = cyan, hcb (health) = magenta,
+        // hcmc (media) = gold, m5x2 (real estate) = orange, xk87/s897 (social) = pink,
+        // i447 (infra) = purple, n156 (time) = blue
         const skillColors = {
-            '/did': { bg: 'linear-gradient(180deg, #4CAF50 0%, #81C784 100%)', shadow: 'rgba(76, 175, 80, 0.3)', label: '#4CAF50' },
-            '/tg': { bg: 'linear-gradient(180deg, #E57CD8 0%, #F0A0E8 100%)', shadow: 'rgba(229, 124, 216, 0.3)', label: '#E57CD8' },
-            '/-1g': { bg: 'linear-gradient(180deg, #FF9800 0%, #FFB74D 100%)', shadow: 'rgba(255, 152, 0, 0.3)', label: '#FF9800' },
-            '/0t': { bg: 'linear-gradient(180deg, #2196F3 0%, #64B5F6 100%)', shadow: 'rgba(33, 150, 243, 0.3)', label: '#2196F3' },
-            '/1n': { bg: 'linear-gradient(180deg, #9C27B0 0%, #BA68C8 100%)', shadow: 'rgba(156, 39, 176, 0.3)', label: '#9C27B0' },
-            '/1nd': { bg: 'linear-gradient(180deg, #00BCD4 0%, #4DD0E1 100%)', shadow: 'rgba(0, 188, 212, 0.3)', label: '#00BCD4' },
-            '/commit': { bg: 'linear-gradient(180deg, #607D8B 0%, #90A4AE 100%)', shadow: 'rgba(96, 125, 139, 0.3)', label: '#607D8B' },
+            '/did':    { bg: 'linear-gradient(180deg, #39FF14 0%, #7AFF5C 100%)', shadow: 'rgba(57, 255, 20, 0.3)', label: '#39FF14' },     // g245 - neon green
+            '/tg':     { bg: 'linear-gradient(180deg, #00D4FF 0%, #66E5FF 100%)', shadow: 'rgba(0, 212, 255, 0.3)', label: '#00D4FF' },     // i156/toggl - cyan
+            '/-1g':    { bg: 'linear-gradient(180deg, #39FF14 0%, #5BFF3E 100%)', shadow: 'rgba(57, 255, 20, 0.2)', label: '#5BFF3E' },     // g245 - green variant
+            '/0t':     { bg: 'linear-gradient(180deg, #4D9EFF 0%, #79B8FF 100%)', shadow: 'rgba(77, 158, 255, 0.3)', label: '#4D9EFF' },    // n156 - blue
+            '/1n':     { bg: 'linear-gradient(180deg, #4D9EFF 0%, #66AFFF 100%)', shadow: 'rgba(77, 158, 255, 0.2)', label: '#66AFFF' },    // n156 - blue variant
+            '/1nd':    { bg: 'linear-gradient(180deg, #39FF14 0%, #8FFF7A 100%)', shadow: 'rgba(57, 255, 20, 0.15)', label: '#8FFF7A' },    // g245 - green light
+            '/0g':     { bg: 'linear-gradient(180deg, #39FF14 0%, #AAFF8F 100%)', shadow: 'rgba(57, 255, 20, 0.1)', label: '#AAFF8F' },    // g245 - green lighter
+            '/todo':   { bg: 'linear-gradient(180deg, #FF10F0 0%, #FF6BD6 100%)', shadow: 'rgba(255, 16, 240, 0.3)', label: '#FF10F0' },    // i447 - magenta
+            '/notes':  { bg: 'linear-gradient(180deg, #9C27FF 0%, #BB6BFF 100%)', shadow: 'rgba(156, 39, 255, 0.3)', label: '#9C27FF' },    // i447 - purple
+            '/ibx':    { bg: 'linear-gradient(180deg, #FFD700 0%, #FFE44D 100%)', shadow: 'rgba(255, 215, 0, 0.3)', label: '#FFD700' },     // comms - gold
+            '/commit': { bg: 'linear-gradient(180deg, #607D8B 0%, #90A4AE 100%)', shadow: 'rgba(96, 125, 139, 0.3)', label: '#607D8B' },    // infra - grey
+            '/defer':  { bg: 'linear-gradient(180deg, #FF8C00 0%, #FFB347 100%)', shadow: 'rgba(255, 140, 0, 0.3)', label: '#FF8C00' },     // m5x2 - orange
+            '/tasks':  { bg: 'linear-gradient(180deg, #E57CD8 0%, #F0A0E8 100%)', shadow: 'rgba(229, 124, 216, 0.3)', label: '#E57CD8' },   // tracking - pink
+            '/1hcb':   { bg: 'linear-gradient(180deg, #FF10F0 0%, #FF50F5 100%)', shadow: 'rgba(255, 16, 240, 0.2)', label: '#FF50F5' },    // hcb - magenta variant
+            '/1s897':  { bg: 'linear-gradient(180deg, #FF6B9D 0%, #FF9DBF 100%)', shadow: 'rgba(255, 107, 157, 0.3)', label: '#FF6B9D' },   // s897 - pink
         };
         const skillFallbackColors = [
+            { bg: 'linear-gradient(180deg, #9C27B0 0%, #BA68C8 100%)', shadow: 'rgba(156, 39, 176, 0.3)', label: '#9C27B0' },
             { bg: 'linear-gradient(180deg, #FF5722 0%, #FF8A65 100%)', shadow: 'rgba(255, 87, 34, 0.3)', label: '#FF5722' },
             { bg: 'linear-gradient(180deg, #795548 0%, #A1887F 100%)', shadow: 'rgba(121, 85, 72, 0.3)', label: '#795548' },
             { bg: 'linear-gradient(180deg, #CDDC39 0%, #DCE775 100%)', shadow: 'rgba(205, 220, 57, 0.3)', label: '#CDDC39' },
@@ -1861,7 +1930,9 @@ HTML_TEMPLATE = """
             return c;
         }
 
-        skillNames.forEach(skill => {
+        // Build legend (top 10 skills by 7-day call count)
+        const skillTopNames = {{ skill_top_names | tojson | safe }};
+        skillTopNames.forEach(skill => {
             const color = getSkillColor(skill);
             const item = document.createElement('div');
             item.className = 'legend-item';
@@ -2041,8 +2112,8 @@ HTML_TEMPLATE = """
 
             const buckets = [
                 { key: 'le_p50',   color: '#00D4FF', label: '≤p50' },
-                { key: 'p50_p95',  color: '#FF10F0', label: 'p50→p95' },
-                { key: 'p95_p99',  color: '#FFD700', label: 'p95→p99' },
+                { key: 'p50_p90',  color: '#FF10F0', label: 'p50→p90' },
+                { key: 'p90_p99',  color: '#FFD700', label: 'p90→p99' },
                 { key: 'p99_max',  color: '#FF5722', label: 'p99→max' },
             ];
 
@@ -2193,8 +2264,10 @@ def dashboard():
         daily_turns=daily_turns,
         mcp_daily=mcp["daily"],
         mcp_servers=mcp["servers"],
+        mcp_top_servers=mcp["top_servers"],
         skill_daily=skills["daily"],
         skill_names=skills["skills"],
+        skill_top_names=skills["top_skills"],
         latency=latency,
         latency_daily=latency["daily"],
         greatest_hits=greatest_hits,
