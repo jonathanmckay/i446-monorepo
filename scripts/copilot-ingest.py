@@ -43,11 +43,16 @@ def extract_json_blocks(log_path):
     in_block = False
     brace_depth = 0
 
+    last_log_ts = None  # track timestamps from log lines preceding JSON blocks
+
     with open(log_path) as f:
         for line in f:
             stripped = line.rstrip()
 
             if not in_block:
+                # Capture timestamp from log lines like "2026-04-09T18:43:17.047Z [DEBUG] ..."
+                if len(stripped) > 24 and stripped[4] == '-' and stripped[10] == 'T':
+                    last_log_ts = stripped[:24]  # "2026-04-09T18:43:17.047Z"
                 # JSON blocks start with a bare '{'
                 if stripped == "{":
                     in_block = True
@@ -58,12 +63,22 @@ def extract_json_blocks(log_path):
             current_block.append(stripped)
             brace_depth += stripped.count("{") - stripped.count("}")
 
+            # Safety: abandon blocks that are too large (likely malformed)
+            if len(current_block) > 500:
+                in_block = False
+                current_block = []
+                brace_depth = 0
+                continue
+
             if brace_depth <= 0:
                 raw = "\n".join(current_block)
                 try:
                     obj = json.loads(raw)
                     kind = obj.get("kind", "")
                     if kind in ("assistant_usage", "session_usage_info"):
+                        # Inject log-line timestamp if created_at is missing
+                        if "created_at" not in obj and last_log_ts:
+                            obj["created_at"] = last_log_ts
                         blocks.append(obj)
                 except json.JSONDecodeError:
                     pass
