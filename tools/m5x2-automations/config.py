@@ -7,7 +7,7 @@ from pathlib import Path
 # Emails whose forwarded AppFolio countersign requests are auto-signed
 AUTOSIGN_SENDERS = [
     "stefanie@m5c7.com",
-    "andie@m5c7.com",   # add when active
+    "andrea@m5c7.com",
 ]
 
 # AppFolio credentials (env var AF_PASSWORD or ~/.config/m5x2/af_password)
