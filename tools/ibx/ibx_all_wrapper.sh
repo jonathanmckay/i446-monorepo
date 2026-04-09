@@ -16,7 +16,7 @@ while true; do
         python3 "$SCRIPT" 2>"$ERR_FILE"
         EXIT_CODE=$?
 
-        [[ $EXIT_CODE -eq 0 ]] && break
+        [[ $EXIT_CODE -eq 0 || $EXIT_CODE -eq 2 ]] && break
         ERROR=$(cat "$ERR_FILE")
         [[ -z "$ERROR" ]] && break
 
