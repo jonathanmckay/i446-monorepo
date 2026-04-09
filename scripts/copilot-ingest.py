@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Ingest GitHub Copilot agent session logs into llm-sessions.db.
 
-Parses ~/.copilot/logs/process-*.log files for assistant_usage and
-session_usage_info telemetry events, groups by session_id, and upserts
-into the sessions table (provider='copilot', product='agent').
+Parses process-*.log files from both ~/.copilot/logs/ and ~/.agency/logs/
+for assistant_usage and session_usage_info telemetry events, groups by
+session_id, and upserts into the sessions table (provider='copilot', product='agent').
 
-Designed to run periodically (e.g. every 10 min via cron).
+Designed to run periodically (e.g. every 30 min via cron).
 """
 
 import json
@@ -16,6 +16,7 @@ from collections import defaultdict
 from pathlib import Path
 
 COPILOT_LOGS = Path.home() / ".copilot" / "logs"
+AGENCY_LOGS = Path.home() / ".agency" / "logs"
 DB_PATH = Path.home() / "vault" / "i447" / "i446" / "llm-sessions.db"
 MARKER_FILE = COPILOT_LOGS / ".ingested_files"
 
@@ -167,22 +168,29 @@ def upsert_sessions(sessions):
 
 
 def main():
-    if not COPILOT_LOGS.exists():
-        print("No Copilot logs directory found", file=sys.stderr)
+    # Collect log files from both ~/.copilot/logs/ and ~/.agency/logs/
+    log_files = []
+    if COPILOT_LOGS.exists():
+        log_files.extend(sorted(COPILOT_LOGS.glob("process-*.log")))
+    if AGENCY_LOGS.exists():
+        # Agency logs are in session subdirectories
+        log_files.extend(sorted(AGENCY_LOGS.glob("*/process-*.log")))
+
+    if not log_files:
+        print("No Copilot/Agency log files found", file=sys.stderr)
         return
 
     ingested = load_ingested()
-    log_files = sorted(COPILOT_LOGS.glob("process-*.log"))
 
     all_blocks = []
     newly_processed = set()
 
     for lf in log_files:
-        fname = lf.name
+        fname = str(lf)  # use full path as key since files span directories
         blocks = extract_json_blocks(lf)
         if blocks:
             all_blocks.extend(blocks)
-            newly_processed.add(fname)
+            newly_processed.add(lf.name)
 
     if not all_blocks:
         print("No usage events found")

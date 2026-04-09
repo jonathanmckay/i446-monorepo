@@ -301,7 +301,8 @@ def do_reply(item, reply_text):
     elif t == "slack":
         d = item["_data"]
         _slack.send_reply(d["token"], d["thread"]["channel_id"], reply_text)
-    do_archive(item)
+    if t != "outlook":  # outlook.reply() already marks processed + archives
+        do_archive(item)
 
 def do_open(item):
     """Open the current item in the browser."""
