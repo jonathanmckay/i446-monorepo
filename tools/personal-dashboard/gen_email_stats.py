@@ -375,6 +375,41 @@ def compute_slack_response_times(days=DAYS):
     return response_times
 
 
+def compute_outlook_response_times(days=DAYS):
+    """
+    Read Outlook response times from the local tracking DB populated by ibx.
+    Returns list of {"date": "YYYY-MM-DD", "hours": float} dicts.
+    """
+    import sqlite3 as _sqlite3
+
+    db_path = Path.home() / ".config" / "outlook" / "response_times.db"
+    if not db_path.exists():
+        print("  WARN: Outlook response DB not found")
+        return []
+
+    conn = _sqlite3.connect(str(db_path))
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+    rows = conn.execute("""
+        SELECT action_at, response_hours
+        FROM outlook_responses
+        WHERE action IN ('reply', 'reply_all')
+          AND response_hours IS NOT NULL
+          AND action_at >= ?
+    """, (cutoff,)).fetchall()
+    conn.close()
+
+    response_times = []
+    for action_at, hours in rows:
+        try:
+            day_str = datetime.fromisoformat(action_at).date().isoformat()
+            response_times.append({"date": day_str, "hours": round(hours, 2)})
+        except Exception:
+            continue
+
+    return response_times
+
+
 def main():
     token = get_github_token()
     if not token:
@@ -416,6 +451,17 @@ def main():
         print(f"  → {len(slack_times)} reply events")
     except Exception as e:
         print(f"  WARN: Slack failed: {e}")
+
+    # Outlook response times (from ibx tracking DB)
+    print("Fetching Outlook...")
+    try:
+        outlook_times = compute_outlook_response_times()
+        for rec in outlook_times:
+            rec["account"] = "outlook"
+        all_data.extend(outlook_times)
+        print(f"  → {len(outlook_times)} reply events")
+    except Exception as e:
+        print(f"  WARN: Outlook failed: {e}")
 
     daily, summary = build_stats(all_data)
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")

@@ -21,6 +21,8 @@ console = Console()
 
 # Track which workiq items have been "processed" (archived/deleted in ibx)
 PROCESSED_FILE = Path.home() / ".config" / "outlook" / "processed.json"
+# Response time tracking DB
+RESPONSE_DB = Path.home() / ".config" / "outlook" / "response_times.db"
 
 # Target Outlook address for the bridge emails
 OUTLOOK_TARGET = os.environ.get("OUTLOOK_TARGET", "jomckay@microsoft.com")
@@ -28,6 +30,61 @@ OUTLOOK_TARGET = os.environ.get("OUTLOOK_TARGET", "jomckay@microsoft.com")
 BRIDGE_FROM = "mckay@m5x2.com"
 # Subject prefix for bridge emails — PA filters on this
 BRIDGE_PREFIX = "[IBX]"
+
+
+def _init_response_db():
+    """Initialize the response time tracking database."""
+    import sqlite3
+    RESPONSE_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(RESPONSE_DB))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS outlook_responses (
+            item_id TEXT PRIMARY KEY,
+            sender TEXT,
+            subject TEXT,
+            fetched_at TEXT,
+            action TEXT,
+            action_at TEXT,
+            response_hours REAL
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def record_fetch(item_id, sender, subject, received_at=None):
+    """Record when an email was received. Uses actual receive time if available."""
+    conn = _init_response_db()
+    ts = received_at or datetime.now().isoformat()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO outlook_responses (item_id, sender, subject, fetched_at) VALUES (?, ?, ?, ?)",
+            (item_id, sender, subject, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_action(item_id, action):
+    """Record when the user acted on an email (reply/archive/etc)."""
+    conn = _init_response_db()
+    now = datetime.now()
+    try:
+        row = conn.execute("SELECT fetched_at FROM outlook_responses WHERE item_id = ?", (item_id,)).fetchone()
+        hours = None
+        if row and row[0]:
+            fetched = datetime.fromisoformat(row[0])
+            hours = round((now - fetched).total_seconds() / 3600, 2)
+            if hours > 72:
+                hours = None
+        conn.execute(
+            "UPDATE outlook_responses SET action = ?, action_at = ?, response_hours = ? WHERE item_id = ?",
+            (action, now.isoformat(), hours, item_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def load_processed():
@@ -94,6 +151,7 @@ def fetch_outlook_items():
         "List every unread email in my inbox, including both Focused and Other tabs. "
         "For each one give me:\n"
         "FROM: full sender name and email address\n"
+        "DATE: exact date and time received in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)\n"
         "SUBJECT: full subject line\n"
         "BODY: the first 3 sentences of the email body, verbatim\n"
         "Separate each email with ---. Do not summarize, group, or omit any."
@@ -189,6 +247,23 @@ def fetch_outlook_items():
         subject = re.sub(r'\s*\[\d+\]\([^)]+\)', '', subject).strip()
         body = re.sub(r'\s*\[\d+\]\([^)]+\)', '', body).strip()
 
+        # Parse real receive time from workiq DATE field
+        received_at = None
+        if date_str:
+            try:
+                received_at = datetime.fromisoformat(date_str.replace("Z", "+00:00")).isoformat()
+            except ValueError:
+                # Try common formats workiq might return
+                for fmt in ("%B %d, %Y %I:%M %p", "%B %d, %Y at %I:%M %p", "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M"):
+                    try:
+                        received_at = datetime.strptime(date_str, fmt).isoformat()
+                        break
+                    except ValueError:
+                        continue
+
+        # Record fetch time for response tracking (using real receive time)
+        record_fetch(item_id, from_str, subject, received_at)
+
         items.append({
             "type": "outlook",
             "source": "outlook",
@@ -265,6 +340,7 @@ def archive(item_id, subject="", sender=""):
     """Archive via Gmail→PA bridge, then mark locally processed."""
     if subject and sender:
         _send_bridge_email("archive", subject, sender)
+    record_action(item_id, "archive")
     _mark_processed(item_id)
 
 
@@ -276,12 +352,14 @@ def delete(item_id, subject="", sender=""):
 def reply(item_id, subject, sender, reply_text):
     """Reply via Gmail→PA bridge, then mark processed."""
     _send_bridge_email("reply", subject, sender, reply_text)
+    record_action(item_id, "reply")
     _mark_processed(item_id)
 
 
 def reply_all(item_id, subject, sender, reply_text):
     """Reply-all via Gmail→PA bridge, then mark processed."""
     _send_bridge_email("reply_all", subject, sender, reply_text)
+    record_action(item_id, "reply_all")
     _mark_processed(item_id)
 
 
@@ -301,6 +379,7 @@ def pipe_through(item_id, subject, sender, body, instruction, reply_all_flag=Fal
     draft = re.sub(r'\[\d+\]\([^)]+\)', '', draft).strip()
     action = "reply_all" if reply_all_flag else "reply"
     _send_bridge_email(action, subject, sender, draft)
+    record_action(item_id, action)
     _mark_processed(item_id)
     return draft
 

@@ -648,17 +648,21 @@ def main():
                    f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
                    f"[blue]{len(slack_items)} slack[/blue])")
 
-    # If no items yet but Outlook is still loading, wait for it
-    if not all_items and not _outlook_done.is_set():
+    # If Outlook is still loading, always wait for it (workiq takes 60-120s)
+    if not _outlook_done.is_set():
         console.print("[dim]  waiting for Outlook...[/dim]")
         _outlook_done.wait(timeout=150)
-        outlook_items = list(_outlook_result)
+        new_outlook = list(_outlook_result)
         _outlook_result.clear()
-        all_items.extend(outlook_items)
-        status_line = (f"({email_parts}  "
-                       f"[cyan]{len(outlook_items)} outlook[/cyan]  "
-                       f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
-                       f"[blue]{len(slack_items)} slack[/blue])")
+        if new_outlook:
+            existing_uids = {_item_uid(it) for it in all_items}
+            added = [it for it in new_outlook if _item_uid(it) not in existing_uids]
+            all_items.extend(added)
+            outlook_items = outlook_items + added
+            status_line = (f"({email_parts}  "
+                           f"[cyan]{len(outlook_items)} outlook[/cyan]  "
+                           f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
+                           f"[blue]{len(slack_items)} slack[/blue])")
 
     if not all_items:
         _wait_for_autosign()
