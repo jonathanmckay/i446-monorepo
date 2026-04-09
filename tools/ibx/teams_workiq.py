@@ -141,17 +141,15 @@ def fetch_teams_items():
     console.print("\n[bold]Teams[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "Show me my unread Teams messages — both 1:1 DMs and group chats. "
-        "Only include messages I have NOT yet read or replied to. "
+        "Show me my last 5 Teams 1:1 chat messages from other people (not from me). "
         "For each, write exactly:\n"
-        "FROM: sender name (and group name if it's a group chat)\n"
+        "FROM: name\n"
         "SAYS: their message text\n"
-        "Separate with ---\n"
-        "If there are no unread messages, say 'No unread messages'."
+        "Separate with ---"
     )
 
-    if not response or re.search(r'(?i)no (?:recent|unread|new)|no direct messages|no DMs|no 1:1|no unread messages', response):
-        console.print("  [dim]no unread Teams messages[/dim]")
+    if not response or re.search(r'(?i)^no (?:recent|unread|new)|no direct messages|no DMs|no 1:1 .* found', response):
+        console.print("  [dim]no recent Teams DMs[/dim]")
         return items
 
     # Detect workiq refusal
@@ -214,11 +212,27 @@ def fetch_teams_items():
         if re.search(r'(?i)jonathan\s+mckay|jomckay|mckay@', from_str):
             continue
 
+        # Skip group chats — workiq sometimes includes them despite 1:1 prompt
+        # Group chats have parenthetical names like "Name (Chat Title)" or "(group chat)"
+        if re.search(r'\(.*(?:group|chat|workstream|weekly|standup|sync|1\|1|planning|pre-read)\)', from_str, re.IGNORECASE):
+            continue
+
         # Clean markdown artifacts
         from_str = re.sub(r'\s*\[\d+\]\([^)]+\)', '', from_str).strip()
         message = re.sub(r'\s*\[\d+\]\([^)]+\)', '', message).strip()
 
-        item_id = _make_item_id(from_str, message)
+        # Extract just the person name (strip parenthetical chat context)
+        clean_name = re.sub(r'\s*\([^)]*\)\s*$', '', from_str).strip()
+        if clean_name:
+            from_str = clean_name
+
+        # Skip items with no actual message text
+        if not message:
+            continue
+
+        # Use link hash in item ID for uniqueness (same sender, different messages)
+        link_hash = link[-20:] if link else ""
+        item_id = _make_item_id(from_str, message[:80] + link_hash)
 
         if item_id in processed:
             continue
