@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import webbrowser
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -263,14 +264,11 @@ def fetch_teams_items():
 
 
 def archive(item_id):
-    """Mark Teams message as processed and attempt to mark as read via workiq."""
-    record_action(item_id, "archive")
-    _mark_processed(item_id)
-    # Try to mark as read on the server via workiq
-    sender = item_id.split(":", 2)[1] if ":" in item_id else ""
-    if sender:
-        _run_workiq(f"Mark my Teams chat with {sender} as read.")
-
+    """Mark Teams message as processed (local only — no server-side action)."""
+    threading.Thread(
+        target=lambda: (record_action(item_id, "archive"), _mark_processed(item_id)),
+        daemon=True,
+    ).start()
 
 
 def delete(item_id):

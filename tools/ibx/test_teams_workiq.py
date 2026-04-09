@@ -62,3 +62,23 @@ def test_teams_skips_empty_messages():
             )
             return
     raise AssertionError("fetch_teams_items function not found")
+
+
+def test_teams_archive_no_workiq_call():
+    """
+    Bug: archive() called _run_workiq() to try marking chats as read, which takes
+    60-120 seconds and freezes the UI. workiq can't mark chats as read anyway.
+
+    Fix: archive() must NOT call _run_workiq. It should only do local bookkeeping.
+    """
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "archive":
+            func_source = ast.get_source_segment(source, node)
+            assert "_run_workiq" not in func_source, (
+                "archive() must not call _run_workiq — it freezes the UI for 60-120s "
+                "and workiq cannot mark Teams chats as read anyway"
+            )
+            return
+    raise AssertionError("archive function not found")
