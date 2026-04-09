@@ -99,6 +99,19 @@ def fetch_outlook_items():
         console.print("  [dim]no unread emails[/dim]")
         return items
 
+    # Detect workiq refusal / prompt-echo — these are not real emails
+    refusal_signals = [
+        r"(?i)why I'm stopping",
+        r"(?i)I won't do that",
+        r"(?i)tell me .* how you want",
+        r"(?i)continuing without narrowing",
+        r"(?i)omit nothing within the selected scope",
+        r"(?i)explicitly rejected",
+    ]
+    if any(re.search(sig, response) for sig in refusal_signals):
+        console.print("  [dim]workiq returned refusal — treating as empty[/dim]")
+        return items
+
     processed = load_processed()
 
     # Extract any links from the full response for fallback

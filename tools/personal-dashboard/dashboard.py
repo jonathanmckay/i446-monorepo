@@ -512,6 +512,7 @@ def api_data():
         "m5x2 gmail": "#d5003266", "m5x2": "#d5003266",
         "s897 gmail": "#1b5e2066", "personal": "#1b5e2066", "gmail": "#1b5e2066",
         "imessage": "#34c75966",
+        "slack": "#9b002366",
     }
     # Compute blended daily avg response time (minutes) across all accounts
     blended_response = []
@@ -691,16 +692,16 @@ fetch('/api/data').then(r => r.json()).then(data => {
 
   // Tasks chart (stacked: 0n, posthoc, 1n, other — neon palette)
   const taskSeries = [
-    { label: '0₦', data: data.tasks_neon,    bg: '#9e9e9e', border: '#bbb' },
-    { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff88', border: '#7c4dff' },
-    { label: '1₦', data: data.tasks_1n,      bg: '#1249b488', border: '#1249b4' },
-    { label: 'other', data: data.tasks_other, bg: '#2979ff44', border: '#2979ff' },
+    { label: '0₦', data: data.tasks_neon,    bg: '#0a0a0a' },
+    { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff' },
+    { label: '1₦', data: data.tasks_1n,      bg: '#00e676' },
+    { label: 't779', data: data.tasks_other, bg: '#2979ff' },
   ];
   new Chart(document.getElementById('tasksChart'), {
     type: 'bar',
     data: { labels, datasets: taskSeries.map(s => ({
       label: s.label, data: s.data,
-      backgroundColor: s.bg, borderColor: s.border, borderWidth: 1,
+      backgroundColor: s.bg, borderColor: s.bg, borderWidth: 0,
     }))},
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -770,6 +771,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     ['m5x2 gmail', '#d50032', 'bar'],
     ['jbm gmail', '#1b5e20', 'bar'],
     ['imessage', '#34c759', 'bar'],
+    ['slack', '#9b0023', 'bar'],
   ];
   emLegend.forEach(([label, color, type]) => {
     const b = document.createElement('div');

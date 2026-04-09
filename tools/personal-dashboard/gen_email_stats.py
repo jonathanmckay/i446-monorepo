@@ -22,6 +22,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 import statistics
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "ibx"))
@@ -283,6 +284,97 @@ def compute_imessage_response_times(days=DAYS):
     return response_times
 
 
+SLACK_CONFIG = Path.home() / ".config" / "slack" / "tokens.json"
+
+
+def compute_slack_response_times(days=DAYS):
+    """
+    Compute Slack DM response times across all configured workspaces.
+    For each sent reply in the last `days` days, find the preceding received message
+    in the same DM conversation and compute the response delta in hours. Cap at 72h.
+
+    Returns list of {"date": "YYYY-MM-DD", "hours": float} dicts.
+    """
+    if not SLACK_CONFIG.exists():
+        print("  WARN: Slack tokens file not found")
+        return []
+
+    tokens = json.loads(SLACK_CONFIG.read_text())
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_ts = str(cutoff.timestamp())
+    response_times = []
+
+    for workspace, token in tokens.items():
+        try:
+            # Get our user ID
+            req = urllib.request.Request(
+                "https://slack.com/api/auth.test",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                auth = json.loads(r.read())
+            if not auth.get("ok"):
+                continue
+            self_id = auth["user_id"]
+
+            # List DM conversations
+            cursor = None
+            dm_channels = []
+            while True:
+                params = {"types": "im", "limit": "200"}
+                if cursor:
+                    params["cursor"] = cursor
+                url = "https://slack.com/api/conversations.list?" + urllib.parse.urlencode(params)
+                req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    data = json.loads(r.read())
+                if not data.get("ok"):
+                    break
+                dm_channels.extend(data.get("channels", []))
+                cursor = data.get("response_metadata", {}).get("next_cursor")
+                if not cursor:
+                    break
+
+            # For each DM, fetch recent history and compute response pairs
+            for ch in dm_channels:
+                ch_id = ch["id"]
+                try:
+                    url = "https://slack.com/api/conversations.history?" + urllib.parse.urlencode({
+                        "channel": ch_id, "limit": "200", "oldest": cutoff_ts,
+                    })
+                    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        hist = json.loads(r.read())
+                    if not hist.get("ok"):
+                        continue
+                    msgs = sorted(hist.get("messages", []), key=lambda m: float(m.get("ts", 0)))
+                except Exception:
+                    continue
+
+                for i, msg in enumerate(msgs):
+                    if msg.get("user") != self_id:
+                        continue
+                    # Find preceding message from someone else
+                    for j in range(i - 1, -1, -1):
+                        if msgs[j].get("user") != self_id:
+                            sent_ts = float(msg["ts"])
+                            recv_ts = float(msgs[j]["ts"])
+                            delta_hours = (sent_ts - recv_ts) / 3600
+                            if 0 < delta_hours <= 72:
+                                sent_dt = datetime.fromtimestamp(sent_ts, tz=LOCAL_TZ)
+                                response_times.append({
+                                    "date": sent_dt.date().isoformat(),
+                                    "hours": round(delta_hours, 2),
+                                })
+                            break
+
+            print(f"  {workspace}: {len([r for r in response_times])} reply events so far")
+        except Exception as e:
+            print(f"  WARN: Slack {workspace} failed: {e}")
+
+    return response_times
+
+
 def main():
     token = get_github_token()
     if not token:
@@ -313,6 +405,17 @@ def main():
         print(f"  → {len(imsg_times)} reply events")
     except Exception as e:
         print(f"  WARN: iMessage failed: {e}")
+
+    # Slack response times
+    print("Fetching Slack...")
+    try:
+        slack_times = compute_slack_response_times()
+        for rec in slack_times:
+            rec["account"] = "slack"
+        all_data.extend(slack_times)
+        print(f"  → {len(slack_times)} reply events")
+    except Exception as e:
+        print(f"  WARN: Slack failed: {e}")
 
     daily, summary = build_stats(all_data)
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")
