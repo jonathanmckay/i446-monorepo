@@ -239,8 +239,11 @@ def main():
         console.print("To get a User OAuth Token:")
         console.print("  1. api.slack.com/apps → Create New App → From Scratch")
         console.print("  2. OAuth & Permissions → User Token Scopes:")
-        console.print("     [dim]channels:history, channels:read, groups:history, groups:read,[/dim]")
-        console.print("     [dim]im:history, im:read, mpim:history, mpim:read, chat:write, users:read[/dim]")
+        console.print("     [dim]channels:history, channels:read, channels:write,[/dim]")
+        console.print("     [dim]groups:history, groups:read, groups:write,[/dim]")
+        console.print("     [dim]im:history, im:read, im:write,[/dim]")
+        console.print("     [dim]mpim:history, mpim:read, mpim:write,[/dim]")
+        console.print("     [dim]chat:write, users:read[/dim]")
         console.print("  3. Install to Workspace → copy User OAuth Token (xoxp-...)")
         sys.exit(0)
 

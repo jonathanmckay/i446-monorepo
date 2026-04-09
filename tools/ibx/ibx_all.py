@@ -152,6 +152,8 @@ def print_help():
         "[bold]a[/bold] archive/done  "
         "[bold]d[/bold] delete  "
         "[bold]r <text>[/bold] reply  "
+        "[bold]R <text>[/bold] reply-all  "
+        "[bold]p <instruction>[/bold] pipe (AI draft)  "
         "[bold]s[/bold] skip  "
         "[bold]t <text>[/bold] todo  "
         "[bold]o[/bold] open  "
@@ -256,7 +258,8 @@ def do_archive(item):
     if t == "email":
         _ibx.archive(item["_data"]["service"], item["_data"]["email"]["id"])
     elif t == "outlook":
-        _outlook.archive(item["_data"]["item_id"])
+        d = item["_data"]
+        _outlook.archive(d["item_id"], d["email"]["subject"], d["email"]["from"])
     elif t == "imsg":
         thread = item["_data"]["thread"]
         proc = _imsg.load_processed()
@@ -272,7 +275,8 @@ def do_delete(item):
     if t == "email":
         _ibx.delete(item["_data"]["service"], item["_data"]["email"]["id"])
     elif t == "outlook":
-        _outlook.delete(item["_data"]["item_id"])
+        d = item["_data"]
+        _outlook.delete(d["item_id"], d["email"]["subject"], d["email"]["from"])
     elif t == "imsg":
         # iMessage has no true delete via our API; just mark processed
         thread = item["_data"]["thread"]
@@ -290,7 +294,8 @@ def do_reply(item, reply_text):
     if t == "email":
         _ibx.send_reply(item["_data"]["service"], item["_data"]["email"], reply_text)
     elif t == "outlook":
-        _outlook.reply_via_outlook(item["_data"].get("link", ""))
+        d = item["_data"]
+        _outlook.reply(d["item_id"], d["email"]["subject"], d["email"]["from"], reply_text)
     elif t == "imsg":
         _imsg.reply_imessage(item["_data"]["thread"], reply_text)
     elif t == "slack":
@@ -837,6 +842,64 @@ def main():
                     console.print(f"[red]Send failed: {e}[/red]")
             else:
                 console.print("[dim]Cancelled.[/dim]")
+
+        elif cmd.startswith("R "):
+            # Reply-all (Outlook only for now; others fall back to reply)
+            reply_text = user_input[2:].strip()
+            console.print(Panel(reply_text, title="Reply All", border_style="magenta"))
+            console.print("[bold magenta]Reply-all? (y/n)[/bold magenta]")
+            confirm = input("> ").strip().lower()
+            if confirm == "y":
+                try:
+                    t = item["type"]
+                    if t == "outlook":
+                        d = item["_data"]
+                        _outlook.reply_all(d["item_id"], d["email"]["subject"], d["email"]["from"], reply_text)
+                        do_archive(item)
+                    else:
+                        do_reply(item, reply_text)
+                    console.print("[green]Sent + done.[/green]")
+                    index += 1
+                except Exception as e:
+                    console.print(f"[red]Send failed: {e}[/red]")
+            else:
+                console.print("[dim]Cancelled.[/dim]")
+
+        elif cmd.startswith("P "):
+            # Pipe through reply-all: AI drafts reply from instruction
+            instruction = user_input[2:].strip()
+            if item["type"] == "outlook":
+                console.print(f"[dim]Drafting reply-all: \"{instruction}\"...[/dim]")
+                d = item["_data"]
+                draft = _outlook.pipe_through(
+                    d["item_id"], d["email"]["subject"], d["email"]["from"],
+                    item.get("body", ""), instruction, reply_all_flag=True,
+                )
+                if draft:
+                    console.print(Panel(draft, title="AI Draft — Reply All — Sent", border_style="green"))
+                    index += 1
+                else:
+                    console.print("[red]Draft failed — not sent[/red]")
+            else:
+                console.print("[yellow]Pipe-through only supported for Outlook.[/yellow]")
+
+        elif cmd.startswith("p "):
+            # Pipe through: AI drafts reply from instruction
+            instruction = user_input[2:].strip()
+            if item["type"] == "outlook":
+                console.print(f"[dim]Drafting reply: \"{instruction}\"...[/dim]")
+                d = item["_data"]
+                draft = _outlook.pipe_through(
+                    d["item_id"], d["email"]["subject"], d["email"]["from"],
+                    item.get("body", ""), instruction,
+                )
+                if draft:
+                    console.print(Panel(draft, title="AI Draft — Sent", border_style="green"))
+                    index += 1
+                else:
+                    console.print("[red]Draft failed — not sent[/red]")
+            else:
+                console.print("[yellow]Pipe-through only supported for Outlook. Use 'r <text>' for other types.[/yellow]")
 
         elif cmd.startswith("t "):
             task_text = user_input[2:].strip()

@@ -12,13 +12,18 @@ import subprocess
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
+import requests
 from rich.console import Console
 
 console = Console()
 
 # Track which workiq items have been "processed" (archived/deleted in ibx)
 PROCESSED_FILE = Path.home() / ".config" / "outlook" / "processed.json"
+
+# Power Automate webhook URL for archive/reply/reply-all
+OUTLOOK_WEBHOOK_URL = os.environ.get("OUTLOOK_WEBHOOK_URL", "")
 
 
 def load_processed():
@@ -188,16 +193,78 @@ def fetch_outlook_items():
     return items
 
 
-def archive(item_id):
-    """Mark item as processed (can't actually archive via workiq)."""
+def _call_webhook(action, subject, sender, reply_text=""):
+    """Call Power Automate webhook to archive/reply/reply-all."""
+    if not OUTLOOK_WEBHOOK_URL:
+        console.print("[yellow]OUTLOOK_WEBHOOK_URL not set — action skipped[/yellow]")
+        return False
+    payload = {
+        "subject": subject,
+        "sender": sender,
+        "action": action,
+    }
+    if reply_text:
+        payload["reply_text"] = reply_text
+    try:
+        r = requests.post(OUTLOOK_WEBHOOK_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        console.print(f"[red]Webhook error: {e}[/red]")
+        return False
+
+
+def archive(item_id, subject="", sender=""):
+    """Archive via Power Automate webhook, then mark locally processed."""
+    if subject and sender:
+        _call_webhook("archive", subject, sender)
     proc = load_processed()
     proc[item_id] = datetime.now().isoformat()
     save_processed(proc)
 
 
-def delete(item_id):
-    """Mark item as processed."""
-    archive(item_id)
+def delete(item_id, subject="", sender=""):
+    """Delete = archive for Outlook."""
+    archive(item_id, subject, sender)
+
+
+def reply(item_id, subject, sender, reply_text):
+    """Reply via Power Automate webhook, then mark processed."""
+    _call_webhook("reply", subject, sender, reply_text)
+    proc = load_processed()
+    proc[item_id] = datetime.now().isoformat()
+    save_processed(proc)
+
+
+def reply_all(item_id, subject, sender, reply_text):
+    """Reply-all via Power Automate webhook, then mark processed."""
+    _call_webhook("reply_all", subject, sender, reply_text)
+    proc = load_processed()
+    proc[item_id] = datetime.now().isoformat()
+    save_processed(proc)
+
+
+def pipe_through(item_id, subject, sender, body, instruction, reply_all_flag=False):
+    """Use workiq to draft a reply from a natural language instruction, then send."""
+    prompt = (
+        f"Draft a short, professional email reply.\n"
+        f"Original email from {sender}, subject: {subject}\n"
+        f"Original body: {body[:1000]}\n"
+        f"Instruction: {instruction}\n"
+        f"Output ONLY the reply body text, no greeting preamble, no signature."
+    )
+    draft = _run_workiq(prompt)
+    if not draft:
+        console.print("[red]Failed to generate reply via workiq[/red]")
+        return None
+    # Clean up workiq response artifacts
+    draft = re.sub(r'\[\d+\]\([^)]+\)', '', draft).strip()
+    action = "reply_all" if reply_all_flag else "reply"
+    _call_webhook(action, subject, sender, draft)
+    proc = load_processed()
+    proc[item_id] = datetime.now().isoformat()
+    save_processed(proc)
+    return draft
 
 
 def open_in_outlook(link):
@@ -209,6 +276,6 @@ def open_in_outlook(link):
 
 
 def reply_via_outlook(link):
-    """Open in Outlook for manual reply (can't send via workiq)."""
+    """Open in Outlook for manual reply (fallback)."""
     console.print("[dim](Opening in Outlook for reply...)[/dim]")
     open_in_outlook(link)
