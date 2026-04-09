@@ -751,6 +751,19 @@ def main():
 
     status_line = _build_status()
 
+    # If no items yet but slow sources still loading, wait for them
+    if not all_items and not _fetch_done.is_set():
+        slow_pending = [n for n in ("outlook", "teams") if n not in _source_counts]
+        if slow_pending:
+            console.print(f"[dim]  waiting for {', '.join(slow_pending)}...[/dim]")
+            _fetch_done.wait(timeout=150)
+            # Drain any late arrivals
+            with _bg_lock:
+                for it in _bg_injected:
+                    all_items.append(it)
+                _bg_injected.clear()
+            status_line = _build_status()
+
     if not all_items:
         _wait_for_autosign()
         console.print(f"\n[dim]Inbox zero.[/dim]  {status_line}")

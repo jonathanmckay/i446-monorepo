@@ -141,17 +141,17 @@ def fetch_teams_items():
     console.print("\n[bold]Teams[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "Show me my unread Teams 1:1 chat messages from other people (not from me). "
+        "Show me my unread Teams messages — both 1:1 DMs and group chats. "
         "Only include messages I have NOT yet read or replied to. "
         "For each, write exactly:\n"
-        "FROM: name\n"
+        "FROM: sender name (and group name if it's a group chat)\n"
         "SAYS: their message text\n"
         "Separate with ---\n"
-        "If there are no unread DMs, say 'No unread DMs'."
+        "If there are no unread messages, say 'No unread messages'."
     )
 
-    if not response or re.search(r'(?i)no (?:recent|unread|new)|no direct messages|no DMs|no 1:1', response):
-        console.print("  [dim]no recent Teams DMs[/dim]")
+    if not response or re.search(r'(?i)no (?:recent|unread|new)|no direct messages|no DMs|no 1:1|no unread messages', response):
+        console.print("  [dim]no unread Teams messages[/dim]")
         return items
 
     # Detect workiq refusal

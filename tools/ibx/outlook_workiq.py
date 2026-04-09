@@ -148,13 +148,11 @@ def fetch_outlook_items():
     console.print("\n[bold]Outlook[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "List every unread email in my inbox, including both Focused and Other tabs. "
-        "For each one give me:\n"
-        "FROM: full sender name and email address\n"
-        "DATE: exact date and time received in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)\n"
-        "SUBJECT: full subject line\n"
-        "BODY: the first 3 sentences of the email body, verbatim\n"
-        "Separate each email with ---. Do not summarize, group, or omit any."
+        "List my unread emails. For each give me:\n"
+        "FROM: sender name and email\n"
+        "SUBJECT: subject line\n"
+        "BODY: first 2 sentences\n"
+        "Separate with ---"
     )
 
     if not response or re.search(r'(?i)^NONE$|no unread|inbox is empty|no emails', response):

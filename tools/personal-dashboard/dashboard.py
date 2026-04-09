@@ -516,16 +516,20 @@ def api_data():
         "outlook": "#00b8d466",
         "teams": "#1249b466",
     }
-    # Compute blended daily avg response time (minutes) across all accounts
+    # Compute blended daily avg response time (minutes), weighted by message count
     blended_response = []
     for d in dates:
-        hours_list = []
+        total_hours = 0
+        total_count = 0
         for acct, day_map in email_by_account.items():
-            h = day_map.get(d, {}).get("avg_hours")
-            if h is not None:
-                hours_list.append(h)
-        if hours_list:
-            blended_response.append(round(sum(hours_list) / len(hours_list) * 60, 1))
+            entry = day_map.get(d, {})
+            h = entry.get("avg_hours")
+            c = entry.get("count", 0)
+            if h is not None and c > 0:
+                total_hours += h * c
+                total_count += c
+        if total_count > 0:
+            blended_response.append(round(total_hours / total_count * 60, 1))
         else:
             blended_response.append(None)
 
