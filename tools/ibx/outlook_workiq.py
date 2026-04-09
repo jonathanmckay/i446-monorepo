@@ -173,6 +173,11 @@ def fetch_outlook_items():
         if not from_str and not subject:
             continue
 
+        # Skip placeholder/template entries (workiq echoing the prompt format)
+        placeholder = re.compile(r'^[\s.…*_\-<>\[\]()]+$|^full\s|^first\s\d+\s')
+        if all(placeholder.match(v) or not v for v in [from_str, subject, body]):
+            continue
+
         item_id = _make_item_id(from_str, subject)
 
         # Skip already-processed items
