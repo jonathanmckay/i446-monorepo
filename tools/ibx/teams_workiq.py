@@ -141,12 +141,11 @@ def fetch_teams_items():
     console.print("\n[bold]Teams[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "List my most recent Teams direct messages from the last 24 hours. "
-        "Only include 1:1 chats, not group chats or channels. "
-        "For each one give me:\n"
-        "FROM: sender's full name\n"
-        "MESSAGE: the full message text\n"
-        "Separate each message with ---. Do not summarize or omit any."
+        "Show me my last 5 Teams 1:1 chat messages from other people (not from me). "
+        "For each, write exactly:\n"
+        "FROM: name\n"
+        "SAYS: their message text\n"
+        "Separate with ---"
     )
 
     if not response or re.search(r'(?i)no (?:recent|unread|new)|no direct messages|no DMs|no 1:1', response):
@@ -192,9 +191,9 @@ def fetch_teams_items():
                 from_str = re.sub(r'^FROM:\s*', '', bare, flags=re.IGNORECASE).strip()
             elif re.match(r'^DATE:', bare, re.IGNORECASE):
                 date_str = re.sub(r'^DATE:\s*', '', bare, flags=re.IGNORECASE).strip()
-            elif re.match(r'^MESSAGE:', bare, re.IGNORECASE):
-                message = re.sub(r'^MESSAGE:\s*', '', bare, flags=re.IGNORECASE).strip().strip('"')
-            elif message and not re.match(r'^(?:FROM|DATE|MESSAGE|LINK):', bare, re.IGNORECASE):
+            elif re.match(r'^(?:MESSAGE|SAYS):', bare, re.IGNORECASE):
+                message = re.sub(r'^(?:MESSAGE|SAYS):\s*', '', bare, flags=re.IGNORECASE).strip().strip('"')
+            elif message and not re.match(r'^(?:FROM|DATE|MESSAGE|SAYS|LINK):', bare, re.IGNORECASE):
                 message += " " + line_clean.strip('"')
 
         if not link and block_links:
@@ -204,6 +203,10 @@ def fetch_teams_items():
             link_idx += 1
 
         if not from_str and not message:
+            continue
+
+        # Skip own messages
+        if re.search(r'(?i)jonathan\s+mckay|jomckay|mckay@', from_str):
             continue
 
         # Clean markdown artifacts

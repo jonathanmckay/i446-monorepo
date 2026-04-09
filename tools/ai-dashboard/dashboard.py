@@ -301,11 +301,11 @@ def get_claude_stats():
 
 
 def get_copilot_stats():
-    """Get Copilot stats from llm-sessions.db
+    """Get Copilot stats from llm-sessions.db.
 
-    NOTE: Copilot input tokens are broken/unreliable in the database.
-    We ONLY use output_tokens for all calculations and cost estimates.
-    DO NOT add input_tokens to any Copilot queries or calculations.
+    For agent sessions: input_tokens = uncached input, cached_tokens stored separately.
+    Cost computed per-model (opus/sonnet pricing) using uncached input + output + cache reads.
+    For cli sessions: only output_tokens is reliable (legacy wrapper).
     """
     if not LLM_DB.exists():
         return None
@@ -313,25 +313,39 @@ def get_copilot_stats():
     conn = sqlite3.connect(f"file:{LLM_DB}?mode=ro", uri=True)
 
     # All-time stats
-    # NOTE: Deliberately NOT selecting input_tokens - they're broken for Copilot
     row = conn.execute("""
         SELECT
             COUNT(*) as sessions,
             SUM(message_count) as turns,
-            SUM(output_tokens) as output
+            SUM(CASE WHEN product = 'agent' THEN total_tokens ELSE output_tokens END) as tokens
         FROM sessions
         WHERE provider = 'copilot'
     """).fetchone()
 
-    sessions, turns, output = row if row else (0, 0, 0)
+    sessions, turns, tokens = row if row else (0, 0, 0)
 
-    # Output-only cost (Opus pricing)
-    # NOTE: Input costs excluded because input_tokens are unreliable for Copilot
-    total_cost = (output / 1_000_000) * PRICING["opus"]["output"]
+    # Per-model cost: use uncached input + output + cache read pricing
+    cost_rows = conn.execute("""
+        SELECT model, input_tokens, output_tokens,
+               COALESCE(cached_tokens, 0) as cached
+        FROM sessions
+        WHERE provider = 'copilot'
+    """).fetchall()
+
+    total_cost = 0.0
+    for model, inp, outp, cached in cost_rows:
+        model_str = (model or "").lower()
+        if "opus" in model_str:
+            prices = PRICING["opus"]
+        else:
+            prices = PRICING["sonnet"]
+        total_cost += (
+            (inp / 1_000_000) * prices["input"] +
+            (outp / 1_000_000) * prices["output"] +
+            (cached / 1_000_000) * prices["cache_read"]
+        )
 
     # Last 30 days
-    # For agent sessions: input_tokens = uncached input, total_tokens = uncached + output
-    # For cli sessions: only output_tokens is reliable
     month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     daily = conn.execute("""
         SELECT
@@ -347,10 +361,34 @@ def get_copilot_stats():
 
     conn.close()
 
+    # Per-model cost breakdown for display
+    model_breakdown = defaultdict(lambda: {"uncached": 0, "output": 0, "cached": 0, "cost": 0})
+    for model, inp, outp, cached in cost_rows:
+        model_str = (model or "").lower()
+        if "opus" in model_str:
+            key, prices = "Opus", PRICING["opus"]
+        elif "sonnet" in model_str:
+            key, prices = "Sonnet", PRICING["sonnet"]
+        elif "haiku" in model_str:
+            key, prices = "Haiku", PRICING["sonnet"]  # approx
+        else:
+            key, prices = "GPT", PRICING["sonnet"]  # approx
+        cost = (inp / 1e6) * prices["input"] + (outp / 1e6) * prices["output"] + (cached / 1e6) * prices["cache_read"]
+        model_breakdown[key]["uncached"] += inp
+        model_breakdown[key]["output"] += outp
+        model_breakdown[key]["cached"] += cached
+        model_breakdown[key]["cost"] += cost
+
     return {
         "total_sessions": sessions,
         "total_turns": turns,
         "total_cost": total_cost,
+        "total_tokens": tokens,
+        "model_breakdown": {k: {"cost": round(v["cost"], 2),
+                                 "uncached_m": round(v["uncached"] / 1e6, 1),
+                                 "output_m": round(v["output"] / 1e6, 2),
+                                 "cached_m": round(v["cached"] / 1e6, 1)}
+                            for k, v in model_breakdown.items()},
         "daily_activity": [
             {"date": d[0], "sessions": d[1], "turns": d[2], "output": d[3]}
             for d in daily
@@ -1271,7 +1309,7 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="card">
-                <h2>🚀 Copilot CLI</h2>
+                <h2>🚀 Copilot Agent</h2>
                 <div class="metric">
                     <span class="metric-label">Sessions</span>
                     <span class="metric-value">{{ copilot.total_sessions | default(0) }}</span>
@@ -1281,14 +1319,23 @@ HTML_TEMPLATE = """
                     <span class="metric-value">{{ copilot.total_turns | default(0) }}</span>
                 </div>
                 <div class="metric">
-                    <span class="metric-label">Cost (output only)</span>
-                    <span class="metric-value cost">${{ "%.2f" | format(copilot.total_cost | default(0)) }}</span>
+                    <span class="metric-label">Tokens (uncached in + out)</span>
+                    <span class="metric-value">{{ "{:,.0f}".format(copilot.total_tokens | default(0)) }}</span>
                 </div>
                 <div class="metric">
-                    <span class="metric-label" style="font-size: 0.85em; color: var(--muted);">
-                        ⚠️ Input costs excluded
-                    </span>
+                    <span class="metric-label">Est. Cost</span>
+                    <span class="metric-value cost">${{ "%.2f" | format(copilot.total_cost | default(0)) }}</span>
                 </div>
+                {% if copilot.model_breakdown %}
+                <div style="margin-top: 12px; font-size: 0.8em; color: var(--muted);">
+                    {% for model, mb in copilot.model_breakdown.items() %}
+                    <div style="display:flex; justify-content:space-between; padding: 2px 0;">
+                        <span>{{ model }}</span>
+                        <span>${{ "%.2f" | format(mb.cost) }} <span style="opacity:0.6">({{ mb.uncached_m }}M in · {{ mb.output_m }}M out · {{ mb.cached_m }}M cache)</span></span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
             </div>
 
             <div class="card">
