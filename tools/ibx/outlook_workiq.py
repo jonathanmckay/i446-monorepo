@@ -231,6 +231,10 @@ def fetch_outlook_items():
         if not from_str and not subject:
             continue
 
+        # Skip bridge emails (sent by ibx itself for PA processing)
+        if "[IBX]" in subject:
+            continue
+
         # Skip placeholder/template entries (workiq echoing the prompt format)
         placeholder = re.compile(r'^[\s.…*_\-<>\[\]()]+$|^full\s|^first\s\d+\s')
         if all(placeholder.match(v) or not v for v in [from_str, subject, body]):
