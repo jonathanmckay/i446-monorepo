@@ -1,0 +1,64 @@
+"""Regression tests for teams_workiq."""
+import ast
+from pathlib import Path
+
+TEAMS_PY = Path(__file__).parent / "teams_workiq.py"
+
+
+def test_teams_prompt_no_unread_request():
+    """
+    Bug: Asking workiq for 'unread' Teams messages causes refusal because
+    workiq cannot determine read/unread status. The prompt must ask for
+    'recent' messages instead.
+    """
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            # Find the _run_workiq call and check its string argument
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    # Check if this is _run_workiq(...)
+                    func_name = ""
+                    if isinstance(child.func, ast.Name):
+                        func_name = child.func.id
+                    elif isinstance(child.func, ast.Attribute):
+                        func_name = child.func.attr
+                    if func_name == "_run_workiq" and child.args:
+                        prompt_node = child.args[0]
+                        prompt_src = ast.get_source_segment(source, prompt_node)
+                        assert "unread" not in prompt_src.lower(), (
+                            "Teams prompt must not request 'unread' messages — "
+                            "workiq cannot determine read/unread status and will refuse"
+                        )
+                        return
+    raise AssertionError("_run_workiq call not found in fetch_teams_items")
+
+
+def test_teams_filters_group_chats():
+    """Teams fetch must filter out group chat messages (only show 1:1 DMs)."""
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "group" in func_source.lower(), (
+                "fetch_teams_items must filter group chat messages"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")
+
+
+def test_teams_skips_empty_messages():
+    """Teams items with no message text should be filtered out, not shown as '(no message text available)'."""
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "not message" in func_source or "if not message" in func_source, (
+                "fetch_teams_items must skip items with empty message text"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")
