@@ -42,7 +42,7 @@ EMAIL_GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 # 0分 sheet: column index (1-based) → label + domain
 POINTS_COLS = {
     25: {"label": "-1₦", "domain": None,    "color": "#9e9e9e"},  # Y
-    26: {"label": "0₲",  "domain": None,    "color": "#616161"},  # Z
+    26: {"label": "0₲",  "domain": None,    "color": "#0a0a0a"},  # Z — Abyss
     27: {"label": "i9",  "domain": "i9",    "color": "#2979ff"},  # AA
     28: {"label": "m5",  "domain": "m5x2",  "color": "#d50032"},  # AB
     29: {"label": "个",  "domain": "g245",  "color": "#00e676"},  # AC
@@ -77,7 +77,7 @@ PROJECT_COLORS = {
     "xk88":  "#e65100",  # Molten
     "epcn":  "#00bfa5",  # Miami Vice
     "家":    "#fd6c1d",  # same as xk87
-    "睡觉":  "#0a0a0a",  # Abyss
+    "睡觉":  "#303030",  # Shadow
     "no project": "#424242",
 }
 
@@ -693,7 +693,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const taskSeries = [
     { label: '0₦', data: data.tasks_neon,    bg: '#9e9e9e', border: '#bbb' },
     { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff88', border: '#7c4dff' },
-    { label: '1₦', data: data.tasks_1n,      bg: '#00e67688', border: '#00e676' },
+    { label: '1₦', data: data.tasks_1n,      bg: '#1249b488', border: '#1249b4' },
     { label: 'other', data: data.tasks_other, bg: '#2979ff44', border: '#2979ff' },
   ];
   new Chart(document.getElementById('tasksChart'), {

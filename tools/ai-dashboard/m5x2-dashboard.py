@@ -125,6 +125,84 @@ def get_daily_tokens(stats, days=30):
     return [d for d in daily if d["date"] >= cutoff]
 
 
+def get_daily_turns(days=30):
+    """Compute daily turns per user from JSONL session logs (live, not from stats-cache).
+
+    A 'turn' = one assistant message (type=assistant with a message).
+    Returns {"daily": [{"date": ..., "jm": N, "lx": N, ...}], "users": ["jm", "lx", ...]}
+    """
+    pacific = pytz.timezone("America/Los_Angeles")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    base = Path.home() / ".claude" / "projects"
+
+    # Map directory prefixes to user IDs
+    user_dirs = {"jm": base / "-Users-mckay"}
+    for uid in CONFIG.get("users", {}):
+        if uid == "jm":
+            continue
+        repo_dir = STATS_REPO / uid
+        if repo_dir.exists():
+            user_dirs[uid] = repo_dir
+
+    daily_by_user = defaultdict(Counter)  # date -> {user: count}
+    all_users = set()
+
+    for uid, session_dir in user_dirs.items():
+        if uid != "jm":
+            # Non-JM: read precomputed session-stats.json if available
+            stats_file = session_dir / "session-stats.json"
+            if stats_file.exists():
+                try:
+                    ss = json.load(open(stats_file))
+                    for entry in ss.get("daily_turns", []):
+                        d = entry.get("date", "")
+                        count = entry.get("turns", 0)
+                        if d and count:
+                            daily_by_user[d][uid] += count
+                            all_users.add(uid)
+                except Exception:
+                    pass
+            # Also try JSONL if available
+            jsonl_dir = session_dir
+        else:
+            jsonl_dir = session_dir
+
+        if not jsonl_dir.exists():
+            continue
+
+        for fpath in jsonl_dir.glob("*.jsonl"):
+            try:
+                with open(fpath) as fh:
+                    for line in fh:
+                        obj = json.loads(line.strip())
+                        if obj.get("type") != "assistant" or "message" not in obj:
+                            continue
+                        ts_str = obj.get("timestamp")
+                        if not ts_str:
+                            continue
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if ts < cutoff:
+                            continue
+                        day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+                        daily_by_user[day][uid] += 1
+                        all_users.add(uid)
+            except Exception:
+                continue
+
+    # Build sorted daily list
+    all_dates = sorted(daily_by_user.keys())
+    users = sorted(all_users)
+    daily = []
+    for d in all_dates:
+        entry = {"date": d}
+        for u in users:
+            entry[u] = daily_by_user[d].get(u, 0)
+        entry["total"] = sum(entry.get(u, 0) for u in users)
+        daily.append(entry)
+
+    return {"daily": daily, "users": users}
+
+
 def get_github_activity():
     """Get personal GitHub commit activity (last 90 days)"""
     try:
@@ -872,6 +950,18 @@ HTML_TEMPLATE = """
             </table>
         </div>
 
+        <!-- Turns / Day (top chart, full width) -->
+        <div class="card" style="margin-bottom: 24px;">
+            <h2>Turns / Day (Last 30d)</h2>
+            <div class="chart">
+                <div class="chart-container">
+                    <div class="y-axis" id="turns-y-axis"></div>
+                    <div class="bar-chart" id="turns-chart"></div>
+                </div>
+            </div>
+            <div style="margin-top: 8px; font-size: 0.8em; color: #999; display: flex; gap: 16px;" id="turns-legend"></div>
+        </div>
+
         <!-- Charts -->
         <div class="grid">
             <div class="card">
@@ -1395,6 +1485,7 @@ def dashboard():
         daily_tokens = get_daily_tokens(stats)
 
     github = get_github_activity()
+    turns_data = get_daily_turns()
 
     # Session stats: JM reads local JSONL; others read precomputed JSON from stats repo
     is_jm = selected_user in ("jm", "")
@@ -1451,6 +1542,8 @@ def dashboard():
         skill_names=skills["skills"],
         latency=latency,
         latency_daily=latency["daily"],
+        turns_daily=turns_data["daily"],
+        turns_users=turns_data["users"],
         stats_date=stats.get("lastComputedDate", "unknown"),
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
