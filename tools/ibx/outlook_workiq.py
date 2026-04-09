@@ -112,11 +112,14 @@ def _run_workiq(question):
     try:
         result = subprocess.run(
             [WORKIQ_BIN, "ask", "-q", question],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=180,
         )
         return result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        console.print(f"  [yellow]workiq error: {e}[/yellow]")
+    except subprocess.TimeoutExpired:
+        console.print("  [dim]workiq timed out — skipping[/dim]")
+        return ""
+    except FileNotFoundError:
+        console.print("  [dim]workiq not found — skipping[/dim]")
         return ""
 
 

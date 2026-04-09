@@ -82,3 +82,28 @@ def test_teams_archive_no_workiq_call():
             )
             return
     raise AssertionError("archive function not found")
+
+
+def test_workiq_timeout_no_raw_error():
+    """
+    Bug: workiq timeout printed raw subprocess error with full command path,
+    e.g. "Command '['/Users/...workiq', 'ask', '-q', '...']' timed out after 120 seconds"
+
+    Fix: catch TimeoutExpired separately and print a clean message.
+    """
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_workiq":
+            func_source = ast.get_source_segment(source, node)
+            # Must NOT have a generic f-string error with {e} for timeout
+            assert "workiq error: {e}" not in func_source, (
+                "_run_workiq must not print raw exception for timeouts — "
+                "use a clean message like 'workiq timed out'"
+            )
+            # Must handle TimeoutExpired specifically
+            assert "TimeoutExpired" in func_source, (
+                "_run_workiq must catch TimeoutExpired explicitly"
+            )
+            return
+    raise AssertionError("_run_workiq function not found")

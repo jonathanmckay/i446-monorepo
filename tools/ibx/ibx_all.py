@@ -751,14 +751,14 @@ def main():
 
     status_line = _build_status()
 
-    # If slow sources still loading, wait for them
-    if not _fetch_done.is_set():
+    # Only block on slow sources if we have NOTHING to show yet
+    if not all_items and not _fetch_done.is_set():
         slow_pending = [n for n in ("outlook", "teams") if n not in _source_counts]
         if slow_pending:
             console.print(f"[dim]  waiting for {', '.join(slow_pending)}...[/dim]")
         _fetch_done.wait(timeout=150)
 
-    # Always drain late arrivals after fetch completes (regardless of wait path)
+    # Drain any late arrivals that have come in so far
     import time as _time
     _time.sleep(0.3)  # give _bg_drainer a moment to finish its final drain
     with _bg_lock:
@@ -768,7 +768,6 @@ def main():
                 all_items.append(it)
                 seen_uids.add(uid)
         _bg_injected.clear()
-    # Also drain anything still in _incoming directly
     while not _incoming.empty():
         try:
             it = _incoming.get_nowait()
