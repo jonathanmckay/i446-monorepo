@@ -501,7 +501,7 @@ def fetch_slack():
                         count += 1
                 except Exception as e:
                     console.print(f"  [yellow]channel error: {e}[/yellow]")
-            console.print(f"  [dim]✓ {workspace}: {count} unread[/dim]")
+            console.print(f"  [dim]✓ {workspace}: {count} recent[/dim]")
         except Exception as e:
             console.print(f"  [yellow]✗ {workspace}: {e}[/yellow]")
 

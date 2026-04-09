@@ -102,7 +102,17 @@ def fetch_recent_channels(token, days=7):
     return result
 
 def build_thread(token, channel, self_id):
-    """Build a display thread from a Slack channel."""
+    """Build a display thread from a Slack channel. Returns None if no unread messages."""
+    # Check read state — skip channels where all messages have been read
+    try:
+        info = slack_get(token, "conversations.info", channel=channel["id"])
+        ch_info = info.get("channel", {})
+        last_read = ch_info.get("last_read", "0")
+        if int(ch_info.get("unread_count", 0)) == 0 and last_read != "0":
+            return None
+    except Exception:
+        pass  # If info fails, fall through and show the thread
+
     msgs_data = slack_get(token, "conversations.history", channel=channel["id"], limit=15)
     msgs = msgs_data.get("messages", [])
     if not msgs:
