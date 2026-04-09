@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
 outlook_workiq — Outlook emails via workiq natural language interface.
-Read-only: fetches email summaries, renders as ibx cards.
-Actions open Outlook in browser since we lack Graph API write access.
+Read-only fetch via workiq. Write actions (archive/reply) via Gmail-to-Outlook
+bridge: sends coded emails that Power Automate picks up and executes.
 """
 
+import base64
 import json
 import os
 import re
 import subprocess
 import webbrowser
 from datetime import datetime
+from email.mime.text import MIMEText
 from pathlib import Path
-from urllib.parse import quote
 
-import requests
 from rich.console import Console
 
 console = Console()
@@ -22,8 +22,12 @@ console = Console()
 # Track which workiq items have been "processed" (archived/deleted in ibx)
 PROCESSED_FILE = Path.home() / ".config" / "outlook" / "processed.json"
 
-# Power Automate webhook URL for archive/reply/reply-all
-OUTLOOK_WEBHOOK_URL = os.environ.get("OUTLOOK_WEBHOOK_URL", "")
+# Target Outlook address for the bridge emails
+OUTLOOK_TARGET = os.environ.get("OUTLOOK_TARGET", "jomckay@microsoft.com")
+# Gmail sender for bridge emails
+BRIDGE_FROM = "mckay@m5x2.com"
+# Subject prefix for bridge emails — PA filters on this
+BRIDGE_PREFIX = "[IBX]"
 
 
 def load_processed():
@@ -206,34 +210,57 @@ def fetch_outlook_items():
     return items
 
 
-def _call_webhook(action, subject, sender, reply_text=""):
-    """Call Power Automate webhook to archive/reply/reply-all."""
-    if not OUTLOOK_WEBHOOK_URL:
-        console.print("[yellow]OUTLOOK_WEBHOOK_URL not set — action skipped[/yellow]")
-        return False
-    payload = {
-        "subject": subject,
-        "sender": sender,
-        "action": action,
-    }
-    if reply_text:
-        payload["reply_text"] = reply_text
+def _get_gmail_service():
+    """Get the Gmail service from ibx module (lazy import to avoid circular deps)."""
+    import ibx as _ibx
+    acct = _ibx.ACCOUNTS[0]  # m5c7 account
+    return _ibx.get_gmail_service(acct["tokens"], acct["creds"])
+
+
+def _send_bridge_email(action, subject, sender, reply_text=""):
+    """Send a coded email from Gmail to Outlook that Power Automate will process.
+
+    Subject format: [IBX] action | original_subject
+    Body: JSON with sender + reply_text for PA to parse.
+    """
     try:
-        r = requests.post(OUTLOOK_WEBHOOK_URL, json=payload, timeout=30)
-        r.raise_for_status()
+        svc = _get_gmail_service()
+    except Exception as e:
+        console.print(f"[red]Gmail bridge auth failed: {e}[/red]")
+        return False
+
+    body_json = json.dumps({
+        "sender": sender,
+        "original_subject": subject,
+        "action": action,
+        "reply_text": reply_text,
+    })
+
+    msg = MIMEText(body_json)
+    msg["To"] = OUTLOOK_TARGET
+    msg["From"] = BRIDGE_FROM
+    msg["Subject"] = f"{BRIDGE_PREFIX} {action} | {subject}"
+
+    try:
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId="me", body={"raw": raw}).execute()
         return True
     except Exception as e:
-        console.print(f"[red]Webhook error: {e}[/red]")
+        console.print(f"[red]Bridge send failed: {e}[/red]")
         return False
 
 
-def archive(item_id, subject="", sender=""):
-    """Archive via Power Automate webhook, then mark locally processed."""
-    if subject and sender:
-        _call_webhook("archive", subject, sender)
+def _mark_processed(item_id):
     proc = load_processed()
     proc[item_id] = datetime.now().isoformat()
     save_processed(proc)
+
+
+def archive(item_id, subject="", sender=""):
+    """Archive via Gmail→PA bridge, then mark locally processed."""
+    if subject and sender:
+        _send_bridge_email("archive", subject, sender)
+    _mark_processed(item_id)
 
 
 def delete(item_id, subject="", sender=""):
@@ -242,19 +269,15 @@ def delete(item_id, subject="", sender=""):
 
 
 def reply(item_id, subject, sender, reply_text):
-    """Reply via Power Automate webhook, then mark processed."""
-    _call_webhook("reply", subject, sender, reply_text)
-    proc = load_processed()
-    proc[item_id] = datetime.now().isoformat()
-    save_processed(proc)
+    """Reply via Gmail→PA bridge, then mark processed."""
+    _send_bridge_email("reply", subject, sender, reply_text)
+    _mark_processed(item_id)
 
 
 def reply_all(item_id, subject, sender, reply_text):
-    """Reply-all via Power Automate webhook, then mark processed."""
-    _call_webhook("reply_all", subject, sender, reply_text)
-    proc = load_processed()
-    proc[item_id] = datetime.now().isoformat()
-    save_processed(proc)
+    """Reply-all via Gmail→PA bridge, then mark processed."""
+    _send_bridge_email("reply_all", subject, sender, reply_text)
+    _mark_processed(item_id)
 
 
 def pipe_through(item_id, subject, sender, body, instruction, reply_all_flag=False):
@@ -270,13 +293,10 @@ def pipe_through(item_id, subject, sender, body, instruction, reply_all_flag=Fal
     if not draft:
         console.print("[red]Failed to generate reply via workiq[/red]")
         return None
-    # Clean up workiq response artifacts
     draft = re.sub(r'\[\d+\]\([^)]+\)', '', draft).strip()
     action = "reply_all" if reply_all_flag else "reply"
-    _call_webhook(action, subject, sender, draft)
-    proc = load_processed()
-    proc[item_id] = datetime.now().isoformat()
-    save_processed(proc)
+    _send_bridge_email(action, subject, sender, draft)
+    _mark_processed(item_id)
     return draft
 
 
