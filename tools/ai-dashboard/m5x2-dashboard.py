@@ -146,31 +146,12 @@ def get_daily_turns(days=30):
 
     daily_by_user = defaultdict(Counter)  # date -> {user: count}
     all_users = set()
+    cutoff_str = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    for uid, session_dir in user_dirs.items():
-        if uid != "jm":
-            # Non-JM: read precomputed session-stats.json if available
-            stats_file = session_dir / "session-stats.json"
-            if stats_file.exists():
-                try:
-                    ss = json.load(open(stats_file))
-                    for entry in ss.get("daily_turns", []):
-                        d = entry.get("date", "")
-                        count = entry.get("turns", 0)
-                        if d and count:
-                            daily_by_user[d][uid] += count
-                            all_users.add(uid)
-                except Exception:
-                    pass
-            # Also try JSONL if available
-            jsonl_dir = session_dir
-        else:
-            jsonl_dir = session_dir
-
-        if not jsonl_dir.exists():
-            continue
-
-        for fpath in jsonl_dir.glob("*.jsonl"):
+    # JM: compute from local JSONL session files (live data)
+    jm_dir = base / "-Users-mckay"
+    if jm_dir.exists():
+        for fpath in jm_dir.glob("*.jsonl"):
             try:
                 with open(fpath) as fh:
                     for line in fh:
@@ -184,10 +165,29 @@ def get_daily_turns(days=30):
                         if ts < cutoff:
                             continue
                         day = ts.astimezone(pacific).strftime("%Y-%m-%d")
-                        daily_by_user[day][uid] += 1
-                        all_users.add(uid)
+                        daily_by_user[day]["jm"] += 1
+                        all_users.add("jm")
             except Exception:
                 continue
+
+    # Other users: read from stats-cache.json in the shared stats repo
+    # Uses messageCount from dailyActivity as proxy for turns
+    for uid in CONFIG.get("users", {}):
+        if uid == "jm":
+            continue
+        stats_file = STATS_REPO / uid / "stats-cache.json"
+        if not stats_file.exists():
+            continue
+        try:
+            user_stats = json.loads(stats_file.read_text())
+            for entry in user_stats.get("dailyActivity", []):
+                d = entry.get("date", "")
+                count = entry.get("messageCount", 0)
+                if d >= cutoff_str and count > 0:
+                    daily_by_user[d][uid] += count
+                    all_users.add(uid)
+        except Exception:
+            continue
 
     # Build sorted daily list
     all_dates = sorted(daily_by_user.keys())

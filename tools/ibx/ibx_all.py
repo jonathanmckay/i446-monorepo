@@ -643,6 +643,18 @@ def main():
                    f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
                    f"[blue]{len(slack_items)} slack[/blue])")
 
+    # If no items yet but Outlook is still loading, wait for it
+    if not all_items and not _outlook_done.is_set():
+        console.print("[dim]  waiting for Outlook...[/dim]")
+        _outlook_done.wait(timeout=150)
+        outlook_items = list(_outlook_result)
+        _outlook_result.clear()
+        all_items.extend(outlook_items)
+        status_line = (f"({email_parts}  "
+                       f"[cyan]{len(outlook_items)} outlook[/cyan]  "
+                       f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
+                       f"[blue]{len(slack_items)} slack[/blue])")
+
     if not all_items:
         _wait_for_autosign()
         console.print(f"\n[dim]Inbox zero.[/dim]  {status_line}")
