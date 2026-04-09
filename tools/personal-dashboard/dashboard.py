@@ -536,13 +536,17 @@ def api_data():
         "borderColor": "#aa00ff",
         "backgroundColor": "transparent",
         "borderWidth": 2,
-        "pointRadius": 2,
-        "tension": 0.3,
+        "pointRadius": 3,
+        "tension": 0,
         "spanGaps": True,
         "yAxisID": "y",
     })
-    # Per-account count bars (stacked)
-    for acct, day_map in sorted(email_by_account.items()):
+    # Per-account count bars (stacked) — ordered so m5x2+slack are adjacent
+    EMAIL_BAR_ORDER = ["m5x2 gmail", "slack", "imessage", "s897 gmail"]
+    for acct in EMAIL_BAR_ORDER:
+        day_map = email_by_account.get(acct, {})
+        if not day_map:
+            continue
         email_datasets.append({
             "type": "bar",
             "label": acct,
@@ -551,6 +555,17 @@ def api_data():
             "borderWidth": 0,
             "yAxisID": "y2",
         })
+    # Any accounts not in the explicit order
+    for acct, day_map in sorted(email_by_account.items()):
+        if acct not in EMAIL_BAR_ORDER:
+            email_datasets.append({
+                "type": "bar",
+                "label": acct,
+                "data": [day_map.get(d, {}).get("count", 0) for d in dates],
+                "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
+                "borderWidth": 0,
+                "yAxisID": "y2",
+            })
 
     # Summary stats
     total_points = {label: sum(points_raw.get(d, {}).get(label, 0) for d in dates)
@@ -680,7 +695,21 @@ fetch('/api/data').then(r => r.json()).then(data => {
   new Chart(document.getElementById('pointsChart'), {
     type: 'bar',
     data: { labels, datasets: data.points.datasets },
-    options: { ...CHART_DEFAULTS }
+    options: {
+      ...CHART_DEFAULTS,
+      scales: {
+        ...CHART_DEFAULTS.scales,
+        y: {
+          ...CHART_DEFAULTS.scales.y,
+          max: 2160,
+          ticks: {
+            ...CHART_DEFAULTS.scales.y.ticks,
+            stepSize: 360,
+            callback: v => [0,360,720,1080,1440,2160].includes(v) ? v : ''
+          }
+        }
+      }
+    }
   });
 
   // Time chart
@@ -717,7 +746,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
   taskSeries.forEach(s => {
     const b = document.createElement('div');
     b.className = 'badge';
-    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.border};margin-right:4px;vertical-align:middle;"></span>${s.label}`;
+    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.bg};margin-right:4px;vertical-align:middle;"></span>${s.label}`;
     tkEl.appendChild(b);
   });
 
@@ -769,9 +798,9 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const emLegend = [
     ['avg response', '#aa00ff', 'line'],
     ['m5x2 gmail', '#d50032', 'bar'],
-    ['jbm gmail', '#1b5e20', 'bar'],
-    ['imessage', '#34c759', 'bar'],
     ['slack', '#9b0023', 'bar'],
+    ['imessage', '#34c759', 'bar'],
+    ['jbm gmail', '#1b5e20', 'bar'],
   ];
   emLegend.forEach(([label, color, type]) => {
     const b = document.createElement('div');
