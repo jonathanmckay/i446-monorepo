@@ -543,7 +543,7 @@ def api_data():
         "yAxisID": "y",
     })
     # Per-account count bars (stacked) — ordered so m5x2+slack are adjacent
-    EMAIL_BAR_ORDER = ["m5x2 gmail", "outlook", "slack", "imessage", "s897 gmail"]
+    EMAIL_BAR_ORDER = ["outlook", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
     for acct in EMAIL_BAR_ORDER:
         day_map = email_by_account.get(acct, {})
         if not day_map:
@@ -799,10 +799,10 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const emLegend = [
     ['avg response', '#aa00ff', 'line'],
     ['m5x2 gmail', '#d50032', 'bar'],
-    ['outlook', '#00b8d4', 'bar'],
     ['slack', '#9b0023', 'bar'],
     ['imessage', '#34c759', 'bar'],
     ['jbm gmail', '#1b5e20', 'bar'],
+    ['outlook', '#00b8d4', 'bar'],
   ];
   emLegend.forEach(([label, color, type]) => {
     const b = document.createElement('div');
