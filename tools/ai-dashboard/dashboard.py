@@ -330,14 +330,15 @@ def get_copilot_stats():
     total_cost = (output / 1_000_000) * PRICING["opus"]["output"]
 
     # Last 30 days
-    # NOTE: Deliberately NOT selecting input_tokens - they're broken for Copilot
+    # For agent sessions: input_tokens = uncached input, total_tokens = uncached + output
+    # For cli sessions: only output_tokens is reliable
     month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     daily = conn.execute("""
         SELECT
             DATE(start_time) as day,
             COUNT(*) as sessions,
             SUM(message_count) as messages,
-            SUM(output_tokens) as output
+            SUM(CASE WHEN product = 'agent' THEN total_tokens ELSE output_tokens END) as output
         FROM sessions
         WHERE provider = 'copilot' AND DATE(start_time) >= ?
         GROUP BY day

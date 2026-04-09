@@ -27,6 +27,12 @@ try:
 except ImportError:
     _outlook_available = False
 
+try:
+    import teams_workiq as _teams
+    _teams_available = True
+except ImportError:
+    _teams_available = False
+
 # ── Auto-sign integration (optional — skipped if module not found) ────────────
 _AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
 sys.path.insert(0, str(_AUTOSIGN_DIR))
@@ -54,12 +60,14 @@ TYPE_STYLE = {
     "imsg":  "bold magenta",
     "slack": "bold blue",
     "outlook": "bold cyan",
+    "teams": "bold yellow",
 }
 TYPE_LABEL = {
     "email": "EMAIL",
     "imsg":  "IMSG",
     "slack": "SLACK",
     "outlook": "OUTLOOK",
+    "teams": "TEAMS",
 }
 
 # ── Normalize items ───────────────────────────────────────────────────────────
@@ -269,6 +277,8 @@ def do_archive(item):
     elif t == "slack":
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])
+    elif t == "teams":
+        _teams.archive(item["_data"]["item_id"])
 
 def do_delete(item):
     t = item["type"]
@@ -288,6 +298,8 @@ def do_delete(item):
         # Slack: just mark read (can't delete others' messages)
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])
+    elif t == "teams":
+        _teams.delete(item["_data"]["item_id"])
 
 def do_reply(item, reply_text):
     t = item["type"]
@@ -301,7 +313,11 @@ def do_reply(item, reply_text):
     elif t == "slack":
         d = item["_data"]
         _slack.send_reply(d["token"], d["thread"]["channel_id"], reply_text)
-    if t != "outlook":  # outlook.reply() already marks processed + archives
+    elif t == "teams":
+        # Can't send via workiq — open Teams for reply
+        _teams.reply_via_teams(item["_data"].get("link", ""))
+        console.print("[dim](Opened Teams for reply — mark done manually)[/dim]")
+    if t not in ("outlook", "teams"):  # these handle their own archiving
         do_archive(item)
 
 def do_open(item):
@@ -322,6 +338,8 @@ def do_open(item):
         d = item["_data"]
         ch = d["thread"]["channel_id"]
         url = f"https://app.slack.com/client/T/{ch}"
+    elif t == "teams":
+        url = item["_data"].get("link", "")
     else:
         return
     if url:
@@ -331,7 +349,7 @@ def do_open(item):
 
 def ask_claude(item, user_input):
     t = item["type"]
-    type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM", "outlook": "Outlook email"}[t]
+    type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM", "outlook": "Outlook email", "teams": "Teams DM"}[t]
     prompt = f"""You are a personal assistant for Jonathan McKay.
 Given an inbound {type_label} and a user instruction, respond with JSON only.
 
@@ -518,6 +536,16 @@ def fetch_outlook():
         console.print(f"  [yellow]Outlook error: {e}[/yellow]")
         return []
 
+def fetch_teams():
+    """Fetch Teams DMs via workiq natural language interface."""
+    if not _teams_available:
+        return []
+    try:
+        return _teams.fetch_teams_items()
+    except Exception as e:
+        console.print(f"  [yellow]Teams error: {e}[/yellow]")
+        return []
+
 # ── Background poll ───────────────────────────────────────────────────────────
 
 def _item_uid(item):
@@ -530,6 +558,8 @@ def _item_uid(item):
         return ("imsg", item["_data"]["thread"]["chat_identifier"])
     elif item["type"] == "slack":
         return ("slack", item["_data"]["thread"]["channel_id"])
+    elif item["type"] == "teams":
+        return ("teams", item["_data"]["item_id"])
     return None
 
 
@@ -611,30 +641,42 @@ def set_term_color(color):
 def main():
     console.print(Rule("[bold]Inbox 0[/bold]", style="dim"))
 
-    # Start Outlook fetch in background (slow — runs via workiq)
+    # Start Outlook + Teams fetch in background (slow — runs via workiq)
     _outlook_result = []
     _outlook_done = threading.Event()
+    _teams_result = []
+    _teams_done = threading.Event()
     def _bg_outlook():
         _outlook_result.extend(fetch_outlook())
         _outlook_done.set()
+    def _bg_teams():
+        _teams_result.extend(fetch_teams())
+        _teams_done.set()
     if _outlook_available:
         threading.Thread(target=_bg_outlook, daemon=True).start()
     else:
         _outlook_done.set()
+    if _teams_available:
+        threading.Thread(target=_bg_teams, daemon=True).start()
+    else:
+        _teams_done.set()
 
     email_items, per_account = fetch_emails()
     imsg_items = fetch_imsgs()
     slack_items = fetch_slack()
 
-    # Wait up to 5s for Outlook if it hasn't finished yet, then merge what we have
+    # Wait up to 5s for Outlook/Teams if they haven't finished yet
     _outlook_done.wait(timeout=5)
+    _teams_done.wait(timeout=5)
     outlook_items = list(_outlook_result)
+    teams_items = list(_teams_result)
 
-    # Merge: Slack sorted by ts (most recent first), emails/outlook/imsgs in fetch order
+    # Merge: Slack sorted by ts (most recent first), others in fetch order
     all_items = (
         sorted(slack_items, key=lambda x: -x["ts"]) +
         email_items +
         outlook_items +
+        teams_items +
         imsg_items
     )
 
@@ -646,24 +688,33 @@ def main():
 
     status_line = (f"({email_parts}  "
                    f"[cyan]{len(outlook_items)} outlook[/cyan]  "
+                   f"[yellow]{len(teams_items)} teams[/yellow]  "
                    f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
                    f"[blue]{len(slack_items)} slack[/blue])")
 
-    # If Outlook is still loading, always wait for it (workiq takes 60-120s)
-    if not _outlook_done.is_set():
-        console.print("[dim]  waiting for Outlook...[/dim]")
+    # If Outlook/Teams still loading, wait for them (workiq takes 60-120s)
+    if not _outlook_done.is_set() or not _teams_done.is_set():
+        if not _outlook_done.is_set():
+            console.print("[dim]  waiting for Outlook...[/dim]")
+        if not _teams_done.is_set():
+            console.print("[dim]  waiting for Teams...[/dim]")
         _outlook_done.wait(timeout=150)
+        _teams_done.wait(timeout=150)
         new_outlook = list(_outlook_result)
+        new_teams = list(_teams_result)
         _outlook_result.clear()
-        if new_outlook:
-            existing_uids = {_item_uid(it) for it in all_items}
-            added = [it for it in new_outlook if _item_uid(it) not in existing_uids]
-            all_items.extend(added)
-            outlook_items = outlook_items + added
-            status_line = (f"({email_parts}  "
-                           f"[cyan]{len(outlook_items)} outlook[/cyan]  "
-                           f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
-                           f"[blue]{len(slack_items)} slack[/blue])")
+        _teams_result.clear()
+        existing_uids = {_item_uid(it) for it in all_items}
+        added_outlook = [it for it in new_outlook if _item_uid(it) not in existing_uids]
+        added_teams = [it for it in new_teams if _item_uid(it) not in existing_uids]
+        all_items.extend(added_outlook + added_teams)
+        outlook_items = outlook_items + added_outlook
+        teams_items = teams_items + added_teams
+        status_line = (f"({email_parts}  "
+                       f"[cyan]{len(outlook_items)} outlook[/cyan]  "
+                       f"[yellow]{len(teams_items)} teams[/yellow]  "
+                       f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
+                       f"[blue]{len(slack_items)} slack[/blue])")
 
     if not all_items:
         _wait_for_autosign()

@@ -94,6 +94,7 @@ def build_sessions(blocks):
     sessions = defaultdict(lambda: {
         "input_tokens": 0,
         "output_tokens": 0,
+        "cached_tokens": 0,
         "message_count": 0,
         "model": None,
         "start_time": None,
@@ -122,6 +123,7 @@ def build_sessions(blocks):
         if kind == "assistant_usage":
             s["input_tokens"] += metrics.get("input_tokens", 0)
             s["output_tokens"] += metrics.get("output_tokens", 0)
+            s["cached_tokens"] += metrics.get("cache_read_tokens", 0)
             s["duration_ms"] += metrics.get("duration", 0)
             s["message_count"] += 1
             model = props.get("model")
@@ -152,18 +154,21 @@ def upsert_sessions(sessions):
         # Use copilot-agent- prefix to avoid colliding with copilot-track.sh entries
         db_sid = f"copilot-agent-{sid[:12]}"
 
+        uncached_input = s["input_tokens"] - s["cached_tokens"]
+
         conn.execute("""
             INSERT INTO sessions
                 (session_id, provider, product, model, start_time, end_time,
                  message_count, input_tokens, output_tokens, total_tokens,
-                 cost_usd, status, user_id)
-            VALUES (?, 'copilot', 'agent', ?, ?, ?, ?, ?, ?, ?, 0.0, 'completed', 'jm')
+                 cached_tokens, cost_usd, status, user_id)
+            VALUES (?, 'copilot', 'agent', ?, ?, ?, ?, ?, ?, ?, ?, 0.0, 'completed', 'jm')
             ON CONFLICT(session_id) DO UPDATE SET
                 end_time = excluded.end_time,
                 message_count = MAX(sessions.message_count, excluded.message_count),
                 input_tokens = excluded.input_tokens,
                 output_tokens = excluded.output_tokens,
                 total_tokens = excluded.total_tokens,
+                cached_tokens = excluded.cached_tokens,
                 model = COALESCE(excluded.model, sessions.model)
         """, (
             db_sid,
@@ -171,9 +176,10 @@ def upsert_sessions(sessions):
             s["start_time"],
             s["end_time"],
             s["message_count"],
-            s["input_tokens"],
+            uncached_input,          # input_tokens = uncached only
             s["output_tokens"],
-            s["input_tokens"] + s["output_tokens"],
+            uncached_input + s["output_tokens"],  # total = uncached + output
+            s["cached_tokens"],
         ))
         count += 1
 
