@@ -1093,6 +1093,45 @@ HTML_TEMPLATE = """
             }
         }
 
+        // --- Turns chart (stacked by user) ---
+        const turnsDaily = {{ turns_daily | tojson | safe }};
+        const turnsUsers = {{ turns_users | tojson | safe }};
+        const turnsChart = document.getElementById('turns-chart');
+        const turnsLegend = document.getElementById('turns-legend');
+        const USER_COLORS = {jm: '#4ade80', lx: '#60a5fa', ian: '#f97316', matt: '#a78bfa'};
+
+        const maxTurns = Math.max(...turnsDaily.map(d => d.total || 0), 1);
+        buildYAxis('turns-y-axis', maxTurns, 4);
+
+        turnsDaily.forEach(day => {
+            const barPct = (day.total / maxTurns) * 100;
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = `flex:1;min-width:8px;max-width:40px;height:${barPct}%;display:flex;flex-direction:column;justify-content:flex-end;position:relative;`;
+            wrapper.title = `${day.date}: ${day.total} turns (${turnsUsers.map(u => u + ':' + (day[u]||0)).join(', ')})`;
+
+            turnsUsers.forEach(u => {
+                const count = day[u] || 0;
+                if (count > 0 && day.total > 0) {
+                    const seg = document.createElement('div');
+                    const segPct = (count / day.total) * 100;
+                    seg.style.cssText = `height:${segPct}%;background:${USER_COLORS[u]||'#888'};border-radius:2px 2px 0 0;min-height:1px;`;
+                    wrapper.appendChild(seg);
+                }
+            });
+
+            const label = document.createElement('div');
+            label.className = 'bar-label';
+            label.textContent = day.date.substring(5);
+            wrapper.appendChild(label);
+            turnsChart.appendChild(wrapper);
+        });
+
+        turnsUsers.forEach(u => {
+            const span = document.createElement('span');
+            span.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${USER_COLORS[u]||'#888'};margin-right:4px;"></span>${u}`;
+            turnsLegend.appendChild(span);
+        });
+
         // --- Messages chart ---
         const dailyActivity = {{ daily_activity | tojson | safe }};
         const msgChart = document.getElementById('msg-chart');
