@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import warnings
 warnings.filterwarnings("ignore")
 from datetime import datetime
@@ -641,80 +642,114 @@ def set_term_color(color):
 def main():
     console.print(Rule("[bold]Inbox 0[/bold]", style="dim"))
 
-    # Start Outlook + Teams fetch in background (slow — runs via workiq)
-    _outlook_result = []
-    _outlook_done = threading.Event()
-    _teams_result = []
-    _teams_done = threading.Event()
-    def _bg_outlook():
-        _outlook_result.extend(fetch_outlook())
-        _outlook_done.set()
-    def _bg_teams():
-        _teams_result.extend(fetch_teams())
-        _teams_done.set()
+    # ── Concurrent fetch: all sources in parallel ────────────────────────────
+    # Thread-safe queue for items arriving from any source
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    _incoming = queue.Queue()       # items land here as each source finishes
+    _source_counts = {}             # source -> count (for status line)
+    _per_account = {}               # email account breakdown
+    _fetch_done = threading.Event() # set when ALL sources have reported
+
+    def _bg_fetch(name, fn, *args):
+        """Run a fetch function and post results to _incoming queue."""
+        try:
+            result = fn(*args)
+            if name == "email":
+                items, acct_counts = result
+                _per_account.update(acct_counts)
+            else:
+                items = result
+            _source_counts[name] = len(items)
+            for it in items:
+                _incoming.put(it)
+        except Exception as e:
+            console.print(f"[dim]  {name} fetch error: {e}[/dim]")
+            _source_counts[name] = 0
+
+    # Launch all sources in parallel
+    fetch_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="ibx-fetch")
+    futures = []
+    futures.append(fetch_pool.submit(_bg_fetch, "email", fetch_emails))
+    futures.append(fetch_pool.submit(_bg_fetch, "imsg", fetch_imsgs))
+    futures.append(fetch_pool.submit(_bg_fetch, "slack", fetch_slack))
     if _outlook_available:
-        threading.Thread(target=_bg_outlook, daemon=True).start()
+        futures.append(fetch_pool.submit(_bg_fetch, "outlook", fetch_outlook))
     else:
-        _outlook_done.set()
+        _source_counts["outlook"] = 0
     if _teams_available:
-        threading.Thread(target=_bg_teams, daemon=True).start()
+        futures.append(fetch_pool.submit(_bg_fetch, "teams", fetch_teams))
     else:
-        _teams_done.set()
+        _source_counts["teams"] = 0
 
-    email_items, per_account = fetch_emails()
-    imsg_items = fetch_imsgs()
-    slack_items = fetch_slack()
+    # Wait up to 8s for fast sources (email, imsg, slack), don't block on slow ones
+    fast_deadline = time.time() + 8
+    while time.time() < fast_deadline:
+        if all(n in _source_counts for n in ("email", "imsg", "slack")):
+            break
+        time.sleep(0.2)
 
-    # Wait up to 5s for Outlook/Teams if they haven't finished yet
-    _outlook_done.wait(timeout=5)
-    _teams_done.wait(timeout=5)
-    outlook_items = list(_outlook_result)
-    teams_items = list(_teams_result)
+    # Drain whatever has arrived so far into all_items
+    all_items = []
+    seen_uids = set()
+    while not _incoming.empty():
+        it = _incoming.get_nowait()
+        uid = _item_uid(it)
+        if uid not in seen_uids:
+            all_items.append(it)
+            seen_uids.add(uid)
 
-    # Merge: Slack sorted by ts (most recent first), others in fetch order
-    all_items = (
-        sorted(slack_items, key=lambda x: -x["ts"]) +
-        email_items +
-        outlook_items +
-        teams_items +
-        imsg_items
-    )
+    # Sort: Slack by ts desc, then everything else in arrival order
+    slack_items_init = [it for it in all_items if it.get("type") == "slack"]
+    other_items_init = [it for it in all_items if it.get("type") != "slack"]
+    all_items = sorted(slack_items_init, key=lambda x: -x.get("ts", 0)) + other_items_init
 
-    # Build per-account email breakdown: "jbm:2  m5x2:1"
-    email_parts = "  ".join(
-        f"[green]{display}:{count}[/green]"
-        for display, count in per_account.items()
-    ) or f"[green]0 email[/green]"
+    # Background drainer: keeps pulling from _incoming as slow sources finish
+    _bg_injected = []  # shared list for late items (read from main loop)
+    _bg_lock = threading.Lock()
+    def _bg_drainer():
+        """Continuously drain _incoming queue and stage late items for injection."""
+        while not _fetch_done.is_set():
+            try:
+                it = _incoming.get(timeout=1)
+                uid = _item_uid(it)
+                with _bg_lock:
+                    if uid not in seen_uids:
+                        _bg_injected.append(it)
+                        seen_uids.add(uid)
+            except queue.Empty:
+                pass
+        # Final drain
+        while not _incoming.empty():
+            it = _incoming.get_nowait()
+            uid = _item_uid(it)
+            with _bg_lock:
+                if uid not in seen_uids:
+                    _bg_injected.append(it)
+                    seen_uids.add(uid)
+    threading.Thread(target=_bg_drainer, daemon=True).start()
 
-    status_line = (f"({email_parts}  "
-                   f"[cyan]{len(outlook_items)} outlook[/cyan]  "
-                   f"[yellow]{len(teams_items)} teams[/yellow]  "
-                   f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
-                   f"[blue]{len(slack_items)} slack[/blue])")
+    # Mark fetch done when all futures complete (non-blocking)
+    def _bg_wait_all():
+        for f in futures:
+            f.result(timeout=180)
+        _fetch_done.set()
+    threading.Thread(target=_bg_wait_all, daemon=True).start()
 
-    # If Outlook/Teams still loading, wait for them (workiq takes 60-120s)
-    if not _outlook_done.is_set() or not _teams_done.is_set():
-        if not _outlook_done.is_set():
-            console.print("[dim]  waiting for Outlook...[/dim]")
-        if not _teams_done.is_set():
-            console.print("[dim]  waiting for Teams...[/dim]")
-        _outlook_done.wait(timeout=150)
-        _teams_done.wait(timeout=150)
-        new_outlook = list(_outlook_result)
-        new_teams = list(_teams_result)
-        _outlook_result.clear()
-        _teams_result.clear()
-        existing_uids = {_item_uid(it) for it in all_items}
-        added_outlook = [it for it in new_outlook if _item_uid(it) not in existing_uids]
-        added_teams = [it for it in new_teams if _item_uid(it) not in existing_uids]
-        all_items.extend(added_outlook + added_teams)
-        outlook_items = outlook_items + added_outlook
-        teams_items = teams_items + added_teams
-        status_line = (f"({email_parts}  "
-                       f"[cyan]{len(outlook_items)} outlook[/cyan]  "
-                       f"[yellow]{len(teams_items)} teams[/yellow]  "
-                       f"[magenta]{len(imsg_items)} iMsg[/magenta]  "
-                       f"[blue]{len(slack_items)} slack[/blue])")
+    def _build_status():
+        email_parts = "  ".join(
+            f"[green]{d}:{c}[/green]" for d, c in _per_account.items()
+        ) or f"[green]0 email[/green]"
+        ol = _source_counts.get("outlook", "...")
+        tm = _source_counts.get("teams", "...")
+        im = _source_counts.get("imsg", "...")
+        sl = _source_counts.get("slack", "...")
+        return (f"({email_parts}  "
+                f"[cyan]{ol} outlook[/cyan]  "
+                f"[yellow]{tm} teams[/yellow]  "
+                f"[magenta]{im} iMsg[/magenta]  "
+                f"[blue]{sl} slack[/blue])")
+
+    status_line = _build_status()
 
     if not all_items:
         _wait_for_autosign()
@@ -754,15 +789,20 @@ def main():
         while not poll_msgs.empty():
             console.print(poll_msgs.get_nowait())
 
-        # Inject late-arriving Outlook items from the background fetch
-        if _outlook_done.is_set() and _outlook_result:
-            existing_uids = {_item_uid(it) for it in all_items + skipped}
-            existing_uids.update(resolved)
-            new_outlook = [it for it in _outlook_result if _item_uid(it) not in existing_uids]
-            if new_outlook:
-                all_items.extend(new_outlook)
-                console.print(f"[cyan]  + {len(new_outlook)} Outlook item(s) loaded[/cyan]")
-            _outlook_result.clear()
+        # Inject late-arriving items from background fetch threads
+        with _bg_lock:
+            if _bg_injected:
+                new_late = list(_bg_injected)
+                _bg_injected.clear()
+        if 'new_late' in dir() and new_late:
+            existing_uids_now = {_item_uid(it) for it in all_items + skipped}
+            existing_uids_now.update(resolved)
+            fresh = [it for it in new_late if _item_uid(it) not in existing_uids_now]
+            if fresh:
+                all_items.extend(fresh)
+                status_line = _build_status()
+                console.print(f"[cyan]  + {len(fresh)} item(s) arrived in background[/cyan]  {status_line}")
+            new_late = []
 
         # Prune any items resolved elsewhere before advancing
         all_items, gone = filter_resolved(all_items)
@@ -780,15 +820,21 @@ def main():
                 skipped = []
                 index = 0
             else:
-                # One final fetch before declaring zero
+                # One final parallel fetch before declaring zero
                 existing_uids = {_item_uid(it) for it in all_items}
                 existing_uids.update(resolved)
-                late_emails, _ = fetch_emails()
-                late_imsgs = fetch_imsgs()
-                late_slack = fetch_slack()
-                late_outlook = fetch_outlook()
-                late_all = [it for it in (late_emails + late_imsgs + late_slack + late_outlook)
-                            if _item_uid(it) not in existing_uids]
+                _final = []
+                def _final_fetch(fn):
+                    r = fn()
+                    return r[0] if isinstance(r, tuple) else r
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    futs = [pool.submit(_final_fetch, f) for f in [fetch_emails, fetch_imsgs, fetch_slack, fetch_outlook]]
+                    for fut in futs:
+                        try:
+                            _final.extend(fut.result(timeout=30))
+                        except Exception:
+                            pass
+                late_all = [it for it in _final if _item_uid(it) not in existing_uids]
                 if late_all:
                     all_items = late_all
                     index = 0

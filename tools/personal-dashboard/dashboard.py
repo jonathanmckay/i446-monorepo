@@ -514,6 +514,7 @@ def api_data():
         "imessage": "#34c75966",
         "slack": "#9b002366",
         "outlook": "#00b8d466",
+        "teams": "#1249b466",
     }
     # Compute blended daily avg response time (minutes) across all accounts
     blended_response = []
@@ -543,7 +544,7 @@ def api_data():
         "yAxisID": "y",
     })
     # Per-account count bars (stacked) — ordered so m5x2+slack are adjacent
-    EMAIL_BAR_ORDER = ["outlook", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
+    EMAIL_BAR_ORDER = ["outlook", "teams", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
     for acct in EMAIL_BAR_ORDER:
         day_map = email_by_account.get(acct, {})
         if not day_map:
@@ -798,11 +799,12 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const emEl = document.getElementById('emailSummary');
   const emLegend = [
     ['avg response', '#aa00ff', 'line'],
+    ['outlook', '#00b8d4', 'bar'],
+    ['teams', '#1249b4', 'bar'],
     ['m5x2 gmail', '#d50032', 'bar'],
     ['slack', '#9b0023', 'bar'],
     ['imessage', '#34c759', 'bar'],
     ['jbm gmail', '#1b5e20', 'bar'],
-    ['outlook', '#00b8d4', 'bar'],
   ];
   emLegend.forEach(([label, color, type]) => {
     const b = document.createElement('div');

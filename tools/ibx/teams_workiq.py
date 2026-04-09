@@ -141,11 +141,13 @@ def fetch_teams_items():
     console.print("\n[bold]Teams[/bold] — querying workiq...", style="dim")
 
     response = _run_workiq(
-        "Show me my last 5 Teams 1:1 chat messages from other people (not from me). "
+        "Show me my unread Teams 1:1 chat messages from other people (not from me). "
+        "Only include messages I have NOT yet read or replied to. "
         "For each, write exactly:\n"
         "FROM: name\n"
         "SAYS: their message text\n"
-        "Separate with ---"
+        "Separate with ---\n"
+        "If there are no unread DMs, say 'No unread DMs'."
     )
 
     if not response or re.search(r'(?i)no (?:recent|unread|new)|no direct messages|no DMs|no 1:1', response):
@@ -194,6 +196,9 @@ def fetch_teams_items():
             elif re.match(r'^(?:MESSAGE|SAYS):', bare, re.IGNORECASE):
                 message = re.sub(r'^(?:MESSAGE|SAYS):\s*', '', bare, flags=re.IGNORECASE).strip().strip('"')
             elif message and not re.match(r'^(?:FROM|DATE|MESSAGE|SAYS|LINK):', bare, re.IGNORECASE):
+                # Stop appending if we hit workiq meta-commentary
+                if re.search(r'(?i)if you want|I can rerun|time window|specific people|truncated messages|I don.t |Also I ', bare):
+                    break
                 message += " " + line_clean.strip('"')
 
         if not link and block_links:
@@ -244,9 +249,14 @@ def fetch_teams_items():
 
 
 def archive(item_id):
-    """Mark Teams message as processed (no server-side action possible)."""
+    """Mark Teams message as processed and attempt to mark as read via workiq."""
     record_action(item_id, "archive")
     _mark_processed(item_id)
+    # Try to mark as read on the server via workiq
+    sender = item_id.split(":", 2)[1] if ":" in item_id else ""
+    if sender:
+        _run_workiq(f"Mark my Teams chat with {sender} as read.")
+
 
 
 def delete(item_id):
