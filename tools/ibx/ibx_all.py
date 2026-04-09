@@ -486,7 +486,7 @@ def fetch_slack():
     for workspace, token in workspaces.items():
         try:
             self_id = _slack.get_self_id(token)
-            channels = _slack.fetch_unread_channels(token)
+            channels = _slack.fetch_recent_channels(token)
             count = 0
             for ch in channels:
                 try:

@@ -77,8 +77,10 @@ def get_self_id(token):
 
 # ── Fetching ──────────────────────────────────────────────────────────────────
 
-def fetch_unread_channels(token):
-    """Return DM/MPIM channels with unread_count > 0."""
+def fetch_recent_channels(token, days=7):
+    """Return DM/MPIM channels with activity in the last N days."""
+    import time
+    cutoff = time.time() - days * 86400
     result = []
     cursor = None
     while True:
@@ -87,7 +89,12 @@ def fetch_unread_channels(token):
             kwargs["cursor"] = cursor
         data = slack_get(token, "conversations.list", **kwargs)
         for ch in data.get("channels", []):
-            if int(ch.get("unread_count", 0)) > 0 and not ch.get("is_archived"):
+            if ch.get("is_archived"):
+                continue
+            if ch.get("is_user_deleted"):
+                continue
+            updated = ch.get("updated", 0) / 1000
+            if updated > cutoff:
                 result.append(ch)
         cursor = data.get("response_metadata", {}).get("next_cursor")
         if not cursor:
@@ -250,7 +257,7 @@ def main():
     for workspace, token in workspaces.items():
         try:
             self_id = get_self_id(token)
-            channels = fetch_unread_channels(token)
+            channels = fetch_recent_channels(token)
             count = 0
             for ch in channels:
                 try:
@@ -265,7 +272,7 @@ def main():
                         count += 1
                 except Exception as e:
                     console.print(f"  [dim yellow]skipped channel: {e}[/dim yellow]")
-            console.print(f"  [dim]✓ {workspace}: {count} unread DMs[/dim]")
+            console.print(f"  [dim]✓ {workspace}: {count} recent DMs[/dim]")
         except Exception as e:
             console.print(f"  [yellow]✗ {workspace}: {e}[/yellow]")
 
