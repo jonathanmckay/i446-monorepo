@@ -114,7 +114,7 @@ def extract_attributed_text(data: bytes) -> str:
             except (UnicodeDecodeError, ValueError):
                 i += 1
                 continue
-            if candidate and candidate not in _KNOWN_AB_CLASSES and not candidate.startswith("NS"):
+            if len(candidate) >= 2 and candidate not in _KNOWN_AB_CLASSES and not candidate.startswith("NS"):
                 return candidate
         i += 1
 

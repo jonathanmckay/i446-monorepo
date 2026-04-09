@@ -52,6 +52,19 @@ class TestExtractAttributedText(unittest.TestCase):
         text = imsg.extract_attributed_text(payload)
         self.assertEqual(text, message, f"Raw bytes scanner failed for uppercase length byte: {text!r}")
 
+    def test_single_char_typestream_not_returned(self):
+        """Single-character TypedStream candidates (e.g. '4') must be skipped as false positives."""
+        import imsg
+        # Simulate: TypedStream marker (+) with length 1 containing '4', followed by
+        # regex-matchable real text. Strategy 1 should skip '4' and fall through to regex.
+        payload = (b"\x04\x0bstreamtyped\x00NSString\x00"
+                   + b"\x2b\x01" + b"4"  # '+' marker, length 1, content '4'
+                   + b"\x00\x00\x00\x00"
+                   + b"3rd Cousin: Restaurant Week starts tomorrow")
+        text = imsg.extract_attributed_text(payload)
+        self.assertNotEqual(text, "4", "Single-char false positive '4' should be skipped")
+        self.assertIn("3rd Cousin", text)
+
     def test_empty_data_returns_empty_string(self):
         """Empty or undecodable data must return empty string, not raise."""
         import imsg
