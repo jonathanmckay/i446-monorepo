@@ -45,10 +45,10 @@ def test_archive_deletes_message():
 
 def test_fetch_filters_calendar_responses():
     """
-    Bug: ibx showed calendar responses (Accepted, Declined, Canceled) and emails
-    from non-Inbox folders (Calendar, Sent, Junk) as cards.
+    Bug: ibx showed calendar responses (Accepted, Declined, Canceled) and
+    the user's own sent emails as cards.
 
-    Fix: filter to Inbox folder only + skip calendar subject prefixes.
+    Fix: filter calendar subject prefixes + skip own sent emails.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
@@ -58,8 +58,8 @@ def test_fetch_filters_calendar_responses():
             assert "Accepted" in func_source and "Canceled" in func_source, (
                 "fetch_outlook_items must filter calendar response subjects"
             )
-            assert "inbox_folder_id" in func_source, (
-                "fetch_outlook_items must filter to Inbox folder only"
+            assert "MY_ADDRESSES" in func_source or "jomckay" in func_source, (
+                "fetch_outlook_items must skip own sent emails"
             )
             return
     raise AssertionError("fetch_outlook_items function not found")

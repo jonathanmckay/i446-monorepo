@@ -124,34 +124,6 @@ def _parse_graph_messages(raw_text):
 
 _inbox_folder_id_cache = None
 
-def _get_inbox_folder_id():
-    """Get the Inbox folder ID by looking at recent messages. Cached."""
-    global _inbox_folder_id_cache
-    if _inbox_folder_id_cache:
-        return _inbox_folder_id_cache
-
-    from datetime import timedelta, timezone
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    raw = _mail_call("SearchMessagesQueryParameters", {
-        "queryParameters": f"?$top=30&$filter=receivedDateTime ge {cutoff}&$select=parentFolderId&$orderby=receivedDateTime desc"
-    }, timeout=15)
-    if raw is None:
-        return None
-
-    messages = _parse_graph_messages(raw)
-    if not messages:
-        return None
-
-    # The folder with the most messages is likely Inbox
-    folder_counts = {}
-    for m in messages:
-        fid = m.get("parentFolderId", "")
-        folder_counts[fid] = folder_counts.get(fid, 0) + 1
-
-    inbox_id = max(folder_counts, key=folder_counts.get)
-    _inbox_folder_id_cache = inbox_id
-    return inbox_id
-
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
