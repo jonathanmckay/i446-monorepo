@@ -313,6 +313,27 @@ def lookup_contact_email(name: str):
 # ── Actions ─────────────────────────────────────────────────────────────────
 
 def archive(service, msg_id):
+    """Archive a message AND all other messages in the same thread.
+    Gmail's `in:inbox` query is thread-level — if any message in a thread
+    has INBOX, the whole thread shows up. Remove INBOX from all of them.
+    """
+    # Get the thread ID for this message
+    try:
+        msg = service.users().messages().get(userId="me", id=msg_id, format="minimal").execute()
+        thread_id = msg.get("threadId")
+        if thread_id:
+            thread = service.users().threads().get(userId="me", id=thread_id, format="minimal").execute()
+            for m in thread.get("messages", []):
+                labels = m.get("labelIds", [])
+                if "INBOX" in labels or "UNREAD" in labels:
+                    service.users().messages().modify(
+                        userId="me", id=m["id"],
+                        body={"removeLabelIds": ["INBOX", "UNREAD"]}
+                    ).execute()
+            return
+    except Exception:
+        pass
+    # Fallback: just archive the single message
     service.users().messages().modify(
         userId="me", id=msg_id,
         body={"removeLabelIds": ["INBOX", "UNREAD"]}

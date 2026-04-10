@@ -80,6 +80,10 @@ def normalize_email(msg_ref, service, account):
         email["_account"] = account
     except Exception as e:
         return None
+    # Skip messages sent by the user (thread-level inbox can surface sent replies)
+    from_addr = re.search(r'<([^>]+)>', email.get("from", ""))
+    if from_addr and from_addr.group(1).lower() in MY_EMAILS:
+        return None
     return {
         "type": "email",
         "source": account,
@@ -392,6 +396,9 @@ ACCOUNT_DISPLAY = {
     "m5c7": "m5x2",
     "gmail": "jbm",
 }
+
+# User's own email addresses — skip messages sent by these
+MY_EMAILS = {"mckay@m5c7.com", "mckay@m5x2.com", "jonathan.b.mckay@gmail.com"}
 
 def fetch_emails():
     items = []
