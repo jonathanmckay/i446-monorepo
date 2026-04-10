@@ -25,7 +25,7 @@ cmux new-surface --type terminal
 Parse the surface and pane refs from the output (e.g. `OK surface:6 pane:3 workspace:1`), then use the full ref tokens (e.g. `surface:6`, `pane:3`):
 
 ```bash
-cmux respawn-pane --surface surface:<N> --command "bash ~/i446-monorepo/tools/ibx/ibx_all_wrapper.sh"
+cmux respawn-pane --surface surface:<N> --command "bash ~/i446-monorepo/tools/ibx/ibx0_wrapper.sh"
 cmux focus-pane --pane pane:<N>
 ```
 

@@ -27,7 +27,7 @@ _(none yet)_
 **Fix:** Skip candidates with `len < 2` in the raw-bytes scanner (imsg.py:117).
 
 ### ibx crashes on quit (2026-04-09)
-**Symptom:** Typing `q` triggers "ibx-all crashed (attempt 1/3) — asking Claude to fix..."
+**Symptom:** Typing `q` triggers "ibx0 crashed (attempt 1/3) — asking Claude to fix..."
 **Root cause:** Wrapper only treated exit code 0 as clean. Exit code 2 (user quit) fell through to crash handler.
 **Fix:** `ibx_all_wrapper.sh` line 19: `[[ $EXIT_CODE -eq 0 || $EXIT_CODE -eq 2 ]] && break`
 

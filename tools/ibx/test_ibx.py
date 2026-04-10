@@ -778,7 +778,7 @@ class TestImsgPollResolution(unittest.TestCase):
         """If item's latest_apple_ts > stored proc ts, poll must NOT mark it resolved."""
         import sys, os
         sys.path.insert(0, os.path.dirname(__file__))
-        import ibx_all
+        import ibx0
 
         stored_ts = 1_000_000
         item_ts = 2_000_000  # newer message — not yet processed
@@ -787,10 +787,10 @@ class TestImsgPollResolution(unittest.TestCase):
         resolved = set()
 
         with unittest.mock.patch("imsg.load_processed", return_value={"chat;-;+15105551234": stored_ts}):
-            ibx_all.check_resolved_now([item], resolved)
+            ibx0.check_resolved_now([item], resolved)
 
         self.assertNotIn(
-            ibx_all._item_uid(item),
+            ibx0._item_uid(item),
             resolved,
             "check_resolved_now must NOT resolve an iMessage item whose latest_apple_ts is "
             "newer than the stored processed timestamp — new message should stay visible.",
@@ -800,7 +800,7 @@ class TestImsgPollResolution(unittest.TestCase):
         """If stored proc ts >= item's latest_apple_ts, item is resolved (already archived)."""
         import sys, os
         sys.path.insert(0, os.path.dirname(__file__))
-        import ibx_all
+        import ibx0
 
         stored_ts = 2_000_000
         item_ts = 1_000_000  # older — already processed
@@ -809,10 +809,10 @@ class TestImsgPollResolution(unittest.TestCase):
         resolved = set()
 
         with unittest.mock.patch("imsg.load_processed", return_value={"chat;-;+15105551234": stored_ts}):
-            ibx_all.check_resolved_now([item], resolved)
+            ibx0.check_resolved_now([item], resolved)
 
         self.assertIn(
-            ibx_all._item_uid(item),
+            ibx0._item_uid(item),
             resolved,
             "check_resolved_now SHOULD resolve an item whose ts is already covered by stored proc.",
         )
@@ -821,16 +821,16 @@ class TestImsgPollResolution(unittest.TestCase):
         """An iMessage from a contact not in proc at all must not be resolved."""
         import sys, os
         sys.path.insert(0, os.path.dirname(__file__))
-        import ibx_all
+        import ibx0
 
         item = self._make_imsg_item("chat;-;+15105559999", 500_000)
         resolved = set()
 
         with unittest.mock.patch("imsg.load_processed", return_value={}):
-            ibx_all.check_resolved_now([item], resolved)
+            ibx0.check_resolved_now([item], resolved)
 
         self.assertNotIn(
-            ibx_all._item_uid(item),
+            ibx0._item_uid(item),
             resolved,
             "check_resolved_now must NOT resolve an iMessage from a contact not in proc at all.",
         )
@@ -843,7 +843,7 @@ class TestImsgMarkReadOnArchive(unittest.TestCase):
         """do_archive for an imsg item must call mark_thread_read with the chat_identifier."""
         import sys, os
         sys.path.insert(0, os.path.dirname(__file__))
-        import ibx_all
+        import ibx0
 
         cid = "chat;-;+15105551234"
         item = {
@@ -860,7 +860,7 @@ class TestImsgMarkReadOnArchive(unittest.TestCase):
         with unittest.mock.patch("imsg.load_processed", return_value={}), \
              unittest.mock.patch("imsg.save_processed"), \
              unittest.mock.patch("imsg.mark_thread_read", side_effect=lambda c: marked.append(c)):
-            ibx_all.do_archive(item)
+            ibx0.do_archive(item)
 
         self.assertEqual(marked, [cid],
             "do_archive must call mark_thread_read so the thread loses its unread dot in Messages.app")
@@ -935,7 +935,7 @@ class TestTriagePromptDoesNotOverClassifyAsInfo(unittest.TestCase):
 
 
 class TestIbxAllOptionalImport(unittest.TestCase):
-    """Every try/except guarding an import in ibx_all.py must catch SystemExit.
+    """Every try/except guarding an import in ibx0.py must catch SystemExit.
 
     Regression: lease_signer calls sys.exit(1) when playwright is not installed.
     The try/except ImportError block did not catch SystemExit, so ibx_all exited
@@ -958,7 +958,7 @@ class TestIbxAllOptionalImport(unittest.TestCase):
         return set()
 
     def test_all_import_try_blocks_catch_system_exit(self):
-        """Every try block containing an import in ibx_all.py must catch SystemExit.
+        """Every try block containing an import in ibx0.py must catch SystemExit.
 
         Optional dependencies may call sys.exit() during import (e.g. when a
         required sub-dependency like playwright is missing). If the guarding
@@ -966,7 +966,7 @@ class TestIbxAllOptionalImport(unittest.TestCase):
         the whole ibx_all process before any inbox items are fetched.
         """
         import ast, pathlib
-        src = pathlib.Path(__file__).parent / "ibx_all.py"
+        src = pathlib.Path(__file__).parent / "ibx0.py"
         tree = ast.parse(src.read_text())
 
         # Only check module-level try blocks (direct children of the module body).
@@ -1003,7 +1003,7 @@ class TestIbxAllOptionalImport(unittest.TestCase):
 
         self.assertFalse(
             failures,
-            "ibx_all.py has try/except import blocks that don't catch SystemExit:\n"
+            "ibx0.py has try/except import blocks that don't catch SystemExit:\n"
             + "\n".join(f"  • {f}" for f in failures),
         )
 
@@ -1018,7 +1018,7 @@ class TestInboxZeroSetsBlue(unittest.TestCase):
     def test_inbox_zero_path_calls_set_term_color_blue(self):
         """AST: the if-not-all_items branch in main() must call set_term_color('blue')."""
         import ast, pathlib
-        src = pathlib.Path(__file__).parent / "ibx_all.py"
+        src = pathlib.Path(__file__).parent / "ibx0.py"
         tree = ast.parse(src.read_text())
 
         main_fn = next(

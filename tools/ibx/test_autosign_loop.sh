@@ -2,7 +2,7 @@
 # Test loop: restore the countersign email, run ibx, capture errors,
 # ask Claude to fix, and retry until signing succeeds.
 
-SCRIPT="$HOME/i446-monorepo/tools/ibx/ibx_all.py"
+SCRIPT="$HOME/i446-monorepo/tools/ibx/ibx0.py"
 EMAIL_ID="19d6a42edc060e83"
 MAX_ATTEMPTS=10
 ERR_FILE=$(mktemp /tmp/autosign_test.XXXXXX)
@@ -71,7 +71,7 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
         echo "  Asking Claude to fix..."
         claude -p "Fix this error in the lease auto-signing code. The relevant files are:
 - ~/i446-monorepo/tools/m5x2-automations/lease_signer.py (CUA signing logic)
-- ~/i446-monorepo/tools/ibx/ibx_all.py (_autosign_item function around line 199)
+- ~/i446-monorepo/tools/ibx/ibx0.py (_autosign_item function around line 199)
 
 Error:
 $ERROR" --allowedTools "Read,Edit,Grep"

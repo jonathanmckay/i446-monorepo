@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ibx-all — Unified inbox: Gmail + iMessages + Slack in one queue.
+ibx0 — Unified inbox: Gmail + iMessages + Slack in one queue.
 Fetches from all sources, sorts by timestamp, presents as a single card stream.
 """
 

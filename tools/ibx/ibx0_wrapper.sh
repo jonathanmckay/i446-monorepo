@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Auto-fixing wrapper for ibx_all.py
+# Auto-fixing wrapper for ibx0.py
 # On crash: captures traceback, asks Claude to fix the file, then retries.
 # On clean exit: waits POLL_INTERVAL seconds and re-runs (watch mode).
 
-SCRIPT="$HOME/i446-monorepo/tools/ibx/ibx_all.py"
+SCRIPT="$HOME/i446-monorepo/tools/ibx/ibx0.py"
 MAX_RETRIES=3
 POLL_INTERVAL=60  # seconds between re-fetches after inbox zero
 ERR_FILE=$(mktemp /tmp/ibx_all_error.XXXXXX)
@@ -22,21 +22,21 @@ while true; do
 
         if [[ $attempt -eq $MAX_RETRIES ]]; then
             echo ""
-            echo "ibx-all failed after $MAX_RETRIES attempts. Last error:"
+            echo "ibx0 failed after $MAX_RETRIES attempts. Last error:"
             echo "$ERROR"
             break
         fi
 
         echo ""
-        echo "━━ ibx-all crashed (attempt $attempt/$MAX_RETRIES) — asking Claude to fix... ━━"
+        echo "━━ ibx0 crashed (attempt $attempt/$MAX_RETRIES) — asking Claude to fix... ━━"
         echo ""
 
-        claude -p "Fix this Python traceback in ~/i446-monorepo/tools/ibx/ibx_all.py. Edit the file directly to resolve the error. No explanation needed.
+        claude -p "Fix this Python traceback in ~/i446-monorepo/tools/ibx/ibx0.py. Edit the file directly to resolve the error. No explanation needed.
 
 $ERROR" --allowedTools "Read,Edit,Grep"
 
         echo ""
-        echo "Fix applied. Retrying ibx-all..."
+        echo "Fix applied. Retrying ibx0..."
         echo ""
         sleep 0.5
     done

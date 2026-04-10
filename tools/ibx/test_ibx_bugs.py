@@ -27,7 +27,7 @@ def test_normalize_email_skips_sent_by_user():
     thread-level queries return the latest message (which could be sent).
     Fix: normalize_email returns None when from-address is in MY_EMAILS.
     """
-    source = open("ibx_all.py").read()
+    source = open("ibx0.py").read()
 
     # normalize_email must reference MY_EMAILS to filter sent messages
     tree = ast.parse(source)
@@ -38,7 +38,7 @@ def test_normalize_email_skips_sent_by_user():
             assert "return None" in body_src, "normalize_email must return None for sent messages"
             break
     else:
-        raise AssertionError("normalize_email() not found in ibx_all.py")
+        raise AssertionError("normalize_email() not found in ibx0.py")
 
     # MY_EMAILS must contain the known addresses
     assert "mckay@m5x2.com" in source, "MY_EMAILS must include mckay@m5x2.com"

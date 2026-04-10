@@ -8,6 +8,34 @@ user-invocable: true
 
 Investigate the problem described in the conversation, fix it, and add a regression test.
 
+## Arguments
+
+The user message after `/bug` contains:
+1. **Bug description** — what's broken (required)
+2. **Process name** — optional, appended after the description. If present, kill that process before fixing, then restart it after tests pass.
+
+Examples:
+- `/bug emails not showing in ibx` — just fix, no process management
+- `/bug emails not showing in ibx ibx0` — kill ibx0 process, fix, test, restart ibx0
+
+### Process management
+
+If a process name is given (second argument):
+
+**Before fixing (in parallel with Step 1–2):**
+1. Find the running process: `ps aux | grep <process_name> | grep -v grep`
+2. Kill it using its PID: `kill <PID>`
+
+**After tests pass (Step 5):**
+1. Restart the process using cmux:
+   ```bash
+   cmux respawn-pane --surface surface:<N> --command "<restart_command>"
+   ```
+2. Use the process name to determine the restart command:
+   - `ibx0` → `bash ~/i446-monorepo/tools/ibx/ibx0_wrapper.sh`
+
+If cmux isn't available or the surface number is unknown, just tell the user to restart manually.
+
 ## Steps
 
 ### Step 1: Understand the problem
@@ -41,3 +69,7 @@ python3 -m pytest <test_file> -v
 ```
 
 Report: what was broken, what line was changed, and that tests pass.
+
+### Step 6: Restart process (if process name was given)
+
+If a process name was provided, restart it now that the fix is verified.

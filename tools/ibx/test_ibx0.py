@@ -1,8 +1,8 @@
-"""Regression tests for ibx_all.py."""
+"""Regression tests for ibx0.py."""
 import ast
 from pathlib import Path
 
-IBX_ALL_PY = Path(__file__).parent / "ibx_all.py"
+IBX_ALL_PY = Path(__file__).parent / "ibx0.py"
 
 
 def test_outlook_wait_not_gated_on_empty_inbox():

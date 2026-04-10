@@ -122,17 +122,57 @@ def _parse_graph_messages(raw_text):
         return []
 
 
+_inbox_folder_id_cache = None
+
+def _get_inbox_folder_id():
+    """Get the Inbox folder ID by looking at a known inbox message. Cached."""
+    global _inbox_folder_id_cache
+    if _inbox_folder_id_cache:
+        return _inbox_folder_id_cache
+
+    # Fetch one recent message and grab its parentFolderId — most recent message
+    # is almost always in Inbox. We also cross-check: the folder with the most
+    # unread messages is likely Inbox.
+    raw = _mail_call("SearchMessagesQueryParameters", {
+        "queryParameters": "?$top=30&$filter=isRead eq false&$select=parentFolderId&$orderby=receivedDateTime desc"
+    }, timeout=15)
+    if raw is None:
+        return None
+
+    messages = _parse_graph_messages(raw)
+    if not messages:
+        return None
+
+    # The folder with the most messages is likely Inbox
+    folder_counts = {}
+    for m in messages:
+        fid = m.get("parentFolderId", "")
+        folder_counts[fid] = folder_counts.get(fid, 0) + 1
+
+    inbox_id = max(folder_counts, key=folder_counts.get)
+    _inbox_folder_id_cache = inbox_id
+    return inbox_id
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
 def fetch_outlook_items():
-    """Fetch unread Outlook emails via Agency mail MCP (Inbox only)."""
+    """Fetch unread Outlook emails via Agency mail MCP (Inbox only, last 48h)."""
     items = []
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
     # First, get the Inbox folder ID
     inbox_folder_id = _get_inbox_folder_id()
 
-    query = "?$top=30&$filter=isRead eq false&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,parentFolderId&$orderby=receivedDateTime desc"
+    # Only fetch unread emails from last 48h to avoid stale Graph isRead state
+    from datetime import timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = (
+        f"?$top=30"
+        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
+        f"&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,parentFolderId"
+        f"&$orderby=receivedDateTime desc"
+    )
     raw = _mail_call("SearchMessagesQueryParameters", {
         "queryParameters": query
     }, timeout=30)

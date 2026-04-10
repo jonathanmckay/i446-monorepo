@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 
 SLACK_PY = Path(__file__).parent / "slack.py"
-IBX_ALL_PY = Path(__file__).parent / "ibx_all.py"
+IBX_ALL_PY = Path(__file__).parent / "ibx0.py"
 
 REQUIRED_SCOPES = {
     "channels:history", "channels:read", "channels:write",
@@ -40,7 +40,7 @@ def test_ibx_all_slack_status_does_not_say_unread():
     """Status line should say 'recent' not 'unread' since we fetch all recent channels."""
     source = IBX_ALL_PY.read_text()
     assert '": {count} unread"' not in source, (
-        "ibx_all.py Slack status line should not say 'unread' — we fetch recent, not unread"
+        "ibx0.py Slack status line should not say 'unread' — we fetch recent, not unread"
     )
 
 
