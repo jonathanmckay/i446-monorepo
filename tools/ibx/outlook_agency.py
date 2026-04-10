@@ -160,9 +160,6 @@ def fetch_outlook_items():
     items = []
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
-    # First, get the Inbox folder ID
-    inbox_folder_id = _get_inbox_folder_id()
-
     # Fetch recent emails (last 24h) — don't rely on isRead flag
     # (Outlook Focused Inbox read state doesn't match Graph isRead)
     from datetime import timedelta, timezone
@@ -183,7 +180,7 @@ def fetch_outlook_items():
 
     messages = _parse_graph_messages(raw)
     if not messages:
-        console.print("  [dim]no unread emails[/dim]")
+        console.print("  [dim]no recent emails[/dim]")
         return items
 
     processed = load_processed()
@@ -194,20 +191,22 @@ def fetch_outlook_items():
         r'^(Accepted|Declined|Tentative|Canceled|Updated|Forwarded):\s',
         re.IGNORECASE,
     )
+    # Skip emails sent by the user (Sent Items folder)
+    MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 
     for msg in messages:
         msg_id = msg.get("id", "")
         subject = msg.get("subject", "(no subject)")
-        folder_id = msg.get("parentFolderId", "")
         from_data = msg.get("from", {}).get("emailAddress", {})
         sender_name = from_data.get("name", "")
-        sender_email = from_data.get("address", "")
+        sender_email = from_data.get("address", "").lower()
         from_str = f"{sender_name} <{sender_email}>" if sender_name else sender_email
         body_preview = msg.get("bodyPreview", "")
         received = msg.get("receivedDateTime", "")
 
-        # Only include Inbox folder (skip Calendar, Sent, Junk, etc.)
-        if inbox_folder_id and folder_id != inbox_folder_id:
+        # Skip own sent emails
+        if sender_email in MY_ADDRESSES:
+            continue
             continue
 
         # Skip bridge emails — and auto-clean them
