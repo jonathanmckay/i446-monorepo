@@ -23,10 +23,14 @@ import ibx as _ibx
 import imsg as _imsg
 import slack as _slack
 try:
-    import outlook_workiq as _outlook
+    import outlook_agency as _outlook
     _outlook_available = True
-except ImportError:
-    _outlook_available = False
+except Exception:
+    try:
+        import outlook_workiq as _outlook
+        _outlook_available = True
+    except ImportError:
+        _outlook_available = False
 
 try:
     import teams_workiq as _teams

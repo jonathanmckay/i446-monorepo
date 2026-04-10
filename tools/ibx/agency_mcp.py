@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 agency_mcp — Shared client for Agency MCP servers (mail, teams, etc).
-Starts the server process, handles SSE JSON-RPC protocol.
+Starts server processes on demand, handles SSE JSON-RPC protocol.
 """
 
+import atexit
 import json
 import os
+import select
+import socket
 import subprocess
 import threading
 import time
@@ -16,31 +19,29 @@ AGENCY_BIN = os.environ.get(
     str(Path.home() / ".config/agency/CurrentVersion/agency"),
 )
 
-# Cache running server processes + ports
 _servers = {}  # name -> {"proc": Popen, "port": int}
 _lock = threading.Lock()
 
 
-def _start_server(name, port=0):
-    """Start an agency MCP server and return its port."""
+def _start_server(name):
+    """Start an agency MCP server on a random port and return (proc, port)."""
     proc = subprocess.Popen(
-        [AGENCY_BIN, "mcp", name, "--transport", "http", "--port", str(port)],
+        [AGENCY_BIN, "mcp", name, "--transport", "http", "--port", "0"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    # Read lines until we get the port number (first line that's just digits)
     deadline = time.time() + 30
-    actual_port = None
+    port = None
     while time.time() < deadline:
         line = proc.stdout.readline().strip()
         if line.isdigit():
-            actual_port = int(line)
+            port = int(line)
             break
-    if actual_port is None:
+    if port is None:
         proc.kill()
         raise RuntimeError(f"Failed to start agency mcp {name}")
-    return proc, actual_port
+    return proc, port
 
 
 def get_server(name):
@@ -50,95 +51,86 @@ def get_server(name):
             srv = _servers[name]
             if srv["proc"].poll() is None:
                 return srv["port"]
-            # Server died, restart
             del _servers[name]
         proc, port = _start_server(name)
         _servers[name] = {"proc": proc, "port": port}
         return port
 
 
-def call_tool(server_name, tool_name, arguments=None, timeout=180):
-    """Call an MCP tool and return the result. Handles SSE chunked responses."""
-    import socket
-    import select
-
+def call_tool(server_name, tool_name, arguments=None, timeout=120):
+    """Call an MCP tool via SSE HTTP. Returns the result dict."""
     port = get_server(server_name)
     payload = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments or {},
-        },
-    })
-    payload_bytes = payload.encode()
+        "params": {"name": tool_name, "arguments": arguments or {}},
+    }).encode()
 
-    # Use raw socket — Connection: close to avoid chunked encoding issues
-    sock = socket.create_connection(("localhost", port), timeout=30)
-    request = (
-        f"POST / HTTP/1.1\r\n"
-        f"Host: localhost:{port}\r\n"
+    sock = socket.create_connection(("localhost", port), timeout=10)
+    sock.sendall(
+        f"POST / HTTP/1.1\r\nHost: localhost:{port}\r\n"
         f"Content-Type: application/json\r\n"
-        f"Content-Length: {len(payload_bytes)}\r\n"
-        f"Connection: close\r\n"
-        f"\r\n"
-    ).encode() + payload_bytes
-    sock.sendall(request)
+        f"Content-Length: {len(payload)}\r\n"
+        f"Connection: close\r\n\r\n".encode() + payload
+    )
 
-    # Read until connection closes, with overall timeout
     chunks = []
     deadline = time.time() + timeout
     while time.time() < deadline:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            break
+        remaining = max(deadline - time.time(), 0.1)
         ready = select.select([sock], [], [], min(remaining, 5.0))
         if ready[0]:
-            chunk = sock.recv(1048576)  # 1MB reads
+            chunk = sock.recv(1048576)
             if not chunk:
                 break
             chunks.append(chunk)
-            # Check if we already have a complete "data:" line with result
+            # Early exit: check if we have a complete result
             partial = b"".join(chunks).decode(errors="replace")
             for line in partial.splitlines():
-                line = line.strip()
-                if line.startswith("data:") and '"result"' in line:
+                stripped = line.strip()
+                if stripped.startswith("data:") and '"result"' in stripped:
                     try:
-                        data = json.loads(line[5:].strip())
+                        data = json.loads(stripped[5:].strip())
                         if "result" in data:
                             sock.close()
                             return data["result"]
                         if "error" in data:
                             sock.close()
-                            raise RuntimeError(f"MCP error: {data['error']}")
+                            raise RuntimeError(data["error"])
                     except json.JSONDecodeError:
-                        continue
+                        pass
     sock.close()
 
-    # Final parse of accumulated response
+    # Final parse
     body = b"".join(chunks).decode(errors="replace")
     for line in body.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
+        stripped = line.strip()
+        if stripped.startswith("data:"):
             try:
-                data = json.loads(line[5:].strip())
+                data = json.loads(stripped[5:].strip())
                 if "result" in data:
                     return data["result"]
                 if "error" in data:
-                    raise RuntimeError(f"MCP error: {data['error']}")
+                    raise RuntimeError(data["error"])
             except json.JSONDecodeError:
-                continue
-
-    raise RuntimeError(f"No result in MCP response for {tool_name}")
+                pass
+    raise RuntimeError(f"No result from {server_name}/{tool_name} (timeout={timeout}s)")
 
 
 def stop_all():
     """Stop all running MCP servers."""
     with _lock:
-        for name, srv in _servers.items():
+        for name, srv in list(_servers.items()):
             try:
-                srv["proc"].kill()
+                srv["proc"].terminate()
+                srv["proc"].wait(timeout=5)
             except Exception:
-                pass
+                try:
+                    srv["proc"].kill()
+                except Exception:
+                    pass
         _servers.clear()
+
+
+atexit.register(stop_all)
