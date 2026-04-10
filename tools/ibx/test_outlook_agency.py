@@ -63,3 +63,26 @@ def test_fetch_filters_calendar_responses():
             )
             return
     raise AssertionError("fetch_outlook_items function not found")
+
+
+def test_fetch_no_isread_filter():
+    """
+    Bug: Query used 'isRead eq false' but Outlook Focused Inbox read state
+    doesn't match Graph API's isRead flag. Emails the user sees as unread
+    in Outlook were isRead=True in Graph and got filtered out.
+
+    Fix: Don't filter on isRead. Fetch all recent emails (last 24h) and let
+    processed.json handle dedup.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
+            func_source = ast.get_source_segment(source, node)
+            # The query string must NOT contain isRead filter
+            assert "isRead eq false" not in func_source, (
+                "fetch_outlook_items must not filter on isRead — "
+                "Outlook Focused Inbox read state doesn't match Graph isRead"
+            )
+            return
+    raise AssertionError("fetch_outlook_items function not found")

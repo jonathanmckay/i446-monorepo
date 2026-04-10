@@ -125,16 +125,15 @@ def _parse_graph_messages(raw_text):
 _inbox_folder_id_cache = None
 
 def _get_inbox_folder_id():
-    """Get the Inbox folder ID by looking at a known inbox message. Cached."""
+    """Get the Inbox folder ID by looking at recent messages. Cached."""
     global _inbox_folder_id_cache
     if _inbox_folder_id_cache:
         return _inbox_folder_id_cache
 
-    # Fetch one recent message and grab its parentFolderId — most recent message
-    # is almost always in Inbox. We also cross-check: the folder with the most
-    # unread messages is likely Inbox.
+    from datetime import timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")
     raw = _mail_call("SearchMessagesQueryParameters", {
-        "queryParameters": "?$top=30&$filter=isRead eq false&$select=parentFolderId&$orderby=receivedDateTime desc"
+        "queryParameters": f"?$top=30&$filter=receivedDateTime ge {cutoff}&$select=parentFolderId&$orderby=receivedDateTime desc"
     }, timeout=15)
     if raw is None:
         return None
@@ -157,19 +156,20 @@ def _get_inbox_folder_id():
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
 def fetch_outlook_items():
-    """Fetch unread Outlook emails via Agency mail MCP (Inbox only, last 48h)."""
+    """Fetch recent Outlook inbox emails via Agency mail MCP."""
     items = []
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
     # First, get the Inbox folder ID
     inbox_folder_id = _get_inbox_folder_id()
 
-    # Only fetch unread emails from last 48h to avoid stale Graph isRead state
+    # Fetch recent emails (last 24h) — don't rely on isRead flag
+    # (Outlook Focused Inbox read state doesn't match Graph isRead)
     from datetime import timedelta, timezone
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     query = (
         f"?$top=30"
-        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
+        f"&$filter=receivedDateTime ge {cutoff}"
         f"&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,parentFolderId"
         f"&$orderby=receivedDateTime desc"
     )
