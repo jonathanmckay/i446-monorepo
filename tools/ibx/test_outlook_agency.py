@@ -22,3 +22,22 @@ def test_fromisoformat_handles_z_suffix():
         assert 'replace' in call and 'Z' in call, (
             f"fromisoformat call must handle Z suffix: {call}"
         )
+
+
+def test_archive_deletes_message():
+    """
+    Bug: archive() tried to mark as read via UpdateMessage, but that tool
+    doesn't support isRead. Emails stayed unread in Graph and kept reappearing.
+
+    Fix: archive() calls DeleteMessage to definitively remove from inbox.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "archive":
+            func_source = ast.get_source_segment(source, node)
+            assert "DeleteMessage" in func_source, (
+                "archive() must call DeleteMessage to remove email from inbox"
+            )
+            return
+    raise AssertionError("archive function not found")

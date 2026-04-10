@@ -125,12 +125,16 @@ def _parse_graph_messages(raw_text):
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
 def fetch_outlook_items():
-    """Fetch unread Outlook emails via Agency mail MCP."""
+    """Fetch unread Outlook emails via Agency mail MCP (Inbox only)."""
     items = []
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
+    # First, get the Inbox folder ID
+    inbox_folder_id = _get_inbox_folder_id()
+
+    query = "?$top=30&$filter=isRead eq false&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,parentFolderId&$orderby=receivedDateTime desc"
     raw = _mail_call("SearchMessagesQueryParameters", {
-        "queryParameters": "?$top=20&$filter=isRead eq false&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,conversationId&$orderby=receivedDateTime desc"
+        "queryParameters": query
     }, timeout=30)
 
     if raw is None:
@@ -144,9 +148,17 @@ def fetch_outlook_items():
 
     processed = load_processed()
 
+    # Calendar/meeting response patterns to filter out
+    import re
+    CALENDAR_RE = re.compile(
+        r'^(Accepted|Declined|Tentative|Canceled|Updated|Forwarded):\s',
+        re.IGNORECASE,
+    )
+
     for msg in messages:
         msg_id = msg.get("id", "")
         subject = msg.get("subject", "(no subject)")
+        folder_id = msg.get("parentFolderId", "")
         from_data = msg.get("from", {}).get("emailAddress", {})
         sender_name = from_data.get("name", "")
         sender_email = from_data.get("address", "")
@@ -154,12 +166,20 @@ def fetch_outlook_items():
         body_preview = msg.get("bodyPreview", "")
         received = msg.get("receivedDateTime", "")
 
+        # Only include Inbox folder (skip Calendar, Sent, Junk, etc.)
+        if inbox_folder_id and folder_id != inbox_folder_id:
+            continue
+
         # Skip bridge emails — and auto-clean them
         if "[IBX]" in subject:
             threading.Thread(
                 target=lambda mid=msg_id: _mail_call("DeleteMessage", {"id": mid}, timeout=15),
                 daemon=True,
             ).start()
+            continue
+
+        # Skip calendar/meeting responses
+        if CALENDAR_RE.match(subject):
             continue
 
         item_id = f"outlook:{msg_id}"
@@ -200,11 +220,11 @@ def fetch_outlook_items():
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 def archive(item_id, subject="", sender=""):
-    """Mark email as read via Graph API (removes from unread query)."""
+    """Archive email — delete from inbox via Graph API so it won't reappear."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
         def _do_archive():
-            _mail_call("UpdateMessage", {"id": graph_id, "isRead": True}, timeout=15)
+            _mail_call("DeleteMessage", {"id": graph_id}, timeout=15)
         threading.Thread(target=_do_archive, daemon=True).start()
     record_action(item_id, "archive")
     _mark_processed(item_id)
