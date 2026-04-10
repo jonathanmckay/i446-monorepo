@@ -156,6 +156,21 @@ def display_card(item, idx, total):
     header.append(f"\nSUBJECT: ", style="bold dim")
     header.append(item["preview"], style="white")
 
+    # Show received date/time in local time if available
+    date_str = item.get("_data", {}).get("date", "")
+    if date_str:
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            local_dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
+            header.append(f"\nDATE:    ", style="bold dim")
+            header.append(local_dt.strftime("%a %b %d, %I:%M %p %Z"), style="dim white")
+        except Exception:
+            pass
+
     title = f"{badge}  {source}  {counter}"
     console.print(Panel(header, title=title, border_style="dim", box=box.SIMPLE_HEAD, padding=(0, 1)))
 

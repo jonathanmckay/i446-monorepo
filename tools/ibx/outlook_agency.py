@@ -75,7 +75,7 @@ def record_action(item_id, action):
         row = conn.execute("SELECT fetched_at FROM outlook_responses WHERE item_id = ?", (item_id,)).fetchone()
         hours = None
         if row and row[0]:
-            fetched = datetime.fromisoformat(row[0])
+            fetched = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
             hours = round((now - fetched).total_seconds() / 3600, 2)
             if hours > 72:
                 hours = None
@@ -154,8 +154,12 @@ def fetch_outlook_items():
         body_preview = msg.get("bodyPreview", "")
         received = msg.get("receivedDateTime", "")
 
-        # Skip bridge emails
+        # Skip bridge emails — and auto-clean them
         if "[IBX]" in subject:
+            threading.Thread(
+                target=lambda mid=msg_id: _mail_call("DeleteMessage", {"id": mid}, timeout=15),
+                daemon=True,
+            ).start()
             continue
 
         item_id = f"outlook:{msg_id}"
@@ -196,13 +200,12 @@ def fetch_outlook_items():
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 def archive(item_id, subject="", sender=""):
-    """Move email to Archive via Graph API."""
+    """Mark email as read via Graph API (removes from unread query)."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
-        threading.Thread(
-            target=lambda: _mail_call("DeleteMessage", {"id": graph_id}, timeout=15),
-            daemon=True,
-        ).start()
+        def _do_archive():
+            _mail_call("UpdateMessage", {"id": graph_id, "isRead": True}, timeout=15)
+        threading.Thread(target=_do_archive, daemon=True).start()
     record_action(item_id, "archive")
     _mark_processed(item_id)
 

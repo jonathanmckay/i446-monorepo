@@ -74,7 +74,7 @@ def record_action(item_id, action):
         row = conn.execute("SELECT fetched_at FROM outlook_responses WHERE item_id = ?", (item_id,)).fetchone()
         hours = None
         if row and row[0]:
-            fetched = datetime.fromisoformat(row[0])
+            fetched = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
             hours = round((now - fetched).total_seconds() / 3600, 2)
             if hours > 72:
                 hours = None
