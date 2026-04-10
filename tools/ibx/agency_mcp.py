@@ -57,10 +57,10 @@ def get_server(name):
         return port
 
 
-def call_tool(server_name, tool_name, arguments=None):
+def call_tool(server_name, tool_name, arguments=None, timeout=180):
     """Call an MCP tool and return the result. Handles SSE chunked responses."""
-    import http.client
-    import urllib.parse
+    import socket
+    import select
 
     port = get_server(server_name)
     payload = json.dumps({
@@ -72,34 +72,65 @@ def call_tool(server_name, tool_name, arguments=None):
             "arguments": arguments or {},
         },
     })
+    payload_bytes = payload.encode()
 
-    conn = http.client.HTTPConnection("localhost", port, timeout=120)
-    conn.request("POST", "/", payload, {"Content-Type": "application/json"})
-    resp = conn.getresponse()
+    # Use raw socket — Connection: close to avoid chunked encoding issues
+    sock = socket.create_connection(("localhost", port), timeout=30)
+    request = (
+        f"POST / HTTP/1.1\r\n"
+        f"Host: localhost:{port}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(payload_bytes)}\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    ).encode() + payload_bytes
+    sock.sendall(request)
 
-    # Read SSE stream line by line — look for "data:" lines with result
-    result = None
-    while True:
-        line = resp.readline()
-        if not line:
+    # Read until connection closes, with overall timeout
+    chunks = []
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        remaining = deadline - time.time()
+        if remaining <= 0:
             break
-        line = line.decode().strip()
+        ready = select.select([sock], [], [], min(remaining, 5.0))
+        if ready[0]:
+            chunk = sock.recv(1048576)  # 1MB reads
+            if not chunk:
+                break
+            chunks.append(chunk)
+            # Check if we already have a complete "data:" line with result
+            partial = b"".join(chunks).decode(errors="replace")
+            for line in partial.splitlines():
+                line = line.strip()
+                if line.startswith("data:") and '"result"' in line:
+                    try:
+                        data = json.loads(line[5:].strip())
+                        if "result" in data:
+                            sock.close()
+                            return data["result"]
+                        if "error" in data:
+                            sock.close()
+                            raise RuntimeError(f"MCP error: {data['error']}")
+                    except json.JSONDecodeError:
+                        continue
+    sock.close()
+
+    # Final parse of accumulated response
+    body = b"".join(chunks).decode(errors="replace")
+    for line in body.splitlines():
+        line = line.strip()
         if line.startswith("data:"):
             try:
                 data = json.loads(line[5:].strip())
                 if "result" in data:
-                    result = data["result"]
-                    break
+                    return data["result"]
                 if "error" in data:
-                    conn.close()
                     raise RuntimeError(f"MCP error: {data['error']}")
             except json.JSONDecodeError:
                 continue
-    conn.close()
 
-    if result is None:
-        raise RuntimeError(f"No result in MCP response for {tool_name}")
-    return result
+    raise RuntimeError(f"No result in MCP response for {tool_name}")
 
 
 def stop_all():
