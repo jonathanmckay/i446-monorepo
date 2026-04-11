@@ -65,48 +65,29 @@ def test_fetch_filters_calendar_responses():
     raise AssertionError("fetch_outlook_items function not found")
 
 
-def test_fetch_no_isread_filter():
+def test_fetch_uses_received_and_isread():
     """
-    Bug: Query used 'isRead eq false' but Outlook Focused Inbox read state
-    doesn't match Graph API's isRead flag. Emails the user sees as unread
-    in Outlook were isRead=True in Graph and got filtered out.
+    Bug: lastModifiedDateTime filter was too broad — pulled in emails that were
+    modified for any reason (read, categorized, moved) even if they're not in
+    the inbox. Showed 20+ phantom emails.
 
-    Fix: Don't filter on isRead. Fetch all recent emails (last 24h) and let
-    processed.json handle dedup.
-    """
-    source = OUTLOOK_AGENCY_PY.read_text()
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
-            func_source = ast.get_source_segment(source, node)
-            # The query string must NOT contain isRead filter
-            assert "isRead eq false" not in func_source, (
-                "fetch_outlook_items must not filter on isRead — "
-                "Outlook Focused Inbox read state doesn't match Graph isRead"
-            )
-            return
-    raise AssertionError("fetch_outlook_items function not found")
-
-
-def test_fetch_uses_lastmodified_not_received():
-    """
-    Bug: Snoozed emails have old receivedDateTime but get resurfaced to inbox
-    when snooze expires. The 24h filter on receivedDateTime excluded them.
-
-    Fix: Filter on lastModifiedDateTime — catches snoozed, flagged, and
-    resurfaced emails.
+    Fix: Use receivedDateTime + isRead eq false. This matches emails that are
+    genuinely new and unread. processed.json handles dedup.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
             func_source = ast.get_source_segment(source, node)
-            assert "lastModifiedDateTime" in func_source, (
-                "fetch_outlook_items must filter on lastModifiedDateTime, not receivedDateTime — "
-                "snoozed emails have old receivedDateTime but updated lastModifiedDateTime"
+            assert "receivedDateTime ge" in func_source, (
+                "fetch_outlook_items must use receivedDateTime for time cutoff"
             )
-            assert "receivedDateTime ge" not in func_source, (
-                "fetch_outlook_items must not use receivedDateTime for the time cutoff"
+            assert "isRead eq false" in func_source, (
+                "fetch_outlook_items must filter on isRead eq false"
+            )
+            assert "lastModifiedDateTime ge" not in func_source, (
+                "fetch_outlook_items must NOT use lastModifiedDateTime — "
+                "it's too broad and pulls in read/moved/categorized emails"
             )
             return
     raise AssertionError("fetch_outlook_items function not found")

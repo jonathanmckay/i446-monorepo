@@ -128,20 +128,17 @@ _inbox_folder_id_cache = None
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
 def fetch_outlook_items():
-    """Fetch recent Outlook inbox emails via Agency mail MCP."""
+    """Fetch recent unread Outlook emails via Agency mail MCP."""
     items = []
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
-    # Use lastModifiedDateTime for cutoff — catches snoozed/resurfaced emails
-    # (receivedDateTime stays at original receive time, but lastModifiedDateTime
-    # updates when snooze expires, flags change, etc.)
     from datetime import timedelta, timezone
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     query = (
         f"?$top=30"
-        f"&$filter=lastModifiedDateTime ge {cutoff}"
-        f"&$select=id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,isRead,parentFolderId"
-        f"&$orderby=lastModifiedDateTime desc"
+        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
+        f"&$select=id,subject,from,receivedDateTime,bodyPreview,parentFolderId"
+        f"&$orderby=receivedDateTime desc"
     )
     raw = _mail_call("SearchMessagesQueryParameters", {
         "queryParameters": query

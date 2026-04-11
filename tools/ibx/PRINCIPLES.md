@@ -9,14 +9,13 @@ ibx0 is the single unified queue. If Outlook Focused Inbox, Gmail Inbox, iMessag
 ## Source-specific rules
 
 ### Outlook (via Agency MCP / Graph API)
-- **Time window**: last 24h by `lastModifiedDateTime` (not `receivedDateTime`)
-  - Snoozed emails resurface when snooze expires (updates `lastModifiedDateTime`)
-  - Replied-to/forwarded emails also update `lastModifiedDateTime`
-- **No `isRead` filter**: Outlook's read/unread state doesn't mean "processed." Reading an email in Outlook ≠ handling it. `processed.json` tracks what ibx0 has handled.
+- **Time window**: last 24h by `receivedDateTime`
+- **Read filter**: `isRead eq false` — only truly unread emails
 - **Skip own sent emails**: filter by sender address
 - **Skip calendar noise**: Accepted/Declined/Canceled/Tentative/Updated/Forwarded meeting responses
 - **Skip bridge emails**: auto-delete any `[IBX]` prefixed emails (legacy Gmail bridge)
 - **Archive = DeleteMessage**: marks processed locally + deletes from mailbox (moves to Deleted Items, recoverable)
+- **Trade-off**: Snoozed emails older than 24h won't appear (acceptable — snooze is rare)
 
 ### Gmail (via Gmail API)
 - Fetches unread Inbox messages
