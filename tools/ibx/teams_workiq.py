@@ -234,9 +234,7 @@ def fetch_teams_items():
         if not message:
             continue
 
-        # Use link hash in item ID for uniqueness (same sender, different messages)
-        link_hash = link[-20:] if link else ""
-        item_id = _make_item_id(from_str, message[:80] + link_hash)
+        item_id = _make_item_id(from_str, message[:80])
 
         if item_id in processed:
             continue

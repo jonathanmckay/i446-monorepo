@@ -132,15 +132,16 @@ def fetch_outlook_items():
     items = []
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
-    # Fetch recent emails (last 24h) — don't rely on isRead flag
-    # (Outlook Focused Inbox read state doesn't match Graph isRead)
+    # Use lastModifiedDateTime for cutoff — catches snoozed/resurfaced emails
+    # (receivedDateTime stays at original receive time, but lastModifiedDateTime
+    # updates when snooze expires, flags change, etc.)
     from datetime import timedelta, timezone
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     query = (
         f"?$top=30"
-        f"&$filter=receivedDateTime ge {cutoff}"
-        f"&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,parentFolderId"
-        f"&$orderby=receivedDateTime desc"
+        f"&$filter=lastModifiedDateTime ge {cutoff}"
+        f"&$select=id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,isRead,parentFolderId"
+        f"&$orderby=lastModifiedDateTime desc"
     )
     raw = _mail_call("SearchMessagesQueryParameters", {
         "queryParameters": query
@@ -168,17 +169,16 @@ def fetch_outlook_items():
 
     for msg in messages:
         msg_id = msg.get("id", "")
-        subject = msg.get("subject", "(no subject)")
-        from_data = msg.get("from", {}).get("emailAddress", {})
-        sender_name = from_data.get("name", "")
-        sender_email = from_data.get("address", "").lower()
+        subject = msg.get("subject") or "(no subject)"
+        from_data = (msg.get("from") or {}).get("emailAddress") or {}
+        sender_name = from_data.get("name") or ""
+        sender_email = (from_data.get("address") or "").lower()
         from_str = f"{sender_name} <{sender_email}>" if sender_name else sender_email
-        body_preview = msg.get("bodyPreview", "")
-        received = msg.get("receivedDateTime", "")
+        body_preview = msg.get("bodyPreview") or ""
+        received = msg.get("receivedDateTime") or ""
 
         # Skip own sent emails
         if sender_email in MY_ADDRESSES:
-            continue
             continue
 
         # Skip bridge emails — and auto-clean them

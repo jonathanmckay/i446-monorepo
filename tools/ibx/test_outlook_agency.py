@@ -86,3 +86,27 @@ def test_fetch_no_isread_filter():
             )
             return
     raise AssertionError("fetch_outlook_items function not found")
+
+
+def test_fetch_uses_lastmodified_not_received():
+    """
+    Bug: Snoozed emails have old receivedDateTime but get resurfaced to inbox
+    when snooze expires. The 24h filter on receivedDateTime excluded them.
+
+    Fix: Filter on lastModifiedDateTime — catches snoozed, flagged, and
+    resurfaced emails.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "lastModifiedDateTime" in func_source, (
+                "fetch_outlook_items must filter on lastModifiedDateTime, not receivedDateTime — "
+                "snoozed emails have old receivedDateTime but updated lastModifiedDateTime"
+            )
+            assert "receivedDateTime ge" not in func_source, (
+                "fetch_outlook_items must not use receivedDateTime for the time cutoff"
+            )
+            return
+    raise AssertionError("fetch_outlook_items function not found")
