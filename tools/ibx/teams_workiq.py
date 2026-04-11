@@ -74,8 +74,11 @@ def _extract_teams_links(text):
 
 
 def _make_item_id(from_str, message_preview):
-    """Create a stable-ish ID from sender + message preview for dedup."""
-    return f"teams:{from_str}:{message_preview[:80]}"
+    """Create a stable ID from sender + normalized message prefix for dedup."""
+    import re as _re
+    # Normalize: lowercase, collapse whitespace, strip punctuation variance
+    normalized = _re.sub(r'\s+', ' ', message_preview.lower().strip())[:40]
+    return f"teams:{from_str}:{normalized}"
 
 
 def _init_response_db():
@@ -234,13 +237,27 @@ def fetch_teams_items():
         if not message:
             continue
 
-        item_id = _make_item_id(from_str, message[:80])
+        item_id = _make_item_id(from_str, message)
 
         if item_id in processed:
             continue
 
+        # Also check legacy format (old 80-char keys)
+        legacy_id = f"teams:{from_str}:{message[:80]}"
+        if legacy_id in processed:
+            processed[item_id] = datetime.now().isoformat()
+            save_processed(processed)
+            continue
+
+        # Fuzzy check: if any processed key starts with same sender + first 30 chars
+        msg_prefix = message[:30].lower().strip()
+        if any(k.startswith(f"teams:{from_str}:") and msg_prefix in k.lower() for k in processed):
+            processed[item_id] = datetime.now().isoformat()
+            save_processed(processed)
+            continue
+
         # Record fetch for response tracking
-        record_fetch(item_id, from_str, message[:80])
+        record_fetch(item_id, from_str, message[:40])
 
         items.append({
             "type": "teams",

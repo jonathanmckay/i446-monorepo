@@ -107,3 +107,45 @@ def test_workiq_timeout_no_raw_error():
             )
             return
     raise AssertionError("_run_workiq function not found")
+
+
+def test_teams_item_id_normalized():
+    """
+    Bug: Teams messages kept reappearing because workiq returns slightly
+    different text each run (trailing whitespace, punctuation, capitalization).
+    The 80-char message prefix in the item ID created fragile keys.
+
+    Fix: _make_item_id normalizes text (lowercase, collapse whitespace, 40 chars).
+    """
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_make_item_id":
+            func_source = ast.get_source_segment(source, node)
+            assert "lower()" in func_source, (
+                "_make_item_id must normalize to lowercase for stable dedup"
+            )
+            assert "40" in func_source or "[:40]" in func_source, (
+                "_make_item_id must use shorter prefix (40 chars) for stability"
+            )
+            return
+    raise AssertionError("_make_item_id function not found")
+
+
+def test_teams_checks_legacy_processed_ids():
+    """
+    Bug: Changing _make_item_id format caused all previously-processed
+    messages to resurface (same problem as Outlook ID migration).
+
+    Fix: fetch_teams_items must check legacy ID formats + fuzzy match.
+    """
+    source = TEAMS_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "legacy" in func_source.lower(), (
+                "fetch_teams_items must check legacy processed ID format"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")
