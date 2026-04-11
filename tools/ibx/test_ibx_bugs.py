@@ -43,3 +43,52 @@ def test_normalize_email_skips_sent_by_user():
     # MY_EMAILS must contain the known addresses
     assert "mckay@m5x2.com" in source, "MY_EMAILS must include mckay@m5x2.com"
     assert "mckay@m5c7.com" in source, "MY_EMAILS must include mckay@m5c7.com"
+
+
+def test_fetch_inbox_dedup_threads_shows_one_message_per_thread():
+    """Bug: every message in a Gmail thread appeared as a separate review item.
+    User should only see the most recent message per thread.
+    Fix: fetch_inbox(dedup_threads=True) keeps only the first message per threadId.
+    """
+    from unittest.mock import MagicMock
+
+    import ibx
+
+    svc = MagicMock()
+    svc.users().messages().list().execute.return_value = {
+        "messages": [
+            {"id": "m1", "threadId": "tA"},
+            {"id": "m2", "threadId": "tA"},  # older msg in same thread
+            {"id": "m3", "threadId": "tB"},
+            {"id": "m4", "threadId": "tA"},  # yet another in same thread
+            {"id": "m5", "threadId": "tB"},  # older msg in thread B
+        ]
+    }
+
+    # Without dedup: all 5 messages returned
+    result = ibx.fetch_inbox(svc, dedup_threads=False)
+    assert len(result) == 5
+
+    # With dedup: only first message per thread (m1 for tA, m3 for tB)
+    result = ibx.fetch_inbox(svc, dedup_threads=True)
+    assert len(result) == 2
+    assert result[0]["id"] == "m1"
+    assert result[1]["id"] == "m3"
+
+
+def test_ibx0_fetch_emails_uses_dedup_threads():
+    """Verify ibx0.fetch_emails calls fetch_inbox with dedup_threads=True
+    so users only review one message per thread.
+    """
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_emails":
+            body_src = ast.get_source_segment(source, node)
+            assert "dedup_threads=True" in body_src, (
+                "fetch_emails must call fetch_inbox with dedup_threads=True"
+            )
+            break
+    else:
+        raise AssertionError("fetch_emails() not found in ibx0.py")

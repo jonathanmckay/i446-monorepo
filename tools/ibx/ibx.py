@@ -86,14 +86,26 @@ def get_gmail_service(tokens_file="tokens.json", creds_file="gcp-oauth.keys.json
 
 # ── Email Fetching ───────────────────────────────────────────────────────────
 
-def fetch_inbox(service, max_results=50, unread_only=False):
+def fetch_inbox(service, max_results=50, unread_only=False, dedup_threads=False):
     q = "in:inbox is:unread" if unread_only else "in:inbox"
     result = service.users().messages().list(
         userId="me",
         q=q,
         maxResults=max_results,
     ).execute()
-    return result.get("messages", [])
+    messages = result.get("messages", [])
+    if dedup_threads:
+        seen_threads = set()
+        deduped = []
+        for m in messages:
+            tid = m.get("threadId")
+            if tid and tid in seen_threads:
+                continue
+            if tid:
+                seen_threads.add(tid)
+            deduped.append(m)
+        messages = deduped
+    return messages
 
 def get_email(service, msg_id):
     msg = service.users().messages().get(

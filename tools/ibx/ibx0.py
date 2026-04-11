@@ -468,7 +468,7 @@ def fetch_emails():
 
     # Fetch remaining
     for name, svc in services.items():
-        msgs = _ibx.fetch_inbox(svc, unread_only=False)
+        msgs = _ibx.fetch_inbox(svc, unread_only=False, dedup_threads=True)
         count = 0
         for m in msgs:
             item = normalize_email(m, svc, name)
