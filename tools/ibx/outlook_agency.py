@@ -70,15 +70,20 @@ def record_fetch(item_id, sender, subject, received_at=None):
 
 def record_action(item_id, action):
     conn = _init_response_db()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     try:
         row = conn.execute("SELECT fetched_at FROM outlook_responses WHERE item_id = ?", (item_id,)).fetchone()
         hours = None
         if row and row[0]:
-            fetched = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
-            hours = round((now - fetched).total_seconds() / 3600, 2)
-            if hours > 72:
-                hours = None
+            try:
+                fetched = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+                if fetched.tzinfo is None:
+                    fetched = fetched.replace(tzinfo=timezone.utc)
+                hours = round((now - fetched).total_seconds() / 3600, 2)
+                if hours > 72:
+                    hours = None
+            except Exception:
+                pass
         conn.execute(
             "UPDATE outlook_responses SET action = ?, action_at = ?, response_hours = ? WHERE item_id = ?",
             (action, now.isoformat(), hours, item_id),

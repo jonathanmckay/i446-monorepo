@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -23,9 +24,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "ibx"))
 import agency_mcp
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
 RESPONSE_DB = Path.home() / ".config" / "outlook" / "response_times.db"
 MY_EMAIL = "jomckay@microsoft.com"
+MY_ALIASES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 MAX_RESPONSE_HOURS = 72
+# Assume Outlook "Sent:" timestamps in bodyPreview are Pacific time
+LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def init_db():
@@ -71,22 +80,98 @@ def parse_graph_response(raw_text):
         return []
 
 
-def fetch_sent_items(days):
-    """Fetch sent items from the last N days. Returns list of message dicts."""
+def parse_iso_datetime(dt_str):
+    """Parse an ISO datetime string from Graph API."""
+    if not dt_str:
+        return None
+    dt_str = dt_str.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(dt_str)
+    except ValueError:
+        return None
+
+
+def parse_outlook_sent_date(sent_str):
+    """Parse the 'Sent:' timestamp from Outlook's quoted reply header.
+
+    Outlook formats: 'Friday, April 10, 2026 4:35 PM' or 'Thursday, April 10, 2026 10:32:15 PM'
+    These are in the sender's local timezone. We assume Pacific for Microsoft internal.
+    """
+    if not sent_str:
+        return None
+    sent_str = sent_str.strip()
+    # Try several common formats
+    for fmt in [
+        "%A, %B %d, %Y %I:%M %p",
+        "%A, %B %d, %Y %I:%M:%S %p",
+        "%B %d, %Y %I:%M %p",
+        "%B %d, %Y %I:%M:%S %p",
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%A, %B %d, %Y %H:%M",
+        "%A, %B %d, %Y %H:%M:%S",
+    ]:
+        try:
+            naive = datetime.strptime(sent_str, fmt)
+            # Localize to Pacific and convert to UTC
+            localized = naive.replace(tzinfo=LOCAL_TZ)
+            return localized
+        except ValueError:
+            continue
+    return None
+
+
+def parse_quoted_headers(text):
+    """Extract From and Sent from Outlook's quoted reply headers in body/bodyPreview.
+
+    Returns (sender_email, sender_name, sent_datetime) or (None, None, None).
+    """
+    if not text:
+        return None, None, None
+
+    # Outlook puts a horizontal rule then From:/Sent:/To:/Subject: block
+    # Match From: Name <email> or From: email
+    from_match = re.search(
+        r'From:\s*(.+?)(?:<([^>]+)>)?\s*[\r\n]',
+        text,
+    )
+    sent_match = re.search(r'Sent:\s*(.+?)[\r\n]', text)
+
+    if not from_match:
+        return None, None, None
+
+    sender_name = from_match.group(1).strip().rstrip("<").strip()
+    sender_email = from_match.group(2)
+    if not sender_email:
+        # From line might just be an email
+        if "@" in sender_name:
+            sender_email = sender_name
+            sender_name = ""
+
+    sent_dt = None
+    if sent_match:
+        sent_dt = parse_outlook_sent_date(sent_match.group(1))
+
+    return sender_email, sender_name, sent_dt
+
+
+def fetch_sent_replies(days):
+    """Fetch sent reply messages from the last N days. Returns list of message dicts."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    all_messages = []
+    all_replies = []
 
     # Graph API doesn't support efficient from/emailAddress/address filter,
-    # so we fetch all recent messages and filter client-side for our own.
+    # so we fetch all recent messages and filter client-side for our own replies.
     skip = 0
     page_size = 50
-    while True:
+    max_pages = 10  # Safety limit: 500 messages max
+    for _page in range(max_pages):
         query = (
             f"?$top={page_size}"
             f"&$skip={skip}"
             f"&$filter=receivedDateTime ge {cutoff}"
             f"&$select=id,subject,from,toRecipients,ccRecipients,sentDateTime,"
-            f"receivedDateTime,conversationId,internetMessageId"
+            f"receivedDateTime,conversationId,bodyPreview"
             f"&$orderby=receivedDateTime desc"
         )
         raw = mail_call("SearchMessagesQueryParameters", {
@@ -101,72 +186,65 @@ def fetch_sent_items(days):
         if not messages:
             break
 
-        # Filter to messages sent by us
+        # Filter to replies sent by us
         for msg in messages:
             from_data = (msg.get("from") or {}).get("emailAddress", {})
             from_addr = (from_data.get("address") or "").lower()
-            if from_addr == MY_EMAIL:
-                all_messages.append(msg)
+            subject = msg.get("subject", "")
+
+            if from_addr not in MY_ALIASES:
+                continue
+            if not subject.lower().startswith("re:"):
+                continue
+            # Skip calendar noise
+            if any(kw in subject.lower() for kw in
+                   ["accepted:", "declined:", "tentative:", "canceled:", "updated:"]):
+                continue
+
+            all_replies.append(msg)
 
         if len(messages) < page_size:
             break
         skip += page_size
 
-    return all_messages
+    return all_replies
 
 
-def fetch_conversation_messages(conversation_id, sent_datetime):
-    """Fetch messages in a conversation to find the original received message.
-
-    Returns list of message dicts in the conversation, ordered by receivedDateTime asc.
-    We look for messages received before the sent_datetime that are NOT from us.
-    """
-    # Query all messages with this conversationId, selecting key fields
-    # Filter to messages received before our sent time
-    query = (
-        f"?$top=20"
-        f"&$filter=conversationId eq '{conversation_id}'"
-        f"&$select=id,subject,from,receivedDateTime,conversationId"
-        f"&$orderby=receivedDateTime desc"
-    )
-
-    raw = mail_call("SearchMessagesQueryParameters", {
-        "queryParameters": query,
-    }, timeout=30)
-
-    if raw is None:
-        return []
-
-    return parse_graph_response(raw)
+def get_message_details(msg_id):
+    """Fetch full message details via GetMessage to get bodyPreview for header parsing."""
+    raw = mail_call("GetMessage", {"id": msg_id}, timeout=30)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data.get("data", data)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
-def determine_action(sent_msg):
+def determine_action(msg):
     """Determine if a sent message is a reply or reply_all based on recipients."""
-    to_recipients = sent_msg.get("toRecipients", [])
-    cc_recipients = sent_msg.get("ccRecipients", [])
+    to_recipients = msg.get("toRecipients", [])
+    cc_recipients = msg.get("ccRecipients", [])
 
-    # Count non-self recipients
-    non_self_to = [
-        r for r in to_recipients
-        if (r.get("emailAddress", {}).get("address", "").lower() != MY_EMAIL)
-    ]
-    non_self_cc = [
-        r for r in cc_recipients
-        if (r.get("emailAddress", {}).get("address", "").lower() != MY_EMAIL)
-    ]
+    # Handle both formats: list of dicts (Graph search) or list of strings (GetMessage)
+    def count_non_self(recipients):
+        count = 0
+        for r in recipients:
+            if isinstance(r, dict):
+                addr = r.get("emailAddress", {}).get("address", "").lower()
+            else:
+                addr = str(r).lower()
+            if addr not in MY_ALIASES:
+                count += 1
+        return count
 
-    if len(non_self_to) > 1 or non_self_cc:
+    non_self_to = count_non_self(to_recipients)
+    non_self_cc = count_non_self(cc_recipients)
+
+    if non_self_to > 1 or non_self_cc > 0:
         return "reply_all"
     return "reply"
-
-
-def parse_datetime(dt_str):
-    """Parse an ISO datetime string from Graph API."""
-    if not dt_str:
-        return None
-    # Graph API returns UTC times like "2026-04-10T15:37:35Z"
-    dt_str = dt_str.replace("Z", "+00:00")
-    return datetime.fromisoformat(dt_str)
 
 
 def sync_responses(days=7):
@@ -178,100 +256,103 @@ def sync_responses(days=7):
     for row in conn.execute("SELECT item_id FROM outlook_responses WHERE action IS NOT NULL"):
         existing.add(row[0])
 
-    print(f"Fetching sent items from last {days} days...")
-    sent_items = fetch_sent_items(days)
-    print(f"  Found {len(sent_items)} sent items")
+    print(f"Fetching sent replies from last {days} days...")
+    replies = fetch_sent_replies(days)
+    print(f"  Found {len(replies)} sent replies")
 
-    # Filter to replies (subject starts with "Re:" or "RE:")
-    replies = []
-    for msg in sent_items:
-        subject = msg.get("subject", "")
+    # Filter out already processed
+    new_replies = []
+    for msg in replies:
         item_id = f"outlook-sent:{msg.get('id', '')}"
+        if item_id not in existing:
+            new_replies.append(msg)
 
-        # Skip already processed
-        if item_id in existing:
-            continue
-
-        # Only process replies
-        if not subject.lower().startswith("re:"):
-            continue
-
-        # Skip calendar/meeting responses
-        if any(kw in subject.lower() for kw in ["accepted:", "declined:", "tentative:", "canceled:"]):
-            continue
-
-        replies.append(msg)
-
-    print(f"  {len(replies)} new replies to process")
+    print(f"  {len(new_replies)} new replies to process")
 
     upserted = 0
-    for msg in replies:
+    for msg in new_replies:
         msg_id = msg.get("id", "")
         item_id = f"outlook-sent:{msg_id}"
         subject = msg.get("subject", "")
-        conversation_id = msg.get("conversationId", "")
         sent_dt_str = msg.get("sentDateTime") or msg.get("receivedDateTime", "")
-
-        sent_dt = parse_datetime(sent_dt_str)
+        sent_dt = parse_iso_datetime(sent_dt_str)
         if not sent_dt:
             continue
 
-        # Find the original message we replied to
-        if not conversation_id:
+        # Try to parse quoted headers from bodyPreview first
+        body_preview = msg.get("bodyPreview", "")
+        sender_email, sender_name, original_sent_dt = parse_quoted_headers(body_preview)
+
+        # If bodyPreview was truncated and didn't have From:/Sent:, fetch full message
+        if not sender_email:
+            details = get_message_details(msg_id)
+            if details:
+                # Try bodyPreview from GetMessage (which may be fuller)
+                bp = details.get("bodyPreview", "")
+                sender_email, sender_name, original_sent_dt = parse_quoted_headers(bp)
+
+                # Also try parsing from body HTML if bodyPreview fails
+                if not sender_email:
+                    body = details.get("body", "")
+                    # Extract text between From: and Subject: in HTML
+                    from_html = re.search(
+                        r'<b>From:</b>\s*(.+?)(?:<br>|</)',
+                        body,
+                    )
+                    sent_html = re.search(
+                        r'<b>Sent:</b>\s*(.+?)(?:<br>|</)',
+                        body,
+                    )
+                    if from_html:
+                        # Strip HTML tags, then decode entities
+                        from_text = re.sub(r'<[^>]+>', '', from_html.group(1)).strip()
+                        from_text = from_text.replace("&lt;", "<").replace("&gt;", ">")
+                        from_text = from_text.replace("&amp;", "&")
+                        # Try to extract email from "Name <email>" pattern
+                        em = re.search(r'<([^>]+@[^>]+)>', from_text)
+                        if em:
+                            sender_email = em.group(1)
+                            sender_name = from_text.split("<")[0].strip()
+                        elif "@" in from_text:
+                            # Bare email address
+                            email_match = re.search(r'[\w.+-]+@[\w.-]+', from_text)
+                            if email_match:
+                                sender_email = email_match.group(0)
+                            else:
+                                sender_email = from_text
+                    if sent_html:
+                        sent_text = re.sub(r'<[^>]+>', '', sent_html.group(1)).strip()
+                        original_sent_dt = parse_outlook_sent_date(sent_text)
+
+        if not sender_email:
             continue
 
-        conv_messages = fetch_conversation_messages(conversation_id, sent_dt_str)
-        if not conv_messages:
+        # Skip if the original sender is ourselves (e.g., forwarded chains)
+        if sender_email.lower() in MY_ALIASES:
             continue
 
-        # Find the most recent message from someone else, received before our reply
-        original = None
-        for conv_msg in conv_messages:
-            from_data = (conv_msg.get("from") or {}).get("emailAddress", {})
-            from_addr = (from_data.get("address") or "").lower()
-
-            # Skip our own messages
-            if from_addr == MY_EMAIL:
-                continue
-
-            recv_dt = parse_datetime(conv_msg.get("receivedDateTime", ""))
-            if not recv_dt:
-                continue
-
-            # Must be before our sent time
-            if recv_dt >= sent_dt:
-                continue
-
-            # Take the most recent one (list is desc by receivedDateTime)
-            if original is None:
-                original = {
-                    "from": from_data,
-                    "received_dt": recv_dt,
-                    "recv_dt_str": conv_msg.get("receivedDateTime", ""),
-                }
-                break
-
-        if original is None:
+        if not original_sent_dt:
             continue
 
         # Compute response time
-        delta = sent_dt - original["received_dt"]
+        # original_sent_dt is the time the original was sent (approx when we received it)
+        delta = sent_dt - original_sent_dt
         response_hours = round(delta.total_seconds() / 3600, 2)
 
-        # Cap at MAX_RESPONSE_HOURS
-        if response_hours > MAX_RESPONSE_HOURS:
-            response_hours = MAX_RESPONSE_HOURS
+        # Skip negative or impossibly large
         if response_hours < 0:
             continue
+        if response_hours > MAX_RESPONSE_HOURS:
+            response_hours = MAX_RESPONSE_HOURS
 
-        # Determine sender
-        from_data = original["from"]
-        sender_name = from_data.get("name", "")
-        sender_addr = from_data.get("address", "")
-        sender = f"{sender_name} <{sender_addr}>" if sender_name else sender_addr
+        # Format sender
+        sender = f"{sender_name} <{sender_email}>" if sender_name else sender_email
 
         # Determine action type
         action = determine_action(msg)
+
+        # fetched_at = original message sent time (best approx for when we received it)
+        fetched_at = original_sent_dt.isoformat()
 
         # Upsert
         conn.execute("""
@@ -288,14 +369,14 @@ def sync_responses(days=7):
             item_id,
             sender,
             subject,
-            original["recv_dt_str"],
+            fetched_at,
             action,
             sent_dt_str,
             response_hours,
         ))
         upserted += 1
 
-        print(f"  {action}: {subject[:60]}  ({response_hours:.1f}h) <- {sender_addr}")
+        print(f"  {action}: {subject[:60]}  ({response_hours:.1f}h) <- {sender_email}")
 
     conn.commit()
     conn.close()
