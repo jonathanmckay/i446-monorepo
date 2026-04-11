@@ -219,6 +219,15 @@ def fetch_outlook_items():
         if item_id in processed:
             continue
 
+        # Also check legacy workiq-style IDs for backwards compat
+        legacy_id = f"workiq:{from_str}:{subject}"
+        legacy_id2 = f"workiq:{sender_name}:{subject}"
+        if legacy_id in processed or legacy_id2 in processed:
+            # Migrate to new ID format
+            processed[item_id] = datetime.now().isoformat()
+            save_processed(processed)
+            continue
+
         # Record with actual receive time from Graph API
         record_fetch(item_id, from_str, subject, received)
 

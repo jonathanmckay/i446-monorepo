@@ -114,3 +114,25 @@ def test_fetch_filters_noise_senders():
             )
             return
     raise AssertionError("fetch_outlook_items function not found")
+
+
+def test_fetch_checks_legacy_workiq_ids():
+    """
+    Bug: Switching from outlook_workiq to outlook_agency changed item ID format
+    from 'workiq:sender:subject' to 'outlook:graph_msg_id'. All previously
+    processed emails resurfaced because the new IDs didn't match old ones.
+
+    Fix: fetch_outlook_items must check both new and legacy ID formats against
+    processed.json.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "workiq:" in func_source, (
+                "fetch_outlook_items must check legacy workiq: ID format "
+                "for backwards compatibility with processed.json"
+            )
+            return
+    raise AssertionError("fetch_outlook_items function not found")
