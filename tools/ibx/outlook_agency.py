@@ -158,11 +158,27 @@ def fetch_outlook_items():
     # Calendar/meeting response patterns to filter out
     import re
     CALENDAR_RE = re.compile(
-        r'^(Accepted|Declined|Tentative|Canceled|Updated|Forwarded):\s',
+        r'^(\[EXTERNAL\]\s*)?(Accepted|Declined|Tentative|Canceled|Updated|Forwarded):\s',
         re.IGNORECASE,
     )
     # Skip emails sent by the user (Sent Items folder)
     MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
+    # Automated/notification senders to skip (Outlook "Other" tab noise)
+    NOISE_SENDERS = {
+        "msaemail@microsoft.com",       # MSApprovals
+        "msxemail@microsoft.com",       # MyExpense
+        "noreply@microsoft.com",        # SharePoint, system notifications
+        "noreply@email.teams.microsoft.com",
+        "benefits@microsoft.com",
+        "weeklyfeed@microsoft.com",
+        "powerautomatenorepley@microsoft.com",
+        "microsoftexchangeonline@microsoft.com",
+    }
+    # Subject patterns for automated notifications
+    NOISE_SUBJECT_RE = re.compile(
+        r'^(\[EXTERNAL\]\s*)?(Reminder:|Expense Report|Your sitter job|Supplement your|RE: ﻿Post)',
+        re.IGNORECASE,
+    )
 
     for msg in messages:
         msg_id = msg.get("id", "")
@@ -188,6 +204,14 @@ def fetch_outlook_items():
 
         # Skip calendar/meeting responses
         if CALENDAR_RE.match(subject):
+            continue
+
+        # Skip automated notification senders
+        if sender_email in NOISE_SENDERS:
+            continue
+
+        # Skip automated notification subjects
+        if NOISE_SUBJECT_RE.match(subject):
             continue
 
         item_id = f"outlook:{msg_id}"

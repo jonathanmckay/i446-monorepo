@@ -91,3 +91,26 @@ def test_fetch_uses_received_and_isread():
             )
             return
     raise AssertionError("fetch_outlook_items function not found")
+
+
+def test_fetch_filters_noise_senders():
+    """
+    Bug: ibx0 showed automated notification emails (MSApprovals, MyExpense,
+    SharePoint noreply, Benefits) that Outlook puts in the Other tab.
+    User sees 0 in Focused inbox but 5+ in ibx0.
+
+    Fix: filter known noise sender addresses.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "NOISE_SENDERS" in func_source, (
+                "fetch_outlook_items must filter NOISE_SENDERS"
+            )
+            assert "msaemail@microsoft.com" in func_source, (
+                "NOISE_SENDERS must include MSApprovals (msaemail@microsoft.com)"
+            )
+            return
+    raise AssertionError("fetch_outlook_items function not found")
