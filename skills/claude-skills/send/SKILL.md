@@ -109,22 +109,63 @@ _slack.send_reply(token, channel_id, '<message>')
 
 ## Recipient Resolution
 
-If only a name is given (not an email), resolve via:
-1. **Teams**: `agency mcp m365-user` → `GetMultipleUsersDetails` with display name search
-2. **Known contacts**: check common contacts below
+Resolve recipients via **d359 lookup first**, then fall back to live lookups.
 
-### Known contacts (shorthand)
+### Resolution order
 
-| Name | Email | Teams UPN |
-|------|-------|-----------|
-| Luke Hoban | lukehoban@github.com | lukehoban@microsoft.com |
-| Asha Sharma | ashasharma@microsoft.com | ashasharma@microsoft.com |
-| Carolina Pinzon | cpinzon@microsoft.com | cpinzon@microsoft.com |
-| John Maeda | johnmaeda@microsoft.com | johnmaeda@microsoft.com |
-| Andy Sharman | andysh@github.com | andysh@microsoft.com |
-| Joe Ingraham | joeing@microsoft.com | joeing@microsoft.com |
+1. **d359 vault lookup** — Search `~/vault/d359/` for a matching person file by name/slug.
+   Read the `channels:` frontmatter block for email, work_email, teams_upn, phone, slack.
+   Use the field matching the requested channel (e.g., `teams_upn` for teams, `phone` for imessage).
+   If no channel was specified by the user, use `preferred:` to pick the channel.
 
-If the person isn't in the table, use `GetMultipleUsersDetails` to resolve their UPN.
+2. **MS Graph lookup** (teams/outlook only) — `GetMultipleUsersDetails` via agency mcp m365-user.
+
+3. **Gmail search** (gmail only) — Search recent threads for the person's name to find their email.
+
+### d359 lookup implementation
+
+```python
+import re, glob
+from pathlib import Path
+
+def resolve_d359(name):
+    """Search d359 files by name. Returns channels dict or None."""
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    d = Path.home() / 'vault/d359'
+    for p in d.glob('*.md'):
+        stem = p.stem.lower()
+        if slug in stem or name.lower() in stem:
+            text = p.read_text()
+            m = re.match(r'^---\n(.*?)\n---\n', text, re.DOTALL)
+            if not m: continue
+            fm = m.group(1)
+            if 'channels:' not in fm: continue
+            ch = {}
+            in_ch = False
+            for line in fm.split('\n'):
+                if line.strip() == 'channels:': in_ch = True; continue
+                if in_ch and line.startswith('  ') and ':' in line:
+                    k, _, v = line.strip().partition(':')
+                    ch[k.strip()] = v.strip().strip('"')
+                elif in_ch: break
+            if ch: return ch
+    return None
+```
+
+### Channel → field mapping
+
+| Channel   | Primary field  | Fallback field |
+|-----------|---------------|----------------|
+| teams     | teams_upn     | work_email     |
+| outlook   | work_email    | email          |
+| gmail     | email         | work_email     |
+| imessage  | phone         | email          |
+| slack     | slack         | —              |
+
+### Lazy write-back
+
+When a recipient is resolved via Graph/Gmail search (not d359), write the result back
+into their d359 file's `channels:` block so future lookups skip the live search.
 
 ## Tools
 
