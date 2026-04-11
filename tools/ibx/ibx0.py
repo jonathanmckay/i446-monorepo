@@ -33,10 +33,14 @@ except Exception:
         _outlook_available = False
 
 try:
-    import teams_workiq as _teams
+    import teams_agency as _teams
     _teams_available = True
-except ImportError:
-    _teams_available = False
+except Exception:
+    try:
+        import teams_workiq as _teams
+        _teams_available = True
+    except ImportError:
+        _teams_available = False
 
 # ── Auto-sign integration (optional — skipped if module not found) ────────────
 _AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
@@ -338,9 +342,12 @@ def do_reply(item, reply_text):
         d = item["_data"]
         _slack.send_reply(d["token"], d["thread"]["channel_id"], reply_text)
     elif t == "teams":
-        # Can't send via workiq — open Teams for reply
-        _teams.reply_via_teams(item["_data"].get("link", ""))
-        console.print("[dim](Opened Teams for reply — mark done manually)[/dim]")
+        chat_id = item["_data"].get("chat_id", "")
+        if chat_id and hasattr(_teams, 'reply'):
+            _teams.reply(item["_data"]["item_id"], chat_id, reply_text)
+        else:
+            _teams.reply_via_teams(item["_data"].get("link", ""))
+            console.print("[dim](Opened Teams for reply)[/dim]")
     if t not in ("outlook", "teams"):  # these handle their own archiving
         do_archive(item)
 
