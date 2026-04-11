@@ -13,7 +13,7 @@ Manage daily goals in the `## 0₲` section of the build order file and sync to 
 - **Build order**: `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`
 - **Section**: `## 0₲` (stop at the next `##` or `###` heading)
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
-- **Todoist labels**: `#0g` on every task
+- **Todoist labels**: `#关键径路` AND `#0g` on every task
 
 ## Notation Parsing
 
@@ -55,7 +55,7 @@ Preserve the `### 以后的目标` subsection and everything below it. Only repl
 For each goal, create a Todoist task:
 - **Content**: goal text (with `(N)`, `[N]`, `{N}` preserved; `@code` stripped)
 - **Project**: `0g` (ID `6XfvCQ3p8Gq6fhGR`)
-- **Labels**: `["#0g"]` + the `@code` label if present (e.g. `"i9"`)
+- **Labels**: `["#关键径路", "#0g"]` + the `@code` label if present (e.g. `"i9"`)
 - **Priority**: `p1`
 - **Due**: today
 - **Duration**: from `(N)` if present
