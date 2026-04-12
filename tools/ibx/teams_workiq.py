@@ -256,8 +256,8 @@ def fetch_teams_items():
             save_processed(processed)
             continue
 
-        # Record fetch for response tracking
-        record_fetch(item_id, from_str, message[:40])
+        # Record fetch for response tracking (use message date when available)
+        record_fetch(item_id, from_str, message[:40], received_at=date_str or None)
 
         items.append({
             "type": "teams",
