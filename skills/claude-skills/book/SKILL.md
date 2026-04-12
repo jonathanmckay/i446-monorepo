@@ -1,6 +1,6 @@
 ---
 name: "book"
-description: "Write a book review. Interactive: prompts for bullets, generates review in vault, opens Goodreads. Usage: /book <title>"
+description: "Write a book review. Interactive: prompts for bullets, generates review in vault, opens Goodreads and Obsidian. Usage: /book <title>"
 user-invocable: true
 ---
 
@@ -102,7 +102,18 @@ series: "<Series Name>"
 - Omit `series` if not part of a series
 - Omit `source` if user doesn't plan to post to Goodreads
 
-3. **Open Goodreads** in Chrome so the user can paste the review:
+3. **Open the saved review in Obsidian** so the user can see or edit the vault file immediately:
+
+```bash
+python3 - <<'PY'
+import urllib.parse, subprocess
+path = "/Users/mckay/vault/hcmc/reviews/YYYY/title.md"
+url = "obsidian://open?path=" + urllib.parse.quote(path)
+subprocess.run(["open", url], check=True)
+PY
+```
+
+4. **Open Goodreads** in Chrome so the user can paste the review:
 
 ```bash
 open -a "Google Chrome" "https://www.goodreads.com/book/show/<search_query>"
@@ -113,7 +124,7 @@ Use a Goodreads search URL:
 open -a "Google Chrome" "https://www.goodreads.com/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('TITLE AUTHOR'))")"
 ```
 
-4. **Copy review text to clipboard** (without frontmatter) so the user can paste directly:
+5. **Copy review text to clipboard** (without frontmatter) so the user can paste directly:
 
 ```bash
 # Copy just the review body to clipboard
@@ -124,5 +135,5 @@ echo "<review text>" | pbcopy
 
 ```
 Saved: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
-Goodreads opened. Review copied to clipboard — paste away.
+Obsidian and Goodreads opened. Review copied to clipboard — paste away.
 ```
