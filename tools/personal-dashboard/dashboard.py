@@ -18,6 +18,18 @@ from pathlib import Path
 import openpyxl
 from flask import Flask, render_template_string, jsonify
 
+# GA4 imports (optional — dashboard works without analytics)
+try:
+    from google.analytics.data_v1beta import BetaAnalyticsDataClient
+    from google.analytics.data_v1beta.types import (
+        RunReportRequest, DateRange, Metric, Dimension, OrderBy,
+    )
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    GA4_AVAILABLE = True
+except ImportError:
+    GA4_AVAILABLE = False
+
 # Load .env file if present (for local dev without exporting vars)
 _env_file = Path(__file__).parent / ".env"
 if _env_file.exists():
@@ -92,6 +104,12 @@ PROJECT_ID_TO_CODE = {
 }
 
 DAYS = 30
+
+# GA4 config
+GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID", "")
+GA4_OAUTH_KEYS = Path(__file__).parent / "ga4-oauth.keys.json"
+GA4_TOKENS = Path(__file__).parent / "ga4-tokens.json"
+GA4_SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────────
@@ -339,6 +357,73 @@ def load_email_data():
         return {"daily": [], "summary": {}}
 
 
+def _ga4_credentials():
+    """Load or refresh GA4 OAuth credentials."""
+    if not GA4_AVAILABLE or not GA4_OAUTH_KEYS.exists():
+        return None
+    creds = None
+    if GA4_TOKENS.exists():
+        info = json.loads(GA4_TOKENS.read_text())
+        creds = Credentials.from_authorized_user_info(info, GA4_SCOPES)
+    if creds and creds.expired and creds.refresh_token:
+        from google.auth.transport.requests import Request
+        creds.refresh(Request())
+        GA4_TOKENS.write_text(creds.to_json())
+    if not creds or not creds.valid:
+        return None
+    return creds
+
+
+def load_ga4_data():
+    """Fetch GA4 pageviews/day and top pages for last DAYS days.
+    Returns {"daily": {date_str: pageviews}, "top_pages": [{path, views}]}.
+    """
+    creds = _ga4_credentials()
+    if not creds or not GA4_PROPERTY_ID:
+        return {"daily": {}, "top_pages": []}
+
+    try:
+        client = BetaAnalyticsDataClient(credentials=creds)
+
+        # Daily pageviews
+        today = date.today()
+        start = (today - timedelta(days=DAYS)).isoformat()
+        end = today.isoformat()
+
+        resp = client.run_report(RunReportRequest(
+            property=f"properties/{GA4_PROPERTY_ID}",
+            date_ranges=[DateRange(start_date=start, end_date=end)],
+            metrics=[Metric(name="screenPageViews")],
+            dimensions=[Dimension(name="date")],
+        ))
+        daily = {}
+        for row in resp.rows:
+            d = row.dimension_values[0].value  # YYYYMMDD
+            d_iso = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+            daily[d_iso] = int(row.metric_values[0].value)
+
+        # Top pages
+        resp2 = client.run_report(RunReportRequest(
+            property=f"properties/{GA4_PROPERTY_ID}",
+            date_ranges=[DateRange(start_date=start, end_date=end)],
+            metrics=[Metric(name="screenPageViews")],
+            dimensions=[Dimension(name="pagePath")],
+            order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="screenPageViews"), desc=True)],
+            limit=10,
+        ))
+        top_pages = []
+        for row in resp2.rows:
+            top_pages.append({
+                "path": row.dimension_values[0].value,
+                "views": int(row.metric_values[0].value),
+            })
+
+        return {"daily": daily, "top_pages": top_pages}
+    except Exception as e:
+        print(f"GA4 error: {e}")
+        return {"daily": {}, "top_pages": []}
+
+
 # ── Date range helper ──────────────────────────────────────────────────────────
 
 def last_n_days(n=DAYS):
@@ -379,6 +464,7 @@ def api_data():
     tasks_raw = load_tasks_data()
     email_raw = load_email_data()
     imsg_stats = load_imessage_stats()
+    ga4_raw = load_ga4_data()
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -579,6 +665,10 @@ def api_data():
     total_time = {code: sum(toggl_raw.get(d, {}).get(code, 0) for d in dates)
                   for code in all_projects}
 
+    # GA4 pageviews per day
+    ga4_daily = ga4_raw.get("daily", {})
+    ga4_views = [ga4_daily.get(d, 0) for d in dates]
+
     return jsonify({
         "dates": [d[5:] for d in dates],  # MM-DD for display
         "points": {"datasets": points_datasets},
@@ -592,11 +682,13 @@ def api_data():
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
         "email": {"datasets": email_datasets, "summary": email_summary, "imessage": imsg_stats},
+        "ga4": {"views": ga4_views, "top_pages": ga4_raw.get("top_pages", [])},
         "summary": {
             "total_points": {k: int(v) for k, v in total_points.items() if v > 0},
             "total_mins": {k: int(v) for k, v in total_time.items() if v > 0},
             "total_turns": sum(turns_values),
             "total_tasks": sum(tasks_values),
+            "total_views": sum(ga4_views),
         }
     })
 
@@ -849,6 +941,11 @@ MORE_HTML = """<!DOCTYPE html>
     <h2>Shots / Task (turns ÷ tasks, 7-day rolling)</h2>
     <div class="chart-wrap xs"><canvas id="shotsChart"></canvas></div>
   </div>
+  <div class="card">
+    <h2>o315 Blog — Pageviews / Day</h2>
+    <div class="chart-wrap xs"><canvas id="ga4Chart"></canvas></div>
+    <div class="summary" id="ga4Summary"></div>
+  </div>
 </div>
 
 <script>
@@ -916,6 +1013,43 @@ fetch('/api/data').then(r => r.json()).then(data => {
         y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
+  });
+
+  // GA4 pageviews chart
+  const ga4 = data.ga4 || { views: [], top_pages: [] };
+  new Chart(document.getElementById('ga4Chart'), {
+    type: 'bar',
+    data: { labels, datasets: [{
+      label: 'pageviews',
+      data: ga4.views,
+      backgroundColor: '#00e67644',
+      borderColor: '#00e676',
+      borderWidth: 1,
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, beginAtZero: true }
+      }
+    }
+  });
+  // Top pages badges
+  const ga4El = document.getElementById('ga4Summary');
+  const totalViews = data.summary.total_views || 0;
+  if (totalViews > 0) {
+    const tb = document.createElement('div');
+    tb.className = 'badge';
+    tb.innerHTML = `total <span>${totalViews}</span>`;
+    ga4El.appendChild(tb);
+  }
+  (ga4.top_pages || []).slice(0, 5).forEach(p => {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    const short = p.path.length > 30 ? p.path.slice(0, 27) + '...' : p.path;
+    b.innerHTML = `${short} <span>${p.views}</span>`;
+    ga4El.appendChild(b);
   });
 });
 </script>

@@ -79,6 +79,62 @@ TYPE_LABEL = {
     "teams": "TEAMS",
 }
 
+# ── Response time tracking ────────────────────────────────────────────────────
+_response_times: list[float] = []  # minutes per reply, session-level
+
+def _parse_received_at(item) -> float:
+    """Extract received epoch from any item type. Returns 0.0 if unavailable."""
+    try:
+        t = item["type"]
+        if t in ("email", "outlook", "teams"):
+            date_str = item.get("_data", {}).get("email", {}).get("date", "")
+            if not date_str:
+                date_str = item.get("_data", {}).get("date", "")
+            if date_str:
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                return dt.timestamp()
+        elif t == "slack":
+            ts = item.get("ts", 0.0)
+            if ts:
+                return float(ts)
+        elif t == "imsg":
+            date_str = item.get("_data", {}).get("thread", {}).get("latest_date", "")
+            if date_str:
+                # Format like "apr 05, 01:30pm"
+                dt = datetime.strptime(date_str, "%b %d, %I:%M%p")
+                dt = dt.replace(year=datetime.now().year)
+                return dt.timestamp()
+    except Exception:
+        pass
+    return 0.0
+
+def _print_response_stats(item):
+    """Print response time for this reply and running day average."""
+    received = item.get("received_at", 0.0)
+    if not received:
+        return
+    elapsed_min = (time.time() - received) / 60
+    if elapsed_min < 0 or elapsed_min > 10080:  # ignore if negative or > 1 week
+        return
+    old_avg = sum(_response_times) / len(_response_times) if _response_times else None
+    _response_times.append(elapsed_min)
+    new_avg = sum(_response_times) / len(_response_times)
+    # Format
+    def fmt(m):
+        if m < 60:
+            return f"{m:.0f}m"
+        return f"{m / 60:.1f}h"
+    if old_avg is not None:
+        console.print(
+            f"[dim]⏱ Response time: {fmt(elapsed_min)} · "
+            f"Day avg: {fmt(old_avg)} → {fmt(new_avg)} ({len(_response_times)} replies)[/dim]"
+        )
+    else:
+        console.print(
+            f"[dim]⏱ Response time: {fmt(elapsed_min)} · "
+            f"Day avg: {fmt(new_avg)} (1st reply)[/dim]"
+        )
+
 # ── Normalize items ───────────────────────────────────────────────────────────
 
 def normalize_email(msg_ref, service, account):
@@ -92,7 +148,7 @@ def normalize_email(msg_ref, service, account):
     from_addr = re.search(r'<([^>]+)>', email.get("from", ""))
     if from_addr and from_addr.group(1).lower() in MY_EMAILS:
         return None
-    return {
+    item = {
         "type": "email",
         "source": account,
         "from": email.get("from", ""),
@@ -103,6 +159,8 @@ def normalize_email(msg_ref, service, account):
         "ts": 0.0,  # Gmail doesn't give easy sort ts; use fetch order
         "_data": {"email": email, "service": service},
     }
+    item["received_at"] = _parse_received_at(item)
+    return item
 
 def normalize_imsg(thread):
     """Normalize an iMessage thread card into a unified item."""
@@ -111,7 +169,7 @@ def normalize_imsg(thread):
         ts = 0.0
     except Exception:
         ts = 0.0
-    return {
+    item = {
         "type": "imsg",
         "source": "iMessage",
         "from": thread.get("display_name", ""),
@@ -120,6 +178,8 @@ def normalize_imsg(thread):
         "ts": ts,
         "_data": {"thread": thread},
     }
+    item["received_at"] = _parse_received_at(item)
+    return item
 
 def normalize_slack(thread, token, workspace):
     """Normalize a Slack thread into a unified item."""
@@ -129,7 +189,7 @@ def normalize_slack(thread, token, workspace):
         ts = 0.0
     msgs = thread.get("messages", [])
     body = "\n".join(f"{m['sender']} ({m['time']}): {m['text']}" for m in msgs)
-    return {
+    item = {
         "type": "slack",
         "source": workspace,
         "from": thread.get("display_name", ""),
@@ -138,6 +198,8 @@ def normalize_slack(thread, token, workspace):
         "ts": ts,
         "_data": {"thread": thread, "token": token, "workspace": workspace},
     }
+    item["received_at"] = _parse_received_at(item)
+    return item
 
 # ── Display ───────────────────────────────────────────────────────────────────
 
@@ -569,7 +631,10 @@ def fetch_outlook():
     if not _outlook_available:
         return []
     try:
-        return _outlook.fetch_outlook_items()
+        items = _outlook.fetch_outlook_items()
+        for item in items:
+            item["received_at"] = _parse_received_at(item)
+        return items
     except Exception as e:
         console.print(f"  [yellow]Outlook error: {e}[/yellow]")
         return []
@@ -579,7 +644,10 @@ def fetch_teams():
     if not _teams_available:
         return []
     try:
-        return _teams.fetch_teams_items()
+        items = _teams.fetch_teams_items()
+        for item in items:
+            item["received_at"] = _parse_received_at(item)
+        return items
     except Exception as e:
         console.print(f"  [yellow]Teams error: {e}[/yellow]")
         return []
