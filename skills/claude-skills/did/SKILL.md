@@ -300,6 +300,17 @@ If no matching task is found, skip silently (not all habits have a Todoist task)
 
 After every AppleScript write to 0₦ or 0分, **check the return value** for `verify=`. If the value is `0`, empty, or clearly wrong (e.g. the written number doesn't appear), flag it as `⚠ checksum mismatch` and report the actual cell value. Do NOT silently report success if the verify value looks wrong.
 
+### Step 3b: Validation gate
+
+**BLOCKING CHECK — do not proceed to Step 4 without this.**
+
+Before reporting, verify that Step 3 (Todoist close) was actually attempted:
+- If a Todoist search was run and a task was found → it must have been closed. Confirm with `[+ todoist]`.
+- If a Todoist search was run and no task was found → acceptable, note omission.
+- If **no Todoist search was attempted at all** → **STOP. Go back and run Step 3.** This is the most common failure mode.
+
+This gate exists because skipping Step 3 silently is a recurring bug. Every 0₦ habit write MUST be paired with a Todoist search attempt.
+
 ### Step 4: Report
 
 On success, confirm in one line:
