@@ -1,8 +1,45 @@
 """Regression tests for outlook_agency."""
 import ast
+import sqlite3
 from pathlib import Path
 
+import outlook_agency
+
 OUTLOOK_AGENCY_PY = Path(__file__).parent / "outlook_agency.py"
+
+
+def test_record_action_uses_timezone_aware_now(tmp_path, monkeypatch):
+    """
+    Bug: record_action() called datetime.now(timezone.utc) without importing
+    timezone, so reply/archive/delete paths crashed with NameError at runtime.
+
+    Fix: import timezone at module scope and verify record_action updates the DB.
+    """
+    db_path = tmp_path / "response_times.db"
+    monkeypatch.setattr(outlook_agency, "RESPONSE_DB", db_path)
+
+    item_id = "outlook:test-message"
+    outlook_agency.record_fetch(
+        item_id,
+        "Sender <sender@example.com>",
+        "Subject",
+        "2026-04-12T12:00:00Z",
+    )
+
+    outlook_agency.record_action(item_id, "reply")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT action, action_at, response_hours FROM outlook_responses WHERE item_id = ?",
+            (item_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == "reply"
+    assert row[1]
 
 
 def test_fromisoformat_handles_z_suffix():

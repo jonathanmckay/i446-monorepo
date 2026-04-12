@@ -9,7 +9,7 @@ import json
 import os
 import threading
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
