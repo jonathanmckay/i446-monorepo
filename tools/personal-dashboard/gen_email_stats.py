@@ -410,6 +410,68 @@ def compute_teams_response_times(days=DAYS):
     return response_times
 
 
+def parse_teams_sent_counts(raw, days=DAYS, now=None):
+    """Parse Graph search results into local-day counts of my sent Teams messages."""
+    if not raw:
+        return {}
+
+    now = now or datetime.now(timezone.utc)
+    today = now.astimezone(LOCAL_TZ).date()
+    cutoff = today - timedelta(days=days)
+
+    try:
+        import teams_agency
+        my_addresses = teams_agency.MY_ADDRESSES
+        outer = json.loads(raw)
+        inner = json.loads(outer.get("rawResponse", "{}"))
+        hits_containers = inner.get("value", [{}])[0].get("hitsContainers", [{}])
+        hits = hits_containers[0].get("hits", []) if hits_containers else []
+    except Exception:
+        return {}
+
+    counts = defaultdict(int)
+    for hit in hits:
+        resource = hit.get("resource", {})
+        sender = resource.get("from", {}).get("emailAddress", {})
+        sender_email = (sender.get("address") or "").lower()
+        if sender_email not in my_addresses:
+            continue
+
+        created = resource.get("createdDateTime", "")
+        if not created:
+            continue
+
+        try:
+            sent_dt = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+        except (ValueError, TypeError):
+            continue
+
+        day = sent_dt.date()
+        if day <= cutoff or day > today:
+            continue
+        counts[day.isoformat()] += 1
+
+    return dict(counts)
+
+
+def compute_teams_sent_counts(days=DAYS):
+    """Count recent actual sent Teams messages by local day via Graph search."""
+    try:
+        import teams_agency
+    except Exception:
+        return {}
+
+    # Full 30-day Teams message search times out in practice. Patch recent counts
+    # (today/yesterday) from Graph and leave older days on the response DB fallback.
+    recent_days = min(days, 2)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=recent_days)).strftime("%Y-%m-%d")
+    raw = teams_agency._teams_call("SearchTeamMessagesQueryParameters", {
+        "queryString": f"sent>={cutoff}",
+        "size": 100,
+    }, timeout=60)
+    return parse_teams_sent_counts(raw, days=recent_days)
+
+
 def compute_outlook_response_times(days=DAYS):
     """
     Read Outlook response times from the local tracking DB populated by ibx.
@@ -489,12 +551,16 @@ def main():
 
     # Teams response times (from ibx tracking DB)
     print("Fetching Teams...")
+    teams_sent_counts = {}
     try:
         teams_times = compute_teams_response_times()
         for rec in teams_times:
             rec["account"] = "teams"
         all_data.extend(teams_times)
         print(f"  → {len(teams_times)} reply events")
+        teams_sent_counts = compute_teams_sent_counts()
+        if teams_sent_counts:
+            print(f"  → {sum(teams_sent_counts.values())} sent messages")
     except Exception as e:
         print(f"  WARN: Teams failed: {e}")
 
@@ -510,6 +576,15 @@ def main():
         print(f"  WARN: Outlook failed: {e}")
 
     daily, summary = build_stats(all_data)
+    if teams_sent_counts:
+        daily_index = {(row["date"], row["account"]): row for row in daily}
+        for day, count in teams_sent_counts.items():
+            key = (day, "teams")
+            if key in daily_index:
+                daily_index[key]["count"] = count
+            else:
+                daily.append({"date": day, "account": "teams", "avg_hours": None, "count": count})
+        daily.sort(key=lambda row: (row["date"], row["account"]))
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")
     print(f"Summary: {summary}")
 

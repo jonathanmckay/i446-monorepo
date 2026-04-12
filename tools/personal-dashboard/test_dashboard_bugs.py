@@ -97,3 +97,56 @@ def test_compute_teams_response_times_counts_only_replies_in_local_day(tmp_path,
         {"date": "2026-04-11", "hours": 0.6},
         {"date": "2026-04-12", "hours": 1.0},
     ]
+
+
+def test_parse_teams_sent_counts_uses_actual_sent_messages_and_local_day():
+    gen_email_stats = _load_gen_email_stats()
+
+    raw = {
+        "rawResponse": __import__("json").dumps({
+            "value": [{
+                "hitsContainers": [{
+                    "hits": [
+                        {
+                            "resource": {
+                                "createdDateTime": "2026-04-12T17:05:40Z",
+                                "from": {"emailAddress": {
+                                    "name": "Jonathan McKay",
+                                    "address": "jomckay@microsoft.com",
+                                }},
+                            }
+                        },
+                        {
+                            "resource": {
+                                "createdDateTime": "2026-04-12T06:24:57Z",
+                                "from": {"emailAddress": {
+                                    "name": "Jonathan McKay",
+                                    "address": "jomckay@microsoft.com",
+                                }},
+                            }
+                        },
+                        {
+                            "resource": {
+                                "createdDateTime": "2026-04-12T16:55:23Z",
+                                "from": {"emailAddress": {
+                                    "name": "Jacky Huang",
+                                    "address": "jacky.huang@microsoft.com",
+                                }},
+                            }
+                        },
+                    ]
+                }]
+            }]
+        })
+    }
+
+    counts = gen_email_stats.parse_teams_sent_counts(
+        __import__("json").dumps(raw),
+        days=30,
+        now=gen_email_stats.datetime(2026, 4, 12, 18, 0, tzinfo=gen_email_stats.timezone.utc),
+    )
+
+    assert counts == {
+        "2026-04-11": 1,
+        "2026-04-12": 1,
+    }
