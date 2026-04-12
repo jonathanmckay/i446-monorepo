@@ -102,6 +102,97 @@ def test_slack_build_thread_uses_message_ts_not_unread_count():
         raise AssertionError("build_thread() not found in slack.py")
 
 
+def test_slack_mpim_with_missing_unread_count_still_shows():
+    """Behavioral test: an MPIM where conversations.info returns NO unread_count
+    field but there ARE messages newer than last_read should still appear.
+    """
+    from unittest.mock import patch, MagicMock
+    import slack as _slack
+
+    token = "xoxp-fake"
+    self_id = "U_SELF"
+    channel = {"id": "G_MPIM", "is_im": False, "is_mpim": True, "user": ""}
+
+    # conversations.info returns last_read but NO unread_count (real MPIM behavior)
+    info_response = {
+        "ok": True,
+        "channel": {
+            "id": "G_MPIM",
+            "last_read": "1000000000.000000",  # old
+            # NOTE: no "unread_count" key at all — this is the bug trigger
+        }
+    }
+
+    # conversations.history returns a message NEWER than last_read
+    history_response = {
+        "ok": True,
+        "messages": [
+            {"type": "message", "user": "U_OTHER", "text": "hey!", "ts": "1000000999.000000"},
+        ]
+    }
+
+    members_response = {
+        "ok": True,
+        "members": ["U_SELF", "U_OTHER"]
+    }
+
+    def fake_slack_get(tok, method, **kwargs):
+        if method == "conversations.info":
+            return info_response
+        elif method == "conversations.history":
+            return history_response
+        elif method == "conversations.members":
+            return members_response
+        elif method == "users.info":
+            return {"ok": True, "user": {"real_name": "Other User", "profile": {"display_name": "other"}}}
+        return {}
+
+    with patch.object(_slack, "slack_get", side_effect=fake_slack_get):
+        result = _slack.build_thread(token, channel, self_id)
+
+    # Before the fix: result would be None (unread_count defaulted to 0 → filtered out)
+    # After the fix: result is not None because latest msg ts > last_read
+    assert result is not None, (
+        "MPIM with missing unread_count but newer messages must NOT be filtered out"
+    )
+    assert result["messages"][0]["text"] == "hey!"
+
+
+def test_slack_read_channel_is_filtered():
+    """Counterpart: a channel where last_read >= latest message SHOULD be filtered."""
+    from unittest.mock import patch
+    import slack as _slack
+
+    token = "xoxp-fake"
+    self_id = "U_SELF"
+    channel = {"id": "D_IM", "is_im": True, "user": "U_OTHER"}
+
+    info_response = {
+        "ok": True,
+        "channel": {"id": "D_IM", "last_read": "2000000000.000000"}  # newer than messages
+    }
+    history_response = {
+        "ok": True,
+        "messages": [
+            {"type": "message", "user": "U_OTHER", "text": "old msg", "ts": "1000000000.000000"},
+        ]
+    }
+
+    def fake_slack_get(tok, method, **kwargs):
+        if method == "conversations.info":
+            return info_response
+        elif method == "conversations.history":
+            return history_response
+        elif method == "users.info":
+            return {"ok": True, "user": {"real_name": "Other", "profile": {"display_name": "other"}}}
+        return {}
+
+    with patch.object(_slack, "slack_get", side_effect=fake_slack_get):
+        result = _slack.build_thread(token, channel, self_id)
+
+    assert result is None, "Channel where last_read > latest msg should be filtered out"
+
+
 def test_ibx0_fetch_emails_uses_dedup_threads():
     """Verify ibx0.fetch_emails calls fetch_inbox with dedup_threads=True
     so users only review one message per thread.
