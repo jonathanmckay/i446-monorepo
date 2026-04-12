@@ -247,6 +247,10 @@ def _autosign_item(item):
     """Sign a lease, archive the email, log to DB."""
     url = _signer.extract_appfolio_url(item.get("body", ""))
     if not url:
+        # Fallback: check HTML body (forwarded emails often only have links in HTML)
+        html_body = item.get("_data", {}).get("email", {}).get("html_body", "")
+        url = _signer.extract_appfolio_url(html_body)
+    if not url:
         console.print("[yellow]  ⚠ autosign: no AppFolio URL found in email[/yellow]")
         return
     meta = _signer.parse_email_metadata(item)

@@ -128,6 +128,17 @@ def get_email(service, msg_id):
 
     body = extract_body(parsed)
 
+    # Also extract raw HTML body for URL extraction (autosign needs links
+    # that are only in the HTML part, not in the text/plain fallback)
+    html_body = ""
+    if parsed.is_multipart():
+        for part in parsed.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    html_body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                    break
+
     return {
         "id": msg_id,
         "message_id": message_id,
@@ -138,6 +149,7 @@ def get_email(service, msg_id):
         "cc": cc_,
         "date": date,
         "body": body,
+        "html_body": html_body,
         "thread_id": msg.get("threadId"),
     }
 

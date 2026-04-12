@@ -302,7 +302,11 @@ def is_autosign_email(item: dict, autosign_senders: list[str]) -> bool:
     body    = item.get("body", "")
     if not _COUNTERSIGN_SUBJECT_RE.search(subject + body):
         return False
-    if not extract_appfolio_url(body):
+    # Check both plaintext and HTML body for the AppFolio URL.
+    # Forwarded emails often have the countersign link only in the HTML part
+    # (Gmail's text/plain rendering truncates quoted content).
+    html_body = item.get("_data", {}).get("email", {}).get("html_body", "")
+    if not extract_appfolio_url(body) and not extract_appfolio_url(html_body):
         return False
     return True
 

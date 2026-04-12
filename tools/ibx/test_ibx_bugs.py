@@ -193,6 +193,31 @@ def test_slack_read_channel_is_filtered():
     assert result is None, "Channel where last_read > latest msg should be filtered out"
 
 
+def test_autosign_checks_html_body_for_appfolio_url():
+    """Bug: forwarded countersign emails had the AppFolio URL only in the HTML body,
+    not in the text/plain part. is_autosign_email returned False because
+    extract_appfolio_url only searched the plaintext body.
+    Fix: is_autosign_email and _autosign_item now also check html_body.
+    """
+    source = open("../m5x2-automations/lease_signer.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "is_autosign_email":
+            body_src = ast.get_source_segment(source, node)
+            assert "html_body" in body_src, (
+                "is_autosign_email must check html_body for AppFolio URLs "
+                "(forwarded emails often only have links in HTML)"
+            )
+            break
+    else:
+        raise AssertionError("is_autosign_email() not found")
+
+    # ibx.get_email must include html_body field
+    ibx_source = open("ibx.py").read()
+    assert "html_body" in ibx_source, "get_email must return html_body field"
+
+
 def test_ibx0_fetch_emails_uses_dedup_threads():
     """Verify ibx0.fetch_emails calls fetch_inbox with dedup_threads=True
     so users only review one message per thread.
