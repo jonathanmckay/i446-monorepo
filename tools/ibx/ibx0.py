@@ -66,7 +66,7 @@ ai = anthropic.Anthropic()
 
 # ── Single-line fetch status ─────────────────────────────────────────────────
 _fetch_status: dict[str, str] = {}  # source -> status string
-_live: Live | None = None  # set during concurrent fetch
+_live: "Live | None" = None  # set during concurrent fetch
 
 _SOURCE_ORDER = ["Gmail", "iMsg", "Slack", "Outlook", "Teams"]
 

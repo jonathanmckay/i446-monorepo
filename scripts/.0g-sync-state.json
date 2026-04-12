@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-04-12T09:22:29.949570-07:00"
+  "tasks": {
+    "tasks down to 50": {
+      "todoist_id": "6gMv48FVQW7HPJqR",
+      "minutes": 100
+    },
+    "high quality basketball": {
+      "todoist_id": "6gMv48McrrJ2Fj42",
+      "minutes": 40
+    },
+    "think about how to make m5x2 meetings more useful": {
+      "todoist_id": "6gMv48MRhRHcX6X2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-04-12T11:32:05.151679-07:00"
 }

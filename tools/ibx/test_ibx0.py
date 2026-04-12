@@ -107,3 +107,46 @@ def test_response_times_tracker_exists():
     # Verify it's initialized as a list
     assert "_response_times:" in source or "_response_times =" in source, \
         "_response_times must be initialized"
+
+
+# ── Single-line status feature tests ─────────────────────────────────────────
+
+def test_fetch_functions_use_update_status():
+    """fetch_emails/imsgs/slack must call _update_status, not console.print for progress."""
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+
+    for func_name in ("fetch_emails", "fetch_imsgs", "fetch_slack"):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                func_source = ast.get_source_segment(source, node)
+                assert "_update_status" in func_source, \
+                    f"{func_name} must use _update_status for progress reporting"
+                break
+
+
+def test_status_line_function_exists():
+    """_status_line must exist and reference all source names."""
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_status_line":
+            func_source = ast.get_source_segment(source, node)
+            assert "_fetch_status" in func_source, \
+                "_status_line must read from _fetch_status dict"
+            return
+    raise AssertionError("_status_line function not found")
+
+
+def test_live_display_used_in_main():
+    """main() must start and stop a Live display for the status line."""
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            func_source = ast.get_source_segment(source, node)
+            assert "_live" in func_source, "main must use _live for status display"
+            assert ".start()" in func_source, "main must start the Live display"
+            assert ".stop()" in func_source, "main must stop the Live display"
+            return
+    raise AssertionError("main function not found")
