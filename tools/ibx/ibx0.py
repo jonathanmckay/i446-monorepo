@@ -56,12 +56,42 @@ except (ImportError, SystemExit, Exception):
 import anthropic
 from rich import box
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
 console = Console()
 ai = anthropic.Anthropic()
+
+# ── Single-line fetch status ─────────────────────────────────────────────────
+_fetch_status: dict[str, str] = {}  # source -> status string
+_live: Live | None = None  # set during concurrent fetch
+
+_SOURCE_ORDER = ["Gmail", "iMsg", "Slack", "Outlook", "Teams"]
+
+def _status_line() -> Text:
+    """Render current fetch status as a single Rich Text line."""
+    parts = Text()
+    for i, src in enumerate(_SOURCE_ORDER):
+        if i > 0:
+            parts.append(" | ", style="dim")
+        status = _fetch_status.get(src, "")
+        if not status:
+            parts.append(src, style="dim")
+        elif status.startswith("✓"):
+            parts.append(f"{src} {status}", style="green")
+        elif status.startswith("✗"):
+            parts.append(f"{src} {status}", style="yellow")
+        else:
+            parts.append(f"{src} {status}", style="dim")
+    return parts
+
+def _update_status(source: str, status: str):
+    """Update a source's status and refresh the live display."""
+    _fetch_status[source] = status
+    if _live is not None:
+        _live.update(_status_line())
 
 # ── Type badge colors ─────────────────────────────────────────────────────────
 TYPE_STYLE = {
@@ -495,16 +525,15 @@ MY_EMAILS = {"mckay@m5c7.com", "mckay@m5x2.com", "jonathan.b.mckay@gmail.com"}
 def fetch_emails():
     items = []
     per_account = {}  # display_name -> count
-    console.print("\n[bold]Gmail[/bold] — connecting...", style="dim")
+    _update_status("Gmail", "...")
     services = {}
     for acct in _ibx.ACCOUNTS:
         try:
             svc = _ibx.get_gmail_service(acct["tokens"], acct["creds"])
             services[acct["name"]] = svc
             _ibx._gmail_services[acct["name"]] = svc
-            console.print(f"  [dim]✓ {acct['name']}[/dim]")
         except Exception as e:
-            console.print(f"  [yellow]✗ {acct['name']}: {e}[/yellow]")
+            console.print(f"  [yellow]Gmail ✗ {acct['name']}: {e}[/yellow]")
 
     if not services:
         return items, per_account
@@ -526,11 +555,8 @@ def fetch_emails():
                 pass
 
     # Triage
-    console.print("[dim]  triaging...[/dim]")
     for name, svc in services.items():
         total, moved = _ibx.triage_inbox(svc, name)
-        if total:
-            console.print(f"  [dim]{name}: {moved}/{total} → no-response-needed[/dim]")
 
     # Fetch remaining
     for name, svc in services.items():
@@ -551,16 +577,16 @@ def fetch_emails():
             count += 1
         display = ACCOUNT_DISPLAY.get(name, name)
         per_account[display] = count
-        if msgs:
-            console.print(f"  [dim]{display}: {count} to review[/dim]")
 
+    total_email = sum(per_account.values())
+    _update_status("Gmail", f"✓ {total_email}")
     return items, per_account
 
 def fetch_imsgs():
     items = []
-    console.print("\n[bold]iMessages[/bold] — reading...", style="dim")
+    _update_status("iMsg", "...")
     if not _imsg.CHAT_DB.exists():
-        console.print("[yellow]  chat.db not found — grant Terminal Full Disk Access[/yellow]")
+        _update_status("iMsg", "✗ no db")
         return items
 
     _imsg._contacts = _imsg.build_contact_cache()
@@ -569,16 +595,14 @@ def fetch_imsgs():
     try:
         conn = _imsg.snapshot_db()
     except Exception as e:
-        console.print(f"[yellow]  iMessage read failed: {e}[/yellow]")
+        _update_status("iMsg", "✗")
         return items
 
     raw_threads = _imsg.fetch_unread_threads(conn, processed)
     if not raw_threads:
-        console.print("  [dim]no unread threads[/dim]")
+        _update_status("iMsg", "✓ 0")
         conn.close()
         return items
-
-    console.print(f"  [dim]triaging {len(raw_threads)} thread(s)...[/dim]")
     threads_to_review, auto_handled = _imsg.triage_threads(raw_threads)
 
     if auto_handled:
@@ -594,14 +618,14 @@ def fetch_imsgs():
             console.print(f"  [yellow]thread error: {e}[/yellow]")
 
     conn.close()
-    console.print(f"  [dim]{len(items)} thread(s) to review[/dim]")
+    _update_status("iMsg", f"✓ {len(items)}")
     return items
 
 def fetch_slack():
     items = []
-    console.print("\n[bold]Slack[/bold] — connecting...", style="dim")
+    _update_status("Slack", "...")
     if not _slack.CONFIG_FILE.exists():
-        console.print("  [dim]no tokens configured — skipping[/dim]")
+        _update_status("Slack", "✓ 0")
         return items
 
     with open(_slack.CONFIG_FILE) as f:
@@ -620,36 +644,42 @@ def fetch_slack():
                         count += 1
                 except Exception as e:
                     console.print(f"  [yellow]channel error: {e}[/yellow]")
-            console.print(f"  [dim]✓ {workspace}: {count} recent[/dim]")
+            _update_status("Slack", f"✓ {len(items)}")
         except Exception as e:
-            console.print(f"  [yellow]✗ {workspace}: {e}[/yellow]")
+            console.print(f"  [yellow]Slack ✗ {workspace}: {e}[/yellow]")
 
+    if "Slack" not in _fetch_status or not _fetch_status["Slack"].startswith("✓"):
+        _update_status("Slack", f"✓ {len(items)}")
     return items
 
 def fetch_outlook():
     """Fetch Outlook emails via workiq natural language interface."""
     if not _outlook_available:
         return []
+    _update_status("Outlook", "...")
     try:
         items = _outlook.fetch_outlook_items()
         for item in items:
             item["received_at"] = _parse_received_at(item)
+        _update_status("Outlook", f"✓ {len(items)}")
         return items
     except Exception as e:
-        console.print(f"  [yellow]Outlook error: {e}[/yellow]")
+        _update_status("Outlook", "✗")
         return []
 
 def fetch_teams():
     """Fetch Teams DMs via workiq natural language interface."""
     if not _teams_available:
         return []
+    _update_status("Teams", "...")
     try:
         items = _teams.fetch_teams_items()
         for item in items:
             item["received_at"] = _parse_received_at(item)
+        _update_status("Teams", f"✓ {len(items)}")
         return items
     except Exception as e:
-        console.print(f"  [yellow]Teams error: {e}[/yellow]")
+        _update_status("Teams", "✗")
         return []
 
 # ── Background poll ───────────────────────────────────────────────────────────
@@ -745,6 +775,7 @@ def set_term_color(color):
         subprocess.run(["bash", str(TERM_COLOR), color], capture_output=True)
 
 def main():
+    global _live
     console.print(Rule("[bold]Inbox 0[/bold]", style="dim"))
 
     # ── Concurrent fetch: all sources in parallel ────────────────────────────
@@ -754,6 +785,11 @@ def main():
     _source_counts = {}             # source -> count (for status line)
     _per_account = {}               # email account breakdown
     _fetch_done = threading.Event() # set when ALL sources have reported
+
+    # Initialize status line
+    _fetch_status.clear()
+    _live = Live(_status_line(), console=console, refresh_per_second=4, transient=False)
+    _live.start()
 
     def _bg_fetch(name, fn, *args):
         """Run a fetch function and post results to _incoming queue."""
@@ -781,10 +817,12 @@ def main():
         futures.append(fetch_pool.submit(_bg_fetch, "outlook", fetch_outlook))
     else:
         _source_counts["outlook"] = 0
+        _update_status("Outlook", "✓ 0")
     if _teams_available:
         futures.append(fetch_pool.submit(_bg_fetch, "teams", fetch_teams))
     else:
         _source_counts["teams"] = 0
+        _update_status("Teams", "✓ 0")
 
     # Wait up to 8s for fast sources (email, imsg, slack), don't block on slow ones
     fast_deadline = time.time() + 8
@@ -792,6 +830,13 @@ def main():
         if all(n in _source_counts for n in ("email", "imsg", "slack")):
             break
         time.sleep(0.2)
+
+    # Stop the live status display
+    if _live is not None:
+        _live.stop()
+        _live = None
+    # Print final status line (persists after Live stops)
+    console.print(_status_line())
 
     # Drain whatever has arrived so far into all_items
     all_items = []
@@ -1072,6 +1117,7 @@ def main():
                 try:
                     do_reply(item, reply_text)
                     console.print("[green]Sent + done.[/green]")
+                    _print_response_stats(item)
                     index += 1
                 except Exception as e:
                     console.print(f"[red]Send failed: {e}[/red]")
@@ -1094,6 +1140,7 @@ def main():
                     else:
                         do_reply(item, reply_text)
                     console.print("[green]Sent + done.[/green]")
+                    _print_response_stats(item)
                     index += 1
                 except Exception as e:
                     console.print(f"[red]Send failed: {e}[/red]")
@@ -1167,6 +1214,7 @@ def main():
                     try:
                         do_reply(item, content)
                         console.print("[green]Sent + done.[/green]")
+                        _print_response_stats(item)
                         index += 1
                     except Exception as e:
                         console.print(f"[red]Send failed: {e}[/red]")
@@ -1176,6 +1224,7 @@ def main():
                         try:
                             do_reply(item, new_text)
                             console.print("[green]Sent + done.[/green]")
+                            _print_response_stats(item)
                             index += 1
                         except Exception as e:
                             console.print(f"[red]Send failed: {e}[/red]")
