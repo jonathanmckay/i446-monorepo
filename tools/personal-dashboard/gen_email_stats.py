@@ -393,7 +393,8 @@ def compute_teams_response_times(days=DAYS):
     rows = conn.execute("""
         SELECT action_at, response_hours
         FROM teams_responses
-        WHERE response_hours IS NOT NULL
+        WHERE action = 'reply'
+          AND response_hours IS NOT NULL
           AND action_at >= ?
     """, (cutoff,)).fetchall()
     conn.close()
@@ -401,7 +402,7 @@ def compute_teams_response_times(days=DAYS):
     response_times = []
     for action_at, hours in rows:
         try:
-            day_str = datetime.fromisoformat(action_at.replace("Z", "+00:00")).date().isoformat()
+            day_str = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ).date().isoformat()
             response_times.append({"date": day_str, "hours": round(hours, 2)})
         except Exception:
             continue
