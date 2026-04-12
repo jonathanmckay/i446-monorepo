@@ -76,6 +76,32 @@ def test_fetch_inbox_dedup_threads_shows_one_message_per_thread():
     assert result[1]["id"] == "m3"
 
 
+def test_slack_build_thread_uses_message_ts_not_unread_count():
+    """Bug: Slack unread DMs not showing in ibx because build_thread relied on
+    conversations.info unread_count which is MISSING for MPIMs (group DMs).
+    All MPIMs defaulted to unread_count=0 and were filtered out.
+    Fix: compare last_read against the actual latest message timestamp instead.
+    """
+    source = open("slack.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "build_thread":
+            body_src = ast.get_source_segment(source, node)
+            # Must NOT rely on unread_count for filtering
+            assert 'unread_count", 0)' not in body_src, (
+                "build_thread must not use unread_count for read/unread filtering — "
+                "it's missing for MPIMs"
+            )
+            # Must compare last_read against latest message ts
+            assert "latest_msg_ts" in body_src or "latest" in body_src, (
+                "build_thread must compare last_read against actual message timestamps"
+            )
+            break
+    else:
+        raise AssertionError("build_thread() not found in slack.py")
+
+
 def test_ibx0_fetch_emails_uses_dedup_threads():
     """Verify ibx0.fetch_emails calls fetch_inbox with dedup_threads=True
     so users only review one message per thread.
