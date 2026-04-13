@@ -242,3 +242,20 @@ def test_final_fetch_includes_teams():
     assert "fetch_teams" in source.split("One final parallel fetch")[1].split("Inbox zero")[0], (
         "Final parallel fetch before inbox zero must include fetch_teams"
     )
+
+
+def test_wrapper_supports_force_refresh():
+    """
+    Bug: ibx0_wrapper.sh used 'sleep $POLL_INTERVAL' after inbox zero,
+    which couldn't be interrupted. Users had to wait the full 60s or Ctrl+C.
+
+    Fix: Use 'read -t' so any keypress forces an immediate refresh.
+    """
+    wrapper = Path(__file__).parent / "ibx0_wrapper.sh"
+    text = wrapper.read_text()
+    assert "read -t" in text, (
+        "ibx0_wrapper.sh must use 'read -t' for interruptible wait, not 'sleep'"
+    )
+    assert "Enter to refresh" in text or "enter to refresh" in text.lower(), (
+        "ibx0_wrapper.sh must tell the user they can press Enter to refresh"
+    )

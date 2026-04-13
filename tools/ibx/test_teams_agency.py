@@ -62,13 +62,11 @@ def test_fetch_uses_graph_ids():
     raise AssertionError("fetch_teams_items function not found")
 
 
-def test_reply_marks_chat_read():
+def test_reply_does_not_eagerly_mark_read():
     """
-    Bug: replying to a Teams thread via PostMessage did not mark the chat
-    as read in the Teams app. Threads showed as unread even after responding.
-
-    Fix: reply() and archive() must call _mark_chat_read(chat_id) to invoke
-    the Graph API markChatReadForUser endpoint.
+    Feature: Lazy mark-as-read. reply() must NOT call _mark_chat_read
+    (expensive Chrome tab). Mark-as-read is handled lazily by fetch_teams_items
+    when it detects stubborn unreads still in search results.
     """
     source = TEAMS_AGENCY_PY.read_text()
     tree = ast.parse(source)
@@ -76,19 +74,18 @@ def test_reply_marks_chat_read():
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "reply":
             func_source = ast.get_source_segment(source, node)
-            assert "_mark_chat_read" in func_source, (
-                "reply() must call _mark_chat_read to mark the chat as read in Teams"
+            assert "_mark_chat_read" not in func_source, (
+                "reply() must NOT call _mark_chat_read — mark-as-read is lazy"
             )
             return
     raise AssertionError("reply function not found")
 
 
-def test_archive_marks_chat_read():
+def test_archive_does_not_eagerly_mark_read():
     """
-    Bug: archiving a Teams message only updated local processed.json.
-    The chat stayed unread in the Teams app.
-
-    Fix: archive() must accept chat_id and call _mark_chat_read().
+    Feature: Lazy mark-as-read. archive() must NOT call _mark_chat_read
+    (expensive Chrome tab). Mark-as-read is handled lazily by fetch_teams_items
+    when it detects stubborn unreads still in search results.
     """
     source = TEAMS_AGENCY_PY.read_text()
     tree = ast.parse(source)
@@ -96,11 +93,8 @@ def test_archive_marks_chat_read():
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "archive":
             func_source = ast.get_source_segment(source, node)
-            assert "_mark_chat_read" in func_source, (
-                "archive() must call _mark_chat_read to mark the chat as read in Teams"
-            )
-            assert "chat_id" in func_source, (
-                "archive() must accept chat_id parameter"
+            assert "_mark_chat_read" not in func_source, (
+                "archive() must NOT call _mark_chat_read — mark-as-read is lazy"
             )
             return
     raise AssertionError("archive function not found")

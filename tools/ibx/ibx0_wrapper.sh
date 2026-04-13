@@ -46,6 +46,6 @@ $ERROR" --allowedTools "Read,Edit,Grep"
     [[ $LAST_EXIT -eq 2 ]] && break
 
     echo ""
-    echo "── Inbox zero — checking again in ${POLL_INTERVAL}s  (Ctrl+C to quit) ──"
-    sleep "$POLL_INTERVAL"
+    echo "── Inbox zero — checking again in ${POLL_INTERVAL}s  (Enter to refresh, Ctrl+C to quit) ──"
+    read -t "$POLL_INTERVAL" -s -n 1 && echo "  ↻ Refreshing now..."
 done

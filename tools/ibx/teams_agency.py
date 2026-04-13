@@ -292,10 +292,10 @@ def fetch_teams_items():
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 def archive(item_id, chat_id=""):
-    """Mark Teams message as processed and mark chat read in Teams."""
+    """Mark Teams message as processed locally. Mark-as-read in Teams is
+    handled lazily by fetch_teams_items when it detects stubborn unreads."""
     record_action(item_id, "archive")
     _mark_processed(item_id)
-    _mark_chat_read(chat_id)
 
 
 def delete(item_id, chat_id=""):
@@ -315,7 +315,6 @@ def reply(item_id, chat_id, reply_text):
             return False
     record_action(item_id, "reply")
     _mark_processed(item_id)
-    _mark_chat_read(chat_id)
     return True
 
 
