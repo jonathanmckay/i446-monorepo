@@ -570,10 +570,13 @@ def api_data():
         acct = entry.get("account", "unknown")
         d = entry.get("date", "")
         if d:
-            email_by_account[acct][d] = {
+            rec = {
                 "avg_hours": entry.get("avg_hours"),
                 "count": entry.get("count", 0),
             }
+            if "sent_count" in entry:
+                rec["sent_count"] = entry["sent_count"]
+            email_by_account[acct][d] = rec
     # Add iMessage daily stats from response DB
     import sqlite3 as _sq3
     _imsg_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
@@ -602,7 +605,7 @@ def api_data():
         "outlook": "#00b8d466",
         "teams": "#1249b466",
     }
-    # Compute blended daily avg response time (minutes), weighted by message count
+    # Compute blended daily avg response time (minutes), weighted by reply pair count
     blended_response = []
     for d in dates:
         total_hours = 0
@@ -642,7 +645,7 @@ def api_data():
         email_datasets.append({
             "type": "bar",
             "label": acct,
-            "data": [day_map.get(d, {}).get("count", 0) for d in dates],
+            "data": [day_map.get(d, {}).get("sent_count", day_map.get(d, {}).get("count", 0)) for d in dates],
             "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
             "borderWidth": 0,
             "yAxisID": "y2",
@@ -653,7 +656,7 @@ def api_data():
             email_datasets.append({
                 "type": "bar",
                 "label": acct,
-                "data": [day_map.get(d, {}).get("count", 0) for d in dates],
+                "data": [day_map.get(d, {}).get("sent_count", day_map.get(d, {}).get("count", 0)) for d in dates],
                 "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
                 "borderWidth": 0,
                 "yAxisID": "y2",

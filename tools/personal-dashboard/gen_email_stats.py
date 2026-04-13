@@ -581,9 +581,9 @@ def main():
         for day, count in teams_sent_counts.items():
             key = (day, "teams")
             if key in daily_index:
-                daily_index[key]["count"] = count
+                daily_index[key]["sent_count"] = count
             else:
-                daily.append({"date": day, "account": "teams", "avg_hours": None, "count": count})
+                daily.append({"date": day, "account": "teams", "avg_hours": None, "count": 0, "sent_count": count})
         daily.sort(key=lambda row: (row["date"], row["account"]))
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")
     print(f"Summary: {summary}")
