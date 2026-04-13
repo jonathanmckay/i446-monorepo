@@ -103,9 +103,60 @@ d358 (meetings):
 Inbox cleared.
 ```
 
-### Step 7: Mark notes habit done
+### Step 7: Extract action items
 
-After reporting, execute the `/did` skill for habit `notes` — follow the full `/did` flow exactly as if the user had typed `/did notes`. This writes 1 to the `notes` column in today's 0₦ row and closes any matching 0neon Todoist task.
+After sorting, scan the content that was just routed for action items. This step surfaces implicit and explicit tasks so nothing falls through the cracks.
+
+**7a. Identify action items from the sorted note content.**
+
+Look for lines or phrases matching these patterns:
+- Explicit markers: "Action:", "TODO:", "Follow up on...", "Next step:"
+- Commitments: "I need to...", "I should...", "I'll send...", "I'll check...", "I'll schedule...", "Will do..."
+- Collaborative: "Let's...", "We should...", "We need to..."
+- Requests: "Ask [person] about...", "Check with...", "Get [thing] from...", "Ping [person]..."
+- Deadlines or urgency cues: "by Friday", "before the meeting", "ASAP", "this week"
+
+If no action items are found across all sorted blocks, skip silently to Step 8.
+
+**7b. For each extracted action item, infer:**
+
+1. **Task content** — clean, concise phrasing. Strip filler words; keep it actionable. Example: "I should probably check with Andy about the deploy timeline" → "Check with Andy about deploy timeline"
+2. **Project label** — derive from the block's context tag (the same context detected in Step 4):
+   - i9 (Microsoft/GitHub), m5x2 (real estate), xk87 (school/kids), hcm (mindfulness), hcb (health), etc.
+   - If the block has a d359 person file with a `context:` frontmatter field, use that context as the project label
+   - If ambiguous, default to the block's context tag; if still unclear, omit the label
+3. **Due date** — default to tomorrow. Override if urgency is implied:
+   - "ASAP" / "today" → today
+   - "by Friday" → that Friday
+   - "this week" → Friday of current week
+   - "next week" → Monday of next week
+
+**7c. Present the action items to the user:**
+
+```
+Action items extracted:
+
+1. Check with Andy about deploy timeline [@i9, due tomorrow]
+2. Send lease renewal to tenant [@m5x2, due tomorrow]
+3. Schedule dentist appointment [@hcb, due Friday]
+
+Create these tasks? (y/n/edit)
+```
+
+- **y** — create all tasks via the Todoist MCP `add-tasks` tool using the inferred content, project label, and due date
+- **n** — skip task creation entirely
+- **edit** — let the user modify the list (add, remove, change labels/dates), then confirm and create
+
+**7d. Create confirmed tasks.**
+
+Use the Todoist MCP `add-tasks` tool. For each task:
+- `content`: the cleaned task text
+- `dueString`: the inferred due date in natural language (e.g., "tomorrow", "Friday")
+- Assign to the appropriate Todoist project using the label/domain code
+
+### Step 8: Mark notes habit done
+
+After action item handling (or skipping), execute the `/did` skill for habit `notes` — follow the full `/did` flow exactly as if the user had typed `/did notes`. This writes 1 to the `notes` column in today's 0₦ row and closes any matching 0neon Todoist task.
 
 ## Rules
 
