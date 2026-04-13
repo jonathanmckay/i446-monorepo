@@ -22,9 +22,6 @@ PROCESSED_FILE = Path.home() / ".config" / "teams" / "processed.json"
 RESPONSE_DB = Path.home() / ".config" / "teams" / "response_times.db"
 MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 
-# Cached Graph identity (populated lazily by _get_graph_identity)
-_graph_identity = None  # Optional[dict]
-
 # Chat IDs already retried for mark-as-read this fetch cycle
 _retry_read_chats = set()
 
@@ -108,60 +105,27 @@ def _mark_processed(item_id):
     save_processed(proc)
 
 
-# ── Mark chat as read via Graph API ───────────────────────────────────────────
-
-def _get_graph_identity():
-    """Get user_id and tenant_id from az CLI (cached after first success)."""
-    global _graph_identity
-    if _graph_identity:
-        return _graph_identity
-    try:
-        user_id = subprocess.run(
-            ["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        tenant_id = subprocess.run(
-            ["az", "account", "show", "--query", "tenantId", "-o", "tsv"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        if user_id and tenant_id:
-            _graph_identity = {"user_id": user_id, "tenant_id": tenant_id}
-            return _graph_identity
-    except Exception:
-        pass
-    return None
-
+# ── Mark chat as read via Teams desktop app ───────────────────────────────────
 
 def _mark_chat_read(chat_id):
-    """Mark a Teams chat as read via Graph API, synchronously with retry."""
+    """Mark a Teams chat as read by opening it in the Teams desktop app.
+
+    The Graph API markChatReadForUser requires Chat.ReadWrite scope which
+    isn't available via az CLI (tenant conditional access blocks device-code
+    auth for the Graph Explorer app). Opening the chat via deep link causes
+    the Teams client to mark it as read — same as the user clicking on it.
+    """
     if not chat_id:
         return
-    identity = _get_graph_identity()
-    if not identity:
-        console.print("[yellow]⚠ Could not get Graph identity — chat may still appear unread in Teams[/yellow]")
-        return
-    url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/markChatReadForUser"
-    body = json.dumps({
-        "user": {
-            "id": identity["user_id"],
-            "tenantId": identity["tenant_id"],
-        }
-    })
-    import time
-    for attempt in range(2):
-        try:
-            result = subprocess.run(
-                ["az", "rest", "--method", "POST", "--url", url,
-                 "--body", body, "--headers", "Content-Type=application/json"],
-                capture_output=True, text=True, timeout=15,
-            )
-            if result.returncode == 0:
-                return
-        except Exception:
-            pass
-        if attempt == 0:
-            time.sleep(1)
-    console.print("[yellow]⚠ Could not mark chat as read — may still appear unread in Teams[/yellow]")
+    import urllib.parse
+    encoded = urllib.parse.quote(chat_id, safe='')
+    try:
+        subprocess.run(
+            ["open", "-g", f"msteams://teams.microsoft.com/l/chat/{encoded}"],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        console.print("[yellow]⚠ Could not open chat in Teams — may still appear unread[/yellow]")
 
 
 # ── Agency MCP Teams calls ────────────────────────────────────────────────────
