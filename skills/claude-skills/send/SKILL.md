@@ -14,16 +14,17 @@ Send a proactive message to someone. Supports Teams, Outlook email, Gmail, iMess
 - `Sent via Teams to Luke Hoban`
 - `Sent via Outlook to Asha Sharma`
 - `Sent via iMessage to Mom`
+- `Sent via Teams to Luke Hoban, Asha Sharma` (group chat)
 
 Do NOT explain what you're doing. Do NOT ask for confirmation unless the message contains `<angle brackets>` (see AI assist below). Just execute.
 
 ## Syntax
 
 ```
-/send <person> via <channel>: <message>
+/send <person(s)> via <channel>: <message>
 ```
 
-- **person**: name or email of the recipient
+- **person(s)**: one or more recipients, separated by `,` or `and`. When multiple people are listed, send **one message to all** (group chat / multi-recipient email) — NOT separate messages to each.
 - **channel**: `teams`, `outlook`, `gmail`, `imessage`, `slack`
 - **message**: the text to send. If any part is in `<angle brackets>`, treat it as an instruction for you to draft that portion.
 
@@ -35,6 +36,8 @@ Do NOT explain what you're doing. Do NOT ask for confirmation unless the message
 /send Mom via imessage: I'll be home by 6
 /send Joe via teams: <tell him I liked his proposal and suggest we meet Thursday to discuss>
 /send Carolina via outlook: <draft a professional reply declining the meeting but suggesting async followup>
+/send Luke and Asha via teams: let's sync on the design doc tomorrow
+/send Luke, Asha, Joe via outlook: Here's the agenda for Friday
 ```
 
 ## AI Assist (angle brackets)
@@ -51,14 +54,25 @@ When the message contains `<instructions>`:
 ```python
 import agency_mcp as mcp
 
-# 1. Create/get the 1:1 chat
-result = mcp.call_tool('teams', 'CreateChat', {
-    'chatType': 'oneOnOne',
-    'members_upns': ['<email>']
-}, timeout=60)
+# Resolve all recipient emails first, then:
+
+if len(emails) == 1:
+    # 1:1 chat
+    result = mcp.call_tool('teams', 'CreateChat', {
+        'chatType': 'oneOnOne',
+        'members_upns': [emails[0]]
+    }, timeout=60)
+else:
+    # Group chat — one thread with all recipients
+    result = mcp.call_tool('teams', 'CreateChat', {
+        'chatType': 'group',
+        'members_upns': emails,
+        'topic': '',  # optional topic
+    }, timeout=60)
+
 chat_id = json.loads(result['content'][0]['text'])['id']
 
-# 2. Send the message
+# Send the message once to the shared chat
 mcp.call_tool('teams', 'PostMessage', {
     'chatId': chat_id,
     'content': '<message>',
@@ -70,8 +84,9 @@ mcp.call_tool('teams', 'PostMessage', {
 ```python
 import agency_mcp as mcp
 
+# Pass ALL recipient emails in the 'to' array — one email to all
 mcp.call_tool('mail', 'SendEmailWithAttachments', {
-    'to': ['<email>'],
+    'to': emails,  # e.g. ['asha@microsoft.com', 'luke@microsoft.com']
     'subject': '<subject>',
     'body': '<message>',
     'contentType': 'Text',
@@ -86,7 +101,7 @@ from email.mime.text import MIMEText
 
 svc = _ibx.get_gmail_service(_ibx.ACCOUNTS[0]['tokens'], _ibx.ACCOUNTS[0]['creds'])
 msg = MIMEText('<message>')
-msg['To'] = '<email>'
+msg['To'] = ', '.join(emails)  # all recipients in one To: header
 msg['From'] = 'mckay@m5x2.com'
 msg['Subject'] = '<subject>'
 raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
