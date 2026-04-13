@@ -1,18 +1,14 @@
 {
   "version": 1,
   "tasks": {
-    "tasks down to 50": {
-      "todoist_id": "6gMv48FVQW7HPJqR",
-      "minutes": 100
+    "write weekly update": {
+      "todoist_id": "6gP62HqVPffgxGRR",
+      "minutes": 80
     },
-    "high quality basketball": {
-      "todoist_id": "6gMv48McrrJ2Fj42",
-      "minutes": 40
-    },
-    "think about how to make m5x2 meetings more useful": {
-      "todoist_id": "6gMv48MRhRHcX6X2",
-      "minutes": 40
+    "skin2skin with aurora": {
+      "todoist_id": "6gP62HqChw5wC5jR",
+      "minutes": 20
     }
   },
-  "last_sync": "2026-04-13T00:17:51.463264-07:00"
+  "last_sync": "2026-04-13T09:46:10.200230-07:00"
 }
