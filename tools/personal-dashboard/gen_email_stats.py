@@ -499,7 +499,7 @@ def compute_outlook_response_times(days=DAYS):
     response_times = []
     for action_at, hours in rows:
         try:
-            day_str = datetime.fromisoformat(action_at.replace("Z", "+00:00")).date().isoformat()
+            day_str = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ).date().isoformat()
             response_times.append({"date": day_str, "hours": round(hours, 2)})
         except Exception:
             continue
