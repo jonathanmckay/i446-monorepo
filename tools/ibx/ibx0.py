@@ -110,7 +110,39 @@ TYPE_LABEL = {
 }
 
 # ── Response time tracking ────────────────────────────────────────────────────
-_response_times: list[float] = []  # minutes per reply, session-level
+_RESPONSE_TIMES_FILE = Path.home() / ".config" / "ibx" / "response_times.json"
+_response_times: list[float] = []  # minutes per reply, loaded from disk on startup
+
+
+def _load_response_times():
+    """Load today's response times from persistent storage."""
+    global _response_times
+    try:
+        if _RESPONSE_TIMES_FILE.exists():
+            data = json.loads(_RESPONSE_TIMES_FILE.read_text())
+            today = datetime.now().strftime("%Y-%m-%d")
+            if data.get("date") == today:
+                _response_times = data.get("times", [])
+            else:
+                _response_times = []
+    except Exception:
+        _response_times = []
+
+
+def _save_response_times():
+    """Persist today's response times to disk."""
+    try:
+        _RESPONSE_TIMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        _RESPONSE_TIMES_FILE.write_text(json.dumps({
+            "date": today,
+            "times": _response_times,
+        }))
+    except Exception:
+        pass
+
+
+_load_response_times()
 
 def _parse_received_at(item) -> float:
     """Extract received epoch from any item type. Returns 0.0 if unavailable."""
@@ -148,6 +180,7 @@ def _print_response_stats(item):
         return
     old_avg = sum(_response_times) / len(_response_times) if _response_times else None
     _response_times.append(elapsed_min)
+    _save_response_times()
     new_avg = sum(_response_times) / len(_response_times)
     # Format
     def fmt(m):
@@ -1159,6 +1192,7 @@ def main():
                 )
                 if draft:
                     console.print(Panel(draft, title="AI Draft — Reply All — Sent", border_style="green"))
+                    _print_response_stats(item)
                     index += 1
                 else:
                     console.print("[red]Draft failed — not sent[/red]")
@@ -1177,6 +1211,7 @@ def main():
                 )
                 if draft:
                     console.print(Panel(draft, title="AI Draft — Sent", border_style="green"))
+                    _print_response_stats(item)
                     index += 1
                 else:
                     console.print("[red]Draft failed — not sent[/red]")

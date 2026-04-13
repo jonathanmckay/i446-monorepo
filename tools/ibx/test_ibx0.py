@@ -109,6 +109,48 @@ def test_response_times_tracker_exists():
         "_response_times must be initialized"
 
 
+def test_response_times_persisted_to_disk():
+    """_response_times must be persisted to disk so day average survives restarts."""
+    source = IBX_ALL_PY.read_text()
+    # Must have load and save functions
+    assert "_load_response_times" in source, \
+        "Must have _load_response_times to restore day average across restarts"
+    assert "_save_response_times" in source, \
+        "Must have _save_response_times to persist day average across restarts"
+    # _save must be called inside _print_response_stats
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_print_response_stats":
+            func_source = ast.get_source_segment(source, node)
+            assert "_save_response_times" in func_source, \
+                "_print_response_stats must call _save_response_times after appending"
+            return
+    raise AssertionError("_print_response_stats function not found")
+
+
+def test_pipe_through_tracks_response_stats():
+    """Pipe-through reply commands (p/P) must call _print_response_stats."""
+    source = IBX_ALL_PY.read_text()
+    lines = source.splitlines()
+
+    pipe_sites = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if "pipe_through(" in stripped and not stripped.startswith("def "):
+            pipe_sites.append(i)
+
+    assert len(pipe_sites) >= 2, \
+        f"Expected >=2 pipe_through call sites, found {len(pipe_sites)}"
+
+    for line_num in pipe_sites:
+        # Check that _print_response_stats appears within 6 lines after pipe_through
+        after = "\n".join(lines[line_num:line_num + 7])
+        assert "_print_response_stats" in after, (
+            f"pipe_through at line {line_num + 1} is not followed by "
+            "_print_response_stats. Pipe-through replies must track response time."
+        )
+
+
 # ── Single-line status feature tests ─────────────────────────────────────────
 
 def test_fetch_functions_use_update_status():
