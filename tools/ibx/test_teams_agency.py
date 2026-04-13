@@ -172,3 +172,31 @@ def test_get_graph_identity_does_not_cache_failures():
             )
             return
     raise AssertionError("_get_graph_identity function not found")
+
+
+def test_fetch_retries_mark_read_for_processed_items():
+    """
+    Bug: Messages archived via ibx0 were marked processed locally, but
+    _mark_chat_read failed silently in a daemon thread. On next fetch,
+    ibx0 skipped them (already processed) so they stayed unread in Teams
+    forever — 'ghost unreads' visible in Teams but invisible in ibx0.
+
+    Fix: fetch_teams_items must retry _mark_chat_read for processed items
+    that still appear in search results (once per chat_id per fetch cycle).
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "_mark_chat_read" in func_source, (
+                "fetch_teams_items must call _mark_chat_read for processed items "
+                "still appearing in search results"
+            )
+            assert "_retry_read_chats" in func_source, (
+                "fetch_teams_items must track retried chat_ids to avoid "
+                "redundant mark-as-read calls within a single fetch cycle"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")

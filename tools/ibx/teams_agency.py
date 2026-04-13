@@ -25,6 +25,9 @@ MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 # Cached Graph identity (populated lazily by _get_graph_identity)
 _graph_identity = None  # Optional[dict]
 
+# Chat IDs already retried for mark-as-read this fetch cycle
+_retry_read_chats = set()
+
 
 def load_processed():
     PROCESSED_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +185,8 @@ def _teams_call(tool, args, timeout=30):
 
 def fetch_teams_items():
     """Fetch recent Teams DMs via Agency Teams MCP (Graph API search)."""
+    global _retry_read_chats
+    _retry_read_chats = set()  # reset per fetch cycle
     items = []
     console.print("\n[bold]Teams[/bold] — querying teams API...", style="dim")
 
@@ -238,6 +243,11 @@ def fetch_teams_items():
         item_id = f"teams:{chat_id}:{msg_id}"
 
         if item_id in processed:
+            # Retry mark-as-read for processed items still appearing in search
+            # (handles cases where previous mark-as-read silently failed)
+            if chat_id and chat_id not in _retry_read_chats:
+                _retry_read_chats.add(chat_id)
+                _mark_chat_read(chat_id)
             continue
 
         # Check legacy workiq-style IDs
