@@ -78,7 +78,9 @@ def compute_response_times(service, account_name, days=DAYS):
     For each sent reply in the last `days` days, find the preceding received message
     in the same thread and compute the response time in hours.
 
-    Returns list of {"date": "YYYY-MM-DD", "hours": float} dicts.
+    Returns (response_times, sent_by_day) where:
+        response_times: list of {"date": "YYYY-MM-DD", "hours": float}
+        sent_by_day: dict of {"YYYY-MM-DD": int} total sent messages per day
     """
     profile = service.users().getProfile(userId="me").execute()
     my_email = profile["emailAddress"].lower()
@@ -107,6 +109,7 @@ def compute_response_times(service, account_name, days=DAYS):
     print(f"  {account_name}: {len(results)} sent messages in last {days}d")
 
     response_times = []
+    sent_by_day = defaultdict(int)
     seen_threads = set()
 
     for msg_stub in results:
@@ -120,7 +123,7 @@ def compute_response_times(service, account_name, days=DAYS):
         except Exception:
             continue
 
-        # Walk pairs: find sent messages that follow a received message
+        # Classify each sent message as reply or proactive
         for i, msg in enumerate(thread_msgs):
             if not is_sent_by_me(msg, my_email):
                 continue
@@ -128,6 +131,10 @@ def compute_response_times(service, account_name, days=DAYS):
             sent_ts = int(msg.get("internalDate", 0))
             if sent_ts < since_ts:
                 continue
+
+            sent_dt = datetime.fromtimestamp(sent_ts / 1000, tz=LOCAL_TZ)
+            day_str = sent_dt.date().isoformat()
+            sent_by_day[day_str] += 1
 
             # Find the most recent received message before this sent one
             received_msg = None
@@ -149,28 +156,37 @@ def compute_response_times(service, account_name, days=DAYS):
             if delta_hours > 72:
                 continue
 
-            sent_dt = datetime.fromtimestamp(sent_ts / 1000, tz=LOCAL_TZ)
-            day_str = sent_dt.date().isoformat()
             response_times.append({"date": day_str, "hours": round(delta_hours, 2)})
 
-    return response_times
+    return response_times, dict(sent_by_day)
 
 
-def build_stats(all_data):
+def build_stats(all_data, sent_counts=None):
     """
     all_data: list of {"date", "hours", "account"} dicts
+    sent_counts: dict of {account: {date: int}} total sent messages per day
     Returns:
-        daily: list of {"date", "account", "avg_hours", "count"}
+        daily: list of {"date", "account", "avg_hours", "count", "sent_count"}
         summary: stats over work account
     """
+    sent_counts = sent_counts or {}
     by_day_acct = defaultdict(list)
     for rec in all_data:
         by_day_acct[(rec["date"], rec["account"])].append(rec["hours"])
 
+    # Collect all (date, account) keys that have sent_counts but no reply data
+    all_keys = set(by_day_acct.keys())
+    for acct, day_map in sent_counts.items():
+        for day, count in day_map.items():
+            all_keys.add((day, acct))
+
     daily = []
-    for (day, acct), hours_list in sorted(by_day_acct.items()):
-        avg = round(sum(hours_list) / len(hours_list), 2)
-        daily.append({"date": day, "account": acct, "avg_hours": avg, "count": len(hours_list)})
+    for day, acct in sorted(all_keys):
+        hours_list = by_day_acct.get((day, acct), [])
+        reply_count = len(hours_list)
+        avg = round(sum(hours_list) / reply_count, 2) if reply_count else None
+        sent = sent_counts.get(acct, {}).get(day, reply_count)
+        daily.append({"date": day, "account": acct, "avg_hours": avg, "count": reply_count, "sent_count": sent})
 
     # Summary over work account, last 7d and 28d
     today = date.today()
@@ -228,14 +244,16 @@ def compute_imessage_response_times(days=DAYS):
     For each sent message, find the preceding received message in the same chat
     and compute the response delta in hours. Cap at 72h.
 
-    Returns list of {"date": "YYYY-MM-DD", "hours": float} dicts.
+    Returns (response_times, sent_by_day) where:
+        response_times: list of {"date": "YYYY-MM-DD", "hours": float}
+        sent_by_day: dict of {"YYYY-MM-DD": int} total sent messages per day
     """
     import sqlite3 as _sqlite3
 
     db_path = Path.home() / "Library" / "Messages" / "chat.db"
     if not db_path.exists():
         print("  WARN: iMessage database not found")
-        return []
+        return [], {}
 
     conn = _sqlite3.connect(str(db_path))
     conn.row_factory = _sqlite3.Row
@@ -265,11 +283,13 @@ def compute_imessage_response_times(days=DAYS):
     # Group by chat_id, then walk pairs
     from itertools import groupby
     response_times = []
+    sent_by_day = defaultdict(int)
     for chat_id, msgs in groupby(rows, key=lambda r: r["chat_id"]):
         msgs_list = list(msgs)
         for i, msg in enumerate(msgs_list):
             if not msg["is_from_me"]:
                 continue
+            sent_by_day[msg["day_str"]] += 1
             # Find preceding received message
             for j in range(i - 1, -1, -1):
                 if not msgs_list[j]["is_from_me"]:
@@ -281,7 +301,7 @@ def compute_imessage_response_times(days=DAYS):
                         })
                     break
 
-    return response_times
+    return response_times, dict(sent_by_day)
 
 
 SLACK_CONFIG = Path.home() / ".config" / "slack" / "tokens.json"
@@ -293,16 +313,19 @@ def compute_slack_response_times(days=DAYS):
     For each sent reply in the last `days` days, find the preceding received message
     in the same DM conversation and compute the response delta in hours. Cap at 72h.
 
-    Returns list of {"date": "YYYY-MM-DD", "hours": float} dicts.
+    Returns (response_times, sent_by_day) where:
+        response_times: list of {"date": "YYYY-MM-DD", "hours": float}
+        sent_by_day: dict of {"YYYY-MM-DD": int} total sent messages per day
     """
     if not SLACK_CONFIG.exists():
         print("  WARN: Slack tokens file not found")
-        return []
+        return [], {}
 
     tokens = json.loads(SLACK_CONFIG.read_text())
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     cutoff_ts = str(cutoff.timestamp())
     response_times = []
+    sent_by_day = defaultdict(int)
 
     for workspace, token in tokens.items():
         try:
@@ -354,14 +377,15 @@ def compute_slack_response_times(days=DAYS):
                 for i, msg in enumerate(msgs):
                     if msg.get("user") != self_id:
                         continue
+                    sent_ts = float(msg["ts"])
+                    sent_dt = datetime.fromtimestamp(sent_ts, tz=LOCAL_TZ)
+                    sent_by_day[sent_dt.date().isoformat()] += 1
                     # Find preceding message from someone else
                     for j in range(i - 1, -1, -1):
                         if msgs[j].get("user") != self_id:
-                            sent_ts = float(msg["ts"])
                             recv_ts = float(msgs[j]["ts"])
                             delta_hours = (sent_ts - recv_ts) / 3600
                             if 0 < delta_hours <= 72:
-                                sent_dt = datetime.fromtimestamp(sent_ts, tz=LOCAL_TZ)
                                 response_times.append({
                                     "date": sent_dt.date().isoformat(),
                                     "hours": round(delta_hours, 2),
@@ -372,7 +396,7 @@ def compute_slack_response_times(days=DAYS):
         except Exception as e:
             print(f"  WARN: Slack {workspace} failed: {e}")
 
-    return response_times
+    return response_times, dict(sent_by_day)
 
 
 def compute_teams_response_times(days=DAYS):
@@ -514,44 +538,48 @@ def main():
         sys.exit(1)
 
     all_data = []
+    all_sent_counts = {}  # {account_name: {date: int}}
+
     for acct in ACCOUNTS:
         display_name = ACCOUNT_DISPLAY.get(acct["name"], acct["name"])
         print(f"Fetching {acct['name']} ({display_name})...")
         try:
             service = get_gmail_service(acct["tokens"], acct["creds"])
-            times = compute_response_times(service, acct["name"])
+            times, sent_by_day = compute_response_times(service, acct["name"])
             for rec in times:
                 rec["account"] = display_name
             all_data.extend(times)
-            print(f"  → {len(times)} reply events")
+            all_sent_counts[display_name] = sent_by_day
+            print(f"  → {len(times)} reply events, {sum(sent_by_day.values())} total sent")
         except Exception as e:
             print(f"  WARN: {acct['name']} failed: {e}")
 
     # iMessage response times
     print("Fetching iMessage...")
     try:
-        imsg_times = compute_imessage_response_times()
+        imsg_times, imsg_sent = compute_imessage_response_times()
         for rec in imsg_times:
             rec["account"] = "imessage"
         all_data.extend(imsg_times)
-        print(f"  → {len(imsg_times)} reply events")
+        all_sent_counts["imessage"] = imsg_sent
+        print(f"  → {len(imsg_times)} reply events, {sum(imsg_sent.values())} total sent")
     except Exception as e:
         print(f"  WARN: iMessage failed: {e}")
 
     # Slack response times
     print("Fetching Slack...")
     try:
-        slack_times = compute_slack_response_times()
+        slack_times, slack_sent = compute_slack_response_times()
         for rec in slack_times:
             rec["account"] = "slack"
         all_data.extend(slack_times)
-        print(f"  → {len(slack_times)} reply events")
+        all_sent_counts["slack"] = slack_sent
+        print(f"  → {len(slack_times)} reply events, {sum(slack_sent.values())} total sent")
     except Exception as e:
         print(f"  WARN: Slack failed: {e}")
 
     # Teams response times (from ibx tracking DB)
     print("Fetching Teams...")
-    teams_sent_counts = {}
     try:
         teams_times = compute_teams_response_times()
         for rec in teams_times:
@@ -560,7 +588,8 @@ def main():
         print(f"  → {len(teams_times)} reply events")
         teams_sent_counts = compute_teams_sent_counts()
         if teams_sent_counts:
-            print(f"  → {sum(teams_sent_counts.values())} sent messages")
+            all_sent_counts["teams"] = teams_sent_counts
+            print(f"  → {sum(teams_sent_counts.values())} total sent")
     except Exception as e:
         print(f"  WARN: Teams failed: {e}")
 
@@ -575,16 +604,7 @@ def main():
     except Exception as e:
         print(f"  WARN: Outlook failed: {e}")
 
-    daily, summary = build_stats(all_data)
-    if teams_sent_counts:
-        daily_index = {(row["date"], row["account"]): row for row in daily}
-        for day, count in teams_sent_counts.items():
-            key = (day, "teams")
-            if key in daily_index:
-                daily_index[key]["sent_count"] = count
-            else:
-                daily.append({"date": day, "account": "teams", "avg_hours": None, "count": 0, "sent_count": count})
-        daily.sort(key=lambda row: (row["date"], row["account"]))
+    daily, summary = build_stats(all_data, sent_counts=all_sent_counts)
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")
     print(f"Summary: {summary}")
 

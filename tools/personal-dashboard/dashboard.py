@@ -636,31 +636,38 @@ def api_data():
         "spanGaps": True,
         "yAxisID": "y",
     })
-    # Per-account count bars (stacked) — ordered so m5x2+slack are adjacent
-    EMAIL_BAR_ORDER = ["outlook", "teams", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
-    for acct in EMAIL_BAR_ORDER:
-        day_map = email_by_account.get(acct, {})
-        if not day_map:
-            continue
-        email_datasets.append({
-            "type": "bar",
-            "label": acct,
-            "data": [day_map.get(d, {}).get("sent_count", day_map.get(d, {}).get("count", 0)) for d in dates],
-            "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
-            "borderWidth": 0,
-            "yAxisID": "y2",
-        })
-    # Any accounts not in the explicit order
-    for acct, day_map in sorted(email_by_account.items()):
-        if acct not in EMAIL_BAR_ORDER:
-            email_datasets.append({
-                "type": "bar",
-                "label": acct,
-                "data": [day_map.get(d, {}).get("sent_count", day_map.get(d, {}).get("count", 0)) for d in dates],
-                "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
-                "borderWidth": 0,
-                "yAxisID": "y2",
-            })
+    # Two aggregated bar series: replies (dark) + proactive (light), stacked
+    reply_totals = []
+    proactive_totals = []
+    for d in dates:
+        day_replies = 0
+        day_proactive = 0
+        for acct, day_map in email_by_account.items():
+            entry = day_map.get(d, {})
+            replies = entry.get("count", 0)
+            sent = entry.get("sent_count", replies)
+            day_replies += replies
+            day_proactive += max(0, sent - replies)
+        reply_totals.append(day_replies)
+        proactive_totals.append(day_proactive)
+    email_datasets.append({
+        "type": "bar",
+        "label": "replies",
+        "data": reply_totals,
+        "backgroundColor": "#aa00ff66",
+        "borderWidth": 0,
+        "yAxisID": "y2",
+        "stack": "comms",
+    })
+    email_datasets.append({
+        "type": "bar",
+        "label": "proactive",
+        "data": proactive_totals,
+        "backgroundColor": "#aa00ff28",
+        "borderWidth": 0,
+        "yAxisID": "y2",
+        "stack": "comms",
+    })
 
     # Summary stats
     total_points = {label: sum(points_raw.get(d, {}).get(label, 0) for d in dates)
