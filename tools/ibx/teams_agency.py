@@ -121,6 +121,10 @@ def _mark_chat_read(chat_id):
     """
     if not chat_id:
         return
+    # Verify user is in the chat before opening a tab
+    check = _teams_call("GetChat", {"chatId": chat_id}, timeout=10)
+    if check is None:
+        return  # user not in chat or chat doesn't exist — skip silently
     import urllib.parse
     encoded = urllib.parse.quote(chat_id, safe='')
     url = f"https://teams.microsoft.com/l/chat/{encoded}"

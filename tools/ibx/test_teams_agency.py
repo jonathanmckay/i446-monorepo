@@ -179,3 +179,27 @@ def test_fetch_retries_mark_read_for_processed_items():
             )
             return
     raise AssertionError("fetch_teams_items function not found")
+
+
+def test_mark_chat_read_validates_membership():
+    """
+    Bug: _mark_chat_read opened a Chrome tab for every chat ID without
+    checking if the user is still a member. For chats the user had left,
+    Teams web showed "We can't take you to that message because it's in
+    a chat you're not in."
+
+    Fix: _mark_chat_read must call GetChat to verify membership before
+    opening a Chrome tab. If GetChat fails (returns None), skip silently.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_mark_chat_read":
+            func_source = ast.get_source_segment(source, node)
+            assert "GetChat" in func_source, (
+                "_mark_chat_read must call GetChat to verify user is in the chat "
+                "before opening a Chrome tab"
+            )
+            return
+    raise AssertionError("_mark_chat_read function not found")
