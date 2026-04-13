@@ -108,9 +108,9 @@ def _mark_processed(item_id):
 # ── Mark chat as read via Graph API ───────────────────────────────────────────
 
 def _get_graph_identity():
-    """Get user_id and tenant_id from az CLI (cached after first call)."""
+    """Get user_id and tenant_id from az CLI (cached after first success)."""
     global _graph_identity
-    if _graph_identity is not None:
+    if _graph_identity:
         return _graph_identity
     try:
         user_id = subprocess.run(
@@ -126,36 +126,39 @@ def _get_graph_identity():
             return _graph_identity
     except Exception:
         pass
-    _graph_identity = {}
-    return _graph_identity
+    return None
 
 
 def _mark_chat_read(chat_id):
-    """Mark a Teams chat as read via Graph API (fire-and-forget in background)."""
+    """Mark a Teams chat as read via Graph API, synchronously with retry."""
     if not chat_id:
         return
-
-    def _do_mark():
-        identity = _get_graph_identity()
-        if not identity:
-            return
-        url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/markChatReadForUser"
-        body = json.dumps({
-            "user": {
-                "id": identity["user_id"],
-                "tenantId": identity["tenant_id"],
-            }
-        })
+    identity = _get_graph_identity()
+    if not identity:
+        console.print("[yellow]⚠ Could not get Graph identity — chat may still appear unread in Teams[/yellow]")
+        return
+    url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/markChatReadForUser"
+    body = json.dumps({
+        "user": {
+            "id": identity["user_id"],
+            "tenantId": identity["tenant_id"],
+        }
+    })
+    import time
+    for attempt in range(2):
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["az", "rest", "--method", "POST", "--url", url,
                  "--body", body, "--headers", "Content-Type=application/json"],
                 capture_output=True, text=True, timeout=15,
             )
+            if result.returncode == 0:
+                return
         except Exception:
             pass
-
-    threading.Thread(target=_do_mark, daemon=True).start()
+        if attempt == 0:
+            time.sleep(1)
+    console.print("[yellow]⚠ Could not mark chat as read — may still appear unread in Teams[/yellow]")
 
 
 # ── Agency MCP Teams calls ────────────────────────────────────────────────────

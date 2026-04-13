@@ -119,3 +119,56 @@ def test_mark_chat_read_exists():
             )
             return
     raise AssertionError("_mark_chat_read function not found")
+
+
+def test_mark_chat_read_is_synchronous_with_retry():
+    """
+    Bug: _mark_chat_read ran in a daemon thread that silently swallowed errors.
+    If the az rest call failed (auth, timeout), the chat stayed unread in Teams
+    with no user feedback.
+
+    Fix: _mark_chat_read must run synchronously, retry once on failure,
+    and warn the user if both attempts fail.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_mark_chat_read":
+            func_source = ast.get_source_segment(source, node)
+            assert "Thread" not in func_source and "daemon" not in func_source, (
+                "_mark_chat_read must not use daemon threads — must be synchronous"
+            )
+            assert func_source.count("subprocess.run") >= 1, (
+                "_mark_chat_read must call az rest"
+            )
+            assert "range(2)" in func_source or "attempt" in func_source, (
+                "_mark_chat_read must retry on failure"
+            )
+            assert "could not mark" in func_source.lower() or "still appear unread" in func_source.lower(), (
+                "_mark_chat_read must warn user on failure"
+            )
+            return
+    raise AssertionError("_mark_chat_read function not found")
+
+
+def test_get_graph_identity_does_not_cache_failures():
+    """
+    Bug: _get_graph_identity cached {} on failure (line: _graph_identity = {}).
+    Since {} is not None, subsequent calls returned {} immediately,
+    and _mark_chat_read silently no-oped forever after one az CLI failure.
+
+    Fix: On failure, return None without caching. Only cache successful results.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_get_graph_identity":
+            func_source = ast.get_source_segment(source, node)
+            assert "_graph_identity = {}" not in func_source, (
+                "_get_graph_identity must not cache empty dict on failure — "
+                "this makes all future mark-as-read calls silently no-op"
+            )
+            return
+    raise AssertionError("_get_graph_identity function not found")
