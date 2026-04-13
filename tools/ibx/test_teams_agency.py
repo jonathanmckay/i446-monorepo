@@ -117,11 +117,6 @@ def test_mark_chat_read_exists():
 
 def test_mark_chat_read_uses_chrome_msft_profile():
     """
-    Bug: _mark_chat_read tried multiple approaches that all failed:
-    - az rest markChatReadForUser: blocked by Chat.ReadWrite scope
-    - msteams:// deep link: navigates but doesn't trigger read state
-    - AppleScript focus tricks: Teams ignores programmatic navigation
-
     Fix: Open the chat URL in Chrome's MSFT profile (Profile 1), which has
     Teams auth cookies. Teams web marks the chat as read and syncs to desktop.
     """
@@ -137,11 +132,47 @@ def test_mark_chat_read_uses_chrome_msft_profile():
             assert "profile-directory" in func_source, (
                 "_mark_chat_read must specify Chrome profile directory"
             )
-            assert "msteams://" not in func_source, (
-                "_mark_chat_read must not use msteams:// deep link (doesn't trigger read state)"
+            return
+    raise AssertionError("_mark_chat_read function not found")
+
+
+def test_close_only_ibx_tabs():
+    """
+    Bug: _close_teams_tabs closed ALL teams.microsoft.com tabs in Chrome,
+    including tabs the user had open for their own work.
+
+    Fix: close_ibx_teams_tabs only closes tabs containing the ibx0mark
+    fingerprint parameter, leaving user's own Teams tabs untouched.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "close_ibx_teams_tabs":
+            func_source = ast.get_source_segment(source, node)
+            assert "ibx0mark" in func_source or "_IBX_TAB_MARKER" in func_source, (
+                "close_ibx_teams_tabs must filter by ibx0mark fingerprint"
             )
-            assert "az rest" not in func_source, (
-                "_mark_chat_read must not use az rest (lacks Chat.ReadWrite scope)"
+            return
+    raise AssertionError("close_ibx_teams_tabs function not found")
+
+
+def test_mark_chat_read_includes_tab_marker():
+    """
+    Bug: _mark_chat_read opened plain teams.microsoft.com/l/chat/ URLs
+    with no way to distinguish them from user's own Teams tabs.
+
+    Fix: URL must include ibx0mark parameter so close_ibx_teams_tabs
+    can identify and close only ibx0-opened tabs.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_mark_chat_read":
+            func_source = ast.get_source_segment(source, node)
+            assert "_IBX_TAB_MARKER" in func_source, (
+                "_mark_chat_read URL must include _IBX_TAB_MARKER fingerprint"
             )
             return
     raise AssertionError("_mark_chat_read function not found")

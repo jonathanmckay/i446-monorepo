@@ -19,11 +19,29 @@ from rich.console import Console
 console = Console()
 
 PROCESSED_FILE = Path.home() / ".config" / "teams" / "processed.json"
+MARKED_READ_FILE = Path.home() / ".config" / "teams" / "marked_read.json"
 RESPONSE_DB = Path.home() / ".config" / "teams" / "response_times.db"
 MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 
 # Chat IDs already retried for mark-as-read this fetch cycle
 _retry_read_chats = set()
+
+
+def _load_marked_read():
+    """Load set of chat_ids that have already been marked read via Chrome."""
+    if MARKED_READ_FILE.exists():
+        try:
+            return set(json.load(open(MARKED_READ_FILE)))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return set()
+
+
+def _save_marked_read(chat_ids):
+    """Persist chat_ids that have been marked read via Chrome."""
+    MARKED_READ_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(MARKED_READ_FILE, "w") as f:
+        json.dump(list(chat_ids), f)
 
 
 def load_processed():
@@ -110,6 +128,9 @@ def _mark_processed(item_id):
 # Chrome profile with Microsoft/Teams cookies
 _CHROME_MSFT_PROFILE = "Profile 1"
 
+# Fingerprint appended to URLs we open so _close_teams_tabs only kills ours
+_IBX_TAB_MARKER = "ibx0mark=1"
+
 
 def _mark_chat_read(chat_id):
     """Mark a Teams chat as read by opening it in Teams web (Chrome MSFT profile).
@@ -127,26 +148,23 @@ def _mark_chat_read(chat_id):
         return  # user not in chat or chat doesn't exist — skip silently
     import urllib.parse
     encoded = urllib.parse.quote(chat_id, safe='')
-    url = f"https://teams.microsoft.com/l/chat/{encoded}"
+    url = f"https://teams.microsoft.com/l/chat/{encoded}?{_IBX_TAB_MARKER}"
     try:
         subprocess.run(
             ["open", "-na", "Google Chrome", "--args",
              f"--profile-directory={_CHROME_MSFT_PROFILE}", url],
             capture_output=True, timeout=5,
         )
-        # Close the tab after Teams web registers the read state
-        threading.Thread(target=_close_teams_tabs, daemon=True).start()
     except Exception:
         console.print("[yellow]⚠ Could not open chat in Teams web — may still appear unread[/yellow]")
 
 
-def _close_teams_tabs():
-    """Wait for Teams web to load, then close all teams.microsoft.com tabs."""
-    import time
-    time.sleep(4)
+def close_ibx_teams_tabs():
+    """Close only Chrome tabs opened by ibx0 (identified by ibx0mark param).
+    Called once after all mark-as-read opens are done, not per-tab."""
     try:
         subprocess.run(
-            ["osascript", "-e", """
+            ["osascript", "-e", f"""
 tell application "Google Chrome"
     set winCount to count of windows
     repeat with w from winCount to 1 by -1
@@ -154,7 +172,7 @@ tell application "Google Chrome"
             set tabCount to count of tabs of window w
             repeat with i from tabCount to 1 by -1
                 try
-                    if URL of tab i of window w contains "teams.microsoft.com" then
+                    if URL of tab i of window w contains "{_IBX_TAB_MARKER}" then
                         close tab i of window w
                     end if
                 end try
@@ -219,6 +237,7 @@ def fetch_teams_items():
         return items
 
     processed = load_processed()
+    already_marked = _load_marked_read()
 
     for hit in hits:
         resource = hit.get("resource", {})
@@ -248,11 +267,12 @@ def fetch_teams_items():
         item_id = f"teams:{chat_id}:{msg_id}"
 
         if item_id in processed:
-            # Retry mark-as-read for processed items still appearing in search
-            # (handles cases where previous mark-as-read silently failed)
-            if chat_id and chat_id not in _retry_read_chats:
+            # Only mark-as-read for chats we haven't already marked
+            if chat_id and chat_id not in _retry_read_chats and chat_id not in already_marked:
                 _retry_read_chats.add(chat_id)
                 _mark_chat_read(chat_id)
+                already_marked.add(chat_id)
+                _save_marked_read(already_marked)
             continue
 
         # Check legacy workiq-style IDs
@@ -286,6 +306,15 @@ def fetch_teams_items():
         })
 
     console.print(f"  [dim]teams: {len(items)} to review[/dim]")
+
+    # Batch cleanup: close all ibx0-opened tabs after they've had time to load
+    if _retry_read_chats:
+        import time
+        def _deferred_close():
+            time.sleep(5)
+            close_ibx_teams_tabs()
+        threading.Thread(target=_deferred_close, daemon=True).start()
+
     return items
 
 
