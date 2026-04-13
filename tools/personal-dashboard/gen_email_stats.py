@@ -344,7 +344,7 @@ def compute_slack_response_times(days=DAYS):
             cursor = None
             dm_channels = []
             while True:
-                params = {"types": "im", "limit": "200"}
+                params = {"types": "im,mpim", "limit": "200"}
                 if cursor:
                     params["cursor"] = cursor
                 url = "https://slack.com/api/conversations.list?" + urllib.parse.urlencode(params)
@@ -531,6 +531,52 @@ def compute_outlook_response_times(days=DAYS):
     return response_times
 
 
+def compute_outlook_sent_counts(days=DAYS):
+    """Count recent sent Outlook messages by local day via Graph API search."""
+    try:
+        import outlook_agency
+    except Exception:
+        return {}
+
+    recent_days = min(days, 2)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=recent_days)).strftime("%Y-%m-%d")
+    raw = outlook_agency._mail_call("SearchMessagesQueryParameters", {
+        "queryString": f"sent>={cutoff} kind:email from:me",
+        "top": 100,
+    }, timeout=60)
+    if not raw:
+        return {}
+
+    now = datetime.now(timezone.utc)
+    today = now.astimezone(LOCAL_TZ).date()
+    cutoff_date = today - timedelta(days=recent_days)
+
+    counts = defaultdict(int)
+    try:
+        outer = json.loads(raw)
+        inner = json.loads(outer.get("rawResponse", "{}"))
+        hits_containers = inner.get("value", [{}])[0].get("hitsContainers", [{}])
+        hits = hits_containers[0].get("hits", []) if hits_containers else []
+    except Exception:
+        return {}
+
+    for hit in hits:
+        resource = hit.get("resource", {})
+        created = resource.get("sentDateTime", "") or resource.get("createdDateTime", "")
+        if not created:
+            continue
+        try:
+            sent_dt = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+        except (ValueError, TypeError):
+            continue
+        day = sent_dt.date()
+        if day <= cutoff_date or day > today:
+            continue
+        counts[day.isoformat()] += 1
+
+    return dict(counts)
+
+
 def main():
     token = get_github_token()
     if not token:
@@ -601,6 +647,10 @@ def main():
             rec["account"] = "outlook"
         all_data.extend(outlook_times)
         print(f"  → {len(outlook_times)} reply events")
+        outlook_sent_counts = compute_outlook_sent_counts()
+        if outlook_sent_counts:
+            all_sent_counts["outlook"] = outlook_sent_counts
+            print(f"  → {sum(outlook_sent_counts.values())} total sent")
     except Exception as e:
         print(f"  WARN: Outlook failed: {e}")
 
