@@ -150,3 +150,33 @@ def test_parse_teams_sent_counts_uses_actual_sent_messages_and_local_day():
         "2026-04-11": 1,
         "2026-04-12": 1,
     }
+
+
+def test_slack_scans_mpim_channels():
+    """
+    Bug: Slack DM scan used types="im" which only finds 1:1 DMs. Group DMs
+    (MPIMs) were missed, undercounting Slack replies and sent messages.
+
+    Fix: Use types="im,mpim" to include both 1:1 and group DMs.
+    """
+    source = Path(__file__).parent.joinpath("gen_email_stats.py").read_text()
+    assert '"im,mpim"' in source or "'im,mpim'" in source, (
+        "compute_slack_response_times must use types='im,mpim' to include group DMs"
+    )
+
+
+def test_outlook_sent_counts_exist():
+    """
+    Bug: Outlook had no sent count computation. Proactive bars were always 0
+    because only reply response times were tracked, not total sent messages.
+
+    Fix: Add compute_outlook_sent_counts() that queries Graph API for sent
+    mail, and wire it into main() so all_sent_counts["outlook"] is populated.
+    """
+    source = Path(__file__).parent.joinpath("gen_email_stats.py").read_text()
+    assert "def compute_outlook_sent_counts" in source, (
+        "gen_email_stats.py must have a compute_outlook_sent_counts function"
+    )
+    assert 'all_sent_counts["outlook"]' in source, (
+        "main() must populate all_sent_counts['outlook'] from compute_outlook_sent_counts"
+    )
