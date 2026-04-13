@@ -889,6 +889,7 @@ def main():
     # Background drainer: keeps pulling from _incoming as slow sources finish
     _bg_injected = []  # shared list for late items (read from main loop)
     _bg_lock = threading.Lock()
+    _drainer_done = threading.Event()
     def _bg_drainer():
         """Continuously drain _incoming queue and stage late items for injection."""
         while not _fetch_done.is_set():
@@ -909,6 +910,7 @@ def main():
                 if uid not in seen_uids:
                     _bg_injected.append(it)
                     seen_uids.add(uid)
+        _drainer_done.set()
     threading.Thread(target=_bg_drainer, daemon=True).start()
 
     # Mark fetch done when all futures complete (non-blocking)
@@ -941,9 +943,8 @@ def main():
             console.print(f"[dim]  waiting for {', '.join(slow_pending)}...[/dim]")
         _fetch_done.wait(timeout=150)
 
-    # Drain any late arrivals that have come in so far
-    import time as _time
-    _time.sleep(0.3)  # give _bg_drainer a moment to finish its final drain
+    # Drain any late arrivals — wait for drainer to finish its final drain
+    _drainer_done.wait(timeout=5)
     with _bg_lock:
         for it in _bg_injected:
             uid = _item_uid(it)
@@ -1038,8 +1039,8 @@ def main():
                 def _final_fetch(fn):
                     r = fn()
                     return r[0] if isinstance(r, tuple) else r
-                with ThreadPoolExecutor(max_workers=4) as pool:
-                    futs = [pool.submit(_final_fetch, f) for f in [fetch_emails, fetch_imsgs, fetch_slack, fetch_outlook]]
+                with ThreadPoolExecutor(max_workers=5) as pool:
+                    futs = [pool.submit(_final_fetch, f) for f in [fetch_emails, fetch_imsgs, fetch_slack, fetch_outlook, fetch_teams]]
                     for fut in futs:
                         try:
                             _final.extend(fut.result(timeout=30))

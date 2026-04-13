@@ -192,3 +192,53 @@ def test_live_display_used_in_main():
             assert ".stop()" in func_source, "main must stop the Live display"
             return
     raise AssertionError("main function not found")
+
+
+def test_drainer_done_event_prevents_race():
+    """
+    Bug: after _fetch_done fires, the main thread used a 0.3s sleep hoping
+    _bg_drainer would finish its final drain. If the drainer was slow, items
+    sat in _bg_injected and the main thread declared 'Inbox zero' despite
+    having items. Manifested as 'teams: 4 to review' followed by 'Inbox zero'.
+
+    Fix: _bg_drainer must set a _drainer_done event after its final drain,
+    and the main thread must wait on _drainer_done instead of sleeping.
+    """
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+
+    # _bg_drainer must set _drainer_done
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_bg_drainer":
+            func_source = ast.get_source_segment(source, node)
+            assert "_drainer_done.set()" in func_source, (
+                "_bg_drainer must signal _drainer_done after final drain"
+            )
+            break
+    else:
+        raise AssertionError("_bg_drainer function not found")
+
+    # main() must wait on _drainer_done, not use time.sleep for drain sync
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            func_source = ast.get_source_segment(source, node)
+            assert "_drainer_done.wait(" in func_source, (
+                "main must wait on _drainer_done event instead of sleeping"
+            )
+            return
+    raise AssertionError("main function not found")
+
+
+def test_final_fetch_includes_teams():
+    """
+    Bug: the 'final parallel fetch before declaring inbox zero' only checked
+    email, imsg, slack, and outlook — Teams was missing. If all items were
+    Teams messages, the final sweep would miss them entirely.
+
+    Fix: include fetch_teams in the final fetch list.
+    """
+    source = IBX_ALL_PY.read_text()
+    # Find the final fetch block
+    assert "fetch_teams" in source.split("One final parallel fetch")[1].split("Inbox zero")[0], (
+        "Final parallel fetch before inbox zero must include fetch_teams"
+    )
