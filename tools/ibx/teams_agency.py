@@ -12,6 +12,8 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import subprocess
+
 from rich.console import Console
 
 console = Console()
@@ -19,6 +21,9 @@ console = Console()
 PROCESSED_FILE = Path.home() / ".config" / "teams" / "processed.json"
 RESPONSE_DB = Path.home() / ".config" / "teams" / "response_times.db"
 MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
+
+# Cached Graph identity (populated lazily by _get_graph_identity)
+_graph_identity: dict | None = None
 
 
 def load_processed():
@@ -98,6 +103,59 @@ def _mark_processed(item_id):
     proc = load_processed()
     proc[item_id] = datetime.now().isoformat()
     save_processed(proc)
+
+
+# ── Mark chat as read via Graph API ───────────────────────────────────────────
+
+def _get_graph_identity():
+    """Get user_id and tenant_id from az CLI (cached after first call)."""
+    global _graph_identity
+    if _graph_identity is not None:
+        return _graph_identity
+    try:
+        user_id = subprocess.run(
+            ["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        tenant_id = subprocess.run(
+            ["az", "account", "show", "--query", "tenantId", "-o", "tsv"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if user_id and tenant_id:
+            _graph_identity = {"user_id": user_id, "tenant_id": tenant_id}
+            return _graph_identity
+    except Exception:
+        pass
+    _graph_identity = {}
+    return _graph_identity
+
+
+def _mark_chat_read(chat_id):
+    """Mark a Teams chat as read via Graph API (fire-and-forget in background)."""
+    if not chat_id:
+        return
+
+    def _do_mark():
+        identity = _get_graph_identity()
+        if not identity:
+            return
+        url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/markChatReadForUser"
+        body = json.dumps({
+            "user": {
+                "id": identity["user_id"],
+                "tenantId": identity["tenant_id"],
+            }
+        })
+        try:
+            subprocess.run(
+                ["az", "rest", "--method", "POST", "--url", url,
+                 "--body", body, "--headers", "Content-Type=application/json"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=_do_mark, daemon=True).start()
 
 
 # ── Agency MCP Teams calls ────────────────────────────────────────────────────
@@ -215,14 +273,15 @@ def fetch_teams_items():
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 
-def archive(item_id):
-    """Mark Teams message as processed (instant, local only)."""
+def archive(item_id, chat_id=""):
+    """Mark Teams message as processed and mark chat read in Teams."""
     record_action(item_id, "archive")
     _mark_processed(item_id)
+    _mark_chat_read(chat_id)
 
 
-def delete(item_id):
-    archive(item_id)
+def delete(item_id, chat_id=""):
+    archive(item_id, chat_id=chat_id)
 
 
 def reply(item_id, chat_id, reply_text):
@@ -238,6 +297,7 @@ def reply(item_id, chat_id, reply_text):
             return False
     record_action(item_id, "reply")
     _mark_processed(item_id)
+    _mark_chat_read(chat_id)
     return True
 
 
