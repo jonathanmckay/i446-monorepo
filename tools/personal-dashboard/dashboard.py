@@ -564,19 +564,17 @@ def api_data():
     # one bar per account (email count, secondary y-axis)
     email_daily = email_raw.get("daily", [])
     email_summary = email_raw.get("summary", {})
-    # Build {account: {date: {avg_hours, count}}}
+    # Build {account: {date: {avg_hours, count, sent_count}}}
     email_by_account = defaultdict(dict)
     for entry in email_daily:
         acct = entry.get("account", "unknown")
         d = entry.get("date", "")
         if d:
-            rec = {
+            email_by_account[acct][d] = {
                 "avg_hours": entry.get("avg_hours"),
                 "count": entry.get("count", 0),
+                "sent_count": entry.get("sent_count", entry.get("count", 0)),
             }
-            if "sent_count" in entry:
-                rec["sent_count"] = entry["sent_count"]
-            email_by_account[acct][d] = rec
     # Add iMessage daily stats from response DB
     import sqlite3 as _sq3
     _imsg_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
@@ -636,37 +634,49 @@ def api_data():
         "spanGaps": True,
         "yAxisID": "y",
     })
-    # Two aggregated bar series: replies (dark) + proactive (light), stacked
-    reply_totals = []
-    proactive_totals = []
+    # Per-account inbound/reply count bars (stacked) — ordered so m5x2+slack are adjacent
+    EMAIL_BAR_ORDER = ["outlook", "teams", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
+    for acct in EMAIL_BAR_ORDER:
+        day_map = email_by_account.get(acct, {})
+        if not day_map:
+            continue
+        email_datasets.append({
+            "type": "bar",
+            "label": acct,
+            "data": [day_map.get(d, {}).get("count", 0) for d in dates],
+            "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
+            "borderWidth": 0,
+            "yAxisID": "y2",
+            "stack": "inbound",
+        })
+    # Any accounts not in the explicit order
+    for acct, day_map in sorted(email_by_account.items()):
+        if acct not in EMAIL_BAR_ORDER:
+            email_datasets.append({
+                "type": "bar",
+                "label": acct,
+                "data": [day_map.get(d, {}).get("count", 0) for d in dates],
+                "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
+                "borderWidth": 0,
+                "yAxisID": "y2",
+                "stack": "inbound",
+            })
+    # Outbound/sent total bar (single bar, all channels aggregated)
+    outbound_totals = []
     for d in dates:
-        day_replies = 0
-        day_proactive = 0
+        day_sent = 0
         for acct, day_map in email_by_account.items():
-            entry = day_map.get(d, {})
-            replies = entry.get("count", 0)
-            sent = entry.get("sent_count", replies)
-            day_replies += replies
-            day_proactive += max(0, sent - replies)
-        reply_totals.append(day_replies)
-        proactive_totals.append(day_proactive)
+            day_sent += day_map.get(d, {}).get("sent_count", 0)
+        outbound_totals.append(day_sent)
     email_datasets.append({
         "type": "bar",
-        "label": "replies",
-        "data": reply_totals,
-        "backgroundColor": "#aa00ff66",
-        "borderWidth": 0,
+        "label": "sent",
+        "data": outbound_totals,
+        "backgroundColor": "#4fc3f766",
+        "borderColor": "#4fc3f7",
+        "borderWidth": 1,
         "yAxisID": "y2",
-        "stack": "comms",
-    })
-    email_datasets.append({
-        "type": "bar",
-        "label": "proactive",
-        "data": proactive_totals,
-        "backgroundColor": "#aa00ff28",
-        "borderWidth": 0,
-        "yAxisID": "y2",
-        "stack": "comms",
+        "stack": "outbound",
     })
 
     # Summary stats
