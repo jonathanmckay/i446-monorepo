@@ -16,7 +16,7 @@ Send a proactive message to someone. Supports Teams, Outlook email, Gmail, iMess
 - `Sent via iMessage to Mom`
 - `Sent via Teams to Luke Hoban, Asha Sharma` (group chat)
 
-Do NOT explain what you're doing. Do NOT ask for confirmation unless the message contains `<angle brackets>` (see AI assist below). Just execute.
+Do NOT explain what you're doing. Just execute — except when confirmation is required (see AI assist and recipient confirmation rules below).
 
 ## Syntax
 
@@ -144,28 +144,63 @@ import re, glob
 from pathlib import Path
 
 def resolve_d359(name):
-    """Search d359 files by name. Returns channels dict or None."""
+    """Search d359 files by name. Returns (display_name, channels) or None.
+    Uses scored matching: exact > full-name-in-stem > partial. Best match wins."""
     slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    name_lower = name.lower()
     d = Path.home() / 'vault/d359'
+    candidates = []  # list of (score, display_name, channels)
     for p in d.glob('*.md'):
         stem = p.stem.lower()
-        if slug in stem or name.lower() in stem:
-            text = p.read_text()
-            m = re.match(r'^---\n(.*?)\n---\n', text, re.DOTALL)
-            if not m: continue
-            fm = m.group(1)
-            if 'channels:' not in fm: continue
-            ch = {}
-            in_ch = False
-            for line in fm.split('\n'):
-                if line.strip() == 'channels:': in_ch = True; continue
-                if in_ch and line.startswith('  ') and ':' in line:
-                    k, _, v = line.strip().partition(':')
-                    ch[k.strip()] = v.strip().strip('"')
-                elif in_ch: break
-            if ch: return ch
-    return None
+        # Strip " d359" suffix for display name
+        display = p.stem.replace(' d359', '')
+        # Score: 3 = exact match, 2 = full name in stem, 1 = slug/partial match
+        name_part = stem.replace(' d359', '').strip()
+        if name_lower == name_part:
+            score = 3
+        elif name_lower in stem:
+            score = 2
+        elif slug in re.sub(r'[^a-z0-9]+', '-', stem):
+            score = 1
+        else:
+            continue
+        text = p.read_text()
+        m = re.match(r'^---\n(.*?)\n---\n', text, re.DOTALL)
+        if not m: continue
+        fm = m.group(1)
+        if 'channels:' not in fm: continue
+        ch = {}
+        in_ch = False
+        for line in fm.split('\n'):
+            if line.strip() == 'channels:': in_ch = True; continue
+            if in_ch and line.startswith('  ') and ':' in line:
+                k, _, v = line.strip().partition(':')
+                ch[k.strip()] = v.strip().strip('"')
+            elif in_ch: break
+        if ch:
+            candidates.append((score, display, ch))
+    if not candidates:
+        return None
+    # Sort by score descending; return best match
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates  # Return ALL candidates for ambiguity detection
 ```
+
+### Recipient confirmation
+
+After resolving a recipient, **ask the user to confirm** if ANY of these apply:
+
+1. **Multiple d359 matches** — more than one person matched the input name (e.g., two Andys).
+   Show the top matches and ask which one.
+2. **Low-confidence match** — best match score is 1 (partial/slug only, no exact or full-name match).
+   Show the match and ask: "Did you mean {name}?"
+3. **No d359 match, falling back to Graph/search** — the person has never been messaged before
+   (no d359 entry). Show the resolved name/email from Graph and ask: "Send to {name} ({email})?"
+
+**Do NOT ask for confirmation** when:
+- Best match score is 2 or 3 (exact or full-name match) AND it's the only match
+
+This ensures known, unambiguous contacts resolve silently, while new or ambiguous contacts get a quick confirmation.
 
 ### Channel → field mapping
 

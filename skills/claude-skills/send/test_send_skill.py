@@ -56,3 +56,44 @@ def test_gmail_dispatch_joins_recipients():
     assert "join(emails)" in text, (
         "Gmail dispatch must use ', '.join(emails) for the To: header"
     )
+
+
+def test_resolve_d359_uses_scored_matching():
+    """
+    Bug: resolve_d359 used simple substring matching and returned the first
+    glob hit. When multiple people share a first name (e.g., two Andys),
+    the wrong person could be selected.
+
+    Fix: resolve_d359 must score matches (exact > full-name > partial) and
+    return all candidates so ambiguity can be detected.
+    """
+    text = SKILL_MD.read_text()
+    assert "score" in text.lower() and "candidates" in text.lower(), (
+        "resolve_d359 must use scored matching with candidates list"
+    )
+    assert "score = 3" in text and "score = 2" in text and "score = 1" in text, (
+        "resolve_d359 must assign tiered scores: 3 (exact), 2 (full name), 1 (partial)"
+    )
+
+
+def test_recipient_confirmation_on_ambiguous_match():
+    """
+    Bug: /send Andy Shaman via teams sent to the wrong Andy because the skill
+    never asked for confirmation when the match was ambiguous.
+
+    Fix: SKILL.md must require confirmation when multiple d359 matches exist,
+    when match confidence is low, or when falling back to Graph (first-time contact).
+    """
+    text = SKILL_MD.read_text()
+    assert "Recipient confirmation" in text or "recipient confirmation" in text, (
+        "SKILL.md must have a recipient confirmation section"
+    )
+    assert "Multiple d359 matches" in text, (
+        "Must require confirmation when multiple people match the input name"
+    )
+    assert "Low-confidence match" in text, (
+        "Must require confirmation when match score is low (partial only)"
+    )
+    assert "No d359 match" in text, (
+        "Must require confirmation when falling back to Graph/search for unknown contacts"
+    )
