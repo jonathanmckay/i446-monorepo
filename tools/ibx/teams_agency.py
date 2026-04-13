@@ -23,7 +23,7 @@ RESPONSE_DB = Path.home() / ".config" / "teams" / "response_times.db"
 MY_ADDRESSES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 
 # Cached Graph identity (populated lazily by _get_graph_identity)
-_graph_identity: dict | None = None
+_graph_identity = None  # Optional[dict]
 
 
 def load_processed():

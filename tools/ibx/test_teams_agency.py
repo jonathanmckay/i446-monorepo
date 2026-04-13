@@ -5,6 +5,25 @@ from pathlib import Path
 TEAMS_AGENCY_PY = Path(__file__).parent / "teams_agency.py"
 
 
+def test_module_imports_on_python39():
+    """
+    Bug: `_graph_identity: dict | None = None` uses PEP 604 union syntax
+    which requires Python 3.10+. On Python 3.9 the module fails to import
+    with TypeError, so ibx0 silently sets _teams_available=False and all
+    Teams messages are invisible.
+
+    Fix: use plain assignment without type annotation, or use Optional[dict].
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    # Must not use PEP 604 union syntax (X | Y) in runtime annotations
+    assert "dict | None" not in source and "None | dict" not in source, (
+        "Module must not use 'dict | None' syntax — breaks Python 3.9. "
+        "Use Optional[dict] or a comment annotation instead."
+    )
+    # Verify the module actually compiles
+    compile(source, str(TEAMS_AGENCY_PY), "exec")
+
+
 def test_archive_not_daemon_thread():
     """
     Bug: archive() ran record_action + _mark_processed in a daemon thread.

@@ -66,15 +66,15 @@ def test_archive_deletes_message():
     Bug: archive() tried to mark as read via UpdateMessage, but that tool
     doesn't support isRead. Emails stayed unread in Graph and kept reappearing.
 
-    Fix: archive() calls DeleteMessage to definitively remove from inbox.
+    Fix: archive() calls _delete_after_action to definitively remove from inbox.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "archive":
             func_source = ast.get_source_segment(source, node)
-            assert "DeleteMessage" in func_source, (
-                "archive() must call DeleteMessage to remove email from inbox"
+            assert "_delete_after_action" in func_source, (
+                "archive() must call _delete_after_action to remove email from inbox"
             )
             return
     raise AssertionError("archive function not found")
@@ -158,16 +158,16 @@ def test_reply_archives_email():
     Bug: reply() sent the reply via Graph API but did not remove the email
     from the inbox. The email stayed visible even after responding.
 
-    Fix: reply() must call DeleteMessage after a successful ReplyToMessage
-    so the email leaves the inbox (same pattern as archive()).
+    Fix: reply() must call _delete_after_action after a successful ReplyToMessage
+    so the email leaves the inbox reliably.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "reply":
             func_source = ast.get_source_segment(source, node)
-            assert "DeleteMessage" in func_source, (
-                "reply() must call DeleteMessage to archive the email after replying"
+            assert "_delete_after_action" in func_source, (
+                "reply() must call _delete_after_action to archive the email after replying"
             )
             return
     raise AssertionError("reply function not found")
@@ -178,15 +178,15 @@ def test_reply_all_archives_email():
     Bug: reply_all() sent the reply via Graph API but did not remove the
     email from the inbox (same issue as reply()).
 
-    Fix: reply_all() must call DeleteMessage after successful ReplyAllToMessage.
+    Fix: reply_all() must call _delete_after_action after successful ReplyAllToMessage.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "reply_all":
             func_source = ast.get_source_segment(source, node)
-            assert "DeleteMessage" in func_source, (
-                "reply_all() must call DeleteMessage to archive the email after replying"
+            assert "_delete_after_action" in func_source, (
+                "reply_all() must call _delete_after_action to archive the email after replying"
             )
             return
     raise AssertionError("reply_all function not found")
@@ -212,3 +212,53 @@ def test_fetch_checks_legacy_workiq_ids():
             )
             return
     raise AssertionError("fetch_outlook_items function not found")
+
+
+def test_delete_after_action_is_synchronous_with_retry():
+    """
+    Bug: reply/archive fired DeleteMessage in a daemon thread that silently
+    swallowed errors. If the delete failed (timeout, auth issue), the email
+    stayed in Outlook Focused Inbox even though ibx0 marked it processed.
+
+    Fix: _delete_after_action runs DeleteMessage synchronously with one retry
+    on failure, and warns the user if both attempts fail.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_delete_after_action":
+            func_source = ast.get_source_segment(source, node)
+            assert "DeleteMessage" in func_source, (
+                "_delete_after_action must call DeleteMessage"
+            )
+            assert "Thread" not in func_source, (
+                "_delete_after_action must not use daemon threads — deletion must be synchronous"
+            )
+            assert func_source.count("_mail_call") >= 2, (
+                "_delete_after_action must retry DeleteMessage on failure"
+            )
+            assert "could not delete" in func_source.lower(), (
+                "_delete_after_action must warn user if deletion fails after retry"
+            )
+            return
+    raise AssertionError("_delete_after_action function not found")
+
+
+def test_archive_uses_delete_after_action():
+    """
+    Bug: archive() used a daemon thread for DeleteMessage, same silent-failure
+    pattern as reply(). Must use _delete_after_action for consistency.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "archive":
+            func_source = ast.get_source_segment(source, node)
+            assert "_delete_after_action" in func_source, (
+                "archive() must use _delete_after_action, not a daemon thread"
+            )
+            assert "Thread" not in func_source, (
+                "archive() must not use daemon threads for deletion"
+            )
+            return
+    raise AssertionError("archive function not found")
