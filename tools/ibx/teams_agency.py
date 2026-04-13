@@ -105,27 +105,64 @@ def _mark_processed(item_id):
     save_processed(proc)
 
 
-# ── Mark chat as read via Teams desktop app ───────────────────────────────────
+# ── Mark chat as read via Teams web in Chrome ─────────────────────────────────
+
+# Chrome profile with Microsoft/Teams cookies
+_CHROME_MSFT_PROFILE = "Profile 1"
+
 
 def _mark_chat_read(chat_id):
-    """Mark a Teams chat as read by opening it in the Teams desktop app.
+    """Mark a Teams chat as read by opening it in Teams web (Chrome MSFT profile).
 
     The Graph API markChatReadForUser requires Chat.ReadWrite scope which
-    isn't available via az CLI (tenant conditional access blocks device-code
-    auth for the Graph Explorer app). Opening the chat via deep link causes
-    the Teams client to mark it as read — same as the user clicking on it.
+    isn't available via az CLI. The Teams MCP server has the scope but doesn't
+    expose the tool. Opening the chat in Teams web (which has auth cookies)
+    marks it as read and syncs to desktop. The tab is closed after loading.
     """
     if not chat_id:
         return
     import urllib.parse
     encoded = urllib.parse.quote(chat_id, safe='')
+    url = f"https://teams.microsoft.com/l/chat/{encoded}"
     try:
         subprocess.run(
-            ["open", "-g", f"msteams://teams.microsoft.com/l/chat/{encoded}"],
+            ["open", "-na", "Google Chrome", "--args",
+             f"--profile-directory={_CHROME_MSFT_PROFILE}", url],
             capture_output=True, timeout=5,
         )
+        # Close the tab after Teams web registers the read state
+        threading.Thread(target=_close_teams_tabs, daemon=True).start()
     except Exception:
-        console.print("[yellow]⚠ Could not open chat in Teams — may still appear unread[/yellow]")
+        console.print("[yellow]⚠ Could not open chat in Teams web — may still appear unread[/yellow]")
+
+
+def _close_teams_tabs():
+    """Wait for Teams web to load, then close all teams.microsoft.com tabs."""
+    import time
+    time.sleep(4)
+    try:
+        subprocess.run(
+            ["osascript", "-e", """
+tell application "Google Chrome"
+    set winCount to count of windows
+    repeat with w from winCount to 1 by -1
+        try
+            set tabCount to count of tabs of window w
+            repeat with i from tabCount to 1 by -1
+                try
+                    if URL of tab i of window w contains "teams.microsoft.com" then
+                        close tab i of window w
+                    end if
+                end try
+            end repeat
+        end try
+    end repeat
+end tell
+"""],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
 
 
 # ── Agency MCP Teams calls ────────────────────────────────────────────────────

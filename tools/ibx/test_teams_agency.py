@@ -107,29 +107,29 @@ def test_archive_marks_chat_read():
 
 
 def test_mark_chat_read_exists():
-    """_mark_chat_read function must exist and use Teams deep link."""
+    """_mark_chat_read function must exist and open Teams web in Chrome."""
     source = TEAMS_AGENCY_PY.read_text()
     tree = ast.parse(source)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_mark_chat_read":
             func_source = ast.get_source_segment(source, node)
-            assert "msteams://" in func_source, (
-                "_mark_chat_read must use msteams:// deep link"
+            assert "teams.microsoft.com" in func_source, (
+                "_mark_chat_read must open Teams web URL"
             )
             return
     raise AssertionError("_mark_chat_read function not found")
 
 
-def test_mark_chat_read_uses_deep_link():
+def test_mark_chat_read_uses_chrome_msft_profile():
     """
-    Bug: _mark_chat_read used az rest to call markChatReadForUser, but the
-    az CLI token doesn't have Chat.ReadWrite scope (tenant conditional access
-    blocks device-code auth for the Graph Explorer app). Every call failed
-    with Forbidden, leaving chats permanently unread in Teams.
+    Bug: _mark_chat_read tried multiple approaches that all failed:
+    - az rest markChatReadForUser: blocked by Chat.ReadWrite scope
+    - msteams:// deep link: navigates but doesn't trigger read state
+    - AppleScript focus tricks: Teams ignores programmatic navigation
 
-    Fix: _mark_chat_read opens the chat via msteams:// deep link, which
-    causes the Teams desktop client to mark it as read — same as clicking.
+    Fix: Open the chat URL in Chrome's MSFT profile (Profile 1), which has
+    Teams auth cookies. Teams web marks the chat as read and syncs to desktop.
     """
     source = TEAMS_AGENCY_PY.read_text()
     tree = ast.parse(source)
@@ -137,15 +137,17 @@ def test_mark_chat_read_uses_deep_link():
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_mark_chat_read":
             func_source = ast.get_source_segment(source, node)
-            assert "msteams://" in func_source, (
-                "_mark_chat_read must use msteams:// deep link to mark chat as read"
+            assert "Google Chrome" in func_source, (
+                "_mark_chat_read must open URL in Google Chrome"
             )
-            # Ensure az rest is not used in executable code (docstring mentions are OK)
-            # Strip the docstring to check only the code body
-            code_lines = func_source.split('"""')
-            code_body = code_lines[-1] if len(code_lines) >= 3 else func_source
-            assert "az rest" not in code_body, (
-                "_mark_chat_read must not call az rest (lacks Chat.ReadWrite scope)"
+            assert "profile-directory" in func_source, (
+                "_mark_chat_read must specify Chrome profile directory"
+            )
+            assert "msteams://" not in func_source, (
+                "_mark_chat_read must not use msteams:// deep link (doesn't trigger read state)"
+            )
+            assert "az rest" not in func_source, (
+                "_mark_chat_read must not use az rest (lacks Chat.ReadWrite scope)"
             )
             return
     raise AssertionError("_mark_chat_read function not found")
