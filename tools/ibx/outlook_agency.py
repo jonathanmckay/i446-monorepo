@@ -265,13 +265,24 @@ def fetch_outlook_items():
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 
+
+def _delete_after_action(graph_id):
+    """Delete email synchronously after reply/archive, with one retry on failure."""
+    import time
+    time.sleep(0.5)  # let Graph API settle after the action
+    result = _mail_call("DeleteMessage", {"id": graph_id}, timeout=15)
+    if result is None:
+        time.sleep(1)
+        result = _mail_call("DeleteMessage", {"id": graph_id}, timeout=15)
+        if result is None:
+            console.print("[yellow]⚠ Could not delete email from inbox — may still appear in Outlook[/yellow]")
+
+
 def archive(item_id, subject="", sender=""):
     """Archive email — delete from inbox via Graph API so it won't reappear."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
-        def _do_archive():
-            _mail_call("DeleteMessage", {"id": graph_id}, timeout=15)
-        threading.Thread(target=_do_archive, daemon=True).start()
+        _delete_after_action(graph_id)
     record_action(item_id, "archive")
     _mark_processed(item_id)
 
@@ -300,11 +311,7 @@ def reply(item_id, subject, sender, reply_text):
         if result is None:
             console.print("[red]Reply failed[/red]")
             return
-        # Archive the email so it leaves the inbox after replying
-        threading.Thread(
-            target=lambda: _mail_call("DeleteMessage", {"id": graph_id}, timeout=15),
-            daemon=True,
-        ).start()
+        _delete_after_action(graph_id)
     record_action(item_id, "reply")
     _mark_processed(item_id)
 
@@ -321,10 +328,7 @@ def reply_all(item_id, subject, sender, reply_text):
         if result is None:
             console.print("[red]Reply-all failed[/red]")
             return
-        threading.Thread(
-            target=lambda: _mail_call("DeleteMessage", {"id": graph_id}, timeout=15),
-            daemon=True,
-        ).start()
+        _delete_after_action(graph_id)
     record_action(item_id, "reply_all")
     _mark_processed(item_id)
 

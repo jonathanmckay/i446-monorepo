@@ -661,23 +661,39 @@ def api_data():
                 "yAxisID": "y2",
                 "stack": "inbound",
             })
-    # Outbound/sent total bar (single bar, all channels aggregated)
-    outbound_totals = []
-    for d in dates:
-        day_sent = 0
-        for acct, day_map in email_by_account.items():
-            day_sent += day_map.get(d, {}).get("sent_count", 0)
-        outbound_totals.append(day_sent)
-    email_datasets.append({
-        "type": "bar",
-        "label": "sent",
-        "data": outbound_totals,
-        "backgroundColor": "#4fc3f766",
-        "borderColor": "#4fc3f7",
-        "borderWidth": 1,
-        "yAxisID": "y2",
-        "stack": "outbound",
-    })
+    # Outbound/sent bars per channel (stacked, darker versions of inbound colors)
+    EMAIL_BAR_COLORS_DARK = {
+        "m5x2 gmail": "#d50032aa", "m5x2": "#d50032aa",
+        "s897 gmail": "#1b5e20aa", "personal": "#1b5e20aa", "gmail": "#1b5e20aa",
+        "imessage": "#34c759aa",
+        "slack": "#9b0023aa",
+        "outlook": "#00b8d4aa",
+        "teams": "#1249b4aa",
+    }
+    for acct in EMAIL_BAR_ORDER:
+        day_map = email_by_account.get(acct, {})
+        if not day_map:
+            continue
+        email_datasets.append({
+            "type": "bar",
+            "label": acct + " sent",
+            "data": [max(0, day_map.get(d, {}).get("sent_count", 0) - day_map.get(d, {}).get("count", 0)) for d in dates],
+            "backgroundColor": EMAIL_BAR_COLORS_DARK.get(acct, "#aaaaaaaa"),
+            "borderWidth": 0,
+            "yAxisID": "y2",
+            "stack": "outbound",
+        })
+    for acct, day_map in sorted(email_by_account.items()):
+        if acct not in EMAIL_BAR_ORDER:
+            email_datasets.append({
+                "type": "bar",
+                "label": acct + " sent",
+                "data": [max(0, day_map.get(d, {}).get("sent_count", 0) - day_map.get(d, {}).get("count", 0)) for d in dates],
+                "backgroundColor": EMAIL_BAR_COLORS_DARK.get(acct, "#aaaaaaaa"),
+                "borderWidth": 0,
+                "yAxisID": "y2",
+                "stack": "outbound",
+            })
 
     # Summary stats
     total_points = {label: sum(points_raw.get(d, {}).get(label, 0) for d in dates)
