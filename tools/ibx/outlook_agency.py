@@ -289,7 +289,7 @@ def delete(item_id, subject="", sender=""):
 
 
 def reply(item_id, subject, sender, reply_text):
-    """Reply to email via Graph API."""
+    """Reply to email via Graph API, then archive it from the inbox."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
         result = _mail_call("ReplyToMessage", {
@@ -300,12 +300,17 @@ def reply(item_id, subject, sender, reply_text):
         if result is None:
             console.print("[red]Reply failed[/red]")
             return
+        # Archive the email so it leaves the inbox after replying
+        threading.Thread(
+            target=lambda: _mail_call("DeleteMessage", {"id": graph_id}, timeout=15),
+            daemon=True,
+        ).start()
     record_action(item_id, "reply")
     _mark_processed(item_id)
 
 
 def reply_all(item_id, subject, sender, reply_text):
-    """Reply-all to email via Graph API."""
+    """Reply-all to email via Graph API, then archive it from the inbox."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
         result = _mail_call("ReplyAllToMessage", {
@@ -316,6 +321,10 @@ def reply_all(item_id, subject, sender, reply_text):
         if result is None:
             console.print("[red]Reply-all failed[/red]")
             return
+        threading.Thread(
+            target=lambda: _mail_call("DeleteMessage", {"id": graph_id}, timeout=15),
+            daemon=True,
+        ).start()
     record_action(item_id, "reply_all")
     _mark_processed(item_id)
 

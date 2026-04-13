@@ -41,3 +41,62 @@ def test_fetch_uses_graph_ids():
             )
             return
     raise AssertionError("fetch_teams_items function not found")
+
+
+def test_reply_marks_chat_read():
+    """
+    Bug: replying to a Teams thread via PostMessage did not mark the chat
+    as read in the Teams app. Threads showed as unread even after responding.
+
+    Fix: reply() and archive() must call _mark_chat_read(chat_id) to invoke
+    the Graph API markChatReadForUser endpoint.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "reply":
+            func_source = ast.get_source_segment(source, node)
+            assert "_mark_chat_read" in func_source, (
+                "reply() must call _mark_chat_read to mark the chat as read in Teams"
+            )
+            return
+    raise AssertionError("reply function not found")
+
+
+def test_archive_marks_chat_read():
+    """
+    Bug: archiving a Teams message only updated local processed.json.
+    The chat stayed unread in the Teams app.
+
+    Fix: archive() must accept chat_id and call _mark_chat_read().
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "archive":
+            func_source = ast.get_source_segment(source, node)
+            assert "_mark_chat_read" in func_source, (
+                "archive() must call _mark_chat_read to mark the chat as read in Teams"
+            )
+            assert "chat_id" in func_source, (
+                "archive() must accept chat_id parameter"
+            )
+            return
+    raise AssertionError("archive function not found")
+
+
+def test_mark_chat_read_exists():
+    """_mark_chat_read function must exist and call markChatReadForUser."""
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_mark_chat_read":
+            func_source = ast.get_source_segment(source, node)
+            assert "markChatReadForUser" in func_source, (
+                "_mark_chat_read must call the Graph API markChatReadForUser endpoint"
+            )
+            return
+    raise AssertionError("_mark_chat_read function not found")

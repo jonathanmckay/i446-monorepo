@@ -153,6 +153,45 @@ def test_fetch_filters_noise_senders():
     raise AssertionError("fetch_outlook_items function not found")
 
 
+def test_reply_archives_email():
+    """
+    Bug: reply() sent the reply via Graph API but did not remove the email
+    from the inbox. The email stayed visible even after responding.
+
+    Fix: reply() must call DeleteMessage after a successful ReplyToMessage
+    so the email leaves the inbox (same pattern as archive()).
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "reply":
+            func_source = ast.get_source_segment(source, node)
+            assert "DeleteMessage" in func_source, (
+                "reply() must call DeleteMessage to archive the email after replying"
+            )
+            return
+    raise AssertionError("reply function not found")
+
+
+def test_reply_all_archives_email():
+    """
+    Bug: reply_all() sent the reply via Graph API but did not remove the
+    email from the inbox (same issue as reply()).
+
+    Fix: reply_all() must call DeleteMessage after successful ReplyAllToMessage.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "reply_all":
+            func_source = ast.get_source_segment(source, node)
+            assert "DeleteMessage" in func_source, (
+                "reply_all() must call DeleteMessage to archive the email after replying"
+            )
+            return
+    raise AssertionError("reply_all function not found")
+
+
 def test_fetch_checks_legacy_workiq_ids():
     """
     Bug: Switching from outlook_workiq to outlook_agency changed item ID format

@@ -435,7 +435,7 @@ def do_archive(item):
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])
     elif t == "teams":
-        _teams.archive(item["_data"]["item_id"])
+        _teams.archive(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
 
 def do_delete(item):
     t = item["type"]
@@ -456,7 +456,7 @@ def do_delete(item):
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])
     elif t == "teams":
-        _teams.delete(item["_data"]["item_id"])
+        _teams.delete(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
 
 def do_reply(item, reply_text):
     t = item["type"]
