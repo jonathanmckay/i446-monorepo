@@ -1,12 +1,12 @@
 ---
 name: "ibx0"
-description: "Mark all inbox habits as done (ibx s897, ibx i9, slack github, slack m5x2, ibx m5x2, teams). Usage: /ibx0"
+description: "Mark all inbox habits as done (ibx s897, ibx i9, slack github, slack m5x2, ibx m5x2, teams, whatsapp, messenger). Usage: /ibx0"
 user-invocable: true
 ---
 
 # Mark Inbox Habits Done (/ibx0)
 
-Batch-marks all six inbox-related habits as done via `/did`, which writes to 0₦ (Neon) and completes matching Todoist tasks.
+Batch-marks all inbox-related habits as done via `/did`, which writes to 0₦ (Neon) and completes matching Todoist tasks.
 
 ## Usage
 
@@ -14,11 +14,11 @@ Batch-marks all six inbox-related habits as done via `/did`, which writes to 0�
 /ibx0
 ```
 
-No arguments. Marks all six items for today.
+No arguments. Marks all items for today.
 
 ## Steps
 
-### Step 1: Run /did with all six items
+### Step 1: Run /did with all items
 
 Execute exactly this:
 
