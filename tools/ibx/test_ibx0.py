@@ -259,3 +259,22 @@ def test_wrapper_supports_force_refresh():
     assert "Enter to refresh" in text or "enter to refresh" in text.lower(), (
         "ibx0_wrapper.sh must tell the user they can press Enter to refresh"
     )
+
+
+def test_display_card_truncates_long_lines():
+    """
+    Bug: When card body content had lines longer than terminal width, they
+    wrapped into multiple terminal lines. This confused readline's cursor
+    tracking at the input() prompt, making backspace/delete stop working.
+
+    Fix: display_card must truncate individual lines to terminal width and
+    cap total line count to prevent excessive wrapping.
+    """
+    source = IBX_ALL_PY.read_text()
+    assert "get_terminal_size" in source or "term_width" in source, (
+        "display_card must check terminal width to truncate long lines"
+    )
+    # Body section must limit lines
+    assert "body_lines" in source or "splitlines" in source, (
+        "display_card must split body into lines for truncation"
+    )

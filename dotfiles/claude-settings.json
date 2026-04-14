@@ -22,6 +22,18 @@
         "matcher": ""
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path as $f | (.tool_input.content // .tool_input.new_string // \"\") as $c | if ($f | test(\"^/Users/mckay/vault/\")) and ($c | [splits(\"\\\\n\\\\n\")] | length > 2) then $f else empty end' | { read -r f; [ -n \"$f\" ] && open \"obsidian://open?vault=vault&file=$(python3 -c \"import urllib.parse as u,sys; p=sys.argv[1].replace('/Users/mckay/vault/',''); p=p[:-3] if p.endswith('.md') else p; print(u.quote(p))\" \"$f\")\"; } 2>/dev/null || true",
+            "async": true
+          }
+        ]
+      }
+    ],
     "PostToolUseFailure": [
       {
         "hooks": [
