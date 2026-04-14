@@ -189,13 +189,18 @@ def fetch_outlook_items():
     NOISE_SENDERS = {
         "msaemail@microsoft.com",       # MSApprovals
         "msxemail@microsoft.com",       # MyExpense
-        "noreply@microsoft.com",        # SharePoint, system notifications
         "noreply@email.teams.microsoft.com",
         "benefits@microsoft.com",
         "weeklyfeed@microsoft.com",
         "powerautomatenorepley@microsoft.com",
         "microsoftexchangeonline@microsoft.com",
     }
+    # noreply@microsoft.com is special: it sends both noise (SharePoint) and
+    # wanted mail (Reaction Daily Digest). Only skip noise subjects from it.
+    NOREPLY_NOISE_SUBJECT_RE = re.compile(
+        r'^(SharePoint|Microsoft Forms|Microsoft Viva|You have|A site)',
+        re.IGNORECASE,
+    )
     # Subject patterns for automated notifications
     NOISE_SUBJECT_RE = re.compile(
         r'^(\[EXTERNAL\]\s*)?(Reminder:|Expense Report|Your sitter job|Supplement your|RE: ﻿Post)',
@@ -230,6 +235,10 @@ def fetch_outlook_items():
 
         # Skip automated notification senders
         if sender_email in NOISE_SENDERS:
+            continue
+
+        # noreply@microsoft.com: skip only noise subjects, let others through
+        if sender_email == "noreply@microsoft.com" and NOREPLY_NOISE_SUBJECT_RE.match(subject):
             continue
 
         # Skip automated notification subjects

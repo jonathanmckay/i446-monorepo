@@ -153,6 +153,40 @@ def test_fetch_filters_noise_senders():
     raise AssertionError("fetch_outlook_items function not found")
 
 
+def test_noreply_not_blanket_blocked():
+    """
+    Bug: noreply@microsoft.com was in NOISE_SENDERS, which blanket-blocked
+    ALL emails from that address. This filtered out wanted mail like
+    'Reaction Daily Digest' along with actual noise (SharePoint notifications).
+
+    Fix: remove noreply@microsoft.com from NOISE_SENDERS. Instead, use a
+    subject-based filter (NOREPLY_NOISE_SUBJECT_RE) to skip only noise
+    subjects from that address, letting legitimate mail through.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
+            func_source = ast.get_source_segment(source, node)
+            # noreply@microsoft.com must NOT be in NOISE_SENDERS
+            # Find the NOISE_SENDERS block specifically
+            import re
+            noise_block = re.search(
+                r'NOISE_SENDERS\s*=\s*\{([^}]+)\}', func_source, re.DOTALL
+            )
+            assert noise_block, "NOISE_SENDERS set not found"
+            assert "noreply@microsoft.com" not in noise_block.group(1), (
+                "noreply@microsoft.com must NOT be in NOISE_SENDERS — "
+                "it sends both noise and wanted mail (e.g. Reaction Daily Digest)"
+            )
+            # Must have subject-aware filtering for noreply
+            assert "NOREPLY_NOISE_SUBJECT_RE" in func_source, (
+                "Must use NOREPLY_NOISE_SUBJECT_RE to selectively filter "
+                "noreply@microsoft.com by subject"
+            )
+            return
+    raise AssertionError("fetch_outlook_items function not found")
+
 def test_reply_archives_email():
     """
     Bug: reply() sent the reply via Graph API but did not remove the email
