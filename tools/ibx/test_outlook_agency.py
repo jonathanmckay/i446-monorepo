@@ -262,3 +262,31 @@ def test_archive_uses_delete_after_action():
             )
             return
     raise AssertionError("archive function not found")
+
+
+def test_fetch_retries_delete_for_processed_items():
+    """
+    Bug: Outlook emails replied to via ibx0 were marked processed locally,
+    but _delete_after_action failed silently. On next fetch, ibx0 skipped
+    them (already processed) so they stayed in Outlook inbox forever —
+    'ghost unreads' visible in Outlook but invisible in ibx0.
+
+    Fix: fetch_outlook_items must retry _delete_after_action for processed
+    items still appearing in the inbox, with a persisted deleted set to
+    avoid redundant delete calls.
+    """
+    source = OUTLOOK_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "_delete_after_action" in func_source, (
+                "fetch_outlook_items must call _delete_after_action for processed items "
+                "still appearing in the inbox"
+            )
+            assert "already_deleted" in func_source, (
+                "fetch_outlook_items must track deleted IDs to avoid "
+                "redundant delete calls"
+            )
+            return
+    raise AssertionError("fetch_outlook_items function not found")

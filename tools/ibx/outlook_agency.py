@@ -17,6 +17,7 @@ from rich.console import Console
 console = Console()
 
 PROCESSED_FILE = Path.home() / ".config" / "outlook" / "processed.json"
+DELETED_FILE = Path.home() / ".config" / "outlook" / "deleted.json"
 RESPONSE_DB = Path.home() / ".config" / "outlook" / "response_times.db"
 
 
@@ -28,6 +29,21 @@ def load_processed():
     return {}
 
 
+def _load_deleted():
+    """Load set of graph_ids that have been successfully deleted from inbox."""
+    if DELETED_FILE.exists():
+        try:
+            return set(json.load(open(DELETED_FILE)))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return set()
+
+
+def _save_deleted(deleted_ids):
+    """Persist graph_ids that have been successfully deleted."""
+    DELETED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(DELETED_FILE, "w") as f:
+        json.dump(list(deleted_ids), f)
 def save_processed(proc):
     PROCESSED_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(PROCESSED_FILE, "w") as f:
@@ -135,6 +151,7 @@ _inbox_folder_id_cache = None
 def fetch_outlook_items():
     """Fetch recent unread Outlook emails via Agency mail MCP."""
     items = []
+    already_deleted = _load_deleted()
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
 
     from datetime import timedelta, timezone
@@ -222,6 +239,12 @@ def fetch_outlook_items():
         item_id = f"outlook:{msg_id}"
 
         if item_id in processed:
+            # Retry delete for processed emails still in inbox
+            # (handles cases where _delete_after_action failed)
+            if msg_id not in already_deleted:
+                _delete_after_action(msg_id)
+                already_deleted.add(msg_id)
+                _save_deleted(already_deleted)
             continue
 
         # Also check legacy workiq-style IDs for backwards compat
