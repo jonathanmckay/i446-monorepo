@@ -303,20 +303,20 @@ def display_card(item, idx, total):
     title = f"{badge}  {source}  {counter}"
     console.print(Panel(header, title=title, border_style="dim", box=box.SIMPLE_HEAD, padding=(0, 1)))
 
-    # Body — show last ~2000 chars, limit line count to avoid terminal cursor issues
+    # Body — show last ~2000 chars, cap at 20 lines after wrapping
     body = item["body"][-2000:] if item["body"] else "(no content)"
-    body_lines = body.splitlines()
-    if len(body_lines) > 20:
-        body = "\n".join(body_lines[-20:])
-    # Truncate individual lines to terminal width to prevent wrapping
     import shutil
     term_width = shutil.get_terminal_size().columns - 6  # panel padding + border
+    # Wrap long lines manually to control line count
     wrapped = []
     for line in body.splitlines():
-        if len(line) > term_width:
-            wrapped.append(line[:term_width] + "…")
-        else:
-            wrapped.append(line)
+        while len(line) > term_width:
+            wrapped.append(line[:term_width])
+            line = line[term_width:]
+        wrapped.append(line)
+    if len(wrapped) > 20:
+        wrapped = wrapped[:20]
+        wrapped.append("…")
     body = "\n".join(wrapped)
     console.print(Panel(body, box=box.SIMPLE, border_style="dim", padding=(0, 1)))
 
