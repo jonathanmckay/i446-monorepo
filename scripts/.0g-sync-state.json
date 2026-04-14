@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-04-14T07:22:32.015224-07:00"
+  "tasks": {
+    "tasks to 50": {
+      "todoist_id": "6gPHM9qWP86Qxm8R",
+      "minutes": 100
+    },
+    "write weekly update": {
+      "todoist_id": "6gPHM9x8rmch37J2",
+      "minutes": 40
+    },
+    "3 flax": {
+      "todoist_id": "6gPHMC2c3jhV7g62",
+      "minutes": 15
+    },
+    "plan the m5x2 trip": {
+      "todoist_id": "6gPHMC3MFP6V5Wq2",
+      "minutes": 50
+    },
+    "skin2skin": {
+      "todoist_id": "6gPHMC6PpC52vfPR",
+      "minutes": 15
+    }
+  },
+  "last_sync": "2026-04-14T09:28:36.892336-07:00"
 }
