@@ -1,10 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "write weekly update": {
-      "todoist_id": "6gP62HqVPffgxGRR",
-      "minutes": 80
-    }
-  },
-  "last_sync": "2026-04-14T04:56:50.205588-07:00"
+  "tasks": {},
+  "last_sync": "2026-04-14T05:30:08.052307-07:00"
 }
