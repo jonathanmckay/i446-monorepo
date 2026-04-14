@@ -59,3 +59,33 @@ def test_build_thread_checks_read_state():
             )
             return
     raise AssertionError("build_thread function not found")
+
+
+def test_fetch_recent_channels_probes_stale_ims():
+    """
+    Bug: fetch_recent_channels only used the `updated` field from
+    conversations.list to decide if a channel had recent activity. For IMs,
+    this field can be months stale even when messages arrived today, causing
+    DMs to be silently dropped.
+
+    Fix: For IM channels that fail the `updated` check, do a secondary
+    conversations.history probe with oldest=cutoff to catch channels with
+    recent messages but stale `updated` timestamps.
+    """
+    source = SLACK_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_recent_channels":
+            func_source = ast.get_source_segment(source, node)
+            assert "stale_ims" in func_source, (
+                "fetch_recent_channels must collect stale IMs for secondary probing"
+            )
+            assert "conversations.history" in func_source, (
+                "fetch_recent_channels must probe stale IMs via conversations.history"
+            )
+            assert "is_im" in func_source, (
+                "fetch_recent_channels must distinguish IMs from MPIMs for the secondary check"
+            )
+            return
+    raise AssertionError("fetch_recent_channels function not found")

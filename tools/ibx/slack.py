@@ -78,10 +78,17 @@ def get_self_id(token):
 # ── Fetching ──────────────────────────────────────────────────────────────────
 
 def fetch_recent_channels(token, days=7):
-    """Return DM/MPIM channels with activity in the last N days."""
+    """Return DM/MPIM channels with recent activity.
+
+    The `updated` field on conversations.list is unreliable for IMs — it can be
+    months stale even when messages arrived today. For IMs that fail the updated
+    check, we do a quick conversations.history probe to catch stale-updated channels.
+    """
     import time
     cutoff = time.time() - days * 86400
+    cutoff_ts = str(cutoff)
     result = []
+    stale_ims = []  # IMs with stale updated field — need secondary check
     cursor = None
     while True:
         kwargs = {"types": "im,mpim", "exclude_archived": "true", "limit": 200}
@@ -96,9 +103,22 @@ def fetch_recent_channels(token, days=7):
             updated = ch.get("updated", 0) / 1000
             if updated > cutoff:
                 result.append(ch)
+            elif ch.get("is_im"):
+                stale_ims.append(ch)
         cursor = data.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
+
+    # Secondary check: probe stale IMs for recent messages
+    for ch in stale_ims:
+        try:
+            hist = slack_get(token, "conversations.history",
+                             channel=ch["id"], limit=1, oldest=cutoff_ts)
+            if hist.get("messages"):
+                result.append(ch)
+        except Exception:
+            pass
+
     return result
 
 def build_thread(token, channel, self_id):
