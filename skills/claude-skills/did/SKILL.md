@@ -60,8 +60,29 @@ Before matching against 0₦ headers, apply this alias map. If the user's input 
 |-----------|------------------|
 | `hcmc` | `night hcmc` |
 | `stats m5x2` | `stats m5x2` |
+| `math` | `问学` |
+| `skin2skin` | `问学` |
 
 This prevents matching the wrong column when multiple headers contain the same substring.
+
+### Cumulative columns
+
+Some 0₦ columns accept multiple entries per day. Instead of overwriting the cell, **add** the new value to the existing one.
+
+| Column header | Behavior |
+|--------------|----------|
+| `问学` | Cumulative — read current value, add new value, write sum |
+
+When writing to a cumulative column in Step 2, replace the simple `set value` with:
+```applescript
+set oldVal to value of cell habitCol of row todayRow of theSheet
+if oldVal is missing value or (oldVal as text) = "" or (oldVal as text) = "0" then
+    set newVal to TIME_PLACEHOLDER
+else
+    set newVal to (oldVal as number) + TIME_PLACEHOLDER
+end if
+set value of cell habitCol of row todayRow of theSheet to newVal
+```
 
 ### Step 0: Determine path (habit / Todoist task / variable task)
 
