@@ -103,11 +103,17 @@ def record_audio(teams_mode: bool = False) -> np.ndarray:
         else:
             print("⚠  No call audio device found (tried Teams Audio, BlackHole) — mic only.")
 
+    stop_event = False
+    def _handle_stop(sig, frame):
+        nonlocal stop_event
+        stop_event = True
+    signal.signal(signal.SIGTERM, _handle_stop)
+
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
         s.start()
     try:
-        while True:
+        while not stop_event:
             sd.sleep(500)
     except KeyboardInterrupt:
         pass
@@ -336,8 +342,8 @@ def main():
                         help="Domain for filing + Todoist labels (default: i9)")
     parser.add_argument("--teams", action="store_true",
                         help="Record Teams/Zoom call: mix BlackHole system audio + mic")
-    parser.add_argument("--no-todos", action="store_true",
-                        help="Skip Todoist task creation")
+    parser.add_argument("--todos", action="store_true",
+                        help="Create Todoist tasks from action items (off by default)")
     parser.add_argument("--tx", metavar="FILE",
                         help="Use existing transcript file instead of recording")
     parser.add_argument("--model", default=WHISPER_MODEL,
@@ -379,8 +385,8 @@ def main():
     # 3. File meeting note
     note_path = write_meeting_note(data, transcript, meeting_name, args.domain)
 
-    # 4. Create Todoist tasks
-    if not args.no_todos:
+    # 4. Create Todoist tasks (opt-in with --todos)
+    if args.todos:
         create_todoist_tasks(data.get("todos", []), args.domain)
 
     # 5. Summary
