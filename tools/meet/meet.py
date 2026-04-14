@@ -360,13 +360,14 @@ def main():
         print(f"📄 Using transcript: {args.tx} ({len(transcript.split())} words)")
     else:
         audio = record_audio(teams_mode=args.teams)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            wav_path = Path(f.name)
+        recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
+        recordings_dir.mkdir(parents=True, exist_ok=True)
+        date_slug = datetime.now().strftime("%Y-%m-%d-%H%M")
+        name_slug = meeting_name.lower().replace(" ", "-")[:30]
+        wav_path = recordings_dir / f"{date_slug}-{name_slug}.wav"
         save_wav(audio, wav_path)
-        try:
-            transcript = transcribe(wav_path, whisper_model)
-        finally:
-            wav_path.unlink(missing_ok=True)
+        print(f"🎙  Saved recording: {wav_path}")
+        transcript = transcribe(wav_path, whisper_model)
 
     if not transcript.strip():
         print("⚠  No speech detected.")
