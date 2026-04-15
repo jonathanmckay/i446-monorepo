@@ -1,25 +1,29 @@
 {
   "cleanupPeriodDays": 3650,
-  "companyAnnouncements": [
-    "Claude Code on Windows can now run PowerShell natively. No more wrapping commands through git bash — Claude writes and executes PowerShell directly, with proper syntax and fewer escaping headaches. See https://code.claude.com/docs/en/tools-reference#powershell-tool to enable this."
-  ],
-  "forceLoginMethod": "console",
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(curl -s -u *:api_token*api.track.toggl.com*)",
+      "Bash(osascript -e *)",
+      "Bash(python3 -c *)"
+    ]
+  },
   "hooks": {
     "PermissionRequest": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": false,
+            "type": "command",
             "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh green >/dev/null 2>&1",
-            "type": "command"
+            "async": false
           },
           {
-            "async": true,
+            "type": "command",
             "command": "mkdir -p ~/.claude/timing && echo \"{\\\"event\\\":\\\"permission\\\",\\\"ts\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\\\"date\\\":\\\"$(date +%Y-%m-%d)\\\"}\" >> ~/.claude/timing/permissions.jsonl",
-            "type": "command"
+            "async": true
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "PostToolUse": [
@@ -36,110 +40,105 @@
     ],
     "PostToolUseFailure": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": true,
+            "type": "command",
             "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh orange >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "PreToolUse": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": true,
+            "type": "command",
             "command": "[ -f /tmp/claude-prayer-token ] || ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "SessionStart": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": true,
+            "type": "command",
             "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "Stop": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": true,
+            "type": "command",
             "command": "rm -f /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh blue >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           },
           {
-            "async": true,
+            "type": "command",
             "command": "~/i446-monorepo/scripts/ai-timing-log.sh stop \"$SESSION_ID\" >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           }
-        ],
-        "matcher": ""
+        ]
       },
       {
+        "matcher": "",
         "hooks": [
           {
-            "command": "/Users/mckay/.claude/sync-stats.sh",
-            "type": "command"
+            "type": "command",
+            "command": "/Users/mckay/.claude/sync-stats.sh"
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "StopFailure": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": true,
+            "type": "command",
             "command": "rm -f /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh red >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "async": true,
+            "type": "command",
             "command": "T=$(date +%s$$); echo \"$T\" > /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh purple >/dev/null 2>&1; ( sleep 10; [ \"$(cat /tmp/claude-prayer-token 2>/dev/null)\" = \"$T\" ] && { ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1; rm -f /tmp/claude-prayer-token; } ) &",
-            "type": "command"
+            "async": true
           },
           {
-            "async": true,
+            "type": "command",
             "command": "~/i446-monorepo/scripts/ai-timing-log.sh prompt_start \"$SESSION_ID\" >/dev/null 2>&1",
-            "type": "command"
+            "async": true
           },
           {
-            "command": "echo \"{\\\"context\\\": \\\"System date: $(date +%Y-%m-%d) ($(date +%A)). Use this as today's date, not the currentDate context.\\\"}\"",
-            "type": "command"
-          },
-          {
-            "command": "bash ~/i446-monorepo/scripts/did-next-hook.sh",
-            "type": "command"
+            "type": "command",
+            "command": "echo \"{\\\"context\\\": \\\"System date: $(date +%Y-%m-%d) ($(date +%A)). Use this as today's date, not the currentDate context.\\\"}\""
           }
-        ],
-        "matcher": ""
+        ]
       }
     ]
   },
-  "permissions": {
-    "allow": [
-      "Bash",
-      "Bash(curl -s -u *:api_token*api.track.toggl.com*)",
-      "Bash(osascript -e *)",
-      "Bash(python3 -c *)"
-    ]
+  "forceLoginMethod": "console",
+  "companyAnnouncements": [
+    "Claude Code on Windows can now run PowerShell natively. No more wrapping commands through git bash — Claude writes and executes PowerShell directly, with proper syntax and fewer escaping headaches. See https://code.claude.com/docs/en/tools-reference#powershell-tool to enable this."
+  ],
+  "enabledPlugins": {
+    "swift-lsp@claude-plugins-official": true
   }
 }

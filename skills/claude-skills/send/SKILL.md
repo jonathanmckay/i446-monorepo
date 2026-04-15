@@ -212,9 +212,26 @@ This ensures known, unambiguous contacts resolve silently, while new or ambiguou
 | imessage  | phone         | email          |
 | slack     | slack         | —              |
 
+### macOS Contacts lookup (iMessage fallback)
+
+When d359 has no phone number and the channel is iMessage, use the Swift contact lookup tool:
+
+```bash
+~/i446-monorepo/tools/ibx/contact_lookup "<person name>"
+```
+
+This searches macOS Contacts by name (given + family) and returns matching phone numbers. Output format: `+1XXXXXXXXXX|Firstname Lastname`
+
+Also works for reverse lookup by phone number:
+```bash
+~/i446-monorepo/tools/ibx/contact_lookup "+14155551234"
+```
+
+If a match is found, send via iMessage using the returned number, then lazy-write the phone back to d359.
+
 ### Lazy write-back
 
-When a recipient is resolved via Graph/Gmail search (not d359), write the result back
+When a recipient is resolved via Graph/Gmail search/Contacts lookup (not d359), write the result back
 into their d359 file's `channels:` block so future lookups skip the live search.
 
 ## Tools
