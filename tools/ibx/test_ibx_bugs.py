@@ -343,10 +343,11 @@ def test_ibx0_bg_fetch_suppresses_console_output():
                 "_bg_continuous_fetch must suppress module console output during bg fetch"
             )
 
-            # Must also suppress ibx0's own console (fetch wrappers print errors via it)
-            assert "saved_own" in body_src or "global console" in body_src, (
-                "_bg_continuous_fetch must suppress ibx0's own console too — "
-                "fetch wrappers like fetch_slack() print 'channel error:' via it"
+            # Must NOT swap ibx0's own console — that races with the main
+            # thread's interactive prompts ("Send? (y/n)") causing hangs
+            assert "global console" not in body_src, (
+                "_bg_continuous_fetch must NOT swap ibx0's own console — "
+                "it races with main-thread interactive prompts and causes hangs"
             )
 
             # Must restore original consoles afterward

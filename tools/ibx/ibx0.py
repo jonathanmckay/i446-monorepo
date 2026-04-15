@@ -846,19 +846,18 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
     quiet = Console(file=io.StringIO())
 
     while not stop_event.wait(interval):
-        # Swap each module's console AND ibx0's own console to suppress background output
-        # (ibx0's fetch wrappers print errors like "channel error:" via the global console)
-        global console
+        # Swap each source module's console to suppress background output.
+        # Do NOT swap ibx0's own console — the main thread uses it for
+        # interactive prompts (e.g. "Send? (y/n)") and swapping it races
+        # with the main loop, causing hangs.
         modules = [_ibx, _imsg, _slack]
         if _outlook_available:
             modules.append(_outlook)
         if _teams_available:
             modules.append(_teams)
         saved = {mod: mod.console for mod in modules if hasattr(mod, "console")}
-        saved_own = console
         for mod in saved:
             mod.console = quiet
-        console = quiet
 
         try:
             from concurrent.futures import ThreadPoolExecutor
@@ -893,7 +892,6 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
         finally:
             for mod, orig in saved.items():
                 mod.console = orig
-            console = saved_own
             quiet.file.truncate(0)
             quiet.file.seek(0)
 
