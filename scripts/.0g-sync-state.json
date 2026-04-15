@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-04-15T11:27:25.373599-07:00"
+  "tasks": {
+    "plan the m5x2 trip": {
+      "todoist_id": "6gPc9465f9hhcRW2",
+      "minutes": 50
+    },
+    "tasks down to 50": {
+      "todoist_id": "6gPc948w3WwQhQVR",
+      "minutes": 100
+    },
+    "skin to skin time with xiki": {
+      "todoist_id": "6gPc94F76gpqM5pR",
+      "minutes": 20
+    },
+    "good basketball": {
+      "todoist_id": "6gPc94Fgvw9HXJPR",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-04-15T13:40:51.933409-07:00"
 }
