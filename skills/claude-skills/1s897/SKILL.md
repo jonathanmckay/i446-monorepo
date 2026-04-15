@@ -1,6 +1,6 @@
 ---
 name: "1s897"
-description: "Weekly social review. Reads Toggl s897+家 entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis."
+description: "Weekly social review. Reads Toggl s897+家+#s897-tagged entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis."
 user-invocable: true
 ---
 
@@ -26,9 +26,10 @@ Calculate `week_start` (Wednesday) and `week_end` (Tuesday).
 
 Use the Toggl MCP server (`toggl_date` tool or equivalent) to fetch all time entries for each day from `week_start` through `week_end`.
 
-Filter to only entries in these two projects:
-- **s897** (project ID 109719141)
-- **家** (project ID 108547409)
+Filter to only entries that match **any** of these criteria:
+- Project is **s897** (project ID 109719141)
+- Project is **家** (project ID 108547409)
+- Entry has the **tag `s897`** (shown as `#s897` in toggl_date output) — this captures social physical activities tracked under other projects like hcbp
 
 Keep only entries with duration **> 20 minutes**.
 

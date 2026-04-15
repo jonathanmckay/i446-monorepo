@@ -124,6 +124,10 @@
           {
             "command": "echo \"{\\\"context\\\": \\\"System date: $(date +%Y-%m-%d) ($(date +%A)). Use this as today's date, not the currentDate context.\\\"}\"",
             "type": "command"
+          },
+          {
+            "command": "bash ~/i446-monorepo/scripts/did-next-hook.sh",
+            "type": "command"
           }
         ],
         "matcher": ""
