@@ -41,9 +41,9 @@ A local cache of undone tasks, sorted by priority. Read instantly on each `/did`
 {
   "refreshed": "2026-04-15T11:33:00-07:00",
   "tasks": [
-    {"id": "abc123", "content": "冥想 (15) [5]", "cat": "0n"},
-    {"id": "def456", "content": "1 hcme [8]", "cat": "1n"},
-    {"id": "ghi789", "content": "Review PR [20]", "cat": "0g"}
+    {"id": "abc123", "content": "冥想 (15) [5]", "cat": "0n", "dueDate": "2026-04-15"},
+    {"id": "def456", "content": "1 hcme [8]", "cat": "1n", "dueDate": "2026-04-16"},
+    {"id": "ghi789", "content": "Review PR [20]", "cat": "0g", "dueDate": "2026-04-15"}
   ]
 }
 ```
@@ -71,12 +71,15 @@ Tracks habit/task names completed today, so recurring tasks that reopen in Todoi
 
 ## Execution Model
 
-When `/did` is invoked, fork into two parallel tracks:
+When `/did` is invoked, do these in order:
 
-1. **Background** (Agent with `run_in_background: true`): Run the full /did pipeline (Steps -2 through 6b, whichever path applies). After completion, refresh the task queue cache. Report results when done.
-2. **Foreground** (immediate): Parse the habit name from the input (just enough to know what was completed), then jump to **Next Task Suggestion**.
-
-The foreground track runs instantly — no waiting for Excel or Todoist.
+1. **Foreground FIRST** (before anything else): Run the next-task script immediately. This is a plain Python script (~30ms), not an LLM call:
+   ```bash
+   python3 ~/i446-monorepo/tools/did/next-task.py <habit_name>
+   ```
+   Display the output verbatim to the user. Then wait for their pick before proceeding.
+2. **After user picks** (or skips): If they picked a task, run `/tg` for it. Then launch the background agent.
+3. **Background** (Agent with `run_in_background: true`): Run the full /did pipeline (Steps -2 through 6b, whichever path applies). After completion, refresh the task queue cache. Report results when done.
 
 ## Steps
 
@@ -639,53 +642,28 @@ This step runs when `<habit>` matches a 0₦ column header **and** `targetDate` 
 
 ## Next Task Suggestion
 
-This runs in the **foreground**, immediately after dispatching the background agent. No waiting.
+This runs in the **foreground**, as the VERY FIRST thing after `/did` is invoked. No LLM reasoning — just run the script.
 
-### 1. Read the cache
-
-```bash
-cat ~/vault/z_ibx/task-queue.json
-```
-
-If the file doesn't exist or is empty, skip the suggestion entirely (the background agent will create it for next time).
-
-### 1b. Read completed-today tracker
+### 1. Run the script
 
 ```bash
-cat ~/vault/z_ibx/completed-today.json
+python3 ~/i446-monorepo/tools/did/next-task.py <habit_name>
 ```
 
-If the file doesn't exist or `date` doesn't match today, treat as empty list.
+The script (~30ms):
+- Reads `task-queue.json` and `completed-today.json`
+- Filters out completed tasks and tasks not due today/overdue
+- Filters out the just-completed habit
+- Shows top 5 + skip option
 
-### 2. Filter and display
+Display the script output verbatim. If the script produces no output (empty cache), skip and proceed to background work.
 
-- Add the habit name just completed to the filter set.
-- Also add all names from `completed-today.json` to the filter set.
-- Remove any task whose `content` (lowercased, stripped of `(N)`, `[N]`, `{N}`, and common suffixes) matches any name in the filter set (case-insensitive substring).
-- Show the top 5 remaining tasks in cache order (already sorted: 0n → 1n → 0g).
-- Add a 6th option for skip (no next task).
+### 2. Handle selection
 
-**Display format:**
-```
-Next up:
-1. 冥想 (15) [5]           0n
-2. hiit [10]               0n
-3. 1 hcme [8]              1n
-4. Review PR #442 [20]     0g
-5. ibx m5x2 (4) [15]      0n
-6. [skip]
+- **1–5**: Extract the task content from the script output. Map it to a `/tg` shortcode (strip `[N]`, `(N)`, `{N}`, and suffixes like `- Daily 分`, `- Healthy Breakfast`). Start a timer via `/tg` for that task.
+- **6** (or N+1): Skip — do nothing, proceed to background work.
 
-Pick [1-6]:
-```
-
-Right-align the category labels. Keep it compact — no extra explanation.
-
-### 3. Handle selection
-
-- **1–5**: Extract the task content. Map it to a `/tg` shortcode if possible (strip bracketed values like `[N]` and `(N)`, use the core description). Start a timer via `/tg` for that task.
-- **6**: Skip — do nothing, just let the background results report when ready.
-
-**Mapping to /tg:** Strip `(N)`, `[N]`, and common suffixes like `- Daily 分` or `- Healthy Breakfast` from the Todoist task content to get the bare shortcode. Example: `冥想 (15) [5]` → `/tg 冥想`. If the stripped name doesn't match a /tg shortcode, start a passthrough timer with the description.
+**Mapping to /tg:** Example: `冥想 (15) [5]` → `/tg 冥想`. If the stripped name doesn't match a /tg shortcode, start a passthrough timer with the description.
 
 ## Cache Refresh
 
@@ -700,7 +678,7 @@ Runs at the end of the **background agent**, after all /did work is complete.
    find-tasks(labels: ["关键径路"], limit: 50)
    ```
 
-2. **Build the task list.** For each result set, extract `{id, content, cat}` where cat is `0n`, `1n`, or `0g` respectively. Concatenate in priority order: 0n tasks first, then 1n, then 0g.
+2. **Build the task list.** For each result set, extract `{id, content, cat, dueDate}` where cat is `0n`, `1n`, or `0g` respectively. `dueDate` comes from the Todoist task's `dueDate` field (YYYY-MM-DD). Concatenate in priority order: 0n tasks first, then 1n, then 0g.
 
 3. **Write the cache:**
    ```bash
