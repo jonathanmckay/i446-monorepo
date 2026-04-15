@@ -218,6 +218,43 @@ def test_autosign_checks_html_body_for_appfolio_url():
     assert "html_body" in ibx_source, "get_email must return html_body field"
 
 
+def test_prompt_uses_readline_escapes_not_console_print():
+    """Bug: typing a long reply at the '> ' prompt that visually wrapped to a
+    second terminal line made backspace stop working at the wrap boundary.
+    Cause: console.print(ANSI, end="") before input("> ") meant readline only
+    knew the prompt was 2 chars wide, so it miscalculated the wrap column.
+    Fix: merge the counter prefix into the input() prompt using \\001/\\002
+    readline escape markers around ANSI codes so readline tracks the full
+    visible width correctly.
+    """
+    for filename in ("ibx.py", "imsg.py", "slack.py"):
+        source = open(filename).read()
+        tree = ast.parse(source)
+
+        # The old pattern: console.print(..., end="") immediately before input("> ")
+        # must not appear anywhere — the prompt should be passed directly to input()
+        lines = source.splitlines()
+        for i, line in enumerate(lines):
+            if 'end=""' in line and "console.print" in line and "[dim][" in line:
+                # Next non-blank line should NOT be input("> ")
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    stripped = lines[j].strip()
+                    if not stripped or stripped.startswith("#") or stripped.startswith("try"):
+                        continue
+                    assert 'input("> ")' not in stripped, (
+                        f"{filename}:{j + 1}: console.print(ANSI, end='') before "
+                        f"input('> ') breaks readline line-wrap/backspace — "
+                        f"merge prefix into input() prompt with \\001/\\002 escapes"
+                    )
+                    break
+
+        # Positive check: input() prompt must contain \x01 / \x02 readline markers
+        assert "\\001" in source or "\x01" in source, (
+            f"{filename}: input prompt must use \\001/\\002 readline escape markers "
+            f"around ANSI codes so readline calculates visible width correctly"
+        )
+
+
 def test_ibx0_fetch_emails_uses_dedup_threads():
     """Verify ibx0.fetch_emails calls fetch_inbox with dedup_threads=True
     so users only review one message per thread.

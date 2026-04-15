@@ -552,10 +552,10 @@ def main():
 
         thread = threads[index]
         display_card(thread, index + 1, total)
-        console.print(f"[dim][{index + 1}/{total}][/dim] ", end="")
 
         try:
-            user_input = input("> ").strip()
+            prompt = f"\001\x1b[2m\002[{index + 1}/{total}]\001\x1b[0m\002 > "
+            user_input = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Bye.[/dim]")
             break
