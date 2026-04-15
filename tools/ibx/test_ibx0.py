@@ -278,3 +278,57 @@ def test_display_card_truncates_long_lines():
     assert "body_lines" in source or "splitlines" in source, (
         "display_card must split body into lines for truncation"
     )
+
+
+def test_fast_source_wait_breaks_on_items():
+    """
+    Bug: The fast-source wait loop (up to 8s) only broke when ALL three fast
+    sources (email, imsg, slack) had reported. If a slow source like Teams
+    returned items first, the user still had to wait up to 8s before seeing
+    any card.
+
+    Fix: Also break out of the wait loop when _incoming queue has items,
+    so the first card is shown as soon as ANY source returns results.
+    """
+    source = IBX_ALL_PY.read_text()
+    lines = source.splitlines()
+
+    for i, line in enumerate(lines):
+        if "fast_deadline" in line and "time.time() + " in line:
+            # Find the while loop that follows
+            block = "\n".join(lines[i:i + 10])
+            assert "_incoming.empty()" in block or "_incoming" in block, (
+                "Fast-source wait loop must break when items are already "
+                "queued in _incoming, not just when all fast sources finish"
+            )
+            return
+    raise AssertionError("fast_deadline wait loop not found in main()")
+
+
+def test_drainer_wait_is_nonblocking():
+    """
+    Bug: _drainer_done.wait(timeout=5) blocked for up to 5 additional seconds
+    after the fast-source wait, even when items were already drained and ready.
+    Combined with the 8s fast-source wait, users waited ~13s before seeing
+    the first card.
+
+    Fix: Use a near-zero timeout (≤0.5s). The main loop already handles
+    late-arriving items via _bg_injected injection.
+    """
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            func_source = ast.get_source_segment(source, node)
+            # Find _drainer_done.wait calls and check timeout values
+            import re
+            waits = re.findall(r'_drainer_done\.wait\(timeout=(\d+(?:\.\d+)?)\)', func_source)
+            assert waits, "_drainer_done.wait() call not found in main()"
+            for t in waits:
+                assert float(t) <= 0.5, (
+                    f"_drainer_done.wait timeout is {t}s — must be ≤0.5s "
+                    "to avoid blocking card display. Late items are handled "
+                    "by the main loop's _bg_injected injection."
+                )
+            return
+    raise AssertionError("main() function not found")

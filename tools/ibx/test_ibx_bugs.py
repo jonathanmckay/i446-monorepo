@@ -321,3 +321,37 @@ def test_ibx0_continuous_polling_and_immediate_blue():
     assert "select.select" in source, (
         "Inbox-zero wait must use select.select for non-blocking user input"
     )
+
+
+def test_ibx0_bg_fetch_suppresses_console_output():
+    """Bug: background continuous fetch called fetch functions that print
+    status messages (e.g. 'Teams — querying teams API...') to stdout,
+    polluting the interactive card UI. Cards and prompts were scrolled
+    off screen by background output, making ibx0 appear stuck.
+    Fix: _bg_continuous_fetch swaps each source module's console to a
+    quiet StringIO-backed Console during background fetches.
+    """
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_bg_continuous_fetch":
+            body_src = ast.get_source_segment(source, node)
+
+            # Must swap module consoles to suppress output
+            assert "mod.console = quiet" in body_src or "console = quiet" in body_src, (
+                "_bg_continuous_fetch must suppress module console output during bg fetch"
+            )
+
+            # Must restore original consoles afterward
+            assert "mod.console = orig" in body_src or "console = orig" in body_src, (
+                "_bg_continuous_fetch must restore original consoles after bg fetch"
+            )
+
+            # Must use finally block to guarantee restoration
+            assert "finally" in body_src, (
+                "_bg_continuous_fetch must restore consoles in a finally block"
+            )
+            break
+    else:
+        raise AssertionError("_bg_continuous_fetch() not found in ibx0.py")

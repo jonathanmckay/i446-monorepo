@@ -839,9 +839,23 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
     Does NOT use seen_uids — the main loop filters against its live queue to allow
     new messages in already-seen Slack/iMessage threads to reappear.
     """
+    import io
     drainer_done_event.wait()
 
+    # Quiet console to suppress output from fetch functions in background
+    quiet = Console(file=io.StringIO())
+
     while not stop_event.wait(interval):
+        # Swap each module's console to suppress background output
+        modules = [_ibx, _imsg, _slack]
+        if _outlook_available:
+            modules.append(_outlook)
+        if _teams_available:
+            modules.append(_teams)
+        saved = {mod: mod.console for mod in modules if hasattr(mod, "console")}
+        for mod in saved:
+            mod.console = quiet
+
         try:
             from concurrent.futures import ThreadPoolExecutor
             fetchers = [
@@ -872,6 +886,11 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
                         bg_injected.append(it)
         except Exception:
             pass
+        finally:
+            for mod, orig in saved.items():
+                mod.console = orig
+            quiet.file.truncate(0)
+            quiet.file.seek(0)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -932,10 +951,12 @@ def main():
         _source_counts["teams"] = 0
         _update_status("Teams", "✓ 0")
 
-    # Wait up to 8s for fast sources (email, imsg, slack), don't block on slow ones
+    # Wait up to 8s for fast sources, but break immediately if any items arrive
     fast_deadline = time.time() + 8
     while time.time() < fast_deadline:
         if all(n in _source_counts for n in ("email", "imsg", "slack")):
+            break
+        if not _incoming.empty():
             break
         time.sleep(0.2)
 
@@ -1018,8 +1039,8 @@ def main():
             console.print(f"[dim]  waiting for {', '.join(slow_pending)}...[/dim]")
         _fetch_done.wait(timeout=150)
 
-    # Drain any late arrivals — wait for drainer to finish its final drain
-    _drainer_done.wait(timeout=5)
+    # Quick drain of whatever's arrived so far — don't block on slow sources
+    _drainer_done.wait(timeout=0.2)
     with _bg_lock:
         for it in _bg_injected:
             uid = _item_uid(it)
