@@ -833,7 +833,7 @@ def check_resolved_now(items_snapshot, resolved):
     return newly
 
 
-def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_done_event, interval=60):
+def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_done_event, interval=120):
     """Background thread: periodically fetch new items from all sources.
     Items are staged in bg_injected for the main loop to pick up.
     Does NOT use seen_uids — the main loop filters against its live queue to allow

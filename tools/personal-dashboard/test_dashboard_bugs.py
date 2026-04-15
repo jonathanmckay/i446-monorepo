@@ -180,3 +180,26 @@ def test_outlook_sent_counts_exist():
     assert 'all_sent_counts["outlook"]' in source, (
         "main() must populate all_sent_counts['outlook'] from compute_outlook_sent_counts"
     )
+
+
+def test_imessage_blended_avg_uses_response_count_not_sent_count():
+    """
+    Bug: dashboard.py used sent_count as the weight for iMessage in the
+    blended response time average. sent_count includes proactive messages
+    (no inbound to respond to), inflating iMessage's weight and dragging
+    the blended average toward iMessage's (often high) avg_response_hours.
+
+    Fix: SELECT response_count from daily_stats and use it as "count".
+    """
+    source = Path(__file__).parent.joinpath("dashboard.py").read_text()
+    # The iMessage query must select response_count
+    assert "response_count" in source, (
+        "dashboard.py iMessage query must SELECT response_count from daily_stats"
+    )
+    # The count field must use response_count, not sent_count
+    import re
+    # Find the iMessage block and verify count uses resp_count
+    imsg_block = source[source.index("# Add iMessage"):source.index("# Blended")]
+    assert '"count": resp_count' in imsg_block or "'count': resp_count" in imsg_block, (
+        "iMessage 'count' must be set to resp_count (response_count), not sent"
+    )

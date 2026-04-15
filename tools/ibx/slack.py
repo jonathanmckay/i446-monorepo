@@ -7,6 +7,7 @@ Process unread Slack DMs one at a time, across multiple workspaces.
 import json
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,11 +34,20 @@ ai = anthropic.Anthropic()
 def slack_get(token, method, **params):
     url = f"https://slack.com/api/{method}?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        data = json.loads(r.read())
-    if not data.get("ok"):
-        raise RuntimeError(f"{method}: {data.get('error', 'unknown')}")
-    return data
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read())
+            if not data.get("ok"):
+                raise RuntimeError(f"{method}: {data.get('error', 'unknown')}")
+            return data
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                retry_after = int(e.headers.get("Retry-After", 2 ** attempt))
+                time.sleep(retry_after)
+                continue
+            raise
+    raise RuntimeError(f"{method}: rate limited after 4 retries")
 
 def slack_post(token, method, **payload):
     url = f"https://slack.com/api/{method}"

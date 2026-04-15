@@ -55,6 +55,20 @@ A local cache of undone tasks, sorted by priority. Read instantly on each `/did`
 
 **Refresh:** happens in the background after every `/did` completion (see Cache Refresh below). If the file doesn't exist yet, skip the suggestion and refresh the cache for next time.
 
+### Completed-today tracker
+
+**File:** `~/vault/z_ibx/completed-today.json`
+
+Tracks habit/task names completed today, so recurring tasks that reopen in Todoist don't get re-suggested.
+
+```json
+{"date": "2026-04-15", "names": ["CPAP", "wake up", "hiit", "0t"]}
+```
+
+- **Background agent appends** the completed habit/task name (lowercase) to `names` after each successful completion.
+- **Foreground reads** this file alongside the cache and filters out any task whose content (lowercased, stripped of `(N)`, `[N]`, `{N}`, and suffixes like `- Daily 分`, `- Healthy Breakfast`, `- Clean spaces`, `- Time`, `- Push commit`, `- Daily Spa`) contains any name from the completed list.
+- **Date gate:** if `date` doesn't match today, treat the file as empty (new day → fresh start).
+
 ## Execution Model
 
 When `/did` is invoked, fork into two parallel tracks:
@@ -635,10 +649,20 @@ cat ~/vault/z_ibx/task-queue.json
 
 If the file doesn't exist or is empty, skip the suggestion entirely (the background agent will create it for next time).
 
+### 1b. Read completed-today tracker
+
+```bash
+cat ~/vault/z_ibx/completed-today.json
+```
+
+If the file doesn't exist or `date` doesn't match today, treat as empty list.
+
 ### 2. Filter and display
 
-- Remove any task whose `content` contains the habit name just completed (case-insensitive substring match). This prevents suggesting the task that was just marked done.
-- Show the top 5 tasks in cache order (already sorted: 0n → 1n → 0g).
+- Add the habit name just completed to the filter set.
+- Also add all names from `completed-today.json` to the filter set.
+- Remove any task whose `content` (lowercased, stripped of `(N)`, `[N]`, `{N}`, and common suffixes) matches any name in the filter set (case-insensitive substring).
+- Show the top 5 remaining tasks in cache order (already sorted: 0n → 1n → 0g).
 - Add a 6th option for skip (no next task).
 
 **Display format:**
@@ -685,7 +709,9 @@ Runs at the end of the **background agent**, after all /did work is complete.
    CACHE
    ```
 
-4. **Report the /did results** (the standard Step 4 output from the background work).
+4. **Update completed-today tracker.** Read `~/vault/z_ibx/completed-today.json`. If `date` matches today, append the just-completed habit/task name (lowercase) to `names`. If date doesn't match or file doesn't exist, create fresh with today's date and just this name. Write the file.
+
+5. **Report the /did results** (the standard Step 4 output from the background work).
 
 ## Regression tests (documented)
 
@@ -698,3 +724,4 @@ Runs at the end of the **background agent**, after all /did work is complete.
 | `/did some task with words reordered` — Todoist has "words reordered task" | Step 0 word-overlap matches (≥60% words present regardless of order) | Must NOT fall through to Step 6 and create posthoc duplicate |
 | `/did ibx - s897` — 0₦ column is "ibx - s897", Todoist task is "ibx s897 [6] (15)" | Step 3 dash-normalization: strips ` - ` → "ibx s897" matches "ibx s897", closes task | Must NOT skip Todoist close due to dash mismatch |
 | `/did ibx i9` — 0₦ column is "ibx i9", Todoist task is "ibx - i9 (4) [20]" | Step 3 dash-normalization: "ibx i9" matches "ibx i9" (after stripping ` - ` from task content) | Must NOT skip Todoist close due to dash mismatch |
+| `/did hiit` then `/did 0l` — hiit completed first, cache refreshed, but hiit reappears (recurring task) | Foreground reads completed-today.json, filters out "hiit" from suggestions even though it's back in the cache | Must NOT suggest already-completed recurring tasks |

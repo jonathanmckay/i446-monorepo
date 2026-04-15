@@ -582,14 +582,15 @@ def api_data():
         try:
             _conn = _sq3.connect(f"file:{_imsg_db}?mode=ro", uri=True)
             _rows = _conn.execute(
-                "SELECT day, avg_response_hours, sent_count FROM daily_stats"
+                "SELECT day, avg_response_hours, response_count, sent_count FROM daily_stats"
             ).fetchall()
             _conn.close()
-            for day, avg_h, sent in _rows:
+            for day, avg_h, resp_count, sent in _rows:
                 if day in set(dates):
                     email_by_account["imessage"][day] = {
                         "avg_hours": avg_h,
-                        "count": sent,
+                        "count": resp_count or 0,
+                        "sent_count": sent,
                     }
         except Exception:
             pass

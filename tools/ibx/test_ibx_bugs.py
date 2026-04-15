@@ -355,3 +355,72 @@ def test_ibx0_bg_fetch_suppresses_console_output():
             break
     else:
         raise AssertionError("_bg_continuous_fetch() not found in ibx0.py")
+
+
+def test_slack_get_retries_on_429():
+    """Bug: continuous background polling hammered Slack API, triggering
+    HTTP 429 (Too Many Requests). slack_get had no retry logic, so every
+    429 surfaced as 'channel error' and the channel was skipped.
+    Fix: slack_get retries up to 4 times with Retry-After backoff on 429.
+    """
+    source = open("slack.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "slack_get":
+            body_src = ast.get_source_segment(source, node)
+
+            # Must handle 429 status code
+            assert "429" in body_src, (
+                "slack_get must check for HTTP 429 and retry"
+            )
+
+            # Must use Retry-After header
+            assert "Retry-After" in body_src, (
+                "slack_get must respect the Retry-After header from 429 responses"
+            )
+
+            # Must have a retry loop
+            assert "for attempt" in body_src or "retry" in body_src.lower(), (
+                "slack_get must retry on 429, not fail immediately"
+            )
+
+            # Must sleep/backoff
+            assert "time.sleep" in body_src, (
+                "slack_get must sleep between retries"
+            )
+            break
+    else:
+        raise AssertionError("slack_get() not found in slack.py")
+
+
+def test_bg_continuous_fetch_interval_not_too_aggressive():
+    """The continuous fetch interval must be >= 120s to avoid hammering
+    APIs (especially Slack which rate-limits at ~1 req/sec per method).
+    """
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_bg_continuous_fetch":
+            # Check the default interval parameter
+            for arg, default in zip(node.args.args, node.args.defaults):
+                pass  # walk to get defaults aligned
+            # defaults align to the LAST N args
+            args = node.args.args
+            defaults = node.args.defaults
+            offset = len(args) - len(defaults)
+            for i, d in enumerate(defaults):
+                arg_name = args[offset + i].arg
+                if arg_name == "interval":
+                    assert isinstance(d, ast.Constant), "interval default must be a constant"
+                    assert d.value >= 120, (
+                        f"_bg_continuous_fetch interval must be >= 120s to avoid rate limits, "
+                        f"got {d.value}s"
+                    )
+                    break
+            else:
+                raise AssertionError("interval parameter not found in _bg_continuous_fetch")
+            break
+    else:
+        raise AssertionError("_bg_continuous_fetch() not found")
