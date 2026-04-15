@@ -332,3 +332,43 @@ def test_drainer_wait_is_nonblocking():
                 )
             return
     raise AssertionError("main() function not found")
+
+
+def test_background_injection_after_input_not_before_card():
+    """
+    Bug: Background item arrivals and poll messages were printed at the TOP
+    of the main loop, between card display iterations. This interrupted the
+    card the user was reading — e.g. printing "+ 2 item(s) arrived in
+    background" in the middle of reading a Teams DM.
+
+    Fix: Move background injection and poll message printing to AFTER
+    user_input = input("> "), so the card + prompt are shown uninterrupted.
+    Background items are silently queued until the user acts.
+    """
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            func_source = ast.get_source_segment(source, node)
+            lines = func_source.splitlines()
+
+            # Find the main card loop's input(">") and "arrived in background" print
+            input_line = None
+            arrived_line = None
+            for i, line in enumerate(lines):
+                if ('input("> ")' in line or 'input(\"> \")' in line) and input_line is None:
+                    input_line = i
+                if "arrived in background" in line:
+                    arrived_line = i
+
+            assert input_line is not None, "input prompt not found in main()"
+            assert arrived_line is not None, "background arrival print not found in main()"
+
+            assert arrived_line > input_line, (
+                f"Background arrival message (line {arrived_line}) must come AFTER "
+                f"input prompt (line {input_line}), not before card display. "
+                "Printing during card view interrupts the user."
+            )
+            return
+    raise AssertionError("main() function not found")

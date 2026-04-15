@@ -846,15 +846,19 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
     quiet = Console(file=io.StringIO())
 
     while not stop_event.wait(interval):
-        # Swap each module's console to suppress background output
+        # Swap each module's console AND ibx0's own console to suppress background output
+        # (ibx0's fetch wrappers print errors like "channel error:" via the global console)
+        global console
         modules = [_ibx, _imsg, _slack]
         if _outlook_available:
             modules.append(_outlook)
         if _teams_available:
             modules.append(_teams)
         saved = {mod: mod.console for mod in modules if hasattr(mod, "console")}
+        saved_own = console
         for mod in saved:
             mod.console = quiet
+        console = quiet
 
         try:
             from concurrent.futures import ThreadPoolExecutor
@@ -889,6 +893,7 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
         finally:
             for mod, orig in saved.items():
                 mod.console = orig
+            console = saved_own
             quiet.file.truncate(0)
             quiet.file.seek(0)
 
@@ -1138,25 +1143,6 @@ def main():
         return kept, removed
 
     while True:
-        # Print any status messages from the background poll thread
-        while not poll_msgs.empty():
-            console.print(poll_msgs.get_nowait())
-
-        # Inject late-arriving items from background fetch threads
-        with _bg_lock:
-            if _bg_injected:
-                new_late = list(_bg_injected)
-                _bg_injected.clear()
-        if 'new_late' in dir() and new_late:
-            existing_uids_now = {_item_uid(it) for it in all_items + skipped}
-            existing_uids_now.update(resolved)
-            fresh = [it for it in new_late if _item_uid(it) not in existing_uids_now]
-            if fresh:
-                all_items.extend(fresh)
-                status_line = _build_status()
-                console.print(f"[cyan]  + {len(fresh)} item(s) arrived in background[/cyan]  {status_line}")
-            new_late = []
-
         # Prune any items resolved elsewhere before advancing
         all_items, gone = filter_resolved(all_items)
         skipped, gone_skipped = filter_resolved(skipped)
@@ -1225,6 +1211,25 @@ def main():
             _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
+
+        # After user input: inject background arrivals and print poll messages
+        # (done here so they don't interrupt the card display above)
+        while not poll_msgs.empty():
+            console.print(poll_msgs.get_nowait())
+        with _bg_lock:
+            if _bg_injected:
+                new_late = list(_bg_injected)
+                _bg_injected.clear()
+            else:
+                new_late = []
+        if new_late:
+            existing_uids_now = {_item_uid(it) for it in all_items + skipped}
+            existing_uids_now.update(resolved)
+            fresh = [it for it in new_late if _item_uid(it) not in existing_uids_now]
+            if fresh:
+                all_items.extend(fresh)
+                status_line = _build_status()
+                console.print(f"[cyan]  + {len(fresh)} item(s) arrived in background[/cyan]  {status_line}")
 
         if not user_input:
             index += 1

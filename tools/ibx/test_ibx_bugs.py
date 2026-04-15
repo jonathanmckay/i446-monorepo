@@ -343,6 +343,12 @@ def test_ibx0_bg_fetch_suppresses_console_output():
                 "_bg_continuous_fetch must suppress module console output during bg fetch"
             )
 
+            # Must also suppress ibx0's own console (fetch wrappers print errors via it)
+            assert "saved_own" in body_src or "global console" in body_src, (
+                "_bg_continuous_fetch must suppress ibx0's own console too — "
+                "fetch wrappers like fetch_slack() print 'channel error:' via it"
+            )
+
             # Must restore original consoles afterward
             assert "mod.console = orig" in body_src or "console = orig" in body_src, (
                 "_bg_continuous_fetch must restore original consoles after bg fetch"
