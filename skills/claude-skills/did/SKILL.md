@@ -30,6 +30,40 @@ Examples:
 - `/did hiit yesterday` → writes hiit for yesterday
 - `/did o314 20, 冥想 15 3/25` → writes both habits for 3/25
 
+## Task Queue Cache
+
+**File:** `~/vault/z_ibx/task-queue.json`
+
+A local cache of undone tasks, sorted by priority. Read instantly on each `/did` invocation to suggest the next task with zero latency.
+
+**Format:**
+```json
+{
+  "refreshed": "2026-04-15T11:33:00-07:00",
+  "tasks": [
+    {"id": "abc123", "content": "冥想 (15) [5]", "cat": "0n"},
+    {"id": "def456", "content": "1 hcme [8]", "cat": "1n"},
+    {"id": "ghi789", "content": "Review PR [20]", "cat": "0g"}
+  ]
+}
+```
+
+**Categories** (in priority order):
+- `0n` — daily habits (label: `0neon`)
+- `1n` — weekly tasks (label: `1neon`)
+- `0g` — daily goals (label: `关键径路`)
+
+**Refresh:** happens in the background after every `/did` completion (see Cache Refresh below). If the file doesn't exist yet, skip the suggestion and refresh the cache for next time.
+
+## Execution Model
+
+When `/did` is invoked, fork into two parallel tracks:
+
+1. **Background** (Agent with `run_in_background: true`): Run the full /did pipeline (Steps -2 through 6b, whichever path applies). After completion, refresh the task queue cache. Report results when done.
+2. **Foreground** (immediate): Parse the habit name from the input (just enough to know what was completed), then jump to **Next Task Suggestion**.
+
+The foreground track runs instantly — no waiting for Excel or Todoist.
+
 ## Steps
 
 ### Step -2: Parse global date
@@ -588,6 +622,70 @@ This step runs when `<habit>` matches a 0₦ column header **and** `targetDate` 
 - Date is in column C in **M/D format** (e.g. `3/30`, not `03/30`).
 - If the user passes a habit shortcode that looks different from the column header, they need to use the exact header string from row 1.
 - **AppleScript calls to Excel must be sequential, not parallel.** Multiple concurrent `osascript` processes writing to the same workbook will race — only the first write commits, the rest silently fail. When processing multiple items (Step -1), run each item's AppleScript serially, or batch all writes into a single `osascript` invocation with `delay 0.3` between writes.
+
+## Next Task Suggestion
+
+This runs in the **foreground**, immediately after dispatching the background agent. No waiting.
+
+### 1. Read the cache
+
+```bash
+cat ~/vault/z_ibx/task-queue.json
+```
+
+If the file doesn't exist or is empty, skip the suggestion entirely (the background agent will create it for next time).
+
+### 2. Filter and display
+
+- Remove any task whose `content` contains the habit name just completed (case-insensitive substring match). This prevents suggesting the task that was just marked done.
+- Show the top 5 tasks in cache order (already sorted: 0n → 1n → 0g).
+- Add a 6th option for skip (no next task).
+
+**Display format:**
+```
+Next up:
+1. 冥想 (15) [5]           0n
+2. hiit [10]               0n
+3. 1 hcme [8]              1n
+4. Review PR #442 [20]     0g
+5. ibx m5x2 (4) [15]      0n
+6. [skip]
+
+Pick [1-6]:
+```
+
+Right-align the category labels. Keep it compact — no extra explanation.
+
+### 3. Handle selection
+
+- **1–5**: Extract the task content. Map it to a `/tg` shortcode if possible (strip bracketed values like `[N]` and `(N)`, use the core description). Start a timer via `/tg` for that task.
+- **6**: Skip — do nothing, just let the background results report when ready.
+
+**Mapping to /tg:** Strip `(N)`, `[N]`, and common suffixes like `- Daily 分` or `- Healthy Breakfast` from the Todoist task content to get the bare shortcode. Example: `冥想 (15) [5]` → `/tg 冥想`. If the stripped name doesn't match a /tg shortcode, start a passthrough timer with the description.
+
+## Cache Refresh
+
+Runs at the end of the **background agent**, after all /did work is complete.
+
+### Steps:
+
+1. **Query Todoist** for each category (3 parallel calls):
+   ```
+   find-tasks(labels: ["0neon"], limit: 50)
+   find-tasks(labels: ["1neon"], limit: 50)
+   find-tasks(labels: ["关键径路"], limit: 50)
+   ```
+
+2. **Build the task list.** For each result set, extract `{id, content, cat}` where cat is `0n`, `1n`, or `0g` respectively. Concatenate in priority order: 0n tasks first, then 1n, then 0g.
+
+3. **Write the cache:**
+   ```bash
+   cat > ~/vault/z_ibx/task-queue.json << 'CACHE'
+   {"refreshed":"TIMESTAMP","tasks":[...]}
+   CACHE
+   ```
+
+4. **Report the /did results** (the standard Step 4 output from the background work).
 
 ## Regression tests (documented)
 
