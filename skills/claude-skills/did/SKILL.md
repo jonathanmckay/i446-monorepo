@@ -587,6 +587,7 @@ This step runs when `<habit>` matches a 0₦ column header **and** `targetDate` 
 - Column headers are in **row 1**. The habit name must match exactly (case-sensitive).
 - Date is in column C in **M/D format** (e.g. `3/30`, not `03/30`).
 - If the user passes a habit shortcode that looks different from the column header, they need to use the exact header string from row 1.
+- **AppleScript calls to Excel must be sequential, not parallel.** Multiple concurrent `osascript` processes writing to the same workbook will race — only the first write commits, the rest silently fail. When processing multiple items (Step -1), run each item's AppleScript serially, or batch all writes into a single `osascript` invocation with `delay 0.3` between writes.
 
 ## Regression tests (documented)
 
