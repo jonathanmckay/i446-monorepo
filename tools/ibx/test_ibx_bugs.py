@@ -271,3 +271,53 @@ def test_ibx0_fetch_emails_uses_dedup_threads():
             break
     else:
         raise AssertionError("fetch_emails() not found in ibx0.py")
+
+
+def test_ibx0_continuous_polling_and_immediate_blue():
+    """Bug: ibx0 only polled for new items when the card stack emptied,
+    then did a blocking re-fetch before turning the terminal blue.
+    Fix: continuous background fetch thread polls all sources on a timer.
+    When cards reach zero, terminal goes blue immediately — no blocking fetch.
+    """
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    # 1. _bg_continuous_fetch function must exist
+    bg_fetch_found = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_bg_continuous_fetch":
+            body_src = ast.get_source_segment(source, node)
+            bg_fetch_found = True
+            # Must use ThreadPoolExecutor for parallel fetching
+            assert "ThreadPoolExecutor" in body_src, (
+                "_bg_continuous_fetch must fetch sources in parallel"
+            )
+            # Must wait for drainer to finish before starting
+            assert "wait()" in body_src, (
+                "_bg_continuous_fetch must wait for initial fetch to complete"
+            )
+            break
+    assert bg_fetch_found, "_bg_continuous_fetch() not found in ibx0.py"
+
+    # 2. main() must start the continuous fetch thread
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            body_src = ast.get_source_segment(source, node)
+            assert "_bg_continuous_fetch" in body_src, (
+                "main() must start the continuous fetch thread"
+            )
+            break
+
+    # 3. The old blocking final-fetch pattern must NOT exist
+    # (ThreadPoolExecutor in the stack-empty branch with _final_fetch)
+    assert "_final_fetch" not in source, (
+        "Blocking _final_fetch at stack-empty must be removed — "
+        "terminal should go blue immediately, not after a re-fetch"
+    )
+
+    # 4. set_term_color("blue") must appear BEFORE any re-fetch in the
+    #    stack-empty branch — verify by checking the inbox-zero wait loop
+    #    uses select.select (non-blocking wait) not a blocking fetch
+    assert "select.select" in source, (
+        "Inbox-zero wait must use select.select for non-blocking user input"
+    )

@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import re
+import select
 import subprocess
 import sys
 import threading
@@ -832,6 +833,47 @@ def check_resolved_now(items_snapshot, resolved):
     return newly
 
 
+def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_done_event, interval=60):
+    """Background thread: periodically fetch new items from all sources.
+    Items are staged in bg_injected for the main loop to pick up.
+    Does NOT use seen_uids — the main loop filters against its live queue to allow
+    new messages in already-seen Slack/iMessage threads to reappear.
+    """
+    drainer_done_event.wait()
+
+    while not stop_event.wait(interval):
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            fetchers = [
+                ("email", fetch_emails),
+                ("imsg", fetch_imsgs),
+                ("slack", fetch_slack),
+            ]
+            if _outlook_available:
+                fetchers.append(("outlook", fetch_outlook))
+            if _teams_available:
+                fetchers.append(("teams", fetch_teams))
+
+            new_items = []
+            with ThreadPoolExecutor(max_workers=len(fetchers)) as pool:
+                futs = {pool.submit(fn): name for name, fn in fetchers}
+                for fut in futs:
+                    try:
+                        r = fut.result(timeout=30)
+                        items = r[0] if isinstance(r, tuple) else r
+                        new_items.extend(items)
+                    except Exception:
+                        pass
+
+            with bg_lock:
+                for it in new_items:
+                    uid = _item_uid(it)
+                    if uid and uid not in resolved:
+                        bg_injected.append(it)
+        except Exception:
+            pass
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 TERM_COLOR = Path(__file__).parent.parent.parent / "scripts" / "term-color.sh"
@@ -998,9 +1040,46 @@ def main():
 
     if not all_items:
         _wait_for_autosign()
-        console.print(f"\n[dim]Inbox zero.[/dim]  {status_line}")
         set_term_color("blue")
-        return
+        console.print(f"\n[dim]Inbox zero — watching for new items... (q to quit)[/dim]  {status_line}")
+
+        # Start continuous fetch even when starting at zero
+        stop_poll = threading.Event()
+        resolved = set()
+        fetch_thread = threading.Thread(
+            target=_bg_continuous_fetch,
+            args=(resolved, _bg_injected, _bg_lock, stop_poll, _drainer_done),
+            daemon=True,
+        )
+        fetch_thread.start()
+
+        while True:
+            with _bg_lock:
+                if _bg_injected:
+                    staged = list(_bg_injected)
+                    _bg_injected.clear()
+                else:
+                    staged = []
+            if staged:
+                fresh = [it for it in staged if _item_uid(it) not in resolved]
+                if fresh:
+                    all_items = fresh
+                    set_term_color("red")
+                    console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
+                    break
+
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 2.0)
+                if ready:
+                    line = sys.stdin.readline().strip().lower()
+                    if line == "q":
+                        console.print("[dim]Bye.[/dim]")
+                        stop_poll.set()
+                        return
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Bye.[/dim]")
+                stop_poll.set()
+                return
 
     set_term_color("red")
     console.print(f"\n[bold]{len(all_items)} item(s)[/bold] to review {status_line}")
@@ -1015,6 +1094,14 @@ def main():
         daemon=True,
     )
     poll_thread.start()
+
+    # Continuous background fetch: poll all sources for new items
+    fetch_thread = threading.Thread(
+        target=_bg_continuous_fetch,
+        args=(resolved, _bg_injected, _bg_lock, stop_poll, _drainer_done),
+        daemon=True,
+    )
+    fetch_thread.start()
 
     index = 0
     skipped = []
@@ -1065,31 +1152,45 @@ def main():
                 skipped = []
                 index = 0
             else:
-                # One final parallel fetch before declaring zero
-                existing_uids = {_item_uid(it) for it in all_items}
-                existing_uids.update(resolved)
-                _final = []
-                def _final_fetch(fn):
-                    r = fn()
-                    return r[0] if isinstance(r, tuple) else r
-                with ThreadPoolExecutor(max_workers=5) as pool:
-                    futs = [pool.submit(_final_fetch, f) for f in [fetch_emails, fetch_imsgs, fetch_slack, fetch_outlook, fetch_teams]]
-                    for fut in futs:
-                        try:
-                            _final.extend(fut.result(timeout=30))
-                        except Exception:
-                            pass
-                late_all = [it for it in _final if _item_uid(it) not in existing_uids]
-                if late_all:
-                    all_items = late_all
-                    index = 0
-                    console.print(f"[green]  + {len(late_all)} new item(s) arrived[/green]")
-                    continue
+                # Inbox zero — go blue immediately, let background polling find new items
                 _wait_for_autosign()
-                console.print("[dim]Inbox zero.[/dim]")
-                stop_poll.set()
                 set_term_color("blue")
-                break
+                console.print("[dim]Inbox zero — watching for new items... (q to quit)[/dim]")
+
+                while True:
+                    # Check for items from continuous background fetch
+                    with _bg_lock:
+                        if _bg_injected:
+                            staged = list(_bg_injected)
+                            _bg_injected.clear()
+                        else:
+                            staged = []
+                    if staged:
+                        existing_uids_now = {_item_uid(it) for it in all_items + skipped}
+                        existing_uids_now.update(resolved)
+                        fresh = [it for it in staged if _item_uid(it) not in existing_uids_now]
+                        if fresh:
+                            all_items = fresh
+                            index = 0
+                            set_term_color("red")
+                            console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
+                            break
+
+                    # Wait up to 2s, check for user quit
+                    try:
+                        ready, _, _ = select.select([sys.stdin], [], [], 2.0)
+                        if ready:
+                            line = sys.stdin.readline().strip().lower()
+                            if line == "q":
+                                console.print("[dim]Bye.[/dim]")
+                                stop_poll.set()
+                                sys.exit(2)
+                    except (KeyboardInterrupt, EOFError):
+                        console.print("\n[dim]Bye.[/dim]")
+                        stop_poll.set()
+                        sys.exit(2)
+
+                continue
 
         item = all_items[index]
         display_card(item, index + 1, len(all_items))
