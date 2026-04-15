@@ -284,6 +284,10 @@ def display_card(item, idx, total):
         header.append(item["cc"], style="dim white")
     header.append(f"\nSUBJECT: ", style="bold dim")
     header.append(item["preview"], style="white")
+    # Show message count for grouped Teams threads
+    msg_count = item.get("_data", {}).get("msg_count", 0)
+    if msg_count > 1:
+        header.append(f"  ({msg_count} messages)", style="bold yellow")
 
     # Show received date/time in local time if available
     date_str = item.get("_data", {}).get("date", "")
@@ -448,7 +452,11 @@ def do_archive(item):
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])
     elif t == "teams":
-        _teams.archive(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
+        all_ids = item["_data"].get("all_item_ids")
+        if all_ids and hasattr(_teams, 'archive_all'):
+            _teams.archive_all(all_ids, chat_id=item["_data"].get("chat_id", ""))
+        else:
+            _teams.archive(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
 
 def do_delete(item):
     t = item["type"]
@@ -469,7 +477,11 @@ def do_delete(item):
         d = item["_data"]
         _slack.mark_read(d["token"], d["thread"]["channel_id"], d["thread"]["latest_ts"])
     elif t == "teams":
-        _teams.delete(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
+        all_ids = item["_data"].get("all_item_ids")
+        if all_ids and hasattr(_teams, 'delete_all'):
+            _teams.delete_all(all_ids, chat_id=item["_data"].get("chat_id", ""))
+        else:
+            _teams.delete(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
 
 def do_reply(item, reply_text):
     t = item["type"]
@@ -490,6 +502,11 @@ def do_reply(item, reply_text):
         else:
             _teams.reply_via_teams(item["_data"].get("link", ""))
             console.print("[dim](Opened Teams for reply)[/dim]")
+        # Mark all grouped message IDs as processed
+        all_ids = item["_data"].get("all_item_ids", [])
+        for iid in all_ids:
+            if iid != item["_data"]["item_id"]:
+                _teams._mark_processed(iid)
     if t not in ("outlook", "teams"):  # these handle their own archiving
         do_archive(item)
 
@@ -741,6 +758,9 @@ def _item_uid(item):
     elif item["type"] == "slack":
         return ("slack", item["_data"]["thread"]["channel_id"])
     elif item["type"] == "teams":
+        chat_id = item["_data"].get("chat_id", "")
+        if chat_id:
+            return ("teams_thread", chat_id)
         return ("teams", item["_data"]["item_id"])
     return None
 

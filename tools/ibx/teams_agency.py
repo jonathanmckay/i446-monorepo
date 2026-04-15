@@ -239,6 +239,10 @@ def fetch_teams_items():
     processed = load_processed()
     already_marked = _load_marked_read()
 
+    # Collect per-chat unprocessed messages for grouping
+    # chat_id -> list of (created, sender_name, summary, item_id, web_link, msg_id)
+    chat_msgs = {}
+
     for hit in hits:
         resource = hit.get("resource", {})
         sender_data = resource.get("from", {}).get("emailAddress", {})
@@ -283,27 +287,59 @@ def fetch_teams_items():
             save_processed(processed)
             continue
 
-        record_fetch(item_id, sender_name, summary[:40], created)
+        if chat_id not in chat_msgs:
+            chat_msgs[chat_id] = []
+        chat_msgs[chat_id].append((created, sender_name, summary, item_id, web_link, msg_id))
+
+    # Group by chat_id: sort messages chronologically within each thread
+    for chat_id, msgs in chat_msgs.items():
+        msgs.sort(key=lambda m: m[0])  # sort by createdDateTime ascending
+        latest = msgs[-1]
+        latest_created, latest_sender, latest_summary, latest_item_id, latest_link, latest_msg_id = latest
+
+        all_item_ids = [m[3] for m in msgs]
+
+        # Record fetch only for the representative (latest) message
+        record_fetch(latest_item_id, latest_sender, latest_summary[:40], latest_created)
+
+        if len(msgs) == 1:
+            body = latest_summary or "(no message text)"
+        else:
+            # Concatenate all messages chronologically
+            lines = []
+            for created, sender, summary, _iid, _link, _mid in msgs:
+                try:
+                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%I:%M %p")
+                except Exception:
+                    time_str = ""
+                lines.append(f"{sender} ({time_str}): {summary}")
+            body = "\n".join(lines)
 
         items.append({
             "type": "teams",
             "source": "teams",
-            "from": sender_name or "(unknown sender)",
+            "from": latest_sender or "(unknown sender)",
             "to": "",
             "cc": "",
-            "preview": f"Teams DM from {sender_name}" if sender_name else "(Teams DM)",
-            "body": summary or "(no message text)",
+            "preview": f"Teams DM from {latest_sender}" if latest_sender else "(Teams DM)",
+            "body": body,
             "ts": 0.0,
             "_data": {
-                "item_id": item_id,
+                "item_id": latest_item_id,
+                "all_item_ids": all_item_ids,
                 "chat_id": chat_id,
-                "msg_id": msg_id,
-                "link": web_link,
-                "date": created,
-                "sender": sender_name,
-                "message": summary,
+                "msg_id": latest_msg_id,
+                "link": latest_link,
+                "date": latest_created,
+                "sender": latest_sender,
+                "message": latest_summary,
+                "msg_count": len(msgs),
             },
         })
+
+    # Sort by latest message date descending
+    items.sort(key=lambda x: x["_data"].get("date", ""), reverse=True)
 
     console.print(f"  [dim]teams: {len(items)} to review[/dim]")
 
@@ -327,8 +363,25 @@ def archive(item_id, chat_id=""):
     _mark_processed(item_id)
 
 
+def archive_all(item_ids, chat_id=""):
+    """Mark multiple Teams messages as processed (for grouped thread cards).
+    Only records response-time action for the first (representative) ID."""
+    if not item_ids:
+        return
+    # Record action only for the representative (latest) message
+    record_action(item_ids[0], "archive")
+    # Mark all individual messages as processed
+    for iid in item_ids:
+        _mark_processed(iid)
+
+
 def delete(item_id, chat_id=""):
     archive(item_id, chat_id=chat_id)
+
+
+def delete_all(item_ids, chat_id=""):
+    """Delete (mark processed) multiple grouped messages."""
+    archive_all(item_ids, chat_id=chat_id)
 
 
 def reply(item_id, chat_id, reply_text):

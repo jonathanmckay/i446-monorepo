@@ -1,8 +1,10 @@
 """Regression tests for teams_agency."""
 import ast
+import textwrap
 from pathlib import Path
 
 TEAMS_AGENCY_PY = Path(__file__).parent / "teams_agency.py"
+IBX0_PY = Path(__file__).parent / "ibx0.py"
 
 
 def test_module_imports_on_python39():
@@ -228,3 +230,179 @@ def test_mark_chat_read_validates_membership():
             )
             return
     raise AssertionError("_mark_chat_read function not found")
+
+
+# ── Thread grouping tests ─────────────────────────────────────────────────────
+
+IBX0_PY = Path(__file__).parent / "ibx0.py"
+
+
+def test_fetch_groups_by_chat_id():
+    """
+    Feature: Multiple unread messages in the same Teams chat thread must be
+    grouped into a single card. fetch_teams_items must group hits by chat_id.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "chat_msgs" in func_source, (
+                "fetch_teams_items must collect messages by chat_id for grouping"
+            )
+            assert "all_item_ids" in func_source, (
+                "Grouped items must include all_item_ids in _data"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")
+
+
+def test_grouped_item_has_all_item_ids():
+    """
+    Feature: Grouped Teams card must include all individual message IDs
+    in _data['all_item_ids'] so archive/delete can mark all processed.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "all_item_ids" in func_source, (
+                "Grouped items must store all_item_ids list"
+            )
+            assert "msg_count" in func_source, (
+                "Grouped items must include msg_count in _data"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")
+
+
+def test_archive_all_exists():
+    """
+    Feature: archive_all must mark all individual message IDs as processed
+    but only record response-time action for the representative message.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    found = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "archive_all":
+            func_source = ast.get_source_segment(source, node)
+            assert "_mark_processed" in func_source, (
+                "archive_all must call _mark_processed for each item"
+            )
+            assert "record_action" in func_source, (
+                "archive_all must call record_action for the representative message"
+            )
+            found = True
+            break
+    assert found, "archive_all function not found"
+
+
+def test_delete_all_exists():
+    """
+    Feature: delete_all must exist and delegate to archive_all.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "delete_all":
+            func_source = ast.get_source_segment(source, node)
+            assert "archive_all" in func_source, (
+                "delete_all must delegate to archive_all"
+            )
+            return
+    raise AssertionError("delete_all function not found")
+
+
+def test_ibx0_item_uid_uses_chat_id():
+    """
+    Feature: _item_uid for Teams items must use chat_id (thread-level identity),
+    not msg_id. This prevents duplicate cards when new messages arrive in the
+    same thread between fetches.
+    """
+    source = IBX0_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_item_uid":
+            func_source = ast.get_source_segment(source, node)
+            assert "teams_thread" in func_source, (
+                "_item_uid must return ('teams_thread', chat_id) for Teams items"
+            )
+            assert "chat_id" in func_source, (
+                "_item_uid must use chat_id for Teams dedup"
+            )
+            return
+    raise AssertionError("_item_uid function not found")
+
+
+def test_ibx0_do_archive_handles_grouped():
+    """
+    Feature: do_archive must handle grouped Teams items by calling
+    archive_all with all_item_ids.
+    """
+    source = IBX0_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "do_archive":
+            func_source = ast.get_source_segment(source, node)
+            assert "all_item_ids" in func_source, (
+                "do_archive must check for all_item_ids in grouped Teams items"
+            )
+            assert "archive_all" in func_source, (
+                "do_archive must call archive_all for grouped items"
+            )
+            return
+    raise AssertionError("do_archive function not found")
+
+
+def test_ibx0_do_reply_marks_all_grouped():
+    """
+    Feature: do_reply for Teams must mark all grouped message IDs as processed,
+    not just the representative.
+    """
+    source = IBX0_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "do_reply":
+            func_source = ast.get_source_segment(source, node)
+            assert "all_item_ids" in func_source, (
+                "do_reply must handle all_item_ids for grouped Teams items"
+            )
+            return
+    raise AssertionError("do_reply function not found")
+
+
+def test_grouped_body_contains_all_messages():
+    """
+    Feature: Grouped card body must concatenate all messages chronologically.
+    """
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_teams_items":
+            func_source = ast.get_source_segment(source, node)
+            assert "lines" in func_source, (
+                "Grouped items must concatenate all messages into body"
+            )
+            assert "sort" in func_source, (
+                "Messages within a group must be sorted chronologically"
+            )
+            return
+    raise AssertionError("fetch_teams_items function not found")
+
+
+def test_ibx0_display_card_shows_msg_count():
+    """
+    Feature: display_card must show the message count for grouped Teams cards.
+    """
+    source = IBX0_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "display_card":
+            func_source = ast.get_source_segment(source, node)
+            assert "msg_count" in func_source, (
+                "display_card must show msg_count for grouped Teams items"
+            )
+            return
+    raise AssertionError("display_card function not found")
