@@ -75,3 +75,4 @@ yarn.lock
 quickbooks-online-mcp-server/
 tools/personal-dashboard/.env
 tools/personal-dashboard/ga4-tokens.json
+tools/personal-dashboard/ga4-oauth.keys.json
