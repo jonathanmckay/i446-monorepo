@@ -308,7 +308,7 @@ curl -s "https://api.todoist.com/api/v1/tasks?label=0neon&limit=200" \
   -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5"
 ```
 
-Filter the JSON results: find a task where `content` contains the habit name (case-insensitive). If found, close it:
+Filter the JSON results: find a task where `content` contains the habit name (case-insensitive). **Dash-normalization:** before matching, strip ` - ` (space-dash-space) from both the habit name and each task's content, then also try matching with all hyphens removed and whitespace collapsed. This handles cases like "ibx - s897" matching "ibx s897" and vice versa. If found, close it:
 
 ```bash
 curl -s -X POST "https://api.todoist.com/api/v1/tasks/TASK_ID/close" \
@@ -598,3 +598,5 @@ This step runs when `<habit>` matches a 0₦ column header **and** `targetDate` 
 | `/did 0g 2` — matches 0₦ column header, no date | Step 1 habit flow, writes to 0₦ sheet | Must NOT search Todoist |
 | `/did 0l 2 4/1` — matches 0₦ column header, past date | Step 6b: posthoc Todoist task for 4/1, no Neon write | Must NOT write to 0₦ sheet |
 | `/did some task with words reordered` — Todoist has "words reordered task" | Step 0 word-overlap matches (≥60% words present regardless of order) | Must NOT fall through to Step 6 and create posthoc duplicate |
+| `/did ibx - s897` — 0₦ column is "ibx - s897", Todoist task is "ibx s897 [6] (15)" | Step 3 dash-normalization: strips ` - ` → "ibx s897" matches "ibx s897", closes task | Must NOT skip Todoist close due to dash mismatch |
+| `/did ibx i9` — 0₦ column is "ibx i9", Todoist task is "ibx - i9 (4) [20]" | Step 3 dash-normalization: "ibx i9" matches "ibx i9" (after stripping ` - ` from task content) | Must NOT skip Todoist close due to dash mismatch |
