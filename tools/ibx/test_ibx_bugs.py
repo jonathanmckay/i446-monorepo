@@ -431,3 +431,43 @@ def test_bg_continuous_fetch_interval_not_too_aggressive():
             break
     else:
         raise AssertionError("_bg_continuous_fetch() not found")
+
+
+def test_imsg_fetch_unread_skips_already_replied_threads():
+    """Bug: threads where the user already replied directly in iMessage
+    still appeared in ibx0 for review. The user saw their own replies
+    in the conversation preview but was asked to review/respond again.
+    Cause: fetch_unread_threads only looked at inbound messages (is_from_me=0)
+    to determine latest_date. It didn't check if the user had sent a reply
+    after the last inbound message.
+    Fix: query also fetches latest_sent_date (is_from_me=1). If the user's
+    latest outgoing message is newer than the latest inbound, skip the thread.
+    """
+    source = open("imsg.py").read()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_unread_threads":
+            body_src = ast.get_source_segment(source, node)
+
+            # SQL must fetch latest sent date alongside latest inbound date
+            assert "latest_sent_date" in body_src, (
+                "fetch_unread_threads must query latest_sent_date (is_from_me=1) "
+                "to detect threads the user already replied to"
+            )
+
+            # Must compare sent vs received timestamps to skip replied threads
+            assert "latest_sent_date" in body_src and "latest_date" in body_src, (
+                "fetch_unread_threads must compare latest_sent_date > latest_date "
+                "to skip threads where user already responded"
+            )
+
+            # SQL must not restrict WHERE to only is_from_me=0
+            # (needs both inbound and outbound to compare)
+            assert "WHERE m.is_from_me = 0" not in body_src, (
+                "fetch_unread_threads SQL must not filter to only is_from_me=0 — "
+                "it needs outbound messages to detect user replies"
+            )
+            break
+    else:
+        raise AssertionError("fetch_unread_threads() not found in imsg.py")

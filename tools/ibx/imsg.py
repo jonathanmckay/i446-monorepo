@@ -192,6 +192,8 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
 
     Uses a time window rather than is_read so messages read elsewhere (phone, Mac) still appear.
     processed.json is the sole source of truth for what ibx has already handled.
+    Threads where the user's latest reply is newer than the latest inbound message are
+    skipped — the user already responded directly in iMessage.
     """
     import time
     cutoff_apple_ts = int((time.time() - APPLE_EPOCH_OFFSET - days * 86400) * 1e9)
@@ -202,14 +204,15 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
             c.guid,
             c.chat_identifier,
             c.display_name,
-            COUNT(DISTINCT m.ROWID) as unread_count,
-            MAX(m.date) as latest_date
+            COUNT(DISTINCT CASE WHEN m.is_from_me = 0 THEN m.ROWID END) as unread_count,
+            MAX(CASE WHEN m.is_from_me = 0 THEN m.date END) as latest_date,
+            MAX(CASE WHEN m.is_from_me = 1 THEN m.date END) as latest_sent_date
         FROM chat c
         JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
         JOIN message m ON cmj.message_id = m.ROWID
-        WHERE m.is_from_me = 0
-          AND m.date >= ?
+        WHERE m.date >= ?
         GROUP BY c.ROWID
+        HAVING latest_date IS NOT NULL
         ORDER BY latest_date DESC
     """, (cutoff_apple_ts,)).fetchall()
 
@@ -218,6 +221,9 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
         last_ts = processed.get(row["chat_identifier"], -1)
         if row["latest_date"] <= last_ts:
             continue  # no new messages since last processed
+        # Skip if user already replied after the latest inbound message
+        if row["latest_sent_date"] and row["latest_sent_date"] > row["latest_date"]:
+            continue
         threads.append(dict(row))
     return threads
 
