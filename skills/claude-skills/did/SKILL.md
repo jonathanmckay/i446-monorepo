@@ -19,15 +19,28 @@ When you see hook output containing "Next up:" and "Pick [1-N]:", do this:
 3. **After the pick** (or if no hook output), launch the background agent for the /did pipeline.
 4. **Background** (Agent with `run_in_background: true`): Run Steps -2 through 6b (whichever path applies), then refresh cache + update completed-today. Report results when done.
 
+## No-args Mode
+
+When `/did` is called with **no arguments**:
+
+1. **Read Toggl cache** at `~/.claude/skills/tg/cache.json`. If no timer running, output `No timer running.` and exit.
+2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`).
+3. **Use the timer description as the /did input.** Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 → 6) as if the user had typed `/did <description>`.
+4. **Surface next tasks.** After launching the /did background agent, read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1–9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
+
+This lets the user finish a task and immediately start the next one in a single flow: `/did` → stop timer → mark done → pick next → start timer.
+
 ## Parsing (Steps -2 to 0.5)
 
 **Date:** Last token `yesterday` or `M/D` → strip and set `targetDate`. Default: today (M/D format).
 
 **Split:** `,` or `;` → separate items, process each independently.
 
-**Aliases:** `hcmc`→`night hcmc`, `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`
+**Aliases:** `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`
 
 **Cumulative columns:** `问学` — add to existing value instead of overwriting.
+
+**Cumulative 1n+ habits:** `一起饭` — routes to Step 1n but adds +30 per occurrence (not the row 3 value). Uses the cumulative variant of the 1n+ write template.
 
 **@project override:** `@code` token → set `projectOverride`, strip from item.
 
@@ -35,12 +48,14 @@ When you see hook output containing "Next up:" and "Pick [1-N]:", do this:
 
 ## Routing (Step 0)
 
-1. **0₦ match** (exact column header in row 1) → today: Steps 1–4. Past date: Step 6b.
-2. **1n+ match** (column header, case-insensitive) → Step 1n.
+**IMPORTANT:** Always complete Steps 0.1–0.3 in order before falling through to Step 6. Do NOT short-circuit to Step 6 just because the input starts with a number. Many 1n+ headers start with `1` (e.g. `1 xk88`, `1 i9`, `1 m5x2`). Match the **full input string** against headers first.
+
+1. **0₦ match** (full input = exact column header in 0n row 1, case-insensitive) → today: Steps 1–4. Past date: Step 6b.
+2. **1n+ match** (full input = column header in 1n+ row 1, case-insensitive) → Step 1n.
 3. **Todoist match** (word overlap ≥0.6 across ALL pages, paginate with `next_cursor`) → Step 5.
 4. **No match** → Step 6 (variable task).
 
-Word overlap: tokenize both sides (lowercase, strip `[N]`/stopwords), ratio = query words found in task / total query words. ≥0.6 matches. Tie: highest ratio. 0.4 only if exactly one task.
+Word overlap: tokenize both sides (lowercase, strip `[N]`/`(N)`/stopwords, **strip apostrophes and punctuation** so `mother's`→`mothers`, `don't`→`dont`), ratio = query words found in task / total query words. ≥0.6 matches. Tie: highest ratio. 0.4 only if exactly one task.
 
 ## Step 1–4: 0₦ Habit Flow
 
@@ -52,7 +67,7 @@ Word overlap: tokenize both sides (lowercase, strip `[N]`/stopwords), ratio = qu
 
 **2c. Verify:** Check `verify=` in AppleScript return. Flag `⚠ checksum mismatch` if wrong.
 
-**3. Close Todoist:** Search `0neon`-labeled tasks for content match (case-insensitive substring). **Dash-normalization:** strip ` - ` from both sides before matching. Close if found.
+**3. Close Todoist:** Search `0neon`-labeled tasks using **word overlap matching** (same algorithm as Step 0: tokenize both sides, ratio ≥ 0.6). Also search `夜neon`-labeled tasks (evening habits like `hcmc`). **Dash-normalization:** strip ` - ` from both sides before matching. **Alias expansion:** if the habit was resolved via alias (e.g. `math` → `问学`), search for BOTH the original input AND the alias. Close if found.
 
 **3b. Validation gate:** BLOCKING — confirm Step 3 was attempted. If not → go back. This is the most common failure mode.
 
@@ -64,6 +79,13 @@ Task found in Step 0. Extract `[N]` points. Map labels to 0分 column:
 - `i9`/`i447`/`f693`/`f694` → AA, `m5x2` → AB, `g245`/`infra`/`cc` → AC, `hcmc` → AD, `xk87`/`xk88` → AG, `s897` → AH, `hcb`/`hcbp` → AF
 
 Append `+N` to 0分 using "Append to 0分" template. Close the Todoist task.
+
+**5b. Build order check-off:** If the closed task has label `关键路径` (or `#0g`/`#-1g`), flip the matching line in `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md` from `- [ ]` to `- [x]`:
+
+- Search `## 0₲` section (before `### 以后的目标`), 2-space indent: `  - [ ] <content>` → `  - [x] <content>`
+- Then search `## -1₲` section within any 地支 block (寅/卯/辰/…), 4-space indent: `    - [ ] <content>` → `    - [x] <content>`
+
+Match the line whose bullet content equals the Todoist task content (preserve `(N)`, `[N]`, `{N}` annotations — they're written identically by `/0g` and `/-1g`). If no exact match, fall back to substring match on the bare goal text. If still no match, skip silently — don't fail the /did flow.
 
 **5.5.** If `hasTimeRange`, create Toggl entry via `toggl_create_entry`.
 
@@ -80,7 +102,8 @@ No 0₦ or Todoist match. Number = **points** not minutes.
 Matches 1n+ sheet header. Do NOT write to 0₦.
 
 1. Find column + week row (M.W = month.ceil(day/7)). Read points from row 3. Write points to cell. Use "1n+ write" template.
-2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`. Use "1n+ → 0分" template.
+   - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template — read old value, add increment, write sum). Fixed increments: `一起饭` = 30.
+2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`. Use "1n+ → 0分" template. For 一起饭 → 0分 column AG (xk).
 3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1–2).
 
 ## Step 6b: Posthoc Habit
@@ -89,11 +112,11 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
 ## Cache & Tracking
 
-**Task queue:** `~/vault/z_ibx/task-queue.json` — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键径路).
+**Task queue:** `~/vault/z_ibx/task-queue.json` — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键路径).
 
 **Completed-today:** `~/vault/z_ibx/completed-today.json` — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day.
 
-**Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键径路 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
+**Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键路径 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
 
 **Next-task script:** `~/i446-monorepo/tools/did/next-task.py <habit>` — reads cache + completed-today, filters to today/overdue, excludes completed, shows top 5. Hook runs this automatically.
 
@@ -112,4 +135,9 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did ibx - s897` — Todoist is "ibx s897 [6]" | Step 3 dash-norm matches | Must NOT skip Todoist close |
 | `/did ibx i9` — Todoist is "ibx - i9 [20]" | Step 3 dash-norm matches | Must NOT skip Todoist close |
 | `/did 30m session with lx` — Todoist has "30m lx session [30]" | Step 0 word-overlap → Step 5 | Must NOT create posthoc duplicate |
+| `/did stats m5x2` — Todoist is "m5x2 stats (4) [8]" | Step 3 word-overlap matches despite word order | Must NOT skip Todoist close |
+| `/did math` — alias→问学, Todoist is "math with kids (60) [70]" | Step 3 searches original "math" too, word-overlap matches | Must NOT skip Todoist close |
 | `/did hiit` then `/did 0l` | completed-today filters hiit from suggestions | Must NOT re-suggest completed recurring tasks |
+| `/did 1 xk88` — 1n+ header is "1 xk88" | Step 0.2 matches 1n+ header → Step 1n, closes 1neon Todoist task | Must NOT treat leading "1" as points and route to Step 6 |
+| `/did 1 i9` — 1n+ header is "1 i9" | Step 0.2 matches 1n+ header → Step 1n | Must NOT route to Step 6 as "1 point to i9" |
+| `/did PTC` — Todoist match "PTC feedback [180]" with label xk87 | Step 5: extract [180] from task, write +180 to 0分 AG | Must NOT use 0 pts just because user input had no [N] — always extract from the matched Todoist task |

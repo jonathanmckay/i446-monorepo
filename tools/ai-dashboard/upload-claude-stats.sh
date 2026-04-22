@@ -48,7 +48,15 @@ fi
 
 # 5. Copy and push stats
 mkdir -p "$REPO_DIR/$USER_ID"
-cp "$STATS_FILE" "$REPO_DIR/$USER_ID/stats-cache.json"
+
+# Merge non-Claude provider stats (Copilot CLI, etc.) from llm-sessions.db
+# into the dashboard cache. Falls back to a plain copy if the merger fails.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if ! python3 "$SCRIPT_DIR/merge-llm-sessions.py" \
+      --src "$STATS_FILE" \
+      --out "$REPO_DIR/$USER_ID/stats-cache.json"; then
+  cp "$STATS_FILE" "$REPO_DIR/$USER_ID/stats-cache.json"
+fi
 
 cd "$REPO_DIR"
 git add "$USER_ID/stats-cache.json"

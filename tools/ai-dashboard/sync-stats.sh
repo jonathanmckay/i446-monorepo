@@ -13,7 +13,16 @@ STATS_FILE="$HOME/.claude/stats-cache.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$REPO_DIR/$USER_ID"
-cp "$STATS_FILE" "$REPO_DIR/$USER_ID/stats-cache.json"
+
+# Merge non-Claude provider stats (Copilot CLI, etc.) from llm-sessions.db
+# into the dashboard's stats-cache.json. Falls back to a plain copy if the
+# merger fails for any reason.
+if ! python3 "$SCRIPT_DIR/merge-llm-sessions.py" \
+      --src "$STATS_FILE" \
+      --out "$REPO_DIR/$USER_ID/stats-cache.json" \
+      --device "$(hostname -s | tr '[:upper:]' '[:lower:]')" 2>/dev/null; then
+  cp "$STATS_FILE" "$REPO_DIR/$USER_ID/stats-cache.json"
+fi
 
 # Compute MCP/skill/latency stats from local JSONL session files
 python3 "$SCRIPT_DIR/compute-session-stats.py" \

@@ -10,10 +10,16 @@ import base64
 import json
 import os
 import subprocess
+import threading
+import time
 import urllib.request
 from collections import defaultdict
-from datetime import datetime, timedelta, date
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+PACIFIC = ZoneInfo("America/Los_Angeles")
 
 import openpyxl
 from flask import Flask, render_template_string, jsonify
@@ -88,7 +94,7 @@ PROJECT_COLORS = {
     "xk87":  "#fd6c1d",  # Tangerine Dream
     "xk88":  "#e65100",  # Molten
     "epcn":  "#00bfa5",  # Miami Vice
-    "家":    "#fd6c1d",  # same as xk87
+    "家":    "#00bfa5",  # Miami Vice (teal)
     "睡觉":  "#303030",  # Shadow
     "no project": "#424242",
 }
@@ -115,36 +121,84 @@ GA4_SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
 # ── Data loaders ───────────────────────────────────────────────────────────────
 
 def load_points_data():
-    """Read 0分 sheet, return {date_str: {label: value}} for last DAYS days."""
+    """Read 0分 sheet, return {date_str: {label: value}} for last DAYS days.
+
+    Uses xlwings to read from the running Excel instance so cross-sheet
+    formulas are fully evaluated (openpyxl data_only reads stale caches).
+    Falls back to openpyxl if xlwings/Excel is unavailable.
+    """
     today = date.today()
     cutoff = today - timedelta(days=DAYS)
 
-    wb = openpyxl.load_workbook(str(NEON_PATH), data_only=True, read_only=True)
-    ws = wb["0分"]
+    # Strategy: read from JSON cache first (fast, reliable from launchd).
+    # Fall back to xlwings if no cache (works interactively / from SSH).
+    # Cache is refreshed by refresh-points-cache.sh cron or by xlwings on hit.
+    _pts_cache = Path(__file__).parent / ".points-cache.json"
+    if _pts_cache.exists():
+        try:
+            cached = json.loads(_pts_cache.read_text())
+            result = {d: v for d, v in cached.items()
+                      if cutoff < date.fromisoformat(d) <= today}
+            if result:
+                return result
+        except Exception:
+            pass
 
-    result = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        b = row[1]  # column B (index 1)
-        if b is None:
-            continue
-        if isinstance(b, datetime):
-            d = b.date()
-        else:
-            continue
-        if d <= cutoff or d > today:
-            continue
+    # Fallback: xlwings (works when run interactively, may timeout from launchd)
+    try:
+        import xlwings as xw
+        wb = xw.Book(str(NEON_PATH))
+        ws = wb.sheets["0分"]
+        last_row = ws.range("B2").end("down").row
+        min_idx = min(POINTS_COLS)
+        max_idx = max(POINTS_COLS)
+        def _col_letter(idx):
+            return chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)
+        first_col = _col_letter(min_idx)
+        last_col = _col_letter(max_idx)
+        b_vals = ws.range(f"B3:B{last_row}").value
+        if not isinstance(b_vals, list):
+            b_vals = [b_vals]
+        block = ws.range(f"{first_col}3:{last_col}{last_row}").value
+        if not isinstance(block, list):
+            block = [[block]]
+        elif block and not isinstance(block[0], list):
+            if min_idx == max_idx:
+                block = [[v] for v in block]
+            else:
+                block = [block]
 
-        day_str = d.isoformat()
-        day_data = {}
-        for col_idx, meta in POINTS_COLS.items():
-            val = row[col_idx - 1]  # 0-based
-            if val is not None and isinstance(val, (int, float)) and val > 0:
-                day_data[meta["label"]] = int(round(float(val)))
-        if day_data:
-            result[day_str] = day_data
+        result = {}
+        for i, b in enumerate(b_vals):
+            if b is None:
+                continue
+            if isinstance(b, datetime):
+                d = b.date()
+            elif isinstance(b, date):
+                d = b
+            else:
+                continue
+            if d <= cutoff or d > today:
+                continue
+            day_str = d.isoformat()
+            day_data = {}
+            row_vals = block[i] if i < len(block) else []
+            for col_idx, meta in POINTS_COLS.items():
+                offset = col_idx - min_idx
+                val = row_vals[offset] if offset < len(row_vals) else None
+                if val is not None and isinstance(val, (int, float)) and val > 0:
+                    day_data[meta["label"]] = int(round(float(val)))
+            if day_data:
+                result[day_str] = day_data
+        if result:
+            # Write cache for launchd fallback
+            _pts_cache = Path(__file__).parent / ".points-cache.json"
+            _pts_cache.write_text(json.dumps(result))
+        return result
+    except Exception:
+        pass
 
-    wb.close()
-    return result
+    return {}
 
 
 def load_toggl_data():
@@ -200,54 +254,49 @@ def load_tasks_data():
       @posthoc → retroactive log (purple)
       @1neon  → 1n weekly tasks (green)
       other   → regular tasks (blue)
+
+    Uses the v1/tasks/completed endpoint (NOT by_completion_date, which misses
+    recurring task completions). Fetches day-by-day to stay under the 200-item
+    cap per request (no pagination on this endpoint).
     """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
     today = date.today()
-    since = (today - timedelta(days=DAYS)).strftime("%Y-%m-%dT00:00:00Z")
 
     neon = defaultdict(int)
     posthoc = defaultdict(int)
     one_n = defaultdict(int)
     other = defaultdict(int)
-    cursor = None
 
-    while True:
-        url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&limit=200"
-        if cursor:
-            url += f"&cursor={cursor}"
+    # Fetch day-by-day to avoid the 200-item cap (recurring habits can exceed
+    # 200 when fetching a wide range). Each day is well under 200.
+    for days_ago in range(DAYS, -1, -1):
+        day = today - timedelta(days=days_ago)
+        # Pacific midnight → UTC ISO Z so each bucket covers a Pacific calendar
+        # day. Otherwise evening completions leak into the next UTC day's bucket.
+        since_dt = datetime.combine(day, datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
+        until_dt = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
+        since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=200"
         req = urllib.request.Request(url)
         req.add_header("Authorization", f"Bearer {token}")
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
         except Exception:
-            break
+            continue
 
+        day_str = day.isoformat()
         for item in data.get("items", []):
-            completed_at = item.get("completed_at", "")
-            if not completed_at:
-                continue
-            try:
-                ts = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
-                d = ts.astimezone(LOCAL_TZ).date()
-                if d <= (today - timedelta(days=DAYS)) or d > today:
-                    continue
-                day_str = d.isoformat()
-                content = item.get("content", "")
-                if "@0neon" in content:
-                    neon[day_str] += 1
-                elif "@posthoc" in content:
-                    posthoc[day_str] += 1
-                elif "@1neon" in content:
-                    one_n[day_str] += 1
-                else:
-                    other[day_str] += 1
-            except (ValueError, TypeError):
-                continue
-
-        cursor = data.get("next_cursor")
-        if not cursor:
-            break
+            content = item.get("content", "")
+            if "@0neon" in content:
+                neon[day_str] += 1
+            elif "@posthoc" in content:
+                posthoc[day_str] += 1
+            elif "@1neon" in content:
+                one_n[day_str] += 1
+            else:
+                other[day_str] += 1
 
     all_days = set(neon) | set(posthoc) | set(one_n) | set(other)
     return {d: {
@@ -456,15 +505,60 @@ def favicon():
 
 @app.route("/api/data")
 def api_data():
+    cached = _api_data_cached()
+    return jsonify(cached)
+
+
+# 60s TTL cache for /api/data — avoids re-fetching everything on refresh-spam.
+_API_DATA_CACHE: dict = {"payload": None, "ts": 0.0}
+_API_DATA_LOCK = threading.Lock()
+_API_DATA_TTL = 60.0
+
+
+def _api_data_cached():
+    now = time.time()
+    with _API_DATA_LOCK:
+        if _API_DATA_CACHE["payload"] is not None and (now - _API_DATA_CACHE["ts"]) < _API_DATA_TTL:
+            return _API_DATA_CACHE["payload"]
+    payload = _build_api_data()
+    with _API_DATA_LOCK:
+        _API_DATA_CACHE["payload"] = payload
+        _API_DATA_CACHE["ts"] = time.time()
+    return payload
+
+
+def _build_api_data():
     dates = last_n_days()
 
-    points_raw = load_points_data()
-    toggl_raw = load_toggl_data()
-    turns_raw = load_turns_data()
-    tasks_raw = load_tasks_data()
-    email_raw = load_email_data()
-    imsg_stats = load_imessage_stats()
-    ga4_raw = load_ga4_data()
+    # xlwings uses AppleScript and cannot run in a background thread.
+    # Run it in the main thread first, then parallelize the rest.
+    try:
+        points_raw = load_points_data()
+    except Exception:
+        points_raw = {}
+
+    loaders = {
+        "toggl": load_toggl_data,
+        "turns": load_turns_data,
+        "tasks": load_tasks_data,
+        "email": load_email_data,
+        "imsg": load_imessage_stats,
+        "ga4": load_ga4_data,
+    }
+    raw = {}
+    with ThreadPoolExecutor(max_workers=len(loaders)) as ex:
+        futures = {name: ex.submit(fn) for name, fn in loaders.items()}
+        for name, fut in futures.items():
+            try:
+                raw[name] = fut.result()
+            except Exception:
+                raw[name] = {} if name != "imsg" else None
+    toggl_raw = raw["toggl"]
+    turns_raw = raw["turns"]
+    tasks_raw = raw["tasks"]
+    email_raw = raw["email"]
+    imsg_stats = raw["imsg"]
+    ga4_raw = raw["ga4"]
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -570,10 +664,13 @@ def api_data():
         acct = entry.get("account", "unknown")
         d = entry.get("date", "")
         if d:
+            count = entry.get("count", 0)
             email_by_account[acct][d] = {
                 "avg_hours": entry.get("avg_hours"),
-                "count": entry.get("count", 0),
-                "sent_count": entry.get("sent_count", entry.get("count", 0)),
+                "avg_hours_daytime": entry.get("avg_hours_daytime"),
+                "count": count,
+                "count_daytime": entry.get("count_daytime", count),
+                "sent_count": entry.get("sent_count", count),
             }
     # Add iMessage daily stats from response DB
     import sqlite3 as _sq3
@@ -582,14 +679,18 @@ def api_data():
         try:
             _conn = _sq3.connect(f"file:{_imsg_db}?mode=ro", uri=True)
             _rows = _conn.execute(
-                "SELECT day, avg_response_hours, response_count, sent_count FROM daily_stats"
+                "SELECT day, median_response_hours, response_count, sent_count, "
+                "median_response_hours_daytime, response_count_daytime "
+                "FROM daily_stats"
             ).fetchall()
             _conn.close()
-            for day, avg_h, resp_count, sent in _rows:
+            for day, median_h, resp_count, sent, median_h_dt, resp_count_dt in _rows:
                 if day in set(dates):
                     email_by_account["imessage"][day] = {
-                        "avg_hours": avg_h,
+                        "avg_hours": median_h,
+                        "avg_hours_daytime": median_h_dt,
                         "count": resp_count or 0,
+                        "count_daytime": resp_count_dt or 0,
                         "sent_count": sent,
                     }
         except Exception:
@@ -606,28 +707,47 @@ def api_data():
     }
     # Compute blended daily avg response time (minutes), weighted by reply pair count
     blended_response = []
+    blended_daytime = []
     for d in dates:
         total_hours = 0
         total_count = 0
+        total_hours_dt = 0
+        total_count_dt = 0
         for acct, day_map in email_by_account.items():
             entry = day_map.get(d, {})
             h = entry.get("avg_hours")
             c = entry.get("count", 0)
+            h_dt = entry.get("avg_hours_daytime")
+            c_dt = entry.get("count_daytime", 0)
             if h is not None and c > 0:
                 total_hours += h * c
                 total_count += c
-        if total_count > 0:
-            blended_response.append(round(total_hours / total_count * 60, 1))
-        else:
-            blended_response.append(None)
+            if h_dt is not None and c_dt > 0:
+                total_hours_dt += h_dt * c_dt
+                total_count_dt += c_dt
+        blended_response.append(round(total_hours / total_count * 60, 1) if total_count > 0 else None)
+        blended_daytime.append(round(total_hours_dt / total_count_dt * 60, 1) if total_count_dt > 0 else None)
 
     email_datasets = []
-    # Purple blended line
+    # Purple blended line — overall (no exclusions)
     email_datasets.append({
         "type": "line",
         "label": "avg response",
         "data": blended_response,
         "borderColor": "#aa00ff",
+        "backgroundColor": "transparent",
+        "borderWidth": 2,
+        "pointRadius": 3,
+        "tension": 0,
+        "spanGaps": True,
+        "yAxisID": "y",
+    })
+    # Pink line — daytime only (excludes inbound 9pm–6am)
+    email_datasets.append({
+        "type": "line",
+        "label": "avg response - daytime",
+        "data": blended_daytime,
+        "borderColor": "#ff4081",
         "backgroundColor": "transparent",
         "borderWidth": 2,
         "pointRadius": 3,
@@ -706,7 +826,7 @@ def api_data():
     ga4_daily = ga4_raw.get("daily", {})
     ga4_views = [ga4_daily.get(d, 0) for d in dates]
 
-    return jsonify({
+    return {
         "dates": [d[5:] for d in dates],  # MM-DD for display
         "points": {"datasets": points_datasets},
         "time": {"datasets": time_datasets},
@@ -727,7 +847,7 @@ def api_data():
             "total_tasks": sum(tasks_values),
             "total_views": sum(ga4_views),
         }
-    })
+    }
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
@@ -932,6 +1052,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const emEl = document.getElementById('emailSummary');
   const emLegend = [
     ['avg response', '#aa00ff', 'line'],
+    ['avg response - daytime', '#ff4081', 'line'],
     ['outlook', '#00b8d4', 'bar'],
     ['teams', '#1249b4', 'bar'],
     ['m5x2 gmail', '#d50032', 'bar'],
@@ -1105,4 +1226,4 @@ def more():
 
 
 if __name__ == "__main__":
-    app.run(port=5558, debug=False)
+    app.run(host="0.0.0.0", port=5558, debug=False)

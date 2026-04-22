@@ -156,7 +156,8 @@ def compute_response_times(service, account_name, days=DAYS):
             if delta_hours > 72:
                 continue
 
-            response_times.append({"date": day_str, "hours": round(delta_hours, 2)})
+            recv_hour = datetime.fromtimestamp(received_ts / 1000, tz=LOCAL_TZ).hour
+            response_times.append({"date": day_str, "hours": round(delta_hours, 2), "recv_hour": recv_hour})
 
     return response_times, dict(sent_by_day)
 
@@ -169,10 +170,18 @@ def build_stats(all_data, sent_counts=None):
         daily: list of {"date", "account", "avg_hours", "count", "sent_count"}
         summary: stats over work account
     """
+    # Daytime = inbound message received between 6am and 9pm local
+    DAY_START, DAY_END = 6, 21
+
     sent_counts = sent_counts or {}
     by_day_acct = defaultdict(list)
+    by_day_acct_daytime = defaultdict(list)
     for rec in all_data:
-        by_day_acct[(rec["date"], rec["account"])].append(rec["hours"])
+        key = (rec["date"], rec["account"])
+        by_day_acct[key].append(rec["hours"])
+        rh = rec.get("recv_hour")
+        if rh is not None and DAY_START <= rh < DAY_END:
+            by_day_acct_daytime[key].append(rec["hours"])
 
     # Collect all (date, account) keys that have sent_counts but no reply data
     all_keys = set(by_day_acct.keys())
@@ -180,13 +189,27 @@ def build_stats(all_data, sent_counts=None):
         for day, count in day_map.items():
             all_keys.add((day, acct))
 
+    # Always emit a row for *today* (local) for every account that has any
+    # activity in the last 7 days. This prevents a Graph API timeout from
+    # silently dropping today's bar from the dashboard — the user must see "0"
+    # rather than "missing", because "missing" looks identical to "no outage".
+    today_iso = date.today().isoformat()
+    recent_cutoff = (date.today() - timedelta(days=7))
+    recent_accounts = {acct for (d, acct) in by_day_acct.keys()
+                       if date.fromisoformat(d) >= recent_cutoff}
+    recent_accounts |= set(sent_counts.keys())
+    for acct in recent_accounts:
+        all_keys.add((today_iso, acct))
+
     daily = []
     for day, acct in sorted(all_keys):
         hours_list = by_day_acct.get((day, acct), [])
+        daytime_list = by_day_acct_daytime.get((day, acct), [])
         reply_count = len(hours_list)
         avg = round(sum(hours_list) / reply_count, 2) if reply_count else None
+        avg_daytime = round(sum(daytime_list) / len(daytime_list), 2) if daytime_list else None
         sent = sent_counts.get(acct, {}).get(day, reply_count)
-        daily.append({"date": day, "account": acct, "avg_hours": avg, "count": reply_count, "sent_count": sent})
+        daily.append({"date": day, "account": acct, "avg_hours": avg, "avg_hours_daytime": avg_daytime, "count": reply_count, "count_daytime": len(daytime_list), "sent_count": sent})
 
     # Summary over work account, last 7d and 28d
     today = date.today()
@@ -295,9 +318,11 @@ def compute_imessage_response_times(days=DAYS):
                 if not msgs_list[j]["is_from_me"]:
                     delta_hours = (msg["unix_ts"] - msgs_list[j]["unix_ts"]) / 3600
                     if 0 < delta_hours <= 72:
+                        recv_hour = datetime.fromtimestamp(msgs_list[j]["unix_ts"], tz=LOCAL_TZ).hour
                         response_times.append({
                             "date": msg["day_str"],
                             "hours": round(delta_hours, 2),
+                            "recv_hour": recv_hour,
                         })
                     break
 
@@ -386,9 +411,11 @@ def compute_slack_response_times(days=DAYS):
                             recv_ts = float(msgs[j]["ts"])
                             delta_hours = (sent_ts - recv_ts) / 3600
                             if 0 < delta_hours <= 72:
+                                recv_hour = datetime.fromtimestamp(recv_ts, tz=LOCAL_TZ).hour
                                 response_times.append({
                                     "date": sent_dt.date().isoformat(),
                                     "hours": round(delta_hours, 2),
+                                    "recv_hour": recv_hour,
                                 })
                             break
 
@@ -397,6 +424,117 @@ def compute_slack_response_times(days=DAYS):
             print(f"  WARN: Slack {workspace} failed: {e}")
 
     return response_times, dict(sent_by_day)
+
+
+def parse_teams_replies(raw, days=DAYS, now=None):
+    """Parse a Graph Teams search result into reply events.
+
+    Reply detection: within each chat, sort messages chronologically; whenever
+    one of MY messages is preceded by a message from someone else within ≤72h,
+    emit a reply event (hours = my_sent - their_sent).
+
+    This catches replies sent from the Teams app directly (which the local
+    response_times.db never sees, because ibx only records actions taken
+    through ibx itself).
+
+    Returns list of {"date", "hours", "recv_hour"} dicts (LOCAL_TZ days).
+    """
+    if not raw:
+        return []
+
+    now = now or datetime.now(timezone.utc)
+    today = now.astimezone(LOCAL_TZ).date()
+    cutoff = today - timedelta(days=days)
+
+    try:
+        import teams_agency
+        my_addresses = teams_agency.MY_ADDRESSES
+        outer = json.loads(raw)
+        inner = json.loads(outer.get("rawResponse", "{}"))
+        hits_containers = inner.get("value", [{}])[0].get("hitsContainers", [{}])
+        hits = hits_containers[0].get("hits", []) if hits_containers else []
+    except Exception:
+        return []
+
+    # Group messages by chatId
+    by_chat = defaultdict(list)
+    for hit in hits:
+        resource = hit.get("resource", {})
+        chat_id = resource.get("chatId", "")
+        if not chat_id:
+            continue
+        # Skip channel posts — only DMs / group chats count for response time
+        channel_id = (resource.get("channelIdentity") or {}).get("channelId", "")
+        if channel_id and "@thread.tacv2" in channel_id:
+            continue
+        sender_email = (resource.get("from", {}).get("emailAddress", {}).get("address") or "").lower()
+        created = resource.get("createdDateTime", "")
+        if not created:
+            continue
+        try:
+            ts = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        is_mine = sender_email in my_addresses
+        by_chat[chat_id].append((ts, is_mine))
+
+    replies = []
+    for chat_id, msgs in by_chat.items():
+        msgs.sort(key=lambda m: m[0])
+        # Find last "their" message before each "mine" message
+        last_their_ts = None
+        for ts, is_mine in msgs:
+            if not is_mine:
+                last_their_ts = ts
+                continue
+            if last_their_ts is None:
+                # Mine without a preceding inbound — not a reply
+                continue
+            delta = (ts - last_their_ts).total_seconds() / 3600.0
+            # Cap at 72h to exclude abandoned threads (matches build_stats)
+            if delta <= 0 or delta > 72:
+                last_their_ts = None
+                continue
+            local_sent = ts.astimezone(LOCAL_TZ)
+            local_recv = last_their_ts.astimezone(LOCAL_TZ)
+            day = local_sent.date()
+            if day <= cutoff or day > today:
+                last_their_ts = None
+                continue
+            replies.append({
+                "date": day.isoformat(),
+                "hours": round(delta, 2),
+                "recv_hour": local_recv.hour,
+            })
+            # Reset so we don't double-count: a single inbound triggers at most
+            # one reply event (the first responsive message from me).
+            last_their_ts = None
+
+    return replies
+
+
+def compute_teams_replies_via_graph(days=DAYS):
+    """Detect Teams replies from the last N days via a single Graph search.
+
+    Independent of the local response_times.db — captures replies sent from
+    the Teams app directly. Uses the same shrink-on-timeout pattern as
+    `compute_teams_sent_counts`.
+    """
+    try:
+        import teams_agency
+    except Exception:
+        return []
+
+    requested = max(1, min(days, 2))
+    for recent_days in (requested, 1):
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=recent_days)).strftime("%Y-%m-%d")
+        raw = teams_agency._teams_call("SearchTeamMessagesQueryParameters", {
+            "queryString": f"sent>={cutoff}",
+            "size": 200,
+        }, timeout=60)
+        if raw is not None:
+            return parse_teams_replies(raw, days=recent_days)
+    return []
 
 
 def compute_teams_response_times(days=DAYS):
@@ -426,8 +564,9 @@ def compute_teams_response_times(days=DAYS):
     response_times = []
     for action_at, hours in rows:
         try:
-            day_str = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ).date().isoformat()
-            response_times.append({"date": day_str, "hours": round(hours, 2)})
+            sent_dt = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            recv_dt = sent_dt - timedelta(hours=hours)
+            response_times.append({"date": sent_dt.date().isoformat(), "hours": round(hours, 2), "recv_hour": recv_dt.hour})
         except Exception:
             continue
 
@@ -479,21 +618,33 @@ def parse_teams_sent_counts(raw, days=DAYS, now=None):
 
 
 def compute_teams_sent_counts(days=DAYS):
-    """Count recent actual sent Teams messages by local day via Graph search."""
+    """Count recent actual sent Teams messages by local day via Graph search.
+
+    Graph search for Teams is flaky and the full 30-day window times out in
+    practice. We progressively shrink the window (2d → 1d → today only) so that
+    at minimum *today's* count survives a partial outage. If everything fails,
+    return an empty dict — `build_stats` will still emit a zero-row for today.
+    """
     try:
         import teams_agency
     except Exception:
         return {}
 
-    # Full 30-day Teams message search times out in practice. Patch recent counts
-    # (today/yesterday) from Graph and leave older days on the response DB fallback.
-    recent_days = min(days, 2)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=recent_days)).strftime("%Y-%m-%d")
-    raw = teams_agency._teams_call("SearchTeamMessagesQueryParameters", {
-        "queryString": f"sent>={cutoff}",
-        "size": 100,
-    }, timeout=60)
-    return parse_teams_sent_counts(raw, days=recent_days)
+    # Try progressively smaller windows on timeout so today's count is most
+    # likely to come back even when the broader query is failing.
+    requested = max(1, min(days, 2))
+    for recent_days in (requested, 1):
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=recent_days)).strftime("%Y-%m-%d")
+        raw = teams_agency._teams_call("SearchTeamMessagesQueryParameters", {
+            "queryString": f"sent>={cutoff}",
+            "size": 100,
+        }, timeout=60)
+        counts = parse_teams_sent_counts(raw, days=recent_days)
+        if counts or raw is not None:
+            # Either we got data, or the call succeeded with zero hits.
+            return counts
+        # raw is None → call failed; try a shorter window.
+    return {}
 
 
 def compute_outlook_response_times(days=DAYS):
@@ -523,8 +674,9 @@ def compute_outlook_response_times(days=DAYS):
     response_times = []
     for action_at, hours in rows:
         try:
-            day_str = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ).date().isoformat()
-            response_times.append({"date": day_str, "hours": round(hours, 2)})
+            sent_dt = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            recv_dt = sent_dt - timedelta(hours=hours)
+            response_times.append({"date": sent_dt.date().isoformat(), "hours": round(hours, 2), "recv_hour": recv_dt.hour})
         except Exception:
             continue
 
@@ -624,14 +776,27 @@ def main():
     except Exception as e:
         print(f"  WARN: Slack failed: {e}")
 
-    # Teams response times (from ibx tracking DB)
+    # Teams response times (from ibx tracking DB + Graph-derived for recent days)
     print("Fetching Teams...")
     try:
         teams_times = compute_teams_response_times()
         for rec in teams_times:
             rec["account"] = "teams"
+        # Graph-derived replies catch messages sent from the Teams app directly
+        # (the local DB only sees actions taken through ibx). We trust Graph
+        # data for the recent window it covers and drop overlapping DB rows
+        # for those days to avoid double-counting.
+        graph_replies = compute_teams_replies_via_graph()
+        graph_days = {r["date"] for r in graph_replies}
+        if graph_days:
+            teams_times = [r for r in teams_times if r["date"] not in graph_days]
+        for rec in graph_replies:
+            rec["account"] = "teams"
+        teams_times.extend(graph_replies)
         all_data.extend(teams_times)
-        print(f"  → {len(teams_times)} reply events")
+        print(f"  → {len(teams_times)} reply events "
+              f"({len(graph_replies)} from Graph, "
+              f"covering {len(graph_days)} day(s))")
         teams_sent_counts = compute_teams_sent_counts()
         if teams_sent_counts:
             all_sent_counts["teams"] = teams_sent_counts

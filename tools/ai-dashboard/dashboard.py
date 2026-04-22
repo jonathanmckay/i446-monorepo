@@ -13,6 +13,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +23,19 @@ import requests
 
 app = Flask(__name__)
 
-STATS_CACHE = Path.home() / ".claude" / "stats-cache.json"
+_RAW_STATS_CACHE = Path.home() / ".claude" / "stats-cache.json"
+_MERGED_STATS_CACHE = Path.home() / "m5x2-ai-stats" / "jm" / "stats-cache.json"
+
+def _stats_cache_path():
+    """Prefer the merged cache (Claude + Copilot) if it exists and is no older than the raw one."""
+    if _MERGED_STATS_CACHE.exists():
+        if not _RAW_STATS_CACHE.exists():
+            return _MERGED_STATS_CACHE
+        if _MERGED_STATS_CACHE.stat().st_mtime >= _RAW_STATS_CACHE.stat().st_mtime - 60:
+            return _MERGED_STATS_CACHE
+    return _RAW_STATS_CACHE
+
+STATS_CACHE = _stats_cache_path()
 LLM_DB = Path.home() / "vault" / "i447" / "i446" / "llm-sessions.db"
 GITHUB_USER = "jonathanmckay"
 
@@ -39,6 +52,127 @@ PRICING = {
 }
 
 
+# ---------------------------------------------------------------------------
+# mtime-keyed in-process cache
+# ---------------------------------------------------------------------------
+# Most expensive hotspots in the `/` route (ingest_claude_sessions,
+# get_mcp_stats, get_skill_stats, get_latency_stats, get_greatest_hits,
+# _parse_jsonl_daily_stats, _load_hook_timing) read the same set of files on
+# every request and the data only changes when those files are written. We
+# build a fingerprint from each relevant file's (path, mtime_ns, size) tuple
+# and memoize results keyed by that fingerprint. A 1-hour TTL is a safety net
+# in case the fingerprint ever misses an update (e.g. clock skew on a network
+# fs). The cache is a plain dict — no threading primitives — because Flask's
+# dev server is single-threaded for this app.
+
+_CACHE_TTL_S = 3600  # safety-net TTL; primary invalidation is mtime-based
+_CACHE = {}  # fn_name -> (fingerprint, timestamp, value)
+
+# Directory fingerprint cache: repeatedly scanning 297 JSONL files' stats in
+# the same request is ~10 ms each; memoize within a small window.
+_DIR_FP_CACHE = {}  # dir_path -> (expiry_ts, fingerprint_tuple)
+_DIR_FP_WINDOW_S = 10.0
+
+
+def _dir_fingerprint(dir_path, pattern="*.jsonl"):
+    """Return a compact fingerprint of all files matching pattern under dir_path.
+
+    Uses (path, mtime_ns, size) per file; hashed to a single int so the key
+    stays tiny regardless of how many files are in the directory.
+    """
+    dir_path = Path(dir_path)
+    now = time.time()
+    cached = _DIR_FP_CACHE.get(str(dir_path))
+    if cached and cached[0] > now:
+        return cached[1]
+    if not dir_path.exists():
+        fp = 0
+    else:
+        parts = []
+        for p in dir_path.glob(pattern):
+            try:
+                st = p.stat()
+                parts.append((p.name, st.st_mtime_ns, st.st_size))
+            except OSError:
+                continue
+        parts.sort()
+        fp = hash(tuple(parts))
+    _DIR_FP_CACHE[str(dir_path)] = (now + _DIR_FP_WINDOW_S, fp)
+    return fp
+
+
+def _rglob_fingerprint(dir_path, pattern="*.jsonl"):
+    """Recursive version of _dir_fingerprint (for ingest_claude_sessions)."""
+    dir_path = Path(dir_path)
+    now = time.time()
+    key = f"{dir_path}::rglob::{pattern}"
+    cached = _DIR_FP_CACHE.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    if not dir_path.exists():
+        fp = 0
+    else:
+        parts = []
+        for p in dir_path.rglob(pattern):
+            try:
+                st = p.stat()
+                parts.append((str(p), st.st_mtime_ns, st.st_size))
+            except OSError:
+                continue
+        parts.sort()
+        fp = hash(tuple(parts))
+    _DIR_FP_CACHE[key] = (now + _DIR_FP_WINDOW_S, fp)
+    return fp
+
+
+def _path_fingerprint(path):
+    """Return (mtime_ns, size) for a single path, or (0, 0) if missing."""
+    p = Path(path)
+    try:
+        st = p.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (0, 0)
+
+
+def _cached(name, fingerprint_fn):
+    """Decorator: memoize fn's result keyed by fingerprint_fn(*args, **kwargs).
+
+    `name` must be unique per function+argument-shape. The cache is invalidated
+    when the fingerprint changes or after _CACHE_TTL_S seconds.
+    """
+    def decorator(fn):
+        def wrapper(*args, **kwargs):
+            try:
+                fp = fingerprint_fn(*args, **kwargs)
+            except Exception:
+                return fn(*args, **kwargs)
+            key = (name, args, tuple(sorted(kwargs.items())))
+            now = time.time()
+            hit = _CACHE.get(key)
+            if hit is not None:
+                cached_fp, ts, value = hit
+                if cached_fp == fp and (now - ts) < _CACHE_TTL_S:
+                    return value
+            value = fn(*args, **kwargs)
+            _CACHE[key] = (fp, now, value)
+            return value
+        wrapper.__wrapped__ = fn
+        wrapper.__name__ = fn.__name__
+        return wrapper
+    return decorator
+
+
+_SESSION_DIR = Path.home() / ".claude" / "projects" / "-Users-mckay"
+_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+_TIMING_FILE = Path.home() / ".claude" / "timing" / "turns.jsonl"
+_LAST_TURN_FILE = Path("/tmp/claude-turn-last")
+
+
+@_cached(
+    "_parse_jsonl_daily_stats",
+    lambda since_date_str: (since_date_str, _dir_fingerprint(_SESSION_DIR)),
+)
 def _parse_jsonl_daily_stats(since_date_str):
     """Parse JSONL session files to get daily activity/token stats after since_date_str (YYYY-MM-DD).
     Returns (activity_by_day, tokens_by_day, cost_by_model).
@@ -111,6 +245,13 @@ def _parse_jsonl_daily_stats(since_date_str):
     return activity_out, tokens_out, dict(extra_model_costs)
 
 
+@_cached(
+    "ingest_claude_sessions",
+    # Fingerprint is inputs ONLY (the JSONL tree). The DB is the output; if we
+    # included its mtime we'd invalidate ourselves on every run. Caching here
+    # short-circuits the write when no session has changed since last ingest.
+    lambda: _rglob_fingerprint(_PROJECTS_ROOT),
+)
 def ingest_claude_sessions():
     """Upsert Claude Code JSONL sessions into llm-sessions.db (provider='claude').
 
@@ -220,12 +361,21 @@ def ingest_claude_sessions():
     conn.close()
 
 
+@_cached(
+    "get_claude_stats",
+    lambda: (
+        _path_fingerprint(_RAW_STATS_CACHE),
+        _path_fingerprint(_MERGED_STATS_CACHE),
+        _dir_fingerprint(_SESSION_DIR),
+    ),
+)
 def get_claude_stats():
     """Get Claude Code stats from stats-cache.json, supplemented with JSONL parsing for recent days."""
-    if not STATS_CACHE.exists():
+    cache_path = _stats_cache_path()
+    if not cache_path.exists():
         return None
 
-    with open(STATS_CACHE) as f:
+    with open(cache_path) as f:
         data = json.load(f)
 
     # Calculate all-time costs and turns
@@ -234,6 +384,9 @@ def get_claude_stats():
     model_costs = {}
 
     for model, usage in data.get("modelUsage", {}).items():
+        # Skip copilot/* keys — those are surfaced by get_copilot_stats() to avoid double counting.
+        if model.lower().startswith("copilot/"):
+            continue
         model_type = "opus" if "opus" in model.lower() else "sonnet"
         prices = PRICING[model_type]
 
@@ -258,6 +411,12 @@ def get_claude_stats():
 
     daily_activity = data.get("dailyActivity", [])
     daily_tokens = data.get("dailyModelTokens", [])
+
+    # Strip copilot/* entries from daily tokensByModel to avoid double counting with get_copilot_stats().
+    for entry in daily_tokens:
+        tbm = entry.get("tokensByModel", {})
+        for k in [m for m in tbm if m.lower().startswith("copilot/")]:
+            tbm.pop(k, None)
 
     # Supplement with JSONL-parsed data for the last cached date (often stale) and beyond
     last_cached_date = daily_activity[-1]["date"] if daily_activity else "2000-01-01"
@@ -300,6 +459,10 @@ def get_claude_stats():
     }
 
 
+@_cached(
+    "get_copilot_stats",
+    lambda: (_path_fingerprint(LLM_DB),),
+)
 def get_copilot_stats():
     """Get Copilot stats from llm-sessions.db.
 
@@ -345,19 +508,29 @@ def get_copilot_stats():
             (cached / 1_000_000) * prices["cache_read"]
         )
 
-    # Last 30 days
-    month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    daily = conn.execute("""
-        SELECT
-            DATE(start_time) as day,
-            COUNT(*) as sessions,
-            SUM(message_count) as messages,
-            SUM(CASE WHEN product = 'agent' THEN total_tokens ELSE output_tokens END) as output
+    # Last 30 days (bucket by PT date, computed in Python to handle DST correctly).
+    pacific = pytz.timezone("America/Los_Angeles")
+    month_ago_dt = datetime.now() - timedelta(days=30)
+    rows = conn.execute("""
+        SELECT start_time,
+               CASE WHEN product = 'agent' THEN total_tokens ELSE output_tokens END as out_tok,
+               message_count
         FROM sessions
-        WHERE provider = 'copilot' AND DATE(start_time) >= ?
-        GROUP BY day
-        ORDER BY day
-    """, (month_ago,)).fetchall()
+        WHERE provider = 'copilot' AND start_time >= ?
+    """, (month_ago_dt.strftime("%Y-%m-%dT00:00:00Z"),)).fetchall()
+
+    daily_map = defaultdict(lambda: {"sessions": 0, "messages": 0, "output": 0})
+    for start_time, out_tok, msgs in rows:
+        try:
+            ts = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+        b = daily_map[day]
+        b["sessions"] += 1
+        b["messages"] += msgs or 0
+        b["output"] += out_tok or 0
+    daily = [(day, v["sessions"], v["messages"], v["output"]) for day, v in sorted(daily_map.items())]
 
     conn.close()
 
@@ -396,6 +569,13 @@ def get_copilot_stats():
     }
 
 
+@_cached(
+    "get_permissions_stats",
+    lambda days=30: (
+        days,
+        _path_fingerprint(Path.home() / ".claude" / "timing" / "permissions.jsonl"),
+    ),
+)
 def get_permissions_stats(days=30):
     """Get daily permission grant counts from ~/.claude/timing/permissions.jsonl"""
     log_file = os.path.expanduser("~/.claude/timing/permissions.jsonl")
@@ -501,6 +681,10 @@ def get_github_commits():
         return {"total_commits": 0, "daily_commits": {}, "repos": [], "error": str(e)}
 
 
+@_cached(
+    "get_mcp_stats",
+    lambda days=30: (days, _dir_fingerprint(_SESSION_DIR)),
+)
 def get_mcp_stats(days=30):
     """Get MCP tool call stats from Claude Code JSONL session logs.
 
@@ -577,6 +761,10 @@ def get_mcp_stats(days=30):
     return {"daily": daily, "servers": servers, "top_servers": top_servers, "total": total}
 
 
+@_cached(
+    "get_skill_stats",
+    lambda days=30: (days, _dir_fingerprint(_SESSION_DIR)),
+)
 def get_skill_stats(days=30):
     """Get slash-command (skill) invocation stats from Claude Code JSONL session logs.
 
@@ -689,6 +877,18 @@ def _wait_buckets(wall_times):
     }
 
 
+@_cached(
+    "_load_hook_timing",
+    # Cache based on both the timing file AND the pending last-turn file, so
+    # an in-progress turn (which updates /tmp/claude-turn-last every ~1s)
+    # invalidates the cache and re-reads. This keeps in-progress timings
+    # fresh without re-parsing on every dashboard hit.
+    lambda days=30: (
+        days,
+        _path_fingerprint(_TIMING_FILE),
+        _path_fingerprint(_LAST_TURN_FILE),
+    ),
+)
 def _load_hook_timing(days=30):
     """Load true wall-clock turn timings from the hook-based timing log.
     Also reads the pending LAST_FILE for the in-progress turn.
@@ -732,6 +932,16 @@ def _load_hook_timing(days=30):
     return dict(result)
 
 
+@_cached(
+    "get_latency_stats",
+    # Depends on both the JSONL session dir AND the hook timing files.
+    lambda days=30: (
+        days,
+        _dir_fingerprint(_SESSION_DIR),
+        _path_fingerprint(_TIMING_FILE),
+        _path_fingerprint(_LAST_TURN_FILE),
+    ),
+)
 def get_latency_stats(days=30):
     """Compute TTFT, TTLT, and wall-clock latency from Claude Code session data.
 
@@ -884,6 +1094,68 @@ def get_latency_stats(days=30):
     return {"daily": daily, "overall": overall}
 
 
+@_cached(
+    "get_device_activity",
+    lambda days=30: (
+        days,
+        _path_fingerprint(_RAW_STATS_CACHE),
+        _path_fingerprint(_MERGED_STATS_CACHE),
+    ),
+)
+def get_device_activity(days=30):
+    """Read deviceActivity from the merged stats cache and return per-day per-device turn counts.
+
+    Returns {"daily": [{date, device1: N, device2: N, total: N}, ...],
+             "devices": [sorted device names],
+             "top_devices": [devices sorted by recent activity]}.
+    """
+    cache_path = _stats_cache_path()
+    if not cache_path.exists():
+        return {"daily": [], "devices": [], "top_devices": []}
+
+    with open(cache_path) as f:
+        data = json.load(f)
+
+    raw = data.get("deviceActivity", [])
+    if not raw:
+        return {"daily": [], "devices": [], "top_devices": []}
+
+    # Build date -> device -> messageCount
+    date_device = defaultdict(lambda: defaultdict(int))
+    all_devices = set()
+    for entry in raw:
+        date = entry.get("date", "")
+        device = entry.get("device", "unknown")
+        msgs = entry.get("messageCount", 0)
+        date_device[date][device] += msgs
+        all_devices.add(device)
+
+    devices = sorted(all_devices)
+
+    # Build 30-day series
+    daily = []
+    device_totals = Counter()
+    for i in range(days):
+        date = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        entry = {"date": date}
+        day_total = 0
+        for d in devices:
+            turns = date_device.get(date, {}).get(d, 0) // 6  # messageCount // 6 = turns
+            entry[d] = turns
+            day_total += turns
+            device_totals[d] += turns
+        entry["total"] = day_total
+        daily.append(entry)
+
+    top_devices = [d for d, _ in device_totals.most_common(10)]
+
+    return {"daily": daily, "devices": devices, "top_devices": top_devices}
+
+
+@_cached(
+    "get_greatest_hits",
+    lambda days=7, top_n=20: (days, top_n, _dir_fingerprint(_SESSION_DIR)),
+)
 def get_greatest_hits(days=7, top_n=20):
     """Find the top N longest wall-time turns from the last `days` days.
     Returns list of {wall_s, prompt_preview, name, date, time} sorted by wall_s desc.
@@ -974,6 +1246,7 @@ def get_greatest_hits(days=7, top_n=20):
     # Call Haiku to name each query
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     hits = []
+    names = {}
     if api_key:
         # Batch all prompts into a single Haiku call
         numbered = "\n".join(
@@ -1399,6 +1672,22 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <div id="turns-tooltip" class="chart-tooltip"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🖥️ Turns / Device (Last 30 Days)</h2>
+            <div class="legend" id="device-legend">
+                <!-- Will be populated by JavaScript -->
+            </div>
+            <div class="chart" style="position:relative;">
+                <div class="chart-container">
+                    <div class="y-axis" id="device-y-axis"></div>
+                    <div class="bar-chart" id="device-chart">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                </div>
+                <div id="device-tooltip" class="chart-tooltip"></div>
             </div>
         </div>
 
@@ -1845,6 +2134,97 @@ HTML_TEMPLATE = """
         }
 
         heatmapContainer.appendChild(grid);
+
+        // Render Turns / Device chart (stacked by device)
+        const deviceData = {{ device_daily | tojson | safe }};
+        const deviceNames = {{ device_names | tojson | safe }};
+        const deviceChart = document.getElementById('device-chart');
+        const deviceLegend = document.getElementById('device-legend');
+        const deviceTooltip = document.getElementById('device-tooltip');
+
+        // Color palette for devices
+        const deviceColors = [
+            { bg: 'linear-gradient(180deg, #FF10F0 0%, #FF6BD6 100%)', shadow: 'rgba(255, 16, 240, 0.3)', label: '#FF10F0' },
+            { bg: 'linear-gradient(180deg, #00D4FF 0%, #66E5FF 100%)', shadow: 'rgba(0, 212, 255, 0.3)', label: '#00D4FF' },
+            { bg: 'linear-gradient(180deg, #39FF14 0%, #7AFF5C 100%)', shadow: 'rgba(57, 255, 20, 0.3)', label: '#39FF14' },
+            { bg: 'linear-gradient(180deg, #FFD700 0%, #FFE44D 100%)', shadow: 'rgba(255, 215, 0, 0.3)', label: '#FFD700' },
+            { bg: 'linear-gradient(180deg, #9C27FF 0%, #BB6BFF 100%)', shadow: 'rgba(156, 39, 255, 0.3)', label: '#9C27FF' },
+            { bg: 'linear-gradient(180deg, #FF5722 0%, #FF8A65 100%)', shadow: 'rgba(255, 87, 34, 0.3)', label: '#FF5722' },
+        ];
+        const deviceColorMap = {};
+        function getDeviceColor(device) {
+            if (deviceColorMap[device]) return deviceColorMap[device];
+            const idx = Object.keys(deviceColorMap).length;
+            const c = deviceColors[idx % deviceColors.length];
+            deviceColorMap[device] = c;
+            return c;
+        }
+
+        // Build legend
+        const deviceTopNames = {{ device_top_names | tojson | safe }};
+        deviceTopNames.forEach(device => {
+            const color = getDeviceColor(device);
+            const item = document.createElement('div');
+            item.className = 'legend-item';
+            item.innerHTML = `<div class="legend-color" style="background: ${color.label};"></div><span>${device}</span>`;
+            deviceLegend.appendChild(item);
+        });
+
+        const maxDevice = Math.max(...deviceData.map(d => d.total), 1);
+        const deviceAxis = niceAxis(maxDevice);
+        createYAxis('device-y-axis', deviceAxis);
+
+        deviceData.forEach(day => {
+            const bar = document.createElement('div');
+            bar.className = 'bar';
+            const totalHeight = deviceAxis.max > 0 ? Math.min((day.total / deviceAxis.max) * 100, 100) : 0;
+            bar.style.height = totalHeight + '%';
+
+            // Stack segments bottom-to-top in device order
+            let isTop = true;
+            for (let i = deviceNames.length - 1; i >= 0; i--) {
+                const device = deviceNames[i];
+                const count = day[device] || 0;
+                if (count <= 0) continue;
+                const seg = document.createElement('div');
+                seg.className = 'bar-segment';
+                const segHeight = day.total > 0 ? (count / day.total) * 100 : 0;
+                seg.style.height = segHeight + '%';
+                const color = getDeviceColor(device);
+                seg.style.background = color.bg;
+                seg.style.boxShadow = `0 0 8px ${color.shadow}`;
+                if (isTop) {
+                    seg.style.borderRadius = '4px 4px 0 0';
+                    isTop = false;
+                }
+                bar.appendChild(seg);
+            }
+
+            // Tooltip
+            bar.addEventListener('mouseenter', e => {
+                let html = `<div class="tt-date">${day.date}</div>`;
+                deviceNames.forEach(d => {
+                    const c = day[d] || 0;
+                    if (c > 0) {
+                        const color = getDeviceColor(d);
+                        html += `<div style="color:${color.label}">${d}: ${c} turns</div>`;
+                    }
+                });
+                html += `<div class="tt-total">Total: ${day.total} turns</div>`;
+                showTooltip(deviceTooltip, deviceChart, e, html);
+            });
+            bar.addEventListener('mousemove', e => {
+                showTooltip(deviceTooltip, deviceChart, e, deviceTooltip.innerHTML);
+            });
+            bar.addEventListener('mouseleave', () => hideTooltip(deviceTooltip));
+
+            const label = document.createElement('div');
+            label.className = 'bar-label';
+            label.textContent = day.date.substring(5);
+            bar.appendChild(label);
+
+            deviceChart.appendChild(bar);
+        });
 
         // Render MCP calls chart (stacked by server)
         const mcpData = {{ mcp_daily | tojson | safe }};
@@ -2302,6 +2682,7 @@ def dashboard():
     latency = get_latency_stats()
     skills = get_skill_stats()
     greatest_hits = get_greatest_hits()
+    device_activity = get_device_activity()
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -2319,6 +2700,9 @@ def dashboard():
         latency=latency,
         latency_daily=latency["daily"],
         greatest_hits=greatest_hits,
+        device_daily=device_activity["daily"],
+        device_names=device_activity["devices"],
+        device_top_names=device_activity["top_devices"],
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 

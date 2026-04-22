@@ -50,6 +50,7 @@ DOMAIN_MAP = {
     "g245": {"label": "g245", "folder": "g245"},
     "xk87": {"label": "xk87", "folder": "xk87"},
     "xk88": {"label": "xk88", "folder": "xk88"},
+    "d357": {"label": "d357", "folder": "d357"},
 }
 DEFAULT_DOMAIN = "i9"
 

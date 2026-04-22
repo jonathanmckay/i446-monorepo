@@ -49,9 +49,21 @@ def init_db():
             response_count INTEGER DEFAULT 0,
             avg_response_hours REAL,
             median_response_hours REAL,
+            response_count_daytime INTEGER DEFAULT 0,
+            avg_response_hours_daytime REAL,
+            median_response_hours_daytime REAL,
             PRIMARY KEY(day)
         )
     """)
+    # Migrate older DBs that pre-date the daytime columns
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_stats)")}
+    for col, ddl in [
+        ("response_count_daytime", "ALTER TABLE daily_stats ADD COLUMN response_count_daytime INTEGER DEFAULT 0"),
+        ("avg_response_hours_daytime", "ALTER TABLE daily_stats ADD COLUMN avg_response_hours_daytime REAL"),
+        ("median_response_hours_daytime", "ALTER TABLE daily_stats ADD COLUMN median_response_hours_daytime REAL"),
+    ]:
+        if col not in cols:
+            conn.execute(ddl)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pairs_day ON response_pairs(day)")
     conn.commit()
     return conn
@@ -108,6 +120,10 @@ def scan_chatdb(days=LOOKBACK_DAYS):
         for i, msg in enumerate(msgs_list):
             if not msg["is_from_me"]:
                 continue
+            # Only count the FIRST sent message after received messages.
+            # Consecutive sent messages (follow-ups) are not new "responses."
+            if i > 0 and msgs_list[i - 1]["is_from_me"]:
+                continue
             # Find most recent received message before this sent
             for j in range(i - 1, -1, -1):
                 if not msgs_list[j]["is_from_me"]:
@@ -144,6 +160,15 @@ def update_db(pairs, daily_counts):
         """, (p["chat_id"], p["chat_name"], p["recv_time"], p["sent_time"],
               p["response_hours"], p["recv_preview"], p["sent_preview"], p["day"]))
 
+    # Daytime: messages received between 6am and 9pm local
+    DAY_START, DAY_END = 6, 21
+
+    def _recv_hour(p):
+        try:
+            return datetime.fromisoformat(p["recv_time"]).hour
+        except Exception:
+            return None
+
     # Upsert daily stats
     for day, counts in daily_counts.items():
         # Get response stats for this day
@@ -153,17 +178,29 @@ def update_db(pairs, daily_counts):
         hours_sorted = sorted(p["response_hours"] for p in day_pairs)
         median_h = round(hours_sorted[len(hours_sorted) // 2], 2) if hours_sorted else None
 
+        day_pairs_dt = [p for p in day_pairs if (h := _recv_hour(p)) is not None and DAY_START <= h < DAY_END]
+        resp_count_dt = len(day_pairs_dt)
+        avg_h_dt = round(sum(p["response_hours"] for p in day_pairs_dt) / resp_count_dt, 2) if resp_count_dt else None
+        hours_sorted_dt = sorted(p["response_hours"] for p in day_pairs_dt)
+        median_h_dt = round(hours_sorted_dt[len(hours_sorted_dt) // 2], 2) if hours_sorted_dt else None
+
         conn.execute("""
             INSERT INTO daily_stats (day, sent_count, received_count, response_count,
-                                     avg_response_hours, median_response_hours)
-            VALUES (?, ?, ?, ?, ?, ?)
+                                     avg_response_hours, median_response_hours,
+                                     response_count_daytime, avg_response_hours_daytime,
+                                     median_response_hours_daytime)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(day) DO UPDATE SET
                 sent_count = excluded.sent_count,
                 received_count = excluded.received_count,
                 response_count = excluded.response_count,
                 avg_response_hours = excluded.avg_response_hours,
-                median_response_hours = excluded.median_response_hours
-        """, (day, counts["sent"], counts["received"], resp_count, avg_h, median_h))
+                median_response_hours = excluded.median_response_hours,
+                response_count_daytime = excluded.response_count_daytime,
+                avg_response_hours_daytime = excluded.avg_response_hours_daytime,
+                median_response_hours_daytime = excluded.median_response_hours_daytime
+        """, (day, counts["sent"], counts["received"], resp_count, avg_h, median_h,
+              resp_count_dt, avg_h_dt, median_h_dt))
 
     conn.commit()
 

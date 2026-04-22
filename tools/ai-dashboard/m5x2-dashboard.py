@@ -70,11 +70,18 @@ def pull_stats_repo():
 
 
 def load_stats(user_id=None):
-    """Load stats for the given user. JM reads local; others read from stats repo."""
+    """Load stats for the given user.
+
+    JM reads the merged file in m5x2-ai-stats (Claude + Copilot CLI). Falls
+    back to the raw Claude cache if the merged file is missing. Other users
+    read from the shared stats repo as before.
+    """
     if not user_id or user_id == "jm":
-        if not STATS_CACHE.exists():
+        merged = STATS_REPO / "jm" / "stats-cache.json"
+        candidate = merged if merged.exists() else STATS_CACHE
+        if not candidate.exists():
             return None
-        with open(STATS_CACHE) as f:
+        with open(candidate) as f:
             return json.load(f)
     else:
         repo_file = STATS_REPO / user_id / "stats-cache.json"
@@ -169,6 +176,36 @@ def get_daily_turns(days=30):
                         all_users.add("jm")
             except Exception:
                 continue
+
+    # JM: also count Copilot CLI turns from ~/.copilot/session-store.db
+    # (one assistant response per turn row). Without this, the headline Turns
+    # chart undercounts JM whenever work happens in Copilot CLI.
+    copilot_db = Path.home() / ".copilot" / "session-store.db"
+    if copilot_db.exists():
+        try:
+            import sqlite3
+            with sqlite3.connect(f"file:{copilot_db}?mode=ro", uri=True) as conn:
+                rows = conn.execute(
+                    "SELECT timestamp FROM turns "
+                    "WHERE assistant_response IS NOT NULL AND assistant_response != ''"
+                ).fetchall()
+            for (ts_str,) in rows:
+                if not ts_str:
+                    continue
+                try:
+                    s = ts_str.replace("Z", "+00:00").replace(" ", "T", 1)
+                    ts = datetime.fromisoformat(s)
+                except ValueError:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts < cutoff:
+                    continue
+                day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+                daily_by_user[day]["jm"] += 1
+                all_users.add("jm")
+        except Exception:
+            pass
 
     # Other users: read from stats-cache.json in the shared stats repo
     # Uses messageCount from dailyActivity as proxy for turns

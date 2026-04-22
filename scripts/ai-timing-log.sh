@@ -33,8 +33,9 @@ case "$EVENT" in
       ELAPSED=$(echo "$NOW - $START_EPOCH" | bc 2>/dev/null || echo "0")
       DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
       LOCAL_DATE=$(date +%Y-%m-%d)
+      DEVICE=$(python3 "$HOME/.claude/resolve-device.py" 2>/dev/null || echo "unknown")
       # Overwrite LAST_FILE (not append) — keeps only the latest stop for this turn
-      echo "{\"event\":\"turn\",\"ts\":\"$DATE\",\"date\":\"$LOCAL_DATE\",\"elapsed_s\":$ELAPSED,\"session\":\"$START_SID\"}" > "$LAST_FILE"
+      echo "{\"event\":\"turn\",\"ts\":\"$DATE\",\"date\":\"$LOCAL_DATE\",\"elapsed_s\":$ELAPSED,\"session\":\"$START_SID\",\"device\":\"$DEVICE\"}" > "$LAST_FILE"
     fi
     ;;
 esac
