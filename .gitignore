@@ -12,6 +12,13 @@ build/
 venv/
 env/
 .venv/
+.pytest_cache/
+
+# Skill runtime state (machine-local, regenerable)
+skills/claude-skills/tg/cache.json
+skills/claude-skills/tg/status.py
+skills/claude-skills/next/cache.json
+tools/personal-dashboard/.points-cache.json
 
 # Credentials & Secrets
 .env

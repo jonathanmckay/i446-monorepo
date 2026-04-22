@@ -16,11 +16,18 @@ Terse. No preamble. Do the work, report results.
 
 ### Step 1: Calculate the target week (W-Tu)
 
-Weeks run **Wednesday through Tuesday**. Find the most recent **complete** W-Tu week:
-- If today is Tuesday, the week ending today is the target (it completes today).
-- If today is Wednesday or later, the week ending on the most recent Tuesday is the target.
+Weeks run **Wednesday through Tuesday**. Find the most recent **complete** W-Tu week.
 
-Calculate `week_start` (Wednesday) and `week_end` (Tuesday).
+**Always target a week that has already ended.** Never target a week that includes today (unless today is Tuesday, the last day of the week).
+
+Rule by weekday of today:
+- **Tuesday**: target week ends today. `week_end = today`, `week_start = today - 6`.
+- **Wednesday**: target week ended *yesterday*. `week_end = today - 1`, `week_start = today - 7`. **Do NOT target the week starting today.**
+- **Thursday – Monday**: target week ended on the most recent Tuesday before today. `week_end = today - ((weekday - Tue) % 7)`, `week_start = week_end - 6`.
+
+Compute the dates with actual date arithmetic (e.g. `python3 -c "from datetime import date,timedelta; t=date.today(); ..."`); do not eyeball them.
+
+**Sanity check before writing**: state out loud `today=YYYY-MM-DD (Day), week=Wed YYYY-MM-DD → Tue YYYY-MM-DD`. The Tuesday in `week_end` MUST be ≤ today. If `week_end > today`, you have computed the wrong week — recompute.
 
 ### Step 2: Fetch Toggl entries
 
@@ -56,7 +63,9 @@ Find the correct row in the `0s897` sheet of `Neon分v12.2.xlsx`:
 Write the formatted activity list + total to **column AA** ("Event Review") of that row.
 Write the total minutes (as a number) to **column Z** ("Time") of that row.
 
-**Important — merged cells**: Columns Z, AA, and AB are merged across each week (7 rows per week). You must write to the **top-left cell** of the merged range, not the Tuesday row directly. Use AppleScript to find the merge area first:
+**Important — merged cells**: Columns Z, AA, and AB are merged across each week (7 rows per week, top row is the **Wednesday** = `week_start`). You must write to the **top-left cell** of the merged range, not the Tuesday row directly. Use AppleScript to find the merge area first:
+
+**Sanity check before writing**: after resolving `topRow`, verify that the date in `B{topRow}` equals `week_start` (the Wednesday you computed in Step 1). If it does not match, abort — you have the wrong row.
 
 ```bash
 osascript -e '

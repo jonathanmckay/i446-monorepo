@@ -29,7 +29,8 @@ rsync_one() {
   rsync_one "$HOME/.claude/stats-cache.json"            ".claude/stats-cache.json"
   rsync_one "$HOME/.claude/projects/"                   ".claude/projects/"
   rsync_one "$HOME/.claude/timing/"                     ".claude/timing/"
-  rsync_one "$HOME/.claude/skills/"                     ".claude/skills/"
+  # ~/.claude/skills/ is now a symlink on both machines to
+  # ~/i446-monorepo/skills/claude-skills/, synced via git. Do not rsync.
   rsync_one "$HOME/.copilot/session-store.db"           ".copilot/session-store.db"
   rsync_one "$HOME/m5x2-ai-stats/jm/stats-cache.json"   "m5x2-ai-stats/jm/stats-cache.json"
   rsync_one "$HOME/vault/i447/i446/llm-sessions.db"     "vault/i447/i446/llm-sessions.db"
