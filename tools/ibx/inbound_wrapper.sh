@@ -3,6 +3,12 @@
 # Same pattern as -2n_wrapper.sh and ibx0_wrapper.sh.
 
 SCRIPT="$HOME/i446-monorepo/tools/ibx/inbound.py"
+
+if [[ ! -f "$SCRIPT" ]]; then
+    echo "inbound_wrapper: missing $SCRIPT" >&2
+    exit 1
+fi
+
 MAX_RETRIES=3
 ERR_FILE=$(mktemp /tmp/inbound_error.XXXXXX)
 

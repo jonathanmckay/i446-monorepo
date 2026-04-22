@@ -1,18 +1,14 @@
 {
   "version": 1,
   "tasks": {
-    "plan the m5x2 trip": {
-      "todoist_id": "6gPc9465f9hhcRW2",
-      "minutes": 50
-    },
-    "tasks down to 50": {
-      "todoist_id": "6gPc948w3WwQhQVR",
+    "take a pass through every i9 task": {
+      "todoist_id": "6gRCPwpCchp92qWR",
       "minutes": 100
     },
-    "skin to skin time with xiki": {
-      "todoist_id": "6gPc94F76gpqM5pR",
-      "minutes": 20
+    "figure out how to agentify / make progress on qz12": {
+      "todoist_id": "6gRCPwwcJ5ffp54R",
+      "minutes": 50
     }
   },
-  "last_sync": "2026-04-15T16:17:33.472472-07:00"
+  "last_sync": "2026-04-22T13:00:15.626551-07:00"
 }
