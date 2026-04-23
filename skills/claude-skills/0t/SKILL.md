@@ -39,19 +39,34 @@ Sum the duration (in minutes) for each project. Group by project code.
 
 ### Step 3: Generate the chart
 
-Run the donut generator script:
+Run the donut generator script with `--no-insert` (chart insertion
+must happen on Ix to avoid OneDrive merge conflicts):
 
 ```bash
 python3 ~/vault/i447/i446/toggl-donut-generator.py \
   --date YYYY-MM-DD \
-  --data '{"project1": minutes1, "project2": minutes2, ...}'
+  --data '{"project1": minutes1, "project2": minutes2, ...}' \
+  --no-insert
 ```
 
 The script will:
 - Create the PNG chart
 - Calculate the correct Excel cell location
-- Insert the chart using xlwings
 - Save a copy to Desktop as `toggl_YYYY-MM-DD.png`
+
+Then insert the chart on Ix via the shared helper (scp + remote
+xlwings/AppleScript). If Ix is unreachable this exits non-zero — do
+NOT fall back to local xlwings:
+
+```bash
+~/.claude/skills/_lib/ix-chart-insert.py \
+  --png ~/Desktop/toggl_YYYY-MM-DD.png \
+  --sheet '0分' \
+  --cell <TARGET_CELL>
+```
+
+The generator prints the target cell on stdout (e.g. `BB12`); pass it
+through.
 
 ### Step 4: Compute and log last night's sleep
 
@@ -70,11 +85,13 @@ This step runs after the donut is generated. "Last night" = the sleep bridging `
 
 **4c. Total sleep = 4a + 4b**
 
-**4d. Write to 0₦ sheet** using osascript:
+**4d. Write to 0₦ sheet** via the ix helper (NEVER local osascript —
+local writes cause OneDrive merge conflicts):
 
-```applescript
+```bash
+~/.claude/skills/_lib/ix-osa.sh <<'AS'
 tell application "Microsoft Excel"
-    set theSheet to sheet 2 of active workbook  -- 0₦ sheet (use index 2, not name)
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
 
     set m to ((month of (current date)) * 1) as text
     set d to ((day of (current date)) * 1) as text
@@ -100,14 +117,10 @@ tell application "Microsoft Excel"
     set value of range targetRef of theSheet to SLEEP_MINUTES
     return "OK: wrote SLEEP_MINUTES to " & targetRef
 end tell
+AS
 ```
 
-Substitute `SLEEP_MINUTES` with the computed total before running.
-
-Run via:
-```bash
-osascript -e '...'
-```
+Substitute `SLEEP_MINUTES` with the computed total before piping.
 
 **Note:** The date used for step 4d is always **today** (the actual current date when `/0t` is run), not `yesterday_date`. This is because /0t runs in the morning for yesterday, and last night's sleep is recorded under today.
 
@@ -152,13 +165,19 @@ Sleep logged: 443 min → 0₦ D (睡觉), today's row
 - The script uses the Neon color palette defined in the Python file
 - 睡觉 is excluded from the chart but its duration is used for the sleep log
 - Chart dimensions: 6x6 inches at 150 DPI
-- Excel insertion uses xlwings (automatic)
-- Fallback: If Excel insertion fails, chart is saved to Desktop for manual insertion
+- Excel insertion runs **on Ix** via `_lib/ix-chart-insert.py`
+  (xlwings on the remote Mac, with AppleScript `add picture` as a
+  remote fallback). Local xlwings against the OneDrive copy is
+  forbidden — it produces merge conflicts against Ix's writes.
+- If Ix is unreachable: the helper exits non-zero with a clear
+  message. The PNG remains on Desktop as an artifact, but the skill
+  must surface the failure and NOT silently mark itself complete.
 - Sleep column: 0₦ sheet, column D, header = 睡觉
 - If sleep entries are mislabeled (wrong project), the total will be off — fix in Toggl first
 
 ## Dependencies
 
-- Python 3 with matplotlib, xlwings
+- Python 3 with matplotlib (local; xlwings not required locally)
+- xlwings (or AppleScript) on **Ix** — used by `_lib/ix-chart-insert.py`
 - Toggl MCP server configured
-- Neon分v12.2.xlsx at ~/OneDrive/vault-excel/ and open in Excel
+- Neon分v12.2.xlsx open in Excel **on Ix**

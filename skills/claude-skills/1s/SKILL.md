@@ -233,6 +233,13 @@ Show the comparison table and narrative to the user. Then execute `/did 1s` to m
 
 ## Notes
 
+- All Excel writes/reads in this skill go through
+  `~/.claude/skills/_lib/ix-osa.sh` (pipe AppleScript on stdin). The
+  helper executes on Ix and hard-fails if Ix is unreachable. NEVER
+  call local `osascript` — local writes cause OneDrive merge
+  conflicts against the canonical workbook on Ix.
+- Batch the multiple writes in this skill into as few helper calls as
+  possible to amortize ssh round-trips.
 - The 1g sheet goals reset weekly — read them BEFORE they're overwritten by next week's `/1g`
 - Toggl CLI `date` command returns entries for a single day. Must call 7 times.
 - 0分 column mapping must match exactly. If columns shift, the review will have wrong data.

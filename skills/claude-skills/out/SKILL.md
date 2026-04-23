@@ -25,7 +25,8 @@ out → 10 (hcbi AI, row 113)
 
 ## Steps
 
-1. **Write to hcbi AI column** via `ssh ix 'osascript ...'` (Straylight) or local `osascript`.
+1. **Write to hcbi AI column** via `~/.claude/skills/_lib/ix-osa.sh`
+   (executes the AppleScript on Ix). Do NOT call local `osascript`.
 
    - Workbook: `Neon分v12.2.xlsx`
    - Sheet: `hcbi`
@@ -37,7 +38,8 @@ out → 10 (hcbi AI, row 113)
 
 ## AppleScript template
 
-```applescript
+```bash
+~/.claude/skills/_lib/ix-osa.sh <<'AS'
 tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
     set ws to sheet "hcbi" of wb
@@ -59,11 +61,16 @@ tell application "Microsoft Excel"
         return "ERROR: date not found"
     end if
 end tell
+AS
 ```
 
-Substitute `M/D` with today's date and `SCORE` with the argument.
+Substitute `M/D` with today's date and `SCORE` with the argument
+before piping the heredoc.
 
 ## Notes
 
-- On Straylight, route through `ssh ix`. Fall back to local with orange terminal if Ix unreachable.
+- All writes go through `ssh ix` via the `_lib/ix-osa.sh` helper. If
+  Ix is unreachable the helper exits 3 with a clear error — do NOT
+  fall back to local `osascript`. Local writes cause OneDrive merge
+  conflicts against the canonical workbook on Ix.
 - Neon must be open on Ix.

@@ -154,6 +154,12 @@ Before running, substitute:
   ```
 - `GOAL_COUNT` — number of goals
 
+Pipe the resulting AppleScript through `~/.claude/skills/_lib/ix-osa.sh`
+(reads from stdin, runs on Ix). NEVER call local `osascript` —
+local writes cause OneDrive merge conflicts against the canonical
+workbook on Ix. If Ix is unreachable the helper exits 3 and this
+step must surface the failure.
+
 ### Step 5: Report
 
 Output a table:

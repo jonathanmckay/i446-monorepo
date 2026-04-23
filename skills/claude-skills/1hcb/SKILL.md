@@ -101,7 +101,28 @@ Under "## Weekly Reviews", add a new entry:
 - Goal 2
 ```
 
-**7b. Optionally write goals to hcbi sheet column BK** for the current week's rows (if user confirms).
+**7b. Optionally write goals to hcbi sheet column BK** for the
+current week's rows (if user confirms).
+
+The write must go through Ix via `~/.claude/skills/_lib/ix-osa.sh`
+(NEVER excel-mcp or local osascript for writes — those edit the
+local OneDrive copy and produce merge conflicts against the
+canonical workbook on Ix). Compose an AppleScript that finds each
+day's row in `hcbi` col B and writes the goal text to column BK,
+then pipe it on stdin:
+
+```bash
+~/.claude/skills/_lib/ix-osa.sh <<'AS'
+tell application "Microsoft Excel"
+    set ws to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+    -- For each (date, goal_text), find row by M/D in col B, write BK.
+    return "OK: wrote goals to BK"
+end tell
+AS
+```
+
+If Ix is unreachable the helper exits 3 and Step 7b is skipped with
+an error — do NOT fall back to a local write.
 
 ### Step 8: Report
 
@@ -119,4 +140,6 @@ Guide updated: vault/hcbi/hcbc/0n-hcb-guide.md
 - Recent weeks may have sparse data — if the current week has no food logs, look back further
 - The user has historically struggled with: leafy greens, replacing coffee with tea, eating vegetables consistently
 - Previous goals have focused on: "21 leafy greens per week" and "4 HIIT workouts"
-- Use excel-mcp for reading (not AppleScript) since this is read-only analysis
+- Use excel-mcp for **reads only** (not AppleScript) since this is
+  read-only analysis. Any write (Step 7b) must route through Ix via
+  `_lib/ix-osa.sh` to avoid OneDrive merge conflicts.

@@ -82,7 +82,7 @@ Find today's row in 0分 (date column B, M/D format), then **append** to the exi
 
 ```applescript
 tell application "Microsoft Excel"
-    set theSheet to sheet "0分" of active workbook
+    set theSheet to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set m to ((month of (current date)) * 1) as text
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
@@ -102,6 +102,10 @@ tell application "Microsoft Excel"
 end tell
 ```
 
+Run via `~/.claude/skills/_lib/ix-osa.sh` (pipe the AppleScript on
+stdin). Both AppleScript blocks in this skill go through the helper —
+do NOT call local `osascript`.
+
 - If **no points override**: `POINTS_EXPR` = `'1n+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (found by scanning column A downward from row 4 for the last non-empty row)
 - If **points override provided**: `POINTS_EXPR` = the literal number (e.g. `+30`)
 
@@ -114,6 +118,9 @@ One line:
 
 ## Notes
 
+- All Excel writes go through `~/.claude/skills/_lib/ix-osa.sh`. The
+  helper hard-fails (exit 3) if Ix is unreachable; do NOT fall back
+  to local `osascript`. Local writes cause OneDrive merge conflicts.
 - The 0分 sheet date column is **B** (M/D format, e.g. `3/30`)
 - Always **append** to existing formula (`oldFormula & "+N"`), never overwrite
 - If the task maps to two columns (e.g. `社+hcbp` could be AH and AF), default to the primary one (AH) unless the user specifies otherwise

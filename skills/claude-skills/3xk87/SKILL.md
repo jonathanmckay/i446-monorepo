@@ -102,13 +102,22 @@ To find the target column:
 
 3. **Find the target column.** Read the year row to locate the year, offset by quarter.
 
-4. **Write to xk887.** Use `ssh ix 'osascript ...'` to write each cell. Keep entries concise (1-3 sentences per cell). Mix English and Chinese as appropriate to the source material.
+4. **Write to xk887.** Pipe each AppleScript through
+   `~/.claude/skills/_lib/ix-osa.sh` (which runs it on Ix). Pin the
+   workbook by name (`workbook "xk887.xlsx"`), never `active workbook`.
+   Keep entries concise (1-3 sentences per cell). Mix English and
+   Chinese as appropriate to the source material.
 
 5. **Report.** List which rows were populated.
 
 ## Notes
 
-- On Straylight, all AppleScript goes through `ssh ix`. Fall back to local with orange terminal if Ix is unreachable.
-- xk887.xlsx must be open on Ix. If not, run `ssh ix 'open "~/OneDrive/vault-excel/xk887.xlsx"'` first.
-- Do NOT overwrite existing cell values. If a cell already has content, append with newline separator.
+- All Excel writes go through `~/.claude/skills/_lib/ix-osa.sh`. The
+  helper hard-fails with exit code 3 if Ix is unreachable; do NOT
+  fall back to local `osascript` — local writes cause OneDrive merge
+  conflicts against the canonical workbook on Ix.
+- xk887.xlsx must be open on Ix. If not, run
+  `ssh ix 'open "~/OneDrive/vault-excel/xk887.xlsx"'` first.
+- Do NOT overwrite existing cell values. If a cell already has
+  content, append with newline separator.
 - Keep cell text concise — these are summary bullets, not transcripts.

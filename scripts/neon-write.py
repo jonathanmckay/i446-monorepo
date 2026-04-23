@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Write values to the live Neon spreadsheet via AppleScript (Excel must be open).
+Write values to the live Neon spreadsheet via AppleScript on `ix`
+(Excel must be open ON IX). All writes route through the shared
+`_lib/ix-osa.py` helper — local osascript writes are forbidden
+because they create OneDrive merge conflicts against the canonical
+workbook on Ix.
 
 Usage:
     python3 neon-write.py --sheet "0₦" --col D --date "3/27" --value 540
@@ -9,18 +13,31 @@ Usage:
 """
 
 import argparse
-import subprocess
+import os
 import sys
 from datetime import datetime
 
 # Date column per sheet
 SHEET_DATE_COL = {
     "0₦": "C",
+    "0n": "C",
     "0分": "B",
 }
 
-NEON_SYMLINK = "~/OneDrive/vault-excel/Neon-current.xlsx"
-NEON_HARDCODED = "~/OneDrive/vault-excel/Neon分v12.2.xlsx"
+WORKBOOK = "Neon分v12.2.xlsx"
+
+# Import the shared ix helper.
+_LIB = os.path.expanduser("~/.claude/skills/_lib")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+try:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ix_osa", os.path.join(_LIB, "ix-osa.py"))
+    ix_osa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ix_osa)
+except Exception as e:  # pragma: no cover
+    print(f"Error: cannot load ix-osa helper from {_LIB}: {e}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _today_md():
@@ -30,14 +47,13 @@ def _today_md():
 
 
 def _run_applescript(script):
-    result = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True, text=True, timeout=15,
-    )
-    if result.returncode != 0:
-        print(f"AppleScript error: {result.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
-    return result.stdout.strip()
+    res = ix_osa.run(script)
+    if res.returncode != 0:
+        # Surface the helper's error verbatim and abort.
+        msg = (res.stderr or res.stdout or "ix-osa failed").strip()
+        print(msg, file=sys.stderr)
+        sys.exit(res.returncode or 1)
+    return res.stdout.strip()
 
 
 def write_value(sheet, col, date_str, value_str):
@@ -49,11 +65,10 @@ def write_value(sheet, col, date_str, value_str):
     append_mode = value_str.startswith("+")
 
     if append_mode:
-        # Read existing formula, then append
-        append_val = value_str  # keep the "+30" as-is for formula concat
+        append_val = value_str
         script = f'''
 tell application "Microsoft Excel"
-    set theSheet to sheet "{sheet}" of active workbook
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     set todayRow to 0
     repeat with i from 2 to 400
         if (string value of cell ("{date_col}" & i) of theSheet) = "{date_str}" then
@@ -62,7 +77,7 @@ tell application "Microsoft Excel"
         end if
     end repeat
     if todayRow = 0 then
-        return "ERR:date_not_found"
+        return "ERROR:date_not_found"
     end if
     set theCell to cell ("{col}" & todayRow) of theSheet
     set oldFormula to formula of theCell
@@ -75,10 +90,9 @@ tell application "Microsoft Excel"
 end tell
 '''
     else:
-        # Direct write
         script = f'''
 tell application "Microsoft Excel"
-    set theSheet to sheet "{sheet}" of active workbook
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     set todayRow to 0
     repeat with i from 2 to 400
         if (string value of cell ("{date_col}" & i) of theSheet) = "{date_str}" then
@@ -87,7 +101,7 @@ tell application "Microsoft Excel"
         end if
     end repeat
     if todayRow = 0 then
-        return "ERR:date_not_found"
+        return "ERROR:date_not_found"
     end if
     set theCell to cell ("{col}" & todayRow) of theSheet
     set formula of theCell to "{value_str}"
@@ -97,7 +111,7 @@ end tell
 
     result = _run_applescript(script)
 
-    if result.startswith("ERR:date_not_found"):
+    if result.startswith("ERROR:date_not_found"):
         print(f"Error: date '{date_str}' not found in {sheet} column {date_col}", file=sys.stderr)
         sys.exit(1)
 
@@ -112,7 +126,7 @@ end tell
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Write to Neon spreadsheet via AppleScript")
+    parser = argparse.ArgumentParser(description="Write to Neon spreadsheet via AppleScript on ix")
     parser.add_argument("--sheet", required=True, help='Sheet name (e.g. "0₦" or "0分")')
     parser.add_argument("--col", required=True, help="Target column letter (e.g. D, AA)")
     parser.add_argument("--date", help="Date as M/D (e.g. 3/27). Default: today")
@@ -125,3 +139,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

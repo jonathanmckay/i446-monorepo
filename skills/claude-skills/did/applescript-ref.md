@@ -2,6 +2,14 @@
 
 Templates for Excel operations. Read this file only when executing /did steps in the background agent.
 
+**Execution policy.** Every template here MUST be executed on Ix via
+`~/.claude/skills/_lib/ix-osa.sh` (or the `ix_osa.run()` Python helper).
+NEVER pipe these into local `osascript -e` — local writes create
+OneDrive merge conflicts against the canonical workbook on Ix. If Ix
+is unreachable the helper exits with code 3 and a clear error; the
+calling /did step must propagate that failure (do not silently
+degrade).
+
 ## Substitution variables (all templates)
 
 - `TARGET_MONTH` → month integer from targetDate (e.g. `4`)
@@ -135,7 +143,7 @@ end tell
 
 ```applescript
 tell application "Microsoft Excel"
-    set theSheet to sheet "0分" of active workbook
+    set theSheet to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set today to "TARGET_DATE"
     set todayRow to 0
     repeat with i from 2 to 200

@@ -68,7 +68,7 @@ Write the total minutes (as a number) to **column Z** ("Time") of that row.
 **Sanity check before writing**: after resolving `topRow`, verify that the date in `B{topRow}` equals `week_start` (the Wednesday you computed in Step 1). If it does not match, abort — you have the wrong row.
 
 ```bash
-osascript -e '
+~/.claude/skills/_lib/ix-osa.sh <<'AS'
 tell application "Microsoft Excel"
   set wb to workbook "Neon分v12.2.xlsx"
   set ws to worksheet "0s897" of wb
@@ -78,8 +78,12 @@ tell application "Microsoft Excel"
   -- Write to the top of the merged cells
   set value of range ("Z" & topRow) of ws to TOTAL_MINUTES_PLACEHOLDER
   set value of range ("AA" & topRow) of ws to "EVENT_REVIEW_PLACEHOLDER"
-end tell'
+end tell
+AS
 ```
+
+Substitute placeholders before piping. Writes go through Ix; do NOT
+fall back to local `osascript` if Ix is unreachable.
 
 Replace:
 - `{ROW}` with the Tuesday row number (e.g. 98)

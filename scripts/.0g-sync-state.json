@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-04-23T08:39:14.268663-07:00"
+  "tasks": {
+    "get through qz12": {
+      "todoist_id": "6gRQCMjf6CW7mCq2",
+      "minutes": 60
+    },
+    "tasks down to 50": {
+      "todoist_id": "6gRQCMppCP4Pm3m2",
+      "minutes": 70
+    },
+    "each meeting fun and doesnt last more than it needs to": {
+      "todoist_id": "6gRQCMwHpfwRJ6J2",
+      "minutes": 35
+    }
+  },
+  "last_sync": "2026-04-23T10:46:06.991273-07:00"
 }

@@ -80,13 +80,35 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
    Validate that `kcal` and `srv` parse as numbers. If not, ask the user to
    reformat.
 
-2. **Run the writer.** Excel must be open on Ix with `Neon分v12.2.xlsx` loaded.
-   All AppleScript/Excel writes must route through `ssh ix 'osascript -e ...'`
-   (Straylight cannot talk to Excel directly).
+2. **Run the writer.** Excel must be open on Ix with `Neon分v12.2.xlsx`
+   loaded. All Excel writes route through Ix via the shared helper —
+   never local `osascript`, which would create OneDrive merge
+   conflicts against the canonical workbook.
+
+   If `~/i446-monorepo/scripts/neon-ate.py` exists, invoke it (the
+   script is expected to delegate to `_lib/ix-osa.{sh,py}` internally,
+   not call local `osascript` or local `xlwings`):
    ```bash
    python3 ~/i446-monorepo/scripts/neon-ate.py "<name>" <kcal> <srv>
    ```
-   Optional flags: `--date M/D` to backfill, `--hour H` to force a band.
+
+   If the writer is unavailable, fall through to an inline write via
+   the helper (compose the AppleScript that finds today's row in
+   `hcbi` col B, picks the triad based on current hour, and applies
+   the set/append rules), e.g.:
+   ```bash
+   ~/.claude/skills/_lib/ix-osa.sh <<'AS'
+   tell application "Microsoft Excel"
+       set ws to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+       -- ...resolve row by M/D in col B; pick triad cols by 地支 hour;
+       -- set or append name (col 1), kcal (col 2), srv (col 3).
+       return "OK: ate <name>"
+   end tell
+   AS
+   ```
+
+   Optional flags for the writer: `--date M/D` to backfill, `--hour H`
+   to force a band.
 
 3. **Report.** Echo the script's one-line confirmation, e.g.:
    ```

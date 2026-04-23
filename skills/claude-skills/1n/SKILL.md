@@ -50,23 +50,27 @@ Sum the duration (in minutes) for each project. Group by project code.
 
 ### Step 4: Generate both charts
 
-You'll need to run the donut generator script twice, once for each dataset.
+You'll need to run the donut generator script twice, once for each
+dataset. **Always pass `--no-insert`** — chart insertion happens on
+Ix in Step 5 to avoid OneDrive merge conflicts.
 
 **Chart 1** (excludes only 睡觉):
 ```bash
 python3 ~/vault/i447/i446/toggl-donut-generator.py \
   --date YYYY-MM-DD \
-  --data '{"project1": minutes1, "project2": minutes2, ...}'
+  --data '{"project1": minutes1, "project2": minutes2, ...}' \
+  --no-insert
 ```
 
 **Chart 2** (excludes 睡觉, i9, xk87, xk88):
 ```bash
 python3 ~/vault/i447/i446/toggl-donut-generator.py \
   --date YYYY-MM-DD \
-  --data '{"project1": minutes1, "project2": minutes2, ...}'
+  --data '{"project1": minutes1, "project2": minutes2, ...}' \
+  --no-insert
 ```
 
-### Step 5: Insert into Neon spreadsheet
+### Step 5: Insert into Neon spreadsheet on Ix
 
 The charts should be inserted into:
 - **Sheet**: 1分+1s
@@ -77,11 +81,21 @@ The charts should be inserted into:
 
 Calculate the ISO week number for the week being visualized to determine the correct row.
 
-The script will:
-- Create the PNG charts
-- Insert chart 1 into column O (excludes 睡觉 only)
-- Insert chart 2 into column P (excludes 睡觉, i9, xk87, xk88)
-- Save copies to Desktop as `toggl_week{N}_all.png` and `toggl_week{N}_focus.png`
+Use the shared remote inserter (scp + xlwings/AppleScript on Ix). It
+hard-fails if Ix is unreachable; do NOT fall back to local xlwings:
+
+```bash
+~/.claude/skills/_lib/ix-chart-insert.py \
+  --png ~/Desktop/toggl_week{N}_all.png \
+  --sheet '1分+1s' --cell O{N}
+
+~/.claude/skills/_lib/ix-chart-insert.py \
+  --png ~/Desktop/toggl_week{N}_focus.png \
+  --sheet '1分+1s' --cell P{N}
+```
+
+The local generator step still saves PNG copies to Desktop as
+`toggl_week{N}_all.png` and `toggl_week{N}_focus.png` for reference.
 
 ### Step 6: Confirm completion
 
@@ -123,12 +137,16 @@ Charts saved to:
 - The script uses the Neon color palette defined in the Python file
 - 睡觉 is excluded from both charts but should still be tracked in Toggl
 - Chart dimensions: 6x6 inches at 150 DPI
-- Excel insertion uses xlwings (automatic)
-- Fallback: If Excel insertion fails, charts are saved to Desktop for manual insertion
+- Excel insertion runs **on Ix** via `_lib/ix-chart-insert.py`. Local
+  xlwings against the OneDrive copy is forbidden (causes merge
+  conflicts). If Ix is unreachable the helper exits non-zero and the
+  PNG remains on Desktop as an artifact — surface the failure rather
+  than silently completing.
 - Week calculation uses ISO week numbering (week starting on Monday), but data collection is Sunday-Saturday
 
 ## Dependencies
 
-- Python 3 with matplotlib, xlwings
+- Python 3 with matplotlib (local; xlwings not required locally)
+- xlwings (or AppleScript) on **Ix**
 - Toggl MCP server configured
-- Neon分v12.2.xlsx at ~/OneDrive/vault-excel/
+- Neon分v12.2.xlsx open in Excel **on Ix**

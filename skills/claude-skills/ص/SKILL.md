@@ -15,14 +15,22 @@ Log salah count to Neon spreadsheet, column AM (ص) in the 0n sheet.
 
 ## Execution
 
-**Run on Ix via SSH heredoc** — the Neon workbook is open on Ix. Sheet name is `0n` (not `0₦`). Date column is C (M/D format).
+**All writes go through `~/.claude/skills/_lib/ix-osa.sh`** (which
+runs the AppleScript on Ix via ssh). The Neon workbook lives on Ix.
+Sheet name is `0n` (not `0₦`). Date column is C (M/D format). Always
+pin the workbook by name (`workbook "Neon分v12.2.xlsx"`) — never
+`active workbook`, since a different workbook may be frontmost on Ix.
+
+If Ix is unreachable, the helper hard-fails with a clear error
+(exit code 3). Do NOT fall back to local `osascript`; local writes
+cause OneDrive merge conflicts.
 
 ### Increment (+1)
 
 ```bash
-ssh ix 'osascript <<EOF
+~/.claude/skills/_lib/ix-osa.sh <<'AS'
 tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of active workbook
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set m to ((month of (current date)) * 1) as text
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
@@ -42,20 +50,20 @@ tell application "Microsoft Excel"
             set val to oldVal as number
         end if
         set value of theCell to (val + 1)
-        return (val + 1) as text
+        return "OK: " & ((val + 1) as text)
     else
-        return "no row for " & today
+        return "ERROR: no row for " & today
     end if
 end tell
-EOF'
+AS
 ```
 
 ### Set to N
 
 ```bash
-ssh ix 'osascript <<EOF
+~/.claude/skills/_lib/ix-osa.sh <<'AS'
 tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of active workbook
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set m to ((month of (current date)) * 1) as text
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
@@ -68,15 +76,15 @@ tell application "Microsoft Excel"
     end repeat
     if todayRow > 0 then
         set value of cell ("AM" & todayRow) of theSheet to N
-        return "N"
+        return "OK: N"
     else
-        return "no row for " & today
+        return "ERROR: no row for " & today
     end if
 end tell
-EOF'
+AS
 ```
 
-Replace `N` with the user's argument.
+Replace `N` with the user's argument before piping.
 
 ## Output
 

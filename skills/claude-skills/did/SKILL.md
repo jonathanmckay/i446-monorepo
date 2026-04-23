@@ -61,7 +61,7 @@ Word overlap: tokenize both sides (lowercase, strip `[N]`/`(N)`/stopwords, **str
 
 **1b. Auto-detect time:** No `[time]` provided → check Toggl today for matching entries (description substring or project code match via /tg shortcode mapping). Sum minutes. No match → `1`.
 
-**2. Write to 0₦:** Use "Write to 0₦" template from `applescript-ref.md`. Run via `osascript -e '...'`.
+**2. Write to 0₦:** Use "Write to 0₦" template from `applescript-ref.md`. Run via `~/.claude/skills/_lib/ix-osa.sh` (or the `ix_osa.run()` Python helper for the background agent). NEVER call local `osascript` — writes must land on Ix to avoid OneDrive merge conflicts.
 
 **2b. 0l special case:** If habit is `0l`, run "0l completion time" template.
 
@@ -122,7 +122,10 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
 ## Notes
 
-- Excel must be open with `Neon分v12.2.xlsx`.
+- Excel must be open with `Neon分v12.2.xlsx` **on Ix**. All writes
+  go through `~/.claude/skills/_lib/ix-osa.{sh,py}`. If Ix is
+  unreachable, the helper exits 3 and the /did step hard-fails — do
+  NOT write locally (would cause OneDrive merge conflicts).
 - AppleScript calls must be **sequential** (race condition on concurrent writes).
 - Column headers in row 1, exact match. Date in col C, M/D format.
 
