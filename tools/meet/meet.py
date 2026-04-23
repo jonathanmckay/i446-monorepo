@@ -3,8 +3,8 @@
 meet.py — Record a meeting, transcribe, extract notes + todos, file to vault.
 
 Usage:
-    python3 meet.py "1:1 with Ashish"        # mic only (in-person)
-    python3 meet.py "standup" --teams         # Teams/Zoom call (BlackHole + mic)
+    python3 meet.py "1:1 with Ashish"        # mic + system audio (default)
+    python3 meet.py "standup" --no-teams     # mic only (in-person, no call)
     python3 meet.py "standup" --no-todos      # skip Todoist
     python3 meet.py "retro" --tx notes.txt    # use existing transcript
     python3 meet.py --devices                 # list available audio devices
@@ -110,12 +110,30 @@ def record_audio(teams_mode: bool = False) -> np.ndarray:
         stop_event = True
     signal.signal(signal.SIGTERM, _handle_stop)
 
+    # One-sided detection state (non-teams mode only)
+    onesided_warned = False
+    SILENCE_THRESH = 500       # int16 amplitude below this = silence
+    CHECK_INTERVAL = 120       # seconds before first check
+    SILENCE_RATIO_WARN = 0.55  # warn if >55% of audio is silence
+
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
         s.start()
     try:
+        elapsed = 0
         while not stop_event:
             sd.sleep(500)
+            elapsed += 0.5
+            # After 2 min, check for one-sided audio (mic-only mode)
+            if (not teams_mode and not onesided_warned
+                    and elapsed >= CHECK_INTERVAL and mic_frames):
+                audio_so_far = np.concatenate(mic_frames, axis=0)
+                silent = np.mean(np.abs(audio_so_far) < SILENCE_THRESH)
+                if silent > SILENCE_RATIO_WARN:
+                    print(f"\n⚠  ONE-SIDED AUDIO DETECTED ({silent:.0%} silence)")
+                    print("   Only your mic is being captured.")
+                    print("   Restart with --teams to capture both sides.\n")
+                    onesided_warned = True
     except KeyboardInterrupt:
         pass
     for s in streams:
@@ -379,8 +397,8 @@ def main():
     parser.add_argument("--domain", default=DEFAULT_DOMAIN,
                         choices=list(DOMAIN_MAP.keys()),
                         help="Domain for filing + Todoist labels (default: i9)")
-    parser.add_argument("--teams", action="store_true",
-                        help="Record Teams/Zoom call: mix BlackHole system audio + mic")
+    parser.add_argument("--no-teams", action="store_true",
+                        help="Mic only (skip system audio capture)")
     parser.add_argument("--todos", action="store_true",
                         help="Create Todoist tasks from action items (off by default)")
     parser.add_argument("--tx", metavar="FILE",
@@ -404,7 +422,7 @@ def main():
         transcript = Path(args.tx).read_text()
         print(f"📄 Using transcript: {args.tx} ({len(transcript.split())} words)")
     else:
-        audio = record_audio(teams_mode=args.teams)
+        audio = record_audio(teams_mode=not args.no_teams)
         recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)
         date_slug = datetime.now().strftime("%Y-%m-%d-%H%M")
@@ -417,15 +435,6 @@ def main():
     if not transcript.strip():
         print("⚠  No speech detected.")
         sys.exit(1)
-
-    # 1b. One-sided transcript check
-    one_sided = check_one_sided(transcript)
-    if one_sided:
-        print(f"\n⚠  Transcript appears one-sided ({one_sided}% filler).")
-        print("   Only one person's audio was captured.")
-        print("   Hint: use --teams to capture both sides of a call.")
-        print("   The recording is saved. Re-run with --teams next time.")
-        sys.exit(2)
 
     # 2. Extract structured data
     data = extract_meeting_data(transcript, meeting_name)

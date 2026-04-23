@@ -7,7 +7,7 @@ user-invocable: true
 # Record Meeting (/d357)
 
 Wraps `~/i446-monorepo/tools/meet/meet.py`:
-- Records mic (add `--teams` for Teams/Zoom mixed audio)
+- Records mic + system audio by default (add `--no-teams` for mic-only)
 - Transcribes locally with faster-whisper (base.en)
 - Extracts notes + action items via Claude
 - Files to `vault/d357/YYYY-MM-DD-<slug>.md`
@@ -26,11 +26,11 @@ Absent or `pid: null` → no recording active.
 ### `/d357 <name>` — start recording
 
 1. Check state.json; if a recording is running, **abort** and tell the user to stop it first.
-2. Parse flags from the name: `--teams` for Teams/Zoom mode (mix system audio + mic).
+2. Parse flags from the name: `--no-teams` for mic-only mode (in-person). Default captures both mic + system audio.
 3. Launch in background:
    ```bash
    cd ~/i446-monorepo/tools/meet && \
-   nohup python3 meet.py "<name>" --domain d357 [--teams] > /tmp/d357-$$.log 2>&1 &
+   nohup python3 meet.py "<name>" --domain d357 [--no-teams] > /tmp/d357-$$.log 2>&1 &
    echo $!
    ```
 4. Write state.json with the returned PID, name, timestamp, log path.
@@ -65,4 +65,4 @@ Read state.json. If active, report `Recording: <name> since <HH:MM> (pid <pid>)`
 | `/d357 stop` | SIGTERM, waits for filing, reports path, clears state |
 | `/d357 stop` (nothing running) | Reports "No recording active." |
 | `/d357` | Reports current state (running or idle) |
-| `/d357 standup --teams` | Launches with `--teams` flag |
+| `/d357 standup --no-teams` | Launches mic-only (in-person) |
