@@ -36,15 +36,15 @@ MTG_BRIEFS = Path.home() / "vault/z_ibx/mtg-briefs.json"
 TZ = "America/Los_Angeles"
 
 BLOCKS = [
-    ("卯", "05:00", "06:59"),
-    ("辰", "07:00", "08:59"),
-    ("巳", "09:00", "10:59"),
-    ("午", "11:00", "12:59"),
-    ("未", "13:00", "14:59"),
-    ("申", "15:00", "16:59"),
-    ("酉", "17:00", "18:59"),
-    ("戌", "19:00", "20:59"),
-    ("亥", "21:00", "22:59"),
+    ("卯", "04:00", "05:59"),
+    ("辰", "06:00", "07:59"),
+    ("巳", "08:00", "09:59"),
+    ("午", "10:00", "11:59"),
+    ("未", "12:00", "13:59"),
+    ("申", "14:00", "15:59"),
+    ("酉", "16:00", "17:59"),
+    ("戌", "18:00", "19:59"),
+    ("亥", "20:00", "21:59"),
 ]
 
 
@@ -57,7 +57,7 @@ def get_current_block():
     """Return (index, arabic_name, start_time, end_time) for current 2h block."""
     now = datetime.now()
     hour = now.hour
-    idx = max(0, min(8, (hour - 5) // 2))
+    idx = max(0, min(8, (hour - 4) // 2))
     name, start, end = BLOCKS[idx]
     return idx, name, start, end
 
@@ -139,6 +139,61 @@ def read_block_goals():
     return blocks
 
 
+PRAYER_MARKER = "☀️"
+
+
+def has_prayer_marker(block_name):
+    """Check if current block already has a ☀️ prayer marker in build order."""
+    if not BUILD_ORDER.exists():
+        return False
+    text = BUILD_ORDER.read_text()
+    if "## -1₲" not in text:
+        return False
+    section = text[text.index("## -1₲"):]
+    current_block = None
+    for line in section.split("\n"):
+        if line.startswith("- ") and not line.startswith("    "):
+            current_block = line.strip().lstrip("- ").strip()
+        elif current_block == block_name and PRAYER_MARKER in line:
+            return True
+    return False
+
+
+def write_prayer_marker(block_name):
+    """Write a ☀️ marker under the current block in -1₲."""
+    if not BUILD_ORDER.exists():
+        return
+    text = BUILD_ORDER.read_text()
+    if "## -1₲" not in text:
+        return
+    lines = text.split("\n")
+    new_lines = []
+    found_block = False
+    inserted = False
+    for line in lines:
+        new_lines.append(line)
+        if not inserted:
+            if line.startswith("- ") and not line.startswith("    "):
+                block = line.strip().lstrip("- ").strip()
+                found_block = (block == block_name)
+            elif found_block and line.startswith("    - ["):
+                # Insert prayer marker after the first goal/checkbox line
+                new_lines.append(f"    - [x] {PRAYER_MARKER}")
+                inserted = True
+    BUILD_ORDER.write_text("\n".join(new_lines))
+
+
+def clear_prayer_markers():
+    """Remove all ☀️ prayer marker lines from -1₲. Called during daily wipe."""
+    if not BUILD_ORDER.exists():
+        return
+    text = BUILD_ORDER.read_text()
+    lines = text.split("\n")
+    new_lines = [l for l in lines if PRAYER_MARKER not in l]
+    if len(new_lines) != len(lines):
+        BUILD_ORDER.write_text("\n".join(new_lines))
+
+
 def prompt_card(card_num, total, title, body, options="y/skip"):
     """Display a card and wait for user input. Returns the user's response."""
     set_term_color("red")
@@ -212,8 +267,9 @@ def main():
             mtg_briefs = []
 
     # Count cards needed
+    prayer_marker_exists = has_prayer_marker(block_name)
     cards_needed = []
-    if not salah_done:
+    if not salah_done and not prayer_marker_exists:
         cards_needed.append("salah")
     if not goals_set:
         cards_needed.append("-1g")
@@ -224,18 +280,28 @@ def main():
 
     if not cards_needed or (len(cards_needed) == 1 and cards_needed[0] == "ibx0"):
         # Only ibx0 — show block status and go straight to inbox
+        salah_status = "✓" if salah_done else ("☀️" if prayer_marker_exists else "·")
         if goals_set:
-            console.print(f"[green]✓[/green] صلاة done  [green]✓[/green] -1g ({block_name}): {', '.join(current_goals)}")
+            console.print(f"[green]{salah_status}[/green] صلاة  [green]✓[/green] -1g ({block_name}): {', '.join(current_goals)}")
         console.print()
     else:
         # ── Card 1: صلاة ──────────────────────────────────────────────
-        if not salah_done:
+        if not salah_done and not prayer_marker_exists:
             card_num += 1
-            resp = prompt_card(card_num, total_cards, "صلاة", "Have you prayed?")
-            if resp == "y":
-                console.print("[dim]  marking ص done...[/dim]")
-                run_did("ص")
-                console.print("[green]  ✓ صلاة logged[/green]")
+            set_term_color("red")
+            panel = Panel(
+                "where is the sun?",
+                title=f"[bold]Card {card_num}/{total_cards}: ☀️[/bold]",
+                border_style="red",
+                padding=(1, 2),
+            )
+            console.print(panel)
+            try:
+                console.input("[dim]any key to continue[/dim] ")
+            except (KeyboardInterrupt, EOFError):
+                pass
+            set_term_color("black")
+            write_prayer_marker(block_name)
 
         # ── Card 2: -1g ───────────────────────────────────────────────
         if not goals_set:

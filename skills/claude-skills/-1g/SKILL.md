@@ -23,17 +23,17 @@ Auto-detect from wall clock time (America/Los_Angeles):
 
 | Block | Local Time | 地支 |
 |-------|-----------|------|
-| 0 | 05:00-06:59 | 卯 |
-| 1 | 07:00-08:59 | 辰 |
-| 2 | 09:00-10:59 | 巳 |
-| 3 | 11:00-12:59 | 午 |
-| 4 | 13:00-14:59 | 未 |
-| 5 | 15:00-16:59 | 申 |
-| 6 | 17:00-18:59 | 酉 |
-| 7 | 19:00-20:59 | 戌 |
-| 8 | 21:00-22:59 | 亥 |
+| 0 | 04:00-05:59 | 卯 |
+| 1 | 06:00-07:59 | 辰 |
+| 2 | 08:00-09:59 | 巳 |
+| 3 | 10:00-11:59 | 午 |
+| 4 | 12:00-13:59 | 未 |
+| 5 | 14:00-15:59 | 申 |
+| 6 | 16:00-17:59 | 酉 |
+| 7 | 18:00-19:59 | 戌 |
+| 8 | 20:00-21:59 | 亥 |
 
-Times outside 05:00-22:59 default to 卯 (block 0).
+Times outside 04:00-21:59 default to 卯 (block 0).
 
 ## Files
 
@@ -46,7 +46,7 @@ Times outside 05:00-22:59 default to 卯 (block 0).
 
 ### Step 1: Determine time block
 
-Get current local time (America/Los_Angeles). Compute which block using `(hour - 5) // 2`, clamped to 0-8. If `next` argument is present, add 1 (clamped to 8).
+Get current local time (America/Los_Angeles). Compute which block using `(hour - 4) // 2`, clamped to 0-8. If `next` argument is present, add 1 (clamped to 8).
 
 ### Step 2: Parse goals
 
