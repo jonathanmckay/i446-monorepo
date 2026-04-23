@@ -79,23 +79,23 @@ Daily ritual review not done. Run now? (y/skip)
 
 Read the build order file (`~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`). Find the `## -1₲` section. Determine the current 2h block from wall clock time:
 
-| Block | Local Time | Arabic |
-|-------|-----------|--------|
-| 0 | 05:00-06:59 | فجر |
-| 1 | 07:00-08:59 | شروق |
-| 2 | 09:00-10:59 | صباح |
-| 3 | 11:00-12:59 | ظهر |
-| 4 | 13:00-14:59 | عصر |
-| 5 | 15:00-16:59 | آصيل |
-| 6 | 17:00-18:59 | غروب |
-| 7 | 19:00-20:59 | غسق |
-| 8 | 21:00-22:59 | زلة |
+| Block | Local Time | 地支 |
+|-------|-----------|------|
+| 0 | 05:00-06:59 | 卯 |
+| 1 | 07:00-08:59 | 辰 |
+| 2 | 09:00-10:59 | 巳 |
+| 3 | 11:00-12:59 | 午 |
+| 4 | 13:00-14:59 | 未 |
+| 5 | 15:00-16:59 | 申 |
+| 6 | 17:00-18:59 | 酉 |
+| 7 | 19:00-20:59 | 戌 |
+| 8 | 21:00-22:59 | 亥 |
 
 Check if the current block's line has goals (non-empty checkbox items under it). If empty:
 
 ```
 Card 3/4: -1g
-No goals set for <Arabic name> (<HH:MM>-<HH:MM>). Set now?
+No goals set for <地支 name> (<HH:MM>-<HH:MM>). Set now?
 > 
 ```
 
@@ -104,7 +104,7 @@ Wait for user input. If they type goals, run `/-1g <goals>`. If they type `skip`
 If goals ARE already set, show them briefly and move on:
 
 ```
--1g (<Arabic name>): ✓ already set
+-1g (<地支 name>): ✓ already set
   - goal 1
   - goal 2
 ```
@@ -149,7 +149,7 @@ Execute `/ibx0` — this marks all inbox habits done (ibx s897, ibx i9, slack gi
 After ibx0 completes, show the current block's goals as a "start working" prompt:
 
 ```
-Goals for <Arabic name> (<HH:MM>-<HH:MM>):
+Goals for <地支 name> (<HH:MM>-<HH:MM>):
   1. <goal 1>
   2. <goal 2>
 
