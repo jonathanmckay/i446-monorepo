@@ -18,7 +18,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+PROJECTS_DIR_IX = Path.home() / ".claude" / "projects-ix"
 OUTPUT_BASE = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts"
+# host -> (source root, output base). Straylight writes to OUTPUT_BASE directly
+# for backwards compatibility with the existing 600+ exported files; ix writes
+# to OUTPUT_BASE/ix/ to host-namespace it.
+ROOTS = [
+    ("straylight", PROJECTS_DIR, OUTPUT_BASE),
+    ("ix",         PROJECTS_DIR_IX, OUTPUT_BASE / "ix"),
+]
 
 # Split sessions with more than this many user turns into multiple files
 SEGMENT_TURNS = 10
@@ -85,14 +93,18 @@ def parse_session(path: Path) -> dict:
             except json.JSONDecodeError:
                 pass
 
-    # Extract slug and date from first user entry
+    # Extract slug + stable date from first user entry's timestamp field.
+    # Fall back to file mtime only if no usable timestamp exists.
     for entry in entries:
         if entry.get("type") == "user" and not slug:
             slug = entry.get("slug", "")
-            # Try to get date from message timestamp or fall back to file mtime
-            # No explicit timestamp in JSONL — use file mtime for date
-            mtime = path.stat().st_mtime
-            date_str = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+            ts = entry.get("timestamp")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    date_str = dt.strftime("%Y-%m-%d")
+                except (ValueError, AttributeError):
+                    pass
             break
 
     if not slug:
@@ -139,6 +151,8 @@ def parse_session(path: Path) -> dict:
         "slug": slug,
         "date": date_str,
         "pairs": pairs,
+        "source_path": path,
+        "source_mtime": path.stat().st_mtime,
     }
 
 
@@ -212,10 +226,16 @@ def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool
         return 0
 
     paths = output_paths_for_session(session, out_dir, segment_turns)
-    all_exist = all(p.exists() for p in paths)
-    if all_exist and not force:
+    src_mtime = session.get("source_mtime", 0)
+    # Re-export when source jsonl is newer than the existing md (live session
+    # has new turns). Without this the exporter snapshots stop at first run.
+    needs_refresh = any(
+        (not p.exists()) or p.stat().st_mtime < src_mtime
+        for p in paths
+    )
+    if not needs_refresh and not force:
         if verbose:
-            print(f"  skip (exists):     {paths[0].name}")
+            print(f"  skip (current):    {paths[0].name}")
         return 0
 
     if len(pairs) <= segment_turns:
@@ -231,9 +251,9 @@ def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool
         written = 0
         for i, seg_pairs in enumerate(segments):
             p = paths[i]
-            if p.exists() and not force:
+            if p.exists() and p.stat().st_mtime >= src_mtime and not force:
                 if verbose:
-                    print(f"  skip (exists):     {p.name}")
+                    print(f"  skip (current):    {p.name}")
                 continue
             md = render_segment(session, seg_pairs, part=i + 1, total_parts=total)
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -244,36 +264,42 @@ def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool
         return written
 
 
-def export_project(project_dir: Path, force: bool = False, verbose: bool = False) -> tuple[int, int]:
-    """Export all sessions in a project directory. Returns (exported, skipped)."""
-    project_name = project_dir.name
-    out_dir = OUTPUT_BASE / project_name
-
-    jsonl_files = sorted(project_dir.glob("*.jsonl"))
+def export_project(project_dir: Path, out_base: Path, sessions_to_export: list,
+                   force: bool = False, verbose: bool = False) -> tuple[int, int]:
+    """Export the given pre-selected sessions in this project dir."""
+    out_dir = out_base / project_dir.name
     exported = 0
     skipped = 0
-
-    for jsonl_path in jsonl_files:
-        session = parse_session(jsonl_path)
-        if not session["pairs"]:
-            skipped += 1
-            continue
-
-        paths = output_paths_for_session(session, out_dir, SEGMENT_TURNS)
-        all_exist = all(p.exists() for p in paths)
-        if all_exist and not force:
-            skipped += 1
-            if verbose:
-                print(f"  skip (exists):     {paths[0].name}")
-            continue
-
+    for session in sessions_to_export:
         n = export_session(session, out_dir, SEGMENT_TURNS, force=force, verbose=verbose)
         if n > 0:
             exported += n
         else:
             skipped += 1
-
     return exported, skipped
+
+
+def discover_sessions():
+    """Scan all ROOTS, return a map of session_id -> (host, root, project_dir, session).
+    For duplicates (same session_id present in multiple roots), keep the one with
+    the most user turns (canonical = most-complete copy)."""
+    chosen: dict[str, tuple[str, Path, Path, dict]] = {}
+    for host, root, out_base in ROOTS:
+        if not root.exists():
+            continue
+        for proj_dir in sorted(root.iterdir()):
+            if not proj_dir.is_dir():
+                continue
+            for jsonl_path in sorted(proj_dir.glob("*.jsonl")):
+                session = parse_session(jsonl_path)
+                if not session["pairs"]:
+                    continue
+                sid = session["session_id"]
+                nturns = len(session["pairs"])
+                prior = chosen.get(sid)
+                if prior is None or nturns > len(prior[3]["pairs"]):
+                    chosen[sid] = (host, root, proj_dir, session)
+    return chosen
 
 
 def main():
@@ -290,35 +316,30 @@ def main():
     )
     args = parser.parse_args()
 
-    if not PROJECTS_DIR.exists():
-        print(f"Error: {PROJECTS_DIR} not found", file=sys.stderr)
-        sys.exit(1)
+    chosen = discover_sessions()
+
+    # Apply filters
+    if args.session:
+        chosen = {sid: v for sid, v in chosen.items() if args.session in sid}
+    if args.project:
+        chosen = {sid: v for sid, v in chosen.items() if args.project in v[2].name}
+
+    # Group by (host, project_dir) for export
+    out_by_host: dict[tuple[str, Path, Path], list] = {}
+    out_base_for_host = {host: out_base for host, _, out_base in ROOTS}
+    for sid, (host, root, proj_dir, session) in chosen.items():
+        key = (host, proj_dir, out_base_for_host[host])
+        out_by_host.setdefault(key, []).append(session)
 
     total_exported = 0
     total_skipped = 0
-
-    project_dirs = [d for d in sorted(PROJECTS_DIR.iterdir()) if d.is_dir()]
-    if args.project:
-        project_dirs = [d for d in project_dirs if args.project in d.name]
-
-    for proj_dir in project_dirs:
+    for (host, proj_dir, out_base), sessions in sorted(out_by_host.items(), key=lambda x: (x[0][0], x[0][1].name)):
         if args.verbose:
-            print(f"\nProject: {proj_dir.name}")
-
-        if args.session:
-            # Export specific session
-            matches = list(proj_dir.glob(f"*{args.session}*.jsonl"))
-            if not matches:
-                continue
-            for jsonl_path in matches:
-                session = parse_session(jsonl_path)
-                out_dir = OUTPUT_BASE / proj_dir.name
-                n = export_session(session, out_dir, SEGMENT_TURNS, args.force, args.verbose)
-                total_exported += n
-        else:
-            exp, skip = export_project(proj_dir, force=args.force, verbose=args.verbose)
-            total_exported += exp
-            total_skipped += skip
+            print(f"\n[{host}] Project: {proj_dir.name}")
+        exp, skip = export_project(proj_dir, out_base, sessions,
+                                   force=args.force, verbose=args.verbose)
+        total_exported += exp
+        total_skipped += skip
 
     print(f"Exported {total_exported} file(s), skipped {total_skipped} session(s).")
 

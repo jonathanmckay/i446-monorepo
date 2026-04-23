@@ -15,7 +15,15 @@ from datetime import datetime
 from pathlib import Path
 
 SESSION_STORE = Path.home() / ".copilot" / "session-store.db"
+SESSION_STORE_IX = Path.home() / ".copilot" / "session-store-ix.db"
 OUTPUT_DIR = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts" / "copilot-cli"
+OUTPUT_DIR_IX = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts" / "ix" / "copilot-cli"
+
+# host -> (db path, output dir)
+SOURCES = [
+    ("straylight", SESSION_STORE,    OUTPUT_DIR),
+    ("ix",         SESSION_STORE_IX, OUTPUT_DIR_IX),
+]
 
 
 def slugify(text: str, max_len: int = 60) -> str:
@@ -110,62 +118,77 @@ def render_markdown(session: dict, turns: list, checkpoints: list) -> str:
     return "\n".join(lines)
 
 
+def _iso_to_epoch(iso_ts: str) -> float:
+    try:
+        return datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, AttributeError, TypeError):
+        return 0.0
+
+
 def export_sessions(force: bool = False, verbose: bool = False):
-    if not SESSION_STORE.exists():
-        print(f"Error: session-store.db not found at {SESSION_STORE}", file=sys.stderr)
+    available = [(host, db, out) for host, db, out in SOURCES if db.exists()]
+    if not available:
+        print(f"Error: no session-store DBs found "
+              f"(checked {[str(s[1]) for s in SOURCES]})", file=sys.stderr)
         sys.exit(1)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(f"file:{SESSION_STORE}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-
-    sessions = conn.execute(
-        "SELECT * FROM sessions ORDER BY created_at"
-    ).fetchall()
+    # Pass 1: discover canonical session per id (max turn count across DBs).
+    chosen: dict[str, tuple[str, Path, dict, int]] = {}
+    db_handles = {}
+    for host, db_path, out_dir in available:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        db_handles[host] = (conn, out_dir)
+        for row in conn.execute("SELECT * FROM sessions ORDER BY created_at"):
+            s = dict(row)
+            sid = s["id"]
+            n = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id = ?", (sid,)
+            ).fetchone()[0]
+            prior = chosen.get(sid)
+            if prior is None or n > prior[3]:
+                chosen[sid] = (host, db_path, s, n)
 
     exported = 0
     skipped = 0
-
-    for session in sessions:
-        s = dict(session)
+    for sid, (host, db_path, s, turn_count) in chosen.items():
+        conn, out_dir = db_handles[host]
+        out_dir.mkdir(parents=True, exist_ok=True)
         fname = filename_for_session(s)
-        outpath = OUTPUT_DIR / fname
-
-        # Skip sessions with no turns (unless forced)
-        turn_count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE session_id = ?", (s["id"],)
-        ).fetchone()[0]
+        outpath = out_dir / fname
 
         if turn_count == 0 and not force:
             if verbose:
-                print(f"  skip (no turns): {fname}")
+                print(f"  skip (no turns):   [{host}] {fname}")
             skipped += 1
             continue
 
-        if outpath.exists() and not force:
+        # Re-export when source updated_at is newer than file mtime.
+        src_epoch = _iso_to_epoch(s.get("updated_at") or s.get("created_at") or "")
+        if outpath.exists() and not force and src_epoch <= outpath.stat().st_mtime:
             if verbose:
-                print(f"  skip (exists):   {fname}")
+                print(f"  skip (current):    [{host}] {fname}")
             skipped += 1
             continue
 
         turns = [dict(r) for r in conn.execute(
             "SELECT * FROM turns WHERE session_id = ? ORDER BY turn_index",
-            (s["id"],)
+            (sid,)
         ).fetchall()]
 
         checkpoints = [dict(r) for r in conn.execute(
             "SELECT * FROM checkpoints WHERE session_id = ? ORDER BY checkpoint_number",
-            (s["id"],)
+            (sid,)
         ).fetchall()]
 
         md = render_markdown(s, turns, checkpoints)
         outpath.write_text(md, encoding="utf-8")
         exported += 1
         if verbose:
-            print(f"  exported:        {fname}")
+            print(f"  exported:          [{host}] {fname}")
 
-    conn.close()
+    for conn, _ in db_handles.values():
+        conn.close()
     print(f"Exported {exported} session(s), skipped {skipped}.")
 
 
