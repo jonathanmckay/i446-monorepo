@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "take a pass through every i9 task": {
-      "todoist_id": "6gRCPwpCchp92qWR",
-      "minutes": 100
-    },
-    "figure out how to agentify / make progress on qz12": {
-      "todoist_id": "6gRCPwwcJ5ffp54R",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-04-22T19:41:53.716955-07:00"
+  "tasks": {},
+  "last_sync": "2026-04-23T08:39:14.268663-07:00"
 }
