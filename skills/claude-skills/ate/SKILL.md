@@ -49,13 +49,13 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
 
 | Hours       | Branch | Cols       |
 |-------------|--------|------------|
-| 04:00–07:59 | 卯     | AL, AM, AN |
-| 08:00–09:59 | 辰     | AO, AP, AQ |
-| 10:00–11:59 | 巳     | AR, AS, AT |
-| 12:00–13:59 | 午     | AU, AV, AW |
-| 14:00–15:59 | 未     | AX, AY, AZ |
-| 16:00–17:59 | 申     | BA, BB, BC |
-| 18:00–03:59 | 戌     | BD, BE, BF |
+| 04:00–07:59 | 卯     | AK, AL, AM |
+| 08:00–09:59 | 辰     | AN, AO, AP |
+| 10:00–11:59 | 巳     | AQ, AR, AS |
+| 12:00–13:59 | 午     | AT, AU, AV |
+| 14:00–15:59 | 未     | AW, AX, AY |
+| 16:00–17:59 | 申     | AZ, BA, BB |
+| 18:00–03:59 | 戌     | BC, BD, BE |
 
 00:00–03:59 also lands in 戌 (still considered "today's" row).
 
@@ -66,7 +66,7 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
 - **Servings** (col 3): same formula-append logic.
 - **Date row**: matched by `M/D` in column `B` of `hcbi`.
 - **Row 1 labels**: every invocation idempotently writes the seven branch glyphs
-  to `AL1, AO1, AR1, AU1, AX1, BA1, BD1` and clears the other two header cells
+  to `AK1, AN1, AQ1, AT1, AW1, AZ1, BC1` and clears the other two header cells
   in each triad. Existing labels (Early Morning / Breakfast / …) get overwritten
   on first run.
 
@@ -80,7 +80,9 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
    Validate that `kcal` and `srv` parse as numbers. If not, ask the user to
    reformat.
 
-2. **Run the writer.** Excel must be open with `Neon分v12.2.xlsx` loaded.
+2. **Run the writer.** Excel must be open on Ix with `Neon分v12.2.xlsx` loaded.
+   All AppleScript/Excel writes must route through `ssh ix 'osascript -e ...'`
+   (Straylight cannot talk to Excel directly).
    ```bash
    python3 ~/i446-monorepo/scripts/neon-ate.py "<name>" <kcal> <srv>
    ```
@@ -88,7 +90,7 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
 
 3. **Report.** Echo the script's one-line confirmation, e.g.:
    ```
-   ate raspberries (80 kcal, 1 srv) → hcbi 巳 band (AR/AS/AT), row 113
+   ate raspberries (80 kcal, 1 srv) → hcbi 巳 band (AQ/AR/AS), row 113
    ```
 
 ## Failure modes
