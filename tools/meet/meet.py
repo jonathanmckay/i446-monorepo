@@ -436,25 +436,16 @@ def main():
         print("⚠  No speech detected.")
         sys.exit(1)
 
-    # 2. Extract structured data
-    data = extract_meeting_data(transcript, meeting_name)
+    # 2. Save transcript to a text file alongside the WAV
+    tx_path = wav_path.with_suffix(".txt") if not args.tx else Path(args.tx).with_suffix(".transcript.txt")
+    tx_path.write_text(transcript)
+    print(f"📄 Transcript saved: {tx_path}")
 
-    # 3. File meeting note
-    note_path = write_meeting_note(data, transcript, meeting_name, args.domain)
-
-    # 4. Create Todoist tasks (opt-in with --todos)
-    if args.todos:
-        create_todoist_tasks(data.get("todos", []), args.domain)
-
-    # 5. Summary
-    print(f"\n✅  Done! \"{data.get('title', meeting_name)}\"")
-    print(f"   Note → {note_path}")
-
-    followup = data.get("followup_email")
-    if followup and followup != "null":
-        print("\n─── Followup email draft ───")
-        print(followup)
-        print("────────────────────────────")
+    # Note: extraction + filing is handled by Claude Code on /d357 stop.
+    # meet.py only records + transcribes.
+    print(f"\n✅  Done! Recording + transcript saved.")
+    print(f"   WAV → {wav_path if not args.tx else '(from file)'}")
+    print(f"   TXT → {tx_path}")
 
 
 if __name__ == "__main__":

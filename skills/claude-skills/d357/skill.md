@@ -39,11 +39,14 @@ Absent or `pid: null` → no recording active.
 ### `/d357 stop` — finalize
 
 1. Read state.json. If no active PID, report `No recording active.` and exit.
-2. Send SIGTERM: `kill -TERM <pid>`. meet.py has a signal handler that stops recording and proceeds to transcription + extraction + filing.
-3. Poll `ps -p <pid>` every 2s until the process exits (transcription on base.en runs ~0.1× realtime, so a 30-min meeting takes ~3 min to transcribe).
-4. Tail the log for the "📁 Filed:" line to get the output path.
+2. Send SIGTERM: `kill -TERM <pid>`. meet.py stops recording, transcribes with Whisper, and saves a `.txt` transcript alongside the `.wav`.
+3. Poll `ps -p <pid>` every 2s until the process exits (~0.1× realtime for transcription).
+4. Tail the log for the `TXT →` line to get the transcript path.
 5. Clear state.json (set `pid: null`).
-6. Report: `Stopped. Filed → <path>`. If the log shows errors, surface them.
+6. **Read the transcript** from the `.txt` file.
+7. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for any hand-written notes matching the meeting name.
+8. **Extract and file** — Claude Code generates the structured meeting note (summary, key points, decisions, action items, my notes, raw transcript) and writes it to `vault/d357/YYYY-MM-DD-<slug>.md`. Clear the meeting's section from new-notes.
+9. Report: `Stopped. Filed → <path>`.
 
 ### `/d357` (no args) — start recording with auto-detected name
 
