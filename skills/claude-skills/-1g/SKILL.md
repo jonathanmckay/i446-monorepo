@@ -21,24 +21,24 @@ Set goals for the current (or next) 2-hour time block. Goals go into the `-1₲`
 
 Auto-detect from wall clock time (America/Los_Angeles):
 
-| Block | Local Time | Arabic |
-|-------|-----------|--------|
-| 0 | 05:00-06:59 | فجر |
-| 1 | 07:00-08:59 | شروق |
-| 2 | 09:00-10:59 | صباح |
-| 3 | 11:00-12:59 | ظهر |
-| 4 | 13:00-14:59 | عصر |
-| 5 | 15:00-16:59 | آصيل |
-| 6 | 17:00-18:59 | غروب |
-| 7 | 19:00-20:59 | غسق |
-| 8 | 21:00-22:59 | زلة |
+| Block | Local Time | 地支 |
+|-------|-----------|------|
+| 0 | 05:00-06:59 | 卯 |
+| 1 | 07:00-08:59 | 辰 |
+| 2 | 09:00-10:59 | 巳 |
+| 3 | 11:00-12:59 | 午 |
+| 4 | 13:00-14:59 | 未 |
+| 5 | 15:00-16:59 | 申 |
+| 6 | 17:00-18:59 | 酉 |
+| 7 | 19:00-20:59 | 戌 |
+| 8 | 21:00-22:59 | 亥 |
 
-Times outside 05:00-22:59 default to فجر (block 0).
+Times outside 05:00-22:59 default to 卯 (block 0).
 
 ## Files
 
 - **Build order**: `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`
-- **Section**: `## -1₲` — goals go under the matching Arabic time heading
+- **Section**: `## -1₲` — goals go under the matching 地支 time heading
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
 - **Todoist labels**: `#关键径路` AND `#-1g` on every task
 
@@ -54,7 +54,7 @@ Extract goal items from the user's input. Each line starting with `-` or `*` or 
 
 ### Step 3: Update build order markdown
 
-Read the build order file. Find the `## -1₲` section. Under the target Arabic time heading (e.g., `- شروق`), replace any existing indented items with the new goals as `    - [ ] <goal>` lines (4-space indent).
+Read the build order file. Find the `## -1₲` section. Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new goals as `    - [ ] <goal>` lines (4-space indent).
 
 Keep all other time blocks untouched.
 
@@ -72,7 +72,7 @@ For each goal, create a Todoist task using the Todoist MCP `add-tasks` tool:
 
 Output one line:
 ```
--1g → <Arabic block name> (<HH:MM>-<HH:MM>): N goals set
+-1g → <地支 block name> (<HH:MM>-<HH:MM>): N goals set
 ```
 
 ## Response Style
