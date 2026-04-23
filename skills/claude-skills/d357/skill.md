@@ -45,9 +45,19 @@ Absent or `pid: null` → no recording active.
 5. Clear state.json (set `pid: null`).
 6. Report: `Stopped. Filed → <path>`. If the log shows errors, surface them.
 
-### `/d357 status` or `/d357` (no args) — show current state
+### `/d357` (no args) — start recording with auto-detected name
 
-Read state.json. If active, report `Recording: <name> since <HH:MM> (pid <pid>)`. If not, `No recording active.`
+If a recording is running, report status: `Recording: <name> since <HH:MM> (pid <pid>)`.
+
+If no recording is running, **auto-detect the meeting name** and start recording:
+1. Query Google Calendar for the current event (happening now ± 5 min) using `mcp__google-calendar-mcp__list-events`.
+2. If found, use the event title as the meeting name.
+3. If no current event, fall back to `"meeting YYYY-MM-DD HHmm"`.
+4. Proceed with the standard start flow (launch meet.py, write state.json, confirm).
+
+### `/d357 status` — show current state
+
+Report `Recording: <name> since <HH:MM> (pid <pid>)` if active, else `No recording active.`
 
 ## Notes
 
@@ -64,5 +74,6 @@ Read state.json. If active, report `Recording: <name> since <HH:MM> (pid <pid>)`
 | `/d357 joe 1:1` (while one is running) | Aborts with "already recording" |
 | `/d357 stop` | SIGTERM, waits for filing, reports path, clears state |
 | `/d357 stop` (nothing running) | Reports "No recording active." |
-| `/d357` | Reports current state (running or idle) |
+| `/d357` (nothing running) | Auto-detects calendar event name, starts recording |
+| `/d357` (while running) | Reports current recording status |
 | `/d357 standup --no-teams` | Launches mic-only (in-person) |
