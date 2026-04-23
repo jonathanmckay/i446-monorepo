@@ -7,6 +7,7 @@ Structured search for recent messages, reply via PostMessage, stable IDs.
 import json
 import os
 import re
+import sys
 import threading
 import webbrowser
 from datetime import datetime, timedelta, timezone
@@ -103,9 +104,14 @@ def record_action(item_id, action):
                 fetched = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
                 if fetched.tzinfo is None:
                     fetched = fetched.replace(tzinfo=timezone.utc)
-                hours = round((now - fetched).total_seconds() / 3600, 2)
-                if hours > 72:
-                    hours = None
+                raw = (now - fetched).total_seconds() / 3600
+                # Drop responses outside the 72h matching window — those are
+                # new threads, not replies. Within the window, clamp via the
+                # daily PST midnight reset (max 24h).
+                if 0 <= raw <= 72:
+                    sys.path.insert(0, str(Path(__file__).parent.parent / "personal-dashboard"))
+                    from comms_response_clamp import clamp_response_hours_dt
+                    hours = round(clamp_response_hours_dt(now, fetched), 2)
             except Exception:
                 pass
         conn.execute(

@@ -18,11 +18,17 @@ import sqlite3
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 
+from comms_response_clamp import clamp_response_hours_unix, MAX_RESPONSE_HOURS
+
 CHATDB = Path.home() / "Library" / "Messages" / "chat.db"
 RESPONSE_DB = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
 APPLE_EPOCH = 978307200
-MAX_RESPONSE_HOURS = 72
 LOOKBACK_DAYS = 30
+# Original received-message matching window (a sent message only counts as a
+# "response" if there's a received message in the same chat within this window).
+# After matching, the recorded response_hours is clamped via comms_response_clamp
+# so the daily timer reset gives us a max latency of 24h.
+MATCH_WINDOW_HOURS = 72
 
 
 def init_db():
@@ -127,8 +133,11 @@ def scan_chatdb(days=LOOKBACK_DAYS):
             # Find most recent received message before this sent
             for j in range(i - 1, -1, -1):
                 if not msgs_list[j]["is_from_me"]:
-                    delta_h = (msg["unix_ts"] - msgs_list[j]["unix_ts"]) / 3600
-                    if 0 < delta_h <= MAX_RESPONSE_HOURS:
+                    raw_h = (msg["unix_ts"] - msgs_list[j]["unix_ts"]) / 3600
+                    if 0 < raw_h <= MATCH_WINDOW_HOURS:
+                        delta_h = clamp_response_hours_unix(
+                            msg["unix_ts"], msgs_list[j]["unix_ts"]
+                        )
                         pairs.append({
                             "chat_id": chat_id,
                             "chat_name": msg["chat_name"],

@@ -33,6 +33,10 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
+# Daily-reset clamp for individual response timers (max 24h, resets at PST midnight)
+sys.path.insert(0, str(Path(__file__).parent))
+from comms_response_clamp import clamp_response_hours_unix
+
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 DAYS = 30
@@ -150,11 +154,14 @@ def compute_response_times(service, account_name, days=DAYS):
             if received_ts <= 0 or sent_ts <= received_ts:
                 continue
 
-            delta_hours = (sent_ts - received_ts) / 3_600_000  # ms → hours
+            raw_hours = (sent_ts - received_ts) / 3_600_000  # ms → hours
 
-            # Cap at 72h to exclude abandoned threads
-            if delta_hours > 72:
+            # Skip threads that have been abandoned for more than 72h
+            # (matching window unchanged); response_hours itself resets daily.
+            if raw_hours > 72:
                 continue
+
+            delta_hours = clamp_response_hours_unix(sent_ts / 1000, received_ts / 1000)
 
             recv_hour = datetime.fromtimestamp(received_ts / 1000, tz=LOCAL_TZ).hour
             response_times.append({"date": day_str, "hours": round(delta_hours, 2), "recv_hour": recv_hour})
@@ -316,8 +323,11 @@ def compute_imessage_response_times(days=DAYS):
             # Find preceding received message
             for j in range(i - 1, -1, -1):
                 if not msgs_list[j]["is_from_me"]:
-                    delta_hours = (msg["unix_ts"] - msgs_list[j]["unix_ts"]) / 3600
-                    if 0 < delta_hours <= 72:
+                    raw_hours = (msg["unix_ts"] - msgs_list[j]["unix_ts"]) / 3600
+                    if 0 < raw_hours <= 72:
+                        delta_hours = clamp_response_hours_unix(
+                            msg["unix_ts"], msgs_list[j]["unix_ts"]
+                        )
                         recv_hour = datetime.fromtimestamp(msgs_list[j]["unix_ts"], tz=LOCAL_TZ).hour
                         response_times.append({
                             "date": msg["day_str"],
@@ -491,10 +501,13 @@ def parse_teams_replies(raw, days=DAYS, now=None):
                 # Mine without a preceding inbound — not a reply
                 continue
             delta = (ts - last_their_ts).total_seconds() / 3600.0
-            # Cap at 72h to exclude abandoned threads (matches build_stats)
+            # Skip threads abandoned >72h (matching window). The recorded
+            # response_hours is then clamped to today (PST) via the daily
+            # reset, so the max is 24h.
             if delta <= 0 or delta > 72:
                 last_their_ts = None
                 continue
+            delta = clamp_response_hours_unix(ts.timestamp(), last_their_ts.timestamp())
             local_sent = ts.astimezone(LOCAL_TZ)
             local_recv = last_their_ts.astimezone(LOCAL_TZ)
             day = local_sent.date()

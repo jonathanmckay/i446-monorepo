@@ -32,9 +32,16 @@ except ImportError:
 RESPONSE_DB = Path.home() / ".config" / "outlook" / "response_times.db"
 MY_EMAIL = "jomckay@microsoft.com"
 MY_ALIASES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
-MAX_RESPONSE_HOURS = 72
+# Original cap on the matching window; replies beyond this are considered
+# new threads, not responses. Final response_hours is clamped daily via
+# comms_response_clamp (max 24h, resets at PST midnight).
+MATCH_WINDOW_HOURS = 72
 # Assume Outlook "Sent:" timestamps in bodyPreview are Pacific time
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+
+# Shared midnight-PST clamp lives next to this script
+sys.path.insert(0, str(Path(__file__).parent))
+from comms_response_clamp import clamp_response_hours_dt
 
 
 def init_db():
@@ -336,14 +343,14 @@ def sync_responses(days=7):
 
         # Compute response time
         # original_sent_dt is the time the original was sent (approx when we received it)
-        delta = sent_dt - original_sent_dt
-        response_hours = round(delta.total_seconds() / 3600, 2)
-
-        # Skip negative or impossibly large
-        if response_hours < 0:
+        delta_raw_hours = (sent_dt - original_sent_dt).total_seconds() / 3600
+        # Skip negative or impossibly large (outside the matching window)
+        if delta_raw_hours < 0:
             continue
-        if response_hours > MAX_RESPONSE_HOURS:
-            response_hours = MAX_RESPONSE_HOURS
+        if delta_raw_hours > MATCH_WINDOW_HOURS:
+            continue
+        # Clamp via daily reset at PST midnight; final value <= 24h.
+        response_hours = round(clamp_response_hours_dt(sent_dt, original_sent_dt), 2)
 
         # Format sender
         sender = f"{sender_name} <{sender_email}>" if sender_name else sender_email
