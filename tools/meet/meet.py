@@ -164,6 +164,44 @@ def transcribe(wav_path: Path, model_name: str = WHISPER_MODEL) -> str:
     return text
 
 
+# ── One-sided detection ──────────────────────────────────────────────────────
+
+FILLER_WORDS = {
+    "mm-hmm", "mmhmm", "mm", "hmm", "yep", "yeah", "yup", "uh-huh",
+    "uh", "um", "ok", "okay", "right", "sure", "yes", "no", "mhm",
+}
+
+
+def check_one_sided(transcript: str, threshold: float = 0.40) -> Optional[int]:
+    """Detect if transcript is one-sided (only one person's audio captured).
+
+    Splits transcript into chunks by sentence-ish boundaries. If >threshold
+    of chunks are pure filler (mm-hmm, yep, yeah, etc.), the transcript is
+    likely one-sided. Returns filler percentage if one-sided, None otherwise.
+    """
+    import re
+    # Split on sentence boundaries (period, question mark, or long pauses
+    # that Whisper renders as capitalized starts)
+    chunks = re.split(r'(?<=[.?!])\s+|(?<=\w)\.\s+', transcript)
+    # Further split on capitalized starts mid-text
+    refined = []
+    for chunk in chunks:
+        parts = re.split(r'(?<=[a-z])\s+(?=[A-Z])', chunk)
+        refined.extend(parts)
+
+    if len(refined) < 10:
+        return None  # too short to judge
+
+    filler_count = 0
+    for chunk in refined:
+        words = set(chunk.strip().lower().rstrip(".!?,").split())
+        if words and words.issubset(FILLER_WORDS):
+            filler_count += 1
+
+    pct = round(100 * filler_count / len(refined))
+    return pct if pct >= int(threshold * 100) else None
+
+
 # ── Extraction ────────────────────────────────────────────────────────────────
 
 EXTRACT_PROMPT = """You are processing a meeting transcript for Jonathan McKay.
@@ -379,6 +417,15 @@ def main():
     if not transcript.strip():
         print("⚠  No speech detected.")
         sys.exit(1)
+
+    # 1b. One-sided transcript check
+    one_sided = check_one_sided(transcript)
+    if one_sided:
+        print(f"\n⚠  Transcript appears one-sided ({one_sided}% filler).")
+        print("   Only one person's audio was captured.")
+        print("   Hint: use --teams to capture both sides of a call.")
+        print("   The recording is saved. Re-run with --teams next time.")
+        sys.exit(2)
 
     # 2. Extract structured data
     data = extract_meeting_data(transcript, meeting_name)
