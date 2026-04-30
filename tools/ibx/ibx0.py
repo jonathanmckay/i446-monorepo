@@ -485,6 +485,7 @@ def print_help():
         "[bold]c[/bold] check now  "
         "[bold]f[/bold] fetch new  "
         "[bold]q[/bold] quit  "
+        "[bold]R[/bold] reload  "
         "[dim]or type anything → Claude[/dim]\n"
     )
 
@@ -1361,11 +1362,16 @@ def main():
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], 2.0)
                 if ready:
-                    line = sys.stdin.readline().strip().lower()
+                    line_raw = sys.stdin.readline().strip()
+                    line = line_raw.lower()
                     if line == "q":
                         console.print("[dim]Bye.[/dim]")
                         stop_poll.set()
                         return
+                    if line_raw == "R":
+                        console.print("[dim]Reloading...[/dim]")
+                        stop_poll.set()
+                        sys.exit(0)
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]Bye.[/dim]")
                 stop_poll.set()
@@ -1448,15 +1454,20 @@ def main():
                             console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
                             break
 
-                    # Wait up to 2s, check for user quit
+                    # Wait up to 2s, check for user quit/reload
                     try:
                         ready, _, _ = select.select([sys.stdin], [], [], 2.0)
                         if ready:
-                            line = sys.stdin.readline().strip().lower()
+                            line_raw = sys.stdin.readline().strip()
+                            line = line_raw.lower()
                             if line == "q":
                                 console.print("[dim]Bye.[/dim]")
                                 stop_poll.set()
                                 sys.exit(2)
+                            if line_raw == "R":
+                                console.print("[dim]Reloading...[/dim]")
+                                stop_poll.set()
+                                sys.exit(0)
                     except (KeyboardInterrupt, EOFError):
                         console.print("\n[dim]Bye.[/dim]")
                         stop_poll.set()
@@ -1515,6 +1526,11 @@ def main():
             _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
+
+        elif cmd == "r" and user_input == "R":  # capital R only (lowercase r = reply)
+            console.print("[dim]Reloading...[/dim]")
+            stop_poll.set()
+            sys.exit(0)  # exit 0 → wrapper restarts immediately
 
         elif cmd == "o":
             try:

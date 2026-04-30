@@ -60,7 +60,13 @@ $ERROR" --allowedTools "Read,Edit,Grep"
     # Exit code 2 = user quit (stop). Otherwise restart.
     [[ $EXIT_CODE -eq 2 ]] && break
 
-    echo ""
-    echo "── inbound exited — restarting in 5s  (Ctrl+C to quit) ──"
-    sleep 5
+    # Exit code 0 = reload (immediate restart, no delay)
+    if [[ $EXIT_CODE -eq 0 ]]; then
+        echo "── reloading inbound ──"
+        sleep 0.3
+    else
+        echo ""
+        echo "── inbound exited — restarting in 5s  (Ctrl+C to quit) ──"
+        sleep 5
+    fi
 done
