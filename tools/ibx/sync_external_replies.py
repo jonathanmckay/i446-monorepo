@@ -237,7 +237,8 @@ def sync_gmail(conn, lookback_hours):
 # ── Outlook/Teams cross-sync ────────────────────────────────────────────────
 
 def sync_from_response_db(conn, db_path, msg_type, table_name, id_prefix):
-    """Import rows from an existing response_times.db into archive_log."""
+    """Import rows from an existing response_times.db into archive_log.
+    Only imports actual replies, not archives/deletes of newsletters/noise."""
     if not db_path.exists():
         return 0
     inserted = 0
@@ -250,12 +251,24 @@ def sync_from_response_db(conn, db_path, msg_type, table_name, id_prefix):
                 action_at = r["action_at"]
                 if not action_at:
                     continue
+                # Only count actual replies, not archives of newsletters/invites.
+                # The source DB action field distinguishes; also check subject for "Re:"
+                src_action = r["action"] if "action" in r.keys() else ""
+                # Outlook has "subject", Teams has "preview"
+                subject = ""
+                if "subject" in r.keys():
+                    subject = r["subject"] or ""
+                elif "preview" in r.keys():
+                    subject = r["preview"] or ""
+                is_reply = (src_action in ("reply", "replied", "reply_all")
+                            or "re:" in subject.lower()[:30])
+                if not is_reply:
+                    continue
                 dt = datetime.fromisoformat(action_at.replace("Z", "+00:00"))
                 epoch = dt.timestamp()
                 resp_hours = r["response_hours"]
                 resp_min = resp_hours * 60 if resp_hours is not None else None
                 uid = f"{id_prefix}:{r['item_id']}"
-                action = "reply"
                 if insert_reply(conn, uid, epoch, msg_type, resp_min):
                     inserted += 1
             except Exception:
