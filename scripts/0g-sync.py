@@ -51,7 +51,7 @@ TASK_RE = re.compile(
 OG_HEADING = "\u0030\u20b2"  # "0" + "₲"
 LATER_HEADING = "\u4ee5\u540e\u7684\u76ee\u6807"  # 以后的目标
 
-CRITICAL_PATH_LABEL = "#\u5173\u952e\u5f84\u8def"  # #关键径路
+OG_LABEL = "#0g"
 
 # Domain detection rules: (pattern, label)
 DOMAIN_RULES = [
@@ -90,8 +90,8 @@ DOMAIN_RULES = [
 
 
 def detect_labels(description: str) -> List[str]:
-    """Detect domain labels from task description. Always includes 关键径路."""
-    labels = [CRITICAL_PATH_LABEL]
+    """Detect domain labels from task description. Always includes #0g."""
+    labels = [OG_LABEL]
     desc_lower = description.lower()
     for pattern, label in DOMAIN_RULES:
         if re.search(pattern, desc_lower, re.IGNORECASE):
@@ -317,6 +317,17 @@ class TodoistClient:
 
 # --- Fuzzy Matching ---
 
+# Annotation tokens that Todoist content may carry but a bare task.key won't:
+# {N} / <N> / (N) and trailing @code labels. Strip before comparison.
+ANNOTATION_RE = re.compile(r"[{<(]\d+[)>}]|@\S+")
+
+
+def normalize_content(s: str) -> str:
+    """Lowercase + strip annotation tokens so MD task.key and Todoist content
+    can be compared apples-to-apples."""
+    return ANNOTATION_RE.sub("", s).strip().lower()
+
+
 def fuzzy_match(new_key: str, state_keys: set) -> Optional[str]:
     """Find a state key that shares 60%+ words with new_key."""
     new_words = set(new_key.split())
@@ -403,12 +414,22 @@ def run_sync(client: TodoistClient, dry_run: bool):
                 logger.info("[DRY RUN] Would update: %s -> %s", fmatch[:40], task.key[:40])
             continue
 
-        # Check if task already exists in Todoist (created by /0g or another source)
+        # Check if task already exists in Todoist (created by /0g or another source).
+        # Normalize both sides — strip {N}/<N>/(N)/@code annotations — so a
+        # Todoist task created with "Foo {30}" matches an MD desc "Foo".
         existing_match = None
+        task_norm = normalize_content(task.key)
+        task_words = set(task_norm.split())
         for tt in todoist_tasks:
-            tt_key = tt["content"].strip().lower()
-            tt_words = set(tt_key.split())
-            task_words = set(task.key.split())
+            tt_norm = normalize_content(tt["content"])
+            # First try: normalized exact match (most robust).
+            if tt_norm and task_norm and (tt_norm == task_norm or
+                                          task_norm in tt_norm or
+                                          tt_norm in task_norm):
+                existing_match = tt
+                break
+            # Fallback: word-set overlap >= 60%.
+            tt_words = set(tt_norm.split())
             if task_words and tt_words:
                 overlap = len(task_words & tt_words) / max(len(task_words), len(tt_words))
                 if overlap >= 0.6:
