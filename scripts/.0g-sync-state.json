@@ -1,22 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "have a rampdown checklist and start on it": {
-      "todoist_id": "6gW4HvPV88X82x7R",
-      "minutes": 60
-    },
-    "finish fund i m5x2 p&l": {
-      "todoist_id": "6gW4qPX35h4GhX42",
-      "minutes": 30
-    },
-    "slt presentation ready to go": {
-      "todoist_id": "6gW4qPpG4w8MrQcR",
-      "minutes": 50
-    },
     "weights exercise": {
       "todoist_id": "6gW4qQ3XCm6Xw6r2",
       "minutes": 20
     }
   },
-  "last_sync": "2026-04-30T10:00:02.818249-07:00"
+  "last_sync": "2026-04-30T16:00:04.925592-07:00"
 }
