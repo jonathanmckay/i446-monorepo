@@ -707,6 +707,49 @@ def _build_api_data():
         except Exception:
             pass
 
+    # Overlay archive_log.db (unified source of truth, shared with /inbound idle screen).
+    # For each day in the chart window, replace per-type counts with archive_log data
+    # so the dashboard matches what /inbound shows.
+    _archive_db = Path.home() / ".config" / "ibx" / "archive_log.db"
+    if _archive_db.exists():
+        try:
+            _aconn = _sq3.connect(f"file:{_archive_db}?mode=ro", uri=True)
+            _TYPE_TO_ACCT = {
+                "email": "m5x2 gmail",
+                "outlook": "outlook",
+                "teams": "teams",
+                "slack": "slack",
+                "imsg": "imessage",
+            }
+            for d in dates:
+                day_start = datetime.strptime(d, "%Y-%m-%d").timestamp()
+                day_end = day_start + 86400
+                rows = _aconn.execute(
+                    "SELECT message_type, COUNT(DISTINCT item_uid), AVG(response_min) "
+                    "FROM archive_log WHERE timestamp >= ? AND timestamp < ? "
+                    "AND action = 'reply' AND response_min IS NOT NULL "
+                    "GROUP BY message_type",
+                    (day_start, day_end),
+                ).fetchall()
+                for msg_type, count, avg_min in rows:
+                    acct = _TYPE_TO_ACCT.get(msg_type)
+                    if not acct or count == 0:
+                        continue
+                    avg_h = avg_min / 60.0 if avg_min else None
+                    existing = email_by_account[acct].get(d, {})
+                    # Only override if archive_log has MORE replies (it's more complete)
+                    if count >= existing.get("count", 0):
+                        email_by_account[acct][d] = {
+                            "avg_hours": avg_h,
+                            "avg_hours_daytime": avg_h,
+                            "count": count,
+                            "count_daytime": count,
+                            "sent_count": count,
+                        }
+            _aconn.close()
+        except Exception:
+            pass
+
     # Blended average response time (purple line) + per-account count bars
     EMAIL_BAR_COLORS = {
         "m5x2 gmail": "#d5003266", "m5x2": "#d5003266",
