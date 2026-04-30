@@ -265,17 +265,20 @@ def _block_reply_count():
 
 
 def _day_avg_response():
-    """Return (avg_minutes, reply_count) for the day from archive_log. Returns (None, 0) if no replies."""
+    """Return (avg_minutes, reply_count) for the day from archive_log. Returns (None, 0) if no replies.
+    Count includes ALL replies; avg only uses those with response_min data."""
     try:
         today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         db = _get_archive_db()
         cursor = db.execute(
-            "SELECT AVG(response_min), COUNT(*) FROM archive_log WHERE timestamp >= ? AND action = 'reply' AND response_min IS NOT NULL",
-            (today_midnight,),
+            "SELECT AVG(response_min), "
+            "  (SELECT COUNT(DISTINCT item_uid) FROM archive_log WHERE timestamp >= ? AND action = 'reply') "
+            "FROM archive_log WHERE timestamp >= ? AND action = 'reply' AND response_min IS NOT NULL",
+            (today_midnight, today_midnight),
         )
         row = cursor.fetchone()
         avg, count = row[0], row[1]
-        if count == 0 or avg is None:
+        if count == 0:
             return None, 0
         return avg, count
     except Exception:
