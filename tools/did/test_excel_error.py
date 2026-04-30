@@ -80,6 +80,27 @@ def test_ix_osa_detects_applescript_error():
     )
 
 
+def test_0n_habits_never_write_to_0fen():
+    """
+    Bug: 0n habits like 'ibx - i9' matched a Todoist task with [20] points
+    and i9 label, causing did-fast.py to write +20 to 0分 column R (i9).
+    This double-counts because Excel's own formulas already roll up 0n
+    data into 0分.
+
+    Fix: The 0n routing step must NOT set fen_col or fen_points. Only
+    close the Todoist task.
+    """
+    src = _get_source(DID_FAST)
+    # Find the 0n routing block (step="0n")
+    idx = src.index('step="0n"')
+    # Find the next step (1n or todoist)
+    next_step = src.index('Step 0.2', idx)
+    on_block = src[idx:next_step]
+    assert "fen_col" not in on_block or "do NOT write" in on_block.lower() or "double-count" in on_block.lower(), (
+        "0n routing must NOT set fen_col — Excel handles 0n→0分 rollup via formulas"
+    )
+
+
 def test_ix_osa_never_falls_back_to_local():
     """ix-osa.py must never call local osascript."""
     src = _get_source(IX_OSA)
