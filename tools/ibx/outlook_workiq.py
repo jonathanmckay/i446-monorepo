@@ -155,6 +155,7 @@ def fetch_outlook_items():
         "FROM: sender name and email\n"
         "SUBJECT: subject line\n"
         "BODY: first 2 sentences\n"
+        "LINK: the Outlook web link to open this email\n"
         "Separate with ---"
     )
 

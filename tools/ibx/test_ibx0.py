@@ -372,3 +372,112 @@ def test_background_injection_after_input_not_before_card():
             )
             return
     raise AssertionError("main() function not found")
+
+
+def test_response_stats_uses_dashboard_clamp():
+    """Bug: /ibx '⏱ Response time' didn't match the project blocking dashboard.
+
+    The dashboard clamps via comms_response_clamp.clamp_response_hours_unix
+    (resets at PST midnight, caps at 24h). ibx0 used a raw `now - received`
+    delta. _print_response_stats must call the same clamp so the numbers align.
+    """
+    source = IBX_ALL_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_print_response_stats":
+            func_source = ast.get_source_segment(source, node)
+            assert "clamp_response_hours_unix" in func_source, (
+                "_print_response_stats must call clamp_response_hours_unix "
+                "from comms_response_clamp so /ibx numbers match the "
+                "project blocking dashboard"
+            )
+            return
+    raise AssertionError("_print_response_stats function not found")
+
+
+def test_clamp_imported_from_dashboard():
+    """ibx0 must import the clamp helper from personal-dashboard's
+    comms_response_clamp module (single source of truth)."""
+    source = IBX_ALL_PY.read_text()
+    assert "comms_response_clamp" in source, (
+        "ibx0 must import from comms_response_clamp (shared with dashboard)"
+    )
+    assert "clamp_response_hours_unix" in source, (
+        "ibx0 must import clamp_response_hours_unix"
+    )
+
+
+# ── Slack resolution polling ────────────────────────────────────────────────
+
+def test_email_uid_uses_rfc_message_id():
+    """
+    Bug: same email delivered to multiple accounts (or appearing as multiple
+    Gmail messages in one account) showed up twice because _item_uid used the
+    Gmail API message ID, which differs per copy. RFC Message-ID is the same
+    for all copies of the same email.
+
+    Fix: _item_uid for emails must prefer RFC Message-ID (email['message_id'])
+    over the Gmail API ID, so duplicate copies are recognized as the same item.
+    """
+    source = IBX_ALL_PY.read_text()
+    # Find _item_uid function body
+    fn_start = source.index("def _item_uid(")
+    fn_end = source.index("\ndef ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    assert "message_id" in fn_body, (
+        "_item_uid must use RFC Message-ID for email dedup, not just Gmail API ID"
+    )
+
+
+def test_notify_sent_plays_sound_and_shows_indicator():
+    """
+    Bug: only iMessage played a sound on send. Other channels (Gmail, Slack,
+    Teams, Outlook) gave no audible or visual feedback after replying.
+
+    Fix: _notify_sent() plays a system sound and prints an envelope indicator.
+    All reply confirmation paths must call it instead of bare console.print.
+    """
+    source = IBX_ALL_PY.read_text()
+    assert "def _notify_sent(" in source, (
+        "_notify_sent helper must exist"
+    )
+    assert "afplay" in source[source.index("def _notify_sent("):source.index("\ndef ", source.index("def _notify_sent(") + 1)], (
+        "_notify_sent must play a system sound via afplay"
+    )
+    # No remaining bare "Sent + done" prints (all should use _notify_sent)
+    assert 'console.print("[green]Sent + done.' not in source, (
+        "All send confirmations must use _notify_sent(), not bare console.print"
+    )
+
+
+def test_poll_resolved_checks_slack():
+    """
+    Bug: _poll_resolved and check_resolved_now only checked email and imsg,
+    never Slack. Archived Slack threads reappeared on every background fetch
+    because they were never added to the resolved set.
+
+    Fix: both functions must check Slack read state (last_read vs latest_ts).
+    """
+    source = IBX_ALL_PY.read_text()
+
+    # _poll_resolved must handle slack
+    poll_fn_start = source.index("def _poll_resolved(")
+    poll_fn_end = source.index("\ndef ", poll_fn_start + 1)
+    poll_body = source[poll_fn_start:poll_fn_end]
+    assert '"slack"' in poll_body, (
+        "_poll_resolved must check Slack items for resolution"
+    )
+    assert "last_read" in poll_body, (
+        "_poll_resolved Slack check must compare last_read timestamp"
+    )
+
+    # check_resolved_now must handle slack
+    check_fn_start = source.index("def check_resolved_now(")
+    check_fn_end = source.index("\ndef ", check_fn_start + 1)
+    check_body = source[check_fn_start:check_fn_end]
+    assert '"slack"' in check_body, (
+        "check_resolved_now must check Slack items for resolution"
+    )
+    assert "last_read" in check_body, (
+        "check_resolved_now Slack check must compare last_read timestamp"
+    )

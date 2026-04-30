@@ -91,3 +91,38 @@ def test_all_filler_flagged():
     result = check_one_sided("Mm-hmm. Yep. Yeah. " * 20)
     assert result is not None
     assert result >= 90
+
+
+# ── Teams mode: repeating checks + notifications ─────────────────────────────
+
+import ast
+
+def test_teams_check_repeats_not_oneshot():
+    """Bug: teams silence check only fired once (silence_warned=True).
+    Amideast meeting warned at 60s but then ran 47 min with no follow-ups.
+    Fix: use last_teams_check counter instead of a boolean flag.
+    """
+    source = Path(__file__).parent.joinpath("meet.py").read_text()
+    # Must NOT have silence_warned as the guard for teams mode
+    tree = ast.parse(source)
+    # Check that the recording loop uses last_teams_check, not silence_warned
+    assert "last_teams_check" in source, "Teams check must use repeating interval, not one-shot flag"
+    assert "silence_warned" not in source or source.count("silence_warned") == 0, (
+        "silence_warned flag should be removed; teams checks must repeat"
+    )
+
+
+def test_teams_warnings_send_notification():
+    """Bug: warnings only went to nohup log file, user never saw them.
+    Fix: _notify() sends macOS notification for each warning.
+    """
+    source = Path(__file__).parent.joinpath("meet.py").read_text()
+    assert "def _notify" in source, "meet.py must define _notify function"
+    assert "display notification" in source, "_notify must use osascript display notification"
+    # _notify must be called in the teams warning branches
+    # Count calls in the recording function
+    in_record = source[source.index("def record_audio"):]
+    notify_calls = in_record.count("_notify(")
+    assert notify_calls >= 3, (
+        f"Expected >=3 _notify calls (both-silent, mic-only, bh-only), got {notify_calls}"
+    )

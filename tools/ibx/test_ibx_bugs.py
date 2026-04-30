@@ -193,6 +193,92 @@ def test_slack_read_channel_is_filtered():
     assert result is None, "Channel where last_read > latest msg should be filtered out"
 
 
+def test_slack_thread_filtered_when_user_already_replied():
+    """Bug: Slack messages the user already replied to kept appearing as new
+    inbox cards. build_thread checked last_read but not whether the user's
+    own reply was the latest message. If the user replied but Slack hadn't
+    updated last_read yet, the thread re-appeared.
+    Fix: compare latest outbound ts against latest inbound ts. If the user's
+    latest message is newer than the latest inbound, skip the thread."""
+    from unittest.mock import patch
+    import slack as _slack
+
+    token = "xoxp-fake"
+    self_id = "U_SELF"
+    channel = {"id": "D_IM", "is_im": True, "user": "U_OTHER"}
+
+    # last_read is OLDER than both messages (Slack hasn't caught up)
+    info_response = {
+        "ok": True,
+        "channel": {"id": "D_IM", "last_read": "1000000000.000000"}
+    }
+    # User replied AFTER the inbound message (newest first)
+    history_response = {
+        "ok": True,
+        "messages": [
+            {"type": "message", "user": "U_SELF", "text": "check with Ian first!", "ts": "1000000200.000000"},
+            {"type": "message", "user": "U_OTHER", "text": "Name rings a bell", "ts": "1000000100.000000"},
+        ]
+    }
+
+    def fake_slack_get(tok, method, **kwargs):
+        if method == "conversations.info":
+            return info_response
+        elif method == "conversations.history":
+            return history_response
+        elif method == "users.info":
+            return {"ok": True, "user": {"real_name": "Lawrence", "profile": {"display_name": "lawrence"}}}
+        return {}
+
+    with patch.object(_slack, "slack_get", side_effect=fake_slack_get):
+        result = _slack.build_thread(token, channel, self_id)
+
+    assert result is None, (
+        "Thread where user's latest reply is newer than latest inbound "
+        "message must be filtered out"
+    )
+
+
+def test_slack_thread_shown_when_new_inbound_after_reply():
+    """Counterpart: if someone replies AFTER the user, the thread should show."""
+    from unittest.mock import patch
+    import slack as _slack
+
+    token = "xoxp-fake"
+    self_id = "U_SELF"
+    channel = {"id": "D_IM", "is_im": True, "user": "U_OTHER"}
+
+    info_response = {
+        "ok": True,
+        "channel": {"id": "D_IM", "last_read": "1000000000.000000"}
+    }
+    # Other person replied AFTER the user (newest first)
+    history_response = {
+        "ok": True,
+        "messages": [
+            {"type": "message", "user": "U_OTHER", "text": "actually wait", "ts": "1000000300.000000"},
+            {"type": "message", "user": "U_SELF", "text": "done", "ts": "1000000200.000000"},
+            {"type": "message", "user": "U_OTHER", "text": "hey", "ts": "1000000100.000000"},
+        ]
+    }
+
+    def fake_slack_get(tok, method, **kwargs):
+        if method == "conversations.info":
+            return info_response
+        elif method == "conversations.history":
+            return history_response
+        elif method == "users.info":
+            return {"ok": True, "user": {"real_name": "Lawrence", "profile": {"display_name": "lawrence"}}}
+        return {}
+
+    with patch.object(_slack, "slack_get", side_effect=fake_slack_get):
+        result = _slack.build_thread(token, channel, self_id)
+
+    assert result is not None, (
+        "Thread with new inbound message after user's reply must still show"
+    )
+
+
 def test_autosign_checks_html_body_for_appfolio_url():
     """Bug: forwarded countersign emails had the AppFolio URL only in the HTML body,
     not in the text/plain part. is_autosign_email returned False because
@@ -471,3 +557,230 @@ def test_imsg_fetch_unread_skips_already_replied_threads():
             break
     else:
         raise AssertionError("fetch_unread_threads() not found in imsg.py")
+
+
+def test_body_truncation_keeps_newest_lines():
+    """Bug: card body truncation kept the FIRST 20 lines, discarding the newest
+    messages at the bottom of threads. Users need to see the latest messages.
+    Fix: truncate from the top (keep last 20 lines) with '…' prefix."""
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    # Find the body truncation block: look for the assignment that builds
+    # the truncated wrapped list
+    found = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        # Look for: if len(wrapped) > 20
+        test = node.test
+        if not (isinstance(test, ast.Compare)
+                and len(test.comparators) == 1):
+            continue
+        segment = ast.get_source_segment(source, node)
+        if segment and "wrapped" in segment and "> 20" in segment:
+            found = True
+            # Must keep tail (wrapped[-20:]) not head (wrapped[:20])
+            assert "wrapped[-20:]" in segment, (
+                "Body truncation must keep the LAST 20 lines (wrapped[-20:]), "
+                "not the first 20 (wrapped[:20])"
+            )
+            break
+    assert found, "Body truncation if-block not found in ibx0.py"
+
+
+def test_open_uses_chrome_profiles():
+    """Bug: 'o' command opened URLs in default browser without the correct
+    Chrome profile context (m5x2, MSFT, 个).
+    Fix: do_open dispatches to _open_in_chrome with profile-specific directory."""
+    source = open("ibx0.py").read()
+
+    # _CHROME_PROFILES must map all three contexts
+    assert '"m5x2"' in source and "Profile 11" in source, "m5x2 profile mapping missing"
+    assert '"msft"' in source and "Profile 1" in source, "MSFT profile mapping missing"
+    assert '"jbm"' in source and "Profile 5" in source, "jbm/个 profile mapping missing"
+
+    # do_open must call _open_in_chrome, not bare subprocess open
+    func_start = source.index("def do_open(")
+    func_end = source.index("\ndef ", func_start + 1)
+    func_src = source[func_start:func_end]
+    assert "_open_in_chrome(" in func_src, "do_open must use _open_in_chrome"
+    assert 'subprocess.run(["open", url])' not in func_src, \
+        "do_open must not use bare open for URLs"
+
+
+def test_expand_command_exists():
+    """Bug: no way to see full message body when truncated.
+    Fix: 'e' command shows the full body stored in item['_full_body']."""
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    # The main loop should have an 'elif cmd == "e"' branch
+    found_expand = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            segment = ast.get_source_segment(source, node)
+            if segment and 'cmd == "e"' in segment:
+                found_expand = True
+                break
+    assert found_expand, 'ibx0.py must have an elif cmd == "e" branch for expand'
+
+    # _full_body must be stored during card rendering
+    assert "_full_body" in source, "Card renderer must store _full_body on item for expand"
+
+
+def test_processed_items_added_to_resolved():
+    """Bug: items processed by the user (archive, delete, reply) were not added
+    to the resolved set. When background continuous fetch re-fetched them and
+    all_items was replaced (idle loop line: all_items = fresh), the old items
+    reappeared as "new" because they weren't in resolved.
+    Fix: mark all items before the current index as resolved at each loop iteration."""
+    source = open("ibx0.py").read()
+
+    # The main loop must add processed items to resolved
+    # Find the section between "item = all_items[index]" and "display_card"
+    # which should contain the resolved.add loop
+    main_loop_section = source[source.index("item = all_items[index]") - 200:
+                               source.index("item = all_items[index]") + 50]
+    assert "resolved.add" in main_loop_section, (
+        "Items before current index must be added to resolved set "
+        "so background fetch doesn't re-inject them"
+    )
+
+
+def test_outlook_open_always_opens_browser():
+    """Bug: hitting 'o' on an Outlook email did nothing in Chrome.
+    Root cause: do_open() checked `if url:` but link was always empty
+    because workiq prompt didn't ask for LINK. When empty, it silently
+    returned without opening anything.
+    Fix: fall back to Outlook web search URL when no link available.
+    """
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    # do_open must always call _open_in_chrome for outlook items,
+    # not guard it behind `if url:`
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "do_open":
+            body_src = ast.get_source_segment(source, node)
+            # The outlook branch must have a fallback URL
+            assert "outlook.office.com" in body_src, (
+                "do_open() must fall back to Outlook web URL when link is empty"
+            )
+            break
+    else:
+        raise AssertionError("do_open function not found")
+
+
+def test_workiq_prompt_asks_for_link():
+    """Bug: workiq prompt didn't ask for LINK field, so Outlook emails
+    never had a link to open.
+    Fix: added LINK: to the workiq prompt.
+    """
+    source = open("outlook_workiq.py").read()
+    assert "LINK:" in source, "workiq prompt must ask for LINK field"
+
+
+def test_archive_log_db_tracks_actions():
+    """Feature: archive actions are logged to a local SQLite database so the
+    idle screen can show an accurate 'archived this block' count that survives
+    process restarts and doesn't depend on flaky APIs."""
+    source = open("ibx0.py").read()
+
+    # DB helpers must exist
+    assert "def _get_archive_db(" in source, "must have _get_archive_db function"
+    assert "def _log_archive(" in source, "must have _log_archive function"
+    assert "def _block_archive_count(" in source, "must have _block_archive_count function"
+    assert "archive_log.db" in source, "must use archive_log.db file"
+
+    # _log_archive must be called in do_archive, do_delete, do_reply
+    for func_name in ("do_archive", "do_delete", "do_reply"):
+        func_start = source.index(f"def {func_name}(")
+        func_end = source.index("\ndef ", func_start + 1)
+        func_src = source[func_start:func_end]
+        assert "_log_archive(" in func_src, (
+            f"{func_name} must call _log_archive after successful action"
+        )
+
+    # _block_archive_count must use COUNT(DISTINCT item_uid) to dedup
+    count_start = source.index("def _block_archive_count(")
+    count_end = source.index("\ndef ", count_start + 1)
+    count_src = source[count_start:count_end]
+    assert "DISTINCT item_uid" in count_src, (
+        "_block_archive_count must use COUNT(DISTINCT item_uid) to avoid "
+        "double-counting when do_reply also calls do_archive"
+    )
+
+    # _render_block_status must show archive count
+    render_start = source.index("def _render_block_status(")
+    render_end = source.index("\ndef ", render_start + 1)
+    render_src = source[render_start:render_end]
+    assert "_block_archive_count()" in render_src, (
+        "idle screen must display archive count"
+    )
+
+
+def test_background_fetch_skips_triage():
+    """Bug: background continuous fetch called fetch_emails() which ran
+    triage_inbox(), removing INBOX labels from emails already in the user's
+    queue. On the next loop iteration, _poll_resolved / filter_resolved saw
+    those emails as "resolved elsewhere" and removed them — clearing the
+    queue while the user was still reviewing it.
+    Fix: fetch_emails() takes skip_triage param; background fetch passes True.
+    """
+    source = open("ibx0.py").read()
+    tree = ast.parse(source)
+
+    # 1. fetch_emails must accept skip_triage parameter
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_emails":
+            arg_names = [a.arg for a in node.args.args]
+            assert "skip_triage" in arg_names, (
+                "fetch_emails() must accept skip_triage parameter"
+            )
+            break
+    else:
+        raise AssertionError("fetch_emails function not found")
+
+    # 2. _bg_continuous_fetch must call fetch_emails with skip_triage=True
+    bg_func = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_bg_continuous_fetch":
+            bg_func = ast.get_source_segment(source, node)
+            break
+    assert bg_func is not None, "_bg_continuous_fetch not found"
+    assert "skip_triage" in bg_func, (
+        "_bg_continuous_fetch must pass skip_triage=True to fetch_emails"
+    )
+
+
+def test_reply_and_archive_counts_use_archive_log_db():
+    """All reply/archive stats must come from archive_log.db (single source
+    of truth). _block_reply_count, _block_archive_count, and _day_avg_response
+    must all query the SQLite DB, not the old _response_times JSON."""
+    source = open("ibx0.py").read()
+
+    # All three stat functions must query archive_log
+    for func_name in ("_block_reply_count", "_block_archive_count", "_day_avg_response"):
+        func_start = source.index(f"def {func_name}(")
+        func_end = source.index("\ndef ", func_start + 1)
+        func_src = source[func_start:func_end]
+        assert "_get_archive_db()" in func_src, (
+            f"{func_name} must query archive_log.db via _get_archive_db()"
+        )
+
+    # _log_archive must store response_min for reply actions
+    log_start = source.index("def _log_archive(")
+    log_end = source.index("\ndef ", log_start + 1)
+    log_src = source[log_start:log_end]
+    assert "response_min" in log_src, (
+        "_log_archive must compute and store response_min for replies"
+    )
+
+    # Old JSON system should be removed
+    assert "_RESPONSE_TIMES_FILE" not in source, (
+        "Old _RESPONSE_TIMES_FILE JSON system should be removed"
+    )
+    assert "def _load_response_times" not in source, (
+        "Old _load_response_times should be removed"
+    )

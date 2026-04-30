@@ -2,6 +2,18 @@
 # inbound wrapper: runs the unified interrupt queue TUI with auto-restart on crash.
 # Same pattern as -2n_wrapper.sh and ibx0_wrapper.sh.
 
+# ── Remote delegation: if on ix via SSH, try to run on Straylight instead ──
+# Straylight has work email (Outlook/Teams) which ix doesn't.
+if [[ -n "$SSH_CLIENT" ]] && [[ "$(hostname)" == *"Mac-mini"* || "$(hostname)" == *"ix"* ]]; then
+    STRAYLIGHT_HOST="192.168.1.53"
+    if ssh -o ConnectTimeout=3 -o BatchMode=yes "$STRAYLIGHT_HOST" true 2>/dev/null; then
+        echo "── delegating to Straylight (work email access) ──"
+        exec ssh -t "$STRAYLIGHT_HOST" "bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh"
+    else
+        echo "── Straylight unreachable, running locally on ix ──"
+    fi
+fi
+
 SCRIPT="$HOME/i446-monorepo/tools/ibx/inbound.py"
 
 if [[ ! -f "$SCRIPT" ]]; then

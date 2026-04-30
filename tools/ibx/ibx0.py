@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import re
+import readline  # enables line editing (backspace, arrows) in input()
 import select
 import subprocess
 import sys
@@ -23,10 +24,17 @@ sys.path.insert(0, os.path.dirname(__file__))
 import ibx as _ibx
 import imsg as _imsg
 import slack as _slack
+# Use the same response-time clamp as the personal dashboard so /ibx
+# stats match what the project blocking dashboard reports.
+sys.path.insert(0, str(Path(__file__).parent.parent / "personal-dashboard"))
+try:
+    from comms_response_clamp import clamp_response_hours_unix as _clamp_response_hours_unix
+except (Exception, SystemExit):
+    _clamp_response_hours_unix = None
 try:
     import outlook_agency as _outlook
     _outlook_available = True
-except Exception:
+except (Exception, SystemExit):
     try:
         import outlook_workiq as _outlook
         _outlook_available = True
@@ -36,7 +44,7 @@ except Exception:
 try:
     import teams_agency as _teams
     _teams_available = True
-except Exception:
+except (Exception, SystemExit):
     try:
         import teams_workiq as _teams
         _teams_available = True
@@ -64,6 +72,43 @@ from rich.text import Text
 
 console = Console()
 ai = anthropic.Anthropic()
+
+
+# ── /-2n module loader (filename has leading dash, can't import normally) ────
+def _load_two_n():
+    import importlib.util
+    p = Path(__file__).parent / "-2n.py"
+    spec = importlib.util.spec_from_file_location("_two_n_mod", p)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+_two_n = _load_two_n()
+
+
+def _render_block_status():
+    """Print the current 2h block's -1g status panel + response stats (idle screen)."""
+    if _two_n is None or not hasattr(_two_n, "render_block_status_panel"):
+        return
+    try:
+        block_replies = _block_reply_count()
+        block_archived = _block_archive_count()
+        day_avg, day_count = _day_avg_response()
+        day_archived = _day_archive_count()
+        stats_lines = [f"[dim]📨 {block_replies} replied · 📦 {block_archived} archived this block[/dim]"]
+        day_parts = []
+        if day_avg is not None:
+            day_parts.append(f"📨 {day_count} replied, avg {day_avg:.0f}m")
+        day_parts.append(f"📦 {day_archived} archived today")
+        stats_lines.append(f"[dim]{' · '.join(day_parts)}[/dim]")
+        stats_line = "\n".join(stats_lines)
+        console.print(_two_n.render_block_status_panel(stats_line=stats_line))
+    except Exception:
+        pass
 
 # ── Single-line fetch status ─────────────────────────────────────────────────
 _fetch_status: dict[str, str] = {}  # source -> status string
@@ -110,40 +155,146 @@ TYPE_LABEL = {
     "teams": "TEAMS",
 }
 
-# ── Response time tracking ────────────────────────────────────────────────────
-_RESPONSE_TIMES_FILE = Path.home() / ".config" / "ibx" / "response_times.json"
-_response_times: list[float] = []  # minutes per reply, loaded from disk on startup
+# ── Archive log (SQLite) — single source of truth for all reply/archive stats ─
+_ARCHIVE_DB_PATH = Path.home() / ".config" / "ibx" / "archive_log.db"
+_archive_db_conn = None
 
 
-def _load_response_times():
-    """Load today's response times from persistent storage."""
-    global _response_times
+def _get_archive_db():
+    """Lazy-init SQLite connection for archive logging."""
+    global _archive_db_conn
+    if _archive_db_conn is not None:
+        return _archive_db_conn
+    import sqlite3
+    _ARCHIVE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _archive_db_conn = sqlite3.connect(str(_ARCHIVE_DB_PATH))
+    _archive_db_conn.execute("""
+        CREATE TABLE IF NOT EXISTS archive_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            item_uid TEXT NOT NULL,
+            action TEXT NOT NULL,
+            message_type TEXT NOT NULL,
+            response_min REAL,
+            UNIQUE(item_uid, action)
+        )
+    """)
+    # Migrate existing DBs that lack the response_min column
     try:
-        if _RESPONSE_TIMES_FILE.exists():
-            data = json.loads(_RESPONSE_TIMES_FILE.read_text())
-            today = datetime.now().strftime("%Y-%m-%d")
-            if data.get("date") == today:
-                _response_times = data.get("times", [])
-            else:
-                _response_times = []
+        _archive_db_conn.execute("ALTER TABLE archive_log ADD COLUMN response_min REAL")
     except Exception:
-        _response_times = []
+        pass  # column already exists
+    # Prune entries older than 7 days
+    _archive_db_conn.execute(
+        "DELETE FROM archive_log WHERE timestamp < ?",
+        (time.time() - 7 * 86400,),
+    )
+    _archive_db_conn.commit()
+    return _archive_db_conn
 
 
-def _save_response_times():
-    """Persist today's response times to disk."""
+def _compute_response_min(item):
+    """Compute response time in minutes for an item. Returns None if unavailable."""
+    received = item.get("received_at", 0.0)
+    if not received:
+        return None
+    now = time.time()
+    if _clamp_response_hours_unix is not None:
+        elapsed_min = _clamp_response_hours_unix(now, received) * 60.0
+    else:
+        elapsed_min = (now - received) / 60
+    if elapsed_min < 0 or elapsed_min > 10080:
+        return None
+    return elapsed_min
+
+
+def _log_archive(item, action):
+    """Record a confirmed archive/delete/reply action. Never raises."""
     try:
-        _RESPONSE_TIMES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        today = datetime.now().strftime("%Y-%m-%d")
-        _RESPONSE_TIMES_FILE.write_text(json.dumps({
-            "date": today,
-            "times": _response_times,
-        }))
+        uid = _item_uid(item)
+        if not uid:
+            return
+        uid_str = f"{uid[0]}:{uid[1]}"
+        resp_min = _compute_response_min(item) if action == "reply" else None
+        db = _get_archive_db()
+        db.execute(
+            "INSERT OR IGNORE INTO archive_log (timestamp, item_uid, action, message_type, response_min) VALUES (?, ?, ?, ?, ?)",
+            (time.time(), uid_str, action, item.get("type", ""), resp_min),
+        )
+        db.commit()
     except Exception:
         pass
 
 
-_load_response_times()
+def _block_archive_count():
+    """Count distinct items archived/processed during the current 2h block."""
+    if not _two_n:
+        return 0
+    try:
+        _, _, block_start, _ = _two_n.get_current_block()
+        now = datetime.now()
+        sh, sm = map(int, block_start.split(":"))
+        block_start_epoch = now.replace(hour=sh, minute=sm, second=0, microsecond=0).timestamp()
+        db = _get_archive_db()
+        cursor = db.execute(
+            "SELECT COUNT(DISTINCT item_uid) FROM archive_log WHERE timestamp >= ?",
+            (block_start_epoch,),
+        )
+        return cursor.fetchone()[0]
+    except Exception:
+        return 0
+
+
+def _block_reply_count():
+    """Count distinct replies made during the current 2h block (from archive_log)."""
+    if not _two_n:
+        return 0
+    try:
+        _, _, block_start, _ = _two_n.get_current_block()
+        now = datetime.now()
+        sh, sm = map(int, block_start.split(":"))
+        block_start_epoch = now.replace(hour=sh, minute=sm, second=0, microsecond=0).timestamp()
+        db = _get_archive_db()
+        cursor = db.execute(
+            "SELECT COUNT(DISTINCT item_uid) FROM archive_log WHERE timestamp >= ? AND action = 'reply'",
+            (block_start_epoch,),
+        )
+        return cursor.fetchone()[0]
+    except Exception:
+        return 0
+
+
+def _day_avg_response():
+    """Return (avg_minutes, reply_count) for the day from archive_log. Returns (None, 0) if no replies."""
+    try:
+        today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        db = _get_archive_db()
+        cursor = db.execute(
+            "SELECT AVG(response_min), COUNT(*) FROM archive_log WHERE timestamp >= ? AND action = 'reply' AND response_min IS NOT NULL",
+            (today_midnight,),
+        )
+        row = cursor.fetchone()
+        avg, count = row[0], row[1]
+        if count == 0 or avg is None:
+            return None, 0
+        return avg, count
+    except Exception:
+        return None, 0
+
+
+def _day_archive_count():
+    """Count distinct items archived today (all actions)."""
+    try:
+        today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        db = _get_archive_db()
+        cursor = db.execute(
+            "SELECT COUNT(DISTINCT item_uid) FROM archive_log WHERE timestamp >= ?",
+            (today_midnight,),
+        )
+        return cursor.fetchone()[0]
+    except Exception:
+        return 0
+
 
 def _parse_received_at(item) -> float:
     """Extract received epoch from any item type. Returns 0.0 if unavailable."""
@@ -172,31 +323,23 @@ def _parse_received_at(item) -> float:
     return 0.0
 
 def _print_response_stats(item):
-    """Print response time for this reply and running day average."""
-    received = item.get("received_at", 0.0)
-    if not received:
+    """Print response time for this reply and running day average.
+    Data is already persisted in archive_log via _log_archive; this just prints."""
+    elapsed_min = _compute_response_min(item)
+    if elapsed_min is None:
         return
-    elapsed_min = (time.time() - received) / 60
-    if elapsed_min < 0 or elapsed_min > 10080:  # ignore if negative or > 1 week
-        return
-    old_avg = sum(_response_times) / len(_response_times) if _response_times else None
-    _response_times.append(elapsed_min)
-    _save_response_times()
-    new_avg = sum(_response_times) / len(_response_times)
-    # Format
+    # Query running average from archive_log
+    day_avg, day_count = _day_avg_response()
     def fmt(m):
-        if m < 60:
-            return f"{m:.0f}m"
-        return f"{m / 60:.1f}h"
-    if old_avg is not None:
+        return f"{m:.0f}m"
+    if day_count > 1:
         console.print(
             f"[dim]⏱ Response time: {fmt(elapsed_min)} · "
-            f"Day avg: {fmt(old_avg)} → {fmt(new_avg)} ({len(_response_times)} replies)[/dim]"
+            f"Day avg: {fmt(day_avg)} ({day_count} replies)[/dim]"
         )
     else:
         console.print(
-            f"[dim]⏱ Response time: {fmt(elapsed_min)} · "
-            f"Day avg: {fmt(new_avg)} (1st reply)[/dim]"
+            f"[dim]⏱ Response time: {fmt(elapsed_min)} (1st reply)[/dim]"
         )
 
 # ── Normalize items ───────────────────────────────────────────────────────────
@@ -214,7 +357,7 @@ def normalize_email(msg_ref, service, account):
         return None
     item = {
         "type": "email",
-        "source": account,
+        "source": ACCOUNT_DISPLAY.get(account, account),
         "from": email.get("from", ""),
         "to": email.get("to", ""),
         "cc": email.get("cc", ""),
@@ -309,19 +452,21 @@ def display_card(item, idx, total):
     console.print(Panel(header, title=title, border_style="dim", box=box.SIMPLE_HEAD, padding=(0, 1)))
 
     # Body — show last ~2000 chars, cap at 20 lines after wrapping
-    body = item["body"][-2000:] if item["body"] else "(no content)"
+    # Keep the LAST lines (newest messages) when truncating
+    raw_body = item["body"][-2000:] if item["body"] else "(no content)"
     import shutil
     term_width = shutil.get_terminal_size().columns - 6  # panel padding + border
     # Wrap long lines manually to control line count
     wrapped = []
-    for line in body.splitlines():
+    for line in raw_body.splitlines():
         while len(line) > term_width:
             wrapped.append(line[:term_width])
             line = line[term_width:]
         wrapped.append(line)
+    # Store full wrapped body for expand; truncate display to last 20 lines
+    item["_full_body"] = "\n".join(wrapped)
     if len(wrapped) > 20:
-        wrapped = wrapped[:20]
-        wrapped.append("…")
+        wrapped = ["…"] + wrapped[-20:]
     body = "\n".join(wrapped)
     console.print(Panel(body, box=box.SIMPLE, border_style="dim", padding=(0, 1)))
 
@@ -335,6 +480,7 @@ def print_help():
         "[bold]p <instruction>[/bold] pipe (AI draft)  "
         "[bold]s[/bold] skip  "
         "[bold]t <text>[/bold] todo  "
+        "[bold]e[/bold] expand  "
         "[bold]o[/bold] open  "
         "[bold]c[/bold] check now  "
         "[bold]f[/bold] fetch new  "
@@ -458,6 +604,7 @@ def do_archive(item):
             _teams.archive_all(all_ids, chat_id=item["_data"].get("chat_id", ""))
         else:
             _teams.archive(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
+    _log_archive(item, "archive")
 
 def do_delete(item):
     t = item["type"]
@@ -483,6 +630,7 @@ def do_delete(item):
             _teams.delete_all(all_ids, chat_id=item["_data"].get("chat_id", ""))
         else:
             _teams.delete(item["_data"]["item_id"], chat_id=item["_data"].get("chat_id", ""))
+    _log_archive(item, "delete")
 
 def do_reply(item, reply_text):
     t = item["type"]
@@ -499,7 +647,9 @@ def do_reply(item, reply_text):
     elif t == "teams":
         chat_id = item["_data"].get("chat_id", "")
         if chat_id and hasattr(_teams, 'reply'):
-            _teams.reply(item["_data"]["item_id"], chat_id, reply_text)
+            ok = _teams.reply(item["_data"]["item_id"], chat_id, reply_text)
+            if not ok:
+                raise RuntimeError("Teams reply failed (SendMessageToChat returned error)")
         else:
             _teams.reply_via_teams(item["_data"].get("link", ""))
             console.print("[dim](Opened Teams for reply)[/dim]")
@@ -510,17 +660,92 @@ def do_reply(item, reply_text):
                 _teams._mark_processed(iid)
     if t not in ("outlook", "teams"):  # these handle their own archiving
         do_archive(item)
+    _log_archive(item, "reply")
+
+def _notify_sent():
+    """Play a send sound and show a visual confirmation."""
+    console.print("[green]\u2709\ufe0f  Sent + done.[/green]")
+    subprocess.Popen(
+        ["afplay", "/System/Library/Sounds/Tink.aiff"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+def update_last_contact(item):
+    """Update d359 last_contact for the sender. Runs in a background thread."""
+    def _update():
+        try:
+            sender = item.get("sender", "") or item.get("from", "")
+            if not sender:
+                return
+            # Strip email addresses, keep just the name
+            name = re.sub(r'<[^>]+>', '', sender).strip().strip('"')
+            if not name or name.lower() in ("me", "jonathan mckay", "mckay"):
+                return
+            d359 = Path.home() / "vault" / "d359"
+            today = datetime.now().strftime("%Y-%m-%d")
+            # Find matching d359 file
+            slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+            for p in d359.glob("*.md"):
+                stem_lower = p.stem.lower().replace(' d359', '').strip()
+                if name.lower() == stem_lower or slug in re.sub(r'[^a-z0-9]+', '-', p.stem.lower()):
+                    text = p.read_text()
+                    if 'last_contact:' in text:
+                        text = re.sub(r'last_contact:.*', f'last_contact: {today}', text)
+                    elif '---\n' in text:
+                        # Add before closing ---
+                        parts = text.split('---\n', 2)
+                        if len(parts) >= 3:
+                            text = f'---\n{parts[1]}last_contact: {today}\n---\n{parts[2]}'
+                    p.write_text(text)
+                    break
+        except Exception:
+            pass  # Never block or crash the UI
+    threading.Thread(target=_update, daemon=True).start()
+
+
+# Chrome profile directories by context
+_CHROME_PROFILES = {
+    "m5x2": "Profile 11",   # m5c7.com
+    "msft": "Profile 1",    # MSFT (Outlook, Teams)
+    "jbm":  "Profile 5",    # 个 (personal Gmail)
+}
+
+
+def _open_in_chrome(url, profile_key):
+    """Open a URL in Chrome with the specified profile."""
+    profile_dir = _CHROME_PROFILES.get(profile_key)
+    if profile_dir:
+        subprocess.run(
+            ["open", "-na", "Google Chrome", "--args",
+             f"--profile-directory={profile_dir}", url],
+            capture_output=True, timeout=5,
+        )
+    else:
+        subprocess.run(["open", url])
+
 
 def do_open(item):
-    """Open the current item in the browser."""
+    """Open the current item in the browser with the correct Chrome profile."""
     t = item["type"]
     if t == "email":
         msg_id = item["_data"]["email"]["id"]
         acct = item["_data"]["email"].get("_account", "m5c7")
         u = ACCOUNT_GMAIL_INDEX.get(acct, 0)
         url = f"https://mail.google.com/mail/u/{u}/#inbox/{msg_id}"
+        profile = "m5x2" if acct == "m5c7" else "jbm"
+        _open_in_chrome(url, profile)
+        return
     elif t == "outlook":
         url = item["_data"].get("link", "")
+        if not url:
+            # Fallback: open Outlook web search for this email's subject
+            import urllib.parse
+            subj = item["_data"].get("email", {}).get("subject", "")
+            url = "https://outlook.office.com/mail/0/inbox" + (
+                f"?search={urllib.parse.quote(subj)}" if subj else ""
+            )
+        _open_in_chrome(url, "msft")
+        return
     elif t == "imsg":
         # No web URL for iMessage — open Messages app
         subprocess.run(["open", "-a", "Messages"])
@@ -529,12 +754,21 @@ def do_open(item):
         d = item["_data"]
         ch = d["thread"]["channel_id"]
         url = f"https://app.slack.com/client/T/{ch}"
+        # Slack workspace context: m5x2 slack → m5x2, github slack → msft
+        ws = d.get("workspace", "")
+        if "m5x2" in ws.lower() or "mckay" in ws.lower():
+            profile = "m5x2"
+        else:
+            profile = "msft"
+        _open_in_chrome(url, profile)
+        return
     elif t == "teams":
         url = item["_data"].get("link", "")
+        if url:
+            _open_in_chrome(url, "msft")
+        return
     else:
         return
-    if url:
-        subprocess.run(["open", url])
 
 # ── Claude ────────────────────────────────────────────────────────────────────
 
@@ -586,7 +820,7 @@ ACCOUNT_DISPLAY = {
 # User's own email addresses — skip messages sent by these
 MY_EMAILS = {"mckay@m5c7.com", "mckay@m5x2.com", "jonathan.b.mckay@gmail.com"}
 
-def fetch_emails():
+def fetch_emails(skip_triage=False):
     items = []
     per_account = {}  # display_name -> count
     _update_status("Gmail", "...")
@@ -618,11 +852,14 @@ def fetch_emails():
             except Exception:
                 pass
 
-    # Triage
-    for name, svc in services.items():
-        total, moved = _ibx.triage_inbox(svc, name)
+    # Triage (skip in background fetches — re-triaging removes INBOX labels
+    # from queued emails, causing them to appear "resolved elsewhere")
+    if not skip_triage:
+        for name, svc in services.items():
+            total, moved = _ibx.triage_inbox(svc, name)
 
-    # Fetch remaining
+    # Fetch remaining (cross-account dedup by RFC Message-ID)
+    seen_message_ids = set()
     for name, svc in services.items():
         msgs = _ibx.fetch_inbox(svc, unread_only=False, dedup_threads=True)
         count = 0
@@ -630,6 +867,11 @@ def fetch_emails():
             item = normalize_email(m, svc, name)
             if not item:
                 continue
+            mid = item["_data"]["email"].get("message_id", "")
+            if mid and mid in seen_message_ids:
+                continue
+            if mid:
+                seen_message_ids.add(mid)
             if _autosign_available and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
                 if item.get("_data", {}).get("email", {}).get("id", "") not in _autosign_queued_ids:
                     _autosign_queued_ids.add(item.get("_data", {}).get("email", {}).get("id", ""))
@@ -751,7 +993,10 @@ def fetch_teams():
 def _item_uid(item):
     """Stable unique ID for an item, used to track external resolution."""
     if item["type"] == "email":
-        return ("email", item["_data"]["email"]["id"])
+        # Prefer RFC Message-ID for dedup: same email delivered to multiple
+        # accounts or appearing as multiple Gmail messages shares this header.
+        mid = item["_data"]["email"].get("message_id", "")
+        return ("email", mid if mid else item["_data"]["email"]["id"])
     elif item["type"] == "outlook":
         return ("outlook", item["_data"]["item_id"])
     elif item["type"] == "imsg":
@@ -797,6 +1042,16 @@ def _poll_resolved(items_snapshot, resolved, stop_event, msg_queue, interval=60)
                     if proc.get(cid, -1) >= item_ts:
                         resolved.add(uid)
 
+                elif item["type"] == "slack":
+                    d = item["_data"]
+                    token = d["token"]
+                    channel_id = d["thread"]["channel_id"]
+                    latest_ts = d["thread"].get("latest_ts", "0")
+                    info = _slack.slack_get(token, "conversations.info", channel=channel_id)
+                    last_read = info.get("channel", {}).get("last_read", "0")
+                    if last_read != "0" and float(latest_ts) <= float(last_read):
+                        resolved.add(uid)
+
             except Exception:
                 pass
 
@@ -826,6 +1081,16 @@ def check_resolved_now(items_snapshot, resolved):
                 cid = item["_data"]["thread"]["chat_identifier"]
                 item_ts = item["_data"]["thread"].get("latest_apple_ts", 0)
                 if proc.get(cid, -1) >= item_ts:
+                    resolved.add(uid)
+                    newly += 1
+            elif item["type"] == "slack":
+                d = item["_data"]
+                token = d["token"]
+                channel_id = d["thread"]["channel_id"]
+                latest_ts = d["thread"].get("latest_ts", "0")
+                info = _slack.slack_get(token, "conversations.info", channel=channel_id)
+                last_read = info.get("channel", {}).get("last_read", "0")
+                if last_read != "0" and float(latest_ts) <= float(last_read):
                     resolved.add(uid)
                     newly += 1
         except Exception:
@@ -862,7 +1127,7 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
         try:
             from concurrent.futures import ThreadPoolExecutor
             fetchers = [
-                ("email", fetch_emails),
+                ("email", lambda: fetch_emails(skip_triage=True)),
                 ("imsg", fetch_imsgs),
                 ("slack", fetch_slack),
             ]
@@ -1065,6 +1330,7 @@ def main():
     if not all_items:
         _wait_for_autosign()
         set_term_color("blue")
+        _render_block_status()
         console.print(f"\n[dim]Inbox zero — watching for new items... (q to quit)[/dim]  {status_line}")
 
         # Start continuous fetch even when starting at zero
@@ -1160,6 +1426,7 @@ def main():
                 # Inbox zero — go blue immediately, let background polling find new items
                 _wait_for_autosign()
                 set_term_color("blue")
+                _render_block_status()
                 console.print("[dim]Inbox zero — watching for new items... (q to quit)[/dim]")
 
                 while True:
@@ -1196,6 +1463,13 @@ def main():
                         sys.exit(2)
 
                 continue
+
+        # Mark all items before current index as resolved so background
+        # fetches don't re-inject them after they leave all_items
+        for i in range(index):
+            uid = _item_uid(all_items[i])
+            if uid:
+                resolved.add(uid)
 
         item = all_items[index]
         display_card(item, index + 1, len(all_items))
@@ -1265,6 +1539,10 @@ def main():
                 console.print(f"[red]Error: {e}[/red]")
             index += 1
 
+        elif cmd == "e":
+            full = item.get("_full_body", item.get("body", ""))
+            console.print(Panel(full, box=box.SIMPLE, border_style="dim", padding=(0, 1)))
+
         elif cmd == "s":
             skipped.append(item)
             console.print("[dim]Skipped.[/dim]")
@@ -1308,7 +1586,8 @@ def main():
             if confirm == "y":
                 try:
                     do_reply(item, reply_text)
-                    console.print("[green]Sent + done.[/green]")
+                    update_last_contact(item)
+                    _notify_sent()
                     _print_response_stats(item)
                     index += 1
                 except Exception as e:
@@ -1331,7 +1610,8 @@ def main():
                         do_archive(item)
                     else:
                         do_reply(item, reply_text)
-                    console.print("[green]Sent + done.[/green]")
+                    update_last_contact(item)
+                    _notify_sent()
                     _print_response_stats(item)
                     index += 1
                 except Exception as e:
@@ -1407,7 +1687,7 @@ def main():
                 if confirm in ("y", "s"):
                     try:
                         do_reply(item, content)
-                        console.print("[green]Sent + done.[/green]")
+                        _notify_sent()
                         _print_response_stats(item)
                         index += 1
                     except Exception as e:
@@ -1417,7 +1697,7 @@ def main():
                     if new_text:
                         try:
                             do_reply(item, new_text)
-                            console.print("[green]Sent + done.[/green]")
+                            _notify_sent()
                             _print_response_stats(item)
                             index += 1
                         except Exception as e:

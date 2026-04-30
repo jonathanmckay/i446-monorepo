@@ -8,9 +8,21 @@ user-invocable: true
 
 Fast Toggl time tracking. Auto-maps descriptions to projects and tags.
 
+## Execution
+
+**Always run `tg-fast.py` first.** Do NOT reason about shortcodes; the script handles all resolution.
+
+```bash
+python3 ~/i446-monorepo/tools/tg/tg-fast.py "<all args verbatim>"
+```
+
+Echo the script's output to the user. Done. No additional processing needed.
+
+The script handles: shortcode→project mapping, @overrides, time ranges, backdated starts, stop/today/current/delete.
+
 ## Response Style
 
-**Minimal output.** After executing, confirm in one line. Examples:
+**Minimal output.** Echo the script result. One line. Examples:
 - `Started: 0l → g245`
 - `Stopped: work (42min)`
 - `Created: 睡觉 22:00–06:00 → 睡觉 [-3]`
@@ -30,13 +42,25 @@ Parse the user's input after `/tg`:
 | `current` | Show what's currently running |
 | `<desc> <start>-<end>` | Create completed entry with time range |
 | `<desc> <start>-<end> @<project>` | Create entry with explicit project override |
+| `<HHMM> <desc>` | Start running timer with backdated start time (see below) |
 | `del <id>` | Delete entry by ID |
+
+### Backdated start
+
+When input contains a single 4-digit time (HHMM) with no dash/range, start a running timer whose start time is backdated to that time today. Steps:
+
+1. Stop any currently running timer.
+2. If the stopped timer overlaps the backdated time (its start is before, end/now is after), trim it: delete the old entry and recreate it ending at 1 minute before the backdated time using `python3 $CLI create <desc> <old_start> <backdate-1min> <project>`.
+3. Start a new timer with the backdated start time: `python3 $CLI start <desc> <project> --at HH:MM`
+
+Example: `/tg 1823 o314` at 18:45 stops the current timer, trims it to end at 18:22, and starts a running o314 timer from 18:23.
 
 ### Time formats accepted
 - `9-10` or `9-10am` → 9:00 AM to 10:00 AM
 - `9:30-10:15` → exact times
 - `21:00-22:30` → 24h format
 - `2h` or `90m` → duration (create entry ending now)
+- `1823` (single 4-digit, no dash) → backdated running timer starting at 18:23
 
 ## Shortcode → Project/Tag Mapping
 

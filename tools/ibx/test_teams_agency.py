@@ -406,3 +406,62 @@ def test_ibx0_display_card_shows_msg_count():
             )
             return
     raise AssertionError("display_card function not found")
+
+
+def test_teams_reply_raises_on_failure():
+    """Regression: Teams reply silently succeeded even when PostMessage failed.
+    do_reply didn't propagate the failure, so the UI showed 'Sent + done'
+    while no message was actually sent.
+
+    Fix: do_reply raises RuntimeError when _teams.reply returns False,
+    which is caught by the try/except in the r command path."""
+    source = IBX0_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "do_reply":
+            func_source = ast.get_source_segment(source, node)
+            assert "raise" in func_source and "teams" in func_source.lower(), (
+                "do_reply must raise an exception when Teams reply fails "
+                "so the UI doesn't falsely report success"
+            )
+            return
+    raise AssertionError("do_reply function not found")
+
+
+def test_teams_reply_rejects_empty_chat_id():
+    """Regression: reply() with empty chat_id skipped the API call entirely
+    but still returned True and recorded the action as successful.
+
+    Fix: reply() must return False when chat_id is empty."""
+    source = TEAMS_AGENCY_PY.read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "reply":
+            func_source = ast.get_source_segment(source, node)
+            assert "not chat_id" in func_source or "no chat_id" in func_source, (
+                "reply() must explicitly reject empty chat_id"
+            )
+            assert "return False" in func_source, (
+                "reply() must return False when chat_id is missing"
+            )
+            return
+    raise AssertionError("reply function not found")
+
+
+def test_teams_reply_uses_correct_tool_name():
+    """Bug: reply() called _teams_call('PostMessage', ...) but the Agency MCP
+    server's actual tool is 'SendMessageToChat'. PostMessage doesn't exist,
+    so _teams_call caught the error and returned None, making every reply fail.
+    Fix: use 'SendMessageToChat' as the tool name."""
+    source = TEAMS_AGENCY_PY.read_text()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef) and node.name == "reply":
+            func_source = ast.get_source_segment(source, node)
+            assert "SendMessageToChat" in func_source, (
+                "reply() must call 'SendMessageToChat', not 'PostMessage'"
+            )
+            assert "PostMessage" not in func_source, (
+                "reply() must not reference the non-existent 'PostMessage' tool"
+            )
+            return
+    raise AssertionError("reply function not found")

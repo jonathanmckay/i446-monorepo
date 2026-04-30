@@ -122,10 +122,23 @@ def is_recording(state: dict) -> bool:
         return False
 
 
+AUDIO_SWITCH = Path(__file__).parent.parent.parent / "scripts" / "audio-switch.sh"
+
+
 def start_recording(meeting_name: str):
+    # Switch audio output to "Meet Output" so BlackHole captures call audio
+    if AUDIO_SWITCH.exists():
+        try:
+            subprocess.run(["bash", str(AUDIO_SWITCH), "meet"],
+                           capture_output=True, timeout=5)
+            log("🔊 Audio switched to Meet Output")
+        except Exception as e:
+            log(f"⚠ Audio switch failed: {e}")
+
     log_path = f"/tmp/d357-daemon-{os.getpid()}.log"
     proc = subprocess.Popen(
-        ["python3", str(MEETING_DIR / "meet.py"), meeting_name, "--domain", "d357"],
+        ["python3", str(MEETING_DIR / "meet.py"), meeting_name,
+         "--domain", "d357", "--teams"],
         stdout=open(log_path, "w"),
         stderr=subprocess.STDOUT,
         cwd=str(MEETING_DIR),
@@ -152,6 +165,15 @@ def stop_recording(state: dict):
         log(f"✓ Transcription done: {name}")
     except OSError:
         log(f"Process {pid} already dead")
+
+    # Switch audio back to default speakers
+    if AUDIO_SWITCH.exists():
+        try:
+            subprocess.run(["bash", str(AUDIO_SWITCH), "default"],
+                           capture_output=True, timeout=5)
+            log("🔊 Audio switched back to default")
+        except Exception:
+            pass
     clear_state()
 
 

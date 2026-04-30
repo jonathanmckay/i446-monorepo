@@ -45,12 +45,15 @@ def create_entry(description, start_iso, stop_iso, duration_sec, project_id=None
     return _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
 
 
-def start_timer(description, project_id=None, tags=None):
+def start_timer(description, project_id=None, tags=None, start_time=None):
     import datetime
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if start_time:
+        start = start_time  # ISO format string
+    else:
+        start = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = {
         "description": description,
-        "start": now,
+        "start": start,
         "duration": -1,
         "workspace_id": TOGGL_WORKSPACE_ID,
         "created_with": "mcp-toggl-custom",
@@ -78,6 +81,13 @@ def get_entries(start_date=None, end_date=None):
         params.append(f"end_date={end_date}")
     qs = "?" + "&".join(params) if params else ""
     return _request("GET", f"/me/time_entries{qs}")
+
+
+def update_entry(entry_id, **fields):
+    """Update a time entry. Supported fields: description, start, stop, duration, project_id, tags."""
+    body = {"workspace_id": TOGGL_WORKSPACE_ID}
+    body.update(fields)
+    return _request("PUT", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}", body)
 
 
 def delete_entry(entry_id):

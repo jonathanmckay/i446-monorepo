@@ -12,6 +12,7 @@
 # Env:
 #   IX_HOST   ssh alias / host (default: ix)
 #   IX_DEBUG  if set, print the command and stderr verbatim
+#   IX_QUEUE  if set to "1", queue the script on exit 3 instead of just failing
 #
 # Exit codes:
 #   0  — AppleScript ran on ix and returned a non-ERROR string
@@ -55,6 +56,16 @@ rm -f /tmp/ix-osa.stderr.$$
 if [ "$rc" -eq 255 ]; then
     echo "$UNREACHABLE_MSG" >&2
     [ -n "$err" ] && [ -n "${IX_DEBUG:-}" ] && echo "ssh: $err" >&2
+    # Queue the write for later replay if IX_QUEUE is set
+    if [ "${IX_QUEUE:-}" = "1" ]; then
+        queue_file="${HOME}/.claude/ix-write-queue.jsonl"
+        python3 -c "
+import json, sys, datetime
+entry = {'ts': datetime.datetime.now().isoformat(), 'script': sys.argv[1]}
+print(json.dumps(entry))
+" "$script" >> "$queue_file" 2>/dev/null
+        echo "QUEUED: write saved to ix-write-queue.jsonl ($(wc -l < "$queue_file" | tr -d ' ') pending)" >&2
+    fi
     exit 3
 fi
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 teams_agency — Teams DMs via Agency MCP Teams server (Graph API).
-Structured search for recent messages, reply via PostMessage, stable IDs.
+Structured search for recent messages, reply via SendMessageToChat, stable IDs.
 """
 
 import json
@@ -195,9 +195,14 @@ end tell
 
 # ── Agency MCP Teams calls ────────────────────────────────────────────────────
 
+_last_mcp_error = None
+
+
 def _teams_call(tool, args, timeout=30):
     """Call Agency Teams MCP tool. Returns content text or None."""
+    global _last_mcp_error
     import agency_mcp
+    _last_mcp_error = None
     try:
         result = agency_mcp.call_tool("teams", tool, args, timeout=timeout)
         content = result.get("content", [])
@@ -206,6 +211,7 @@ def _teams_call(tool, args, timeout=30):
                 return c["text"]
         return ""
     except Exception as e:
+        _last_mcp_error = str(e)
         console.print(f"  [dim]teams MCP error: {e}[/dim]")
         return None
 
@@ -392,15 +398,18 @@ def delete_all(item_ids, chat_id=""):
 
 def reply(item_id, chat_id, reply_text):
     """Reply to Teams chat via Graph API."""
-    if chat_id:
-        result = _teams_call("PostMessage", {
-            "chatId": chat_id,
-            "content": reply_text,
-            "contentType": "text",
-        }, timeout=30)
-        if result is None:
-            console.print("[red]Teams reply failed[/red]")
-            return False
+    if not chat_id:
+        console.print("[red]Teams reply failed: no chat_id[/red]")
+        return False
+    result = _teams_call("SendMessageToChat", {
+        "chatId": chat_id,
+        "content": reply_text,
+        "contentType": "text",
+    }, timeout=30)
+    if result is None:
+        err = _last_mcp_error or "unknown error"
+        console.print(f"[red]Teams reply failed: {err}[/red]")
+        return False
     record_action(item_id, "reply")
     _mark_processed(item_id)
     return True

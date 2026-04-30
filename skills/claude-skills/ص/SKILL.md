@@ -13,24 +13,28 @@ Log salah count to Neon spreadsheet, column AM (ص) in the 0n sheet.
 - **No arguments** (`/ص`): Increment today's value by 1.
 - **With a number** (`/ص 3`): Set today's value to that number (overwrites).
 
+## Argument parsing
+
+Before substituting `N` into the AppleScript, **normalize non-Latin numerals to ASCII digits**. AppleScript's `as number` only coerces `0-9`; passing `٨` (Arabic-Indic) or `八` (CJK) silently fails the write.
+
+| Script | Mapping |
+|---|---|
+| Arabic-Indic | `٠١٢٣٤٥٦٧٨٩` → `0123456789` |
+| Eastern Arabic-Indic (Persian) | `۰۱۲۳۴۵۶۷۸۹` → `0123456789` |
+| CJK | `零一二三四五六七八九` → `0123456789`; `十` → `10` |
+
+After normalization, validate with Python `int()` before passing to AppleScript. If parsing fails, abort with `ص: cannot parse <arg> as a number`.
+
 ## Execution
 
-**All writes go through `~/.claude/skills/_lib/ix-osa.sh`** (which
-runs the AppleScript on Ix via ssh). The Neon workbook lives on Ix.
-Sheet name is `0n` (not `0₦`). Date column is C (M/D format). Always
-pin the workbook by name (`workbook "Neon分v12.2.xlsx"`) — never
-`active workbook`, since a different workbook may be frontmost on Ix.
-
-If Ix is unreachable, the helper hard-fails with a clear error
-(exit code 3). Do NOT fall back to local `osascript`; local writes
-cause OneDrive merge conflicts.
+**Run on Ix via SSH heredoc** — the Neon workbook is open on Ix. Sheet name is `0n` (not `0₦`). Date column is C (M/D format).
 
 ### Increment (+1)
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'AS'
+ssh ix 'osascript <<EOF
 tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set theSheet to sheet "0n" of active workbook
     set m to ((month of (current date)) * 1) as text
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
@@ -50,20 +54,20 @@ tell application "Microsoft Excel"
             set val to oldVal as number
         end if
         set value of theCell to (val + 1)
-        return "OK: " & ((val + 1) as text)
+        return (val + 1) as text
     else
-        return "ERROR: no row for " & today
+        return "no row for " & today
     end if
 end tell
-AS
+EOF'
 ```
 
 ### Set to N
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'AS'
+ssh ix 'osascript <<EOF
 tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set theSheet to sheet "0n" of active workbook
     set m to ((month of (current date)) * 1) as text
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
@@ -76,15 +80,15 @@ tell application "Microsoft Excel"
     end repeat
     if todayRow > 0 then
         set value of cell ("AM" & todayRow) of theSheet to N
-        return "OK: N"
+        return "N"
     else
-        return "ERROR: no row for " & today
+        return "no row for " & today
     end if
 end tell
-AS
+EOF'
 ```
 
-Replace `N` with the user's argument before piping.
+Replace `N` with the user's argument.
 
 ## Output
 

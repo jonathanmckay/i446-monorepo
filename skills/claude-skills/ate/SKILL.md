@@ -9,6 +9,20 @@ user-invocable: true
 Append a food entry to today's row in the `hcbi` sheet of `Neon分v12.2.xlsx`,
 into the cell triad whose Earthly Branch covers the current hour.
 
+## Excel host
+
+All Excel writes go through **Ix** (Mac Mini, Tailscale) — Neon is open there, not on Straylight. Wrap every `osascript` call:
+
+```bash
+ssh ix 'osascript <<APPLESCRIPT
+tell application "Microsoft Excel"
+  ...
+end tell
+APPLESCRIPT'
+```
+
+If `ssh ix` fails (timeout/unreachable), fall back to local `osascript` and warn the user — this is a degraded state. Set terminal orange via `~/i446-monorepo/scripts/term-color.sh orange`.
+
 ## Usage
 
 ```
@@ -80,35 +94,25 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
    Validate that `kcal` and `srv` parse as numbers. If not, ask the user to
    reformat.
 
-2. **Run the writer.** Excel must be open on Ix with `Neon分v12.2.xlsx`
-   loaded. All Excel writes route through Ix via the shared helper —
-   never local `osascript`, which would create OneDrive merge
-   conflicts against the canonical workbook.
+2. **Run the writer.** Excel must be open with `Neon分v12.2.xlsx` loaded on **ix**. Use the `neon.excel` client (which routes through the excel-http daemon on ix at `localhost:9876`, falling back to `ssh ix osascript` if the daemon is down):
 
-   If `~/i446-monorepo/scripts/neon-ate.py` exists, invoke it (the
-   script is expected to delegate to `_lib/ix-osa.{sh,py}` internally,
-   not call local `osascript` or local `xlwings`):
-   ```bash
-   python3 ~/i446-monorepo/scripts/neon-ate.py "<name>" <kcal> <srv>
+   ```python
+   import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+   from datetime import datetime
+   from neon import excel, cols
+
+   today = f"{datetime.now().month}/{datetime.now().day}"
+   band  = cols.hcbi_band(datetime.now().hour)        # → {branch, cols: [name, kcal, srv]}
+   name_col, kcal_col, srv_col = band["cols"]
+
+   excel.append("hcbi", name_col, date=today, value=", " + name)   # name col uses comma-append
+   excel.append("hcbi", kcal_col, date=today, value=f"+{kcal}")
+   excel.append("hcbi", srv_col,  date=today, value=f"+{srv}")
+   for abbrev, count in groups:                         # e.g. ("br", 3)
+       excel.append("hcbi", cols.daily_dozen_col(abbrev), date=today, value=f"+{count}")
    ```
 
-   If the writer is unavailable, fall through to an inline write via
-   the helper (compose the AppleScript that finds today's row in
-   `hcbi` col B, picks the triad based on current hour, and applies
-   the set/append rules), e.g.:
-   ```bash
-   ~/.claude/skills/_lib/ix-osa.sh <<'AS'
-   tell application "Microsoft Excel"
-       set ws to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
-       -- ...resolve row by M/D in col B; pick triad cols by 地支 hour;
-       -- set or append name (col 1), kcal (col 2), srv (col 3).
-       return "OK: ate <name>"
-   end tell
-   AS
-   ```
-
-   Optional flags for the writer: `--date M/D` to backfill, `--hour H`
-   to force a band.
+   Note: the **name column** is a string append, not arithmetic — first write should be plain (no leading "+"); the daemon's /append handles that automatically (sets `=name` then concats `, name` thereafter). For correctness, special-case empty-cell vs concat in the caller, or use `/write` for empties.
 
 3. **Report.** Echo the script's one-line confirmation, e.g.:
    ```

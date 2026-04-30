@@ -8,7 +8,48 @@ user-invocable: true
 
 Write to Neon spreadsheet + close Todoist task. AppleScript templates are in `applescript-ref.md` (same directory) — read that file when you need a template.
 
+## Excel host
+
+All Excel writes go through **Ix** (Mac Mini, Tailscale) — Neon is open there, not on Straylight.
+
+**Preferred path:** the `neon.excel` Python client at `~/i446-monorepo/lib/neon/excel.py`, which talks to the `excel-http` daemon on ix (`localhost:9876`). Cuts per-lookup latency from ~2s to ~30ms. The client falls back to `ssh ix osascript` automatically if the daemon is down.
+
+```python
+import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+from neon import excel, cols
+excel.append("0分", cols.domain_col("0分", "i9"), date="4/29", value="+10")
+```
+
+**Fallback / one-shot path:** wrap raw AppleScript in:
+
+```bash
+ssh ix 'osascript <<APPLESCRIPT
+tell application "Microsoft Excel"
+  ...
+end tell
+APPLESCRIPT'
+```
+
+**Column letters:** never hard-code. `~/i446-monorepo/config/neon-cols.json` is the source of truth (regen via `~/i446-monorepo/scripts/regen-neon-cols.py`). Use `cols.col(sheet, header)` or `cols.domain_col(sheet, domain)`.
+
+If `ssh ix` fails (timeout/unreachable), warn the user — this is a degraded state. Set terminal orange via `~/i446-monorepo/scripts/term-color.sh orange`.
+
 ## Execution Model
+
+**Fast path (registry-resolved 0n / 1n+ habits):** run the runner directly, no agent. Most /did calls hit this path:
+
+```bash
+python3 ~/i446-monorepo/tools/did/run.py "<input>"
+```
+
+The runner:
+1. Calls `route.py` for routing decision
+2. If `step == 0n` or `1n+`: writes Neon, closes Todoist, optionally creates Toggl entry (for `HHMM-HHMM` time ranges), updates `completed-today.json`, prints one-line confirmation. Exit code 0.
+3. If `step == unknown`: exits with code 2 (defer to agent)
+
+**Latency:** ~3-5s per call (was 60-90s when agent-mediated). Most of that is Excel writes.
+
+**Slow path (one-off Todoist tasks, variable tasks):** when `run.py` exits with code 2, dispatch the background agent for Step 5 (Todoist word-overlap match) or Step 6 (variable). The agent is needed here because matching a free-form input against the full Todoist tree requires the LLM.
 
 A **UserPromptSubmit hook** (`did-next-hook.sh`) runs BEFORE Claude processes the prompt. If the prompt starts with `/did`, the hook outputs a "Next up" task list from the local cache. This output appears in a system-reminder tag.
 
@@ -16,15 +57,28 @@ When you see hook output containing "Next up:" and "Pick [1-N]:", do this:
 
 1. **Display the hook output verbatim** to the user. Do not re-run the script.
 2. **Wait for user's pick.** If they pick 1–5, run `/tg` for that task (strip `[N]`, `(N)`, suffixes like `- Daily 分`). If they pick the last number (skip), do nothing.
-3. **After the pick** (or if no hook output), launch the background agent for the /did pipeline.
-4. **Background** (Agent with `run_in_background: true`): Run Steps -2 through 6b (whichever path applies), then refresh cache + update completed-today. Report results when done.
+3. **After the pick** (or if no hook output), invoke `run.py` directly (fast path). If it exits 2, fall back to launching the background agent.
+4. **Background agent** (only when run.py defers): handle Step 5 (Todoist match) or Step 6 (variable task), then refresh cache + update completed-today. Report results when done.
+
+### Next-up suppression (anti-wallpaper rule)
+
+The Next-up panel is wallpaper after the first /did of a session — the same 9 tasks repeat until the user picks one. To save scroll:
+
+- The **background agent** still refreshes the cache every time (`completed-today.json` and `task-queue.json` must stay current).
+- In your **user-facing reply**, only render the Next-up list when:
+  - It's the first `/did` since you last sent the user a Next-up panel in this conversation, OR
+  - The list materially changed (a task that was on it dropped off, or a higher-priority task surfaced), OR
+  - The user explicitly asks (`/next`, "what's next", etc.).
+- Otherwise, just confirm the write in one line (e.g. `hiit → 1 (today) ✓ verify=1.0 + todoist closed`).
+
+Track suppression mentally per-session: after you've shown a Next-up panel once, don't repeat it until the list changes or the user asks. The user knows what's there; they'll ask if they want it again.
 
 ## No-args Mode
 
 When `/did` is called with **no arguments**:
 
 1. **Read Toggl cache** at `~/.claude/skills/tg/cache.json`. If no timer running, output `No timer running.` and exit.
-2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`).
+2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Apply the d359 bump (Step C) to the stopped entry's tags — same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
 3. **Use the timer description as the /did input.** Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 → 6) as if the user had typed `/did <description>`.
 4. **Surface next tasks.** After launching the /did background agent, read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1–9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
 
@@ -36,7 +90,7 @@ This lets the user finish a task and immediately start the next one in a single 
 
 **Split:** `,` or `;` → separate items, process each independently.
 
-**Aliases:** `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`
+**Aliases:** `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`, `wake up`→`起`
 
 **Cumulative columns:** `问学` — add to existing value instead of overwriting.
 
@@ -48,20 +102,51 @@ This lets the user finish a task and immediately start the next one in a single 
 
 ## Routing (Step 0)
 
-**IMPORTANT:** Always complete Steps 0.1–0.3 in order before falling through to Step 6. Do NOT short-circuit to Step 6 just because the input starts with a number. Many 1n+ headers start with `1` (e.g. `1 xk88`, `1 i9`, `1 m5x2`). Match the **full input string** against headers first.
+**Always run the dispatcher first.** Do not re-implement the matching logic in prose — it lives in code:
 
-1. **0₦ match** (full input = exact column header in 0n row 1, case-insensitive) → today: Steps 1–4. Past date: Step 6b.
-2. **1n+ match** (full input = column header in 1n+ row 1, case-insensitive) → Step 1n.
-3. **Todoist match** (word overlap ≥0.6 across ALL pages, paginate with `next_cursor`) → Step 5.
+```bash
+python3 ~/i446-monorepo/tools/did/route.py "<input>" [--target-date M/D]
+```
+
+The dispatcher emits JSON with the routing decision. Use its output directly:
+
+| `step` field | Meaning | What to do |
+|--------------|---------|------------|
+| `"0n"`       | Registry-resolved 0₦ habit | Steps 1–4 using `neon_col`, `neon_sheet`, `domain`, `todoist_label`, `toggl` from JSON |
+| `"1n+"`      | Registry-resolved 1n+ habit | Step 1n using `neon_col` (1n+ sheet), `domain`, `fen_col` for the 0分 append, `todoist_label` |
+| `"unknown"`  | Not in registry — one-off | Fall through to **0.3** (Todoist word-overlap) and **6** (variable). The dispatcher's `hint` field will say so. |
+
+The dispatcher has already:
+- handled aliases (`math` → 问学, `stats m5x2` → m5x2-stats, `wake up` → 起)
+- stripped `@project` overrides into `toggl.project`
+- stripped `[N]`/`(N)`/`{N}` annotations from the routing query
+- resolved live column letters via neon-cols.json (so writes go to the right place even after a column reshuffle)
+
+If `step == "0n"` and target_date is past, treat as Step 6b (posthoc) instead of Steps 1–4.
+
+### Fallback paths (only if `step == "unknown"`)
+
+3. **Todoist match** (word overlap ≥0.6 across ALL pages, paginate with `next_cursor`) → Step 5. For one-off Todoist tasks (build-order goals, posthoc, ad-hoc adds).
 4. **No match** → Step 6 (variable task).
 
 Word overlap: tokenize both sides (lowercase, strip `[N]`/`(N)`/stopwords, **strip apostrophes and punctuation** so `mother's`→`mothers`, `don't`→`dont`), ratio = query words found in task / total query words. ≥0.6 matches. Tie: highest ratio. 0.4 only if exactly one task.
+
+### Registering new recurring habits
+
+If a one-off keeps recurring (you find yourself typing it weekly), register it as a real habit so the dispatcher hits next time:
+
+```bash
+~/i446-monorepo/scripts/register-habit.py <id> --name "..." --category {0n|1n+} \
+    --neon-header <header> --domain <code> --create-excel-col --create-todoist
+```
+
+The `--create-excel-col` flag adds the column to the 0n/1n+ sheet via the daemon. `--create-todoist` creates the recurring Todoist task with the right labels. Registry, Excel, and Todoist stay in sync automatically.
 
 ## Step 1–4: 0₦ Habit Flow
 
 **1b. Auto-detect time:** No `[time]` provided → check Toggl today for matching entries (description substring or project code match via /tg shortcode mapping). Sum minutes. No match → `1`.
 
-**2. Write to 0₦:** Use "Write to 0₦" template from `applescript-ref.md`. Run via `~/.claude/skills/_lib/ix-osa.sh` (or the `ix_osa.run()` Python helper for the background agent). NEVER call local `osascript` — writes must land on Ix to avoid OneDrive merge conflicts.
+**2. Write to 0₦:** Use "Write to 0₦" template from `applescript-ref.md`. Run via `osascript -e '...'`.
 
 **2b. 0l special case:** If habit is `0l`, run "0l completion time" template.
 
@@ -75,19 +160,45 @@ Word overlap: tokenize both sides (lowercase, strip `[N]`/`(N)`/stopwords, **str
 
 ## Step 5: Todoist-only Task
 
-Task found in Step 0. Extract `[N]` points. Map labels to 0分 column:
-- `i9`/`i447`/`f693`/`f694` → AA, `m5x2` → AB, `g245`/`infra`/`cc` → AC, `hcmc` → AD, `xk87`/`xk88` → AG, `s897` → AH, `hcb`/`hcbp` → AF
+Task found in Step 0. **Build order is the points source of truth, not the Todoist task content** — the user routinely edits annotations in the build order after `/0g`/`-1g` sync, and those edits must be respected.
 
-Append `+N` to 0分 using "Append to 0分" template. Close the Todoist task.
+**5a. Resolve points (do BEFORE writing to Excel) — priority order:**
 
-**5b. Build order check-off:** If the closed task has label `关键路径` (or `#0g`/`#-1g`), flip the matching line in `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md` from `- [ ]` to `- [x]`:
+1. **User-typed annotations on the /did command** win over everything. If the user wrote `[N]` or `{N}` in the /did input, use those values. They override stale build-order or Todoist values.
+2. **Build order line.** If the task has label `关键径路` / `#0g` / `#-1g`, find the matching line in `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md` (same matching algorithm as Step 5b below). If matched, extract `[N]` and `{N}` from that line for whichever annotation the user did NOT type explicitly.
+3. **Todoist task content.** If no build-order match, fall back to `[N]`/`{N}` in the Todoist task content.
+4. Empty/missing → 0 pts (per "Zero points default" memory).
+
+The user-typed value is final — if they type `[30]` and the build order says `[100]`, write +30, not +100.
+
+**5a-write. Write points to 0分:**
+
+- `[N]` → domain column per label map: `i9`/`i447`/`f693`/`f694` → AA, `m5x2` → AB, `g245`/`infra`/`cc` → AC, `hcmc` → AD, `xk87`/`xk88` → AG, `s897` → AH, `hcb`/`hcbp` → AF, `hcm`/`hcmp` → AE
+- `{N}` → **always AC** (the 0g column), regardless of task labels
+- If both `[N]` and `{N}` are present, do TWO sequential writes (one per column).
+- If both are 0 / missing, skip the Excel write entirely.
+
+Append via "Append to 0分" template. Close the Todoist task.
+
+**5b. Build order check-off:** If the closed task has label `关键径路` (or `#0g`/`#-1g`), flip the matching line from `- [ ]` to `- [x]`:
 
 - Search `## 0₲` section (before `### 以后的目标`), 2-space indent: `  - [ ] <content>` → `  - [x] <content>`
 - Then search `## -1₲` section within any 地支 block (寅/卯/辰/…), 4-space indent: `    - [ ] <content>` → `    - [x] <content>`
 
-Match the line whose bullet content equals the Todoist task content (preserve `(N)`, `[N]`, `{N}` annotations — they're written identically by `/0g` and `/-1g`). If no exact match, fall back to substring match on the bare goal text. If still no match, skip silently — don't fail the /did flow.
+Match the line whose bullet content equals the Todoist task content (preserve `(N)`, `[N]`, `{N}` annotations — they're written identically by `/0g` and `/-1g`). If no exact match, fall back to substring match on the bare goal text (strip `(N)`/`[N]`/`{N}` from both sides for the comparison). If still no match, skip silently — don't fail the /did flow.
 
 **5.5.** If `hasTimeRange`, create Toggl entry via `toggl_create_entry`.
+
+## Step C (cross-cutting): d359 last_contact bump
+
+**Runs after EVERY Todoist task close in /did** (Steps 1–4 / Step 5 / Step 1n / Step 6b). Cheap to scan, skip silently if no match.
+
+For each label on the closed task matching `d359/<slug>`:
+1. Find `vault/d359/<slug>*.md` (glob — handles `<slug>-d359.md` and `<slug> d359.md` variants).
+2. If file exists, update or insert `last_contact: <targetDate>` in the frontmatter.
+3. If no file matches the slug, log a one-line warning and continue (don't fail the /did flow).
+
+Convention: `d359/<slug>` labels mark Todoist tasks (and Toggl tags) as outreach for that contact. Same convention used by `/done` and `/tg stop` for time entries. Slug = d359 filename minus `-d359.md` / ` d359.md` suffix (e.g., `mark-mckay`, `mariah-mckay`).
 
 ## Step 6: Variable Task
 
@@ -101,7 +212,14 @@ No 0₦ or Todoist match. Number = **points** not minutes.
 
 Matches 1n+ sheet header. Do NOT write to 0₦.
 
-1. Find column + week row (M.W = month.ceil(day/7)). Read points from row 3. Write points to cell. Use "1n+ write" template.
+1. Find column + week row. **M.W** is computed from the **Sunday that starts the calendar week containing the target date** (weeks are Sun–Sat):
+   - `sunday = target_date - timedelta(days=(target_date.weekday() + 1) % 7)` (Python; `weekday()` Mon=0..Sun=6)
+   - `M = sunday.month`
+   - `W = (sunday.day - 1) // 7 + 1`  ← which Sunday of `M` this is (1st, 2nd, 3rd, …)
+   - Examples: Fri Apr 24 2026 → Sun Apr 19 → `4.3`. Sun Mar 29 2026 → `3.5`. Mon Apr 13 2026 → Sun Apr 12 → `4.2`.
+   - Do NOT use `ceil(day/7)` — that gives the wrong week when the date's Sunday falls in a different month/week-of-month bucket. The 1n+ column B labels these Sunday-anchored weeks.
+
+   Read points from row 3. Write points to cell. Use "1n+ write" template.
    - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template — read old value, add increment, write sum). Fixed increments: `一起饭` = 30.
 2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`. Use "1n+ → 0分" template. For 一起饭 → 0分 column AG (xk).
 3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1–2).
@@ -112,20 +230,17 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
 ## Cache & Tracking
 
-**Task queue:** `~/vault/z_ibx/task-queue.json` — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键路径).
+**Task queue:** `~/vault/z_ibx/task-queue.json` — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键径路).
 
 **Completed-today:** `~/vault/z_ibx/completed-today.json` — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day.
 
-**Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键路径 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
+**Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键径路 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
 
 **Next-task script:** `~/i446-monorepo/tools/did/next-task.py <habit>` — reads cache + completed-today, filters to today/overdue, excludes completed, shows top 5. Hook runs this automatically.
 
 ## Notes
 
-- Excel must be open with `Neon分v12.2.xlsx` **on Ix**. All writes
-  go through `~/.claude/skills/_lib/ix-osa.{sh,py}`. If Ix is
-  unreachable, the helper exits 3 and the /did step hard-fails — do
-  NOT write locally (would cause OneDrive merge conflicts).
+- Excel must be open with `Neon分v12.2.xlsx`.
 - AppleScript calls must be **sequential** (race condition on concurrent writes).
 - Column headers in row 1, exact match. Date in col C, M/D format.
 
@@ -144,3 +259,5 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did 1 xk88` — 1n+ header is "1 xk88" | Step 0.2 matches 1n+ header → Step 1n, closes 1neon Todoist task | Must NOT treat leading "1" as points and route to Step 6 |
 | `/did 1 i9` — 1n+ header is "1 i9" | Step 0.2 matches 1n+ header → Step 1n | Must NOT route to Step 6 as "1 point to i9" |
 | `/did PTC` — Todoist match "PTC feedback [180]" with label xk87 | Step 5: extract [180] from task, write +180 to 0分 AG | Must NOT use 0 pts just because user input had no [N] — always extract from the matched Todoist task |
+| `/did Use /inbound to keep response times low.` — Todoist task content has no `{N}`, but build order line has `Use /inbound to keep response times low.{30}` (user added post-sync) | Step 5a: extract `{30}` from BUILD ORDER line, write +30 to 0分 AC (0g column), close Todoist, flip checkbox | Must NOT use 0 pts because Todoist task lacks `{30}` — build order is the points source of truth |
+| `/did 1 hcb` on Fri 2026-04-24 — 1n+ Step 1n flow | Compute M.W from the Sunday starting that calendar week (Sun Apr 19 → `4.3`, row 19). Write to U19. | Must NOT use `ceil(day/7)` (gives 4.4, row 20 = NEXT WEEK). 1n+ column B labels are Sunday-anchored Sun–Sat weeks. |

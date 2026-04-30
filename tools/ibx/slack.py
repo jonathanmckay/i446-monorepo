@@ -151,6 +151,22 @@ def build_thread(token, channel, self_id):
     except Exception:
         pass  # If info fails, fall through and show the thread
 
+    # Skip threads where the user already replied: if the latest message
+    # from the user is newer than the latest inbound message, the thread
+    # doesn't need a response.
+    latest_inbound_ts = 0.0
+    latest_outbound_ts = 0.0
+    for m in msgs:
+        if m.get("type") != "message":
+            continue
+        ts = float(m.get("ts", 0))
+        if m.get("user") == self_id:
+            latest_outbound_ts = max(latest_outbound_ts, ts)
+        else:
+            latest_inbound_ts = max(latest_inbound_ts, ts)
+    if latest_outbound_ts > 0 and latest_outbound_ts >= latest_inbound_ts:
+        return None  # user already replied
+
     # Resolve display name
     if channel.get("is_im"):
         display = get_username(token, channel.get("user", ""))

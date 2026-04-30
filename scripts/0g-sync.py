@@ -403,6 +403,28 @@ def run_sync(client: TodoistClient, dry_run: bool):
                 logger.info("[DRY RUN] Would update: %s -> %s", fmatch[:40], task.key[:40])
             continue
 
+        # Check if task already exists in Todoist (created by /0g or another source)
+        existing_match = None
+        for tt in todoist_tasks:
+            tt_key = tt["content"].strip().lower()
+            tt_words = set(tt_key.split())
+            task_words = set(task.key.split())
+            if task_words and tt_words:
+                overlap = len(task_words & tt_words) / max(len(task_words), len(tt_words))
+                if overlap >= 0.6:
+                    existing_match = tt
+                    break
+
+        if existing_match:
+            # Adopt the existing Todoist task into state instead of creating a duplicate
+            state["tasks"][task.key] = {
+                "todoist_id": existing_match["id"],
+                "minutes": task.minutes,
+            }
+            state_keys.add(task.key)
+            logger.info("Adopted existing Todoist task: %s (id=%s)", task.description, existing_match["id"])
+            continue
+
         # New task
         labels = detect_labels(task.description)
         if dry_run:

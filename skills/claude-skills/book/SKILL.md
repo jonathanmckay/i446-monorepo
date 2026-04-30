@@ -74,7 +74,27 @@ Good? (y to save, or give feedback)
 
 If the user gives feedback, revise and re-present. Loop until approved.
 
-### Step 6: Save the review
+### Step 6: Find inter-review links
+
+Before saving, search `~/vault/hcmc/reviews/` for related reviews to link.
+
+```bash
+# Same author (case-insensitive grep on frontmatter)
+grep -rl "^author:.*AUTHOR_NAME" ~/vault/hcmc/reviews/ --include="*.md"
+
+# Same series (if applicable)
+grep -rl "^series:.*SERIES_NAME" ~/vault/hcmc/reviews/ --include="*.md"
+```
+
+Build three link lists from the results (paths relative to the reviews/ root, e.g. `2025/the-blade-itself.md`):
+
+- **`related:`** — all books by the same author (excluding the current review)
+- **`series_next:` / `series_prev:`** — if this book is in a series and adjacent entries exist, link them. Also update the adjacent review's frontmatter to point back (add `series_next:` or `series_prev:` to the neighbor).
+- **`series_number:`** — position in the series (if applicable)
+
+Do NOT ask the user to confirm the links; just include them silently. If no related reviews exist, omit the fields.
+
+### Step 7: Save the review
 
 Once approved:
 
@@ -93,13 +113,20 @@ score: N
 tags: [hcmc, review]
 source: goodreads
 series: "<Series Name>"
+series_number: N
+series_prev: "YYYY/prev-title.md"
+series_next: "YYYY/next-title.md"
+related:
+  - "YYYY/other-by-author.md"
+  - "YYYY/another-by-author.md"
 ---
 
 <review text>
 ```
 
 - Omit `score` if skipped
-- Omit `series` if not part of a series
+- Omit `series`, `series_number`, `series_prev`, `series_next` if not part of a series
+- Omit `related` if no other reviews by this author exist
 - Omit `source` if user doesn't plan to post to Goodreads
 
 3. **Open the saved review in Obsidian** so the user can see or edit the vault file immediately:
@@ -131,7 +158,7 @@ open -a "Google Chrome" "https://www.goodreads.com/search?q=$(python3 -c "import
 echo "<review text>" | pbcopy
 ```
 
-### Step 7: Report
+### Step 8: Report
 
 ```
 Saved: ~/vault/hcmc/reviews/YYYY/title.md (score: N)

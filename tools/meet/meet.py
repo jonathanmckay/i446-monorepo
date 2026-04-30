@@ -31,9 +31,22 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+import subprocess as _sp
+
 import numpy as np
 import sounddevice as sd
 import anthropic
+
+
+def _notify(title, body):
+    """Send a macOS notification so warnings are visible even when running in background."""
+    try:
+        _sp.run([
+            "osascript", "-e",
+            f'display notification "{body}" with title "{title}" sound name "Funk"'
+        ], timeout=5, capture_output=True)
+    except Exception:
+        pass  # best-effort
 from typing import Optional
 
 SAMPLE_RATE = 16000   # Whisper works best at 16kHz
@@ -72,11 +85,15 @@ def list_devices():
     print()
 
 
-def record_audio(teams_mode: bool = False) -> np.ndarray:
-    """Record audio until Ctrl+C.
+def record_audio(teams_mode: bool = False, max_duration: int = 0,
+                  idle_timeout: int = 600) -> np.ndarray:
+    """Record audio until Ctrl+C, max_duration, or idle timeout.
 
     teams_mode=True: mix BlackHole (system/Teams audio) + mic.
     teams_mode=False: mic only (default).
+    max_duration: auto-stop after this many seconds (0 = no limit).
+    idle_timeout: auto-stop after this many seconds of silence once
+                  conversation has been detected (default 600s = 10min).
     """
     mic_frames: list = []
     bh_frames: list = []
@@ -92,8 +109,8 @@ def record_audio(teams_mode: bool = False) -> np.ndarray:
 
     # System audio stream (Teams/Zoom)
     if teams_mode:
-        # Prefer Teams virtual device, fall back to BlackHole
-        sys_idx = find_device("Microsoft Teams Audio") or find_device("BlackHole")
+        # Prefer BlackHole (reliable via Multi-Output Device); Teams Audio is unreliable
+        sys_idx = find_device("BlackHole") or find_device("Microsoft Teams Audio")
         if sys_idx is not None:
             sys_name = sd.query_devices(sys_idx)["name"]
             def sys_cb(indata, fc, ti, st):
@@ -110,12 +127,36 @@ def record_audio(teams_mode: bool = False) -> np.ndarray:
         stop_event = True
     signal.signal(signal.SIGTERM, _handle_stop)
 
-    # One-sided detection state (non-teams mode only)
+    # Silence / one-sided detection
     onesided_warned = False
+    last_teams_check = 0
+    teams_warn_count = 0
     SILENCE_THRESH = 500       # int16 amplitude below this = silence
-    CHECK_INTERVAL = 120       # seconds before first check
+    SPEECH_THRESH = 800        # int16 amplitude above this = likely speech
+    CHECK_INTERVAL_MIC = 120   # seconds before first check (mic-only mode)
+    CHECK_INTERVAL_BOTH = 60   # seconds between teams-mode checks
     SILENCE_RATIO_WARN = 0.55  # warn if >55% of audio is silence
+    SPEECH_RATIO_MIN = 0.01    # need at least 1% of samples above speech threshold
 
+    def _has_speech(frames, window_secs=60):
+        """Check if the last N seconds of frames contain actual speech."""
+        if not frames:
+            return False
+        samples_needed = SAMPLE_RATE * window_secs
+        recent = np.concatenate(frames[-samples_needed:], axis=0) if len(frames) > 1 else frames[-1]
+        if len(recent) > samples_needed:
+            recent = recent[-samples_needed:]
+        speech_ratio = np.mean(np.abs(recent) > SPEECH_THRESH)
+        return speech_ratio >= SPEECH_RATIO_MIN
+
+    # Auto-stop state
+    conversation_detected = False  # True once we've seen speech
+    idle_since = 0.0              # elapsed time when silence started (after conversation)
+
+    if max_duration:
+        print(f"   Auto-stop after {max_duration // 60}min (calendar duration)")
+    if idle_timeout:
+        print(f"   Auto-stop after {idle_timeout // 60}min of silence (post-conversation)")
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
         s.start()
@@ -124,9 +165,73 @@ def record_audio(teams_mode: bool = False) -> np.ndarray:
         while not stop_event:
             sd.sleep(500)
             elapsed += 0.5
-            # After 2 min, check for one-sided audio (mic-only mode)
+
+            # Auto-stop: max duration reached
+            if max_duration and elapsed >= max_duration:
+                msg = f"Auto-stopped after {int(elapsed // 60)}min (calendar duration)"
+                print(f"\n⏹  {msg}")
+                _notify("Recording Auto-Stopped", msg)
+                break
+
+            # Teams mode: check every 60s (repeating, not one-shot)
+            if (teams_mode and elapsed >= CHECK_INTERVAL_BOTH
+                    and elapsed - last_teams_check >= CHECK_INTERVAL_BOTH):
+                last_teams_check = elapsed
+                mic_has_speech = _has_speech(mic_frames)
+                bh_has_speech = _has_speech(bh_frames)
+                any_speech = mic_has_speech or bh_has_speech
+
+                # Track conversation state for idle auto-stop
+                if any_speech:
+                    conversation_detected = True
+                    idle_since = 0.0  # reset idle timer
+                elif conversation_detected:
+                    if idle_since == 0.0:
+                        idle_since = elapsed  # start idle timer
+                    elif idle_timeout and (elapsed - idle_since) >= idle_timeout:
+                        msg = f"Auto-stopped: {int(idle_timeout // 60)}min silence after conversation ended"
+                        print(f"\n⏹  {msg}")
+                        _notify("Recording Auto-Stopped", msg)
+                        break
+
+                # Hard fail: mic works but call audio is dead after 3 min
+                if mic_has_speech and not bh_has_speech and elapsed >= 180:
+                    teams_warn_count += 1
+                    if teams_warn_count >= 3:
+                        msg = "STOPPED: call audio missing. Set system output to 'Meet Output' and restart."
+                        print(f"\n🛑  {msg}")
+                        _notify("🛑 Recording Failed", msg)
+                        break
+
+                if not mic_has_speech and not bh_has_speech:
+                    teams_warn_count += 1
+                    msg = f"NO SPEECH on either channel ({int(elapsed)}s, #{teams_warn_count})"
+                    print(f"\n⚠  {msg}")
+                    print("   Both mic and system audio lack speech.")
+                    print("   Check: is the call connected? Is system output set to 'Meet Output'?\n")
+                    _notify("⚠ Recording Problem", msg)
+                elif mic_has_speech and not bh_has_speech:
+                    teams_warn_count += 1
+                    msg = f"CALL AUDIO HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
+                    print(f"\n⚠  {msg}")
+                    print("   Your mic is picking up speech, but system audio is not.")
+                    print("   Check: system output → 'Meet Output'? Is the other person talking?\n")
+                    _notify("⚠ Recording Problem", msg)
+                elif not mic_has_speech and bh_has_speech:
+                    teams_warn_count += 1
+                    msg = f"MIC HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
+                    print(f"\n⚠  {msg}")
+                    print("   Call audio has speech, but your mic does not.")
+                    print("   Check your mic input device.\n")
+                    _notify("⚠ Recording Problem", msg)
+                else:
+                    if teams_warn_count > 0:
+                        print(f"\n✓  Both channels now have speech ({int(elapsed)}s). Recording looks good.\n")
+                        teams_warn_count = 0
+
+            # Mic-only mode: after 2 min, check for one-sided audio
             if (not teams_mode and not onesided_warned
-                    and elapsed >= CHECK_INTERVAL and mic_frames):
+                    and elapsed >= CHECK_INTERVAL_MIC and mic_frames):
                 audio_so_far = np.concatenate(mic_frames, axis=0)
                 silent = np.mean(np.abs(audio_so_far) < SILENCE_THRESH)
                 if silent > SILENCE_RATIO_WARN:
@@ -282,7 +387,7 @@ def extract_meeting_data(transcript: str, meeting_name: str) -> dict:
 
 def write_meeting_note(data: dict, transcript: str, meeting_name: str,
                        domain: str) -> Path:
-    date = datetime.now().strftime("%Y-%m-%d")
+    date = datetime.now().strftime("%Y.%m.%d")
     slug = (
         meeting_name.lower()
         .replace(" ", "-")
@@ -406,6 +511,10 @@ def main():
     parser.add_argument("--model", default=WHISPER_MODEL,
                         help=f"Whisper model (default: {WHISPER_MODEL}). "
                              "Options: tiny.en, base.en, small.en, medium.en")
+    parser.add_argument("--max-duration", type=int, default=0, metavar="MIN",
+                        help="Auto-stop after N minutes (0 = no limit)")
+    parser.add_argument("--idle-timeout", type=int, default=2, metavar="MIN",
+                        help="Auto-stop after N min of silence post-conversation (default 2, 0 = off)")
     parser.add_argument("--devices", action="store_true",
                         help="List available audio input devices and exit")
     args = parser.parse_args()
@@ -422,10 +531,14 @@ def main():
         transcript = Path(args.tx).read_text()
         print(f"📄 Using transcript: {args.tx} ({len(transcript.split())} words)")
     else:
-        audio = record_audio(teams_mode=not args.no_teams)
+        audio = record_audio(
+            teams_mode=not args.no_teams,
+            max_duration=args.max_duration * 60,  # convert min to sec
+            idle_timeout=args.idle_timeout * 60,
+        )
         recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)
-        date_slug = datetime.now().strftime("%Y-%m-%d-%H%M")
+        date_slug = datetime.now().strftime("%Y.%m.%d-%H%M")
         name_slug = meeting_name.lower().replace(" ", "-")[:30]
         wav_path = recordings_dir / f"{date_slug}-{name_slug}.wav"
         save_wav(audio, wav_path)

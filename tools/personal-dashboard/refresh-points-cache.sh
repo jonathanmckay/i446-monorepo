@@ -18,7 +18,7 @@ import openpyxl, json
 from datetime import datetime, date, timedelta
 wb = openpyxl.load_workbook('$NEON', data_only=True, read_only=True)
 ws = wb['0分']
-COLS = {25: '-1₦', 26: '0₲', 27: 'i9', 28: 'm5', 29: '个', 30: '媒', 31: '思', 32: 'hcb', 33: 'xk', 34: '社'}
+COLS = {16: '-1₦', 17: '0₲', 18: 'i9', 19: 'm5', 20: '个', 21: '媒', 22: '思', 23: 'hcb', 24: 'xk', 25: '社'}
 today = date.today()
 cutoff = today - timedelta(days=90)
 result = {}

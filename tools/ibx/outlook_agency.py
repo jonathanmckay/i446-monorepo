@@ -319,7 +319,10 @@ def archive(item_id, subject="", sender=""):
     """Archive email — delete from inbox via Graph API so it won't reappear."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
-        _delete_after_action(graph_id)
+        threading.Thread(
+            target=lambda: _delete_after_action(graph_id),
+            daemon=True,
+        ).start()
     record_action(item_id, "archive")
     _mark_processed(item_id)
 
@@ -348,7 +351,10 @@ def reply(item_id, subject, sender, reply_text):
         if result is None:
             console.print("[red]Reply failed[/red]")
             return
-        _delete_after_action(graph_id)
+        threading.Thread(
+            target=lambda: _delete_after_action(graph_id),
+            daemon=True,
+        ).start()
     record_action(item_id, "reply")
     _mark_processed(item_id)
 

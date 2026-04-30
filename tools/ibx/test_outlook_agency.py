@@ -203,6 +203,10 @@ def test_reply_archives_email():
             assert "_delete_after_action" in func_source, (
                 "reply() must call _delete_after_action to archive the email after replying"
             )
+            assert "Thread" in func_source, (
+                "reply() must run _delete_after_action in a background thread "
+                "to avoid blocking the UI after sending"
+            )
             return
     raise AssertionError("reply function not found")
 
@@ -278,10 +282,14 @@ def test_delete_after_action_is_synchronous_with_retry():
     raise AssertionError("_delete_after_action function not found")
 
 
-def test_archive_uses_delete_after_action():
+def test_archive_uses_delete_after_action_in_thread():
     """
-    Bug: archive() used a daemon thread for DeleteMessage, same silent-failure
-    pattern as reply(). Must use _delete_after_action for consistency.
+    Bug: archive() called _delete_after_action synchronously, blocking the UI
+    for up to 31 seconds (0.5s sleep + two 15s timeout retries) on every
+    archive action. The user sees the card freeze while Graph API times out.
+
+    Fix: archive() must call _delete_after_action in a daemon thread so the
+    UI returns immediately. _delete_after_action still retries internally.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
@@ -289,10 +297,11 @@ def test_archive_uses_delete_after_action():
         if isinstance(node, ast.FunctionDef) and node.name == "archive":
             func_source = ast.get_source_segment(source, node)
             assert "_delete_after_action" in func_source, (
-                "archive() must use _delete_after_action, not a daemon thread"
+                "archive() must use _delete_after_action for reliable deletion"
             )
-            assert "Thread" not in func_source, (
-                "archive() must not use daemon threads for deletion"
+            assert "Thread" in func_source, (
+                "archive() must run _delete_after_action in a background thread "
+                "to avoid blocking the UI"
             )
             return
     raise AssertionError("archive function not found")

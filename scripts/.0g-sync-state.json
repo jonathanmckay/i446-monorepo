@@ -1,18 +1,14 @@
 {
   "version": 1,
   "tasks": {
-    "get through qz12": {
-      "todoist_id": "6gRQCMjf6CW7mCq2",
+    "have a rampdown checklist and start on it": {
+      "todoist_id": "6gW4HvPV88X82x7R",
       "minutes": 60
     },
-    "tasks down to 50": {
-      "todoist_id": "6gRQCMppCP4Pm3m2",
-      "minutes": 70
-    },
-    "each meeting fun and doesnt last more than it needs to": {
-      "todoist_id": "6gRQCMwHpfwRJ6J2",
-      "minutes": 35
+    "get one m5x2 p&l": {
+      "todoist_id": "6gW4HvWVfVMCw99R",
+      "minutes": 30
     }
   },
-  "last_sync": "2026-04-23T13:48:04.434366-07:00"
+  "last_sync": "2026-04-30T06:26:53.835628-07:00"
 }

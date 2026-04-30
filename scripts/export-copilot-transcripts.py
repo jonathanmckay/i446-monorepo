@@ -19,11 +19,18 @@ SESSION_STORE_IX = Path.home() / ".copilot" / "session-store-ix.db"
 OUTPUT_DIR = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts" / "copilot-cli"
 OUTPUT_DIR_IX = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts" / "ix" / "copilot-cli"
 
-# host -> (db path, output dir)
-SOURCES = [
-    ("straylight", SESSION_STORE,    OUTPUT_DIR),
-    ("ix",         SESSION_STORE_IX, OUTPUT_DIR_IX),
-]
+# Host-aware sources. We can't rely on hostname (ix is "Jonathans-Mac-mini").
+# The straylight box is the only one with a mirrored ix DB at SESSION_STORE_IX.
+# Any other box exports its own DB into the ix/copilot-cli/ subdir.
+if SESSION_STORE_IX.exists():
+    SOURCES = [
+        ("straylight", SESSION_STORE,    OUTPUT_DIR),
+        ("ix",         SESSION_STORE_IX, OUTPUT_DIR_IX),
+    ]
+else:
+    SOURCES = [
+        ("ix", SESSION_STORE, OUTPUT_DIR_IX),
+    ]
 
 
 def slugify(text: str, max_len: int = 60) -> str:

@@ -28,7 +28,7 @@ import json
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 COMPLETED = Path.home() / "vault/z_ibx/completed-today.json"
@@ -96,11 +96,15 @@ def _atomic_write(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
-def append_names(new_names: list[str], *, today: str | None = None, path: Path | None = None) -> dict:
+def append_names(new_names: list[str], *, today: str | None = None,
+                 path: Path | None = None, points: dict | None = None) -> dict:
     """Append names to completed-today.json with dedup + date gate.
 
     Returns the resulting dict (unwritten if path is a stub, written if path is real).
     Uses flock on the file to serialize concurrent writers.
+
+    `points` is an optional dict mapping name -> int (分 value). Merged into
+    the "points" key in the JSON so enrichment scripts can sum per-block 分.
 
     `path` resolves to the module-level `COMPLETED` constant at call time when
     omitted. Re-reading it via the module means tests can monkey-patch
@@ -119,11 +123,18 @@ def append_names(new_names: list[str], *, today: str | None = None, path: Path |
 
         # Date gate: different date → reset names.
         if data.get("date") != today:
-            data = {"date": today, "names": []}
+            data = {"date": today, "names": [], "points": {}}
+
+        # Ensure points/timestamps dicts exist (backwards compat)
+        if "points" not in data:
+            data["points"] = {}
+        if "timestamps" not in data:
+            data["timestamps"] = {}
 
         # Dedup existing names first (self-heal any pre-existing dupes).
         data["names"] = _dedup_preserve_order(data["names"])
 
+        now_hhmm = datetime.now().strftime("%H:%M")
         existing_keys = {_normalize(n) for n in data["names"]}
         for raw in new_names:
             k = _normalize(raw)
@@ -131,6 +142,14 @@ def append_names(new_names: list[str], *, today: str | None = None, path: Path |
                 continue
             existing_keys.add(k)
             data["names"].append(k)  # store lowercased/normalized form
+            data["timestamps"][k] = now_hhmm  # record completion time
+
+        # Merge points
+        if points:
+            for name, pts in points.items():
+                k = _normalize(name)
+                if k and pts:
+                    data["points"][k] = pts
 
         _atomic_write(path, data)
         return data

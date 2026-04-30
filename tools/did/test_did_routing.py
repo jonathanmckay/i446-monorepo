@@ -499,6 +499,50 @@ class ThresholdTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# AppleScript formula generation tests
+# ---------------------------------------------------------------------------
+
+_DID_FAST = Path(__file__).parent / "did-fast.py"
+
+
+class FormulaAppendTests(unittest.TestCase):
+    """Regression: when a 0分 cell contains a literal number (e.g. '120')
+    instead of a formula (e.g. '=0+30+90'), the append logic produced
+    '120+15' which Excel treats as text, silently losing points.
+    Fix: prepend '=' when oldFormula doesn't start with '='."""
+
+    def setUp(self):
+        self.src = _DID_FAST.read_text()
+
+    def _extract_func(self, name):
+        """Extract function body from source."""
+        start = self.src.index(f"def {name}(")
+        # Find next def at same indent level
+        rest = self.src[start:]
+        lines = rest.split("\n")
+        end = len(lines)
+        for i, line in enumerate(lines[1:], 1):
+            if line.startswith("def ") or (line.startswith("class ") and not line.startswith("    ")):
+                end = i
+                break
+        return "\n".join(lines[:end])
+
+    def test_0fen_script_handles_literal_cell(self):
+        func = self._extract_func("build_0fen_script")
+        self.assertIn('character 1 of oldFormula is not "="', func,
+                       "build_0fen_script must handle literal cell values (no = prefix)")
+        self.assertIn('"=" & oldFormula', func,
+                       "must prepend = when old value is a literal number")
+
+    def test_1n_0fen_script_handles_literal_cell(self):
+        func = self._extract_func("build_1n_0fen_script")
+        self.assertIn('character 1 of oldFormula is not "="', func,
+                       "build_1n_0fen_script must handle literal cell values (no = prefix)")
+        self.assertIn('"=" & oldFormula', func,
+                       "must prepend = when old value is a literal number")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -514,6 +558,7 @@ def main() -> int:
         RegressionTableTests,
         Step6DuplicateGuardTests,
         ThresholdTests,
+        FormulaAppendTests,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

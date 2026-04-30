@@ -73,7 +73,7 @@ else:
 chat_id = json.loads(result['content'][0]['text'])['id']
 
 # Send the message once to the shared chat
-mcp.call_tool('teams', 'PostMessage', {
+mcp.call_tool('teams', 'SendMessageToChat', {
     'chatId': chat_id,
     'content': '<message>',
     'contentType': 'text',
@@ -233,6 +233,24 @@ If a match is found, send via iMessage using the returned number, then lazy-writ
 
 When a recipient is resolved via Graph/Gmail search/Contacts lookup (not d359), write the result back
 into their d359 file's `channels:` block so future lookups skip the live search.
+
+### Update last_contact
+
+After successfully sending a message, update the sender's d359 file frontmatter:
+- Set `last_contact:` to today's date (`YYYY-MM-DD`)
+
+If the d359 file has no `last_contact:` field in its frontmatter, add it.
+
+### Refresh dashboard comms
+
+After successfully sending a message, invalidate the personal dashboard cache so
+comms response time updates immediately:
+
+```bash
+curl -s http://localhost:5558/api/refresh > /dev/null 2>&1 || true
+```
+
+This is fire-and-forget; do not block on failure (dashboard may not be running).
 
 ## Tools
 

@@ -54,13 +54,15 @@ Extract goal items from the user's input. Each line starting with `-` or `*` or 
 
 ### Step 3: Update build order markdown
 
-Read the build order file. Find the `## -1₲` section. Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new goals as `    - [ ] <goal>` lines (4-space indent).
+Read the build order file. Find the `## -1₲` heading (match any line starting with `## -1₲`, ignoring trailing characters). If no match is found, error with "ERROR: ## -1₲ section not found in build order". Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new goals as `    - [ ] <goal>` lines (4-space indent).
 
 Keep all other time blocks untouched.
 
-### Step 4: Create Todoist tasks
+### Step 4: Create Todoist tasks (with dedup)
 
-For each goal, create a Todoist task using the Todoist MCP `add-tasks` tool:
+First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists (substring match).
+
+For each **new** goal (no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
 - **Content**: the goal text
 - **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
 - **Labels**: `["#关键径路", "#-1g"]`

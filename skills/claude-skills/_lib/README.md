@@ -34,6 +34,9 @@ Exit codes:
 Env:
 - `IX_HOST` (default `ix`) — ssh alias to use
 - `IX_DEBUG` — verbose
+- `IX_QUEUE=1` — on exit code 3 (ix unreachable), append the script to
+  `~/.claude/ix-write-queue.jsonl` for later replay. The skill still
+  exits 3 (callers see the failure), but the write is preserved.
 
 ### `ix-osa.py`
 
@@ -64,6 +67,21 @@ charts.
     --png ~/Desktop/toggl_2026-04-23.png \
     --sheet '0分' --cell BB12
 ```
+
+### `ix-drain-queue.sh`
+
+Replays queued writes from `~/.claude/ix-write-queue.jsonl` when ix is
+back online. Stops on first transport failure (preserves remaining queue).
+
+```bash
+~/.claude/skills/_lib/ix-drain-queue.sh           # replay all
+~/.claude/skills/_lib/ix-drain-queue.sh --dry-run  # preview
+```
+
+Skills that set `IX_QUEUE=1` before calling `ix-osa.sh` will
+automatically queue on failure. Idempotent cell-value writes (habits,
+points, scores) are safe to queue. Row-insert operations should NOT
+use the queue.
 
 ## Policy
 

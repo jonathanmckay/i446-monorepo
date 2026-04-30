@@ -62,17 +62,72 @@ total_tracked: 14h 23m
 
 ## Output 2: Google Calendar Archive
 
-Create events on the "jbm" calendar (m5c7 account) for each row in the table.
-- Summary: `{What}` (prefix with project code if from Toggl: `[i9] vibing`)
-- Description: source + attendees if any
-- Skip gap rows
-- Use `allowDuplicates: false` to avoid re-creating on reruns
+Create events on the primary calendar (m5c7 account) for each Toggl entry.
+- Summary: `{description} @{project}` (e.g. `soccer @xk87`)
+- One event per Toggl entry, matching original start/end times
+- Set `transparency: transparent` (don't block calendar as busy)
+- Skip 睡觉 entries
+- Use `create-events` bulk API with `sendUpdates: none`
+
+## Output 3: Build Order Actuals
+
+Write Toggl entries into the build order (`~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`) under each 地支 time block in the `## -1₲a` section.
+
+### 地支 Time Block Mapping
+
+| 地支 | Hours |
+|------|-------|
+| 卯 | 05:00-07:00 |
+| 辰 | 07:00-09:00 |
+| 巳 | 09:00-11:00 |
+| 午 | 11:00-13:00 |
+| 未 | 13:00-15:00 |
+| 申 | 15:00-17:00 |
+| 酉 | 17:00-19:00 |
+| 戌 | 19:00-21:00 |
+| 亥 | 21:00-23:00 |
+
+### Routing Rule
+
+Each Toggl entry is placed in the block where it **starts**. If an entry spans two blocks, it appears only once, in the starting block, with its full original time range.
+
+Skip 睡觉 entries (they start before 卯).
+
+### Format
+
+Under each 地支 line's existing items, append:
+```
+- 辰 ⏰
+    - [ ] (existing goals)
+    - actual:
+        - 新闻 @hcmc (07:54-08:04, 10m)
+        - morning tasks @g245 (08:04-08:10, 6m)
+```
+
+Only add `actual:` to blocks that have entries. Leave empty blocks unchanged.
+
+### Duration Display
+
+- Under 60m: `Nm` (e.g. `30m`)
+- 60m+: `Xh Ym` (e.g. `1h10m`), drop minutes if zero (`1h`)
+
+## Output 4: Build Order Archive
+
+After writing actuals (Output 3), snapshot the complete build order to the daily archive:
+
+1. Copy `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md` to `~/vault/g245/archive/2026/YYYY.MM.DD/build-order.md`
+2. Create the date directory if it doesn't exist (`mkdir -p`)
+3. This preserves the day's goals + actuals together before the live file gets reset for the next day
+
+This runs after Output 3 so the archive includes the actuals.
 
 ## Idempotency
 
 - Check if `~/vault/i156/daily/YYYY/MM-DD.md` already exists
 - If it does, skip unless `--force` flag is passed
 - This makes backfill safe to re-run
+- **Build order actuals**: if any `actual:` blocks already exist in the -1₲a section, warn the user ("Actuals already present, clearing and rewriting") then remove all existing `actual:` sub-trees before writing new ones
+- **Google Calendar**: use `allowDuplicates: false` on create-events to avoid duplicate events on rerun
 
 ## Backfill Mode
 
@@ -85,11 +140,12 @@ Create events on the "jbm" calendar (m5c7 account) for each row in the table.
 ## Integration
 
 - Can be called from `/0t` as a final step
-- Can be scheduled as a nightly trigger on Ix
+- Scheduled as a 4am daily trigger
 
 ## Notes
 
 - On Straylight, Outlook MCP calls go through the local Agency MCP (not Ix)
-- Google Calendar uses account "m5c7"
+- Google Calendar uses account "m5c7" (primary calendar). Switch to "jbm" (jonathan.b.mckay@gmail.com) once that account is connected.
 - Toggl CLI works locally on both machines
 - Create `~/vault/i156/daily/YYYY/` directory if it doesn't exist
+- Build order is a single living document; actuals are written for the current day's -1₲a blocks

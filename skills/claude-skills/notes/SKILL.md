@@ -154,7 +154,29 @@ Use the Todoist MCP `add-tasks` tool. For each task:
 - `dueString`: the inferred due date in natural language (e.g., "tomorrow", "Friday")
 - Assign to the appropriate Todoist project using the label/domain code
 
-### Step 8: Mark notes habit done
+### Step 8: Archive stale z_ibx files
+
+Move any non-essential files in `~/vault/z_ibx/` that are older than 14 days to `~/vault/z_ibx/archive/YYYY-MM/`. Preserve these active state files (never archive them):
+- `new-notes.md`
+- `completed-today.json`
+- `task-queue.json`
+- `mtg-briefs.json`
+- `mtg-postbriefs.json`
+- `.syncthing-test`
+- Directories (`outlook-backfill/`, `overnight/`, `archive/`)
+
+```bash
+mkdir -p ~/vault/z_ibx/archive/$(date +%Y-%m)
+find ~/vault/z_ibx -maxdepth 1 -type f -mtime +14 \
+  ! -name "new-notes.md" ! -name "completed-today.json" \
+  ! -name "task-queue.json" ! -name "mtg-briefs.json" \
+  ! -name "mtg-postbriefs.json" ! -name ".syncthing-test" \
+  -exec mv {} ~/vault/z_ibx/archive/$(date +%Y-%m)/ \;
+```
+
+Report archived files if any: `Archived N stale files from z_ibx.`
+
+### Step 9: Mark notes habit done
 
 After action item handling (or skipping), execute the `/did` skill for habit `notes` — follow the full `/did` flow exactly as if the user had typed `/did notes`. This writes 1 to the `notes` column in today's 0₦ row and closes any matching 0neon Todoist task.
 

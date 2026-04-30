@@ -78,12 +78,27 @@ def _fmt(e):
 
 def cmd_start(args):
     if not args:
-        sys.exit("Usage: start <description> [project] [tags...]")
+        sys.exit("Usage: start <description> [project] [tags...] [--at HH:MM]")
+    # Extract --at flag if present
+    start_time = None
+    if "--at" in args:
+        at_idx = args.index("--at")
+        if at_idx + 1 < len(args):
+            from datetime import datetime, timezone
+            hhmm = args[at_idx + 1]
+            if ":" not in hhmm and len(hhmm) == 4:
+                hhmm = hhmm[:2] + ":" + hhmm[2:]
+            today = datetime.now().strftime("%Y-%m-%d")
+            local_dt = datetime.fromisoformat(f"{today}T{hhmm}:00")
+            from zoneinfo import ZoneInfo
+            local_dt = local_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            start_time = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            args = args[:at_idx] + args[at_idx + 2:]
     desc = args[0]
     project = args[1] if len(args) > 1 else ""
     tags = args[2:] or None
     project_id = _resolve_project(project)
-    entry = toggl_api.start_timer(desc, project_id, tags)
+    entry = toggl_api.start_timer(desc, project_id, tags, start_time=start_time)
     proj_name = PROJECT_NAMES.get(project_id, project) if project_id else ""
     proj_str = f" → {proj_name}" if proj_name else ""
     print(f"Started: {desc}{proj_str} [id:{entry['id']}]")

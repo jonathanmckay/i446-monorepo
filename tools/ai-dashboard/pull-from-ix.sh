@@ -29,8 +29,9 @@ rsync_one() {
   echo "[$(ts)] starting pull"
 
   # Snapshot ix's live Copilot DB on the remote (safe sqlite copy), then pull.
+  # Use $HOME (not ~) — sqlite3 does not expand tilde inside .backup arguments.
   ssh -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE" \
-    'sqlite3 ~/.copilot/session-store.db ".backup ~/.copilot/session-store.snapshot.db" 2>&1' \
+    'sqlite3 "$HOME/.copilot/session-store.db" ".backup $HOME/.copilot/session-store.snapshot.db" 2>&1' \
     || echo "  warn: remote sqlite .backup failed"
 
   mkdir -p "$HOME/.claude/projects-ix"

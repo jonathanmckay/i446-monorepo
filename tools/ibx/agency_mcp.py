@@ -2,12 +2,17 @@
 """
 agency_mcp — Shared client for Agency MCP servers (mail, teams, etc).
 Starts server processes on demand, handles SSE JSON-RPC protocol.
+
+Uses pidfiles so that a single agency process per server type is shared
+across all callers (ibx0, cron jobs, prewarm, etc). Previous behavior
+spawned a new process per Python session, leading to dozens of zombies.
 """
 
 import atexit
 import json
 import os
 import select
+import signal
 import socket
 import subprocess
 import threading
@@ -19,8 +24,57 @@ AGENCY_BIN = os.environ.get(
     str(Path.home() / ".config/agency/CurrentVersion/agency"),
 )
 
-_servers = {}  # name -> {"proc": Popen, "port": int}
+_PIDFILE_DIR = Path.home() / ".config" / "agency" / "pids"
+_servers = {}  # name -> {"proc": Popen|None, "port": int}
 _lock = threading.Lock()
+
+
+def _pidfile(name):
+    return _PIDFILE_DIR / f"{name}.json"
+
+
+def _read_pidfile(name):
+    """Read pidfile, return (pid, port) or (None, None)."""
+    pf = _pidfile(name)
+    if not pf.exists():
+        return None, None
+    try:
+        data = json.loads(pf.read_text())
+        return data.get("pid"), data.get("port")
+    except Exception:
+        return None, None
+
+
+def _write_pidfile(name, pid, port):
+    _PIDFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _pidfile(name).write_text(json.dumps({"pid": pid, "port": port}))
+
+
+def _clear_pidfile(name):
+    pf = _pidfile(name)
+    if pf.exists():
+        pf.unlink()
+
+
+def _is_alive(pid):
+    """Check if a process is running."""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _port_responsive(port):
+    """Quick check if a port accepts connections."""
+    try:
+        s = socket.create_connection(("localhost", port), timeout=2)
+        s.close()
+        return True
+    except Exception:
+        return False
 
 
 def _start_server(name):
@@ -41,19 +95,45 @@ def _start_server(name):
     if port is None:
         proc.kill()
         raise RuntimeError(f"Failed to start agency mcp {name}")
+    _write_pidfile(name, proc.pid, port)
     return proc, port
 
 
 def get_server(name):
-    """Get or start an agency MCP server, return its port."""
+    """Get or start an agency MCP server, return its port.
+
+    First checks for an existing process via pidfile. If a healthy process
+    exists from a previous Python session, reuses it without spawning a new one.
+    """
     with _lock:
+        # Check in-memory cache first
         if name in _servers:
             srv = _servers[name]
-            if srv["proc"].poll() is None:
-                return srv["port"]
+            proc = srv.get("proc")
+            if proc is None or proc.poll() is None:
+                if _port_responsive(srv["port"]):
+                    return srv["port"]
             del _servers[name]
+
+        # Check pidfile for process from a previous session
+        pid, port = _read_pidfile(name)
+        if pid and _is_alive(pid) and port and _port_responsive(port):
+            _servers[name] = {"proc": None, "port": port, "pid": pid}
+            return port
+
+        # Clean up stale pidfile
+        if pid:
+            _clear_pidfile(name)
+            # Kill stale process if still alive but unresponsive
+            if _is_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except Exception:
+                    pass
+
+        # Start fresh
         proc, port = _start_server(name)
-        _servers[name] = {"proc": proc, "port": port}
+        _servers[name] = {"proc": proc, "port": port, "pid": proc.pid}
         return port
 
 
@@ -119,15 +199,18 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
 
 
 def stop_all():
-    """Stop all running MCP servers."""
+    """Stop all running MCP servers started by this process."""
     with _lock:
         for name, srv in list(_servers.items()):
+            proc = srv.get("proc")
+            if proc is None:
+                continue  # adopted from pidfile, don't kill
             try:
-                srv["proc"].terminate()
-                srv["proc"].wait(timeout=5)
+                proc.terminate()
+                proc.wait(timeout=5)
             except Exception:
                 try:
-                    srv["proc"].kill()
+                    proc.kill()
                 except Exception:
                     pass
         _servers.clear()

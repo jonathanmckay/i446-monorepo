@@ -59,16 +59,16 @@ EMAIL_GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 # ── Column mappings ────────────────────────────────────────────────────────────
 # 0分 sheet: column index (1-based) → label + domain
 POINTS_COLS = {
-    25: {"label": "-1₦", "domain": None,    "color": "#9e9e9e"},  # Y
-    26: {"label": "0₲",  "domain": None,    "color": "#0a0a0a"},  # Z — Abyss
-    27: {"label": "i9",  "domain": "i9",    "color": "#2979ff"},  # AA
-    28: {"label": "m5",  "domain": "m5x2",  "color": "#d50032"},  # AB
-    29: {"label": "个",  "domain": "g245",  "color": "#00e676"},  # AC
-    30: {"label": "媒",  "domain": "hcmc",  "color": "#0d3b66"},  # AD
-    31: {"label": "思",  "domain": None,    "color": "#7c4dff"},  # AE
-    32: {"label": "hcb", "domain": "hcb",   "color": "#f81d78"},  # AF
-    33: {"label": "xk",  "domain": "xk87",  "color": "#fd6c1d"},  # AG
-    34: {"label": "社",  "domain": "s897",  "color": "#1b5e20"},  # AH
+    16: {"label": "-1₦", "domain": None,    "color": "#9e9e9e"},  # P
+    17: {"label": "0₲",  "domain": None,    "color": "#0a0a0a"},  # Q — Abyss
+    18: {"label": "i9",  "domain": "i9",    "color": "#2979ff"},  # R
+    19: {"label": "m5",  "domain": "m5x2",  "color": "#d50032"},  # S
+    20: {"label": "个",  "domain": "g245",  "color": "#00e676"},  # T
+    21: {"label": "媒",  "domain": "hcmc",  "color": "#0d3b66"},  # U
+    22: {"label": "思",  "domain": None,    "color": "#7c4dff"},  # V
+    23: {"label": "hcb", "domain": "hcb",   "color": "#f81d78"},  # W
+    24: {"label": "xk",  "domain": "xk87",  "color": "#fd6c1d"},  # X
+    25: {"label": "社",  "domain": "s897",  "color": "#1b5e20"},  # Y
 }
 
 # Toggl project code → color (neon palette)
@@ -130,17 +130,19 @@ def load_points_data():
     today = date.today()
     cutoff = today - timedelta(days=DAYS)
 
-    # Strategy: read from JSON cache first (fast, reliable from launchd).
-    # Fall back to xlwings if no cache (works interactively / from SSH).
-    # Cache is refreshed by refresh-points-cache.sh cron or by xlwings on hit.
+    # Strategy: read from JSON cache if it's newer than the Excel file.
+    # Fall back to xlwings if no cache or cache is stale.
     _pts_cache = Path(__file__).parent / ".points-cache.json"
     if _pts_cache.exists():
         try:
-            cached = json.loads(_pts_cache.read_text())
-            result = {d: v for d, v in cached.items()
-                      if cutoff < date.fromisoformat(d) <= today}
-            if result:
-                return result
+            cache_mtime = _pts_cache.stat().st_mtime
+            excel_mtime = NEON_PATH.stat().st_mtime if NEON_PATH.exists() else 0
+            if cache_mtime >= excel_mtime:
+                cached = json.loads(_pts_cache.read_text())
+                result = {d: v for d, v in cached.items()
+                          if cutoff < date.fromisoformat(d) <= today}
+                if result:
+                    return result
         except Exception:
             pass
 
@@ -507,6 +509,15 @@ def favicon():
 def api_data():
     cached = _api_data_cached()
     return jsonify(cached)
+
+
+@app.route("/api/refresh", methods=["GET", "POST"])
+def api_refresh():
+    """Invalidate the data cache so the next /api/data fetch is fresh."""
+    with _API_DATA_LOCK:
+        _API_DATA_CACHE["payload"] = None
+        _API_DATA_CACHE["ts"] = 0.0
+    return jsonify({"status": "ok"})
 
 
 # 60s TTL cache for /api/data — avoids re-fetching everything on refresh-spam.
@@ -920,24 +931,24 @@ HTML = """<!DOCTYPE html>
 </div>
 <div class="grid">
   <div class="card">
-    <h2>Points / Day</h2>
-    <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
-    <div class="summary" id="pointsSummary"></div>
-  </div>
-  <div class="card">
     <h2>Time / Day</h2>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
   <div class="card">
+    <h2>Points / Day</h2>
+    <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
+    <div class="summary" id="pointsSummary"></div>
+  </div>
+  <div class="card">
+    <h2>Project Blocking — Comms Response Time</h2>
+    <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
+    <div class="summary" id="emailSummary"></div>
+  </div>
+  <div class="card">
     <h2>Tasks Complete / Day</h2>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
     <div class="summary" id="tasksSummary"></div>
-  </div>
-  <div class="card">
-    <h2>Project Bocking — Comms Response Time</h2>
-    <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
-    <div class="summary" id="emailSummary"></div>
   </div>
 </div>
 
@@ -1213,6 +1224,19 @@ fetch('/api/data').then(r => r.json()).then(data => {
 </script>
 </body>
 </html>"""
+
+
+@app.route("/auth/ga4")
+def auth_ga4():
+    """Run GA4 OAuth flow. Visit this URL in a browser to authenticate."""
+    if not GA4_AVAILABLE:
+        return "GA4 libraries not installed. Run: pip install google-analytics-data google-auth-oauthlib", 500
+    if not GA4_OAUTH_KEYS.exists():
+        return f"OAuth client keys not found at {GA4_OAUTH_KEYS}", 500
+    flow = InstalledAppFlow.from_client_secrets_file(str(GA4_OAUTH_KEYS), GA4_SCOPES)
+    creds = flow.run_local_server(port=0)
+    GA4_TOKENS.write_text(creds.to_json())
+    return "GA4 OAuth complete. Tokens saved. Pageviews should now load on the dashboard."
 
 
 @app.route("/")

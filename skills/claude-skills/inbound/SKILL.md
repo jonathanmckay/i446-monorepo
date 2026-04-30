@@ -15,12 +15,15 @@ Unified interrupt queue that orchestrates all inbound cards in one TUI. Three ca
 ## Usage
 
 ```
-/inbound
+/inbound          # auto-detect surface
+/inbound --here   # force inline run in the current shell (escape hatch)
 ```
 
-No arguments. Opens in a cmux surface.
-
 ## Launch
+
+Pick the first available path. **Do not skip detection** — invoking `cmux` blindly will fail on machines without it.
+
+### Path A — cmux available (`command -v cmux` succeeds)
 
 ```bash
 cmux new-surface --type terminal
@@ -29,7 +32,42 @@ cmux respawn-pane --surface surface:<N> --command "bash ~/i446-monorepo/tools/ib
 cmux focus-pane --pane pane:<N>
 ```
 
-Then confirm: `inbound opened in a new cmux tab`
+Confirm: `inbound opened in a new cmux tab`
+
+### Path B — macOS without cmux, local session (Straylight today)
+
+Open a new Terminal.app tab via osascript:
+
+```bash
+osascript -e 'tell application "Terminal" to do script "bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh"' \
+          -e 'tell application "Terminal" to activate'
+```
+
+Confirm: `inbound opened in a new Terminal.app tab`
+
+### Path C — `--here` flag, or remote ssh / no GUI
+
+Run inline in the current shell:
+
+```bash
+bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh --here
+```
+
+Use this when ssh'd into a remote host (e.g. ix via Termius) where neither cmux nor Terminal.app is reachable, or whenever the user wants to keep inbound in the same pane.
+
+### Detection (one-liner)
+
+```bash
+if [[ "$1" == "--here" ]]; then
+  bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh --here
+elif command -v cmux &>/dev/null; then
+  # Path A — cmux flow
+elif [[ "$OSTYPE" == "darwin"* ]] && [[ -z "$SSH_CONNECTION" ]]; then
+  # Path B — Terminal.app
+else
+  # Path C — inline
+fi
+```
 
 ## Card Ordering
 

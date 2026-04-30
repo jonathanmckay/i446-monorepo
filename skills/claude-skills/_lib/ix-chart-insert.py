@@ -51,8 +51,8 @@ def main() -> int:
     p.add_argument("--workbook", default="Neon分v12.2.xlsx")
     p.add_argument("--sheet", required=True)
     p.add_argument("--cell", required=True)
-    p.add_argument("--width", type=float, default=432.0)
-    p.add_argument("--height", type=float, default=432.0)
+    p.add_argument("--width", type=float, default=45.0)
+    p.add_argument("--height", type=float, default=45.0)
     args = p.parse_args()
 
     if not args.png.exists():

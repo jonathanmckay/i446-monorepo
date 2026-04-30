@@ -133,11 +133,30 @@ def run_block_end(api_key: str, dry_run: bool):
 
 # --- Daily reset mode ---
 
+def _archive_before_reset():
+    """Archive yesterday's enriched build order before resetting."""
+    from datetime import datetime, timedelta
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
+    v_logs = MD_FILE.parent / "v_logs"
+    snapshot = v_logs / f"{yesterday}-build-order.md"
+    if snapshot.exists():
+        print(f"[{LOG_PREFIX}] archive already exists: {snapshot.name}")
+        return
+    if MD_FILE.exists():
+        v_logs.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text(MD_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"[{LOG_PREFIX}] archived {snapshot.name}")
+
+
 def run_daily_reset(dry_run: bool):
     """Reset the -1₲ section in build order to empty checkboxes."""
     if not MD_FILE.exists():
         print(f"[{LOG_PREFIX}] ERROR: {MD_FILE} not found")
         return
+
+    # Archive the enriched build order before wiping it
+    if not dry_run:
+        _archive_before_reset()
 
     text = MD_FILE.read_text(encoding="utf-8")
     lines = text.split("\n")

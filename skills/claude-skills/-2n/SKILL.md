@@ -193,4 +193,4 @@ Set color via `~/i446-monorepo/scripts/term-color.sh <color>`.
 
 ## Build Order Snapshot
 
-Daily snapshot of the build order is saved to `~/vault/g245/v_logs/YYYY-MM-DD-build-order.md` via the `cc` wrapper (TODO: not yet implemented — tracked in Todoist).
+Daily snapshot of the build order is saved to `~/vault/g245/v_logs/YYYY.MM.DD-build-order.md` at the start of each `-2n` run (idempotent; only writes once per day).

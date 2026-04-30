@@ -30,6 +30,31 @@ Strip `@code` from the displayed task content in Todoist (it becomes a label). K
 
 ## Behavior
 
+### Step 0: Toggl 0g time carve-out
+
+Before any goal processing, ensure Toggl has a 0g entry for the planning time:
+
+1. Check current Toggl timer via `toggl_cli.py current`.
+2. If a timer is running and its description already contains "0g", skip this step.
+3. If a timer is running but is NOT 0g:
+   a. Read the entry's ID, description, project, and start time.
+   b. Update the running entry's `stop` to (now - 2 minutes) via `toggl_api.update_entry(entry_id, stop=<iso>)`. Use this Python one-liner through Bash:
+      ```bash
+      python3 -c "
+      import sys; sys.path.insert(0, '$HOME/i446-monorepo/mcp/toggl_server')
+      import toggl_api; from datetime import datetime, timezone, timedelta
+      two_ago = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+      toggl_api.update_entry(ENTRY_ID, stop=two_ago)
+      print('Trimmed to', two_ago)
+      "
+      ```
+   c. Create a new 2-minute completed entry: `toggl_cli.py create "0g" <HH:MM-2min> <HH:MM> g245`
+   d. Start a new timer with the SAME description and project as the one that was running: `toggl_cli.py start "<original desc>" <original project>`
+4. If NO timer is running:
+   a. Create a 2-minute completed entry: `toggl_cli.py create "0g" <HH:MM-2min> <HH:MM> g245`
+
+This ensures planning time is always tracked, even retroactively.
+
 ### With arguments — set new goals
 
 Goals are provided as arguments after `/0g`. May be bullet lines, comma-separated, or free text (one goal per sentence/line).
@@ -50,9 +75,11 @@ Read the build order file. Find `## 0₲`. Replace the existing goal items (line
 ```
 Preserve the `### 以后的目标` subsection and everything below it. Only replace the items between `## 0₲` and the next subsection/heading.
 
-**Step 3: Add to Todoist**
+**Step 3: Add to Todoist (with dedup)**
 
-For each goal, create a Todoist task:
+First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists in the project (compare after stripping whitespace; substring match is sufficient).
+
+For each **new** goal (no existing match), create a Todoist task:
 - **Content**: goal text (with `(N)`, `[N]`, `{N}` preserved; `@code` stripped)
 - **Project**: `0g` (ID `6XfvCQ3p8Gq6fhGR`)
 - **Labels**: `["#关键径路", "#0g"]` + the `@code` label if present (e.g. `"i9"`)
@@ -62,7 +89,11 @@ For each goal, create a Todoist task:
 
 **Step 4: Mark 0g habit done**
 
-Execute the `/did` skill for habit `0g` — follow the full `/did` flow exactly as if the user had typed `/did 0g`. This writes 1 to the `0g` column in today's 0₦ row and closes any matching 0neon Todoist task.
+Run `did-fast.py` directly (do NOT spawn an agent or invoke `/did`):
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
+```
+This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer.
 
 **Step 5: Confirm**
 
@@ -80,13 +111,17 @@ Read the build order file. Extract all unchecked items (`- [ ]`) under `## 0₲`
 
 If none found, report "No 0g goals in build order" and stop.
 
-**Step 2: Add to Todoist**
+**Step 2: Add to Todoist (with dedup)**
 
-For each unchecked goal, create a Todoist task (same format as above — parse annotations from the text).
+First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each unchecked goal, skip creation if an open task with matching content already exists (substring match). Create only non-duplicate tasks (same format as above — parse annotations from the text).
 
 **Step 3: Mark 0g habit done**
 
-Execute the `/did` skill for habit `0g` — follow the full `/did` flow exactly as if the user had typed `/did 0g`. This writes 1 to the `0g` column in today's 0₦ row and closes any matching 0neon Todoist task.
+Run `did-fast.py` directly (do NOT spawn an agent or invoke `/did`):
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
+```
+This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer.
 
 **Step 4: Confirm**
 

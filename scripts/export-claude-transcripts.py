@@ -20,13 +20,21 @@ from pathlib import Path
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 PROJECTS_DIR_IX = Path.home() / ".claude" / "projects-ix"
 OUTPUT_BASE = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts"
-# host -> (source root, output base). Straylight writes to OUTPUT_BASE directly
-# for backwards compatibility with the existing 600+ exported files; ix writes
-# to OUTPUT_BASE/ix/ to host-namespace it.
-ROOTS = [
-    ("straylight", PROJECTS_DIR, OUTPUT_BASE),
-    ("ix",         PROJECTS_DIR_IX, OUTPUT_BASE / "ix"),
-]
+
+# Host-aware roots. We can't rely on hostname (ix is "Jonathans-Mac-mini").
+# Instead: the straylight box is the only one with a mirrored ix tree at
+# PROJECTS_DIR_IX. Any other box exports its own data into the ix/ subdir.
+if PROJECTS_DIR_IX.exists():
+    # Straylight — own data direct, mirrored ix data into ix/
+    ROOTS = [
+        ("straylight", PROJECTS_DIR, OUTPUT_BASE),
+        ("ix",         PROJECTS_DIR_IX, OUTPUT_BASE / "ix"),
+    ]
+else:
+    # ix (or any other leaf) — own data into ix/
+    ROOTS = [
+        ("ix", PROJECTS_DIR, OUTPUT_BASE / "ix"),
+    ]
 
 # Split sessions with more than this many user turns into multiple files
 SEGMENT_TURNS = 10
