@@ -82,6 +82,11 @@ VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
     "lunch": ("家", "X"),
     "dinner": ("家", "X"),
 }
+# 1n+ header aliases: map variant names to actual 1n+ headers
+ONENEON_ALIASES: dict[str, str] = {
+    "1 hcbp": "1 hcb",
+}
+
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
 
 
@@ -106,7 +111,13 @@ ONENEON_TO_0FEN: dict[str, str] = {
 
 
 def calc_week_mw(d: date) -> str:
-    """Calculate M.W format: month.ceil(day/7)."""
+    """Calculate M.W format: month.ceil(day/7).
+
+    The spreadsheet has a fixed set of week rows per month. Not every month
+    has a .5 row (e.g. April 2026 has 4.1-4.4 but no 4.5). We compute the
+    ideal week, then the build_1n_script will search for it; if not found,
+    the script falls back to the last row for that month.
+    """
     import math
     return f"{d.month}.{math.ceil(d.day / 7)}"
 
@@ -451,14 +462,16 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             continue
 
         # Step 0.2: 1n+ match (now handled in fast path)
-        if name_lower in h1n:
-            col_letter = h1n[name_lower]
-            fen_col = ONENEON_TO_0FEN.get(name_lower)
-            is_cumul = name_lower in CUMULATIVE_1N
+        # Check aliases first (e.g. "1 hcbp" → "1 hcb")
+        resolved_1n = ONENEON_ALIASES.get(name_lower, name_lower)
+        if resolved_1n in h1n:
+            col_letter = h1n[resolved_1n]
+            fen_col = ONENEON_TO_0FEN.get(resolved_1n)
+            is_cumul = resolved_1n in CUMULATIVE_1N
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
                             is_cumulative_1n=is_cumul,
-                            cumulative_increment=CUMULATIVE_1N.get(name_lower, 0))
+                            cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0))
             # Find matching Todoist 1neon task to close
             neon_1n_tasks = tq.get("1neon", [])
             matched = match_todoist_task(item.name, neon_1n_tasks)
@@ -495,10 +508,18 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
         elif name_lower in VARIABLE_DOMAIN:
             domain_label, fen_col = VARIABLE_DOMAIN[name_lower]
         else:
-            r = RouteResult(item=item, step="needs_agent",
-                            error="no match, needs domain disambiguation")
-            results.append(r)
-            continue
+            # Try "N domain" pattern: e.g. "1 hcbp", "5 i9"
+            var_parts = name_lower.split()
+            if (len(var_parts) == 2 and var_parts[0].isdigit()
+                    and var_parts[1] in LABEL_TO_0FEN):
+                domain_label = var_parts[1]
+                fen_col = LABEL_TO_0FEN[var_parts[1]]
+                item.points_override = int(var_parts[0])
+            else:
+                r = RouteResult(item=item, step="needs_agent",
+                                error="no match, needs domain disambiguation")
+                results.append(r)
+                continue
 
         # Compute points: explicit override > time_range duration > 0
         pts = item.points_override or 0
@@ -634,13 +655,20 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     set wb to workbook "Neon分v12.2.xlsx"
     set ws1n to sheet "1n+" of wb
     set weekRow to 0
+    set fallbackRow to 0
     repeat with r from 4 to 100
         set bVal to string value of range ("B" & r) of ws1n
         if bVal = "{week_mw}" then
             set weekRow to r
             exit repeat
         end if
+        if bVal starts with "{week_mw.split('.')[0]}." then
+            set fallbackRow to r
+        end if
     end repeat
+    if weekRow = 0 and fallbackRow > 0 then
+        set weekRow to fallbackRow
+    end if
     if weekRow = 0 then return "ERROR: week {week_mw} not found"
 {chr(10).join(write_lines)}
     set results to "weekRow=" & weekRow & "|"
@@ -819,6 +847,37 @@ def main():
         script = build_0n_script(on_writes, target_date)
         if script:
             on_result = ix_run(script, timeout=30.0)
+
+    # 4a-ii. 0l special case: write completion time to "N Color" column (AF)
+    if any(r.item.name.lower() == "0l" for r in on_writes):
+        ol_script = f'''tell application "Microsoft Excel"
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set targetMonth to {target_date.split("/")[0]}
+    set targetDay to {target_date.split("/")[1]}
+    set todayRow to 0
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of theSheet
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = targetMonth and d = targetDay then
+                    set todayRow to r
+                    exit repeat
+                end if
+            end try
+        end if
+    end repeat
+    if todayRow = 0 then return "SKIP: date not found"
+    set h to hours of (current date)
+    set mn to minutes of (current date)
+    set timeStr to (h * 100 + mn)
+    set value of cell 32 of row todayRow of theSheet to timeStr
+    return "OK: N Color=" & timeStr & " row=" & todayRow
+end tell'''
+        ol_time_result = ix_run(ol_script, timeout=15.0)
+        if ol_time_result.returncode == 0:
+            print(f"0l completion: {ol_time_result.stdout.strip()}", file=sys.stderr)
 
     # 4b. Batch 1n+ writes
     one_n_writes = [r for r in fast if r.step == "1n" and r.col_letter]
