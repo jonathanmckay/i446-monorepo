@@ -408,7 +408,7 @@ def _osascript(script: str, timeout: int = 180):
 # inline cell-op subscript and returns its result.
 NEON_FIND_ROW_TEMPLATE = r'''
 tell application "Microsoft Excel"
-    set theSheet to sheet "{sheet}" of active workbook
+    set theSheet to sheet "{sheet}" of workbook "Neon分v12.2.xlsx"
     set targetDate to "{date_str}"
     set targetRow to 0
     repeat with i from 2 to 500

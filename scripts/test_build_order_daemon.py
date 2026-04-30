@@ -86,3 +86,25 @@ def test_enrich_runs_before_link_meetings_in_archive():
     assert enrich_pos < link_pos, (
         "Enrichment (Step 0a) must come before link-meetings (Step 0b) in run_archive"
     )
+
+
+
+def test_neon_template_uses_named_workbook():
+    """
+    Bug: NEON_FIND_ROW_TEMPLATE used active workbook instead of the
+    named workbook. If another Excel file was frontmost, the lock/mark
+    operations would hit the wrong workbook or fail silently, causing
+    block cells to never get frozen.
+
+    Fix: Template must reference workbook by name.
+    """
+    src = DAEMON.read_text(encoding="utf-8")
+    idx = src.index("NEON_FIND_ROW_TEMPLATE")
+    template_end = src.index("'''", idx + 30)
+    template = src[idx:template_end]
+    assert "active workbook" not in template, (
+        "NEON_FIND_ROW_TEMPLATE must NOT use active workbook"
+    )
+    assert "Neon" in template, (
+        "NEON_FIND_ROW_TEMPLATE must reference Neon workbook by name"
+    )
