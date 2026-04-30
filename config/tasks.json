@@ -1,0 +1,633 @@
+{
+  "_meta": {
+    "regenerated_by": "~/i446-monorepo/scripts/regen-tasks.py",
+    "last_regen": "2026-04-29",
+    "schema_version": 1,
+    "note": "Edit ONLY via ~/i446-monorepo/scripts/register-{habit,domain}.py. Hand edits will survive but won't update Excel/Todoist; provisioning scripts keep all 4 systems in sync."
+  },
+  "domains": {
+    "i9": {
+      "display": "Microsoft/GitHub work",
+      "fen_header": "i9",
+      "toggl_project_id": 209635316,
+      "cal_color": "Teal"
+    },
+    "i447": {
+      "display": "Infrastructure & admin",
+      "fen_header": "i9",
+      "toggl_project_id": 158134455
+    },
+    "f693": {
+      "display": "1:1s, interviews",
+      "fen_header": "i9",
+      "toggl_project_id": 153212856,
+      "cal_color": "Teal"
+    },
+    "f694": {
+      "display": "Org strategy",
+      "fen_header": "i9",
+      "toggl_project_id": 153212856
+    },
+    "f8": {
+      "display": "Fast track",
+      "fen_header": "i9",
+      "toggl_project_id": 45122191
+    },
+    "m5x2": {
+      "display": "McKay Capital",
+      "fen_header": "m5",
+      "toggl_project_id": 108359987,
+      "cal_color": "Red"
+    },
+    "g245": {
+      "display": "Goals & rituals",
+      "fen_header": "0g",
+      "toggl_project_id": 108537163
+    },
+    "infra": {
+      "display": "Infra/admin",
+      "fen_header": "0g",
+      "toggl_project_id": 120844877
+    },
+    "hcmc": {
+      "display": "Media & consumption",
+      "fen_header": "媒",
+      "toggl_project_id": 109932707
+    },
+    "hcm": {
+      "display": "Mindfulness",
+      "fen_header": "思",
+      "toggl_project_id": 108359995
+    },
+    "hcmp": {
+      "display": "Mindfulness (planning)",
+      "fen_header": "思",
+      "toggl_project_id": 108359995
+    },
+    "hci": {
+      "display": "Health (interior)",
+      "fen_header": "hcb",
+      "toggl_project_id": 109216950
+    },
+    "hcb": {
+      "display": "Health & body",
+      "fen_header": "hcb",
+      "toggl_project_id": 154064792,
+      "cal_color": "Pink"
+    },
+    "hcbp": {
+      "display": "Fitness",
+      "fen_header": "hcb",
+      "toggl_project_id": 108360024,
+      "cal_color": "Pink"
+    },
+    "xk87": {
+      "display": "Family",
+      "fen_header": "xk",
+      "toggl_project_id": 163129781,
+      "cal_color": "Orange"
+    },
+    "xk88": {
+      "display": "Louisa",
+      "fen_header": "xk",
+      "toggl_project_id": 108433670
+    },
+    "家": {
+      "display": "Home & family",
+      "fen_header": "xk",
+      "toggl_project_id": 108547409
+    },
+    "s897": {
+      "display": "Social",
+      "fen_header": "社",
+      "toggl_project_id": 109719141
+    },
+    "n156": {
+      "display": "Time tracking",
+      "fen_header": "n156",
+      "toggl_project_id": 108357451
+    },
+    "qz12": {
+      "display": "Personal finance",
+      "fen_header": "0g",
+      "toggl_project_id": 152057340
+    },
+    "epcn": {
+      "display": "Network",
+      "fen_header": "社",
+      "toggl_project_id": 150114323
+    },
+    "i444": {
+      "display": "Travel",
+      "fen_header": "0g",
+      "toggl_project_id": 185952786
+    },
+    "h335": {
+      "display": "Career",
+      "fen_header": "i9",
+      "toggl_project_id": 153212856
+    },
+    "睡觉": {
+      "display": "Sleep",
+      "fen_header": "卯",
+      "toggl_project_id": 108358083
+    }
+  },
+  "habits": {
+    "睡觉": {
+      "name": "睡觉",
+      "category": "0n",
+      "neon_header": "睡觉",
+      "domain": "睡觉",
+      "toggl_desc": "睡觉",
+      "toggl_tags": [
+        "-3"
+      ],
+      "todoist_label": "0neon"
+    },
+    "cpap": {
+      "name": "cpap",
+      "category": "0n",
+      "neon_header": "cpap",
+      "domain": "hcb",
+      "todoist_label": "0neon"
+    },
+    "wake-up": {
+      "name": "wake up",
+      "category": "0n",
+      "neon_header": "wake up",
+      "domain": "infra",
+      "toggl_desc": "wake up",
+      "todoist_label": "0neon",
+      "aliases": [
+        "起"
+      ]
+    },
+    "2hci": {
+      "name": "2hci",
+      "category": "0n",
+      "neon_header": "2hci",
+      "domain": "hci",
+      "todoist_label": "0neon"
+    },
+    "day-hci": {
+      "name": "day hci",
+      "category": "0n",
+      "neon_header": "day hci",
+      "domain": "hci",
+      "toggl_desc": "day hci",
+      "todoist_label": "0neon"
+    },
+    "ibx-s897": {
+      "name": "ibx - s897",
+      "category": "0n",
+      "neon_header": "ibx - s897",
+      "domain": "s897",
+      "todoist_label": "0neon"
+    },
+    "新闻": {
+      "name": "新闻",
+      "category": "0n",
+      "neon_header": "新闻",
+      "domain": "hcmc",
+      "toggl_desc": "新闻",
+      "toggl_tags": [
+        "-3"
+      ],
+      "todoist_label": "0neon"
+    },
+    "词汇": {
+      "name": "词汇",
+      "category": "0n",
+      "neon_header": "词汇",
+      "domain": "hcmc",
+      "toggl_desc": "词汇",
+      "toggl_tags": [
+        "-3"
+      ],
+      "todoist_label": "0neon"
+    },
+    "night-hcmc": {
+      "name": "night hcmc",
+      "category": "0n",
+      "neon_header": "night hcmc",
+      "domain": "hcmc",
+      "todoist_label": "夜neon"
+    },
+    "0t": {
+      "name": "0t",
+      "category": "0n",
+      "neon_header": "0t",
+      "domain": "n156",
+      "toggl_desc": "0t",
+      "todoist_label": "0neon"
+    },
+    "0l": {
+      "name": "0l",
+      "category": "0n",
+      "neon_header": "0l",
+      "domain": "g245",
+      "toggl_desc": "0l",
+      "todoist_label": "0neon"
+    },
+    "0g": {
+      "name": "0g",
+      "category": "0n",
+      "neon_header": "0g",
+      "domain": "g245",
+      "toggl_desc": "0g",
+      "todoist_label": "0neon"
+    },
+    "stats-i9": {
+      "name": "stats i9",
+      "category": "0n",
+      "neon_header": "stats i9",
+      "domain": "i9",
+      "toggl_desc": "stats",
+      "toggl_project": "i9",
+      "todoist_label": "0neon"
+    },
+    "notes": {
+      "name": "notes",
+      "category": "0n",
+      "neon_header": "notes",
+      "domain": "i9",
+      "toggl_desc": "notes",
+      "todoist_label": "0neon"
+    },
+    "ibx-i9": {
+      "name": "ibx i9",
+      "category": "0n",
+      "neon_header": "ibx i9",
+      "domain": "i9",
+      "todoist_label": "0neon"
+    },
+    "push": {
+      "name": "push",
+      "category": "0n",
+      "neon_header": "push",
+      "domain": "hcbp",
+      "todoist_label": "0neon"
+    },
+    "teams": {
+      "name": "teams",
+      "category": "0n",
+      "neon_header": "teams",
+      "domain": "i9",
+      "toggl_desc": "teams",
+      "todoist_label": "0neon"
+    },
+    "slack-github": {
+      "name": "slack github",
+      "category": "0n",
+      "neon_header": "slack github",
+      "domain": "i9",
+      "todoist_label": "0neon"
+    },
+    "slack-m5x2": {
+      "name": "slack m5x2",
+      "category": "0n",
+      "neon_header": "slack m5x2",
+      "domain": "m5x2",
+      "todoist_label": "0neon"
+    },
+    "ibx-m5x2": {
+      "name": "ibx m5x2",
+      "category": "0n",
+      "neon_header": "ibx m5x2",
+      "domain": "m5x2",
+      "todoist_label": "0neon"
+    },
+    "m5x2-stats": {
+      "name": "m5x2 stats",
+      "category": "0n",
+      "neon_header": "m5x2 stats",
+      "domain": "m5x2",
+      "todoist_label": "0neon",
+      "aliases": [
+        "stats m5x2"
+      ]
+    },
+    "早餐": {
+      "name": "早餐",
+      "category": "0n",
+      "neon_header": "早餐",
+      "domain": "hcb",
+      "toggl_desc": "h breakfast",
+      "toggl_project": "hcb",
+      "todoist_label": "0neon"
+    },
+    "hiit": {
+      "name": "hiit",
+      "category": "0n",
+      "neon_header": "hiit",
+      "domain": "hcbp",
+      "toggl_desc": "hiit",
+      "toggl_project": "hcbp",
+      "toggl_tags": [
+        "-2"
+      ],
+      "todoist_label": "0neon"
+    },
+    "问学": {
+      "name": "问学",
+      "category": "0n",
+      "neon_header": "问学",
+      "domain": "xk87",
+      "cumulative": true,
+      "aliases": [
+        "math",
+        "skin2skin"
+      ],
+      "toggl_desc": "math",
+      "toggl_project": "xk87",
+      "todoist_label": "0neon"
+    },
+    "xk20": {
+      "name": "xk20",
+      "category": "0n",
+      "neon_header": "xk20",
+      "domain": "xk87",
+      "todoist_label": "0neon"
+    },
+    "xk22": {
+      "name": "xk22",
+      "category": "0n",
+      "neon_header": "xk22",
+      "domain": "xk87",
+      "todoist_label": "0neon"
+    },
+    "xk26": {
+      "name": "xk26",
+      "category": "0n",
+      "neon_header": "xk26",
+      "domain": "xk87",
+      "todoist_label": "0neon"
+    },
+    "qft": {
+      "name": "qft",
+      "category": "0n",
+      "neon_header": "qft",
+      "domain": "i9",
+      "todoist_label": "0neon"
+    },
+    "xk88": {
+      "name": "xk88",
+      "category": "0n",
+      "neon_header": "xk88",
+      "domain": "xk88",
+      "todoist_label": "0neon"
+    },
+    "ص": {
+      "name": "ص",
+      "category": "0n",
+      "neon_header": "ص",
+      "domain": "hcm",
+      "todoist_label": "0neon"
+    },
+    "o314": {
+      "name": "o314",
+      "category": "0n",
+      "neon_header": "o314",
+      "domain": "hcm",
+      "toggl_desc": "o314",
+      "toggl_tags": [
+        "-3"
+      ],
+      "todoist_label": "0neon"
+    },
+    "冥想": {
+      "name": "冥想",
+      "category": "0n",
+      "neon_header": "冥想",
+      "domain": "hcm",
+      "toggl_desc": "冥想",
+      "todoist_label": "0neon"
+    },
+    "其他人": {
+      "name": "其他人",
+      "category": "0n",
+      "neon_header": "其他人",
+      "domain": "hcm",
+      "toggl_desc": "其他人",
+      "todoist_label": "0neon"
+    },
+    "1-s897": {
+      "name": "1 s897",
+      "category": "1n+",
+      "neon_header": "1 s897",
+      "domain": "s897",
+      "todoist_label": "1neon"
+    },
+    "1-i9": {
+      "name": "1 i9",
+      "category": "1n+",
+      "neon_header": "1 i9",
+      "domain": "i9",
+      "todoist_label": "1neon"
+    },
+    "1-m5x2": {
+      "name": "1 m5x2",
+      "category": "1n+",
+      "neon_header": "1 m5x2",
+      "domain": "m5x2",
+      "todoist_label": "1neon"
+    },
+    "1-cal": {
+      "name": "1 cal",
+      "category": "1n+",
+      "neon_header": "1 cal",
+      "domain": "g245",
+      "todoist_label": "1neon"
+    },
+    "1-hcb": {
+      "name": "1 hcb",
+      "category": "1n+",
+      "neon_header": "1 hcb",
+      "domain": "hcb",
+      "todoist_label": "1neon"
+    },
+    "1-hcm": {
+      "name": "1 hcm",
+      "category": "1n+",
+      "neon_header": "1 hcm",
+      "domain": "hcm",
+      "todoist_label": "1neon"
+    },
+    "1-hci": {
+      "name": "1 hci",
+      "category": "1n+",
+      "neon_header": "1 hci",
+      "domain": "hci",
+      "todoist_label": "1neon"
+    },
+    "1-hcme": {
+      "name": "1 hcme",
+      "category": "1n+",
+      "neon_header": "1 hcme",
+      "domain": "hcm",
+      "toggl_desc": "1 hcme",
+      "todoist_label": "1neon"
+    },
+    "1-xk87": {
+      "name": "1 xk87",
+      "category": "1n+",
+      "neon_header": "1 xk87",
+      "domain": "xk87",
+      "toggl_desc": "1 xk87",
+      "todoist_label": "1neon"
+    },
+    "1-xk87-wknd": {
+      "name": "1 xk87 wknd",
+      "category": "1n+",
+      "neon_header": "1 xk87 wknd",
+      "domain": "xk87",
+      "todoist_label": "1neon"
+    },
+    "1-xk88": {
+      "name": "1 xk88",
+      "category": "1n+",
+      "neon_header": "1 xk88",
+      "domain": "xk88",
+      "todoist_label": "1neon"
+    },
+    "1-hpm": {
+      "name": "1 hpm",
+      "category": "1n+",
+      "neon_header": "1 hpm",
+      "domain": "g245",
+      "todoist_label": "1neon"
+    },
+    "1-f692": {
+      "name": "1 f692",
+      "category": "1n+",
+      "neon_header": "1 f692",
+      "domain": "f693",
+      "todoist_label": "1neon"
+    },
+    "1-f693": {
+      "name": "1 f693",
+      "category": "1n+",
+      "neon_header": "1 f693",
+      "domain": "f693",
+      "todoist_label": "1neon"
+    },
+    "1-f694": {
+      "name": "1 f694",
+      "category": "1n+",
+      "neon_header": "1 f694",
+      "domain": "f694",
+      "todoist_label": "1neon"
+    },
+    "1--2g": {
+      "name": "1 -2g",
+      "category": "1n+",
+      "neon_header": "1 -2g",
+      "domain": "g245",
+      "toggl_desc": "1 -2g",
+      "todoist_label": "1neon"
+    },
+    "1--1n": {
+      "name": "1 -1n",
+      "category": "1n+",
+      "neon_header": "1 -1n",
+      "domain": "g245",
+      "toggl_desc": "1 -1n",
+      "todoist_label": "1neon"
+    },
+    "1-vm-li-msgr": {
+      "name": "1 vm+li+msgr",
+      "category": "1n+",
+      "neon_header": "1 vm+li+msgr",
+      "domain": "s897",
+      "todoist_label": "1neon"
+    },
+    "1s": {
+      "name": "1s",
+      "category": "1n+",
+      "neon_header": "1s",
+      "domain": "g245",
+      "toggl_desc": "1s",
+      "todoist_label": "1neon"
+    },
+    "1g": {
+      "name": "1g",
+      "category": "1n+",
+      "neon_header": "1g",
+      "domain": "g245",
+      "todoist_label": "1neon"
+    },
+    "groceries": {
+      "name": "groceries",
+      "category": "1n+",
+      "neon_header": "groceries",
+      "domain": "家",
+      "todoist_label": "1neon"
+    },
+    "sunset": {
+      "name": "sunset",
+      "category": "1n+",
+      "neon_header": "sunset",
+      "domain": "xk87",
+      "todoist_label": "1neon"
+    },
+    "AoS": {
+      "name": "AoS",
+      "category": "1n+",
+      "neon_header": "AoS",
+      "domain": "g245",
+      "todoist_label": "1neon"
+    },
+    "family": {
+      "name": "family",
+      "category": "1n+",
+      "neon_header": "family",
+      "domain": "xk87",
+      "todoist_label": "1neon"
+    },
+    "一起饭": {
+      "name": "一起饭",
+      "category": "1n+",
+      "neon_header": "一起饭",
+      "domain": "家",
+      "cumulative_increment": 30,
+      "neon_fen_header": "xk",
+      "todoist_label": "1neon"
+    },
+    "long-o314": {
+      "name": "long o314",
+      "category": "1n+",
+      "neon_header": "long o314",
+      "domain": "hcm",
+      "todoist_label": "1neon"
+    },
+    "长冥想": {
+      "name": "长冥想",
+      "category": "1n+",
+      "neon_header": "长冥想",
+      "domain": "hcm",
+      "todoist_label": "1neon"
+    },
+    "业写": {
+      "name": "业写",
+      "category": "1n+",
+      "neon_header": "业写",
+      "domain": "g245",
+      "todoist_label": "1neon"
+    },
+    "nails": {
+      "name": "nails",
+      "category": "1n+",
+      "neon_header": "nails",
+      "domain": "hcb",
+      "todoist_label": "1neon"
+    },
+    "对身": {
+      "name": "对身",
+      "category": "1n+",
+      "neon_header": "对身",
+      "domain": "hcb",
+      "todoist_label": "1neon"
+    }
+  }
+}
