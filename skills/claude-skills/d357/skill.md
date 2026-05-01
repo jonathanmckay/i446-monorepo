@@ -16,7 +16,7 @@ Wraps `~/i446-monorepo/tools/meet/meet.py`:
 
 Background PID + metadata stored at `~/.claude/skills/d357/state.json`:
 ```json
-{"pid": 12345, "name": "joe 1:1", "started": "2026-04-20T10:00:00", "log": "/tmp/d357-12345.log", "toggl_id": 98765, "project": "m5x2", "calendar_minutes": 30}
+{"pid": 12345, "name": "joe 1:1", "started": "2026-04-20T10:00:00", "log": "/tmp/d357-12345.log", "toggl_id": 98765, "project": "m5x2", "calendar_minutes": 30, "mic_only": false}
 ```
 
 Absent or `pid: null` → no recording active.
@@ -38,7 +38,7 @@ Absent or `pid: null` → no recording active.
    nohup python3 meet.py "<name>" --domain d357 [--no-teams] [--max-duration <calendar_minutes>] > /tmp/d357-$$.log 2>&1 &
    echo $!
    ```
-6. Write state.json with PID, name, timestamp, log path, toggl_id, project, and calendar_minutes (null if no calendar match).
+6. Write state.json with PID, name, timestamp, log path, toggl_id, project, calendar_minutes (null if no calendar match), and `mic_only` (true if `--no-teams` was passed, else false).
 7. Confirm in one line: `Recording → <name> (pid <pid>). /d357 stop when done.`
 
 ### `/d357 stop` — finalize
@@ -52,12 +52,12 @@ Absent or `pid: null` → no recording active.
 7. Clear state.json (set `pid: null`).
 8. **Read the transcript** from the `.txt` file.
 9. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for any hand-written notes matching the meeting name.
-10. **Extract and file** -- Claude Code generates the structured meeting note (summary, key points, decisions, action items, my notes) and writes it to `vault/d357/YYYY.MM.DD-<slug>.md`. Clear the meeting's section from new-notes.
+10. **Extract and file** -- Claude Code generates the structured meeting note (summary, key points, decisions, action items, my notes) and writes it to `vault/d357/<M.W>/YYYY.MM.DD-<slug>.md`, where `<M.W>` is the Sunday-anchored week folder (same convention as 1n+: `sunday = date - timedelta(days=(date.weekday()+1)%7); folder = f"{sunday.month}.{(sunday.day-1)//7+1}"`). Create the week folder if it doesn't exist. If `mic_only` is true in state.json, prefix the frontmatter `title:` and the H1 heading with `1S ` (one-sided audio marker). Clear the meeting's section from new-notes.
 11. **Link raw transcript** -- In the `## Raw Transcript` section of the d357 markdown file, include an Obsidian-style link to the `.txt` transcript file rather than inlining the full text. Format:
     ```markdown
     ## Raw Transcript
 
-    *(N words; see [transcript](../h335/i9/recordings/YYYY.MM.DD-HHMM-slug.txt))*
+    *(N words; see [transcript](../../h335/i9/recordings/YYYY.MM.DD-HHMM-slug.txt))*
     ```
     The word count and relative path should match the actual transcript file written by meet.py.
 11. Report: `Stopped. Filed -> <path>. Logged N 分 to <project>.`
@@ -81,7 +81,8 @@ Report `Recording: <name> since <HH:MM> (pid <pid>)` if active, else `No recordi
 - **Excel/OneDrive not required** — meet.py writes markdown to the vault directly.
 - **Whisper model:** `base.en` (default, ~150MB download on first run). Override with `--model small.en` for better accuracy at 3× the time.
 - **Teams mode requires one-time setup** (BlackHole virtual audio device); see the docstring at the top of meet.py.
-- The `d357` domain maps to `vault/d357/` (new; created on first file).
+- The `d357` domain maps to `vault/d357/<M.W>/` (Sunday-anchored week folders, matching 1n+).
+- **Sweeper safety net:** `~/i446-monorepo/tools/meet/d357-organize.py` runs hourly via cron and moves any loose `YYYY.MM.DD-*.md` at the `d357/` root into the right week folder. The sweeper does NOT add the `1S ` prefix — that decision lives in the skill's stop flow where `mic_only` is known.
 - **Auto-stop (calendar):** When `calendar_minutes` is available, pass `--max-duration <minutes>` so meet.py auto-stops when the event should end. The process still runs transcription and saves normally.
 - **Auto-stop (idle):** meet.py auto-stops after 10 minutes of silence once conversation has been detected (default, override with `--idle-timeout <min>`). Both auto-stops send a macOS notification.
 
