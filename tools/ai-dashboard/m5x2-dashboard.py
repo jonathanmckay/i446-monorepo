@@ -69,6 +69,44 @@ def pull_stats_repo():
         pass
 
 
+def get_freshness():
+    """Per-user staleness based on last git commit touching their stats files.
+
+    Returns list of dicts: {user_id, name, last_update_ts, hours_ago, level}
+    where level is 'ok' (<2h), 'warn' (<8h), 'stale' (>=8h), or 'missing'.
+    """
+    out = []
+    if not (STATS_REPO / ".git").exists():
+        return out
+    now = datetime.now().timestamp()
+    for uid, user in CONFIG.get("users", {}).items():
+        try:
+            r = subprocess.run(
+                ["git", "log", "-1", "--format=%at", "--",
+                 f"{uid}/stats-cache.json", f"{uid}/session-stats.json"],
+                cwd=STATS_REPO, capture_output=True, text=True, timeout=5,
+            )
+            ts_str = r.stdout.strip()
+            if not ts_str:
+                out.append({"user_id": uid, "name": user.get("name", uid),
+                            "hours_ago": None, "level": "missing"})
+                continue
+            ts = int(ts_str)
+            hours = (now - ts) / 3600
+            if hours < 2:
+                level = "ok"
+            elif hours < 8:
+                level = "warn"
+            else:
+                level = "stale"
+            out.append({"user_id": uid, "name": user.get("name", uid),
+                        "hours_ago": hours, "level": level})
+        except Exception:
+            out.append({"user_id": uid, "name": user.get("name", uid),
+                        "hours_ago": None, "level": "missing"})
+    return out
+
+
 def load_stats(user_id=None):
     """Load stats for the given user.
 
@@ -879,6 +917,24 @@ HTML_TEMPLATE = """
         <h1>m5x2 AI Dashboard</h1>
         <p class="subtitle">Claude Code Usage &mdash; McKay Capital</p>
 
+        {% set stale = freshness | selectattr('level', 'in', ['warn','stale','missing']) | list %}
+        {% if stale %}
+        <div style="margin-bottom:16px;padding:12px 16px;border-radius:10px;border:1px solid;
+                    background:{% if stale | selectattr('level','equalto','stale') | list or stale | selectattr('level','equalto','missing') | list %}#fde8e8;border-color:#f5b5b5;color:#8a1f1f{% else %}#fff7d6;border-color:#f0d97a;color:#7a5b00{% endif %};font-size:14px;">
+            <strong>⚠ Data freshness:</strong>
+            {% for f in stale %}
+                <span style="margin-right:14px;">
+                    {{ f.name }}:
+                    {% if f.hours_ago is none %}<em>no data</em>
+                    {% elif f.hours_ago < 24 %}{{ '%.1f'|format(f.hours_ago) }}h ago
+                    {% else %}{{ '%.1f'|format(f.hours_ago / 24) }}d ago
+                    {% endif %}
+                </span>
+            {% endfor %}
+            <span style="opacity:0.7;">— check periodic-sync.sh on the affected device</span>
+        </div>
+        {% endif %}
+
         <div style="display:flex;gap:12px;margin-bottom:24px;padding:16px;background:#f8f9fa;border-radius:12px;">
             <div style="display:flex;flex-direction:column;gap:4px;">
                 <label style="font-size:0.85em;color:#666;font-weight:600;">User</label>
@@ -1562,6 +1618,7 @@ def dashboard():
 
     github = get_github_activity()
     turns_data = get_daily_turns()
+    freshness = get_freshness()
 
     # Session stats: JM reads local JSONL; others read precomputed JSON from stats repo
     is_jm = selected_user in ("jm", "")
@@ -1622,6 +1679,7 @@ def dashboard():
         turns_users=turns_data["users"],
         stats_date=stats.get("lastComputedDate", "unknown"),
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        freshness=freshness,
     )
 
 
