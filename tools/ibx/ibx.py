@@ -273,10 +273,12 @@ def triage_inbox(service, account_name):
     label_id = get_or_create_label(service, TRIAGE_LABEL)
     moved = 0
 
+    consecutive_errors = 0
     for msg_ref in messages:
         try:
             email = get_email(service, msg_ref["id"])
             is_info = classify_email(email)
+            consecutive_errors = 0  # reset on success
             subj = email['subject'][:60]
             if is_info:
                 service.users().messages().modify(
@@ -288,7 +290,13 @@ def triage_inbox(service, account_name):
             else:
                 console.print(f"  [dim]→ keep:[/dim] {subj}")
         except Exception as e:
+            consecutive_errors += 1
+            err_str = str(e)
             console.print(f"  [yellow]triage error: {e}[/yellow]")
+            # Abort on persistent API errors (credit exhaustion, auth, rate limit)
+            if consecutive_errors >= 2 or "credit balance" in err_str or "authentication" in err_str.lower():
+                console.print(f"  [yellow]triage: aborting after {consecutive_errors} error(s)[/yellow]")
+                break
 
     return len(messages), moved
 
