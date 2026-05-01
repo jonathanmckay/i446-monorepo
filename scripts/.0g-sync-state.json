@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "use slt and other meetings to improve d357": {
-      "todoist_id": "6gWGV3c7x2WxRMCR",
-      "minutes": 40
-    },
     "xbox org chart pursued and understood": {
       "todoist_id": "6gWGV3h3M3CW9q42",
       "minutes": 60
@@ -18,5 +14,5 @@
       "minutes": 50
     }
   },
-  "last_sync": "2026-05-01T12:00:05.511064-07:00"
+  "last_sync": "2026-05-01T14:00:05.475319-07:00"
 }
