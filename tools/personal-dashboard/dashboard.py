@@ -216,35 +216,38 @@ CACHE_COLORS = {
 def load_cache_data():
     """Read 0n row 371 (Q2 cache totals) for the configured labels.
 
-    Looks up each label by matching row-1 headers, then returns the cached
-    formula value at row 371. openpyxl reads the last-saved value; if Excel
-    hasn't been saved since the formula recalculated, the value will be stale.
+    Uses xlwings (live Excel) so the values are current; openpyxl can't read
+    OneDrive paths from launchd-spawned processes (no Full Disk Access).
+    Looks up each label by row-1 header, returns the row-371 formula value.
     """
+    result = {label: None for label in CACHE_LABELS}
     try:
-        wb = openpyxl.load_workbook(NEON_PATH, data_only=True, read_only=True)
-        ws = wb["0n"]
+        import xlwings as xw
+        wb = xw.Book(str(NEON_PATH))
+        ws = wb.sheets["0n"]
+        # Read row 1 headers across enough columns (A..BZ = 78)
+        headers = ws.range("A1:BZ1").value
+        if not isinstance(headers, list):
+            headers = [headers]
         header_to_col = {}
-        for cell in ws[1]:
-            v = cell.value
-            if v is None:
+        for i, h in enumerate(headers):
+            if h is None:
                 continue
-            header_to_col[str(v).strip()] = cell.column
-
-        result = {}
+            header_to_col[str(h).strip()] = i + 1
+        # Read row 371 in the same span
+        row_vals = ws.range("A371:BZ371").value
+        if not isinstance(row_vals, list):
+            row_vals = [row_vals]
         for label in CACHE_LABELS:
             col_idx = header_to_col.get(label)
             if col_idx is None:
-                result[label] = None
                 continue
-            v = ws.cell(row=371, column=col_idx).value
+            v = row_vals[col_idx - 1] if col_idx - 1 < len(row_vals) else None
             if isinstance(v, (int, float)):
                 result[label] = round(float(v), 1)
-            else:
-                result[label] = None
-        wb.close()
-        return result
     except Exception:
-        return {label: None for label in CACHE_LABELS}
+        pass
+    return result
 
 
 def load_toggl_data():
