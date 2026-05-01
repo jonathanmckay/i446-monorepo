@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-01T08:00:05.588968-07:00"
+  "tasks": {
+    "habits before slt": {
+      "todoist_id": "6gWGx9fQjRXFj92R",
+      "minutes": 20
+    },
+    "use slt and other meetings to improve d357": {
+      "todoist_id": "6gWGV3c7x2WxRMCR",
+      "minutes": 40
+    },
+    "xbox org chart pursued and understood": {
+      "todoist_id": "6gWGV3h3M3CW9q42",
+      "minutes": 60
+    },
+    "honorable bball with runback attempt": {
+      "todoist_id": "6gWGV3m8WGPHQ65R",
+      "minutes": 30
+    },
+    "tasks to 40": {
+      "todoist_id": "6gWGV3v8P7VJ3VvR",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-05-01T10:00:07.470835-07:00"
 }

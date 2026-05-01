@@ -59,47 +59,48 @@ SMTP_KEYCHAIN_SERVICE = "gmail-smtp-m5c7"
 # No more per-block marker/points columns; just a single -1₦ total in P.
 BLOCK_FIRE_HOURS = {4, 6, 8, 10, 12, 14, 16, 18, 20, 22}
 
-# Map fire-hour → 地支 block in the build order. Used to drop a "fired" emoji on
-# the block header so the user can see at a glance which blocks the daemon hit.
-# 04 has no matching build-order block (build order starts at 卯=06).
+# Map fire-hour → 地支 block (just-ended) in the build order. Used to drop a
+# "fired" emoji on the block header so the user can see at a glance which
+# blocks the daemon hit.
 HOUR_TO_BRANCH_BLOCK = {
-    6:  "卯",
-    8:  "辰",
-    10: "巳",
-    12: "午",
-    14: "未",
-    16: "申",
-    18: "酉",
-    20: "戌",
-    22: "亥",
+    6:  "卯",  # 卯 (04–06) just ended
+    8:  "辰",  # 辰 (06–08)
+    10: "巳",  # 巳 (08–10)
+    12: "午",  # 午 (10–12)
+    14: "未",  # 未 (12–14)
+    16: "申",  # 申 (14–16)
+    18: "酉",  # 酉 (16–18)
+    20: "戌",  # 戌 (18–20)
+    22: "亥",  # 亥 (20–22)
 }
 DAEMON_FIRED_EMOJI = "⏰"
 
 # At each fire hour, freeze the just-ended block's column in 0分 from formula
 # (`=D-SUM(prior blocks)`) to literal value, so the next block's residual
-# formula starts measuring fresh. 04 and 06 have no prior block to lock today.
+# formula starts measuring fresh. 04 has no prior block to lock today.
 LOCK_AT_FIRE_HOUR = {
-    8:  "G",  # 卯 ended at 08
-    10: "H",  # 辰 ended at 10
-    12: "I",  # 巳 ended at 12
-    14: "J",  # 午 ended at 14
-    16: "K",  # 未 ended at 16
-    18: "L",  # 申 ended at 18
-    20: "M",  # 酉 ended at 20
-    22: "N",  # 戌 ended at 22
+    6:  "G",  # 卯 (04–06) ended at 06
+    8:  "H",  # 辰 (06–08) ended at 08
+    10: "I",  # 巳 (08–10) ended at 10
+    12: "J",  # 午 (10–12) ended at 12
+    14: "K",  # 未 (12–14) ended at 14
+    16: "L",  # 申 (14–16) ended at 16
+    18: "M",  # 酉 (16–18) ended at 18
+    20: "N",  # 戌 (18–20) ended at 20
+    22: "O",  # 亥 (20–22) ended at 22
 }
 
-# 地支 block → hour range (inclusive). Hours outside 06-23 clamp to nearest.
+# 地支 block → hour range (inclusive). Hours outside 04-21 clamp to nearest.
 BRANCH_HOURS = [
-    ("卯", 6, 7),   # 卯
-    ("辰", 8, 9),   # 辰
-    ("巳", 10, 11), # 巳
-    ("午", 12, 13), # 午
-    ("未", 14, 15), # 未
-    ("申", 16, 17), # 申
-    ("酉", 18, 19), # 酉
-    ("戌", 20, 21), # 戌
-    ("亥", 22, 23), # 亥
+    ("卯", 4, 5),   # 04–06
+    ("辰", 6, 7),   # 06–08
+    ("巳", 8, 9),   # 08–10
+    ("午", 10, 11), # 10–12
+    ("未", 12, 13), # 12–14
+    ("申", 14, 15), # 14–16
+    ("酉", 16, 17), # 16–18
+    ("戌", 18, 19), # 18–20
+    ("亥", 20, 21), # 20–22
 ]
 BRANCH_NAMES = {b[0] for b in BRANCH_HOURS}
 
@@ -117,9 +118,9 @@ def log(msg: str) -> None:
 # --- 地支 block lookup ---
 
 def hour_to_branch(hour: int) -> str:
-    if hour < 6:
+    if hour < 4:
         return BRANCH_HOURS[0][0]  # 卯
-    if hour > 23:
+    if hour > 21:
         return BRANCH_HOURS[-1][0]  # 亥
     for name, lo, hi in BRANCH_HOURS:
         if lo <= hour <= hi:
