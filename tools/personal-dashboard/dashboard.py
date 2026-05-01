@@ -203,6 +203,50 @@ def load_points_data():
     return {}
 
 
+CACHE_LABELS = ["o314", "冥想", "其他人", "hcbp", "hcbc"]
+CACHE_COLORS = {
+    "o314":   "#7c4dff",
+    "冥想":   "#aa00ff",
+    "其他人": "#fd6c1d",
+    "hcbp":   "#f81d78",
+    "hcbc":   "#ff4081",
+}
+
+
+def load_cache_data():
+    """Read 0n row 371 (Q2 cache totals) for the configured labels.
+
+    Looks up each label by matching row-1 headers, then returns the cached
+    formula value at row 371. openpyxl reads the last-saved value; if Excel
+    hasn't been saved since the formula recalculated, the value will be stale.
+    """
+    try:
+        wb = openpyxl.load_workbook(NEON_PATH, data_only=True, read_only=True)
+        ws = wb["0n"]
+        header_to_col = {}
+        for cell in ws[1]:
+            v = cell.value
+            if v is None:
+                continue
+            header_to_col[str(v).strip()] = cell.column
+
+        result = {}
+        for label in CACHE_LABELS:
+            col_idx = header_to_col.get(label)
+            if col_idx is None:
+                result[label] = None
+                continue
+            v = ws.cell(row=371, column=col_idx).value
+            if isinstance(v, (int, float)):
+                result[label] = round(float(v), 1)
+            else:
+                result[label] = None
+        wb.close()
+        return result
+    except Exception:
+        return {label: None for label in CACHE_LABELS}
+
+
 def load_toggl_data():
     """Fetch Toggl entries for last DAYS days, return {date_str: {project: minutes}}."""
     api_key = os.environ.get("TOGGL_API_KEY", "")
@@ -548,6 +592,11 @@ def _build_api_data():
     except Exception:
         points_raw = {}
 
+    try:
+        cache_raw = load_cache_data()
+    except Exception:
+        cache_raw = {label: None for label in CACHE_LABELS}
+
     loaders = {
         "toggl": load_toggl_data,
         "turns": load_turns_data,
@@ -880,8 +929,14 @@ def _build_api_data():
     ga4_daily = ga4_raw.get("daily", {})
     ga4_views = [ga4_daily.get(d, 0) for d in dates]
 
+    cache_payload = [
+        {"label": label, "value": cache_raw.get(label), "color": CACHE_COLORS.get(label, "#9e9e9e")}
+        for label in CACHE_LABELS
+    ]
+
     return {
         "dates": [d[5:] for d in dates],  # MM-DD for display
+        "cache": cache_payload,
         "points": {"datasets": points_datasets},
         "time": {"datasets": time_datasets},
         "turns": turns_values,
@@ -943,6 +998,19 @@ h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px
 .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .badge { background: var(--badge-bg); border-radius: 4px; padding: 4px 10px; font-size: 12px; }
 .badge span { color: var(--badge-text); }
+.cache-bars { display: flex; flex-direction: column; gap: 8px; }
+.cache-row { display: grid; grid-template-columns: 80px 1fr 1fr 70px; align-items: center; gap: 8px; font-size: 12px; }
+.cache-label { color: var(--badge-text); text-align: right; padding-right: 8px; }
+.cache-track-l, .cache-track-r { height: 14px; position: relative; }
+.cache-track-l { background: linear-gradient(to left, var(--grid), transparent); }
+.cache-track-r { background: linear-gradient(to right, var(--grid), transparent); }
+.cache-bar { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.cache-bar.neg { right: 0; }
+.cache-bar.pos { left: 0; }
+.cache-value { font-variant-numeric: tabular-nums; }
+.cache-value.neg { color: #ff5252; }
+.cache-value.pos { color: #00e676; }
+.cache-value.zero { color: var(--badge-text); }
 </style>
 """
 
@@ -974,6 +1042,10 @@ HTML = """<!DOCTYPE html>
 </div>
 <div class="grid">
   <div class="card">
+    <h2>Cache · Q2</h2>
+    <div id="cacheBars" class="cache-bars"></div>
+  </div>
+  <div class="card">
     <h2>Project Blocking — Comms Response Time</h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
     <div class="summary" id="emailSummary"></div>
@@ -999,6 +1071,30 @@ HTML = """<!DOCTYPE html>
 """ + _SHARED_JS_HEAD + """
 fetch('/api/data').then(r => r.json()).then(data => {
   const labels = data.dates;
+
+  // Cache bars (Q2 cumulative + or - 分 by area)
+  const cache = data.cache || [];
+  const maxAbs = Math.max(1, ...cache.map(c => Math.abs(c.value || 0)));
+  const cbEl = document.getElementById('cacheBars');
+  cache.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'cache-row';
+    const v = c.value;
+    const cls = v == null ? 'zero' : (v < 0 ? 'neg' : (v > 0 ? 'pos' : 'zero'));
+    const display = v == null ? '—' : (v > 0 ? '+' : '') + Math.round(v);
+    const pct = v == null ? 0 : Math.min(100, Math.abs(v) / maxAbs * 100);
+    const negBar = (v != null && v < 0)
+      ? `<div class="cache-bar neg" style="width:${pct}%;background:${c.color}"></div>` : '';
+    const posBar = (v != null && v > 0)
+      ? `<div class="cache-bar pos" style="width:${pct}%;background:${c.color}"></div>` : '';
+    row.innerHTML = `
+      <div class="cache-label">${c.label}</div>
+      <div class="cache-track-l">${negBar}</div>
+      <div class="cache-track-r">${posBar}</div>
+      <div class="cache-value ${cls}">${display}</div>
+    `;
+    cbEl.appendChild(row);
+  });
 
   // Points chart
   new Chart(document.getElementById('pointsChart'), {
