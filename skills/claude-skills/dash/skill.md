@@ -12,16 +12,16 @@ Opens all three local dashboards in Chrome.
 
 | Name | URL | Source |
 |------|-----|--------|
-| Personal Dashboard | http://localhost:5558 | `i446-monorepo/tools/personal-dashboard/dashboard.py` |
-| AI Dashboard (m5x2) | http://localhost:5556 | `i446-monorepo/tools/ai-dashboard/m5x2-dashboard.py` |
-| AI Stats Dashboard | http://localhost:5555 | `i446-monorepo/tools/ai-dashboard/dashboard.py` |
+| Personal Dashboard | http://ix:5558 | `i446-monorepo/tools/personal-dashboard/dashboard.py` |
+| AI Dashboard (m5x2) | http://ix:5556 | `i446-monorepo/tools/ai-dashboard/m5x2-dashboard.py` |
+| AI Stats Dashboard | http://ix:5555 | `i446-monorepo/tools/ai-dashboard/dashboard.py` |
 
 ## Execution
 
 Open all three URLs in Chrome:
 
 ```bash
-open -a "Google Chrome" "http://localhost:5558" "http://localhost:5556" "http://localhost:5555"
+open -a "Google Chrome" "http://ix:5558" "http://ix:5556" "http://ix:5555"
 ```
 
 If any dashboard isn't running (port not listening), report which one is down instead of silently failing.
