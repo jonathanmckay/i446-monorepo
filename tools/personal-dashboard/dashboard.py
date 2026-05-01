@@ -974,16 +974,6 @@ HTML = """<!DOCTYPE html>
 </div>
 <div class="grid">
   <div class="card">
-    <h2>Time / Day</h2>
-    <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
-    <div class="summary" id="timeSummary"></div>
-  </div>
-  <div class="card">
-    <h2>Points / Day</h2>
-    <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
-    <div class="summary" id="pointsSummary"></div>
-  </div>
-  <div class="card">
     <h2>Project Blocking — Comms Response Time</h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
     <div class="summary" id="emailSummary"></div>
@@ -992,6 +982,16 @@ HTML = """<!DOCTYPE html>
     <h2>Tasks Complete / Day</h2>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
     <div class="summary" id="tasksSummary"></div>
+  </div>
+  <div class="card">
+    <h2>Time / Day</h2>
+    <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
+    <div class="summary" id="timeSummary"></div>
+  </div>
+  <div class="card">
+    <h2>Points / Day</h2>
+    <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
+    <div class="summary" id="pointsSummary"></div>
   </div>
 </div>
 
