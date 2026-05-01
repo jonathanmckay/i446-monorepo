@@ -27,10 +27,11 @@ Absent or `pid: null` → no recording active.
 
 1. Check state.json; if a recording is running, **abort** and tell the user to stop it first.
 2. Parse flags from the name: `--no-teams` for mic-only mode (in-person). Default captures both mic + system audio.
-3. **Check Google Calendar** for a current event (now +/- 5 min) using `mcp__google-calendar-mcp__list-events`. If a match exists, capture:
+3. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
    - `calendar_minutes`: the event's scheduled duration
-   - `project`: infer from calendar name/color (m5x2 calendar events -> m5x2, work calendar -> i9, default m5x2)
+   - `project`: `i9` if the event came from the Work calendar id; `m5x2` otherwise (default)
    - Prefer the calendar event title as the Toggl description if it differs from user input
+   - Microsoft/Outlook events that aren't synced into the personal Google Work calendar won't be found — that's a known gap
 4. **Start Toggl timer**: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project>`. Record the returned entry ID.
 5. Launch recording in background:
    ```bash
@@ -67,8 +68,8 @@ Absent or `pid: null` → no recording active.
 If a recording is running, report status: `Recording: <name> since <HH:MM> (pid <pid>)`.
 
 If no recording is running, **auto-detect the meeting name** and start recording:
-1. Query Google Calendar for the current event (happening now ± 5 min) using `mcp__google-calendar-mcp__list-events`.
-2. If found, use the event title as the meeting name.
+1. Query Google Calendar for the current event (happening now ± 5 min) using `mcp__google-calendar-mcp__list-events` with `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (primary + Work calendars).
+2. If found, use the event title as the meeting name. Set `project = i9` if it's a Work-calendar event, else `m5x2`.
 3. If no current event, fall back to `"meeting YYYY.MM.DD HHmm"`.
 4. Proceed with the standard start flow (launch meet.py, write state.json, confirm).
 
@@ -85,6 +86,7 @@ Report `Recording: <name> since <HH:MM> (pid <pid>)` if active, else `No recordi
 - **Sweeper safety net:** `~/i446-monorepo/tools/meet/d357-organize.py` runs hourly via cron and moves any loose `YYYY.MM.DD-*.md` at the `d357/` root into the right week folder. The sweeper does NOT add the `1S ` prefix — that decision lives in the skill's stop flow where `mic_only` is known.
 - **Auto-stop (calendar):** When `calendar_minutes` is available, pass `--max-duration <minutes>` so meet.py auto-stops when the event should end. The process still runs transcription and saves normally.
 - **Auto-stop (idle):** meet.py auto-stops after 10 minutes of silence once conversation has been detected (default, override with `--idle-timeout <min>`). Both auto-stops send a macOS notification.
+- **Watchdog:** `~/i446-monorepo/scripts/d357-watchdog.py` runs every 10 min via `com.jm.d357-watchdog`. Reads state.json and notifies if (1) the recording pid has died (meet.py crashed) or (2) elapsed >= 2× calendar duration (or >=90 min if no calendar). Rate-limited to one overrun nudge every 30 min. Logs at `/tmp/d357-watchdog.log`.
 
 ## Regression tests
 
