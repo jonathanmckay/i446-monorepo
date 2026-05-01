@@ -189,8 +189,25 @@ def run_daily_reset(dry_run: bool):
             print(f"  {line}")
         return
 
-    # Replace
+    # Replace -1₲ section
     new_lines = lines[:section_start] + new_section + lines[section_end:]
+
+    # Also reset ## 0₲ section: replace content between "## 0₲" and
+    # "### 以后的目标" with three empty checkboxes.
+    og_start = -1
+    og_end = -1
+    for i, line in enumerate(new_lines):
+        stripped = line.strip()
+        if stripped == "## 0₲" or stripped == "## 0\u20b2":
+            og_start = i
+        elif og_start >= 0 and stripped.startswith("### "):
+            og_end = i
+            break
+    if og_start >= 0 and og_end > og_start:
+        og_replacement = [new_lines[og_start], "- [ ] ", "- [ ] ", "- [ ] ", ""]
+        new_lines = new_lines[:og_start] + og_replacement + new_lines[og_end:]
+        print(f"[{LOG_PREFIX}] daily-reset: 0₲ section reset (3 empty checkboxes)")
+
     # Atomic write
     tmp = MD_FILE.with_suffix(".md.tmp")
     tmp.write_text("\n".join(new_lines), encoding="utf-8")
