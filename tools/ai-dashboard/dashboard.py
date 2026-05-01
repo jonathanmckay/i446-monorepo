@@ -23,6 +23,34 @@ import requests
 
 app = Flask(__name__)
 
+EXPECTED_HOST = "ix"
+_host_marker = Path.home() / ".claude" / ".host-name"
+_current_host = _host_marker.read_text().strip() if _host_marker.exists() else "unknown"
+
+
+@app.before_request
+def _enforce_canonical_host():
+    if _current_host == EXPECTED_HOST:
+        return None
+    return (
+        f"""<!doctype html><html><head><title>Wrong Host</title>
+<style>
+  html,body{{margin:0;height:100%;background:#b00020;color:#fff;
+    font:600 28px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;
+    display:flex;align-items:center;justify-content:center;text-align:center}}
+  .box{{padding:2em;max-width:640px}}
+  code{{background:rgba(0,0,0,.25);padding:.1em .4em;border-radius:4px;font-size:.9em}}
+</style></head><body><div class="box">
+<div style="font-size:64px">⚠</div>
+<div>This dashboard only serves canonical data from <code>{EXPECTED_HOST}</code>.</div>
+<div style="margin-top:.6em;font-weight:400;font-size:.7em;opacity:.85">
+You're on <code>{_current_host}</code> — bookmark <code>http://ix.local:5555</code> instead.
+</div></div></body></html>""",
+        503,
+        {"Content-Type": "text/html; charset=utf-8"},
+    )
+
+
 _RAW_STATS_CACHE = Path.home() / ".claude" / "stats-cache.json"
 _MERGED_STATS_CACHE = Path.home() / "m5x2-ai-stats" / "jm" / "stats-cache.json"
 
