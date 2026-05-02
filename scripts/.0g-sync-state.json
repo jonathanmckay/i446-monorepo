@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-02T14:00:05.418491-07:00"
+  "tasks": {
+    "good floght with david": {
+      "todoist_id": "6gWc24RqJ94g5gfR",
+      "minutes": 60
+    },
+    "fun things with lx": {
+      "todoist_id": "6gWc24QmCvXwf922",
+      "minutes": 60
+    },
+    "0/1n": {
+      "todoist_id": "6gWc24WR2M6Xw4c2",
+      "minutes": 40
+    },
+    "be true to eternal day": {
+      "todoist_id": "6gWc24h68MxwQCw2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-05-02T16:00:03.155808-07:00"
 }
