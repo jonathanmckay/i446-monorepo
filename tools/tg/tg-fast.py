@@ -21,6 +21,8 @@ from pathlib import Path
 
 CLI = str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py")
 CACHE = str(Path.home() / ".claude/skills/tg/cache.json")
+DO_SESSION = Path.home() / ".claude/skills/do/active.json"
+DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
 
 # ── Shortcode table ──────────────────────────────────────────────────────────
 
@@ -95,6 +97,46 @@ def _update_cache(running=None):
         Path(CACHE).write_text(json.dumps(cache))
     except Exception:
         pass
+
+
+def resolve_do_session():
+    """If a /do session is active, resolve it: stop timer, compute duration, run /did."""
+    if not DO_SESSION.exists():
+        return
+    try:
+        session = json.loads(DO_SESSION.read_text())
+        task = session.get("task", "")
+        started = session.get("started_at", "")
+        if not task or not started:
+            DO_SESSION.unlink(missing_ok=True)
+            return
+
+        duration_min = None
+
+        # Check if the /do timer is still running
+        cur = _run_cli("current")
+        if "Running:" in cur and task.lower() in cur.lower():
+            stop_out = _run_cli("stop")
+            _update_cache(None)
+            # Parse "Stopped: desc (42min)" or similar
+            m = re.search(r'\((\d+)\s*min', stop_out)
+            if m:
+                duration_min = int(m.group(1))
+
+        if duration_min is None:
+            # Timer already stopped elsewhere; fall back to started_at → now
+            started_dt = datetime.fromisoformat(started)
+            duration_min = max(1, int((datetime.now() - started_dt).total_seconds() / 60))
+
+        # Run did-fast.py with task + duration as points
+        result = subprocess.run(
+            ["python3", DID_FAST, f"{task} {duration_min}"],
+            capture_output=True, text=True, timeout=30,
+        )
+        print(f"Resolved /do: {task} → {duration_min}min", file=sys.stderr)
+        DO_SESSION.unlink(missing_ok=True)
+    except Exception as e:
+        print(f"WARN: /do session resolve failed: {e}", file=sys.stderr)
 
 
 def resolve(raw: str):
@@ -197,6 +239,9 @@ def main():
         entry_id = raw[4:].strip()
         print(_run_cli("delete", entry_id))
         return
+
+    # Resolve orphaned /do session before starting any new timer
+    resolve_do_session()
 
     # Check for time range: "desc HH:MM-HH:MM" or "desc H-H"
     range_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*-\s*(\d{1,2}(?::\d{2})?)\s*$', raw)
