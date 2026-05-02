@@ -585,6 +585,27 @@
       "domain": "xk87",
       "todoist_label": "1neon"
     },
+    "var-s897": {
+      "name": "s897",
+      "category": "1n+",
+      "neon_header": "s897",
+      "domain": "s897",
+      "todoist_label": "1neon"
+    },
+    "s+hcbp": {
+      "name": "s+hcbp",
+      "category": "1n+",
+      "neon_header": "s+hcbp",
+      "domain": "hcb",
+      "todoist_label": "1neon"
+    },
+    "relax": {
+      "name": "relax",
+      "category": "1n+",
+      "neon_header": "relax {60}",
+      "domain": "hcb",
+      "todoist_label": "1neon"
+    },
     "一起饭": {
       "name": "一起饭",
       "category": "1n+",

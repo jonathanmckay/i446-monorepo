@@ -3,7 +3,7 @@ name: "did"
 description: "Mark habits or tasks as done. Supports multiple items separated by comma/semicolon. Writes to 0₦ (habits) or 0分 (Todoist tasks), completes in Todoist. Usage: /did <habit> [time], <habit2> [time2] [yesterday|M/D]"
 user-invocable: true
 ---
-
+/
 # Mark Habit Done (/did)
 
 Write to Neon spreadsheet + close Todoist task. AppleScript templates are in `applescript-ref.md` (same directory) — read that file when you need a template.
@@ -45,9 +45,15 @@ The agent follows the original Steps -2 through 6b below for these items only.
 When `/did` is called with **no arguments**:
 
 1. **Read Toggl cache** at `~/.claude/skills/tg/cache.json`. If no timer running, output `No timer running.` and exit.
-2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`).
-3. **Use the timer description as the /did input.** Strip Toggl-specific prefixes/noise, then run `python3 $DID_FAST "<description>"`. Handle results + agent_needed as in the standard flow.
-4. **Surface next tasks.** Read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1–9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
+2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes.
+3. **Check for /do session.** Read `~/.claude/skills/do/active.json`. If it exists and is valid:
+   - The task is a variable-point activity started by `/do`.
+   - Use the duration (minutes) from step 2 as the points value.
+   - Run `python3 $DID_FAST "<task_name> <duration_minutes>"` where `task_name` comes from `active.json`.
+   - After success, delete `active.json` to clear the session.
+   - Skip to step 4 (do NOT use the raw timer description as input).
+4. **Standard path (no /do session).** Use the timer description as the /did input. Strip Toggl-specific prefixes/noise, then run `python3 $DID_FAST "<description>"`. Handle results + agent_needed as in the standard flow.
+5. **Surface next tasks.** Read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
 
 This lets the user finish a task and immediately start the next one in a single flow: `/did` → stop timer → mark done → pick next → start timer.
 
@@ -125,9 +131,12 @@ No 0₦ or Todoist match. Number = **points** not minutes.
 Matches 1n+ sheet header. Do NOT write to 0₦.
 
 1. Find column + week row (M.W = month.ceil(day/7)). Read points from row 3. Write points to cell. Use "1n+ write" template.
-   - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template — read old value, add increment, write sum). Fixed increments: `一起饭` = 30.
-2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`. Use "1n+ → 0分" template. For 一起饭 → 0分 column AG (xk).
-3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1–2).
+   - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template). Fixed increments: `一起饭` = 30.
+   - **Variable 1n+ habits** (`s897`, `family`/`家`, `relax`, `s+hcbp`): Instead of reading row 3, **add the user-provided value** (trailing number or `[N]`) to the existing cell value. These are input-based tasks where points = minutes. If no value provided, the task needs a value (from `/do` timer or explicit input). Write points directly to 0分 (not as cell reference) to avoid over-counting on repeated weekly use.
+2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分 (non-variable tasks only). Map column via `g245/1-neon-meta.md`. Use "1n+ to 0分" template. For 一起饭 → 0分 column AG (xk). For variable tasks, append `+N` directly to 0分 instead.
+3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1-2).
+
+**1n+ aliases:** `家` → `family`, `relax` → `relax {60}`
 
 ## Step 6b: Posthoc Habit
 

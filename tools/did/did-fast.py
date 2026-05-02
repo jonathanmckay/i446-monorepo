@@ -67,7 +67,7 @@ HABIT_PROJECT: dict[str, str] = {
     "wake up": "hcb", "hiit": "hcb", "bio": "hcb",
     "新闻": "hcmc", "hcmc": "hcmc", "night hcmc": "hcmc",
     "词汇": "hcmc",
-    "冥想": "hcm", "o314": "hcm",
+    "冥想": "hcm", "o314": "hcm", "其他人": "hcm",
     "早餐": "家", "问学": "家",
     "xk88": "xk88", "xk20": "xk88", "xk22": "xk88", "xk26": "xk88",
     "睡觉": "睡觉",
@@ -107,12 +107,13 @@ POINTS_RE = re.compile(r"[\[\{](\d+)[\]\}]")
 
 # 1n+ task name → 0分 column mapping (updated 2026.04.28 after 9-column removal)
 ONENEON_TO_0FEN: dict[str, str] = {
-    "1s": "T", "1g": "T", "1 hpm": "R", "s+hcbp": "Y",
+    "1s": "T", "1g": "T", "1 hpm": "R", "s+hcbp": "W",
     "1 f692": "Z", "1 f693": "R", "1 m7": "R", "1 i9": "R",
     "1 -2g": "T", "1 vm+li+msgr": "R", "1 -1n": "P",
     "1 f694": "S", "1 xk88": "Y", "1 xk87": "X",
     "1 xk87 wknd": "X", "1 s897": "Y", "1 hcbc": "W",
     "一起饭": "X", "family": "X", "s897": "Y",
+    "relax {60}": "W",
 }
 
 
@@ -416,6 +417,8 @@ class RouteResult:
     fen_cell_ref: Optional[str] = None  # 1n+ cell ref like "'1n+'!D20"
     is_cumulative_1n: bool = False
     cumulative_increment: int = 0
+    is_variable_1n: bool = False
+    variable_value: Optional[int] = None
     error: Optional[str] = None
 
 
@@ -468,16 +471,23 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             continue
 
         # Step 0.2: 1n+ match (now handled in fast path)
-        # Check aliases first (e.g. "1 hcbp" → "1 hcb")
+        # Check aliases first (e.g. "1 hcbp" → "1 hcb", "家" → "family")
         resolved_1n = ONENEON_ALIASES.get(name_lower, name_lower)
         if resolved_1n in h1n:
             col_letter = h1n[resolved_1n]
             fen_col = ONENEON_TO_0FEN.get(resolved_1n)
             is_cumul = resolved_1n in CUMULATIVE_1N
+            is_var = resolved_1n in VARIABLE_1N
+            # For variable 1n+ tasks, use user-provided value (points_override or time_value)
+            var_val = None
+            if is_var:
+                var_val = item.points_override or item.time_value or None
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
                             is_cumulative_1n=is_cumul,
-                            cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0))
+                            cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
+                            is_variable_1n=is_var,
+                            variable_value=var_val)
             # Find matching Todoist 1neon task to close
             neon_1n_tasks = tq.get("1neon", [])
             matched = match_todoist_task(item.name, neon_1n_tasks)
@@ -648,6 +658,15 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         set value of range ("{col}" & weekRow) of ws1n to {inc}
     else
         set value of range ("{col}" & weekRow) of ws1n to ((oldVal as number) + {inc})
+    end if''')
+        elif w.is_variable_1n and w.variable_value:
+            # Variable 1n+ tasks: add user-provided value to existing cell
+            val = w.variable_value
+            write_lines.append(f'''    set oldVal to string value of range ("{col}" & weekRow) of ws1n
+    if oldVal = "" or oldVal = "0" then
+        set value of range ("{col}" & weekRow) of ws1n to {val}
+    else
+        set value of range ("{col}" & weekRow) of ws1n to ((oldVal as number) + {val})
     end if''')
         else:
             write_lines.append(f'''    set pts{col} to value of range ("{col}3") of ws1n
@@ -902,21 +921,26 @@ end tell'''
                     week_row = m.group(1)
 
     # 4c. Batch 1n+ → 0分 cell reference appends
+    # Variable 1n+ tasks write points directly to 0分 (not cell refs)
+    # to avoid over-counting on repeated weekly use
     one_n_fen_result = None
     if one_n_writes and week_row:
         refs = []
         for r in one_n_writes:
-            if r.fen_col and r.col_letter:
+            if r.is_variable_1n and r.variable_value and r.fen_col:
+                # Direct points append (handled in step 5 fen_appends below)
+                r.fen_points = r.variable_value
+            elif r.fen_col and r.col_letter:
                 refs.append((r.fen_col, r.col_letter, week_row))
         if refs:
             script = build_1n_0fen_script(refs, target_date)
             if script:
                 one_n_fen_result = ix_run(script, timeout=30.0)
 
-    # 5. Batch 0分 appends (for 0n and todoist items with direct points)
+    # 5. Batch 0分 appends (for 0n, todoist, and variable 1n+ items with direct points)
     fen_appends = []
     for r in fast:
-        if r.step != "1n" and r.fen_col and r.fen_points > 0:
+        if r.fen_col and r.fen_points > 0 and not (r.step == "1n" and not r.is_variable_1n):
             fen_appends.append((r.fen_col, r.fen_points))
 
     fen_result = None
@@ -1031,6 +1055,9 @@ end tell'''
             "value": r.write_value if r.step == "0n" else None,
             "col": r.col_num,
         }
+        if r.is_variable_1n:
+            entry["variable_1n"] = True
+            entry["variable_value"] = r.variable_value
         if r.todoist_task:
             tid = r.todoist_task["id"]
             entry["todoist"] = {

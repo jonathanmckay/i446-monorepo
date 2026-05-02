@@ -78,9 +78,15 @@ Track suppression mentally per-session: after you've shown a Next-up panel once,
 When `/did` is called with **no arguments**:
 
 1. **Read Toggl cache** at `~/.claude/skills/tg/cache.json`. If no timer running, output `No timer running.` and exit.
-2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Apply the d359 bump (Step C) to the stopped entry's tags — same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
-3. **Use the timer description as the /did input.** Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 → 6) as if the user had typed `/did <description>`.
-4. **Surface next tasks.** After launching the /did background agent, read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1–9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
+2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes. Apply the d359 bump (Step C) to the stopped entry's tags, same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
+3. **Check for /do session.** Read `~/.claude/skills/do/active.json`. If it exists and is valid:
+   - The task is a variable-point activity started by `/do`.
+   - Use the duration (minutes) from step 2 as the points value.
+   - Route as `/did <task_name> <duration_minutes>` where `task_name` comes from `active.json`.
+   - After success, delete `active.json` to clear the session.
+   - Skip to step 5 (do NOT use the raw timer description as input).
+4. **Standard path (no /do session).** Use the timer description as the /did input. Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 to 6) as if the user had typed `/did <description>`.
+5. **Surface next tasks.** After launching the /did background agent, read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
 
 This lets the user finish a task and immediately start the next one in a single flow: `/did` → stop timer → mark done → pick next → start timer.
 
