@@ -481,3 +481,104 @@ def test_poll_resolved_checks_slack():
     assert "last_read" in check_body, (
         "check_resolved_now Slack check must compare last_read timestamp"
     )
+
+
+# --- Auto-/ibx0 on first inbox-zero-of-day -----------------------------------
+
+def test_first_zero_of_day_runs_ibx0_habits(tmp_path, monkeypatch):
+    """When ibx0.main() reaches inbox-zero for the first time today,
+    /ibx0's habit batch should run automatically (one less manual call).
+    Subsequent same-day zero-states must NOT re-run the batch."""
+    import importlib.util
+    import sys
+    import os
+
+    # Load ibx0 module by spec so we can monkey-patch its subprocess + state path.
+    spec = importlib.util.spec_from_file_location("ibx0_mod", IBX_ALL_PY)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["ibx0_mod"] = mod
+    # Need to ensure the dirname is importable (ibx0 imports ibx, imsg, slack).
+    monkeypatch.syspath_prepend(str(IBX_ALL_PY.parent))
+    # Skip executing the full module — we only need the helper. Read source,
+    # extract just the function we're testing, and exec it in a fresh namespace.
+    src = IBX_ALL_PY.read_text()
+
+    import ast as _ast
+    tree = _ast.parse(src)
+    target_names = {
+        "_mark_ibx0_habits_if_first_today",
+        "_IBX0_AUTODONE_STATE",
+        "_DID_FAST",
+        "_IBX0_HABITS",
+    }
+    nodes_to_keep = []
+    for node in tree.body:
+        if isinstance(node, _ast.FunctionDef) and node.name in target_names:
+            nodes_to_keep.append(node)
+        elif isinstance(node, _ast.Assign):
+            if any(isinstance(t, _ast.Name) and t.id in target_names for t in node.targets):
+                nodes_to_keep.append(node)
+
+    assert any(getattr(n, "name", "") == "_mark_ibx0_habits_if_first_today"
+               for n in nodes_to_keep), (
+        "ibx0.py must define _mark_ibx0_habits_if_first_today() to auto-run "
+        "/ibx0 habits on the first inbox-zero of the day"
+    )
+
+    extracted = _ast.Module(body=nodes_to_keep, type_ignores=[])
+    code = compile(extracted, str(IBX_ALL_PY), "exec")
+
+    # Build a namespace with stubs for module dependencies.
+    calls = []
+
+    class _StubProc:
+        def __init__(self, returncode=0, stdout="ok", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    class _StubSubprocess:
+        DEVNULL = -3
+
+        @staticmethod
+        def run(cmd, capture_output=False, text=False, timeout=None):
+            calls.append(("run", tuple(cmd)))
+            return _StubProc()
+
+        @staticmethod
+        def Popen(cmd, stdout=None, stderr=None):
+            calls.append(("popen", tuple(cmd)))
+            return None
+
+    class _StubConsole:
+        def print(self, *a, **kw):
+            pass
+
+    state_file = tmp_path / "last-autodone-date"
+    ns = {
+        "Path": __import__("pathlib").Path,
+        "datetime": __import__("datetime").datetime,
+        "subprocess": _StubSubprocess,
+        "console": _StubConsole(),
+        "OSError": OSError,
+        "FileNotFoundError": FileNotFoundError,
+    }
+    exec(code, ns)
+    # Override the constants to use tmp paths.
+    ns["_IBX0_AUTODONE_STATE"] = state_file
+    ns["_DID_FAST"] = tmp_path / "did-fast.py"
+
+    # First call: state file missing → should run did-fast and write state.
+    ns["_mark_ibx0_habits_if_first_today"]()
+    assert state_file.exists(), "state file must be written after first run"
+    assert any(c[0] == "run" for c in calls), (
+        "did-fast.py must be invoked the first time inbox-zero is reached"
+    )
+    n_runs_first = sum(1 for c in calls if c[0] == "run")
+
+    # Second call same day: should be a no-op.
+    calls.clear()
+    ns["_mark_ibx0_habits_if_first_today"]()
+    assert not any(c[0] == "run" for c in calls), (
+        "did-fast.py must NOT be re-invoked when state already records today"
+    )

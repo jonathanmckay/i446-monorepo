@@ -90,6 +90,54 @@ def _load_two_n():
 _two_n = _load_two_n()
 
 
+# ── First-zero-of-day auto-/ibx0 ──────────────────────────────────────────────
+_IBX0_AUTODONE_STATE = Path.home() / ".claude/skills/ibx0/.last-autodone-date"
+_DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+_IBX0_HABITS = "ibx - s897, ibx i9, slack github, slack m5x2, ibx m5x2, teams"
+
+
+def _mark_ibx0_habits_if_first_today():
+    """The first time we hit inbox zero today, run /ibx0's habit-batch via
+    did-fast.py so the user doesn't have to do it manually. Idempotent
+    within a day via a tiny date-stamp state file."""
+    today = datetime.now().date().isoformat()
+    try:
+        if _IBX0_AUTODONE_STATE.exists():
+            if _IBX0_AUTODONE_STATE.read_text().strip() == today:
+                return
+    except OSError:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["python3", str(_DID_FAST), _IBX0_HABITS],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        console.print(f"[dim]auto-/ibx0 skipped: {e}[/dim]")
+        return
+
+    if proc.returncode == 0:
+        console.print("[dim]✓ auto-/ibx0: marked inbox habits done[/dim]")
+        try:
+            _IBX0_AUTODONE_STATE.parent.mkdir(parents=True, exist_ok=True)
+            _IBX0_AUTODONE_STATE.write_text(today)
+        except OSError:
+            pass
+        # Refresh the did-fast cache in the background so subsequent
+        # /next / /did calls see the closed Todoist tasks.
+        try:
+            subprocess.Popen(
+                ["python3", str(_DID_FAST), "--refresh-cache"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
+    else:
+        err = (proc.stderr or proc.stdout or "").strip()[:200]
+        console.print(f"[dim]auto-/ibx0 failed: {err}[/dim]")
+
+
 def _render_block_status():
     """Print the current 2h block's -1g status panel + response stats (idle screen)."""
     if _two_n is None or not hasattr(_two_n, "render_block_status_panel"):
@@ -1333,6 +1381,7 @@ def main():
 
     if not all_items:
         _wait_for_autosign()
+        _mark_ibx0_habits_if_first_today()
         set_term_color("blue")
         _render_block_status()
         console.print(f"\n[dim]Inbox zero — watching for new items... (q to quit)[/dim]  {status_line}")
@@ -1434,6 +1483,7 @@ def main():
             else:
                 # Inbox zero — go blue immediately, let background polling find new items
                 _wait_for_autosign()
+                _mark_ibx0_habits_if_first_today()
                 set_term_color("blue")
                 _render_block_status()
                 console.print("[dim]Inbox zero — watching for new items... (q to quit)[/dim]")
