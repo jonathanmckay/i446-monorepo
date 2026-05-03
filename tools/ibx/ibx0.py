@@ -89,6 +89,126 @@ def _load_two_n():
 
 _two_n = _load_two_n()
 
+# ── Inbox habit marking ──────────────────────────────────────────────────────
+_habits_marked = False  # once per session
+
+_IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
+_IBX_HABITS = ["ibx - s897", "ibx i9", "slack github", "slack m5x2", "ibx m5x2", "teams"]
+_TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+
+
+def _write_neon_habit(habit_name: str) -> bool:
+    """Write 1 to a habit column in 0₦ for today, via ix-osa.sh."""
+    now = datetime.now()
+    script = f'''tell application "Microsoft Excel"
+    set wb to workbook "Neon分v12.2.xlsx"
+    set theSheet to sheet "0n" of wb
+    set targetMonth to {now.month}
+    set targetDay to {now.day}
+    set habitName to "{habit_name}"
+    set habitCol to 0
+    repeat with c from 1 to 60
+        set cellVal to value of cell c of row 1 of theSheet
+        if cellVal is not missing value then
+            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
+            if trimmed = habitName then
+                set habitCol to c
+                exit repeat
+            end if
+        end if
+    end repeat
+    if habitCol = 0 then return "ERROR: habit '" & habitName & "' not found in row 1"
+    set todayRow to 0
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of theSheet
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = targetMonth and d = targetDay then
+                    set todayRow to r
+                    exit repeat
+                end if
+            end try
+        end if
+    end repeat
+    if todayRow = 0 then return "ERROR: date not found"
+    set value of cell habitCol of row todayRow of theSheet to 1
+    return "OK"
+end tell'''
+    try:
+        result = subprocess.run(
+            ["bash", str(_IX_OSA)],
+            input=script, capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _close_todoist_habits():
+    """Close matching 0neon-labeled Todoist tasks for inbox habits."""
+    import urllib.request
+    import urllib.error
+    try:
+        req = urllib.request.Request(
+            "https://api.todoist.com/api/v1/tasks?label=0neon&limit=200",
+            headers={"Authorization": f"Bearer {_TODOIST_TOKEN}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            tasks = json.loads(resp.read())
+    except Exception:
+        return
+
+    # Match tasks whose content matches an inbox habit name
+    habit_set = {h.lower() for h in _IBX_HABITS}
+    for task in tasks:
+        content = task.get("content", "").lower().strip()
+        if content in habit_set:
+            try:
+                close_req = urllib.request.Request(
+                    f"https://api.todoist.com/api/v1/tasks/{task['id']}/close",
+                    method="POST",
+                    headers={"Authorization": f"Bearer {_TODOIST_TOKEN}"},
+                )
+                urllib.request.urlopen(close_req, timeout=10)
+            except Exception:
+                pass
+
+
+def _mark_inbox_habits_done():
+    """Mark all inbox-related habits as done in neon (0₦) and Todoist.
+
+    Writes directly via ix-osa.sh AppleScript (no Claude CLI dependency).
+    Called when inbox zero is first achieved. Idempotent within a session."""
+    global _habits_marked
+    if _habits_marked:
+        return
+    _habits_marked = True
+    console.print("[dim]  marking inbox habits done...[/dim]")
+
+    # Write to neon in parallel threads for speed
+    results = {}
+
+    def _write(habit):
+        results[habit] = _write_neon_habit(habit)
+
+    threads = [threading.Thread(target=_write, args=(h,)) for h in _IBX_HABITS]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    ok = sum(1 for v in results.values() if v)
+    fail = len(_IBX_HABITS) - ok
+    if fail:
+        console.print(f"[dim yellow]  neon: {ok}/{len(_IBX_HABITS)} written ({fail} failed)[/dim yellow]")
+    else:
+        console.print(f"[dim green]  ✓ neon: {ok} habits marked[/dim green]")
+
+    # Close Todoist tasks in background (non-blocking)
+    threading.Thread(target=_close_todoist_habits, daemon=True).start()
+
 
 def _render_block_status():
     """Print the current 2h block's -1g status panel + response stats (idle screen)."""
@@ -1333,6 +1453,7 @@ def main():
 
     if not all_items:
         _wait_for_autosign()
+        _mark_inbox_habits_done()
         set_term_color("blue")
         _render_block_status()
         console.print(f"\n[dim]Inbox zero — watching for new items... (q to quit)[/dim]  {status_line}")
@@ -1434,6 +1555,7 @@ def main():
             else:
                 # Inbox zero — go blue immediately, let background polling find new items
                 _wait_for_autosign()
+                _mark_inbox_habits_done()
                 set_term_color("blue")
                 _render_block_status()
                 console.print("[dim]Inbox zero — watching for new items... (q to quit)[/dim]")

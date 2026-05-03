@@ -794,27 +794,89 @@ def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
 # Todoist close
 # ---------------------------------------------------------------------------
 
-def close_todoist_task(task_id: str) -> tuple[str, bool]:
-    url = f"{TODOIST_BASE}/tasks/{task_id}/close"
-    req = urllib.request.Request(url, method="POST", headers={
+def _todoist_request(url: str, method: str = "GET", timeout: float = 15.0):
+    """Wrapped HTTP call returning (status, body_bytes) or raising."""
+    req = urllib.request.Request(url, method=method, headers={
         "Authorization": f"Bearer {TODOIST_TOKEN}",
     })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status, resp.read()
+
+
+def _classify_error(e: Exception) -> tuple[str, bool]:
+    """Return (error_string, is_transient). Transient → retry once."""
+    import socket
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            body = ""
+        is_transient = e.code >= 500
+        return f"HTTP {e.code}: {body}".strip(), is_transient
+    if isinstance(e, urllib.error.URLError):
+        return f"URLError: {e.reason!r}", True
+    if isinstance(e, socket.timeout):
+        return "timeout", True
+    return repr(e), False
+
+
+def _verify_closed(task_id: str) -> tuple[bool, str | None]:
+    """Read back the task; return (closed_ok, error). 404 = closed (archived).
+
+    Recurring tasks are tricky: completing one increments due date instead of
+    archiving, so `checked` may stay false. We treat those as ok if the GET
+    succeeds and `due.is_recurring` is true.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return task_id, True
+        status, body = _todoist_request(f"{TODOIST_BASE}/tasks/{task_id}", "GET")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True, None  # archived
+        msg, _ = _classify_error(e)
+        return False, f"verify_failed: {msg}"
     except Exception as e:
-        return task_id, False
+        msg, _ = _classify_error(e)
+        return False, f"verify_failed: {msg}"
+
+    try:
+        data = json.loads(body)
+    except Exception as e:
+        return False, f"verify_failed: bad json {e!r}"
+
+    if data.get("checked") is True:
+        return True, None
+    due = data.get("due") or {}
+    if due.get("is_recurring"):
+        return True, None  # recurring tasks reschedule, not archive
+    return False, "verify_failed: task still open after close"
 
 
-def close_todoist_tasks(task_ids: list[str]) -> dict[str, bool]:
+def close_todoist_task(task_id: str, _retry: bool = True) -> tuple[str, bool, str | None]:
+    """POST /tasks/{id}/close, then verify. Returns (id, ok, error)."""
+    url = f"{TODOIST_BASE}/tasks/{task_id}/close"
+    try:
+        _todoist_request(url, method="POST")
+    except Exception as e:
+        msg, transient = _classify_error(e)
+        if transient and _retry:
+            import time
+            time.sleep(0.5)
+            return close_todoist_task(task_id, _retry=False)
+        return task_id, False, msg
+
+    ok, verr = _verify_closed(task_id)
+    return task_id, ok, verr
+
+
+def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None]]:
     if not task_ids:
         return {}
     results = {}
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {pool.submit(close_todoist_task, tid): tid for tid in task_ids}
         for future in as_completed(futures):
-            tid, ok = future.result()
-            results[tid] = ok
+            tid, ok, err = future.result()
+            results[tid] = (ok, err)
     return results
 
 
@@ -1060,11 +1122,15 @@ end tell'''
             entry["variable_value"] = r.variable_value
         if r.todoist_task:
             tid = r.todoist_task["id"]
-            entry["todoist"] = {
+            ok, err = close_results.get(tid, (False, "no_attempt"))
+            td_entry = {
                 "id": tid,
                 "content": r.todoist_task["content"],
-                "closed": close_results.get(tid, False),
+                "closed": ok,
             }
+            if not ok and err:
+                td_entry["error"] = err
+            entry["todoist"] = td_entry
         if r.step == "variable" and r.item.name in posthoc_results:
             entry["posthoc"] = posthoc_results[r.item.name]
         if r.fen_col:

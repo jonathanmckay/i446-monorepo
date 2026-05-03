@@ -481,3 +481,46 @@ def test_poll_resolved_checks_slack():
     assert "last_read" in check_body, (
         "check_resolved_now Slack check must compare last_read timestamp"
     )
+
+
+def test_inbox_zero_marks_habits_done():
+    """
+    Bug: /inbound delegated to ibx0.main() for inbox processing, but ibx0
+    never called /did to mark inbox habits done in neon (0₦). The /ibx0 skill
+    (which marks habits) was never invoked — it's a separate Claude skill,
+    not part of the Python ibx0.main() flow.
+
+    Fix: ibx0.py must call _mark_inbox_habits_done() when inbox zero is
+    achieved, which invokes /did to write to neon.
+    """
+    source = IBX_ALL_PY.read_text()
+
+    # _mark_inbox_habits_done must exist
+    assert "def _mark_inbox_habits_done(" in source, (
+        "ibx0.py must define _mark_inbox_habits_done to mark inbox habits in neon"
+    )
+
+    # It must call /did with the inbox habits
+    fn_start = source.index("def _mark_inbox_habits_done(")
+    fn_end = source.index("\ndef ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    assert "/did" in fn_body, (
+        "_mark_inbox_habits_done must invoke /did to mark habits in neon"
+    )
+    assert "ibx" in fn_body.lower(), (
+        "_mark_inbox_habits_done must mark ibx-related habits"
+    )
+
+    # Both inbox-zero paths must call it
+    # Path 1: initial empty inbox (if not all_items)
+    # Path 2: drained all items in the card loop
+    import re
+    # Find call sites (not the definition)
+    calls = [m.start() for m in re.finditer(r'(?<!\bdef )_mark_inbox_habits_done\(\)', source)]
+    # Exclude the definition line itself
+    def_pos = source.index("def _mark_inbox_habits_done(")
+    calls = [c for c in calls if abs(c - def_pos) > 50]
+    assert len(calls) >= 2, (
+        f"ibx0.py must call _mark_inbox_habits_done() in both inbox-zero paths, "
+        f"found {len(calls)} call site(s)"
+    )
