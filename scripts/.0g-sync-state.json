@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "use meetings to improve d357 and see what is optimal for this": {
-      "todoist_id": "6gWmh4xC4mgVX542",
-      "minutes": null
-    },
     "inform on april p&l responsibilities": {
       "todoist_id": "6gWmh5VjqH4jPqqR",
       "minutes": 30
@@ -18,5 +14,5 @@
       "minutes": 40
     }
   },
-  "last_sync": "2026-05-03T14:00:08.671355-07:00"
+  "last_sync": "2026-05-03T16:00:06.092426-07:00"
 }
