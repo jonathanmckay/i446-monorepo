@@ -11,15 +11,24 @@ if [[ ! -f "$CACHE" ]]; then
   return 1 2>/dev/null || exit 1
 fi
 
+# If the cache has no "today" key (stale session refreshed it), rebuild it
+if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
+  python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+fi
+
 task=$(jq -r --slurpfile done "$DONE" '
   (now | strftime("%Y-%m-%d")) as $today |
   (if ($done[0].date == $today) then ($done[0].names | map(ascii_downcase)) else [] end) as $completed |
-  # Merge all categories, dedupe by id
-  [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"], .["today"] // []]
-  | flatten
+  # "today" tasks are pre-filtered by Todoist (due today|overdue), no date check needed
+  # For neon categories, filter by due <= today
+  (
+    [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
+    | flatten
+    | map(select(.due <= $today))
+  ) + [(.["today"] // [])[] | select(.due != "" and .due <= $today)]
+  | map(select(.content != null))
   | group_by(.id) | map(.[0])
   | .[]
-  | select(.due <= $today and .content != null)
   | .content as $raw |
   ($raw | gsub(" *\\([0-9]*\\)"; "") | gsub(" *\\[[0-9]*\\]"; "") | gsub(" *\\{[0-9]*\\}"; "") | gsub(" +$"; "") | gsub("  +"; " ") | ascii_downcase) as $clean |
   ($clean | split(" - ") | .[0]) as $prefix |
