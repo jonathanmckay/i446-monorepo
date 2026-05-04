@@ -557,6 +557,22 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             results.append(r)
             continue
 
+        # Step 0.35: Live Todoist search (fallback when cache misses)
+        # Searches all open tasks by text, not just neon-labeled ones.
+        live_matched = _live_todoist_search(item.name)
+        if live_matched:
+            pts_match = POINTS_RE.search(live_matched["content"])
+            points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+            fen_col = None
+            for lbl in live_matched.get("labels", []):
+                if lbl in LABEL_TO_0FEN:
+                    fen_col = LABEL_TO_0FEN[lbl]
+                    break
+            r = RouteResult(item=item, step="todoist", todoist_task=live_matched,
+                            fen_col=fen_col, fen_points=points)
+            results.append(r)
+            continue
+
         # Step 0.4: Variable task
         # Resolve domain from @project override, keyword map, or bail
         domain_label, fen_col = None, None
@@ -891,6 +907,53 @@ def _verify_closed(task_id: str) -> tuple[bool, str | None]:
     if due.get("is_recurring"):
         return True, None  # recurring tasks reschedule, not archive
     return False, "verify_failed: task still open after close"
+
+
+def _live_todoist_search(query: str) -> Optional[dict]:
+    """Search all open Todoist tasks by text. Returns best match or None.
+
+    Used as a fallback when the neon-labeled task cache misses. Paginates
+    through today + overdue + upcoming (7 days) tasks and applies the same
+    word-overlap matching as the cache path to avoid false positives.
+    """
+    try:
+        from urllib.parse import quote
+        all_tasks: list[dict] = []
+        # Fetch today+overdue and next 7 days in two calls
+        for filt in ("today | overdue", "7 days"):
+            cursor = None
+            for _ in range(3):  # max 3 pages per filter
+                url = f"{TODOIST_BASE}/tasks?filter={quote(filt)}&limit=100"
+                if cursor:
+                    url += f"&cursor={cursor}"
+                req = urllib.request.Request(url, headers={
+                    "Authorization": f"Bearer {TODOIST_TOKEN}",
+                })
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    raw = json.loads(resp.read())
+                tasks = raw if isinstance(raw, list) else raw.get("results", [])
+                for t in tasks:
+                    all_tasks.append({
+                        "id": t.get("id", ""),
+                        "content": t.get("content", ""),
+                        "labels": t.get("labels", []),
+                    })
+                cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
+                if not cursor:
+                    break
+        if not all_tasks:
+            return None
+        # Deduplicate by id
+        seen = set()
+        unique = []
+        for t in all_tasks:
+            if t["id"] not in seen:
+                seen.add(t["id"])
+                unique.append(t)
+        best = match_todoist_task(query, unique)
+        return best
+    except Exception:
+        return None
 
 
 def defer_todoist_task(task_id: str, defer_date: str, points_claimed: int,
