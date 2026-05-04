@@ -106,6 +106,8 @@ This lets the user finish a task and immediately start the next one in a single 
 
 **Time range:** `HHMM-HHMM` pattern → extract start/end, compute duration as `[time]`, set `hasTimeRange`.
 
+**Defer (partial completion):** `--tmrw`, `--tomorrow`, `--Mon`, `--Jun 15`, etc. at the end of an item → log points to 0分 but do NOT close the Todoist task. Instead, reschedule it to the defer date and deduct claimed `[N]` points from the task's total. Example: `/did xbox analytics [10] --tmrw` logs 10 pts, reschedules to tomorrow, updates task from `[30]` to `[20]`.
+
 ## Routing (Step 0)
 
 **Always run the dispatcher first.** Do not re-implement the matching logic in prose — it lives in code:

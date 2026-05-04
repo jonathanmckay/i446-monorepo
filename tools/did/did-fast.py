@@ -199,6 +199,7 @@ class ParsedItem:
     curly_points: Optional[int] = None  # {N} triggers 0g bonus
     time_range: Optional[tuple[str, str]] = None  # (HHMM, HHMM)
     project_override: Optional[str] = None
+    defer_date: Optional[str] = None  # ISO date (YYYY-MM-DD) for partial completion
 
 
 def parse_input(raw: str) -> list[ParsedItem]:
@@ -224,6 +225,47 @@ def parse_input(raw: str) -> list[ParsedItem]:
             continue
 
         item = ParsedItem(raw=chunk, name=chunk, target_date=target_date)
+
+        # Extract --defer flag (--tmrw, --tomorrow, --Mon, --Jun 15, etc.)
+        defer_match = re.search(r"--(\S+(?:\s+\d{1,2})?)\s*$", chunk)
+        if defer_match:
+            defer_raw = defer_match.group(1).strip()
+            chunk = chunk[:defer_match.start()].strip()
+            # Resolve defer date
+            _today = date.today()
+            dl = defer_raw.lower()
+            if dl in ("tmrw", "tomorrow"):
+                item.defer_date = (_today + timedelta(days=1)).isoformat()
+            elif dl in ("mon", "monday"):
+                days_ahead = (0 - _today.weekday()) % 7 or 7
+                item.defer_date = (_today + timedelta(days=days_ahead)).isoformat()
+            elif dl in ("tue", "tuesday"):
+                days_ahead = (1 - _today.weekday()) % 7 or 7
+                item.defer_date = (_today + timedelta(days=days_ahead)).isoformat()
+            elif dl in ("wed", "wednesday"):
+                days_ahead = (2 - _today.weekday()) % 7 or 7
+                item.defer_date = (_today + timedelta(days=days_ahead)).isoformat()
+            elif dl in ("thu", "thursday"):
+                days_ahead = (3 - _today.weekday()) % 7 or 7
+                item.defer_date = (_today + timedelta(days=days_ahead)).isoformat()
+            elif dl in ("fri", "friday"):
+                days_ahead = (4 - _today.weekday()) % 7 or 7
+                item.defer_date = (_today + timedelta(days=days_ahead)).isoformat()
+            else:
+                # Try "Mon DD" or "Month DD" (e.g. "Jun 15", "Jan 3")
+                try:
+                    from dateutil import parser as _dp
+                    parsed = _dp.parse(defer_raw, default=datetime(_today.year, 1, 1))
+                    if parsed.date() <= _today:
+                        parsed = parsed.replace(year=_today.year + 1)
+                    item.defer_date = parsed.date().isoformat()
+                except Exception:
+                    # Last resort: try as ISO date
+                    try:
+                        datetime.fromisoformat(defer_raw)
+                        item.defer_date = defer_raw
+                    except ValueError:
+                        pass  # ignore unparseable defer
 
         # Extract @project override
         at_match = re.search(r"@(\w+)", chunk)
@@ -851,6 +893,50 @@ def _verify_closed(task_id: str) -> tuple[bool, str | None]:
     return False, "verify_failed: task still open after close"
 
 
+def defer_todoist_task(task_id: str, defer_date: str, points_claimed: int,
+                       current_content: str) -> tuple[bool, str | None]:
+    """Reschedule a task and deduct claimed points from its [N] value."""
+    # 1. Reschedule to defer_date
+    try:
+        body = json.dumps({"due_date": defer_date}).encode()
+        req = urllib.request.Request(
+            f"{TODOIST_BASE}/tasks/{task_id}",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {TODOIST_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=15)
+    except Exception as e:
+        return False, f"reschedule failed: {e}"
+
+    # 2. Deduct points from [N] in the task content
+    if points_claimed > 0:
+        pts_match = re.search(r"\[(\d+)\]", current_content)
+        if pts_match:
+            old_pts = int(pts_match.group(1))
+            new_pts = max(0, old_pts - points_claimed)
+            new_content = current_content[:pts_match.start()] + f"[{new_pts}]" + current_content[pts_match.end():]
+            try:
+                body = json.dumps({"content": new_content}).encode()
+                req = urllib.request.Request(
+                    f"{TODOIST_BASE}/tasks/{task_id}",
+                    data=body,
+                    headers={
+                        "Authorization": f"Bearer {TODOIST_TOKEN}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=15)
+            except Exception:
+                pass  # content update is best-effort
+
+    return True, None
+
+
 def close_todoist_task(task_id: str, _retry: bool = True) -> tuple[str, bool, str | None]:
     """POST /tasks/{id}/close, then verify. Returns (id, ok, error)."""
     url = f"{TODOIST_BASE}/tasks/{task_id}/close"
@@ -1011,16 +1097,27 @@ end tell'''
         if script:
             fen_result = ix_run(script, timeout=30.0)
 
-    # 6. Close Todoist tasks in parallel
+    # 6. Close or defer Todoist tasks in parallel
     task_ids = []
+    defer_items = {}  # tid → (defer_date, points_claimed, content)
     id_to_name = {}
     for r in fast:
         if r.todoist_task:
             tid = r.todoist_task["id"]
-            task_ids.append(tid)
             id_to_name[tid] = r.item.name
+            if r.item.defer_date:
+                pts = r.item.points_override or r.fen_points or 0
+                defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
+            else:
+                task_ids.append(tid)
 
     close_results = close_todoist_tasks(task_ids)
+
+    # Defer tasks (reschedule + deduct points)
+    defer_results = {}
+    for tid, (dd, pts, content) in defer_items.items():
+        ok, err = defer_todoist_task(tid, dd, pts, content)
+        defer_results[tid] = (ok, err)
 
     # 6b. Create Toggl entries for items with time_range (parallel)
     toggl_created = {}
@@ -1122,14 +1219,26 @@ end tell'''
             entry["variable_value"] = r.variable_value
         if r.todoist_task:
             tid = r.todoist_task["id"]
-            ok, err = close_results.get(tid, (False, "no_attempt"))
-            td_entry = {
-                "id": tid,
-                "content": r.todoist_task["content"],
-                "closed": ok,
-            }
-            if not ok and err:
-                td_entry["error"] = err
+            if tid in defer_results:
+                ok, err = defer_results[tid]
+                td_entry = {
+                    "id": tid,
+                    "content": r.todoist_task["content"],
+                    "closed": False,
+                    "deferred": r.item.defer_date,
+                    "deferred_ok": ok,
+                }
+                if err:
+                    td_entry["error"] = err
+            else:
+                ok, err = close_results.get(tid, (False, "no_attempt"))
+                td_entry = {
+                    "id": tid,
+                    "content": r.todoist_task["content"],
+                    "closed": ok,
+                }
+                if not ok and err:
+                    td_entry["error"] = err
             entry["todoist"] = td_entry
         if r.step == "variable" and r.item.name in posthoc_results:
             entry["posthoc"] = posthoc_results[r.item.name]
