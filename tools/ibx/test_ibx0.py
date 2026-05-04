@@ -483,44 +483,102 @@ def test_poll_resolved_checks_slack():
     )
 
 
-def test_inbox_zero_marks_habits_done():
-    """
-    Bug: /inbound delegated to ibx0.main() for inbox processing, but ibx0
-    never called /did to mark inbox habits done in neon (0₦). The /ibx0 skill
-    (which marks habits) was never invoked — it's a separate Claude skill,
-    not part of the Python ibx0.main() flow.
+# --- Auto-/ibx0 on first inbox-zero-of-day -----------------------------------
 
-    Fix: ibx0.py must call _mark_inbox_habits_done() when inbox zero is
-    achieved, which invokes /did to write to neon.
-    """
-    source = IBX_ALL_PY.read_text()
+def test_first_zero_of_day_runs_ibx0_habits(tmp_path, monkeypatch):
+    """When ibx0.main() reaches inbox-zero for the first time today,
+    /ibx0's habit batch should run automatically (one less manual call).
+    Subsequent same-day zero-states must NOT re-run the batch."""
+    import importlib.util
+    import sys
+    import os
 
-    # _mark_inbox_habits_done must exist
-    assert "def _mark_inbox_habits_done(" in source, (
-        "ibx0.py must define _mark_inbox_habits_done to mark inbox habits in neon"
+    # Load ibx0 module by spec so we can monkey-patch its subprocess + state path.
+    spec = importlib.util.spec_from_file_location("ibx0_mod", IBX_ALL_PY)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["ibx0_mod"] = mod
+    # Need to ensure the dirname is importable (ibx0 imports ibx, imsg, slack).
+    monkeypatch.syspath_prepend(str(IBX_ALL_PY.parent))
+    # Skip executing the full module — we only need the helper. Read source,
+    # extract just the function we're testing, and exec it in a fresh namespace.
+    src = IBX_ALL_PY.read_text()
+
+    import ast as _ast
+    tree = _ast.parse(src)
+    target_names = {
+        "_mark_ibx0_habits_if_first_today",
+        "_IBX0_AUTODONE_STATE",
+        "_DID_FAST",
+        "_IBX0_HABITS",
+    }
+    nodes_to_keep = []
+    for node in tree.body:
+        if isinstance(node, _ast.FunctionDef) and node.name in target_names:
+            nodes_to_keep.append(node)
+        elif isinstance(node, _ast.Assign):
+            if any(isinstance(t, _ast.Name) and t.id in target_names for t in node.targets):
+                nodes_to_keep.append(node)
+
+    assert any(getattr(n, "name", "") == "_mark_ibx0_habits_if_first_today"
+               for n in nodes_to_keep), (
+        "ibx0.py must define _mark_ibx0_habits_if_first_today() to auto-run "
+        "/ibx0 habits on the first inbox-zero of the day"
     )
 
-    # It must call /did with the inbox habits
-    fn_start = source.index("def _mark_inbox_habits_done(")
-    fn_end = source.index("\ndef ", fn_start + 1)
-    fn_body = source[fn_start:fn_end]
-    assert "/did" in fn_body, (
-        "_mark_inbox_habits_done must invoke /did to mark habits in neon"
-    )
-    assert "ibx" in fn_body.lower(), (
-        "_mark_inbox_habits_done must mark ibx-related habits"
-    )
+    extracted = _ast.Module(body=nodes_to_keep, type_ignores=[])
+    code = compile(extracted, str(IBX_ALL_PY), "exec")
 
-    # Both inbox-zero paths must call it
-    # Path 1: initial empty inbox (if not all_items)
-    # Path 2: drained all items in the card loop
-    import re
-    # Find call sites (not the definition)
-    calls = [m.start() for m in re.finditer(r'(?<!\bdef )_mark_inbox_habits_done\(\)', source)]
-    # Exclude the definition line itself
-    def_pos = source.index("def _mark_inbox_habits_done(")
-    calls = [c for c in calls if abs(c - def_pos) > 50]
-    assert len(calls) >= 2, (
-        f"ibx0.py must call _mark_inbox_habits_done() in both inbox-zero paths, "
-        f"found {len(calls)} call site(s)"
+    # Build a namespace with stubs for module dependencies.
+    calls = []
+
+    class _StubProc:
+        def __init__(self, returncode=0, stdout="ok", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    class _StubSubprocess:
+        DEVNULL = -3
+
+        @staticmethod
+        def run(cmd, capture_output=False, text=False, timeout=None):
+            calls.append(("run", tuple(cmd)))
+            return _StubProc()
+
+        @staticmethod
+        def Popen(cmd, stdout=None, stderr=None):
+            calls.append(("popen", tuple(cmd)))
+            return None
+
+    class _StubConsole:
+        def print(self, *a, **kw):
+            pass
+
+    state_file = tmp_path / "last-autodone-date"
+    ns = {
+        "Path": __import__("pathlib").Path,
+        "datetime": __import__("datetime").datetime,
+        "subprocess": _StubSubprocess,
+        "console": _StubConsole(),
+        "OSError": OSError,
+        "FileNotFoundError": FileNotFoundError,
+    }
+    exec(code, ns)
+    # Override the constants to use tmp paths.
+    ns["_IBX0_AUTODONE_STATE"] = state_file
+    ns["_DID_FAST"] = tmp_path / "did-fast.py"
+
+    # First call: state file missing → should run did-fast and write state.
+    ns["_mark_ibx0_habits_if_first_today"]()
+    assert state_file.exists(), "state file must be written after first run"
+    assert any(c[0] == "run" for c in calls), (
+        "did-fast.py must be invoked the first time inbox-zero is reached"
+    )
+    n_runs_first = sum(1 for c in calls if c[0] == "run")
+
+    # Second call same day: should be a no-op.
+    calls.clear()
+    ns["_mark_ibx0_habits_if_first_today"]()
+    assert not any(c[0] == "run" for c in calls), (
+        "did-fast.py must NOT be re-invoked when state already records today"
     )

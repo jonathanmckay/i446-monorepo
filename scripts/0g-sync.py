@@ -21,7 +21,7 @@ import json
 import subprocess
 import argparse
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, NamedTuple
 
@@ -52,6 +52,22 @@ OG_HEADING = "\u0030\u20b2"  # "0" + "₲"
 LATER_HEADING = "\u4ee5\u540e\u7684\u76ee\u6807"  # 以后的目标
 
 OG_LABEL = "#0g"
+NEG1_LABEL = "#-1g"
+CRITICAL_PATH_LABEL = "#关键径路"  # #关键径路
+NEG1_HEADING = "-1₲"  # -1₲
+
+# Match any markdown task line at any indent.
+# Group 1: indent + "- [", group 2: state char, group 3: "] " + space, group 4: description
+CHECKBOX_RE = re.compile(r"^(\s*-\s*\[)([ xX])(\]\s+)(.+)$")
+
+
+def flip_to_checked(line: str) -> str:
+    """Idempotently flip `- [ ]` to `- [x]` on a task line. Returns unchanged if not unchecked."""
+    m = CHECKBOX_RE.match(line)
+    if not m or m.group(2).strip() != "":
+        return line
+    return f"{m.group(1)}x{m.group(3)}{m.group(4)}"
+
 
 # Domain detection rules: (pattern, label)
 DOMAIN_RULES = [
@@ -314,6 +330,36 @@ class TodoistClient:
         )
         resp.raise_for_status()
 
+    def get_completed_tasks(self, since: datetime, until: datetime,
+                            project_id: Optional[str] = None) -> List[Dict]:
+        """Return tasks completed in [since, until]. Optionally filter by project_id.
+        Times must be timezone-aware ISO 8601."""
+        all_tasks: List[Dict] = []
+        cursor = None
+        while True:
+            params = {
+                "since": since.isoformat(),
+                "until": until.isoformat(),
+                "limit": 200,
+            }
+            if project_id:
+                params["project_id"] = project_id
+            if cursor:
+                params["cursor"] = cursor
+            resp = requests.get(
+                f"{TODOIST_API_BASE}/tasks/completed/by_completion_date",
+                headers=self.headers, params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+            all_tasks.extend(data.get("items") or data.get("results") or [])
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+        return all_tasks
+
 
 # --- Fuzzy Matching ---
 
@@ -348,6 +394,85 @@ def fuzzy_match(new_key: str, state_keys: set) -> Optional[str]:
 
 # --- Sync Mode ---
 
+def find_neg1_section(lines: List[str]) -> Tuple[int, int]:
+    """Return (start, end) line indices of the `## -1₲` section, end exclusive.
+    Returns (-1, -1) if section is not found."""
+    start = -1
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("## ") and NEG1_HEADING in s:
+            start = i
+            break
+    if start < 0:
+        return -1, -1
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].strip().startswith("## "):
+            end = j
+            break
+    return start, end
+
+
+def mark_neg1_completed(client: TodoistClient, lines: List[str],
+                        dry_run: bool = False) -> List[int]:
+    """Find unchecked -1₲ lines whose Todoist task was completed in the last
+    24 hours; return their line indices for flipping to [x].
+
+    Uses Todoist's by_completion_date API restricted to the 0g project.
+    Matches Todoist completed-task content against MD line description by
+    normalized-content equality / substring. Avoids false positives from
+    lines that were never pushed to Todoist (e.g. user-typed bullets that
+    /-1g hasn't synced) since those will not appear in completed-task feed.
+    """
+    start, end = find_neg1_section(lines)
+    if start < 0:
+        return []
+
+    # Collect unchecked task lines in -1₲: (line_idx, normalized_description).
+    md_lines: List[Tuple[int, str]] = []
+    for i in range(start + 1, end):
+        m = CHECKBOX_RE.match(lines[i])
+        if not m or m.group(2).strip() != "":
+            continue
+        desc = m.group(4).strip()
+        if not desc:
+            continue
+        md_lines.append((i, normalize_content(desc)))
+
+    if not md_lines:
+        return []
+
+    # Query Todoist for tasks completed in the last 24h, scoped to the 0g project.
+    now = datetime.now().astimezone()
+    since = now - timedelta(hours=24)
+    try:
+        completed = client.get_completed_tasks(since, now,
+                                               project_id=TODOIST_0G_PROJECT_ID)
+    except requests.exceptions.HTTPError as e:
+        logger.warning("Failed to fetch completed -1g tasks: %s", e)
+        return []
+
+    completed_norms = [normalize_content(t.get("content", "")) for t in completed]
+    completed_norms = [c for c in completed_norms if c]
+
+    flipped_indices = []
+    for idx, norm_desc in md_lines:
+        # Match by exact equality or bidirectional substring (handles {N}/(N) variation).
+        matched = any(
+            norm_desc == c or norm_desc in c or c in norm_desc
+            for c in completed_norms
+        )
+        if not matched:
+            continue
+        if dry_run:
+            logger.info("[DRY RUN] Would flip -1₲ line %d: %s", idx, lines[idx].strip())
+        else:
+            logger.info("-1₲ completed in Todoist, marking [x]: %s", lines[idx].strip())
+        flipped_indices.append(idx)
+
+    return flipped_indices
+
+
 def run_sync(client: TodoistClient, dry_run: bool):
     logger.info("=== Sync mode ===")
 
@@ -366,18 +491,20 @@ def run_sync(client: TodoistClient, dry_run: bool):
     todoist_active_ids = {t["id"] for t in todoist_tasks}
     logger.info("Todoist 0g project has %d active tasks", len(todoist_active_ids))
 
-    # Step 2: Reverse sync — find completed/deleted Todoist tasks, remove from MD
-    lines_to_remove = set()
+    # Step 2: Reverse sync — find completed/deleted Todoist tasks, flip [ ] to [x] in MD.
+    # Preserving the line (rather than removing) lets the 03:59 build-order archive
+    # capture the day's completed work in v_logs. Cleanup mode at 5:30 strips the
+    # [x] lines from the live build order so they don't carry into the next day.
+    lines_to_check = set()
     keys_to_remove = []
 
     for key, entry in state.get("tasks", {}).items():
         tid = entry["todoist_id"]
         if tid not in todoist_active_ids:
-            # Task was completed or deleted in Todoist
             for task in og_tasks:
-                if task.key == key:
-                    lines_to_remove.add(task.line_idx)
-                    logger.info("Completed in Todoist, removing from MD: %s", task.description)
+                if task.key == key and not task.checked:
+                    lines_to_check.add(task.line_idx)
+                    logger.info("Completed in Todoist, marking [x] in MD: %s", task.description)
                     break
             keys_to_remove.append(key)
 
@@ -389,7 +516,7 @@ def run_sync(client: TodoistClient, dry_run: bool):
     created = 0
 
     for task in unchecked:
-        if task.line_idx in lines_to_remove:
+        if task.line_idx in lines_to_check:
             continue
 
         # Exact match
@@ -464,7 +591,7 @@ def run_sync(client: TodoistClient, dry_run: bool):
                 logger.error("Failed to create task '%s': %s", task.description, e)
 
     # Step 4: Orphan cleanup — state entries with no matching MD task
-    current_keys = {t.key for t in unchecked if t.line_idx not in lines_to_remove}
+    current_keys = {t.key for t in unchecked if t.line_idx not in lines_to_check}
     orphaned = [k for k in state.get("tasks", {}) if k not in current_keys]
     for key in orphaned:
         entry = state["tasks"].pop(key)
@@ -479,21 +606,27 @@ def run_sync(client: TodoistClient, dry_run: bool):
                 except requests.exceptions.HTTPError as e:
                     logger.warning("Failed to delete orphan %s: %s", tid, e)
 
-    # Step 5: Write MD if lines were removed
-    if lines_to_remove and not dry_run:
-        new_lines = [l for i, l in enumerate(lines) if i not in lines_to_remove]
-        # Collapse consecutive blank lines to at most one
-        new_lines = _collapse_blanks(new_lines)
+    # Step 4b: Process -1₲ section — flip lines whose Todoist task is no longer active.
+    neg1_flipped = mark_neg1_completed(client, lines, dry_run=dry_run)
+    if neg1_flipped:
+        for idx in neg1_flipped:
+            lines_to_check.add(idx)
+
+    # Step 5: Write MD if lines were flipped
+    if lines_to_check and not dry_run:
+        new_lines = list(lines)
+        for idx in lines_to_check:
+            new_lines[idx] = flip_to_checked(new_lines[idx])
         write_md(MD_FILE, new_lines)
-        logger.info("Removed %d completed lines from MD", len(lines_to_remove))
+        logger.info("Marked %d completed lines [x] in MD", len(lines_to_check))
 
     # Step 6: Save state
     if not dry_run:
         save_state(state)
 
     logger.info(
-        "Sync done: %d created, %d removed, %d orphans cleaned",
-        created, len(lines_to_remove), len(orphaned),
+        "Sync done: %d created, %d marked [x], %d orphans cleaned",
+        created, len(lines_to_check), len(orphaned),
     )
 
 
