@@ -1,18 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "inform on april p&l responsibilities": {
-      "todoist_id": "6gWmh5VjqH4jPqqR",
-      "minutes": 30
-    },
-    "finish and systemize t12/t3 valuations exercise": {
-      "todoist_id": "6gWmh74rghhP8F92",
-      "minutes": 100
-    },
     "do the work that makes me ready for the week (min 80 pts)": {
       "todoist_id": "6gWmh63cPXW2qH7R",
       "minutes": 40
     }
   },
-  "last_sync": "2026-05-03T16:00:06.092426-07:00"
+  "last_sync": "2026-05-03T20:00:08.090495-07:00"
 }
