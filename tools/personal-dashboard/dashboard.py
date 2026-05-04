@@ -231,48 +231,35 @@ def load_points_data():
     return {}
 
 
-CACHE_LABELS = ["o314", "冥想", "其他人", "hcbp", "hcbc"]
-CACHE_COLORS = {
-    "o314":   "#7c4dff",
-    "冥想":   "#aa00ff",
-    "其他人": "#fd6c1d",
-    "hcbp":   "#f81d78",
-    "hcbc":   "#ff4081",
-}
+# Each card pulls a single cell from 0n. Headers live on row 369 (and row 1
+# for xk88). We hardcode (col, row) per card since headers span two rows.
+CACHE_CARDS = [
+    {"label": "hcbp",   "col": "AB", "row": 371, "period": "Q2",   "color": "#f81d78"},
+    {"label": "hcbc",   "col": "AF", "row": 371, "period": "Q2",   "color": "#ff4081"},
+    {"label": "xk88",   "col": "AN", "row": 371, "period": "Q2",   "color": "#e65100"},
+    {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
+    {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
+    {"label": "冥想",   "col": "AR", "row": 375, "period": "2026", "color": "#aa00ff"},
+    {"label": "其他人", "col": "AS", "row": 375, "period": "2026", "color": "#fd6c1d"},
+]
 
 
 def load_cache_data():
-    """Read 0n row 371 (Q2 cache totals) for the configured labels.
+    """Read each configured cell from 0n.
 
     Uses xlwings (live Excel) so the values are current; openpyxl can't read
     OneDrive paths from launchd-spawned processes (no Full Disk Access).
-    Looks up each label by row-1 header, returns the row-371 formula value.
+    Returns {label: value or None}.
     """
-    result = {label: None for label in CACHE_LABELS}
+    result = {card["label"]: None for card in CACHE_CARDS}
     try:
         import xlwings as xw
         wb = xw.Book(str(NEON_PATH))
         ws = wb.sheets["0n"]
-        # Read row 1 headers across enough columns (A..BZ = 78)
-        headers = ws.range("A1:BZ1").value
-        if not isinstance(headers, list):
-            headers = [headers]
-        header_to_col = {}
-        for i, h in enumerate(headers):
-            if h is None:
-                continue
-            header_to_col[str(h).strip()] = i + 1
-        # Read row 371 in the same span
-        row_vals = ws.range("A371:BZ371").value
-        if not isinstance(row_vals, list):
-            row_vals = [row_vals]
-        for label in CACHE_LABELS:
-            col_idx = header_to_col.get(label)
-            if col_idx is None:
-                continue
-            v = row_vals[col_idx - 1] if col_idx - 1 < len(row_vals) else None
+        for card in CACHE_CARDS:
+            v = ws.range(f"{card['col']}{card['row']}").value
             if isinstance(v, (int, float)):
-                result[label] = round(float(v), 1)
+                result[card["label"]] = round(float(v), 1)
     except Exception:
         pass
     return result
@@ -323,63 +310,87 @@ def load_toggl_data():
     return {k: dict(v) for k, v in result.items()}
 
 
+_TASKS_CACHE_PATH = Path(__file__).parent / ".tasks-cache.json"
+# Always refetch today + yesterday (late-evening completions can shift buckets).
+# Days older than this are immutable — read from disk cache only.
+_TASKS_REFETCH_TAIL = 2
+
+
+def _fetch_tasks_for_day(day, token):
+    """Fetch one day's completed-task counts from Todoist. Returns (date_str, counts) or (date_str, None)."""
+    since_dt = datetime.combine(day, datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
+    until_dt = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
+    since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    until = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=200"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    counts = {"neon": 0, "posthoc": 0, "one_n": 0, "other": 0}
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return day.isoformat(), None
+    for item in data.get("items", []):
+        content = item.get("content", "")
+        if "@0neon" in content:
+            counts["neon"] += 1
+        elif "@posthoc" in content:
+            counts["posthoc"] += 1
+        elif "@1neon" in content:
+            counts["one_n"] += 1
+        else:
+            counts["other"] += 1
+    counts["total"] = counts["neon"] + counts["posthoc"] + counts["one_n"] + counts["other"]
+    return day.isoformat(), counts
+
+
 def load_tasks_data():
     """Fetch completed tasks from Todoist, split by category tag in content.
-    Returns {date_str: {"neon": count, "posthoc": count, "one_n": count, "other": count, "total": count}}.
-    Categories (detected via @tag in content):
-      @0neon  → neon habits (black)
-      @posthoc → retroactive log (purple)
-      @1neon  → 1n weekly tasks (green)
-      other   → regular tasks (blue)
+    Returns {date_str: {"neon", "posthoc", "one_n", "other", "total"}}.
 
-    Uses the v1/tasks/completed endpoint (NOT by_completion_date, which misses
-    recurring task completions). Fetches day-by-day to stay under the 200-item
-    cap per request (no pagination on this endpoint).
+    Performance:
+    - Historical days (older than today/yesterday) are read from a disk cache
+      and never refetched (they're immutable).
+    - Today + yesterday are always refetched in parallel.
+    - Cold cache: parallel fetch of all DAYS+1 days.
     """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
     today = date.today()
+    all_days = [today - timedelta(days=n) for n in range(DAYS, -1, -1)]
+    refresh_cutoff = today - timedelta(days=_TASKS_REFETCH_TAIL - 1)
 
-    neon = defaultdict(int)
-    posthoc = defaultdict(int)
-    one_n = defaultdict(int)
-    other = defaultdict(int)
-
-    # Fetch day-by-day to avoid the 200-item cap (recurring habits can exceed
-    # 200 when fetching a wide range). Each day is well under 200.
-    for days_ago in range(DAYS, -1, -1):
-        day = today - timedelta(days=days_ago)
-        # Pacific midnight → UTC ISO Z so each bucket covers a Pacific calendar
-        # day. Otherwise evening completions leak into the next UTC day's bucket.
-        since_dt = datetime.combine(day, datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
-        until_dt = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
-        since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        until = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=200"
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", f"Bearer {token}")
+    # Load disk cache
+    cache = {}
+    if _TASKS_CACHE_PATH.exists():
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
+            cache = json.loads(_TASKS_CACHE_PATH.read_text())
         except Exception:
-            continue
+            cache = {}
 
-        day_str = day.isoformat()
-        for item in data.get("items", []):
-            content = item.get("content", "")
-            if "@0neon" in content:
-                neon[day_str] += 1
-            elif "@posthoc" in content:
-                posthoc[day_str] += 1
-            elif "@1neon" in content:
-                one_n[day_str] += 1
-            else:
-                other[day_str] += 1
+    # Decide which days need a network fetch
+    to_fetch = [d for d in all_days
+                if d >= refresh_cutoff or d.isoformat() not in cache]
 
-    all_days = set(neon) | set(posthoc) | set(one_n) | set(other)
-    return {d: {
-        "neon": neon[d], "posthoc": posthoc[d], "one_n": one_n[d], "other": other[d],
-        "total": neon[d] + posthoc[d] + one_n[d] + other[d],
-    } for d in all_days}
+    # Parallel fetch — Todoist has no published rate limit issue at this scale,
+    # 10 workers gives ~4s for 31 cold days vs 41s serial.
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(_fetch_tasks_for_day, d, token) for d in to_fetch]
+            for fut in futures:
+                day_str, counts = fut.result()
+                if counts is not None:
+                    cache[day_str] = counts
+
+        # Persist (best-effort; cache is just a perf win, not a correctness req)
+        try:
+            _TASKS_CACHE_PATH.write_text(json.dumps(cache))
+        except Exception:
+            pass
+
+    # Build return dict from cache (only days in our window)
+    wanted = {d.isoformat() for d in all_days}
+    return {d: counts for d, counts in cache.items() if d in wanted}
 
 
 def load_turns_data():
@@ -598,7 +609,7 @@ def api_refresh():
 # 60s TTL cache for /api/data — avoids re-fetching everything on refresh-spam.
 _API_DATA_CACHE: dict = {"payload": None, "ts": 0.0}
 _API_DATA_LOCK = threading.Lock()
-_API_DATA_TTL = 60.0
+_API_DATA_TTL = 300.0
 
 
 def _api_data_cached():
@@ -626,7 +637,7 @@ def _build_api_data():
     try:
         cache_raw = load_cache_data()
     except Exception:
-        cache_raw = {label: None for label in CACHE_LABELS}
+        cache_raw = {card["label"]: None for card in CACHE_CARDS}
 
     loaders = {
         "toggl": load_toggl_data,
@@ -961,8 +972,13 @@ def _build_api_data():
     ga4_views = [ga4_daily.get(d, 0) for d in dates]
 
     cache_payload = [
-        {"label": label, "value": cache_raw.get(label), "color": CACHE_COLORS.get(label, "#9e9e9e")}
-        for label in CACHE_LABELS
+        {
+            "label":  card["label"],
+            "value":  cache_raw.get(card["label"]),
+            "color":  card["color"],
+            "period": card["period"],
+        }
+        for card in CACHE_CARDS
     ]
 
     return {
@@ -1031,7 +1047,8 @@ h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px
 .badge span { color: var(--badge-text); }
 .cache-bars { display: flex; flex-direction: column; gap: 8px; }
 .cache-row { display: grid; grid-template-columns: 80px 1fr 1fr 70px; align-items: center; gap: 8px; font-size: 12px; }
-.cache-label { color: var(--badge-text); text-align: right; padding-right: 8px; }
+.cache-label { color: var(--badge-text); text-align: right; padding-right: 8px; line-height: 1.1; }
+.cache-label .period { display: block; font-size: 9px; opacity: 0.6; letter-spacing: 0.5px; }
 .cache-track-l, .cache-track-r { height: 14px; position: relative; }
 .cache-track-l { background: linear-gradient(to left, var(--grid), transparent); }
 .cache-track-r { background: linear-gradient(to right, var(--grid), transparent); }
@@ -1119,7 +1136,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     const posBar = (v != null && v > 0)
       ? `<div class="cache-bar pos" style="width:${pct}%;background:${c.color}"></div>` : '';
     row.innerHTML = `
-      <div class="cache-label">${c.label}</div>
+      <div class="cache-label">${c.label}<span class="period">${c.period||''}</span></div>
       <div class="cache-track-l">${negBar}</div>
       <div class="cache-track-r">${posBar}</div>
       <div class="cache-value ${cls}">${display}</div>
