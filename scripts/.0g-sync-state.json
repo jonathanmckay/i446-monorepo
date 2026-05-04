@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-04T05:30:02.908153-07:00"
+  "tasks": {
+    "touch all 19 of the i9 tasks": {
+      "todoist_id": "6gX2chH4pvPWR3MR",
+      "minutes": 80
+    },
+    "tasks down to 50": {
+      "todoist_id": "6gX2chR3mH3cFmR2",
+      "minutes": 60
+    },
+    "all colors": {
+      "todoist_id": "6gX2chX28xc4xrQR",
+      "minutes": 20
+    },
+    "tennis + hiit": {
+      "todoist_id": "6gX2pg5V6RmqGg9R",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-05-04T08:00:12.644309-07:00"
 }
