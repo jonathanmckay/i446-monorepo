@@ -14,10 +14,12 @@ fi
 task=$(jq -r --slurpfile done "$DONE" '
   (now | strftime("%Y-%m-%d")) as $today |
   (if ($done[0].date == $today) then ($done[0].names | map(ascii_downcase)) else [] end) as $completed |
-  [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
+  # Merge all categories, dedupe by id
+  [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"], .["today"] // []]
   | flatten
+  | group_by(.id) | map(.[0])
   | .[]
-  | select(.due <= $today)
+  | select(.due <= $today and .content != null)
   | .content as $raw |
   ($raw | gsub(" *\\([0-9]*\\)"; "") | gsub(" *\\[[0-9]*\\]"; "") | gsub(" *\\{[0-9]*\\}"; "") | gsub(" +$"; "") | gsub("  +"; " ") | ascii_downcase) as $clean |
   ($clean | split(" - ") | .[0]) as $prefix |
@@ -26,7 +28,7 @@ task=$(jq -r --slurpfile done "$DONE" '
     ($completed | index($prefix) | not)
   )
   | $raw
-' "$CACHE" | fzf --height 20 --prompt="did> " --layout=reverse)
+' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse)
 
 if [[ -z "$task" ]]; then
   return 0 2>/dev/null || exit 0

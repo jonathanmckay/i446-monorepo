@@ -431,10 +431,44 @@ def refresh_task_queue() -> dict:
             print(f"WARN: fetch {label}: {e}", file=sys.stderr)
             return []
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    def fetch_today():
+        """Fetch all tasks due today or overdue (no label filter), with pagination."""
+        from urllib.parse import quote
+        all_tasks = []
+        filt = "today | overdue"
+        cursor = None
+        for _ in range(5):  # max 5 pages
+            url = f"{TODOIST_BASE}/tasks?filter={quote(filt)}&limit=200"
+            if cursor:
+                url += f"&cursor={cursor}"
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {TODOIST_TOKEN}",
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    raw = json.loads(resp.read())
+                tasks = raw if isinstance(raw, list) else raw.get("results", [])
+                for t in tasks:
+                    all_tasks.append({
+                        "id": t.get("id", ""),
+                        "content": t.get("content", ""),
+                        "labels": t.get("labels", []),
+                        "due": t.get("due", {}).get("date", "") if t.get("due") else ""
+                    })
+                cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
+                if not cursor:
+                    break
+            except Exception as e:
+                print(f"WARN: fetch today: {e}", file=sys.stderr)
+                break
+        return all_tasks
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(fetch_label, lbl): key for lbl, key in zip(labels, keys)}
+        today_future = pool.submit(fetch_today)
         for future in as_completed(futures):
             results[futures[future]] = future.result()
+        results["today"] = today_future.result()
 
     cache = {"updated": datetime.now().isoformat()}
     cache.update(results)
