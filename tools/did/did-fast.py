@@ -539,9 +539,21 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             matched = match_todoist_task(item.name, neon_tasks)
             if matched:
                 r.todoist_task = matched
-                # 0n habits do NOT write to 0分 directly.
-                # Excel's own formulas roll up 0n data into 0分.
-                # Writing here would double-count.
+                # By default, 0n habits do NOT write to 0分: Excel's own
+                # formulas roll up 0n data into 0分, and writing here
+                # would double-count.
+
+            # Exception: explicit [N] override on a 0₦ habit appends +N
+            # to that habit's domain column in 0分 — a deliberate boost
+            # on top of the rollup. Triggered ONLY by [N], not {N}: {N}
+            # already has its own 0g-column path (col Z) and would
+            # double-write here.
+            if item.points_override and item.curly_points is None:
+                proj = HABIT_PROJECT.get(name_lower)
+                fen_col_override = LABEL_TO_0FEN.get(proj) if proj else None
+                if fen_col_override:
+                    r.fen_col = fen_col_override
+                    r.fen_points = item.points_override
 
             results.append(r)
             continue

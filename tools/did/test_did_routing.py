@@ -543,6 +543,73 @@ class FormulaAppendTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 0₦ habit + [N] override → 0分 domain column write
+# ---------------------------------------------------------------------------
+
+# Load the real did-fast.py (hyphenated filename → importlib).
+_DF_SPEC = importlib.util.spec_from_file_location("did_fast", _DID_FAST)
+_df_module = importlib.util.module_from_spec(_DF_SPEC)
+sys.modules["did_fast"] = _df_module  # so dataclasses resolve their __module__
+_DF_SPEC.loader.exec_module(_df_module)  # type: ignore[union-attr]
+
+
+class ZeroNeonOverrideTests(unittest.TestCase):
+    """When the user types `[N]` on a 0₦ habit (e.g. `hiit [48]`), the
+    override should append +N to that habit's domain column in 0分.
+    By default a 0₦ habit's points come from Excel's own 0n→0分 rollup;
+    [N] is a deliberate boost on top.
+
+    {N} must NOT trigger this path — it's reserved for the 0g column (Z)
+    and routing it here would double-write."""
+
+    def setUp(self):
+        # Minimal headers + empty task queue. The fast path only needs
+        # h0n to know hiit is a 0₦ header (column number is arbitrary
+        # for routing — only used by the AppleScript builder).
+        self.headers = {"0n": {"hiit": 31, "0g": 20}, "1n": {}}
+        self.tq = {"0neon": [], "1neon": [], "夜neon": []}
+
+    def _route_one(self, raw: str):
+        items = _df_module.parse_input(raw)
+        results = _df_module.route_items(items, self.headers, self.tq)
+        self.assertEqual(len(results), 1)
+        return results[0]
+
+    def test_bracket_override_writes_to_domain_column(self):
+        # hiit → hcb/hcbp domain → 0分.W
+        r = self._route_one("hiit [48]")
+        self.assertEqual(r.step, "0n")
+        self.assertEqual(r.fen_col, "W")
+        self.assertEqual(r.fen_points, 48)
+
+    def test_no_override_does_not_write_to_0fen(self):
+        # Plain `hiit` → 0₦ write only, Excel rollup handles 0分
+        r = self._route_one("hiit")
+        self.assertEqual(r.step, "0n")
+        self.assertIsNone(r.fen_col)
+        self.assertEqual(r.fen_points, 0)
+
+    def test_curly_override_does_not_trigger_domain_write(self):
+        # {N} is the 0g (col Z) channel — must not collide with the
+        # domain-column path above. Today {N} has no implementation in
+        # this routing layer, so the assertion is conservative: the
+        # bracket path stays inert.
+        r = self._route_one("hiit {48}")
+        self.assertEqual(r.step, "0n")
+        self.assertIsNone(r.fen_col)
+        self.assertEqual(r.fen_points, 0)
+
+    def test_habit_with_unmapped_domain_skips_silently(self):
+        # 冥想 maps to project "hcm", which has no column in
+        # LABEL_TO_0FEN. The override must NOT raise; it just no-ops.
+        self.headers["0n"]["冥想"] = 44
+        r = self._route_one("冥想 [48]")
+        self.assertEqual(r.step, "0n")
+        self.assertIsNone(r.fen_col)
+        self.assertEqual(r.fen_points, 0)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -559,6 +626,7 @@ def main() -> int:
         Step6DuplicateGuardTests,
         ThresholdTests,
         FormulaAppendTests,
+        ZeroNeonOverrideTests,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 
