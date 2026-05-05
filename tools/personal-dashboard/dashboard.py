@@ -240,7 +240,7 @@ CACHE_CARDS = [
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
     {"label": "冥想",   "col": "AR", "row": 375, "period": "2026", "color": "#aa00ff"},
-    {"label": "其他人", "col": "AS", "row": 375, "period": "2026", "color": "#fd6c1d"},
+    {"label": "其他人", "col": "AS", "row": 375, "period": "2026", "color": "#673ab7"},
 ]
 
 
