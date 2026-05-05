@@ -11,17 +11,27 @@ STATS_FILE="$HOME/.claude/stats-cache.json"
 [ -d "$REPO_DIR/.git" ] || exit 0
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOST=$(hostname -s | tr '[:upper:]' '[:lower:]')
 
 mkdir -p "$REPO_DIR/$USER_ID"
 
-# Merge non-Claude provider stats (Copilot CLI, etc.) from llm-sessions.db
-# into the dashboard's stats-cache.json. Falls back to a plain copy if the
-# merger fails for any reason.
-if ! python3 "$SCRIPT_DIR/merge-llm-sessions.py" \
-      --src "$STATS_FILE" \
-      --out "$REPO_DIR/$USER_ID/stats-cache.json" \
-      --device "$(hostname -s | tr '[:upper:]' '[:lower:]')" 2>/dev/null; then
-  cp "$STATS_FILE" "$REPO_DIR/$USER_ID/stats-cache.json"
+# Only Straylight rebuilds + pushes stats-cache.json (it has the union of
+# both machines' JSONLs via projects-ix mirror). Other hosts only refresh
+# their own session-stats.json — they don't touch the authoritative cache.
+IS_AUTHORITATIVE=0
+if [[ "$HOST" == straylight* ]]; then
+  IS_AUTHORITATIVE=1
+  python3 "$SCRIPT_DIR/build-stats-cache.py" >>"$SCRIPT_DIR/.build-stats-cache.log" 2>&1 || true
+
+  # Merge non-Claude provider stats (Copilot CLI, etc.) from llm-sessions.db
+  # into the dashboard's stats-cache.json. Falls back to a plain copy if the
+  # merger fails for any reason.
+  if ! python3 "$SCRIPT_DIR/merge-llm-sessions.py" \
+        --src "$STATS_FILE" \
+        --out "$REPO_DIR/$USER_ID/stats-cache.json" \
+        --device "$HOST" 2>/dev/null; then
+    cp "$STATS_FILE" "$REPO_DIR/$USER_ID/stats-cache.json"
+  fi
 fi
 
 # Compute MCP/skill/latency stats from local JSONL session files
@@ -31,7 +41,11 @@ python3 "$SCRIPT_DIR/compute-session-stats.py" \
   2>/dev/null || true
 
 cd "$REPO_DIR"
-git add "$USER_ID/stats-cache.json" "$USER_ID/session-stats.json"
+if [ "$IS_AUTHORITATIVE" = 1 ]; then
+  git add "$USER_ID/stats-cache.json" "$USER_ID/session-stats.json"
+else
+  git add "$USER_ID/session-stats.json"
+fi
 git diff --cached --quiet && exit 0  # nothing changed
 
 git commit -m "stats: $USER_ID $(date '+%Y-%m-%d %H:%M')" -q
