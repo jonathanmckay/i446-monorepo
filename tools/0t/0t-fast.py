@@ -33,6 +33,7 @@ ix_run = _ix_mod.run
 # toggl — direct API calls (can't import toggl_api due to relative imports)
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 SLEEP_PROJECT_ID = 108358083
+HCMC_PROJECT_ID = 109932707
 
 
 def _load_toggl_key() -> str:
@@ -79,6 +80,109 @@ def get_toggl_entries(d: date) -> list[dict]:
     start = d.isoformat()
     end = (d + timedelta(days=1)).isoformat()
     return _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+
+
+TAG_COLUMNS = {"-1": "AU", "-2": "AV", "其他人": "AS"}
+
+
+def compute_tag_minutes(yesterday: date, today: date) -> dict[str, int]:
+    """Sum minutes for entries tagged -1, -2, or 其他人 across yesterday+today."""
+    all_entries = get_toggl_entries(yesterday) + get_toggl_entries(today)
+    totals: dict[str, int] = {}
+    for e in all_entries:
+        tags = e.get("tags") or []
+        dur = e.get("duration", 0)
+        if dur <= 0:
+            continue
+        minutes = dur // 60
+        for tag in tags:
+            if tag in TAG_COLUMNS:
+                totals[tag] = totals.get(tag, 0) + minutes
+    return totals
+
+
+def write_tag_minutes(tag_totals: dict[str, int], today: date) -> str:
+    """Write tag minute sums to 0n columns (AU, AV, AS) for today's row."""
+    if not tag_totals:
+        return "no tagged entries"
+    set_lines = []
+    for tag, minutes in tag_totals.items():
+        col = TAG_COLUMNS[tag]
+        set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
+    set_block = "\n".join(set_lines)
+    month = today.month
+    day = today.day
+    script = f'''tell application "Microsoft Excel"
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set todayRow to 0
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of theSheet
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = {month} and d = {day} then
+                    set todayRow to r
+                    exit repeat
+                end if
+            end try
+        end if
+    end repeat
+    if todayRow = 0 then return "ERROR: date {month}/{day} not found"
+{set_block}
+    return "OK: tags written row=" & todayRow
+end tell'''
+    res = ix_run(script, timeout=30.0)
+    out = res.stdout.strip()
+    if res.returncode != 0 or not out or out.startswith("ERROR"):
+        raise RuntimeError(f"tag write failed (rc={res.returncode}): {out or res.stderr.strip()}")
+    return out
+
+
+def detect_night_hcmc(yesterday: date) -> int | None:
+    """If an hcmc entry ends right when sleep begins (yesterday >=20:00), return its minutes."""
+    entries = get_toggl_entries(yesterday)
+    # Sort by start time
+    timed = []
+    for e in entries:
+        start_str = e.get("start", "")
+        if not start_str or len(start_str) < 14:
+            continue
+        dur = e.get("duration", 0)
+        if dur <= 0:
+            continue
+        timed.append(e)
+    timed.sort(key=lambda e: e["start"])
+
+    # Find the first sleep entry starting >=20:00
+    first_sleep_idx = None
+    for i, e in enumerate(timed):
+        if e.get("project_id") == SLEEP_PROJECT_ID:
+            start_hour = int(e["start"][11:13])
+            if start_hour >= 20:
+                first_sleep_idx = i
+                break
+
+    if first_sleep_idx is None or first_sleep_idx == 0:
+        return None
+
+    # Check if the immediately preceding entry is hcmc
+    prev = timed[first_sleep_idx - 1]
+    if prev.get("project_id") != HCMC_PROJECT_ID:
+        return None
+
+    return prev.get("duration", 0) // 60
+
+
+def mark_night_hcmc(minutes: int) -> dict:
+    """Run did-fast.py to log night hcmc."""
+    proc = subprocess.run(
+        ["python3", str(DID_FAST), f"night hcmc {minutes}"],
+        capture_output=True, text=True, timeout=45,
+    )
+    if proc.returncode == 0:
+        return json.loads(proc.stdout)
+    return {"error": proc.stderr.strip()}
 
 
 def compute_sleep(yesterday: date, today: date) -> int:
@@ -234,13 +338,35 @@ def main():
         output["sleep_write"] = f"FAILED: {e}"
         failed = True
 
-    # 3. Mark 0t done (0₦ + Todoist + stop timer)
+    # 3. Scan tags and write to 0n
+    try:
+        tag_totals = compute_tag_minutes(yesterday, today)
+        if tag_totals:
+            tag_result = write_tag_minutes(tag_totals, today)
+            output["tags"] = {"totals": tag_totals, "write": tag_result}
+        else:
+            output["tags"] = "none"
+    except RuntimeError as e:
+        output["tags"] = f"FAILED: {e}"
+        failed = True
+
+    # 4. Detect hcmc right before sleep → /did night hcmc
+    night_hcmc = detect_night_hcmc(yesterday)
+    if night_hcmc and night_hcmc > 0:
+        nhcmc_result = mark_night_hcmc(night_hcmc)
+        output["night_hcmc"] = {"minutes": night_hcmc, "did": nhcmc_result}
+        if "error" in nhcmc_result:
+            failed = True
+    else:
+        output["night_hcmc"] = "none"
+
+    # 5. Mark 0t done (0₦ + Todoist + stop timer)
     did_result = mark_done()
     output["did"] = did_result
     if "error" in did_result:
         failed = True
 
-    # 4. Refresh dashboard points cache
+    # 6. Refresh dashboard points cache
     try:
         days = refresh_points_cache()
         output["dashboard"] = f"points cache refreshed ({days})"
