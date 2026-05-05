@@ -43,25 +43,40 @@ When in doubt, restart — it's cheap.
    done
    ```
 
-4. **Reload any open Chrome tabs.** Local AppleScript — Chrome lives on the user's current machine, not on Ix. Match `ix:5558` and `localhost:5558` (the latter for cases where the user is on Ix and used localhost):
+4. **Reload any open Chrome tabs.** Chrome lives on **Straylight**, not on Ix. The host running this skill is whatever `~/.claude/.host-name` reports:
+
+   - On **Straylight** → run `osascript` locally.
+   - On **Ix** → wrap in `ssh straylight-refit` (Tailscale name; mirrors the Excel `ssh ix` pattern in reverse — Excel lives on Ix, Chrome lives on Straylight).
+
+   The AppleScript itself uses indexed iteration (`repeat with wi from 1 to count of windows`) — `repeat with t in (every tab of w)` triggers a parser error in osascript on macOS 14+.
 
    ```bash
-   osascript <<'OSA'
+   HOST=$(cat ~/.claude/.host-name 2>/dev/null)
+   read -r -d '' OSA <<'OSA_EOF'
    tell application "Google Chrome"
        set reloaded to 0
-       repeat with w in (every window)
-           repeat with t in (every tab of w)
-               set u to URL of t
+       set windowCount to count of windows
+       repeat with wi from 1 to windowCount
+           set tabCount to count of tabs of window wi
+           repeat with ti from 1 to tabCount
+               set u to URL of tab ti of window wi
                if u contains "ix:5558" or u contains "localhost:5558" then
-                   reload t
+                   reload tab ti of window wi
                    set reloaded to reloaded + 1
                end if
            end repeat
        end repeat
        return "reloaded=" & reloaded
    end tell
-   OSA
+   OSA_EOF
+   if [ "$HOST" = "ix" ]; then
+       ssh straylight-refit "osascript -e \"$OSA\""
+   else
+       osascript -e "$OSA"
+   fi
    ```
+
+   If `ssh straylight-refit` fails (laptop closed / off-network), surface the error verbatim — don't retry locally on Ix; Chrome isn't there.
 
 5. **Verify** (optional but cheap). If the change was a constant the API exposes — e.g. a card color — curl `/api/data` and confirm the new value is present. Useful when the user explicitly wants confirmation.
 
