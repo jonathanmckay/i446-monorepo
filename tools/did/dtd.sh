@@ -59,7 +59,7 @@ fi
 
 if [[ -n "$agent" ]]; then
   echo "⚠ Needs Claude for: $agent"
-  echo "  Run: /did $agent"
+  claude -p "/did $agent" 2>&1
 fi
 
 # Refresh cache in background
