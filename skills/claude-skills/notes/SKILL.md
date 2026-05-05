@@ -21,6 +21,7 @@ Read `~/vault/z_meta/new-notes-meta.md` for the full routing rules. Key summary:
 - **`Name d359`** blocks → `h335/d359/Name d359.md` (1:1 people notes)
 - **`Meeting Name d358`** blocks → `h335/d358/YYYY/Meeting Name d358.md` (general meeting notes)
 - **`o314`** blocks → `hcmp/o314/YYYY/kebab-slug.md` (journal entries)
+- **`<path> iw01`** blocks → explicit destination: append the block to the file/doc the user named in the title (e.g. `s897/things-to-do-people-to-see iw01` → `~/vault/s897/things-to-do-people-to-see.md`). The `iw01` tag is the user's signal that they've already chosen where this goes, so do not auto-route.
 - **Unlabeled blocks** → attach to the nearest labeled block using context clues
 - **Date headers** like `YYYY.MM.DD` at the start of a block set the date for all following blocks until the next date header
 
@@ -29,11 +30,12 @@ Read `~/vault/z_meta/new-notes-meta.md` for the full routing rules. Key summary:
 Split the content into discrete blocks. A new block starts when you see:
 - A line matching `Name d359` or `Name d358` (the tag is at the end of the line)
 - A standalone line `o314` (journal entry marker)
+- A line matching `<path> iw01` (explicit-destination marker; everything before ` iw01` is the destination path relative to `~/vault/`)
 - A date header followed by a name + tag on the next non-blank line
 
 Each block has:
-- **name**: the person or meeting name (for d358/d359), or a descriptive slug derived from the content (for o314)
-- **type**: d359, d358, or o314
+- **name**: the person or meeting name (for d358/d359), or a descriptive slug derived from the content (for o314), or the verbatim path string (for iw01)
+- **type**: d359, d358, o314, or iw01
 - **date**: from the nearest preceding date header (format: YYYY.MM.DD or YYYY-MM-DD). For o314 blocks with no date header, use today's date.
 - **content**: the raw note text (everything between this header and the next block)
 
@@ -75,6 +77,17 @@ Read the frontmatter templates from `h335/d358-d359-meta.md`.
    - Increment the total entry count in the `**N entries**` line at the top
    - If the year folder or year index doesn't exist, create them following the format in `hcmp/o314/2026/2026.md`
 4. **Update the main o314 index** (`hcmp/o314/o314.md`): Increment the total entry count in the `**N entries**` line.
+
+**For iw01 blocks** (explicit-destination — user named the target in the title):
+
+1. **Resolve the destination** from the `<path>` portion of the title (everything before ` iw01`). Treat the path as relative to `~/vault/`. Try in order:
+   - `~/vault/<path>` if it's an existing file → use it
+   - `~/vault/<path>.md` if that file exists → use it
+   - `~/vault/<path>/` if it's a directory → use the folder note `~/vault/<path>/<basename>.md` (per the folder-note convention; `<basename>` is the last path segment, matching the directory name)
+   - Otherwise → ask the user how to resolve before writing anything; do not guess.
+2. **Append the block content verbatim** to the bottom of the resolved file. No date header, no rewriting, no auto-bullet — paste exactly as written. The user already chose the destination; if the content needs structure (a heading, a list bullet, a section name), they'll have included it in the block. The skill's job is faithful placement, not formatting.
+3. **Update `updated:` frontmatter** to today's date if the file has YAML frontmatter with that field.
+4. **No index update** — this path is for arbitrary docs that may or may not have an index.
 
 ### Step 5: Clear the inbox
 
