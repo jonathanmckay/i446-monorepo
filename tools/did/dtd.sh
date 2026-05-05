@@ -1,8 +1,9 @@
 #!/bin/zsh
-# dtd — fuzzy task picker for /did
+# dtd — fuzzy task picker that runs /did directly (no Claude needed)
 # Reads from task-queue.json cache, filters to today/overdue + not completed, launches fzf.
-# Zero API credits. Works from any terminal window.
+# Calls did-fast.py directly. Zero API credits.
 
+DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
 DONE="$HOME/vault/z_ibx/completed-today.json"
 
@@ -13,18 +14,17 @@ fi
 
 # If the cache has no "today" key (stale session refreshed it), rebuild it
 if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
-  python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+  echo "Refreshing task cache..."
+  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
 fi
 
 task=$(jq -r --slurpfile done "$DONE" '
   (now | strftime("%Y-%m-%d")) as $today |
   (if ($done[0].date == $today) then ($done[0].names | map(ascii_downcase)) else [] end) as $completed |
-  # "today" tasks are pre-filtered by Todoist (due today|overdue), no date check needed
-  # For neon categories, filter by due <= today
   (
     [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
     | flatten
-    | map(select(.due <= $today))
+    | map(select(.due != "" and .due <= $today))
   ) + [(.["today"] // [])[] | select(.due != "" and .due <= $today)]
   | map(select(.content != null))
   | group_by(.id) | map(.[0])
@@ -43,6 +43,24 @@ if [[ -z "$task" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# Strip (N) [N] {N} annotations
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
-print -z "/did $clean"
+echo "→ /did $clean"
+result=$(python3 "$DID_FAST" "$clean" 2>&1)
+
+# Parse result
+ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.value) [\(.step)] \(if .todoist.closed then "+ todoist ✓" else "" end)"' 2>/dev/null)
+agent=$(echo "$result" | jq -r '.agent_needed[]?.name' 2>/dev/null)
+
+if [[ -n "$ok" ]]; then
+  echo "$ok"
+fi
+
+if [[ -n "$agent" ]]; then
+  echo "⚠ Needs Claude for: $agent"
+  echo "  Run: /did $agent"
+fi
+
+# Refresh cache in background
+python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 &
