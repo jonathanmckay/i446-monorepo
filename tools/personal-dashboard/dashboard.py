@@ -1121,8 +1121,10 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const labels = data.dates;
 
   // Cache bars (Q2 cumulative + or - 分 by area)
+  // Bar width is normalized to ±200; values beyond that pin to full width
+  // while the numeric label still shows the true value.
   const cache = data.cache || [];
-  const maxAbs = Math.max(1, ...cache.map(c => Math.abs(c.value || 0)));
+  const maxAbs = 200;
   const cbEl = document.getElementById('cacheBars');
   cache.forEach(c => {
     const row = document.createElement('div');
