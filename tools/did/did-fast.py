@@ -1385,6 +1385,24 @@ end tell'''
         if fen_result.returncode != 0:
             output["0fen_write"]["error"] = fen_result.stderr.strip() or f"ix-osa exit {fen_result.returncode}"
 
+    # Fire-and-forget: invalidate personal-dashboard's 300s API cache so the
+    # neon-fed cache cards (其他人, ص, o314, 冥想, hcbp, hcbc, xk88) reflect
+    # this write on the next render instead of up to 5 minutes later.
+    wrote_neon = any(
+        r is not None and r.returncode == 0
+        for r in (on_result, fen_result, one_n_result, one_n_fen_result)
+    )
+    if wrote_neon:
+        try:
+            subprocess.Popen(
+                ["curl", "-fsS", "-X", "POST", "--max-time", "2",
+                 "http://ix:5558/api/refresh"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass
+
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
