@@ -21,7 +21,10 @@ Read `~/vault/z_meta/new-notes-meta.md` for the full routing rules. Key summary:
 - **`Name d359`** blocks → `h335/d359/Name d359.md` (1:1 people notes)
 - **`Meeting Name d358`** blocks → `h335/d358/YYYY/Meeting Name d358.md` (general meeting notes)
 - **`o314`** blocks → `hcmp/o314/YYYY/kebab-slug.md` (journal entries)
-- **`<path> iw01`** blocks → explicit destination: append the block to the file/doc the user named in the title (e.g. `s897/things-to-do-people-to-see iw01` → `~/vault/s897/things-to-do-people-to-see.md`). The `iw01` tag is the user's signal that they've already chosen where this goes, so do not auto-route.
+- **`iw01` blocks** → explicit destination. The user marks a block with `iw01` to say "I've chosen where this goes; don't auto-route." Two recognized syntaxes:
+  - `iw01 -> <description>` on a line by itself (e.g. `iw01 -> put in eternal day`) — the description is matched fuzzily against vault filenames/folders.
+  - `## <Heading> iw01 -> <description>` — the heading before `iw01` is preserved as part of the appended content; everything from `iw01` onward is the routing instruction.
+  - Either way: the routing tag is `iw01`, anything after `iw01 ->` is destination metadata, and the rest of the block is the body.
 - **Unlabeled blocks** → attach to the nearest labeled block using context clues
 - **Date headers** like `YYYY.MM.DD` at the start of a block set the date for all following blocks until the next date header
 
@@ -30,7 +33,7 @@ Read `~/vault/z_meta/new-notes-meta.md` for the full routing rules. Key summary:
 Split the content into discrete blocks. A new block starts when you see:
 - A line matching `Name d359` or `Name d358` (the tag is at the end of the line)
 - A standalone line `o314` (journal entry marker)
-- A line matching `<path> iw01` (explicit-destination marker; everything before ` iw01` is the destination path relative to `~/vault/`)
+- A line containing `iw01 -> <description>` (explicit-destination marker; the description after `->` is matched against vault filenames/folders)
 - A date header followed by a name + tag on the next non-blank line
 
 Each block has:
@@ -80,14 +83,15 @@ Read the frontmatter templates from `h335/d358-d359-meta.md`.
 
 **For iw01 blocks** (explicit-destination — user named the target in the title):
 
-1. **Resolve the destination** from the `<path>` portion of the title (everything before ` iw01`). Treat the path as relative to `~/vault/`. Try in order:
-   - `~/vault/<path>` if it's an existing file → use it
-   - `~/vault/<path>.md` if that file exists → use it
-   - `~/vault/<path>/` if it's a directory → use the folder note `~/vault/<path>/<basename>.md` (per the folder-note convention; `<basename>` is the last path segment, matching the directory name)
-   - Otherwise → ask the user how to resolve before writing anything; do not guess.
-2. **Append the block content verbatim** to the bottom of the resolved file. No date header, no rewriting, no auto-bullet — paste exactly as written. The user already chose the destination; if the content needs structure (a heading, a list bullet, a section name), they'll have included it in the block. The skill's job is faithful placement, not formatting.
-3. **Update `updated:` frontmatter** to today's date if the file has YAML frontmatter with that field.
-4. **No index update** — this path is for arbitrary docs that may or may not have an index.
+1. **Parse the title.** Split on `iw01`. Whatever sits *before* `iw01` (e.g. `## Growth Org Thoughts`) is content-prefix to keep. Whatever sits *after* `iw01 ->` (e.g. `put in xbox`) is the destination description — never written to disk.
+2. **Resolve the destination** from the description. Treat it as a fuzzy lookup against vault filenames/folders, in this order:
+   - Search `~/vault/` for an exact filename match (e.g. "eternal day" → `g245/Eternal Day.md`) — case-insensitive, ignores `.md`.
+   - If multiple files match, prefer ones in the user's most-edited domain folders (g245/, h335/, m5x2/, hcmp/, s897/, xk87/) over archive-y locations (`hcmp/o314/YYYY/` per-entry files, `z_*` inbox).
+   - Look for a folder of that name and use its folder note (`<folder>/<folder>.md`).
+   - If still ambiguous, ask the user before writing.
+3. **Append the block content verbatim** to the bottom of the resolved file — including the content-prefix from step 1 (e.g. the `## Growth Org Thoughts` heading) followed by the body. No date header, no rewriting, no auto-bullet. The user already chose the destination; if structure is wanted, they'll have included it.
+4. **Update `updated:` frontmatter** to today's date if the file has YAML frontmatter with that field.
+5. **No index update** — this path is for arbitrary docs that may or may not have an index.
 
 ### Step 5: Clear the inbox
 
