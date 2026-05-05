@@ -442,11 +442,40 @@ def write_block_goals(block_name: str, goals: list[str]) -> bool:
 
 
 def run_1g(goals_text):
-    """Run /-1g via claude CLI."""
+    """Run /-1g via claude CLI synchronously (legacy; kept for callers/tests).
+
+    The /inbound -1g card uses `spawn_1g_background` instead so the user is
+    not blocked while claude syncs Todoist."""
     subprocess.run(
         ["claude", "-p", f"/-1g {goals_text}", "--allowedTools",
          "Skill,Bash,Read,Edit,Write,mcp__todoist__add-tasks"],
         capture_output=True, timeout=120
+    )
+
+
+def spawn_1g_background(goals_text):
+    """Fire-and-forget: spawn `claude -p /-1g …` as a detached subprocess.
+
+    The local write to the build order is already done by the -1g card before
+    this is called, so this background job's only remaining responsibility is
+    to create matching Todoist tasks. We use start_new_session=True so the
+    child survives parent exit (the /inbound TUI may finish before claude
+    does).
+
+    stdout/stderr go to ~/.cache/inbound/1g-<unix-ts>.log for post-hoc debugging.
+    Returns the Popen handle (caller may ignore)."""
+    log_dir = Path.home() / ".cache" / "inbound"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"1g-{int(time.time())}.log"
+    log_fh = open(log_path, "wb")
+    return subprocess.Popen(
+        ["claude", "-p", f"/-1g {goals_text}", "--allowedTools",
+         "Skill,Bash,Read,Edit,Write,mcp__todoist__add-tasks"],
+        stdin=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,
+        close_fds=True,
     )
 
 
@@ -799,21 +828,24 @@ def main():
                 options="goals/skip", preserve_case=True, multiline=True,
             )
             if resp and resp.lower() != "skip":
-                console.print(f"[dim]  setting -1g goals...[/dim]")
-                # Write to build order locally first — guarantees the file is
-                # updated even if the claude subprocess silently fails.
+                # Local build-order write is fast and authoritative. Do it
+                # synchronously so subsequent cards see the updated goals.
                 parsed_goals = parse_goals_text(resp)
-                run_1g(resp)
-                # Write to build order AFTER run_1g so we always have the
-                # authoritative local version, even if the claude subprocess
-                # wrote something different (or empty) to the same section.
                 wrote_locally = write_block_goals(block_name, parsed_goals)
-                console.print(f"[green]  ✓ -1g → {block_name}[/green]")
-                # Re-read goals
-                block_goals = read_block_goals()
-                current_goals = block_goals.get(block_name, [])
-                if wrote_locally and not current_goals:
-                    console.print(f"[red]  ⚠ goals written but not read back[/red]")
+                # Spawn claude in a detached subprocess for Todoist sync. The
+                # user proceeds to the next card immediately — claude's only
+                # remaining job (Todoist task creation) finishes asynchronously
+                # in the background and may outlive this TUI process.
+                spawn_1g_background(resp)
+                if wrote_locally:
+                    console.print(
+                        f"[green]  ✓ -1g → {block_name}[/green] "
+                        f"[dim](todoist syncing in background)[/dim]"
+                    )
+                    # Refresh in-memory goals so the post-ibx0 summary prints them.
+                    current_goals = list(parsed_goals)
+                else:
+                    console.print(f"[red]  ⚠ failed to write goals to build order[/red]")
 
         # ── Card 3.5: Meeting prep ────────────────────────────────────
         remaining_briefs = []

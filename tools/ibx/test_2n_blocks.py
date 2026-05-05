@@ -147,21 +147,78 @@ def test_write_block_goals_replaces_existing_checkboxes(tmp_path):
 
 
 def test_run_1g_card_writes_locally_before_subprocess(tmp_path):
-    """Regression: the -1g card must write goals to build order via Python,
-    not rely solely on the `claude -p /-1g` subprocess (which can silently
-    fail when capture_output=True hides errors)."""
+    """Card 2 must commit goals to the build order via Python BEFORE spawning
+    the claude subprocess, so goals are durable even if claude is slow, fails,
+    or is killed when /inbound exits.
+
+    This was previously the inverse (claude first, local write second) — the
+    inversion happened when we moved claude to a detached background subprocess
+    so the user is no longer blocked by it."""
     src_text = SRC.read_text()
-    # The local write must precede the claude subprocess call.
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
     next_card = card_section.index("# ── Card 3")
     card_section = card_section[:next_card]
     assert "write_block_goals(" in card_section, \
         "Card 2 must call write_block_goals() so goals land even if claude fails"
     assert "parse_goals_text(" in card_section
-    # Order check: parse + write must come before run_1g.
-    assert card_section.index("run_1g(") < card_section.index("write_block_goals("), \
-        "write_block_goals must run AFTER run_1g so local write is authoritative "\
-        "and can't be overwritten by the claude subprocess"
+    assert "spawn_1g_background(" in card_section, \
+        "Card 2 must spawn the claude subprocess in the background"
+    # Order check: write must come BEFORE the background spawn so the local
+    # file is committed before we hand off to the async job.
+    assert card_section.index("write_block_goals(") < card_section.index("spawn_1g_background("), \
+        "write_block_goals must run BEFORE spawn_1g_background so local goals "\
+        "are durable even if the backgrounded claude subprocess never finishes"
+
+
+def test_card2_does_not_call_run_1g_blocking():
+    """Card 2 must not invoke `run_1g(` synchronously — that would block the
+    UI for up to 120s waiting on the claude subprocess. Use spawn_1g_background
+    instead."""
+    src_text = SRC.read_text()
+    card_section = src_text[src_text.index("# ── Card 2: -1g"):]
+    card_section = card_section[:card_section.index("# ── Card 3")]
+    assert "run_1g(" not in card_section, \
+        "Card 2 should not call the blocking run_1g(); use spawn_1g_background()"
+
+
+def test_spawn_1g_background_is_detached():
+    """spawn_1g_background must use Popen with start_new_session=True so the
+    claude child outlives the parent /inbound process, and must NOT call
+    .wait() / .communicate() (that would re-block the UI)."""
+    tree = ast.parse(SRC.read_text())
+    func = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "spawn_1g_background":
+            func = node
+            break
+    assert func is not None, "spawn_1g_background not defined in -2n.py"
+
+    # Find subprocess.Popen(...) call and confirm start_new_session=True.
+    popen_call = None
+    for child in ast.walk(func):
+        if isinstance(child, ast.Call):
+            f = child.func
+            is_popen = (
+                (isinstance(f, ast.Attribute) and f.attr == "Popen")
+                or (isinstance(f, ast.Name) and f.id == "Popen")
+            )
+            if is_popen:
+                popen_call = child
+                break
+    assert popen_call is not None, "spawn_1g_background must call subprocess.Popen"
+    kwargs = {kw.arg: kw.value for kw in popen_call.keywords}
+    assert "start_new_session" in kwargs, \
+        "Popen call must pass start_new_session=True so child survives parent exit"
+    val = kwargs["start_new_session"]
+    assert isinstance(val, ast.Constant) and val.value is True, \
+        "start_new_session must be the literal True"
+
+    # Must not block on the child.
+    src = ast.unparse(func) if hasattr(ast, "unparse") else SRC.read_text()
+    func_src = ast.get_source_segment(SRC.read_text(), func) or ""
+    assert ".wait(" not in func_src, "spawn_1g_background must not call .wait() (would block)"
+    assert ".communicate(" not in func_src, \
+        "spawn_1g_background must not call .communicate() (would block)"
 
 
 def test_prompt_card_preserves_case_when_requested():
