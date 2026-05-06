@@ -73,17 +73,6 @@ def _teams_active():
 _outlook_available = _outlook_imported
 _teams_available = _teams_imported
 
-# ── Auto-sign integration (optional — skipped if module not found) ────────────
-_AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
-sys.path.insert(0, str(_AUTOSIGN_DIR))
-try:
-    import lease_signer as _signer
-    import automations_db as _autodb
-    from config import AUTOSIGN_SENDERS, DB_PATH as _AUTODB_PATH
-    _autosign_available = True
-except (ImportError, SystemExit, Exception):
-    _autosign_available = False
-
 import anthropic
 from rich import box
 from rich.console import Console
@@ -562,98 +551,6 @@ def print_help():
         "[dim]or type anything → Claude[/dim]\n"
     )
 
-# ── Auto-sign ────────────────────────────────────────────────────────────────
-
-_NOTIFY_THRESHOLD = 5  # send email confirmation for first N signings
-
-def _send_signing_notification(item, meta, result, signing_count):
-    """Send mckay@m5c7.com a confirmation email for the first N auto-signings."""
-    try:
-        import email.mime.text, base64
-        svc = item["_data"]["service"]
-        unit     = meta.get("unit", "unknown unit")
-        tenants  = meta.get("tenants", "")
-        ltype    = meta.get("lease_type", "renewal")
-        status   = result.get("status", "unknown")
-        body = (
-            f"Auto-sign #{signing_count} completed.\n\n"
-            f"Unit:    {unit}\n"
-            f"Tenants: {tenants}\n"
-            f"Type:    {ltype}\n"
-            f"Status:  {status}\n"
-            f"From:    {item.get('from', '')}\n"
-            f"Subject: {item.get('preview', '')}\n\n"
-            f"(Notifications stop after {_NOTIFY_THRESHOLD} successful signings.)"
-        )
-        msg = email.mime.text.MIMEText(body)
-        msg["To"]      = "mckay@m5c7.com"
-        msg["From"]    = _ibx.SEND_FROM
-        msg["Subject"] = f"✓ Auto-signed lease: {unit}"
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-    except Exception as e:
-        console.print(f"[dim yellow]  notification email failed: {e}[/dim yellow]")
-
-
-_autosign_threads: list = []  # tracked so we can join before exit
-
-def _wait_for_autosign(timeout=300):
-    """Block until all pending autosign threads finish (max timeout seconds)."""
-    pending = [t for t in _autosign_threads if t.is_alive()]
-    if pending:
-        console.print(f"[dim cyan]  ⏳ waiting for {len(pending)} lease signing(s) to complete...[/dim cyan]")
-        for t in pending:
-            t.join(timeout=timeout)
-
-
-def _autosign_item(item):
-    """Sign a lease, archive the email, log to DB."""
-    url = _signer.extract_appfolio_url(item.get("body", ""))
-    if not url:
-        # Fallback: check HTML body (forwarded emails often only have links in HTML)
-        html_body = item.get("_data", {}).get("email", {}).get("html_body", "")
-        url = _signer.extract_appfolio_url(html_body)
-    if not url:
-        console.print("[yellow]  ⚠ autosign: no AppFolio URL found in email[/yellow]")
-        return
-    meta = _signer.parse_email_metadata(item)
-    console.print(f"  [dim cyan]⚙ auto-signing lease: {meta.get('unit', url[:60])}...[/dim cyan]")
-    try:
-        result = _signer.sign_lease(url, headless=True)
-        status = result.get("status", "failed")
-        error  = result.get("error", "")
-    except Exception as exc:
-        result = {}
-        status = "failed"
-        error  = str(exc)
-        console.print(f"  [red]✗ autosign exception: {exc}[/red]")
-    _autodb.log_signing(
-        _AUTODB_PATH,
-        property=meta.get("property", ""),
-        unit=meta.get("unit", ""),
-        tenants=meta.get("tenants", ""),
-        lease_type=meta.get("lease_type", "renewal"),
-        source_sender=item.get("from", ""),
-        source_subject=item.get("preview", ""),
-        appfolio_url=url,
-        status=status,
-    )
-    icon = "✓" if status == "success" else "⚠"
-    color = "green" if status == "success" else "yellow"
-    suffix = f": {error}" if error and status != "success" else ""
-    console.print(f"  [{color}]{icon} lease {status}{suffix}: {meta.get('unit', '')}[/{color}]")
-    # Send notification email for first N successes
-    if status == "success":
-        signing_count = _autodb.count_successful(_AUTODB_PATH)
-        if signing_count <= _NOTIFY_THRESHOLD:
-            _send_signing_notification(item, meta, result, signing_count)
-    # Archive the email so it clears from inbox
-    try:
-        _ibx.archive(item["_data"]["service"], item["_data"]["email"]["id"])
-    except Exception:
-        pass
-
-
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 def do_archive(item):
@@ -910,22 +807,6 @@ def fetch_emails(skip_triage=False):
     if not services:
         return items, per_account
 
-    # Pre-triage: intercept autosign emails before triage can move them out of INBOX
-    _autosign_queued_ids: set = set()
-    if _autosign_available:
-        for name, svc in services.items():
-            try:
-                unread = _ibx.fetch_inbox(svc, unread_only=True)
-                for m in unread:
-                    item = normalize_email(m, svc, name)
-                    if item and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
-                        _autosign_queued_ids.add(item.get("_data", {}).get("email", {}).get("id", ""))
-                        t = threading.Thread(target=_autosign_item, args=(item,))
-                        t.start()
-                        _autosign_threads.append(t)
-            except Exception:
-                pass
-
     # Triage (skip in background fetches — re-triaging removes INBOX labels
     # from queued emails, causing them to appear "resolved elsewhere")
     if not skip_triage:
@@ -946,13 +827,6 @@ def fetch_emails(skip_triage=False):
                 continue
             if mid:
                 seen_message_ids.add(mid)
-            if _autosign_available and _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
-                if item.get("_data", {}).get("email", {}).get("id", "") not in _autosign_queued_ids:
-                    _autosign_queued_ids.add(item.get("_data", {}).get("email", {}).get("id", ""))
-                    t = threading.Thread(target=_autosign_item, args=(item,))
-                    t.start()
-                    _autosign_threads.append(t)
-                continue  # don't add to review queue
             items.append(item)
             count += 1
         display = ACCOUNT_DISPLAY.get(name, name)
@@ -1404,7 +1278,6 @@ def main():
     status_line = _build_status()
 
     if not all_items:
-        _wait_for_autosign()
         _mark_ibx0_habits_if_first_today()
         set_term_color("blue")
         _render_block_status()
@@ -1506,7 +1379,6 @@ def main():
                 index = 0
             else:
                 # Inbox zero — go blue immediately, let background polling find new items
-                _wait_for_autosign()
                 _mark_ibx0_habits_if_first_today()
                 set_term_color("blue")
                 _render_block_status()
@@ -1568,7 +1440,6 @@ def main():
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Bye.[/dim]")
             stop_poll.set()
-            _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
 
@@ -1600,7 +1471,6 @@ def main():
         if cmd == "q":
             console.print("[dim]Bye.[/dim]")
             stop_poll.set()
-            _wait_for_autosign()
             set_term_color("blue")
             sys.exit(2)
 
