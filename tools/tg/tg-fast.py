@@ -258,13 +258,24 @@ def main():
         print(cmd_create_range(desc or desc_part, project, tags, start_t, end_t))
         return
 
-    # Check for backdated start: "HHMM desc"
+    # Check for backdated start: "HHMM desc" or "desc HHMM"
     backdate_match = re.match(r'^(\d{4})\s+(.+)$', raw)
     if backdate_match:
         backtime = backdate_match.group(1)
         h, m = int(backtime[:2]), int(backtime[2:])
         if 0 <= h <= 23 and 0 <= m <= 59:
             rest = backdate_match.group(2)
+            desc, project, tags = resolve(rest)
+            print(cmd_backdated(backtime, desc, project, tags))
+            return
+
+    # Check for backdated start: "desc HHMM" (time at end)
+    backdate_end_match = re.search(r'\s(\d{4})$', raw)
+    if backdate_end_match:
+        backtime = backdate_end_match.group(1)
+        h, m = int(backtime[:2]), int(backtime[2:])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            rest = raw[:backdate_end_match.start()].strip()
             desc, project, tags = resolve(rest)
             print(cmd_backdated(backtime, desc, project, tags))
             return

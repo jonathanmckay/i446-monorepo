@@ -784,3 +784,21 @@ def test_reply_and_archive_counts_use_archive_log_db():
     assert "def _load_response_times" not in source, (
         "Old _load_response_times should be removed"
     )
+
+
+def test_0n_boolean_habits_use_write_not_append():
+    """Bug: boolean habits (value=1) used excel.append('+1') which turns
+    '1' into '1+1' when called twice. Should use excel.write('1') for
+    idempotent set. Only cumulative habits and habits with minutes>1 should append.
+    """
+    source = open("../did/run.py").read()
+    # Find the 0n write section
+    write_section = source[source.index("# Write to 0n"):source.index("# Close Todoist")]
+
+    # Must have the minutes==1 branch using excel.write (idempotent set)
+    assert 'minutes == 1' in write_section, (
+        "0n write must special-case minutes==1 for idempotent write"
+    )
+    assert 'excel.write(' in write_section, (
+        "Boolean habits (minutes==1) must use excel.write, not excel.append"
+    )

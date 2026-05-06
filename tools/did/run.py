@@ -336,7 +336,12 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
         except (TypeError, ValueError):
             old = 0
         result = excel.write(sheet, col, date=target_date, value=str(old + minutes))
+    elif minutes == 1:
+        # Boolean habit (default value 1): idempotent set, not append.
+        # Writing "1" twice yields "1", not "1+1".
+        result = excel.write(sheet, col, date=target_date, value="1")
     else:
+        # Actual minutes (from Toggl auto-detect or explicit): append
         result = excel.append(sheet, col, date=target_date, value=f"+{minutes}")
     if not result.get("ok"):
         print(f"  ✗ Excel write failed: {result}", file=sys.stderr)
