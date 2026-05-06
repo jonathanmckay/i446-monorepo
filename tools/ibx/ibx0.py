@@ -33,23 +33,45 @@ except (Exception, SystemExit):
     _clamp_response_hours_unix = None
 try:
     import outlook_agency as _outlook
-    _outlook_available = True
+    _outlook_imported = True
 except (Exception, SystemExit):
     try:
         import outlook_workiq as _outlook
-        _outlook_available = True
+        _outlook_imported = True
     except ImportError:
-        _outlook_available = False
+        _outlook = None
+        _outlook_imported = False
 
 try:
     import teams_agency as _teams
-    _teams_available = True
+    _teams_imported = True
 except (Exception, SystemExit):
     try:
         import teams_workiq as _teams
-        _teams_available = True
+        _teams_imported = True
     except ImportError:
-        _teams_available = False
+        _teams = None
+        _teams_imported = False
+
+# Single source of truth for cross-host source gating. Combines hostname
+# detection, env-var overrides, and cred-presence checks. Always re-evaluated
+# (no module-level cache) so tests can monkeypatch socket.gethostname / env.
+import inbound_sources as _sources
+
+
+def _outlook_active():
+    return _outlook_imported and _sources.is_available("outlook")
+
+
+def _teams_active():
+    return _teams_imported and _sources.is_available("teams")
+
+
+# Back-compat aliases used in legacy call-sites and external tests. These
+# evaluate at module import time, then again at each fetch site via the
+# helpers above.
+_outlook_available = _outlook_imported
+_teams_available = _teams_imported
 
 # ── Auto-sign integration (optional — skipped if module not found) ────────────
 _AUTOSIGN_DIR = Path(__file__).parent.parent / "m5x2-automations"
@@ -1012,7 +1034,7 @@ def fetch_slack():
 
 def fetch_outlook():
     """Fetch Outlook emails via workiq natural language interface."""
-    if not _outlook_available:
+    if not _outlook_active():
         return []
     _update_status("Outlook", "...")
     try:
@@ -1027,7 +1049,7 @@ def fetch_outlook():
 
 def fetch_teams():
     """Fetch Teams DMs via workiq natural language interface."""
-    if not _teams_available:
+    if not _teams_active():
         return []
     _update_status("Teams", "...")
     try:
@@ -1168,9 +1190,9 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
         # interactive prompts (e.g. "Send? (y/n)") and swapping it races
         # with the main loop, causing hangs.
         modules = [_ibx, _imsg, _slack]
-        if _outlook_available:
+        if _outlook_active():
             modules.append(_outlook)
-        if _teams_available:
+        if _teams_active():
             modules.append(_teams)
         saved = {mod: mod.console for mod in modules if hasattr(mod, "console")}
         for mod in saved:
@@ -1183,9 +1205,9 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
                 ("imsg", fetch_imsgs),
                 ("slack", fetch_slack),
             ]
-            if _outlook_available:
+            if _outlook_active():
                 fetchers.append(("outlook", fetch_outlook))
-            if _teams_available:
+            if _teams_active():
                 fetchers.append(("teams", fetch_teams))
 
             new_items = []
@@ -1260,16 +1282,18 @@ def main():
     futures.append(fetch_pool.submit(_bg_fetch, "email", fetch_emails))
     futures.append(fetch_pool.submit(_bg_fetch, "imsg", fetch_imsgs))
     futures.append(fetch_pool.submit(_bg_fetch, "slack", fetch_slack))
-    if _outlook_available:
+    if _outlook_active():
         futures.append(fetch_pool.submit(_bg_fetch, "outlook", fetch_outlook))
     else:
         _source_counts["outlook"] = 0
-        _update_status("Outlook", "✓ 0")
-    if _teams_available:
+        reason = _sources.skip_reason("outlook") or "unavailable"
+        _update_status("Outlook", f"⊘ {reason}")
+    if _teams_active():
         futures.append(fetch_pool.submit(_bg_fetch, "teams", fetch_teams))
     else:
         _source_counts["teams"] = 0
-        _update_status("Teams", "✓ 0")
+        reason = _sources.skip_reason("teams") or "unavailable"
+        _update_status("Teams", f"⊘ {reason}")
 
     # Wait up to 8s for fast sources, but break immediately if any items arrive
     fast_deadline = time.time() + 8
