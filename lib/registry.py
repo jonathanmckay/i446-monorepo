@@ -50,6 +50,7 @@ class Habit:
     cumulative_increment: Optional[int] = None  # for 一起饭 etc
     aliases: list = field(default_factory=list)
     neon_fen_header: Optional[str] = None  # for 1n+ habits, which 0分 col to append into
+    bonus: Optional[dict] = None  # {long_habit_id, threshold_minutes, multiplier} for 冥想/o314
 
     def all_names(self) -> list:
         return [self.name, self.id, *self.aliases]

@@ -110,6 +110,7 @@ def main() -> int:
             "cumulative_increment": h.cumulative_increment,
             "aliases": h.aliases,
             "neon_fen_col": (cols.col("0分", h.neon_fen_header) if h.neon_fen_header else None),
+            "bonus": h.bonus,
         })
     else:
         out["step"] = "unknown"

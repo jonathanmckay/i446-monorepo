@@ -53,6 +53,7 @@ TASK_QUEUE = VAULT / "z_ibx" / "task-queue.json"
 
 TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")
+BRACKET_N_RE = re.compile(r"\[(\d+)\]")
 
 
 def _today_md() -> str:
@@ -95,6 +96,14 @@ def _parse_input(raw: str) -> tuple[str, str, Optional[tuple], Optional[int]]:
     if parts and re.fullmatch(r"\d+", parts[-1]) and len(parts) > 1:
         explicit_minutes = int(parts[-1])
         parts = parts[:-1]
+    # trailing [N] also counts as explicit minutes (e.g. "冥想 [52]") — strip
+    # the bracketed token from the routing query so registry lookup still
+    # matches on the bare habit name.
+    if explicit_minutes is None and parts:
+        m = BRACKET_N_RE.fullmatch(parts[-1])
+        if m and len(parts) > 1:
+            explicit_minutes = int(m.group(1))
+            parts = parts[:-1]
     return " ".join(parts), target, time_range, explicit_minutes
 
 
@@ -236,6 +245,57 @@ def _calc_mw(target_date: str) -> tuple[float, int]:
     raise RuntimeError(f"M.W={week_str} not found in 1n+ col B")
 
 
+def apply_long_bonus(long_habit_id: str, pts: int, target_date: str) -> str | None:
+    """Cumulatively add `pts` to the long-session 1n+ habit for the week
+    containing `target_date`, and append a literal `+pts` to that habit's
+    domain column in 0分.
+
+    Used by the 0n -> 1n+ "long session" auto-bonus for 冥想 / o314. Returns
+    a one-line confirmation string for the runner to print, or None on error.
+    """
+    long_habit = registry.get_habit(long_habit_id)
+    if long_habit is None:
+        print(f"  ✗ long-bonus habit not in registry: {long_habit_id!r}", file=sys.stderr)
+        return None
+    sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+    from neon import cols  # local import: cols is already used in route.py
+
+    try:
+        bonus_col = cols.col("1n+", long_habit.neon_header)
+    except KeyError:
+        print(f"  ✗ no 1n+ column for {long_habit.neon_header!r}", file=sys.stderr)
+        return None
+
+    domain = registry.get_domain(long_habit.domain)
+    if domain is None:
+        print(f"  ✗ no domain entry for {long_habit.domain!r}", file=sys.stderr)
+        return None
+    try:
+        fen_col = cols.col("0分", domain.fen_header)
+    except KeyError:
+        fen_col = None
+
+    try:
+        _, week_row = _calc_mw(target_date)
+    except Exception as e:
+        print(f"  ✗ M.W lookup failed for long bonus: {e}", file=sys.stderr)
+        return None
+
+    cur = excel.read("1n+", bonus_col, row=week_row)
+    old = 0
+    try:
+        old = int(float(cur.get("value", 0) or 0))
+    except (TypeError, ValueError):
+        old = 0
+    excel.write("1n+", bonus_col, row=week_row, value=str(old + pts))
+
+    if fen_col:
+        excel.append("0分", fen_col, date=target_date, value=f"+{pts}")
+
+    return (f"  ⤷ {long_habit.name} +{pts} → 1n+!{bonus_col}{week_row}"
+            + (f", 0分!{fen_col} +{pts}" if fen_col else ""))
+
+
 def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minutes: Optional[int] = None) -> int:
     name = d["habit_name"]
     sheet = d["neon_sheet"]
@@ -304,6 +364,18 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     if closed:
         msg += f" + todoist closed"
     print(msg)
+
+    # Long-session auto-bonus (冥想 → 长冥想, o314 → long-o314).
+    bonus = d.get("bonus")
+    if bonus and not is_past:
+        threshold = bonus.get("threshold_minutes", 30)
+        multiplier = bonus.get("multiplier", 0.5)
+        if minutes >= threshold:
+            pts = int(minutes * multiplier)
+            if pts > 0:
+                bonus_msg = apply_long_bonus(bonus["long_habit_id"], pts, target_date)
+                if bonus_msg:
+                    print(bonus_msg)
     return 0
 
 
