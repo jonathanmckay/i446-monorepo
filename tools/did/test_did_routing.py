@@ -263,6 +263,53 @@ class DashNormTests(unittest.TestCase):
         self.assertEqual(dash_normalize("multi-word"), "multi-word")
 
 
+class HeaderNormalizeTests(unittest.TestCase):
+    """Regression: hyphenated input must match space-separated 0n/1n+ headers.
+
+    Bug 2026-05-06: `/did wake-up 5` fell through to Todoist because the 0n
+    header `wake up` was looked up by `wake-up`. Fix: collapse hyphens, dashes,
+    and whitespace runs into a single space before lookup.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "did_fast", _HERE / "did-fast.py"
+        )
+        cls.df = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.df)  # type: ignore[union-attr]
+
+    def test_hyphen_collapses_to_space(self):
+        self.assertEqual(self.df.header_normalize("wake-up"), "wake up")
+
+    def test_space_preserved(self):
+        self.assertEqual(self.df.header_normalize("wake up"), "wake up")
+
+    def test_em_and_en_dashes_collapse(self):
+        self.assertEqual(self.df.header_normalize("wake — up"), "wake up")
+        self.assertEqual(self.df.header_normalize("wake – up"), "wake up")
+
+    def test_multiple_hyphens_and_runs(self):
+        self.assertEqual(self.df.header_normalize("Day  HCI"), "day hci")
+        self.assertEqual(self.df.header_normalize("ibx-i9"), "ibx i9")
+
+    def test_route_wake_dash_up_hits_0n(self):
+        """`wake-up` must route to 0n (col 6), not fall through to Todoist."""
+        from dataclasses import dataclass as _dc, field as _f
+        from typing import Optional as _Opt
+        # Build a minimal ParsedItem the same shape as did-fast uses.
+        item = self.df.ParsedItem(
+            raw="wake-up 5", name="wake-up", time_value=5, target_date=None,
+        )
+        headers = {"0n": {"wake up": 6, "cpap": 5}, "1n": {}}
+        tq = {"0neon": [], "夜neon": [], "1neon": []}
+        results = self.df.route_items([item], headers, tq)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "0n")
+        self.assertEqual(results[0].col_num, 6)
+        self.assertEqual(results[0].write_value, 5)
+
+
 class DateParseTests(unittest.TestCase):
     def test_yesterday(self):
         self.assertEqual(parse_date("0l 2 yesterday"), ("0l 2", "yesterday"))

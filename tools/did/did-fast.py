@@ -156,6 +156,14 @@ def dash_normalize(s: str) -> str:
     return s.replace(" - ", " ")
 
 
+def header_normalize(s: str) -> str:
+    """Normalize a habit name for header lookup: collapse hyphens, dashes, and
+    runs of whitespace into a single space; lowercase. So `wake-up`, `Wake Up`,
+    and `wake — up` all map to `wake up`."""
+    import re as _re
+    return _re.sub(r"[\s\-—–]+", " ", s).strip().lower()
+
+
 def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
     if not query_tokens:
         return 0.0
@@ -502,14 +510,20 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
     """Route each item through 0₦ → 1n+ → Todoist → variable."""
     h0n = headers.get("0n", {})
     h1n = headers.get("1n", {})
+    # Build hyphen/space-tolerant lookups so `wake-up` matches header `wake up`
+    # (and vice versa). Headers may already be stored lowercased; we re-normalize
+    # the keys so any internal hyphens or extra whitespace also collapse.
+    h0n_norm = {header_normalize(k): v for k, v in h0n.items()}
+    h1n_norm = {header_normalize(k): v for k, v in h1n.items()}
     all_tasks = tq.get("0neon", []) + tq.get("夜neon", []) + tq.get("1neon", [])
     results = []
 
     for item in items:
         name_lower = item.name.lower()
+        name_norm = header_normalize(item.name)
 
-        # Step 0.1: 0₦ match
-        if name_lower in h0n:
+        # Step 0.1: 0₦ match (hyphen/space-insensitive)
+        if name_norm in h0n_norm:
             today_md = item.target_date or f"{date.today().month}/{date.today().day}"
             today_date = date.today()
             # Past date → needs agent (posthoc flow)
@@ -522,7 +536,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
                     results.append(r)
                     continue
 
-            col = h0n[name_lower]
+            col = h0n_norm[name_norm]
             if item.time_range:
                 val = time_range_minutes(item.time_range[0], item.time_range[1])
             elif item.time_value is not None:
@@ -560,9 +574,10 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
 
         # Step 0.2: 1n+ match (now handled in fast path)
         # Check aliases first (e.g. "1 hcbp" → "1 hcb", "家" → "family")
-        resolved_1n = ONENEON_ALIASES.get(name_lower, name_lower)
-        if resolved_1n in h1n:
-            col_letter = h1n[resolved_1n]
+        resolved_1n_raw = ONENEON_ALIASES.get(name_lower, name_lower)
+        resolved_1n = header_normalize(resolved_1n_raw)
+        if resolved_1n in h1n_norm:
+            col_letter = h1n_norm[resolved_1n]
             fen_col = ONENEON_TO_0FEN.get(resolved_1n)
             is_cumul = resolved_1n in CUMULATIVE_1N
             is_var = resolved_1n in VARIABLE_1N
