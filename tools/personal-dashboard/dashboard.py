@@ -597,6 +597,40 @@ def api_data():
     return jsonify(cached)
 
 
+@app.route("/api/points-today")
+def api_points_today():
+    """Live read of 0分 column D for today's row (today's #points total)."""
+    today = date.today()
+    try:
+        import xlwings as xw
+        wb = xw.Book(str(NEON_PATH))
+        ws = wb.sheets["0分"]
+        last_row = ws.range("B2").end("down").row
+        # Scan from bottom up — today's row is near the end.
+        b_vals = ws.range(f"B3:B{last_row}").value
+        if not isinstance(b_vals, list):
+            b_vals = [b_vals]
+        target_row = None
+        for i in range(len(b_vals) - 1, -1, -1):
+            b = b_vals[i]
+            d = None
+            if isinstance(b, datetime):
+                d = b.date()
+            elif isinstance(b, date):
+                d = b
+            if d == today:
+                target_row = i + 3
+                break
+        if target_row is None:
+            return jsonify({"value": None})
+        v = ws.range(f"D{target_row}").value
+        if isinstance(v, (int, float)):
+            return jsonify({"value": round(float(v), 1)})
+        return jsonify({"value": None})
+    except Exception as e:
+        return jsonify({"value": None, "error": str(e)})
+
+
 @app.route("/api/refresh", methods=["GET", "POST"])
 def api_refresh():
     """Invalidate the data cache so the next /api/data fetch is fresh."""
@@ -1086,7 +1120,10 @@ HTML = """<!DOCTYPE html>
 <body>
 <div class="topbar">
   <h1>JM · PERSONAL DASHBOARD</h1>
-  <a class="nav-link" href="/more">MORE →</a>
+  <div style="display:flex;align-items:baseline;gap:16px;">
+    <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
+    <a class="nav-link" href="/more">MORE →</a>
+  </div>
 </div>
 <div class="grid">
   <div class="card">
@@ -1117,6 +1154,17 @@ HTML = """<!DOCTYPE html>
 
 <script>
 """ + _SHARED_JS_HEAD + """
+// Live #points-today poller (0分 col D)
+function pollPointsToday() {
+  fetch('/api/points-today').then(r => r.json()).then(d => {
+    const el = document.getElementById('ptsTodayVal');
+    if (!el) return;
+    el.textContent = (d && d.value != null) ? Math.round(d.value) : '—';
+  }).catch(() => {});
+}
+pollPointsToday();
+setInterval(pollPointsToday, 30000);
+
 fetch('/api/data').then(r => r.json()).then(data => {
   const labels = data.dates;
 
@@ -1131,7 +1179,8 @@ fetch('/api/data').then(r => r.json()).then(data => {
     row.className = 'cache-row';
     const v = c.value;
     const cls = v == null ? 'zero' : (v < 0 ? 'neg' : (v > 0 ? 'pos' : 'zero'));
-    const display = v == null ? '—' : (v > 0 ? '+' : '') + Math.round(v);
+    const capped = v == null ? null : Math.max(-maxAbs, Math.min(maxAbs, v));
+    const display = capped == null ? '—' : (capped > 0 ? '+' : '') + Math.round(capped);
     const pct = v == null ? 0 : Math.min(100, Math.abs(v) / maxAbs * 100);
     const negBar = (v != null && v < 0)
       ? `<div class="cache-bar neg" style="width:${pct}%;background:${c.color}"></div>` : '';
@@ -1214,11 +1263,11 @@ fetch('/api/data').then(r => r.json()).then(data => {
       plugins: { legend: { display: false } },
       scales: {
         x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y:  { type: 'logarithmic', position: 'left', min: 10, max: 1440,
+        y:  { type: 'logarithmic', position: 'right', min: 10, max: 1440,
               ticks: { color: TICK, font: { size: 10 }, callback: v => [10,30,60,120,300,720,1440].includes(v) ? v+'m' : '' },
               afterBuildTicks: axis => { axis.ticks = [10,30,60,120,300,720,1440].map(v => ({value:v})); },
               grid: { color: GRID }, title: { display: true, text: 'min', color: TICK, font: { size: 10 } } },
-        y2: { position: 'right', min: 0, stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { display: false }, title: { display: true, text: 'msgs', color: TICK, font: { size: 10 } } },
+        y2: { position: 'left', min: 0, stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { display: false }, title: { display: true, text: 'msgs', color: TICK, font: { size: 10 } } },
       }
     }
   });
