@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-07T10:00:05.879730-07:00"
+  "tasks": {
+    "6 in person meetings that are good": {
+      "todoist_id": "6gXjC9xXgp3fm2gR",
+      "minutes": 100
+    },
+    "plane ride is productive": {
+      "todoist_id": "6gXjCC6G494jc482",
+      "minutes": 40
+    },
+    "spend time with the kids as soon as home": {
+      "todoist_id": "6gXjCCFHgQXm4672",
+      "minutes": 30
+    },
+    "0n / 1n": {
+      "todoist_id": "6gXjCCCXXjr29G22",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-05-07T12:00:07.569521-07:00"
 }
