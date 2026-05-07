@@ -174,10 +174,11 @@ def detect_night_hcmc(yesterday: date) -> int | None:
     return prev.get("duration", 0) // 60
 
 
-def mark_night_hcmc(minutes: int) -> dict:
-    """Run did-fast.py to log night hcmc."""
+def mark_night_hcmc(minutes: int, target_date: date) -> dict:
+    """Run did-fast.py to log night hcmc on the date the entry occurred (yesterday)."""
+    arg = f"night hcmc {minutes} {target_date.month}/{target_date.day}"
     proc = subprocess.run(
-        ["python3", str(DID_FAST), f"night hcmc {minutes}"],
+        ["python3", str(DID_FAST), arg],
         capture_output=True, text=True, timeout=45,
     )
     if proc.returncode == 0:
@@ -353,7 +354,7 @@ def main():
     # 4. Detect hcmc right before sleep → /did night hcmc
     night_hcmc = detect_night_hcmc(yesterday)
     if night_hcmc and night_hcmc > 0:
-        nhcmc_result = mark_night_hcmc(night_hcmc)
+        nhcmc_result = mark_night_hcmc(night_hcmc, yesterday)
         output["night_hcmc"] = {"minutes": night_hcmc, "did": nhcmc_result}
         if "error" in nhcmc_result:
             failed = True
