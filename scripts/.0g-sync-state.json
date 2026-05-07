@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "xbox growth manifesto": {
-      "todoist_id": "6gXQVp2H98pqQcqR",
-      "minutes": 60
-    },
-    "do at least 6 in person 1:1's": {
-      "todoist_id": "6gXQVp36Pfwpw2H2",
-      "minutes": 60
-    }
-  },
-  "last_sync": "2026-05-07T03:55:03.771518-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-07T04:00:11.993263-07:00"
 }
