@@ -104,7 +104,7 @@ Once approved:
 
 ```markdown
 ---
-title: "<Full Title>"
+title: "<Title Line>: <Full Book Title>"
 author: "<Author>"
 date: YYYY-MM-DD
 type: review
@@ -121,8 +121,12 @@ related:
   - "YYYY/another-by-author.md"
 ---
 
+**<Title Line>**
+
 <review text>
 ```
+
+- The frontmatter `title` is `<Title Line>: <Full Book Title>` — the punchy custom phrase first, then the actual book title after a colon. The same `<Title Line>` is repeated as the bold opener of the body.
 
 - Omit `score` if skipped
 - Omit `series`, `series_number`, `series_prev`, `series_next` if not part of a series
