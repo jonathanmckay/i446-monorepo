@@ -1179,8 +1179,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     row.className = 'cache-row';
     const v = c.value;
     const cls = v == null ? 'zero' : (v < 0 ? 'neg' : (v > 0 ? 'pos' : 'zero'));
-    const capped = v == null ? null : Math.max(-maxAbs, Math.min(maxAbs, v));
-    const display = capped == null ? '—' : (capped > 0 ? '+' : '') + Math.round(capped);
+    const display = v == null ? '—' : (v > 0 ? '+' : '') + Math.round(v);
     const pct = v == null ? 0 : Math.min(100, Math.abs(v) / maxAbs * 100);
     const negBar = (v != null && v < 0)
       ? `<div class="cache-bar neg" style="width:${pct}%;background:${c.color}"></div>` : '';
