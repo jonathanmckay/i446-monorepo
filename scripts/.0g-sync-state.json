@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "6 in person meetings that are good": {
-      "todoist_id": "6gXjC9xXgp3fm2gR",
-      "minutes": 100
-    },
     "plane ride is productive": {
       "todoist_id": "6gXjCC6G494jc482",
       "minutes": 40
@@ -18,5 +14,5 @@
       "minutes": 20
     }
   },
-  "last_sync": "2026-05-07T18:00:06.193545-07:00"
+  "last_sync": "2026-05-07T20:00:06.579011-07:00"
 }
