@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "plane ride is productive": {
-      "todoist_id": "6gXjCC6G494jc482",
-      "minutes": 40
-    },
-    "spend time with the kids as soon as home": {
-      "todoist_id": "6gXjCCFHgQXm4672",
-      "minutes": 30
-    },
-    "0n / 1n": {
-      "todoist_id": "6gXjCCCXXjr29G22",
-      "minutes": 20
-    }
-  },
-  "last_sync": "2026-05-08T03:55:03.835381-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-08T04:00:14.840512-07:00"
 }
