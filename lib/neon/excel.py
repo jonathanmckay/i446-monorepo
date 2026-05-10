@@ -134,12 +134,19 @@ def _ssh_fallback(op: str, sheet: str, col: str,
         )
     elif op == "append":
         v = (value or "").replace("\\", "\\\\").replace('"', '\\"')
+        is_numeric = (value or "").lstrip().startswith("+") or (value or "").lstrip().startswith("=")
+        if is_numeric:
+            empty_set = f'set formula of theCell to "={v.lstrip("+")}"\n'
+        else:
+            # String value: strip leading ", " for empty cells, set as value not formula
+            clean = v.lstrip(", ")
+            empty_set = f'set value of theCell to "{clean}"\n'
         script = (
             f'tell application "Microsoft Excel"\n'
             f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of active workbook\n'
             f'  set f to formula of theCell\n'
             f'  if f = "" or f = "0" then\n'
-            f'    set formula of theCell to "={v.lstrip("+")}"\n'
+            f'    {empty_set}'
             f'  else\n'
             f'    set formula of theCell to f & "{v}"\n'
             f'  end if\n'
