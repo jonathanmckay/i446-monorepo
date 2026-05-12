@@ -354,7 +354,7 @@ def main():
     # 4. Detect hcmc right before sleep → /did night hcmc
     night_hcmc = detect_night_hcmc(yesterday)
     if night_hcmc and night_hcmc > 0:
-        nhcmc_result = mark_night_hcmc(night_hcmc, yesterday)
+        nhcmc_result = mark_night_hcmc(night_hcmc, today)
         output["night_hcmc"] = {"minutes": night_hcmc, "did": nhcmc_result}
         if "error" in nhcmc_result:
             failed = True
