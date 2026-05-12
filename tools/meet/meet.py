@@ -38,15 +38,44 @@ import sounddevice as sd
 import anthropic
 
 
-def _notify(title, body):
-    """Send a macOS notification so warnings are visible even when running in background."""
+_TERM_COLOR = os.path.expanduser("~/i446-monorepo/scripts/term-color.sh")
+_IMESSAGE_RECIPIENT = "jonathan.b.mckay@gmail.com"
+
+
+def _notify(title, body, critical=False):
+    """Alert the user via modal dialog, terminal color, and iMessage.
+
+    - Always: osascript display alert (modal, steals focus)
+    - Always: terminal tab → orange
+    - critical=True: also send iMessage to self
+    """
+    # 1. Modal dialog (display alert, not notification)
     try:
+        escaped_body = body.replace('"', '\\"').replace('\n', '\\n')
+        escaped_title = title.replace('"', '\\"')
         _sp.run([
             "osascript", "-e",
-            f'display notification "{body}" with title "{title}" sound name "Funk"'
-        ], timeout=5, capture_output=True)
+            f'display alert "{escaped_title}" message "{escaped_body}"'
+        ], timeout=30, capture_output=True)
     except Exception:
-        pass  # best-effort
+        pass
+
+    # 2. Terminal tab → orange
+    try:
+        _sp.run([_TERM_COLOR, "orange"], timeout=5, capture_output=True)
+    except Exception:
+        pass
+
+    # 3. iMessage to self (critical alerts only, e.g. auto-stop)
+    if critical:
+        try:
+            msg = f"{title}: {body}"
+            _sp.run([
+                "osascript", "-e",
+                f'tell application "Messages" to send "{msg}" to buddy "{_IMESSAGE_RECIPIENT}" of (first account whose service type is iMessage)'
+            ], timeout=10, capture_output=True)
+        except Exception:
+            pass
 from typing import Optional
 
 SAMPLE_RATE = 16000   # Whisper works best at 16kHz
@@ -200,7 +229,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     if teams_warn_count >= 3:
                         msg = "STOPPED: call audio missing. Set system output to 'Meet Output' and restart."
                         print(f"\n🛑  {msg}")
-                        _notify("🛑 Recording Failed", msg)
+                        _notify("🛑 Recording Failed", msg, critical=True)
                         break
 
                 if not mic_has_speech and not bh_has_speech:
