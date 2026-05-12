@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-12T14:00:05.600912-07:00"
+  "tasks": {
+    "get through queues": {
+      "todoist_id": "6gcxF4gQ7F66V872",
+      "minutes": 60
+    },
+    "group my thoughts for xbox and have an org chart": {
+      "todoist_id": "6gcwgjVXRvMG57jR",
+      "minutes": 40
+    },
+    "do something fun / math with kids": {
+      "todoist_id": "6gcwgjXh5p3j8mX2",
+      "minutes": 40
+    },
+    "get together an hcb plan for the next week": {
+      "todoist_id": "6gcwgjgHC326mFv2",
+      "minutes": 40
+    },
+    "0n": {
+      "todoist_id": "6gcwgjm5833ggfWR",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-05-12T16:00:08.818247-07:00"
 }
