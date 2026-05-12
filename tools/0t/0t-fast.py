@@ -101,8 +101,8 @@ def compute_tag_minutes(yesterday: date, today: date) -> dict[str, int]:
     return totals
 
 
-def write_tag_minutes(tag_totals: dict[str, int], today: date) -> str:
-    """Write tag minute sums to 0n columns (AU, AV, AS) for today's row."""
+def write_tag_minutes(tag_totals: dict[str, int], target_date: date) -> str:
+    """Write tag minute sums to 0n columns for the target date's row."""
     if not tag_totals:
         return "no tagged entries"
     set_lines = []
@@ -110,8 +110,8 @@ def write_tag_minutes(tag_totals: dict[str, int], today: date) -> str:
         col = TAG_COLUMNS[tag]
         set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
     set_block = "\n".join(set_lines)
-    month = today.month
-    day = today.day
+    month = target_date.month
+    day = target_date.day
     script = f'''tell application "Microsoft Excel"
     set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set todayRow to 0
@@ -343,7 +343,7 @@ def main():
     try:
         tag_totals = compute_tag_minutes(yesterday, today)
         if tag_totals:
-            tag_result = write_tag_minutes(tag_totals, today)
+            tag_result = write_tag_minutes(tag_totals, yesterday)
             output["tags"] = {"totals": tag_totals, "write": tag_result}
         else:
             output["tags"] = "none"
