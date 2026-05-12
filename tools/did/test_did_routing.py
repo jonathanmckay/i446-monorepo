@@ -646,14 +646,56 @@ class ZeroNeonOverrideTests(unittest.TestCase):
         self.assertIsNone(r.fen_col)
         self.assertEqual(r.fen_points, 0)
 
-    def test_habit_with_unmapped_domain_skips_silently(self):
-        # 冥想 maps to project "hcm", which has no column in
-        # LABEL_TO_0FEN. The override must NOT raise; it just no-ops.
+    def test_hcm_domain_maps_to_V(self):
+        # 冥想 maps to project "hcm" → 0分 column V (思)
         self.headers["0n"]["冥想"] = 44
         r = self._route_one("冥想 [48]")
         self.assertEqual(r.step, "0n")
+        self.assertEqual(r.fen_col, "V")
+        self.assertEqual(r.fen_points, 48)
+
+    def test_habit_with_unmapped_domain_skips_silently(self):
+        # epcn has no column in LABEL_TO_0FEN. Must NOT raise; just no-ops.
+        self.headers["0n"]["epcn"] = 44
+        r = self._route_one("epcn [48]")
+        self.assertEqual(r.step, "0n")
         self.assertIsNone(r.fen_col)
         self.assertEqual(r.fen_points, 0)
+
+
+class HciLabelMapping(unittest.TestCase):
+    """Regression: `/did 1st hci` fell through to Todoist step because
+    (1) '1st hci' has no 0₦ column header — it's in Todoist as 0neon, and
+    (2) the `hci` label wasn't in LABEL_TO_0FEN, so even when Todoist
+    matched, no points were written to 0分.
+
+    Fix: add `hci` (and `hcm`) to LABEL_TO_0FEN → column V (思).
+    """
+
+    def test_hci_in_label_to_0fen(self):
+        self.assertIn("hci", _df_module.LABEL_TO_0FEN)
+        self.assertEqual(_df_module.LABEL_TO_0FEN["hci"], "V")
+
+    def test_hcm_in_label_to_0fen(self):
+        self.assertIn("hcm", _df_module.LABEL_TO_0FEN)
+        self.assertEqual(_df_module.LABEL_TO_0FEN["hcm"], "V")
+
+    def test_todoist_route_with_hci_label_gets_fen_col(self):
+        """When 1st hci matches via Todoist (no 0₦ header), the hci label
+        must map to 0分 column V so points are written."""
+        headers = {"0n": {}, "1n": {}}  # no 0n match for "1st hci"
+        tq = {
+            "0neon": [{"id": "x", "content": "1st hci - Daily Spa (10) [26]",
+                       "labels": ["0neon", "hci"], "due": "2026-05-12"}],
+            "夜neon": [], "1neon": [],
+        }
+        item = _df_module.ParsedItem(raw="1st hci", name="1st hci")
+        results = _df_module.route_items([item], headers, tq)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r.step, "todoist")
+        self.assertEqual(r.fen_col, "V")
+        self.assertEqual(r.fen_points, 26)
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +716,7 @@ def main() -> int:
         ThresholdTests,
         FormulaAppendTests,
         ZeroNeonOverrideTests,
+        HciLabelMapping,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

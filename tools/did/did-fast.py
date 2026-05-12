@@ -134,6 +134,7 @@ LABEL_TO_0FEN = {
     "m5x2": "S",
     "g245": "T", "infra": "T", "cc": "T",
     "hcmc": "U",
+    "hcm": "V", "hci": "V",
     "hcb": "W", "hcbp": "W",
     "xk87": "X", "xk88": "X",
     "s897": "Y",
