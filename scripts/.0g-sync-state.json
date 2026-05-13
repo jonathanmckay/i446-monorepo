@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "get through queues": {
-      "todoist_id": "6gcxF4gQ7F66V872",
-      "minutes": 60
-    },
-    "group my thoughts for xbox and have an org chart": {
-      "todoist_id": "6gcwgjVXRvMG57jR",
-      "minutes": 40
-    },
-    "get together an hcb plan for the next week": {
-      "todoist_id": "6gcwgjgHC326mFv2",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-05-13T03:55:02.649522-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-13T04:00:12.549642-07:00"
 }
