@@ -51,7 +51,8 @@ echo "ready" > "$DTD_HDR"
     fi
   done < "$DTD_FIFO"
 
-  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  # No cache refresh here — it races with the API and can nuke the "today" section.
+  # The cache was populated before dtd started; it's good enough for this session.
   echo "done" > "$DTD_HDR"
 ) &
 WORKER_PID=$!
