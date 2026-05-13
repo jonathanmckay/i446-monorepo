@@ -2,7 +2,7 @@
 # dtd — fuzzy task picker that runs /did directly (no Claude needed)
 # Reads from task-queue.json cache, filters to today/overdue + not completed, launches fzf.
 # Calls did-fast.py directly. Zero API credits.
-# UI-first: did-fast.py runs in background so fzf re-appears immediately.
+# UI-first: tasks queue into a background worker so fzf re-appears immediately.
 
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
@@ -26,9 +26,35 @@ typeset -a session_done
 setopt NO_MONITOR 2>/dev/null
 
 DTD_LOG="/tmp/dtd-$$.log"
+DTD_FIFO="/tmp/dtd-$$.fifo"
 
 # Use local date, not jq's UTC now (which drifts a day ahead in Pacific evenings)
 LOCAL_TODAY=$(date +%Y-%m-%d)
+
+# Background worker: reads task names from FIFO, processes them serially
+mkfifo "$DTD_FIFO"
+(
+  while IFS= read -r task_clean; do
+    [[ -z "$task_clean" ]] && continue
+    result=$(python3 "$DID_FAST" "$task_clean" 2>&1)
+
+    ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.value) [\(.step)] \(if .todoist.closed then "+ todoist ✓" else "" end)"' 2>/dev/null)
+    agent=$(echo "$result" | jq -r '.agent_needed[]?.name' 2>/dev/null)
+
+    if [[ -n "$ok" ]]; then
+      echo "  ✓ $ok"
+    fi
+
+    if [[ -n "$agent" ]]; then
+      echo "  ⚠ Needs Claude for: $agent"
+      claude -p "/did $agent" 2>&1
+    fi
+  done < "$DTD_FIFO"
+
+  # One final cache refresh after all tasks are processed
+  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+) >> "$DTD_LOG" 2>&1 &
+WORKER_PID=$!
 
 while true; do
   # Build exclusion list: completed-today.json + session_done
@@ -69,28 +95,17 @@ while true; do
 
   echo "→ /did $clean"
 
-  # Run did-fast.py + cache refresh in background (all output to log, not terminal)
-  (
-    result=$(python3 "$DID_FAST" "$clean" 2>&1)
-
-    ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.value) [\(.step)] \(if .todoist.closed then "+ todoist ✓" else "" end)"' 2>/dev/null)
-    agent=$(echo "$result" | jq -r '.agent_needed[]?.name' 2>/dev/null)
-
-    if [[ -n "$ok" ]]; then
-      echo "  ✓ $ok"
-    fi
-
-    if [[ -n "$agent" ]]; then
-      echo "  ⚠ Needs Claude for: $agent"
-      claude -p "/did $agent" 2>&1
-    fi
-
-    python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  ) >> "$DTD_LOG" 2>&1 &
+  # Send to background worker (serialized via FIFO)
+  echo "$clean" > "$DTD_FIFO"
 done
 
-# Wait for any remaining background jobs to finish, then show results
-wait 2>/dev/null
+# Close the FIFO to signal the worker to finish
+exec {fd}>"$DTD_FIFO" && exec {fd}>&-
+rm -f "$DTD_FIFO"
+
+# Wait for worker to finish processing queued tasks
+echo "Finishing background tasks..."
+wait $WORKER_PID 2>/dev/null
 
 if [[ -s "$DTD_LOG" ]]; then
   echo ""
