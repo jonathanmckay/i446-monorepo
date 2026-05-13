@@ -27,20 +27,21 @@ Absent or `pid: null` → no recording active.
 
 1. Check state.json; if a recording is running, **abort** and tell the user to stop it first.
 2. Parse flags from the name: `--no-teams` for mic-only mode (in-person). Default captures both mic + system audio.
-3. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
+3. **Auto-switch audio output** (Teams mode only, skip for `--no-teams`): Run `SwitchAudioSource -s "Meet Output"` to ensure system audio routes through BlackHole. If SwitchAudioSource is not installed or the device doesn't exist, warn but continue.
+4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
    - `calendar_minutes`: the event's scheduled duration
    - `project`: `i9` if the event came from the Work calendar id; `m5x2` otherwise (default)
    - Prefer the calendar event title as the Toggl description if it differs from user input
    - Microsoft/Outlook events that aren't synced into the personal Google Work calendar won't be found — that's a known gap
-4. **Start Toggl timer**: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project>`. Record the returned entry ID.
-5. Launch recording in background:
+5. **Start Toggl timer**: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project>`. Record the returned entry ID.
+6. Launch recording in background using a **fixed log path** (`/tmp/d357-active.log`), not `$$`:
    ```bash
    cd ~/i446-monorepo/tools/meet && \
-   nohup python3 meet.py "<name>" --domain d357 [--no-teams] [--max-duration <calendar_minutes>] > /tmp/d357-$$.log 2>&1 &
+   nohup python3 meet.py "<name>" --domain d357 [--no-teams] [--max-duration <calendar_minutes>] > /tmp/d357-active.log 2>&1 &
    echo $!
    ```
-6. Write state.json with PID, name, timestamp, log path, toggl_id, project, calendar_minutes (null if no calendar match), and `mic_only` (true if `--no-teams` was passed, else false).
-7. Confirm in one line: `Recording → <name> (pid <pid>). /d357 stop when done.`
+7. Write state.json with PID, name, timestamp, log path (`/tmp/d357-active.log`), toggl_id, project, calendar_minutes (null if no calendar match), and `mic_only` (true if `--no-teams` was passed, else false).
+8. Confirm in one line: `Recording → <name> (pid <pid>). Audio: <current output device>. /d357 stop when done.`
 
 ### `/d357 stop` — finalize
 

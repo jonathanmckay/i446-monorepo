@@ -43,20 +43,20 @@ _IMESSAGE_RECIPIENT = "jonathan.b.mckay@gmail.com"
 
 
 def _notify(title, body, critical=False):
-    """Alert the user via modal dialog, terminal color, and iMessage.
+    """Alert the user via auto-dismissing dialog, terminal color, and iMessage.
 
-    - Always: osascript display alert (modal, steals focus)
+    - Always: osascript display dialog (auto-dismisses after 10s)
     - Always: terminal tab → orange
     - critical=True: also send iMessage to self
     """
-    # 1. Modal dialog (display alert, not notification)
+    # 1. Auto-dismissing dialog (gives up after 10s, never blocks forever)
     try:
         escaped_body = body.replace('"', '\\"').replace('\n', '\\n')
         escaped_title = title.replace('"', '\\"')
         _sp.run([
             "osascript", "-e",
-            f'display alert "{escaped_title}" message "{escaped_body}"'
-        ], timeout=30, capture_output=True)
+            f'display dialog "{escaped_title}: {escaped_body}" buttons {{"OK"}} default button "OK" giving up after 10'
+        ], timeout=15, capture_output=True)
     except Exception:
         pass
 
@@ -542,8 +542,8 @@ def main():
                              "Options: tiny.en, base.en, small.en, medium.en")
     parser.add_argument("--max-duration", type=int, default=0, metavar="MIN",
                         help="Auto-stop after N minutes (0 = no limit)")
-    parser.add_argument("--idle-timeout", type=int, default=2, metavar="MIN",
-                        help="Auto-stop after N min of silence post-conversation (default 2, 0 = off)")
+    parser.add_argument("--idle-timeout", type=int, default=5, metavar="MIN",
+                        help="Auto-stop after N min of silence post-conversation (default 5, 0 = off)")
     parser.add_argument("--devices", action="store_true",
                         help="List available audio input devices and exit")
     args = parser.parse_args()
