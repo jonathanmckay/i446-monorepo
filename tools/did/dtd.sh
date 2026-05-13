@@ -1,63 +1,68 @@
 #!/bin/zsh
 # dtd — fuzzy task picker that runs /did directly (no Claude needed)
-# Reads from task-queue.json cache, filters to today/overdue + not completed, launches fzf.
-# Calls did-fast.py directly. Zero API credits.
-# UI-first: tasks queue into a background worker so fzf re-appears immediately.
+# UI-first: fzf stays responsive, background worker processes tasks serially,
+# fzf header shows latest completion hdr_status.
 
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
 DONE="$HOME/vault/z_ibx/completed-today.json"
+DTD_FIFO="/tmp/dtd-$$.fifo"
+DTD_STATUS="/tmp/dtd-$$.hdr_status"
+DTD_LOG="/tmp/dtd-$$.log"
 
 if [[ ! -f "$CACHE" ]]; then
   echo "No task cache found at $CACHE" >&2
   return 1 2>/dev/null || exit 1
 fi
 
-# If the cache has no "today" key (stale session refreshed it), rebuild it
 if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   echo "Refreshing task cache..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
 fi
 
-# Track tasks completed in this session (instant filter, no cache wait)
 typeset -a session_done
-
-# Suppress zsh job control notifications ([1] 12345, [1] + done, etc.)
 setopt NO_MONITOR 2>/dev/null
-
-DTD_LOG="/tmp/dtd-$$.log"
-DTD_FIFO="/tmp/dtd-$$.fifo"
-
-# Use local date, not jq's UTC now (which drifts a day ahead in Pacific evenings)
 LOCAL_TODAY=$(date +%Y-%m-%d)
 
-# Background worker: reads task names from FIFO, processes them serially
+# --- Background worker: reads task names from FIFO, processes serially ---
 mkfifo "$DTD_FIFO"
+echo "ready" > "$DTD_STATUS"
+
 (
   while IFS= read -r task_clean; do
     [[ -z "$task_clean" ]] && continue
-    result=$(python3 "$DID_FAST" "$task_clean" 2>&1)
+    echo "⏳ $task_clean" > "$DTD_STATUS"
 
-    ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.value) [\(.step)] \(if .todoist.closed then "+ todoist ✓" else "" end)"' 2>/dev/null)
+    result=$(python3 "$DID_FAST" "$task_clean" 2>&1)
+    ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
     agent=$(echo "$result" | jq -r '.agent_needed[]?.name' 2>/dev/null)
 
     if [[ -n "$ok" ]]; then
-      echo "  ✓ $ok"
+      echo "✓ $ok" > "$DTD_STATUS"
+      echo "✓ $ok" >> "$DTD_LOG"
+    else
+      echo "? $task_clean (no result)" > "$DTD_STATUS"
+      echo "? $task_clean (no result)" >> "$DTD_LOG"
     fi
 
     if [[ -n "$agent" ]]; then
-      echo "  ⚠ Needs Claude for: $agent"
-      claude -p "/did $agent" 2>&1
+      echo "⚠ agent: $agent" >> "$DTD_LOG"
     fi
   done < "$DTD_FIFO"
 
-  # One final cache refresh after all tasks are processed
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-) >> "$DTD_LOG" 2>&1 &
+  echo "done" > "$DTD_STATUS"
+) &
 WORKER_PID=$!
 
+# Keep FIFO write end open for entire session (prevents EOF on each write)
+exec 3>"$DTD_FIFO"
+
+# --- UI loop ---
 while true; do
-  # Build exclusion list: completed-today.json + session_done
+  # Read latest hdr_status for fzf header
+  hdr_status=$(cat "$DTD_STATUS" 2>/dev/null || echo "")
+
   session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
 
   task=$(jq -r --slurpfile done "$DONE" --argjson session "$session_exclude" --arg today "$LOCAL_TODAY" '
@@ -81,34 +86,31 @@ while true; do
       ($completed | index($prefix) | not)
     )
     | $raw
-  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse)
+  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr_status")
 
   if [[ -z "$task" ]]; then
     break
   fi
 
-  # Strip (N) [N] {N} annotations
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
-
-  # Add to session exclusion list immediately (before async work)
   session_done+=("$clean")
 
-  echo "→ /did $clean"
-
-  # Send to background worker (serialized via FIFO)
-  echo "$clean" > "$DTD_FIFO"
+  # Send to worker via FIFO (non-blocking, goes into pipe buffer)
+  echo "$clean" >&3
 done
 
-# Close the FIFO to signal the worker to finish
-exec {fd}>"$DTD_FIFO" && exec {fd}>&-
-rm -f "$DTD_FIFO"
+# Close FIFO write end → worker sees EOF → finishes remaining tasks → exits
+exec 3>&-
 
-# Wait for worker to finish processing queued tasks
-echo "Finishing background tasks..."
+echo ""
+echo "Waiting for background tasks to finish..."
 wait $WORKER_PID 2>/dev/null
 
+# Show full log
 if [[ -s "$DTD_LOG" ]]; then
   echo ""
   cat "$DTD_LOG"
-  rm -f "$DTD_LOG"
 fi
+
+# Cleanup
+rm -f "$DTD_FIFO" "$DTD_STATUS" "$DTD_LOG"
