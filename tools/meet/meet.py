@@ -161,7 +161,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     last_teams_check = 0
     teams_warn_count = 0
     SILENCE_THRESH = 500       # int16 amplitude below this = silence
-    SPEECH_THRESH = 800        # int16 amplitude above this = likely speech
+    SPEECH_THRESH = 400        # int16 amplitude above this = likely speech
     CHECK_INTERVAL_MIC = 120   # seconds before first check (mic-only mode)
     CHECK_INTERVAL_BOTH = 60   # seconds between teams-mode checks
     SILENCE_RATIO_WARN = 0.55  # warn if >55% of audio is silence
