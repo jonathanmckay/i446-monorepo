@@ -1,13 +1,13 @@
 #!/bin/zsh
 # dtd — fuzzy task picker that runs /did directly (no Claude needed)
 # UI-first: fzf stays responsive, background worker processes tasks serially,
-# fzf header shows latest completion hdr_status.
+# fzf header shows latest completion status.
 
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
 DONE="$HOME/vault/z_ibx/completed-today.json"
 DTD_FIFO="/tmp/dtd-$$.fifo"
-DTD_STATUS="/tmp/dtd-$$.hdr_status"
+DTD_HDR="/tmp/dtd-$$.hdr"
 DTD_LOG="/tmp/dtd-$$.log"
 
 if [[ ! -f "$CACHE" ]]; then
@@ -25,23 +25,24 @@ setopt NO_MONITOR 2>/dev/null
 LOCAL_TODAY=$(date +%Y-%m-%d)
 
 # --- Background worker: reads task names from FIFO, processes serially ---
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
 mkfifo "$DTD_FIFO"
-echo "ready" > "$DTD_STATUS"
+echo "ready" > "$DTD_HDR"
 
 (
   while IFS= read -r task_clean; do
     [[ -z "$task_clean" ]] && continue
-    echo "⏳ $task_clean" > "$DTD_STATUS"
+    echo "⏳ $task_clean" > "$DTD_HDR"
 
     result=$(python3 "$DID_FAST" "$task_clean" 2>&1)
     ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
     agent=$(echo "$result" | jq -r '.agent_needed[]?.name' 2>/dev/null)
 
     if [[ -n "$ok" ]]; then
-      echo "✓ $ok" > "$DTD_STATUS"
+      echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
     else
-      echo "? $task_clean (no result)" > "$DTD_STATUS"
+      echo "? $task_clean (no result)" > "$DTD_HDR"
       echo "? $task_clean (no result)" >> "$DTD_LOG"
     fi
 
@@ -51,7 +52,7 @@ echo "ready" > "$DTD_STATUS"
   done < "$DTD_FIFO"
 
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  echo "done" > "$DTD_STATUS"
+  echo "done" > "$DTD_HDR"
 ) &
 WORKER_PID=$!
 
@@ -60,8 +61,8 @@ exec 3>"$DTD_FIFO"
 
 # --- UI loop ---
 while true; do
-  # Read latest hdr_status for fzf header
-  hdr_status=$(cat "$DTD_STATUS" 2>/dev/null || echo "")
+  # Read latest header
+  hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
 
   session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
 
@@ -86,7 +87,7 @@ while true; do
       ($completed | index($prefix) | not)
     )
     | $raw
-  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr_status")
+  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr")
 
   if [[ -z "$task" ]]; then
     break
@@ -113,4 +114,4 @@ if [[ -s "$DTD_LOG" ]]; then
 fi
 
 # Cleanup
-rm -f "$DTD_FIFO" "$DTD_STATUS" "$DTD_LOG"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
