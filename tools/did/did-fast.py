@@ -479,6 +479,16 @@ def refresh_task_queue() -> dict:
             results[futures[future]] = future.result()
         results["today"] = today_future.result()
 
+    # Preserve existing "today" if the new fetch returned empty (API failure)
+    if not results.get("today") and TASK_QUEUE_PATH.exists():
+        try:
+            old = json.loads(TASK_QUEUE_PATH.read_text())
+            if old.get("today"):
+                results["today"] = old["today"]
+                print("WARN: fetch_today returned empty, keeping stale cache", file=sys.stderr)
+        except Exception:
+            pass
+
     cache = {"updated": datetime.now().isoformat()}
     cache.update(results)
     TASK_QUEUE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n")
