@@ -45,14 +45,15 @@ Absent or `pid: null` → no recording active.
 7. Write state.json with PID, name, timestamp, log path (`/tmp/d357-active.log`), toggl_id, project, calendar_minutes (null if no calendar match), and `mic_only` (true if `--no-teams` was passed, else false).
 8. Confirm in one line: `Recording → <name> (pid <pid>). Audio: <current output device>. /d357 stop when done.`
 
-### `/d357 stop` — finalize
+### `/d357 stop [HHMM]` — finalize
 
 1. Read state.json. If no active PID, report `No recording active.` and exit.
-2. **Stop Toggl timer**: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Note the duration.
-3. Send SIGTERM: `kill -TERM <pid>`. meet.py stops recording, transcribes with Whisper, and saves a `.txt` transcript alongside the `.wav`.
-4. Poll `ps -p <pid>` every 2s until the process exits (~0.1x realtime for transcription).
-5. Tail the log for the `TXT ->` line to get the transcript path.
-6. **Log points to 0分**: Use `calendar_minutes` from state.json if available, else actual Toggl duration. Write that many 分 to the appropriate 0分 column based on `project` (m5x2->AB, i9->AA, etc.) via the "Append to 0分" AppleScript template through ix-osa.sh.
+2. **Parse optional end time.** If `HHMM` or `HH:MM` is provided after `stop`, use it as the Toggl end time. Compute duration as `end_time - start_time` (from state.json `started`). Otherwise stop at now and use actual Toggl duration.
+3. **Stop Toggl timer**: If end time was provided, stop the timer and update the entry's stop time to `HHMM` via `toggl_cli.py stop` then update. Otherwise just `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`.
+4. Send SIGTERM: `kill -TERM <pid>`. meet.py stops recording, transcribes with Whisper, and saves a `.txt` transcript alongside the `.wav`.
+5. Poll `ps -p <pid>` every 2s until the process exits (~0.1x realtime for transcription).
+6. Tail the log for the `TXT ->` line to get the transcript path.
+7. **Log points to 0分**: Use the computed duration (from end_time - start_time if provided, else calendar_minutes, else actual Toggl duration). Write that many 分 to the appropriate 0分 column based on `project` (m5x2->S, i9->R, etc.) via the neon excel lib.
 7. Clear state.json (set `pid: null`).
 8. **Read the transcript** from the `.txt` file.
 9. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for any hand-written notes matching the meeting name.
