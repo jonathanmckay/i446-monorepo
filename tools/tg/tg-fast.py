@@ -41,7 +41,7 @@ SHORTCODES = {
     "doze": ("hcmc", ["-1"]), "youtube": ("hcmc2", ["2"]), "stats": ("i9", []),
     "out the door": ("infra", []),
     # Medium frequency
-    "h breakfast": ("hcb", []), "breakfast": ("hcb", []), "dinner": ("xk87", []),
+    "h breakfast": ("hcb", []), "breakfast": ("hcb", []), "早餐": ("hcb", []), "dinner": ("xk87", []),
     "lunch": ("hcb", []), "h dinner": ("hcb", []), "dad call": ("家", []),
     "lx walk": ("xk88", []), "r203 weekly": ("m5x2", []), "r202 weekly": ("m5x2", []),
     "kids to sleep": ("xk87", []), "lego": ("xk87", []), "notes": ("i9", []),
