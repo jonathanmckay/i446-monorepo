@@ -418,7 +418,27 @@ def load_task_queue() -> dict:
 
 
 def refresh_task_queue() -> dict:
-    """Fetch 0neon + 1neon + 夜neon + 关键路径 from Todoist, rebuild cache."""
+    """Fetch 0neon + 1neon + 夜neon + 関键路径 from Todoist, rebuild cache.
+    Uses a file lock to prevent concurrent refreshes from clobbering each other."""
+    import fcntl
+    lock_path = TASK_QUEUE_PATH.with_suffix(".lock")
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        # Another refresh is already running; return existing cache
+        print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
+        if TASK_QUEUE_PATH.exists():
+            return json.loads(TASK_QUEUE_PATH.read_text())
+        return {}
+    try:
+        return _refresh_task_queue_inner()
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+def _refresh_task_queue_inner() -> dict:
+    """Inner refresh logic, called under file lock."""
     labels = ["0neon", "1neon", "%E5%A4%9Cneon", "%E5%85%B3%E9%94%AE%E8%B7%AF%E5%BE%84"]
     keys = ["0neon", "1neon", "夜neon", "关键路径"]
     results = {}
