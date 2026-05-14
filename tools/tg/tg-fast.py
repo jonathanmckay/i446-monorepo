@@ -243,8 +243,23 @@ def main():
     # Resolve orphaned /do session before starting any new timer
     resolve_do_session()
 
-    # Check for time range: "desc HH:MM-HH:MM" or "desc H-H"
+    # Check for time range: "desc HH:MM-HH:MM" or "HH:MM-HH:MM desc" or "desc H-H"
+    # Try range at end first, then at start
     range_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*-\s*(\d{1,2}(?::\d{2})?)\s*$', raw)
+    if not range_match:
+        range_match_start = re.match(r'^(\d{1,4}(?::\d{2})?)\s*-\s*(\d{1,4}(?::\d{2})?)\s+(.+)$', raw)
+        if range_match_start:
+            s, e = range_match_start.group(1), range_match_start.group(2)
+            # Validate as HHMM-HHMM (4-digit no colon) or HH:MM-HH:MM
+            if ":" not in s and len(s) == 4:
+                s = s[:2] + ":" + s[2:]
+            if ":" not in e and len(e) == 4:
+                e = e[:2] + ":" + e[2:]
+            if ":" in s and ":" in e:
+                desc_part = range_match_start.group(3).strip()
+                desc, project, tags = resolve(desc_part)
+                print(cmd_create_range(desc or desc_part, project, tags, s, e))
+                return
     if range_match:
         start_t = range_match.group(1)
         end_t = range_match.group(2)
