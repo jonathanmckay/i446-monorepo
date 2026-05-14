@@ -637,14 +637,27 @@ class ZeroNeonOverrideTests(unittest.TestCase):
         self.assertEqual(r.fen_points, 0)
 
     def test_curly_override_does_not_trigger_domain_write(self):
-        # {N} is the 0g (col Z) channel — must not collide with the
-        # domain-column path above. Today {N} has no implementation in
-        # this routing layer, so the assertion is conservative: the
-        # bracket path stays inert.
+        # {N} is the 0g bonus (col Q) channel — must not collide with the
+        # domain-column path above. Routing leaves fen_col=None; the
+        # fen_appends collector adds the Q write separately.
         r = self._route_one("hiit {48}")
         self.assertEqual(r.step, "0n")
         self.assertIsNone(r.fen_col)
         self.assertEqual(r.fen_points, 0)
+
+    def test_curly_points_produce_0g_fen_append(self):
+        # {N} on any routed item must produce a ("Q", N) entry in
+        # fen_appends — the 0g bonus column in 0分.
+        items = _df_module.parse_input("0g {50}")
+        routes = _df_module.route_items(items, self.headers, self.tq)
+        fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
+        fen_appends = []
+        for r in fast:
+            if r.fen_col and r.fen_points > 0:
+                fen_appends.append((r.fen_col, r.fen_points))
+            if r.item.curly_points and r.item.curly_points > 0:
+                fen_appends.append(("Q", r.item.curly_points))
+        self.assertIn(("Q", 50), fen_appends)
 
     def test_hcm_domain_maps_to_V(self):
         # 冥想 maps to project "hcm" → 0分 column V (思)

@@ -1238,6 +1238,9 @@ end tell'''
     for r in fast:
         if r.fen_col and r.fen_points > 0 and not (r.step == "1n" and not r.is_variable_1n):
             fen_appends.append((r.fen_col, r.fen_points))
+        # {N} curly points → 0分 column Q (0g bonus)
+        if r.item.curly_points and r.item.curly_points > 0:
+            fen_appends.append(("Q", r.item.curly_points))
 
     fen_result = None
     if fen_appends:

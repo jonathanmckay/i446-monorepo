@@ -94,6 +94,7 @@ while true; do
     break
   fi
 
+  # Strip annotations: (N), [N], {N}
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
   session_done+=("$clean")
 
