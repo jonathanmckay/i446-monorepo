@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "keep using inbound during meetings": {
-      "todoist_id": "6gf6WVXR7Xmjw85R",
-      "minutes": 40
-    },
-    "1 i9 + 1 m5x2": {
-      "todoist_id": "6gf6WVhphGqv2G2R",
-      "minutes": 30
-    },
-    "group my thoughts for xbox and have an org chart": {
-      "todoist_id": "6gf6WVx5C24wQJXR",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-05-14T03:55:04.936574-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-14T04:00:13.973302-07:00"
 }
