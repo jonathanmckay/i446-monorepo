@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "try and review d357 for each meeting": {
-      "todoist_id": "6gf6WVRmG8PQ966R",
-      "minutes": 30
-    },
     "keep using inbound during meetings": {
       "todoist_id": "6gf6WVXR7Xmjw85R",
       "minutes": 40
@@ -13,18 +9,10 @@
       "todoist_id": "6gf6WVhphGqv2G2R",
       "minutes": 30
     },
-    "get through queues {60} (tasks to 70)": {
-      "todoist_id": "6gf6WVq2ggrJ4F82",
-      "minutes": null
-    },
     "group my thoughts for xbox and have an org chart": {
       "todoist_id": "6gf6WVx5C24wQJXR",
       "minutes": 40
-    },
-    "get together an hcb plan for the next week": {
-      "todoist_id": "6gf6WW4P5Wgxxqh2",
-      "minutes": 40
     }
   },
-  "last_sync": "2026-05-13T20:00:08.123004-07:00"
+  "last_sync": "2026-05-13T22:00:07.567733-07:00"
 }
