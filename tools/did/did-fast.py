@@ -441,7 +441,7 @@ def refresh_task_queue() -> dict:
             return []
 
     def fetch_today():
-        """Fetch all tasks due today or overdue (no label filter), with pagination."""
+        """Fetch all tasks due today or overdue (no label filter), with pagination and retry."""
         from urllib.parse import quote
         all_tasks = []
         filt = "today | overdue"
@@ -453,22 +453,29 @@ def refresh_task_queue() -> dict:
             req = urllib.request.Request(url, headers={
                 "Authorization": f"Bearer {TODOIST_TOKEN}",
             })
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    raw = json.loads(resp.read())
-                tasks = raw if isinstance(raw, list) else raw.get("results", [])
-                for t in tasks:
-                    all_tasks.append({
-                        "id": t.get("id", ""),
-                        "content": t.get("content", ""),
-                        "labels": t.get("labels", []),
-                        "due": t.get("due", {}).get("date", "") if t.get("due") else ""
-                    })
-                cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
-                if not cursor:
+            success = False
+            for attempt in range(3):  # retry each page up to 3 times
+                try:
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        raw = json.loads(resp.read())
+                    success = True
                     break
-            except Exception as e:
-                print(f"WARN: fetch today: {e}", file=sys.stderr)
+                except Exception as e:
+                    print(f"WARN: fetch today page (attempt {attempt+1}): {e}", file=sys.stderr)
+                    if attempt < 2:
+                        import time; time.sleep(1)
+            if not success:
+                return None  # signal total failure
+            tasks = raw if isinstance(raw, list) else raw.get("results", [])
+            for t in tasks:
+                all_tasks.append({
+                    "id": t.get("id", ""),
+                    "content": t.get("content", ""),
+                    "labels": t.get("labels", []),
+                    "due": t.get("due", {}).get("date", "") if t.get("due") else ""
+                })
+            cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
+            if not cursor:
                 break
         return all_tasks
 
@@ -477,21 +484,27 @@ def refresh_task_queue() -> dict:
         today_future = pool.submit(fetch_today)
         for future in as_completed(futures):
             results[futures[future]] = future.result()
-        results["today"] = today_future.result()
+        today_result = today_future.result()
 
-    # Preserve existing "today" if the new fetch returned empty (API failure)
-    if not results.get("today") and TASK_QUEUE_PATH.exists():
+    # Atomic write: only update "today" if the fetch fully succeeded
+    if today_result is not None:
+        results["today"] = today_result
+    elif TASK_QUEUE_PATH.exists():
         try:
             old = json.loads(TASK_QUEUE_PATH.read_text())
-            if old.get("today"):
-                results["today"] = old["today"]
-                print("WARN: fetch_today returned empty, keeping stale cache", file=sys.stderr)
+            results["today"] = old.get("today", [])
+            print("WARN: fetch_today failed after retries, keeping old cache", file=sys.stderr)
         except Exception:
-            pass
+            results["today"] = []
+    else:
+        results["today"] = []
 
+    # Atomic file write: write to temp, then rename
+    tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": datetime.now().isoformat()}
     cache.update(results)
-    TASK_QUEUE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n")
+    tmp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n")
+    tmp_path.rename(TASK_QUEUE_PATH)
     return cache
 
 
