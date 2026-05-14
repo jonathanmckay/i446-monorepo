@@ -479,12 +479,15 @@ def refresh_task_queue() -> dict:
                 break
         return all_tasks
 
+    # Fetch labels in parallel, then fetch today AFTER (not concurrent).
+    # Running all 6+ requests simultaneously triggers Todoist rate limiting,
+    # which intermittently returns empty results for fetch_today.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(fetch_label, lbl): key for lbl, key in zip(labels, keys)}
-        today_future = pool.submit(fetch_today)
         for future in as_completed(futures):
             results[futures[future]] = future.result()
-        today_result = today_future.result()
+    # Now fetch today sequentially (no rate-limit contention)
+    today_result = fetch_today()
 
     # Atomic write: only update "today" if the fetch fully succeeded
     # Protect "today": if fetch returned empty/None but old cache had data, retry once then keep old
