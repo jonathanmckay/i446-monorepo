@@ -2,6 +2,7 @@
 # dtd — fuzzy task picker that runs /did directly (no Claude needed)
 # UI-first: fzf stays responsive, background worker processes tasks serially,
 # fzf header shows latest completion status.
+# KEY: cache is snapshotted ONCE at startup. No mid-session re-reads.
 
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
@@ -26,9 +27,11 @@ LOCAL_TODAY=$(date +%Y-%m-%d)
 DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
   'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
 
-# Invariant: tasks due today should be >= 30 (typical day has 80-100).
-# If below threshold, the cache is stale or corrupted — force refresh.
-due_today=$(jq --arg today "$LOCAL_TODAY" '
+# ── SNAPSHOT the cache into a variable. Never read the file again. ──
+CACHE_SNAPSHOT=$(cat "$CACHE")
+
+# Invariant check on the snapshot
+due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
   (
     [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
     | flatten
@@ -37,11 +40,12 @@ due_today=$(jq --arg today "$LOCAL_TODAY" '
   | map(select(.content != null))
   | group_by(.id) | map(.[0])
   | length
-' "$CACHE")
+')
 if [[ $due_today -lt 30 ]]; then
   echo "⚠ Only $due_today tasks due today (expected ~80+). Refreshing..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  due_today=$(jq --arg today "$LOCAL_TODAY" '
+  CACHE_SNAPSHOT=$(cat "$CACHE")
+  due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
     (
       [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
       | flatten
@@ -50,7 +54,7 @@ if [[ $due_today -lt 30 ]]; then
     | map(select(.content != null))
     | group_by(.id) | map(.[0])
     | length
-  ' "$CACHE")
+  ')
   echo "  After refresh: $due_today tasks"
 fi
 
@@ -79,14 +83,14 @@ WORKER_PID=$!
 
 exec 3>"$DTD_FIFO"
 
-# --- UI loop ---
+# --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
 
   session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -c -R -s 'split("\n") | map(select(. != ""))')
   all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
-  task=$(jq -r --argjson completed "$all_completed" --arg today "$LOCAL_TODAY" '
+  task=$(echo "$CACHE_SNAPSHOT" | jq -r --argjson completed "$all_completed" --arg today "$LOCAL_TODAY" '
     (
       [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
       | flatten
@@ -103,7 +107,7 @@ while true; do
       ($completed | index($prefix) | not)
     )
     | $raw
-  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr")
+  ' | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr")
 
   if [[ -z "$task" ]]; then
     break
