@@ -20,7 +20,8 @@ if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
 fi
 
-typeset -a session_done
+typeset -a session_done    # cleaned names (for display/dedup)
+typeset -a session_ids     # task IDs picked this session
 setopt NO_MONITOR 2>/dev/null
 LOCAL_TODAY=$(date +%Y-%m-%d)
 
@@ -65,12 +66,14 @@ while true; do
   # Read latest header
   hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
 
-  session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
+  session_exclude_names=$(printf '%s\n' "${session_done[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
+  session_exclude_ids=$(printf '%s\n' "${session_ids[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
 
-  task=$(jq -r --slurpfile done "$DONE" --argjson session "$session_exclude" --arg today "$LOCAL_TODAY" '
+  # Output "id\tcontent" so we can track which ID was picked
+  pick=$(jq -r --slurpfile done "$DONE" --argjson sess_names "$session_exclude_names" --argjson sess_ids "$session_exclude_ids" --arg today "$LOCAL_TODAY" '
     (
       (if ($done[0].date == $today) then ($done[0].names | map(ascii_downcase)) else [] end)
-      + ($session | map(ascii_downcase))
+      + ($sess_names | map(ascii_downcase))
     ) as $completed |
     (
       [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
@@ -80,15 +83,24 @@ while true; do
     | map(select(.content != null))
     | group_by(.id) | map(.[0])
     | .[]
-    | .content as $raw |
+    | select(.id != null)
+    | select(($sess_ids | index(.id)) | not)
+    | .content as $raw | .id as $tid |
     ($raw | gsub(" *\\([0-9]*\\)"; "") | gsub(" *\\[[0-9]*\\]"; "") | gsub(" *\\{[0-9]*\\}"; "") | gsub(" +$"; "") | gsub("  +"; " ") | ascii_downcase) as $clean |
     ($clean | split(" - ") | .[0]) as $prefix |
     select(
       ($completed | index($clean) | not) and
       ($completed | index($prefix) | not)
     )
-    | $raw
-  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr")
+    | $tid + "\t" + $raw
+  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr" --with-nth=2.. --delimiter='\t')
+
+  if [[ -z "$pick" ]]; then
+    break
+  fi
+
+  task_id=$(echo "$pick" | cut -f1)
+  task=$(echo "$pick" | cut -f2-)
 
   if [[ -z "$task" ]]; then
     break
@@ -103,6 +115,7 @@ while true; do
   clean="$REPLY"
 
   session_done+=("$clean")
+  session_ids+=("$task_id")
 
   # Send to worker via FIFO (non-blocking, goes into pipe buffer)
   echo "$clean" >&3
