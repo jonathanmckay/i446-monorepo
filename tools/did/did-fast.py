@@ -487,17 +487,29 @@ def refresh_task_queue() -> dict:
         today_result = today_future.result()
 
     # Atomic write: only update "today" if the fetch fully succeeded
-    if today_result is not None:
-        results["today"] = today_result
-    elif TASK_QUEUE_PATH.exists():
+    # Protect "today": if fetch returned empty/None but old cache had data, retry once then keep old
+    old_today = []
+    if TASK_QUEUE_PATH.exists():
         try:
-            old = json.loads(TASK_QUEUE_PATH.read_text())
-            results["today"] = old.get("today", [])
-            print("WARN: fetch_today failed after retries, keeping old cache", file=sys.stderr)
+            old_today = json.loads(TASK_QUEUE_PATH.read_text()).get("today", [])
         except Exception:
-            results["today"] = []
+            pass
+
+    if today_result and len(today_result) > 0:
+        results["today"] = today_result
+    elif old_today:
+        # Retry once before giving up
+        print(f"WARN: fetch_today returned {len(today_result) if today_result is not None else 'None'}, retrying...", file=sys.stderr)
+        import time; time.sleep(2)
+        retry_result = fetch_today()
+        if retry_result and len(retry_result) > 0:
+            results["today"] = retry_result
+            print(f"  retry succeeded: {len(retry_result)} tasks", file=sys.stderr)
+        else:
+            results["today"] = old_today
+            print(f"  retry also failed, keeping {len(old_today)} from cache", file=sys.stderr)
     else:
-        results["today"] = []
+        results["today"] = today_result or []
 
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")

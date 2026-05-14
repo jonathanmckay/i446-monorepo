@@ -26,6 +26,34 @@ LOCAL_TODAY=$(date +%Y-%m-%d)
 DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
   'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
 
+# Invariant: tasks due today should be >= 30 (typical day has 80-100).
+# If below threshold, the cache is stale or corrupted — force refresh.
+due_today=$(jq --arg today "$LOCAL_TODAY" '
+  (
+    [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
+    | flatten
+    | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
+  ) + [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today)]
+  | map(select(.content != null))
+  | group_by(.id) | map(.[0])
+  | length
+' "$CACHE")
+if [[ $due_today -lt 30 ]]; then
+  echo "⚠ Only $due_today tasks due today (expected ~80+). Refreshing..."
+  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  due_today=$(jq --arg today "$LOCAL_TODAY" '
+    (
+      [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
+      | flatten
+      | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
+    ) + [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today)]
+    | map(select(.content != null))
+    | group_by(.id) | map(.[0])
+    | length
+  ' "$CACHE")
+  echo "  After refresh: $due_today tasks"
+fi
+
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
 mkfifo "$DTD_FIFO"
@@ -84,10 +112,15 @@ while true; do
   # Strip annotations
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
-  # Let user edit/append args
-  REPLY="$clean"
-  vared -p "→ " REPLY
-  clean="$REPLY"
+  # Tasks that need args (e.g. cpap needs a score)
+  clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
+  case "$clean_lower" in
+    cpap)
+      REPLY="$clean "
+      vared -p "→ " REPLY
+      clean="$REPLY"
+      ;;
+  esac
 
   session_done+=("$clean")
   echo "$clean" >&3
