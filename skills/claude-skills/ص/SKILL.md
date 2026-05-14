@@ -1,12 +1,12 @@
 ---
 name: "ص"
-description: "Log prayers to Neon 0n tab (AM column). No args: +1. With number: set total. Usage: /ص [count]"
+description: "Log prayers to Neon 0n tab (AP column). No args: +1. With number: set total. Usage: /ص [count]"
 user-invocable: true
 ---
 
 # Prayer Counter (/ص)
 
-Log salah count to Neon spreadsheet, column AM (ص) in the 0n sheet.
+Log salah count to Neon spreadsheet, column AP (ص) in the 0n sheet.
 
 ## Behavior
 
@@ -46,7 +46,7 @@ tell application "Microsoft Excel"
         end if
     end repeat
     if todayRow > 0 then
-        set theCell to cell ("AM" & todayRow) of theSheet
+        set theCell to cell ("AP" & todayRow) of theSheet
         set oldVal to string value of theCell
         if oldVal is "" or oldVal is missing value then
             set val to 0
@@ -54,6 +54,7 @@ tell application "Microsoft Excel"
             set val to oldVal as number
         end if
         set value of theCell to (val + 1)
+        save active workbook
         return (val + 1) as text
     else
         return "no row for " & today
@@ -79,7 +80,8 @@ tell application "Microsoft Excel"
         end if
     end repeat
     if todayRow > 0 then
-        set value of cell ("AM" & todayRow) of theSheet to N
+        set value of cell ("AP" & todayRow) of theSheet to N
+        save active workbook
         return "N"
     else
         return "no row for " & today

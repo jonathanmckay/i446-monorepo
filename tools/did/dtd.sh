@@ -96,6 +96,12 @@ while true; do
 
   # Strip annotations: (N), [N], {N}
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+
+  # Let user edit/append args (e.g. "cpap" → "cpap 5"). Enter accepts as-is.
+  REPLY="$clean"
+  vared -p "→ " REPLY
+  clean="$REPLY"
+
   session_done+=("$clean")
 
   # Send to worker via FIFO (non-blocking, goes into pipe buffer)
@@ -105,14 +111,33 @@ done
 # Close FIFO write end → worker sees EOF → finishes remaining tasks → exits
 exec 3>&-
 
-echo ""
-echo "Waiting for background tasks to finish..."
-wait $WORKER_PID 2>/dev/null
-
-# Show full log
-if [[ -s "$DTD_LOG" ]]; then
+if [[ ${#session_done[@]} -gt 0 ]]; then
   echo ""
-  cat "$DTD_LOG"
+  echo "Waiting for ${#session_done[@]} background tasks to finish..."
+  # Wait with a visible spinner so the user knows it's working
+  while kill -0 $WORKER_PID 2>/dev/null; do
+    sleep 1
+    printf "."
+  done
+  echo ""
+
+  # Show full log
+  if [[ -s "$DTD_LOG" ]]; then
+    cat "$DTD_LOG"
+  fi
+
+  # Verify: check if all tasks were processed
+  logged=$(wc -l < "$DTD_LOG" 2>/dev/null || echo 0)
+  if [[ $logged -lt ${#session_done[@]} ]]; then
+    echo ""
+    echo "⚠ Only $logged/${#session_done[@]} tasks processed. Running remaining..."
+    for clean in "${session_done[@]}"; do
+      if ! grep -qi "$(echo "$clean" | head -c 20)" "$DTD_LOG" 2>/dev/null; then
+        echo "  → /did $clean"
+        python3 "$DID_FAST" "$clean" 2>&1 | jq -r '.results[]? | "  ✓ \(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null
+      fi
+    done
+  fi
 fi
 
 # Cleanup
