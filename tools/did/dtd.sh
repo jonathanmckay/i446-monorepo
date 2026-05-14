@@ -20,12 +20,13 @@ if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
 fi
 
-typeset -a session_done    # cleaned names (for display/dedup)
-typeset -a session_ids     # task IDs picked this session
+typeset -a session_done
 setopt NO_MONITOR 2>/dev/null
 LOCAL_TODAY=$(date +%Y-%m-%d)
+DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
+  'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
 
-# --- Background worker: reads task names from FIFO, processes serially ---
+# --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
@@ -34,116 +35,83 @@ echo "ready" > "$DTD_HDR"
   while IFS= read -r task_clean; do
     [[ -z "$task_clean" ]] && continue
     echo "⏳ $task_clean" > "$DTD_HDR"
-
     result=$(python3 "$DID_FAST" "$task_clean" 2>&1)
     ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
-    agent=$(echo "$result" | jq -r '.agent_needed[]?.name' 2>/dev/null)
-
     if [[ -n "$ok" ]]; then
       echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
     else
-      echo "? $task_clean (no result)" > "$DTD_HDR"
-      echo "? $task_clean (no result)" >> "$DTD_LOG"
-    fi
-
-    if [[ -n "$agent" ]]; then
-      echo "⚠ agent: $agent" >> "$DTD_LOG"
+      echo "? $task_clean" > "$DTD_HDR"
+      echo "? $task_clean" >> "$DTD_LOG"
     fi
   done < "$DTD_FIFO"
-
-  # No cache refresh here — it races with the API and can nuke the "today" section.
-  # The cache was populated before dtd started; it's good enough for this session.
   echo "done" > "$DTD_HDR"
 ) &
 WORKER_PID=$!
 
-# Keep FIFO write end open for entire session (prevents EOF on each write)
 exec 3>"$DTD_FIFO"
 
 # --- UI loop ---
 while true; do
-  # Read latest header
   hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
 
-  session_exclude_names=$(printf '%s\n' "${session_done[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
-  session_exclude_ids=$(printf '%s\n' "${session_ids[@]}" | jq -R -s 'split("\n") | map(select(. != ""))')
+  session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -c -R -s 'split("\n") | map(select(. != ""))')
+  all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
-  # Output "id\tcontent" so we can track which ID was picked
-  pick=$(jq -r --slurpfile done "$DONE" --argjson sess_names "$session_exclude_names" --argjson sess_ids "$session_exclude_ids" --arg today "$LOCAL_TODAY" '
-    (
-      (if ($done[0].date == $today) then ($done[0].names | map(ascii_downcase)) else [] end)
-      + ($sess_names | map(ascii_downcase))
-    ) as $completed |
+  task=$(jq -r --argjson completed "$all_completed" --arg today "$LOCAL_TODAY" '
     (
       [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
       | flatten
-      | map(select(.due != "" and .due <= $today))
-    ) + [(.["today"] // [])[] | select(.due != "" and .due <= $today)]
+      | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
+    ) + [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today)]
     | map(select(.content != null))
     | group_by(.id) | map(.[0])
     | .[]
-    | select(.id != null)
-    | select(($sess_ids | index(.id)) | not)
-    | .content as $raw | .id as $tid |
+    | .content as $raw |
     ($raw | gsub(" *\\([0-9]*\\)"; "") | gsub(" *\\[[0-9]*\\]"; "") | gsub(" *\\{[0-9]*\\}"; "") | gsub(" +$"; "") | gsub("  +"; " ") | ascii_downcase) as $clean |
     ($clean | split(" - ") | .[0]) as $prefix |
     select(
       ($completed | index($clean) | not) and
       ($completed | index($prefix) | not)
     )
-    | $tid + "\t" + $raw
-  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr" --with-nth=2.. --delimiter='\t')
-
-  if [[ -z "$pick" ]]; then
-    break
-  fi
-
-  task_id=$(echo "$pick" | cut -f1)
-  task=$(echo "$pick" | cut -f2-)
+    | $raw
+  ' "$CACHE" | fzf --height 40 --prompt="did> " --layout=reverse --header="  $hdr")
 
   if [[ -z "$task" ]]; then
     break
   fi
 
-  # Strip annotations: (N), [N], {N}
+  # Strip annotations
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
-  # Let user edit/append args (e.g. "cpap" → "cpap 5"). Enter accepts as-is.
+  # Let user edit/append args
   REPLY="$clean"
   vared -p "→ " REPLY
   clean="$REPLY"
 
   session_done+=("$clean")
-  session_ids+=("$task_id")
-
-  # Send to worker via FIFO (non-blocking, goes into pipe buffer)
   echo "$clean" >&3
 done
 
-# Close FIFO write end → worker sees EOF → finishes remaining tasks → exits
 exec 3>&-
 
 if [[ ${#session_done[@]} -gt 0 ]]; then
   echo ""
-  echo "Waiting for ${#session_done[@]} background tasks to finish..."
-  # Wait with a visible spinner so the user knows it's working
+  echo "Waiting for ${#session_done[@]} tasks..."
   while kill -0 $WORKER_PID 2>/dev/null; do
     sleep 1
     printf "."
   done
   echo ""
 
-  # Show full log
   if [[ -s "$DTD_LOG" ]]; then
     cat "$DTD_LOG"
   fi
 
-  # Verify: check if all tasks were processed
   logged=$(wc -l < "$DTD_LOG" 2>/dev/null || echo 0)
+  logged=${logged// /}
   if [[ $logged -lt ${#session_done[@]} ]]; then
-    echo ""
-    echo "⚠ Only $logged/${#session_done[@]} tasks processed. Running remaining..."
+    echo "⚠ $logged/${#session_done[@]} processed. Running remaining..."
     for clean in "${session_done[@]}"; do
       if ! grep -qi "$(echo "$clean" | head -c 20)" "$DTD_LOG" 2>/dev/null; then
         echo "  → /did $clean"
@@ -153,5 +121,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-# Cleanup
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
