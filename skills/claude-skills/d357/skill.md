@@ -26,14 +26,16 @@ Absent or `pid: null` → no recording active.
 ### `/d357 <name>` — start recording
 
 1. Check state.json; if a recording is running, **abort** and tell the user to stop it first.
-2. Parse flags from the name: `--no-teams` for mic-only mode (in-person). Default captures both mic + system audio.
+2. **Parse the input.** Split on comma: `<name>[, <start_time>]`. If a trailing HHMM or HH:MM is present after a comma, use it as the Toggl start time (backdated). Also parse `--no-teams` flag from the name for mic-only mode.
+   - Examples: `/d357 Francois 1:1, 1000` → name="Francois 1:1", start_time=10:00
+   - `/d357 SLT metrics` → name="SLT metrics", start_time=now (default)
 3. **Auto-switch audio output** (Teams mode only, skip for `--no-teams`): Run `SwitchAudioSource -s "Meet Output"` to ensure system audio routes through BlackHole. If SwitchAudioSource is not installed or the device doesn't exist, warn but continue.
 4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
    - `calendar_minutes`: the event's scheduled duration
    - `project`: `i9` if the event came from the Work calendar id; `m5x2` otherwise (default)
    - Prefer the calendar event title as the Toggl description if it differs from user input
    - Microsoft/Outlook events that aren't synced into the personal Google Work calendar won't be found — that's a known gap
-5. **Start Toggl timer**: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project>`. Record the returned entry ID.
+5. **Start Toggl timer**: If `start_time` was provided, use `--at HH:MM` to backdate: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project> --at <HH:MM>`. Otherwise start at now: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project>`. Record the returned entry ID.
 6. Launch recording in background using a **fixed log path** (`/tmp/d357-active.log`), not `$$`:
    ```bash
    cd ~/i446-monorepo/tools/meet && \
