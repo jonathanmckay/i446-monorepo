@@ -58,11 +58,44 @@ DETAIL_AFTER_MIN = 120
 SLOT_MIN = 15
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
+PROJECT_CODE = {}
 try:
     from mcp.toggl_server.config import PROJECT_MAP  # type: ignore
     PROJECT_CODE = {v: k for k, v in PROJECT_MAP.items()}
 except Exception:
-    PROJECT_CODE = {}
+    pass
+
+# Neon palette → vault/i447/neon-color-pallette.md
+PROJECT_COLORS = {
+    "g245": "#00e676",   # Matrix
+    "epcn": "#00bfa5",   # Miami Vice
+    "s897": "#1b5e20",   # Emerald Shadow
+    "hcmc2": "#ffd600",  # Lightning
+    "xk87": "#fd6c1d",   # Tangerine Dream
+    "xk88": "#e65100",   # Molten
+    "hci":  "#63ede0",   # Vaporwave
+    "i9":   "#2979ff",   # Electric Blue
+    "n156": "#1249b4",   # Sapphire
+    "hcmc": "#0d3b66",   # Deep Sea
+    "m5x2": "#d50032",   # Crimson
+    "hcb":  "#f81d78",   # Bubblegum Shock
+    "hcbp": "#ff4081",   # Flamingo
+    "infra":"#9e9e9e",   # Concrete
+    "i444": "#616161",   # Graphite
+    "i447": "#a89c8a",   # Shadow (lightened from #303030 for readability on dark)
+    "睡觉": "#666666",    # Abyss (lightened from #0a0a0a)
+    "hcm":  "#aa00ff",   # Purple Haze (no map entry; reasonable fit for hcm parent)
+    "hcmp": "#7c4dff",   # Lavender Lightning
+    "hcmr": "#bda6ff",   # Weak-sauce Purple
+    "家":   "#ff4136",    # Ferrari (family)
+}
+
+
+def project_style(pid_or_code) -> str:
+    """Return a prompt_toolkit style string for a project id or code."""
+    code = pid_or_code if isinstance(pid_or_code, str) else proj_code(pid_or_code)
+    hexv = PROJECT_COLORS.get(code)
+    return f"fg:{hexv}" if hexv else ""
 
 
 # ─── State ─────────────────────────────────────────────────────────────────
@@ -575,3 +608,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, EOFError):
         pass
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
