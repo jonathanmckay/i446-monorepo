@@ -1,12 +1,12 @@
 ---
 name: "-1g"
-description: "Set goals for the current 2-hour block. Writes to build order and syncs to Todoist with #关键径路. Usage: /-1g [next] <goals>"
+description: "Set goals for the current 2-hour block. Writes to build order and syncs to Todoist with #-1g. Usage: /-1g [next] <goals>"
 user-invocable: true
 ---
 
 # Set 2-Hour Block Goals (/-1g)
 
-Set goals for the current (or next) 2-hour time block. Goals go into the `-1₲` section of the build order file and into Todoist with `#关键径路` + `#-1g` labels.
+Set goals for the current (or next) 2-hour time block. Goals go into the `-1₲` section of the build order file and into Todoist with the `#-1g` label.
 
 ## Arguments
 
@@ -40,7 +40,7 @@ Times outside 04:00-21:59 default to 卯 (block 0).
 - **Build order**: `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`
 - **Section**: `## -1₲` — goals go under the matching 地支 time heading
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
-- **Todoist labels**: `#关键径路` AND `#-1g` on every task
+- **Todoist labels**: `#-1g` on every task
 
 ## Steps
 
@@ -65,7 +65,7 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 For each **new** goal (no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
 - **Content**: the goal text
 - **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
-- **Labels**: `["#关键径路", "#-1g"]`
+- **Labels**: `["#-1g"]`
 - **Priority**: `p1`
 - **Due**: `today`
 - **Duration**: from `{N}` annotation if present

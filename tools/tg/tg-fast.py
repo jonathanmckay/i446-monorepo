@@ -226,6 +226,10 @@ def main():
     raw = " ".join(sys.argv[1:]).strip()
 
     # Simple commands
+    if raw.lower().startswith("--resolve "):
+        _, project, _ = resolve(raw[10:])
+        print(project)
+        return
     if raw.lower() == "stop":
         print(cmd_stop())
         return

@@ -454,6 +454,7 @@ def _refresh_task_queue_inner() -> dict:
                 tasks = data.get("results", data) if isinstance(data, dict) else data
                 return [{"id": t["id"], "content": t["content"],
                          "labels": t.get("labels", []),
+                         "priority": t.get("priority", "p4"),
                          "due": t.get("due", {}).get("date", "") if t.get("due") else ""}
                         for t in tasks]
         except Exception as e:
@@ -492,6 +493,7 @@ def _refresh_task_queue_inner() -> dict:
                     "id": t.get("id", ""),
                     "content": t.get("content", ""),
                     "labels": t.get("labels", []),
+                    "priority": t.get("priority", "p4"),
                     "due": t.get("due", {}).get("date", "") if t.get("due") else ""
                 })
             cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
