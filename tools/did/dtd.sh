@@ -61,7 +61,7 @@ if [[ $due_today -lt 30 ]]; then
 fi
 
 # --- Background worker ---
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "/tmp/dtd-$$.start.sh"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
 
@@ -85,16 +85,12 @@ WORKER_PID=$!
 
 exec 3>"$DTD_FIFO"
 
-# --- Helper: fetch current Toggl timer as 1-line string ---
-_toggl_header() {
-  local cur
-  cur=$(python3 "$TOGGL_CLI" current 2>/dev/null)
+# --- Helper: format toggl current output into 1-line string ---
+_parse_toggl() {
+  local cur="$1"
   if [[ "$cur" == Running:* ]]; then
-    # Parse "Running: HH:MM-running <desc> @<project> (running) [id:NNN]"
     local body="${cur#Running: }"
-    # Strip time prefix "HH:MM-running "
     body=$(echo "$body" | sed -E 's/^[0-9]{2}:[0-9]{2}-running //')
-    # Strip trailing [id:...] and (running)
     body=$(echo "$body" | sed -E 's/ *\(running\)//; s/ *\[id:[0-9]*\]//')
     echo "▶ $body"
   else
@@ -102,11 +98,30 @@ _toggl_header() {
   fi
 }
 
+# Fetch timer ONCE at startup (not every loop iteration)
+TOGGL_CURRENT=$(python3 "$TOGGL_CLI" current 2>/dev/null)
+TIMER_HDR=$(_parse_toggl "$TOGGL_CURRENT")
+
+# --- Start script used by fzf ctrl-s binding ---
+DTD_START="/tmp/dtd-$$.start.sh"
+cat > "$DTD_START" << STARTEOF
+#!/bin/zsh
+TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
+TG_FAST="\$HOME/i446-monorepo/tools/tg/tg-fast.py"
+HDR="$DTD_HDR"
+task="\$1"
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
+python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
+python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
+echo "▶ Started: \$clean → \$project" > "\$HDR"
+STARTEOF
+chmod +x "$DTD_START"
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   worker_hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
-  timer_hdr=$(_toggl_header)
-  combined_hdr="$timer_hdr
+  combined_hdr="$TIMER_HDR
   $worker_hdr"
 
   session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -c -R -s 'split("\n") | map(select(. != ""))')
@@ -144,11 +159,11 @@ while true; do
       ($completed | index($prefix) | not)
     )
     | $raw
-  ' | fzf --height 40 --prompt="did> " --layout=reverse --print-query --header="$combined_hdr")
+  ' | fzf --height 40 --prompt="did> " --layout=reverse \
+      --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
+      --header="$combined_hdr  [ctrl-s: start timer]")
 
-  # --print-query: line 1 = typed query, line 2 = selected item
-  query=$(echo "$fzf_output" | head -1)
-  task=$(echo "$fzf_output" | tail -n +2 | head -1)
+  task="$fzf_output"
 
   if [[ -z "$task" ]]; then
     break
@@ -156,16 +171,6 @@ while true; do
 
   # Strip annotations
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
-
-  # --- START MODE: query begins with ">" ---
-  if [[ "$query" == ">"* ]]; then
-    # Resolve project via tg-fast.py --resolve
-    project=$(python3 "$TG_FAST" --resolve "$clean" 2>/dev/null)
-    python3 "$TOGGL_CLI" stop >/dev/null 2>&1
-    start_out=$(python3 "$TOGGL_CLI" start "$clean" $project 2>&1)
-    echo "Started: $clean → $project" > "$DTD_HDR"
-    continue
-  fi
 
   # --- DONE MODE (existing behavior) ---
   # Tasks that need args (e.g. cpap needs a score)
@@ -210,4 +215,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START"
