@@ -159,7 +159,25 @@ while true; do
       ($completed | index($prefix) | not)
     )
     | $raw
-  ' | fzf --height 40 --prompt="did> " --layout=reverse \
+  ' | awk -v w="${COLUMNS:-80}" '{
+    # Middle-truncate: keep beginning + "…" + trailing annotations
+    if (length <= w-2) { print; next }
+    # Find trailing annotations: capture everything from last ( or [ to end
+    tail = ""
+    s = $0
+    while (match(s, /[ ]*[\(\[\{][0-9]*[\)\]\}][ ]*[\(\[\{][0-9]*[\)\]\}].*$/)) {
+      tail = substr(s, RSTART)
+      break
+    }
+    if (tail == "" && match(s, /[ ]*[\(\[\{][0-9]*[\)\]\}][^()[\]{}]*$/)) {
+      tail = substr(s, RSTART)
+    }
+    if (tail == "") { tail = substr(s, length-14) }
+    tl = length(tail)
+    head_len = w - tl - 2
+    if (head_len < 10) head_len = 10
+    printf "%s…%s\n", substr($0, 1, head_len), tail
+  }' | fzf --height 40 --prompt="did> " --layout=reverse \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
       --header="$combined_hdr  [ctrl-s: start timer]")
 
