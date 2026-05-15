@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "group my thoughts for xbox and have an org chart": {
-      "todoist_id": "6gfHXpc6JGCwVxF2",
-      "minutes": 40
-    },
-    "do the gaming night": {
-      "todoist_id": "6gfHXpxPV4cQhWF2",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-05-15T03:55:01.365760-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-15T05:30:12.078057-07:00"
 }
