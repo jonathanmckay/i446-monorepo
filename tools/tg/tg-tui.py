@@ -471,19 +471,32 @@ def _(event):
 @kb.add("s", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
 def _(event):
     flash("stopping…")
-    res = run_tg_fast("stop")
-    flash(res)
-    fetch_current()
-    fetch_today()
+
+    async def _stop():
+        res = await asyncio.to_thread(run_tg_fast, "stop")
+        flash(res)
+        event.app.invalidate()
+        for delay in (0.4, 0.8, 1.5):
+            await asyncio.sleep(delay)
+            await asyncio.to_thread(fetch_current)
+            await asyncio.to_thread(fetch_today)
+            event.app.invalidate()
+
+    event.app.create_background_task(_stop())
 
 
 @kb.add("r", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
 def _(event):
     flash("refreshing…")
-    fetch_current()
-    fetch_today()
-    fetch_gcal(force=True)
-    flash("refreshed")
+
+    async def _refresh():
+        await asyncio.to_thread(fetch_current)
+        await asyncio.to_thread(fetch_today)
+        await asyncio.to_thread(fetch_gcal, True)
+        flash("refreshed")
+        event.app.invalidate()
+
+    event.app.create_background_task(_refresh())
 
 
 @kb.add("j", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
@@ -517,10 +530,19 @@ def _(event):
     if not text:
         return
     flash(f"$ tg {text}")
-    res = run_tg_fast(text)
-    flash(res, 6.0)
-    fetch_current()
-    fetch_today()
+
+    async def _run_and_refresh():
+        res = await asyncio.to_thread(run_tg_fast, text)
+        flash(res, 6.0)
+        event.app.invalidate()
+        # Toggl /current has propagation lag; poll a few times
+        for delay in (0.4, 0.8, 1.5):
+            await asyncio.sleep(delay)
+            await asyncio.to_thread(fetch_current)
+            await asyncio.to_thread(fetch_today)
+            event.app.invalidate()
+
+    event.app.create_background_task(_run_and_refresh())
 
 
 main_window = Window(

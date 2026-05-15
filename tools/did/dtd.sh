@@ -134,7 +134,7 @@ while true; do
     def prank: (. // 1) | (- .);
 
 
-    # Ordered sections: 0neon first, then 1neon, then critical path
+    # Ordered sections: 0neon → 1neon → #0g → 関键路径 → 夜neon → today by priority
     (
       [(.["0neon"] // [])[]] +
       [(.["1neon"] // [])[]] +
@@ -142,12 +142,18 @@ while true; do
       [(.["夜neon"] // [])[]]
       | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
     ) as $neon |
-    # Today bucket sorted by priority
+    # Extract #0g tasks from today bucket (daily goals, shown after 1neon)
     (
-      [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today)]
+      [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today
+        and ((.labels // []) | any(. == "#0g" or . == "#-1g")))]
+    ) as $goals |
+    # Remaining today tasks sorted by priority
+    (
+      [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today
+        and ((.labels // []) | any(. == "#0g" or . == "#-1g") | not))]
       | sort_by(.priority | prank)
     ) as $today_sorted |
-    ($neon + $today_sorted)
+    ($neon + $goals + $today_sorted)
     | map(select(.content != null))
     | reduce .[] as $t ([]; if [.[] | .id] | index($t.id) then . else . + [$t] end)
     | .[]
@@ -194,7 +200,7 @@ while true; do
   # Tasks that need args (e.g. cpap needs a score)
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2)
       REPLY="$clean "
       vared -p "→ " REPLY
       clean="$REPLY"
