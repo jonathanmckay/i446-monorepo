@@ -38,8 +38,26 @@ from config import AUTOSIGN_SENDERS, DB_PATH
 # ---------------------------------------------------------------------------
 
 POLL_INTERVAL = int(os.environ.get("LEASE_SIGNERD_POLL", "300"))  # 5 min default
-NOTIFY_THRESHOLD = 5  # send email for first N successful signings
 NOTIFY_TO = "mckay@m5c7.com"
+
+# File-based notification counter: write a number to this file to get notified
+# for that many upcoming successful signings. Decremented after each notification.
+_NOTIFY_REMAINING_PATH = Path.home() / ".config/m5x2/lease_notify_remaining"
+
+
+def _notify_remaining() -> int:
+    """Read how many notifications are still requested."""
+    try:
+        return int(_NOTIFY_REMAINING_PATH.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def _decrement_notify():
+    """Decrement the remaining notification counter."""
+    n = _notify_remaining()
+    if n > 0:
+        _NOTIFY_REMAINING_PATH.write_text(str(n - 1))
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -112,6 +130,7 @@ def send_notification(service, item: dict, meta: dict, result: dict, count: int)
         tenants = meta.get("tenants", "")
         ltype = meta.get("lease_type", "renewal")
         status = result.get("status", "unknown")
+        remaining = _notify_remaining()
         body = (
             f"Auto-sign #{count} completed (daemon).\n\n"
             f"Unit:    {unit}\n"
@@ -120,7 +139,7 @@ def send_notification(service, item: dict, meta: dict, result: dict, count: int)
             f"Status:  {status}\n"
             f"From:    {item.get('from', '')}\n"
             f"Subject: {item.get('preview', '')}\n\n"
-            f"(Notifications stop after {NOTIFY_THRESHOLD} successful signings.)"
+            f"({remaining} notification(s) remaining.)"
         )
         msg = email.mime.text.MIMEText(body)
         msg["To"] = NOTIFY_TO
@@ -174,9 +193,12 @@ def process_email(service, item: dict) -> bool:
 
     if status == "success":
         log.info(f"Signed successfully: {meta.get('unit', '')}")
-        count = _autodb.count_successful(DB_PATH)
-        if count <= NOTIFY_THRESHOLD:
+        remaining = _notify_remaining()
+        if remaining > 0:
+            count = _autodb.count_successful(DB_PATH)
             send_notification(service, item, meta, result, count)
+            _decrement_notify()
+            log.info(f"Notification sent ({remaining - 1} remaining)")
     else:
         log.warning(f"Signing failed ({status}): {error}")
 
