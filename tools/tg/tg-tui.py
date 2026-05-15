@@ -15,6 +15,7 @@ import datetime as dt
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Toggl API import
@@ -122,7 +123,7 @@ STATE = State()
 def fetch_current():
     try:
         STATE.current = toggl_api.get_current()
-        STATE.last_current_fetch = asyncio.get_event_loop().time()
+        STATE.last_current_fetch = time.monotonic()
     except Exception as e:
         flash(f"toggl current err: {e}")
 
@@ -157,7 +158,7 @@ def fetch_today():
             })
         out.sort(key=lambda x: x["start_dt"])
         STATE.entries = out
-        STATE.last_toggl_fetch = asyncio.get_event_loop().time()
+        STATE.last_toggl_fetch = time.monotonic()
     except Exception as e:
         flash(f"toggl today err: {e}")
 
@@ -168,7 +169,7 @@ def fetch_gcal(force=False):
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + dt.timedelta(days=1)
         STATE.events = gcal_client.list_events(day_start, day_end, force=force)
-        STATE.last_gcal_fetch = asyncio.get_event_loop().time()
+        STATE.last_gcal_fetch = time.monotonic()
     except Exception as e:
         flash(f"gcal err: {e}")
 
@@ -177,7 +178,7 @@ def fetch_gcal(force=False):
 
 def flash(msg: str, secs: float = 4.0):
     STATE.flash = msg
-    STATE.flash_until = asyncio.get_event_loop().time() + secs
+    STATE.flash_until = time.monotonic() + secs
 
 
 def proj_code(pid):
@@ -408,7 +409,7 @@ def render_outlook() -> list[tuple[str, str]]:
 
 def render_footer() -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
-    if STATE.flash and asyncio.get_event_loop().time() < STATE.flash_until:
+    if STATE.flash and time.monotonic() < STATE.flash_until:
         out.append(("class:flash", f" ▸ {STATE.flash}\n"))
     out.append(("class:hint", " [c]hange [s]top [r]efresh [j/k]scroll [q]uit\n"))
     return out
@@ -562,7 +563,7 @@ input_window = Window(
     content=BufferControl(buffer=input_buffer, focusable=True),
     height=1,
 )
-prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1)
+prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1, width=Dimension.exact(5))
 
 from prompt_toolkit.layout import VSplit  # noqa: E402
 
