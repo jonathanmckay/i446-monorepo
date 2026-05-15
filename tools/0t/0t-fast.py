@@ -82,32 +82,42 @@ def get_toggl_entries(d: date) -> list[dict]:
     return _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
 
 
-TAG_COLUMNS = {"-1": "AU", "-2": "AV", "其他人": "AS"}
+TAG_COLUMNS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX"}
+PROJECT_COLUMNS = {163129781: ("xk87", "AZ")}  # project_id → (name, 0n column)
 
 
-def compute_tag_minutes(yesterday: date, today: date) -> dict[str, int]:
-    """Sum minutes for entries tagged -1, -2, or 其他人 across yesterday+today."""
+def compute_tag_minutes(yesterday: date, today: date) -> tuple[dict[str, int], dict[str, int]]:
+    """Sum minutes for tagged entries and project entries across yesterday+today.
+    Returns (tag_totals, project_totals) where keys are tag/project names."""
     all_entries = get_toggl_entries(yesterday) + get_toggl_entries(today)
-    totals: dict[str, int] = {}
+    tag_totals: dict[str, int] = {}
+    proj_totals: dict[str, int] = {}
     for e in all_entries:
-        tags = e.get("tags") or []
         dur = e.get("duration", 0)
         if dur <= 0:
             continue
         minutes = dur // 60
-        for tag in tags:
+        for tag in (e.get("tags") or []):
             if tag in TAG_COLUMNS:
-                totals[tag] = totals.get(tag, 0) + minutes
-    return totals
+                tag_totals[tag] = tag_totals.get(tag, 0) + minutes
+        pid = e.get("project_id")
+        if pid in PROJECT_COLUMNS:
+            name = PROJECT_COLUMNS[pid][0]
+            proj_totals[name] = proj_totals.get(name, 0) + minutes
+    return tag_totals, proj_totals
 
 
-def write_tag_minutes(tag_totals: dict[str, int], target_date: date) -> str:
-    """Write tag minute sums to 0n columns for the target date's row."""
-    if not tag_totals:
+def write_tag_minutes(tag_totals: dict[str, int], target_date: date,
+                      proj_totals: dict[str, int] | None = None) -> str:
+    """Write tag and project minute sums to 0n columns for the target date's row."""
+    if not tag_totals and not proj_totals:
         return "no tagged entries"
     set_lines = []
     for tag, minutes in tag_totals.items():
         col = TAG_COLUMNS[tag]
+        set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
+    for name, minutes in (proj_totals or {}).items():
+        col = next(c for pid, (n, c) in PROJECT_COLUMNS.items() if n == name)
         set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
     set_block = "\n".join(set_lines)
     month = target_date.month
@@ -341,10 +351,10 @@ def main():
 
     # 3. Scan tags and write to 0n
     try:
-        tag_totals = compute_tag_minutes(yesterday, today)
-        if tag_totals:
-            tag_result = write_tag_minutes(tag_totals, yesterday)
-            output["tags"] = {"totals": tag_totals, "write": tag_result}
+        tag_totals, proj_totals = compute_tag_minutes(yesterday, today)
+        if tag_totals or proj_totals:
+            tag_result = write_tag_minutes(tag_totals, yesterday, proj_totals)
+            output["tags"] = {"totals": tag_totals, "projects": proj_totals, "write": tag_result}
         else:
             output["tags"] = "none"
     except RuntimeError as e:
