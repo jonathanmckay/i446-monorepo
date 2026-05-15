@@ -1,16 +1,8 @@
 {
   "version": 1,
   "tasks": {
-    "1 i9 / 1 m5x2": {
-      "todoist_id": "6gfHXpRWvC8H5vhR",
-      "minutes": 40
-    },
     "group my thoughts for xbox and have an org chart": {
       "todoist_id": "6gfHXpc6JGCwVxF2",
-      "minutes": 40
-    },
-    "tasks down to 70": {
-      "todoist_id": "6gfHXpvjfhR2Xhh2",
       "minutes": 40
     },
     "do the gaming night": {
@@ -18,5 +10,5 @@
       "minutes": 40
     }
   },
-  "last_sync": "2026-05-14T18:00:03.296801-07:00"
+  "last_sync": "2026-05-14T20:00:05.813131-07:00"
 }
