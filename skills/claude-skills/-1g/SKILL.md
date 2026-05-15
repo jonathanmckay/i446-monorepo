@@ -50,7 +50,14 @@ Get current local time (America/Los_Angeles). Compute which block using `(hour -
 
 ### Step 2: Parse goals
 
-Extract goal items from the user's input. Each line starting with `-` or `*` or a numbered list is one goal. If no list markers, split by newlines. Strip checkbox syntax if present (e.g., `- [ ] foo` becomes `foo`). Preserve `{N}` minute annotations.
+Extract goal items from the user's input. Each line starting with `-` or `*` or a numbered list is one goal. If no list markers, split by newlines. Strip checkbox syntax if present (e.g., `- [ ] foo` becomes `foo`). Preserve `{N}` bonus point annotations.
+
+**Auto-estimate bonus points:** If a goal does NOT already contain `{N}`, estimate and append one. Use `{5}` to `{20}` based on the goal's ambition and difficulty:
+- Quick/routine tasks (send a message, check something, review): `{5}`
+- Medium tasks (write something, prep, research): `{8}` to `{12}`
+- Ambitious/hard tasks (deep work, build, create, ship): `{15}` to `{20}`
+
+Always add the estimate. Never leave a goal without `{N}`.
 
 ### Step 3: Update build order markdown
 
