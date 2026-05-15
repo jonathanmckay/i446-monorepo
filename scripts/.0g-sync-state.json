@@ -1,5 +1,30 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-15T08:00:08.865626-07:00"
+  "tasks": {
+    "solicit feedback for all reports": {
+      "todoist_id": "6gfXp4mCJgRfpcX2",
+      "minutes": 60
+    },
+    "prep the tuesday offsite": {
+      "todoist_id": "6gfXp543693x3Xm2",
+      "minutes": 60
+    },
+    "send stephany feedback": {
+      "todoist_id": "6gfXp56V4XJwJJ5R",
+      "minutes": 20
+    },
+    "hiit during bball": {
+      "todoist_id": "6gfXp58xx7jWqRVR",
+      "minutes": 20
+    },
+    "interview questions": {
+      "todoist_id": "6gfXp5FFFXQ7gPw2",
+      "minutes": 20
+    },
+    "daily update": {
+      "todoist_id": "6gfXp5JP4W9cCmF2",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-05-15T10:00:07.407398-07:00"
 }
