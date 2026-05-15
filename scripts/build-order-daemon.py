@@ -23,12 +23,15 @@ Usage:
 """
 
 import argparse
+import base64
 import datetime as dt
+import json
 import os
 import re
 import smtplib
 import subprocess
 import sys
+import urllib.request
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -611,6 +614,9 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
     neon_add_12_to_y(today, dry_run=dry_run)
     annotate_block_fired(hour, dry_run=dry_run)
 
+    # Toggl tag/project aggregation (same 2h cadence)
+    run_toggl_sync(dry_run=dry_run)
+
 
 # --- Email rating ---
 
@@ -854,11 +860,147 @@ def defer_unchecked_neg1(dry_run=False):
     return {"deferred": len(keep), "dropped": len(dropped)}
 
 
+# --- Mode: toggl-sync (tag/project time aggregation to 0n) ---
+
+TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
+
+# Tag → 0n column letter
+TOGGL_TAG_COLS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX"}
+# Project ID → 0n column letter
+TOGGL_PROJ_COLS = {163129781: "AZ"}  # xk87 → ∑xk87
+
+
+def _load_toggl_key() -> str:
+    key = os.environ.get("TOGGL_API_KEY", "")
+    if key:
+        return key
+    claude_json = Path.home() / ".claude.json"
+    if claude_json.exists():
+        data = json.loads(claude_json.read_text())
+        env = data.get("mcpServers", {}).get("toggl_server", {}).get("env", {})
+        return env.get("TOGGL_API_KEY", "")
+    return ""
+
+
+def _toggl_get(path: str):
+    key = _load_toggl_key()
+    if not key:
+        raise RuntimeError("No TOGGL_API_KEY found")
+    url = f"{TOGGL_API_BASE}{path}"
+    creds = base64.b64encode(f"{key}:api_token".encode()).decode()
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Basic {creds}")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
+def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
+    """Fetch today's Toggl entries, return {column_letter: minutes} for tags and projects."""
+    start = target_date.isoformat()
+    end = (target_date + dt.timedelta(days=1)).isoformat()
+    entries = _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+
+    col_totals: dict[str, int] = {}
+    now_ts = dt.datetime.now(dt.timezone.utc)
+
+    for e in entries:
+        dur = e.get("duration", 0)
+        if dur > 0:
+            minutes = dur // 60
+        elif dur < 0:
+            start_str = e.get("start", "")
+            if not start_str:
+                continue
+            start_dt = dt.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            minutes = int((now_ts - start_dt).total_seconds()) // 60
+        else:
+            continue
+
+        for tag in (e.get("tags") or []):
+            if tag in TOGGL_TAG_COLS:
+                col = TOGGL_TAG_COLS[tag]
+                col_totals[col] = col_totals.get(col, 0) + minutes
+
+        pid = e.get("project_id")
+        if pid in TOGGL_PROJ_COLS:
+            col = TOGGL_PROJ_COLS[pid]
+            col_totals[col] = col_totals.get(col, 0) + minutes
+
+    return col_totals
+
+
+def write_toggl_totals_to_0n(col_totals: dict[str, int], target_date: dt.date,
+                              dry_run: bool = False) -> str:
+    """Write absolute tag/project minute totals to 0n sheet for target_date."""
+    if not col_totals:
+        return "nothing to write"
+
+    set_lines = []
+    for col, minutes in col_totals.items():
+        set_lines.append(
+            f'    set value of range ("{col}" & targetRow) of theSheet to {minutes}'
+        )
+    set_block = "\n".join(set_lines)
+    month = target_date.month
+    day = target_date.day
+
+    script = f'''tell application "Microsoft Excel"
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set targetRow to 0
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of theSheet
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = {month} and d = {day} then
+                    set targetRow to r
+                    exit repeat
+                end if
+            end try
+        end if
+    end repeat
+    if targetRow = 0 then return "ERROR: date {month}/{day} not found"
+{set_block}
+    return "OK: toggl-sync row=" & targetRow
+end tell'''
+
+    if dry_run:
+        log(f"[DRY RUN] Would write to 0n for {month}/{day}: {col_totals}")
+        return "DRY_RUN"
+
+    try:
+        r = _osascript(script)
+        out = (r.stdout or "").strip()
+        if r.returncode != 0 or out.startswith("ERROR"):
+            log(f"toggl-sync write: FAILED {out or r.stderr.strip()}")
+            return "FAILED"
+        return out
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log(f"toggl-sync write: ERROR {e}")
+        return "ERROR"
+
+
+def run_toggl_sync(dry_run=False):
+    """Compute and write Toggl tag/project totals for today to 0n."""
+    today = dt.date.today()
+    try:
+        totals = compute_toggl_totals(today)
+    except Exception as e:
+        log(f"toggl-sync: ERROR fetching Toggl: {e}")
+        return
+    if not totals:
+        log("toggl-sync: no tagged/project entries for today")
+        return
+    result = write_toggl_totals_to_0n(totals, today, dry_run=dry_run)
+    log(f"toggl-sync: {result} — {totals}")
+
+
 # --- Main ---
 
 def main():
     parser = argparse.ArgumentParser(description="Build-order daemon")
-    parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive"])
+    parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive", "toggl-sync"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hour", type=int, default=None,
                         help="(lock-and-mark only) override current hour for testing")
@@ -868,6 +1010,8 @@ def main():
         run_link_meetings(dry_run=args.dry_run)
     elif args.mode == "lock-and-mark":
         run_lock_and_mark(dry_run=args.dry_run, force_hour=args.hour)
+    elif args.mode == "toggl-sync":
+        run_toggl_sync(dry_run=args.dry_run)
     else:
         run_archive(dry_run=args.dry_run)
 
