@@ -264,7 +264,8 @@ def render_current() -> list[tuple[str, str]]:
     if code:
         line += f"  · {code}"
     line += f"   {fmt_dur(elapsed)}\n"
-    return [("class:running", line)]
+    style = project_style(pid) or "class:running"
+    return [(f"bold {style}".strip(), line)]
 
 
 def section_rule(label: str) -> list[tuple[str, str]]:
@@ -299,7 +300,8 @@ def render_morning() -> list[tuple[str, str]]:
             label = f"{label} · {code}"
         right = fmt_dur(mins)
         space = max(1, WIDTH_HINT - 2 - 6 - len(right) - 1)
-        out.append(("", f"  {m['start_dt']:%H:%M} {pad(truncate(label, space), space)} {right}\n"))
+        style = project_style(m["project_id"])
+        out.append((style, f"  {m['start_dt']:%H:%M} {pad(truncate(label, space), space)} {right}\n"))
     return out
 
 
@@ -313,16 +315,17 @@ def render_detail() -> list[tuple[str, str]]:
     now_drawn = False
     while slot < end:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
-        # Past = Toggl, future = gcal; "covers now" handled by current entry
+        pid = None
         if slot_end <= now:
-            label = _slot_label_toggl(slot, slot_end)
+            label, pid = _slot_label_toggl(slot, slot_end)
             marker = "│"
         elif slot >= now:
-            label = _slot_label_gcal(slot, slot_end)
+            label, _ = _slot_label_gcal(slot, slot_end)
             marker = "│"
         else:
-            # Slot straddles now → show whichever side is bigger
-            label = _slot_label_toggl(slot, slot_end) or _slot_label_gcal(slot, slot_end)
+            label, pid = _slot_label_toggl(slot, slot_end)
+            if not label:
+                label, _ = _slot_label_gcal(slot, slot_end)
             marker = "│"
 
         # Insert now line before this slot if applicable
@@ -331,15 +334,19 @@ def render_detail() -> list[tuple[str, str]]:
             now_drawn = True
 
         time_str = f"{slot:%H:%M}"
-        running_marker = ""
-        if STATE.current and slot <= now < slot_end:
+        is_running = STATE.current and slot <= now < slot_end
+        if is_running:
             cur_desc = STATE.current.get("description") or ""
             label = f"▶ {cur_desc}"
-            running_marker = ""
+            pid = STATE.current.get("project_id")
         space = max(1, WIDTH_HINT - len(time_str) - 4)
         line = f" {time_str} {marker} {truncate(label or '·', space)}\n"
-        cls = "class:running" if (STATE.current and slot <= now < slot_end) else (
-              "class:past" if slot_end <= now else "class:future")
+        if is_running:
+            cls = f"bold {project_style(pid)}".strip() or "class:running"
+        elif slot_end <= now:
+            cls = project_style(pid) or "class:past"
+        else:
+            cls = "class:future"
         out.append((cls, line))
         slot = slot_end
     if not now_drawn:
@@ -347,19 +354,21 @@ def render_detail() -> list[tuple[str, str]]:
     return out
 
 
-def _slot_label_toggl(slot_s, slot_e) -> str:
+def _slot_label_toggl(slot_s, slot_e):
     overlapping = [e for e in STATE.entries if e["start_dt"] < slot_e and e["end_dt"] > slot_s]
     if not overlapping:
-        return ""
+        return "", None
     if len(overlapping) == 1:
         e = overlapping[0]
         code = proj_code(e["project_id"])
-        return f"{e['desc'] or '(blank)'}" + (f"  · {code}" if code else "")
+        return (f"{e['desc'] or '(blank)'}" + (f"  · {code}" if code else ""), e["project_id"])
     descs = ", ".join(dict.fromkeys(e["desc"] or "?" for e in overlapping))
-    return f"{len(overlapping)}× {descs}"
+    # Use the longest-overlap entry's project for color
+    dominant = max(overlapping, key=lambda e: (min(e["end_dt"], slot_e) - max(e["start_dt"], slot_s)).total_seconds())
+    return f"{len(overlapping)}× {descs}", dominant["project_id"]
 
 
-def _slot_label_gcal(slot_s, slot_e) -> str:
+def _slot_label_gcal(slot_s, slot_e):
     overlapping = [
         ev for ev in STATE.events
         if ev["start_dt"] < slot_e and ev["end_dt"] > slot_s
@@ -367,11 +376,11 @@ def _slot_label_gcal(slot_s, slot_e) -> str:
         and not ev.get("all_day")
     ]
     if not overlapping:
-        return ""
+        return "", None
     if len(overlapping) == 1:
-        return f"◇ {overlapping[0]['title']}"
+        return f"◇ {overlapping[0]['title']}", None
     titles = ", ".join(ev["title"] for ev in overlapping)
-    return f"◇ {len(overlapping)}× {titles}"
+    return f"◇ {len(overlapping)}× {titles}", None
 
 
 def render_evening() -> list[tuple[str, str]]:
