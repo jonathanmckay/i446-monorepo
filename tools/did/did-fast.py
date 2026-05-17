@@ -1289,10 +1289,22 @@ end tell'''
     task_ids = []
     defer_items = {}  # tid → (defer_date, points_claimed, content)
     id_to_name = {}
+    future_skipped = []  # tasks skipped because due date is in the future
+    today_str = date.today().isoformat()
     for r in fast:
         if r.todoist_task:
             tid = r.todoist_task["id"]
             id_to_name[tid] = r.item.name
+            # Guard: don't close tasks due in the future (prevents double-tap on recurring)
+            task_due = r.todoist_task.get("due", "")
+            if task_due and task_due > today_str:
+                future_skipped.append({
+                    "id": tid,
+                    "name": r.item.name,
+                    "content": r.todoist_task.get("content", ""),
+                    "due": task_due,
+                })
+                continue
             if r.item.defer_date:
                 pts = r.item.points_override or r.fen_points or 0
                 defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
@@ -1442,6 +1454,13 @@ end tell'''
             "raw": r.item.raw,
             "reason": r.error,
         })
+
+    if future_skipped:
+        output["future_skipped"] = future_skipped
+        # Also emit to stderr so dtd/callers see the warning
+        for fs in future_skipped:
+            print(f"⚠ SKIPPED: \"{fs['name']}\" due {fs['due']} (future) — not closing",
+                  file=sys.stderr)
 
     if toggl_stop:
         output["toggl_stopped"] = toggl_stop

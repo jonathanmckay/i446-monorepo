@@ -1180,9 +1180,9 @@ def defer_unchecked_neg1(dry_run=False):
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 
 # Tag → 0n column letter
-TOGGL_TAG_COLS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX"}
+TOGGL_TAG_COLS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
 # Project ID → 0n column letter
-TOGGL_PROJ_COLS = {163129781: "AZ"}  # xk87 → ∑xk87
+TOGGL_PROJ_COLS = {}
 
 
 def _load_toggl_key() -> str:

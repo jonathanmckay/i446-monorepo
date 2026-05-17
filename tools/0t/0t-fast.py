@@ -82,8 +82,8 @@ def get_toggl_entries(d: date) -> list[dict]:
     return _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
 
 
-TAG_COLUMNS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX"}
-PROJECT_COLUMNS = {163129781: ("xk87", "AZ")}  # project_id → (name, 0n column)
+TAG_COLUMNS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
+PROJECT_COLUMNS = {}  # project_id → (name, 0n column)
 
 
 def compute_tag_minutes(yesterday: date, today: date) -> tuple[dict[str, int], dict[str, int]]:
@@ -353,17 +353,20 @@ def main():
     else:
         yesterday = today - timedelta(days=1)
 
-    output = {"yesterday": yesterday.isoformat(), "today": today.isoformat()}
+    # "sleep_date" = the day the sleep is recorded under (morning after yesterday)
+    sleep_date = yesterday + timedelta(days=1)
+    output = {"yesterday": yesterday.isoformat(), "today": today.isoformat(),
+              "sleep_date": sleep_date.isoformat()}
 
-    # 1. Compute sleep
-    sleep = compute_sleep(yesterday, today)
+    # 1. Compute sleep (bridge yesterday evening → next morning)
+    sleep = compute_sleep(yesterday, sleep_date)
     output["sleep_minutes"] = sleep
     output["sleep_display"] = f"{sleep // 60}h {sleep % 60}m"
 
-    # 2. Write sleep to 0₦
+    # 2. Write sleep to 0₦ (target row = sleep_date, not necessarily today)
     failed = False
     try:
-        sleep_result = write_sleep(sleep, today)
+        sleep_result = write_sleep(sleep, sleep_date)
         output["sleep_write"] = sleep_result
     except RuntimeError as e:
         output["sleep_write"] = f"FAILED: {e}"

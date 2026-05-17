@@ -40,18 +40,17 @@ def test_mark_night_hcmc_targets_yesterday_row():
     )
 
 
-def test_project_minutes_only_counts_target_day():
-    """xk87 project minutes in AZ must only sum the target day (yesterday),
-    not yesterday+today. Summing both days inflated AZ to 720+."""
-    XK87_PID = 163129781
+def test_xk87_matched_by_tag_not_project():
+    """xk87 minutes for AZ must be matched by the 'xk87' Toggl tag,
+    not by project_id. Tags sum across both days (like other tags)."""
     yesterday = date(2026, 5, 16)
     today = date(2026, 5, 17)
 
     yesterday_entries = [
-        {"duration": 18000, "tags": ["-3"], "project_id": XK87_PID},  # 300min xk87 + tag -3
+        {"duration": 18000, "tags": ["-3", "xk87"], "project_id": 163129781},  # 300min
     ]
     today_entries = [
-        {"duration": 24000, "tags": [], "project_id": XK87_PID},  # 400min xk87
+        {"duration": 24000, "tags": ["xk87"], "project_id": 163129781},  # 400min
     ]
 
     def fake_entries(d):
@@ -62,14 +61,10 @@ def test_project_minutes_only_counts_target_day():
     with patch.object(zerot_fast, "get_toggl_entries", side_effect=fake_entries):
         tag_totals, proj_totals = zerot_fast.compute_tag_minutes(yesterday, today)
 
-    # Tags should sum both days (sleep spans midnight)
-    assert tag_totals["-3"] == 300, f"tag -3 should be 300 (both days), got {tag_totals['-3']}"
-
-    # Projects must only count yesterday (target day), NOT both days
-    assert proj_totals["xk87"] == 300, (
-        f"xk87 should be 300 (yesterday only), got {proj_totals['xk87']}. "
-        "Bug: was summing both days, inflating AZ to 700"
-    )
+    # xk87 must be in tag_totals (matched by tag), not proj_totals
+    assert "xk87" in tag_totals, "xk87 should be matched by tag, not project_id"
+    assert tag_totals["xk87"] == 700, f"xk87 tag should sum both days (700), got {tag_totals['xk87']}"
+    assert not proj_totals, f"proj_totals should be empty, got {proj_totals}"
 
 
 def test_write_tag_minutes_appends_not_overwrites():

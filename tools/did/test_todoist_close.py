@@ -187,5 +187,26 @@ class CloseTodoistTask(unittest.TestCase):
         self.assertEqual(df.close_todoist_tasks([]), {})
 
 
+class FutureDateGuard(unittest.TestCase):
+    def test_future_due_task_not_closed(self):
+        """Tasks with due date in the future must NOT be closed.
+        Prevents double-tap on recurring tasks (e.g. closing 0g twice
+        advances its due date past today)."""
+        import ast
+        source = (_HERE / "did-fast.py").read_text()
+        tree = ast.parse(source)
+        # Find the main() function
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "main":
+                main_src = ast.get_source_segment(source, node)
+                # Must contain a future-date guard before closing
+                self.assertIn("future", main_src.lower(),
+                    "main() must contain a future-date guard to prevent closing future tasks")
+                self.assertIn("today_str", main_src,
+                    "main() must compare task due date against today")
+                return
+        self.fail("main() function not found")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
