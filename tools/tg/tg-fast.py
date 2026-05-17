@@ -23,6 +23,7 @@ CLI = str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py")
 CACHE = str(Path.home() / ".claude/skills/tg/cache.json")
 DO_SESSION = Path.home() / ".claude/skills/do/active.json"
 DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
+TASK_QUEUE = str(Path.home() / "vault/z_ibx/task-queue.json")
 
 # ── Shortcode table ──────────────────────────────────────────────────────────
 
@@ -76,6 +77,55 @@ DOMAINS = {
 
 # Pattern: "1 <domain>" maps to that domain
 _ONE_PREFIX = re.compile(r'^1\s+(\S+)$', re.IGNORECASE)
+
+# Valid Toggl project codes (loaded once from config)
+_TOGGL_PROJECTS = None
+
+def _get_toggl_projects():
+    global _TOGGL_PROJECTS
+    if _TOGGL_PROJECTS is not None:
+        return _TOGGL_PROJECTS
+    try:
+        cfg = Path(__file__).resolve().parent.parent.parent / "mcp/toggl_server/config.py"
+        ns = {}
+        exec(cfg.read_text(), ns)
+        _TOGGL_PROJECTS = set(ns.get("PROJECT_MAP", {}).keys())
+    except Exception:
+        _TOGGL_PROJECTS = set()
+    return _TOGGL_PROJECTS
+
+
+_ANNOTATION_RE = re.compile(r' *\(\d*\)| *\[\d*\]| *\{\d*\}')
+
+
+def _strip_annotations(s: str) -> str:
+    return re.sub(r'  +', ' ', _ANNOTATION_RE.sub('', s)).strip()
+
+
+def _project_from_task_cache(content: str) -> str:
+    """Look up task content in task-queue.json, return first label that's a valid Toggl project."""
+    try:
+        data = json.loads(Path(TASK_QUEUE).read_text())
+    except Exception:
+        return ""
+    valid = _get_toggl_projects()
+    if not valid:
+        return ""
+    section_tags = {"0neon", "1neon", "夜neon", "关键路径", "#0g", "#-1g"}
+    clean = _strip_annotations(content).lower()
+    for section in data.values():
+        if not isinstance(section, list):
+            continue
+        for task in section:
+            if not isinstance(task, dict):
+                continue
+            task_clean = _strip_annotations(task.get("content", "")).lower()
+            if task_clean == clean:
+                for label in task.get("labels", []):
+                    if label in valid and label not in section_tags:
+                        return label
+                return ""
+    return ""
 
 
 def _run_cli(*args):
@@ -140,7 +190,7 @@ def resolve_do_session():
 
 
 def resolve(raw: str):
-    """Return (description, project, tags, @override_used)."""
+    """Return (description, project, tags)."""
     desc = raw.strip()
     project = ""
     tags = []
@@ -167,6 +217,10 @@ def resolve(raw: str):
             pm = _ONE_PREFIX.match(desc)
             if pm and pm.group(1).lower() in DOMAINS:
                 project = pm.group(1).lower()
+
+    # Fallback: check task-queue.json labels for a valid Toggl project
+    if not project and not override:
+        project = _project_from_task_cache(raw)
 
     return desc, project, tags
 
