@@ -70,3 +70,26 @@ def test_project_minutes_only_counts_target_day():
         f"xk87 should be 300 (yesterday only), got {proj_totals['xk87']}. "
         "Bug: was summing both days, inflating AZ to 700"
     )
+
+
+def test_write_tag_minutes_appends_not_overwrites():
+    """Tag/project writes must append to existing cell formulas, not overwrite.
+    Overwriting destroys points from other sources (did-fast, manual)."""
+    import ast
+    source = Path(__file__).parent.joinpath("0t-fast.py").read_text()
+    tree = ast.parse(source)
+
+    # Find the write_tag_minutes function
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "write_tag_minutes":
+            body_src = ast.get_source_segment(source, node)
+            # Must NOT contain "set value of" (overwrite pattern)
+            assert "set value of" not in body_src, (
+                "write_tag_minutes must append (formula & \"+N\"), not overwrite (set value of)"
+            )
+            # Must contain the append pattern
+            assert '& "+"' in body_src or "& \"+{" in body_src or 'oldVal & "+"' in body_src or "oldVal" in body_src, (
+                "write_tag_minutes must read old formula and append"
+            )
+            return
+    raise AssertionError("write_tag_minutes function not found")
