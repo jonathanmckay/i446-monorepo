@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-17T14:00:06.818925-07:00"
+  "tasks": {
+    "hiit with basketball [20]": {
+      "todoist_id": "6gg6VpWrfg2R2x9R",
+      "minutes": null
+    },
+    "prep for tuesday [60]": {
+      "todoist_id": "6gg6VpgMfJ5X5hcR",
+      "minutes": null
+    },
+    "list down to 60 [40]": {
+      "todoist_id": "6gg6VpgRcCVVR7V2",
+      "minutes": null
+    }
+  },
+  "last_sync": "2026-05-17T16:00:02.925354-07:00"
 }
