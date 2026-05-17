@@ -197,6 +197,9 @@ while true; do
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
   # --- DONE MODE (existing behavior) ---
+  # Track original name for list filtering (before vared modifies it)
+  clean_for_filter="$clean"
+
   # Tasks that need args (e.g. cpap needs a score)
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
@@ -207,7 +210,7 @@ while true; do
       ;;
   esac
 
-  session_done+=("$clean")
+  session_done+=("$clean_for_filter")
   echo "$clean" >&3
 done
 
