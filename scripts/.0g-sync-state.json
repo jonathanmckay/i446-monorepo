@@ -1,22 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "5 people sunshiny good": {
-      "todoist_id": "6gfr9vG8Mc6V2m2R",
-      "minutes": 100
-    },
-    "100 salat": {
-      "todoist_id": "6gfr9vMP9wQw5G52",
-      "minutes": 20
-    },
-    "enjoy blue": {
-      "todoist_id": "6gfr9vQMxrW4qMH2",
-      "minutes": 20
-    },
-    "0n1n": {
-      "todoist_id": "6gfr9vWMmHM39P6R",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-05-17T03:55:01.412613-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-17T05:30:10.966075-07:00"
 }
