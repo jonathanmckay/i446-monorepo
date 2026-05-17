@@ -95,6 +95,7 @@ Then:
 ```markdown
 ---
 title: "<Title Line>: <Full Book Title>"
+slug: "<kebab-case-full-book-title>"
 author: "<Author>"
 date: YYYY-MM-DD
 type: review
@@ -116,7 +117,8 @@ related:
 <review text>
 ```
 
-- The frontmatter `title` is `<Title Line>: <Full Book Title>` — the punchy custom phrase first, then the actual book title after a colon. The same `<Title Line>` is repeated as the bold opener of the body.
+- The frontmatter `title` is `<Title Line>: <Full Book Title>` — the punchy custom phrase first, then the actual book title after a colon. The same `<Title Line>` is repeated as the bold opener of the body. If the title line ends in a period, drop the period before the separator (`"Sharp Line: Book"`, not `"Sharp Line.: Book"`). If it ends in a question mark, the question mark wins and replaces the separator (`"Sharp Line? Book"`, not `"Sharp Line?: Book"`).
+- The frontmatter `slug` is the kebab-case full book title, **not** the punchy title line. This keeps the blog URL stable at `/reviews/<book-title>/` even if the title line changes during manual editing.
 
 - Omit `score` if skipped
 - Omit `series`, `series_number`, `series_prev`, `series_next` if not part of a series
