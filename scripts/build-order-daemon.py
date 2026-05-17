@@ -32,6 +32,7 @@ import smtplib
 import subprocess
 import sys
 import urllib.request
+import zoneinfo
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -58,9 +59,24 @@ EMAIL_FROM = "mckay@m5c7.com"
 EMAIL_TO = "mckay@m5x2.com"
 SMTP_KEYCHAIN_SERVICE = "gmail-smtp-m5c7"
 
-# Fire schedule: every 2 hours from 04 to 22. Each fire adds 12 to column P.
-# No more per-block marker/points columns; just a single -1₦ total in P.
+# Fire schedule: every 2 hours from 04 to 22. Scores block based on emojis.
 BLOCK_FIRE_HOURS = {4, 6, 8, 10, 12, 14, 16, 18, 20, 22}
+
+# -1₦ sub-habit scoring: emoji → points. Total max = 13.
+# ☀️ and 📧 are written by /inbound; 🎯, ⏱️, ✅ are written by the daemon.
+SCORE_EMOJI_MAP = {
+    "☀️": 1,   # الشمس (prayer)
+    "🎯": 3,   # -1g (goals set)
+    "⏱️": 3,   # -1t (toggl coverage)
+    "✅": 3,   # -1l (todoist completions)
+    "📧": 3,   # ibx (inbox processed)
+}
+GOAL_MARKER = "🎯"
+TOGGL_MARKER = "⏱️"
+TODOIST_MARKER = "✅"
+TODOIST_KEYCHAIN_SERVICE = "todoist-api-key"
+# Toggl coverage threshold: fraction of block minutes that must be tracked
+TOGGL_COVERAGE_THRESHOLD = 0.8  # 96 of 120 min
 
 # Map fire-hour → 地支 block (just-ended) in the build order. Used to drop a
 # "fired" emoji on the block header so the user can see at a glance which
@@ -498,18 +514,18 @@ def neon_set_marker(target_date: dt.date, col: str, dry_run: bool = False) -> st
         return "ERROR"
 
 
-def neon_add_12_to_y(target_date: dt.date, dry_run: bool = False) -> str:
-    """Add 12 to column Y for target_date's row. If empty, set to 12."""
+def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False) -> str:
+    """Add score to -1₦ column (P) for target_date's row. If empty, set to score."""
     body = (
         f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
         '    set oldVal to value of yCell\n'
         '    if oldVal is missing value or (oldVal as text) = "" or (oldVal as text) = "0" then\n'
-        '        set value of yCell to 12\n'
-        '        return "Y_SET 12"\n'
+        f'        set value of yCell to {score}\n'
+        f'        return "P_SET {score}"\n'
         '    else\n'
-        '        set newVal to (oldVal as number) + 12\n'
+        f'        set newVal to (oldVal as number) + {score}\n'
         '        set value of yCell to newVal\n'
-        '        return "Y_ADD " & (oldVal as text) & " + 12 = " & (newVal as text)\n'
+        f'        return "P_ADD " & (oldVal as text) & " + {score} = " & (newVal as text)\n'
         '    end if\n'
     )
     script = NEON_FIND_ROW_TEMPLATE.format(
@@ -517,24 +533,23 @@ def neon_add_12_to_y(target_date: dt.date, dry_run: bool = False) -> str:
         date_col=NEON_DATE_COL, body=body,
     )
     if dry_run:
-        log(f"[DRY RUN] Would add 12 to Y for {_date_str(target_date)}")
+        log(f"[DRY RUN] Would add {score} to P for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
         r = _osascript(script)
         out = (r.stdout or "").strip()
         if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"add_12_to_y: FAILED {out or r.stderr.strip()}")
+            log(f"add_score_to_p: FAILED {out or r.stderr.strip()}")
             return "FAILED"
-        log(f"add_12_to_y: {out}")
-        # Verify write landed by reading back
+        log(f"add_score_to_p: {out}")
         verify = neon_read_y(target_date)
         if verify == "ERROR" or verify == "" or verify == "0":
-            log(f"add_12_to_y: VERIFY FAILED — wrote but read back {verify}. Excel may not be open.")
+            log(f"add_score_to_p: VERIFY FAILED — wrote but read back {verify}. Excel may not be open.")
             return "VERIFY_FAILED"
-        log(f"add_12_to_y: verified={verify}")
+        log(f"add_score_to_p: verified={verify}")
         return out
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log(f"ensure Y: ERROR {e}")
+        log(f"add_score_to_p: ERROR {e}")
         return "ERROR"
 
 
@@ -558,6 +573,230 @@ def neon_read_y(target_date: dt.date) -> str:
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log(f"read Y: ERROR {e}")
         return "ERROR"
+
+
+# --- Block scoring: emoji-based detection and marking ---
+
+def _has_block_marker(block_name: str, marker: str) -> bool:
+    """Check if a block header in -1₲ section has a specific emoji marker."""
+    if not BUILD_ORDER.exists():
+        return False
+    text = BUILD_ORDER.read_text(encoding="utf-8")
+    if "## -1₲" not in text:
+        return False
+    section = text[text.index("## -1₲"):]
+    for line in section.split("\n"):
+        if line.startswith("## ") and line != "## -1₲":
+            break
+        if line.startswith("- ") and not line.startswith("    "):
+            # Extract block name (strip markers, duration suffix)
+            name = line.strip().lstrip("- ").strip()
+            for m in ("☀️", "📧", "⏰", GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER):
+                name = name.replace(m, "")
+            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            if name == block_name and marker in line:
+                return True
+    return False
+
+
+def _write_block_marker(block_name: str, marker: str, dry_run: bool = False) -> bool:
+    """Append an emoji marker to a block header in -1₲. Idempotent."""
+    if _has_block_marker(block_name, marker):
+        return False
+    if not BUILD_ORDER.exists():
+        return False
+    text = BUILD_ORDER.read_text(encoding="utf-8")
+    if "## -1₲" not in text:
+        return False
+    lines = text.split("\n")
+    in_section = False
+    for i, line in enumerate(lines):
+        if line.strip() == "## -1₲":
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if not in_section:
+            continue
+        if line.startswith("- ") and not line.startswith("    "):
+            name = line.strip().lstrip("- ").strip()
+            for m in ("☀️", "📧", "⏰", GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER):
+                name = name.replace(m, "")
+            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            if name == block_name:
+                if dry_run:
+                    log(f"[DRY RUN] Would write {marker} to {block_name}")
+                    return True
+                lines[i] = line.rstrip() + " " + marker
+                BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
+                log(f"marker: wrote {marker} to {block_name}")
+                return True
+    return False
+
+
+def _block_has_goals(block_name: str) -> bool:
+    """Check if the block has any goals (checked or unchecked) in -1₲ section."""
+    if not BUILD_ORDER.exists():
+        return False
+    text = BUILD_ORDER.read_text(encoding="utf-8")
+    if "## -1₲" not in text:
+        return False
+    section = text[text.index("## -1₲"):]
+    current_block = None
+    for line in section.split("\n"):
+        if line.startswith("## ") and current_block is not None:
+            break
+        if line.startswith("- ") and not line.startswith("    "):
+            name = line.strip().lstrip("- ").strip()
+            for m in ("☀️", "📧", "⏰", GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER):
+                name = name.replace(m, "")
+            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            current_block = name
+        elif current_block == block_name:
+            if re.match(r"^    - \[[ xX]\]\s*.+", line):
+                return True
+    return False
+
+
+def _toggl_covers_block(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
+    """Check if Toggl entries cover >= TOGGL_COVERAGE_THRESHOLD of the block window."""
+    try:
+        start = target_date.isoformat()
+        end = (target_date + dt.timedelta(days=1)).isoformat()
+        entries = _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+    except Exception as e:
+        log(f"toggl coverage check: ERROR {e}")
+        return False
+
+    block_start_min = start_hour * 60
+    block_end_min = end_hour * 60
+    block_duration = block_end_min - block_start_min  # 120 min
+
+    # Collect covered minutes within the block window
+    covered = [False] * block_duration
+    for entry in entries:
+        dur = entry.get("duration", 0)
+        start_str = entry.get("start", "")
+        if not start_str:
+            continue
+        entry_start = dt.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        entry_start_local = entry_start.astimezone()
+        if entry_start_local.date() != target_date:
+            continue
+        if dur > 0:
+            entry_end_local = entry_start_local + dt.timedelta(seconds=dur)
+        elif dur < 0:
+            # Running timer
+            entry_end_local = dt.datetime.now(dt.timezone.utc).astimezone()
+        else:
+            continue
+        # Convert to minutes-of-day
+        es_min = entry_start_local.hour * 60 + entry_start_local.minute
+        ee_min = entry_end_local.hour * 60 + entry_end_local.minute
+        # Clip to block window
+        cs = max(es_min, block_start_min) - block_start_min
+        ce = min(ee_min, block_end_min) - block_start_min
+        if cs >= ce:
+            continue
+        for m in range(cs, ce):
+            covered[m] = True
+
+    coverage = sum(covered) / block_duration
+    log(f"toggl coverage: {block_name_for_hours(start_hour)} = {sum(covered)}/{block_duration} min ({coverage:.0%})")
+    return coverage >= TOGGL_COVERAGE_THRESHOLD
+
+
+def block_name_for_hours(start_hour: int) -> str:
+    """Get block name from start hour."""
+    for name, lo, _ in BRANCH_HOURS:
+        if lo == start_hour:
+            return name
+    return "?"
+
+
+def _todoist_has_completions(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
+    """Check if any Todoist tasks were completed during the block time window."""
+    try:
+        token = subprocess.run(
+            ["security", "find-generic-password", "-s", TODOIST_KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if not token:
+            log("todoist completions: no API token in keychain")
+            return False
+    except Exception as e:
+        log(f"todoist completions: keychain error {e}")
+        return False
+
+    # Build time window in UTC
+    tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+    block_start = dt.datetime(target_date.year, target_date.month, target_date.day,
+                              start_hour, 0, tzinfo=tz)
+    block_end = dt.datetime(target_date.year, target_date.month, target_date.day,
+                            end_hour, 0, tzinfo=tz)
+    since = block_start.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    until = block_end.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=1"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            items = data.get("items", [])
+            log(f"todoist completions: {len(items)} task(s) in {start_hour:02d}-{end_hour:02d}")
+            return len(items) > 0
+    except Exception as e:
+        log(f"todoist completions: API error {e}")
+        return False
+
+
+def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
+                            dry_run: bool = False) -> None:
+    """Evaluate -1g, -1t, -1l for the just-ended block and write emojis."""
+    # -1g: goals were set for this block
+    if _block_has_goals(block_name):
+        _write_block_marker(block_name, GOAL_MARKER, dry_run=dry_run)
+    else:
+        log(f"score: {block_name} no goals found")
+
+    # -1t: toggl coverage for the block
+    # Find block hours from HOUR_TO_BRANCH_BLOCK (fire_hour maps to just-ended block)
+    block_start = hour - 2  # block that just ended started 2h before fire
+    block_end = hour
+    if _toggl_covers_block(target_date, block_start, block_end):
+        _write_block_marker(block_name, TOGGL_MARKER, dry_run=dry_run)
+    else:
+        log(f"score: {block_name} toggl coverage below threshold")
+
+    # -1l: todoist completions during the block
+    if _todoist_has_completions(target_date, block_start, block_end):
+        _write_block_marker(block_name, TODOIST_MARKER, dry_run=dry_run)
+    else:
+        log(f"score: {block_name} no todoist completions")
+
+
+def score_block_from_emojis(block_name: str) -> int:
+    """Read emojis on a block header and sum points. Pure function of markers."""
+    if not BUILD_ORDER.exists():
+        return 0
+    text = BUILD_ORDER.read_text(encoding="utf-8")
+    if "## -1₲" not in text:
+        return 0
+    section = text[text.index("## -1₲"):]
+    for line in section.split("\n"):
+        if line.startswith("## ") and line != "## -1₲":
+            break
+        if line.startswith("- ") and not line.startswith("    "):
+            name = line.strip().lstrip("- ").strip()
+            for m in SCORE_EMOJI_MAP:
+                name = name.replace(m, "")
+            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            if name == block_name:
+                score = sum(pts for emoji, pts in SCORE_EMOJI_MAP.items() if emoji in line)
+                log(f"score: {block_name} = {score} pts (from: {[e for e in SCORE_EMOJI_MAP if e in line]})")
+                return score
+    return 0
 
 
 # --- Mode: lock-and-mark ---
@@ -596,7 +835,7 @@ def annotate_block_fired(hour: int, dry_run: bool = False) -> None:
 
 
 def run_lock_and_mark(dry_run=False, force_hour=None):
-    """Add 12 to -1₦ column (P) at each 2-hour boundary."""
+    """Score the just-ended block based on sub-habit emojis, write to -1₦ (P)."""
     now = dt.datetime.now()
     hour = force_hour if force_hour is not None else now.hour
     today = now.date()
@@ -605,17 +844,93 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
         log(f"lock-and-mark: hour {hour} is not a fire time — nothing to do")
         return
 
-    log(f"lock-and-mark: hour={hour:02d} → +12 to {NEON_NEG1_COL}")
+    block_name = HOUR_TO_BRANCH_BLOCK.get(hour)
+    log(f"lock-and-mark: hour={hour:02d}, block={block_name}")
 
     lock_col = LOCK_AT_FIRE_HOUR.get(hour)
     if lock_col:
         neon_lock_cell(today, lock_col, dry_run=dry_run)
 
-    neon_add_12_to_y(today, dry_run=dry_run)
-    annotate_block_fired(hour, dry_run=dry_run)
+    # Phase 1: evaluate daemon-checkable habits and write emojis
+    if block_name:
+        evaluate_and_mark_block(block_name, hour, today, dry_run=dry_run)
+
+        # Phase 2: score purely from emojis on the block header
+        score = score_block_from_emojis(block_name)
+        log(f"lock-and-mark: {block_name} scored {score}/13")
+
+        # Phase 3: write score to neon
+        neon_add_score_to_p(today, score, dry_run=dry_run)
+        annotate_block_fired(hour, dry_run=dry_run)
+
+        # Phase 4: notify with score breakdown
+        notify_block_score(block_name, score, dry_run=dry_run)
+    else:
+        log(f"lock-and-mark: hour={hour:02d} has no block to score (day start)")
 
     # Toggl tag/project aggregation (same 2h cadence)
     run_toggl_sync(dry_run=dry_run)
+
+
+# Countdown: notify for next N fires then disable
+NOTIFY_REMAINING_FILE = Path.home() / ".cache" / "build-order-notify-remaining"
+
+
+def notify_block_score(block_name: str, score: int, dry_run: bool = False) -> None:
+    """Send macOS notification + email with block score breakdown. Auto-disables after 20 fires."""
+    # Check remaining count
+    remaining = 0
+    if NOTIFY_REMAINING_FILE.exists():
+        try:
+            remaining = int(NOTIFY_REMAINING_FILE.read_text().strip())
+        except (ValueError, OSError):
+            remaining = 0
+    if remaining <= 0:
+        return
+
+    # Build breakdown from emojis on block header
+    earned = []
+    missed = []
+    if not BUILD_ORDER.exists():
+        return
+    text = BUILD_ORDER.read_text(encoding="utf-8")
+    if "## -1₲" in text:
+        section = text[text.index("## -1₲"):]
+        for line in section.split("\n"):
+            if line.startswith("## ") and line != "## -1₲":
+                break
+            if line.startswith("- ") and not line.startswith("    "):
+                name = line.strip().lstrip("- ").strip()
+                for m in SCORE_EMOJI_MAP:
+                    name = name.replace(m, "")
+                name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+                if name == block_name:
+                    for emoji, pts in SCORE_EMOJI_MAP.items():
+                        if emoji in line:
+                            earned.append(f"{emoji}+{pts}")
+                        else:
+                            missed.append(f"{emoji}+{pts}")
+                    break
+
+    summary = f"{block_name} {score}/13: ✓{' '.join(earned)} | ✗{' '.join(missed)}"
+    log(f"notify: {summary} (remaining={remaining - 1})")
+
+    if dry_run:
+        log(f"[DRY RUN] Would notify: {summary}")
+    else:
+        # macOS notification
+        _osascript(
+            f'display notification "{summary}" with title "-1₦ Block Score"'
+        )
+        # Email
+        send_rating_email(
+            dt.date.today(), f"{score}/13",
+            f"-1₦ block score: {summary}\n\nRemaining notifications: {remaining - 1}",
+            dry_run=False,
+        )
+        # Decrement counter
+        NOTIFY_REMAINING_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NOTIFY_REMAINING_FILE.write_text(str(remaining - 1))
 
 
 # --- Email rating ---

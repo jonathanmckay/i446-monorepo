@@ -87,11 +87,14 @@ PROJECT_COLUMNS = {163129781: ("xk87", "AZ")}  # project_id → (name, 0n column
 
 
 def compute_tag_minutes(yesterday: date, today: date) -> tuple[dict[str, int], dict[str, int]]:
-    """Sum minutes for tagged entries and project entries across yesterday+today.
-    Returns (tag_totals, project_totals) where keys are tag/project names."""
-    all_entries = get_toggl_entries(yesterday) + get_toggl_entries(today)
+    """Sum minutes for tagged entries and project entries.
+    Tags sum across yesterday+today (sleep spans midnight).
+    Projects sum only yesterday (the target day being written)."""
+    yesterday_entries = get_toggl_entries(yesterday)
+    all_entries = yesterday_entries + get_toggl_entries(today)
     tag_totals: dict[str, int] = {}
     proj_totals: dict[str, int] = {}
+    # Tags: sum both days (sleep-adjacent tags span midnight)
     for e in all_entries:
         dur = e.get("duration", 0)
         if dur <= 0:
@@ -100,6 +103,12 @@ def compute_tag_minutes(yesterday: date, today: date) -> tuple[dict[str, int], d
         for tag in (e.get("tags") or []):
             if tag in TAG_COLUMNS:
                 tag_totals[tag] = tag_totals.get(tag, 0) + minutes
+    # Projects: sum only the target day (yesterday)
+    for e in yesterday_entries:
+        dur = e.get("duration", 0)
+        if dur <= 0:
+            continue
+        minutes = dur // 60
         pid = e.get("project_id")
         if pid in PROJECT_COLUMNS:
             name = PROJECT_COLUMNS[pid][0]

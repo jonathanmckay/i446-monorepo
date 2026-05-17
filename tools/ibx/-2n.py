@@ -241,11 +241,11 @@ def write_inbox_marker(block_name):
 
 
 def clear_prayer_markers():
-    """Strip ☀️ and 📧 from all block header lines in -1₲. Called during daily wipe."""
+    """Strip all block header emojis (☀️📧⏰🎯⏱️✅) from -1₲. Called during daily wipe."""
     if not BUILD_ORDER.exists():
         return
     text = BUILD_ORDER.read_text()
-    all_markers = (PRAYER_MARKER, INBOX_MARKER, TIME_MARKER)
+    all_markers = (PRAYER_MARKER, INBOX_MARKER, TIME_MARKER, "🎯", "⏱️", "✅")
     if not any(m in text for m in all_markers):
         return
     lines = text.split("\n")
