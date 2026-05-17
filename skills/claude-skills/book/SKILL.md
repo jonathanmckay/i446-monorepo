@@ -1,6 +1,6 @@
 ---
 name: "book"
-description: "Write a book review. Interactive: prompts for bullets, generates review in vault, opens Goodreads and Obsidian. Usage: /book <title>"
+description: "Write a book review. Interactive: prompts for bullets, drafts in Obsidian for manual editing, then publishes to Goodreads/blog when approved. Usage: /book <title>"
 user-invocable: true
 ---
 
@@ -64,17 +64,9 @@ Using the collected bullets, write a review that:
 - Comfortable with ambiguity ("the book never quite delivers...")
 - Often ends with a question or unresolved tension
 
-### Step 5: Present for approval
+### Step 5: Save draft and open for manual editing
 
-Show the full review text. Ask:
-
-```
-Good? (y to save, or give feedback)
-```
-
-If the user gives feedback, revise and re-present. Loop until approved.
-
-### Step 6: Find inter-review links
+Do **not** ask whether the composed review is good before saving. Save it as a draft immediately so the user can edit the real vault file.
 
 Before saving, search `~/vault/hcmc/reviews/` for related reviews to link.
 
@@ -94,9 +86,7 @@ Build three link lists from the results (paths relative to the reviews/ root, e.
 
 Do NOT ask the user to confirm the links; just include them silently. If no related reviews exist, omit the fields.
 
-### Step 7: Save the review
-
-Once approved:
+Then:
 
 1. **Determine the year folder.** Use today's date for the completion date unless the user specifies otherwise.
 
@@ -133,18 +123,45 @@ related:
 - Omit `related` if no other reviews by this author exist
 - Omit `source` if user doesn't plan to post to Goodreads
 
-3. **Open the saved review in Obsidian** so the user can see or edit the vault file immediately:
+3. **Open the saved review in Obsidian** so the user can edit the vault file manually:
 
 ```bash
 python3 - <<'PY'
 import urllib.parse, subprocess
 path = "/Users/mckay/vault/hcmc/reviews/YYYY/title.md"
-url = "obsidian://open?path=" + urllib.parse.quote(path)
+url = "obsidian://open?vault=vault&file=" + urllib.parse.quote(path.replace("/Users/mckay/vault/", "")) + "&newTab=true"
 subprocess.run(["open", url], check=True)
 PY
 ```
 
-4. **Open Goodreads** in Chrome so the user can paste the review:
+4. Stop and tell the user:
+
+```
+Draft saved and opened in Obsidian for manual editing.
+When ready, send PUBLISH and I'll copy the final text, open Goodreads, and sync it to the o315 blog.
+```
+
+### Step 6: Publish after manual edit
+
+Only continue when the user explicitly sends `PUBLISH` (or `publish`). Then:
+
+1. Re-read the saved review file from disk so any manual Obsidian edits are included.
+
+2. **Copy review text to clipboard** (without frontmatter) so the user can paste directly:
+
+```bash
+# Copy just the review body to clipboard
+python3 - <<'PY' | pbcopy
+from pathlib import Path
+p = Path("/Users/mckay/vault/hcmc/reviews/YYYY/title.md")
+text = p.read_text()
+if text.startswith("---"):
+    text = text.split("---", 2)[2].lstrip()
+print(text, end="")
+PY
+```
+
+3. **Open Goodreads** in Chrome so the user can paste the review:
 
 ```bash
 open -a "Google Chrome" "https://www.goodreads.com/book/show/<search_query>"
@@ -155,16 +172,15 @@ Use a Goodreads search URL:
 open -a "Google Chrome" "https://www.goodreads.com/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('TITLE AUTHOR'))")"
 ```
 
-5. **Copy review text to clipboard** (without frontmatter) so the user can paste directly:
+4. **Publish to the o315 blog** by syncing generated blog copies from the vault source of truth:
 
 ```bash
-# Copy just the review body to clipboard
-echo "<review text>" | pbcopy
+cd /Users/mckay/vault/hcmp/o315/blog && python3 scripts/sync-vault-reviews.py
 ```
 
-### Step 8: Report
+### Step 7: Report
 
 ```
-Saved: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
-Obsidian and Goodreads opened. Review copied to clipboard — paste away.
+Published: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
+Goodreads opened, final review copied to clipboard, and o315 blog synced.
 ```
