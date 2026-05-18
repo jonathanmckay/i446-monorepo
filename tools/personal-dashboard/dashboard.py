@@ -288,6 +288,7 @@ def load_toggl_data():
         return {}
 
     result = defaultdict(lambda: defaultdict(int))
+    entry_counts = defaultdict(int)
     for e in entries:
         dur = e.get("duration", 0)
         if dur <= 0:
@@ -306,8 +307,9 @@ def load_toggl_data():
         proj_id = e.get("project_id")
         code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
         result[d.isoformat()][code] += dur // 60
+        entry_counts[d.isoformat()] += 1
 
-    return {k: dict(v) for k, v in result.items()}
+    return {k: dict(v) for k, v in result.items()}, dict(entry_counts)
 
 
 _TASKS_CACHE_PATH = Path(__file__).parent / ".tasks-cache.json"
@@ -689,7 +691,11 @@ def _build_api_data():
                 raw[name] = fut.result()
             except Exception:
                 raw[name] = {} if name != "imsg" else None
-    toggl_raw = raw["toggl"]
+    toggl_result = raw["toggl"]
+    if isinstance(toggl_result, tuple):
+        toggl_raw, toggl_entry_counts = toggl_result
+    else:
+        toggl_raw, toggl_entry_counts = toggl_result, {}
     turns_raw = raw["turns"]
     tasks_raw = raw["tasks"]
     email_raw = raw["email"]
@@ -747,6 +753,7 @@ def _build_api_data():
     tasks_1n      = [tasks_raw.get(d, {}).get("one_n", 0)   for d in dates]
     tasks_other   = [tasks_raw.get(d, {}).get("other", 0)   for d in dates]
     tasks_values  = [tasks_raw.get(d, {}).get("total", 0)   for d in dates]
+    time_entries_values = [toggl_entry_counts.get(d, 0) for d in dates]
 
     # shots/task = tasks completed / turns (None when either is 0)
     shots_per_task = []
@@ -1026,6 +1033,7 @@ def _build_api_data():
         "tasks_posthoc": tasks_posthoc,
         "tasks_1n": tasks_1n,
         "tasks_other": tasks_other,
+        "time_entries": time_entries_values,
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
         "email": {"datasets": email_datasets, "summary": email_summary, "imessage": imsg_stats},
@@ -1141,6 +1149,11 @@ HTML = """<!DOCTYPE html>
     <div class="summary" id="tasksSummary"></div>
   </div>
   <div class="card">
+    <h2>Time Entries / Day</h2>
+    <div class="chart-wrap xs"><canvas id="entriesChart"></canvas></div>
+    <div class="summary" id="entriesSummary"></div>
+  </div>
+  <div class="card">
     <h2>Time / Day</h2>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
@@ -1252,6 +1265,27 @@ fetch('/api/data').then(r => r.json()).then(data => {
     b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.bg};margin-right:4px;vertical-align:middle;"></span>${s.label}`;
     tkEl.appendChild(b);
   });
+
+  // Time entries per day chart (simple bar, same color as time chart accent)
+  new Chart(document.getElementById('entriesChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{
+      label: 'Entries', data: data.time_entries,
+      backgroundColor: '#63ede0', borderColor: '#63ede0', borderWidth: 0,
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+      }
+    }
+  });
+  const enEl = document.getElementById('entriesSummary');
+  const enTotal = (data.time_entries || []).reduce((a,b) => a+b, 0);
+  const enDays = (data.time_entries || []).filter(v => v > 0).length;
+  enEl.innerHTML = `<span class="badge">${enTotal} entries / ${enDays > 0 ? Math.round(enTotal/enDays) : 0} avg</span>`;
 
   // Email chart: blended response time line (purple) + per-account count bars (stacked)
   new Chart(document.getElementById('emailChart'), {
