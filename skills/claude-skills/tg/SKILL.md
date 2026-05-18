@@ -86,7 +86,7 @@ When the description matches a shortcode below, auto-assign the project and tags
 | `bball` | hcbp | | |
 | `其他人` | hcm | | |
 | `-1l` | g245 | | |
-| `o314` | hcm | -3 | |
+| `o314` | hcm | | |
 | `hiit` | hcbp | -2 | |
 | `vibing` | i9 | | |
 | `hcmr` | hcm | | |

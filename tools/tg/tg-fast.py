@@ -37,7 +37,7 @@ SHORTCODES = {
     "family time": ("xk87", []), "read": ("xk87", ["-3"]), "0l": ("g245", []),
     "math": ("xk87", []), "冥想": ("hcm", []), "day hci": ("hci", []),
     "wake up": ("infra", []), "bball": ("hcbp", []), "其他人": ("hcm", []),
-    "-1l": ("g245", []), "o314": ("hcm", ["-3"]), "hiit": ("hcbp", ["-2"]),
+    "-1l": ("g245", []), "o314": ("hcm", []), "hiit": ("hcbp", ["-2"]),
     "vibing": ("i9", []), "hcmr": ("hcm", []), "kn47 daily": ("m5x2", []),
     "0g": ("g245", []), "epcn": ("epcn", []), "h lunch": ("hcb", []),
     "meetings": ("i9", []), "tasks": ("i9", []), "ren to sleep": ("xk87", []),
