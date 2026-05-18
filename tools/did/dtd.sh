@@ -110,6 +110,8 @@ TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST="\$HOME/i446-monorepo/tools/tg/tg-fast.py"
 HDR="$DTD_HDR"
 task="\$1"
+# Strip ANSI codes first
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
@@ -124,18 +126,121 @@ cat > "$DTD_DEFER" << DEFEREOF
 #!/bin/zsh
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
 HDR="$DTD_HDR"
+REMOVED="$DTD_REMOVED"
 task="\$1"
+# Strip ANSI codes first
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "⏳ deferring: \$clean" > "\$HDR"
 result=\$(python3 "\$DEFER_FAST" "\$clean" 2>/dev/null)
 ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
 if [[ -n "\$ok" ]]; then
+  echo "\$clean" >> "\$REMOVED"
   echo "⏭ \$clean \$ok" > "\$HDR"
 else
   echo "? defer failed: \$clean" > "\$HDR"
 fi
 DEFEREOF
 chmod +x "$DTD_DEFER"
+
+# --- Temp files for list generation ---
+DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
+DTD_REMOVED="/tmp/dtd-$$.removed"
+echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
+touch "$DTD_REMOVED"
+
+# --- List generation script (reloadable by fzf) ---
+DTD_LIST="/tmp/dtd-$$.list.sh"
+cat > "$DTD_LIST" << 'LISTEOF'
+#!/bin/zsh
+# Args: $1=cache_file $2=done_names_json $3=removed_file $4=today $5=columns
+python3 -c "
+import json, sys, re
+
+cache_file, done_json, removed_file, today, cols = sys.argv[1:6]
+cols = int(cols)
+
+with open(cache_file) as f:
+    d = json.load(f)
+completed = json.loads(done_json)
+
+# Load removed items
+try:
+    with open(removed_file) as f:
+        removed = [l.strip().lower() for l in f if l.strip()]
+except: removed = []
+
+# Neon color palette (label → ANSI 256-color)
+COLORS = {
+    'g245': '\033[38;2;0;230;118m',    'epcn': '\033[38;2;0;191;165m',
+    's897': '\033[38;2;27;94;32m',     'hcmc2': '\033[38;2;255;214;0m',
+    'xk87': '\033[38;2;253;108;29m',   'xk88': '\033[38;2;230;81;0m',
+    'hci':  '\033[38;2;99;237;224m',   'i9':   '\033[38;2;41;121;255m',
+    'n156': '\033[38;2;18;73;180m',    'hcmc': '\033[38;2;13;59;102m',
+    'm5x2': '\033[38;2;213;0;50m',     'hcb':  '\033[38;2;248;29;120m',
+    'hcbp': '\033[38;2;255;64;129m',   'infra':'\033[38;2;158;158;158m',
+    'i444': '\033[38;2;97;97;97m',     'i447': '\033[38;2;168;156;138m',
+    'hcm':  '\033[38;2;170;0;255m',    'hcmp': '\033[38;2;124;77;255m',
+    'hcmr': '\033[38;2;189;166;255m',
+}
+RESET = '\033[0m'
+
+def prank(p):
+    return -(p or 1)
+
+def strip_ann(s):
+    return re.sub(r'  +', ' ', re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', s)).strip()
+
+# Build task list in priority order
+sections = []
+for key in ['0neon', '1neon', '关键路径', '夜neon']:
+    sections.extend([t for t in d.get(key, []) if isinstance(t, dict)
+                     and t.get('due') and t['due'] <= today])
+# #0g tasks from today
+today_tasks = [t for t in d.get('today', []) if isinstance(t, dict)
+               and t.get('due') and t['due'] <= today]
+goals = [t for t in today_tasks if any(l in ('#0g', '#-1g') for l in t.get('labels', []))]
+rest = sorted([t for t in today_tasks if not any(l in ('#0g', '#-1g') for l in t.get('labels', []))],
+              key=lambda t: prank(t.get('priority')))
+all_tasks = sections + goals + rest
+
+# Deduplicate by id
+seen = set()
+unique = []
+for t in all_tasks:
+    if t.get('content') and t['id'] not in seen:
+        seen.add(t['id'])
+        unique.append(t)
+
+for t in unique:
+    raw = t['content']
+    clean = strip_ann(raw).lower()
+    prefix = clean.split(' - ')[0]
+    if clean in completed or prefix in completed or clean in removed:
+        continue
+
+    # Find color from labels
+    color = ''
+    for lbl in t.get('labels', []):
+        if lbl in COLORS:
+            color = COLORS[lbl]
+            break
+
+    # Middle-truncate if needed
+    line = raw
+    if len(line) > cols - 2:
+        # Find trailing annotations
+        tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][ ]*[\(\[\{]\d*[\)\]\}].*$', line)
+        if not tail_m:
+            tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][^()\[\]{}]*$', line)
+        tail = tail_m.group() if tail_m else line[-15:]
+        head_len = max(10, cols - len(tail) - 2)
+        line = line[:head_len] + '…' + tail
+
+    print(f'{color}{line}{RESET}' if color else line)
+" "\$1" "\$2" "\$3" "\$4" "\$5"
+LISTEOF
+chmod +x "$DTD_LIST"
 
 # --- Delete script used by fzf ctrl-x binding ---
 DTD_DELETE="/tmp/dtd-$$.delete.sh"
@@ -144,7 +249,10 @@ cat > "$DTD_DELETE" << DELETEEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
 CACHE_FILE="$CACHE_PATH"
+REMOVED="$DTD_REMOVED"
 task="\$1"
+# Strip ANSI codes first
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "⏳ deleting: \$clean" > "\$HDR"
 tid=\$(python3 -c "
@@ -163,6 +271,7 @@ for s in d.values():
 if [[ -n "\$tid" ]]; then
   curl -s -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" >/dev/null 2>&1
+  echo "\$clean" >> "\$REMOVED"
   echo "🗑 Deleted: \$clean" > "\$HDR"
 else
   echo "? delete: task not found" > "\$HDR"
@@ -179,66 +288,12 @@ while true; do
   session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -c -R -s 'split("\n") | map(select(. != ""))')
   all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
-  # Priority-ordered jq: 0neon → 1neon → 関键路径 → today (sorted by priority)
-  fzf_output=$(echo "$CACHE_SNAPSHOT" | jq -r --argjson completed "$all_completed" --arg today "$LOCAL_TODAY" '
-    # Todoist API: priority 4=urgent(p1), 3=high(p2), 2=medium(p3), 1=normal(p4)
-    # Negate so sort_by puts highest priority first
-    def prank: (. // 1) | (- .);
-
-
-    # Ordered sections: 0neon → 1neon → #0g → 関键路径 → 夜neon → today by priority
-    (
-      [(.["0neon"] // [])[]] +
-      [(.["1neon"] // [])[]] +
-      [(.["关键路径"] // [])[]] +
-      [(.["夜neon"] // [])[]]
-      | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
-    ) as $neon |
-    # Extract #0g tasks from today bucket (daily goals, shown after 1neon)
-    (
-      [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today
-        and ((.labels // []) | any(. == "#0g" or . == "#-1g")))]
-    ) as $goals |
-    # Remaining today tasks sorted by priority
-    (
-      [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today
-        and ((.labels // []) | any(. == "#0g" or . == "#-1g") | not))]
-      | sort_by(.priority | prank)
-    ) as $today_sorted |
-    ($neon + $goals + $today_sorted)
-    | map(select(.content != null))
-    | reduce .[] as $t ([]; if [.[] | .id] | index($t.id) then . else . + [$t] end)
-    | .[]
-    | .content as $raw |
-    ($raw | gsub(" *\\([0-9]*\\)"; "") | gsub(" *\\[[0-9]*\\]"; "") | gsub(" *\\{[0-9]*\\}"; "") | gsub(" +$"; "") | gsub("  +"; " ") | ascii_downcase) as $clean |
-    ($clean | split(" - ") | .[0]) as $prefix |
-    select(
-      ($completed | index($clean) | not) and
-      ($completed | index($prefix) | not)
-    )
-    | $raw
-  ' | awk -v w="${COLUMNS:-80}" '{
-    # Middle-truncate: keep beginning + "…" + trailing annotations
-    if (length <= w-2) { print; next }
-    # Find trailing annotations: capture everything from last ( or [ to end
-    tail = ""
-    s = $0
-    while (match(s, /[ ]*[\(\[\{][0-9]*[\)\]\}][ ]*[\(\[\{][0-9]*[\)\]\}].*$/)) {
-      tail = substr(s, RSTART)
-      break
-    }
-    if (tail == "" && match(s, /[ ]*[\(\[\{][0-9]*[\)\]\}][^()[\]{}]*$/)) {
-      tail = substr(s, RSTART)
-    }
-    if (tail == "") { tail = substr(s, length-14) }
-    tl = length(tail)
-    head_len = w - tl - 2
-    if (head_len < 10) head_len = 10
-    printf "%s…%s\n", substr($0, 1, head_len), tail
-  }' | fzf --height 40 --prompt="did> " --layout=reverse \
+  # Generate task list via reloadable script (supports colors + removal)
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$all_completed' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}'"
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --ansi \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute-silent($DTD_DEFER {})+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {})+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
       --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-x: delete]")
 
   task="$fzf_output"
@@ -246,6 +301,9 @@ while true; do
   if [[ -z "$task" ]]; then
     break
   fi
+
+  # Strip ANSI color codes from fzf selection
+  task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g')
 
   # Resolve truncated names: if fzf output contains "…", find the original
   # full name from the cache snapshot by matching the prefix before "…"
@@ -310,4 +368,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST"

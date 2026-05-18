@@ -1321,8 +1321,21 @@ end tell'''
 
     # 6b. Create Toggl entries for items with time_range (parallel)
     toggl_created = {}
+    def _resolve_toggl_project(r):
+        """Resolve Toggl project code: explicit override > habit map > Todoist labels."""
+        if r.item.project_override:
+            return r.item.project_override
+        habit = HABIT_PROJECT.get(r.item.name.lower())
+        if habit:
+            return habit
+        # Fall back to Todoist task labels
+        if r.todoist_task:
+            for lbl in r.todoist_task.get("labels", []):
+                if lbl in LABEL_TO_0FEN:
+                    return lbl
+        return None
     toggl_items = [(r.item.name, r.item.time_range,
-                    r.item.project_override or HABIT_PROJECT.get(r.item.name.lower()),
+                    _resolve_toggl_project(r),
                     r.item.target_date)
                    for r in fast if r.item.time_range]
     if toggl_items:
