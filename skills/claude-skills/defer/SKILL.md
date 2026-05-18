@@ -33,128 +33,41 @@ Do NOT explain what you're doing. Do NOT ask for confirmation unless multiple ta
 
 ## Steps
 
-### Step 1: Find the task
+### Step 1: Resolve the date
 
-Search all active Todoist tasks (not just 0neon) for content matching `<task>` (case-insensitive, substring):
-
-```bash
-curl -s "https://api.todoist.com/api/v1/tasks" \
-  -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" | python3 -c "
-import json, sys
-tasks = json.load(sys.stdin)
-q = 'QUERY'
-matches = [t for t in tasks if q.lower() in t.get('content','').lower()]
-for t in matches:
-    print(t['id'], repr(t['content']), t.get('due',{}).get('date',''), t.get('labels',[]))
-"
-```
-
-- If **0 matches**: report "task not found" and stop.
-- If **1 match**: proceed.
-- If **2–4 matches**: list them and ask the user which one. Stop and wait.
-- If **5+ matches**: ask user to be more specific. Stop and wait.
-
-### Step 2: Resolve the new date
-
-Convert `<new-date>` to ISO format (`YYYY-MM-DD`) for use in the API. Examples:
+Convert `<new-date>` to ISO format (`YYYY-MM-DD`):
 - `"tomorrow"` → tomorrow's date
 - `"4/15"` → `2026-04-15` (current year)
 - `"next Monday"` → nearest upcoming Monday
-- `"May 1"` → `2026-05-01`
+- `"05.19"` → `2026-05-19`
 - ISO passthrough: `"2026-05-01"` → `2026-05-01`
 
-### Step 3: Reschedule or split (recurring vs non-recurring)
+### Step 2: Parse claimed points
 
-Check if the task is recurring: look for `due.is_recurring == true` in the task data.
+If the user included `[N]` in the args, that's the claimed points for today's stub. Default: 5.
 
-#### 3a: Non-recurring tasks
-
-Use the Todoist REST API to reschedule. Use `due_date` (ISO) rather than `due_string` to avoid ambiguity:
+### Step 3: Run defer-fast.py
 
 ```bash
-curl -s -X POST "https://api.todoist.com/api/v1/tasks/TASK_ID" \
-  -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" \
-  -H "Content-Type: application/json" \
-  -d '{"due_date": "YYYY-MM-DD"}'
+python3 ~/i446-monorepo/tools/did/defer-fast.py "<task_name>" "<YYYY-MM-DD>" <claimed_points>
 ```
 
-Then proceed to Step 4 (apply changes), Step 5 (posthoc record), Step 6 (report).
+The script handles everything: finding the task, detecting recurring vs non-recurring, creating stubs, closing tasks. It outputs JSON with the result.
 
-#### 3b: Recurring tasks (split into two stubs)
+- If it exits 1 with `"error": "multiple matches"`, list the matches and ask the user which one.
+- If it exits 1 with `"error": "task not found"`, report and stop.
 
-For recurring tasks, do NOT reschedule (that destroys recurrence). Instead:
+### Step 4: Apply extra changes (if any)
 
-1. **Close the recurring task** (advances it to its next natural occurrence):
-   ```bash
-   curl -s -X POST "https://api.todoist.com/api/v1/tasks/TASK_ID/close" \
-     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5"
-   ```
+If the user specified additional changes beyond the date and points, apply them after defer-fast.py completes:
 
-2. **Parse points from the original task content.** Extract `[N]` from the content (e.g., `"0g (4) [8]"` has total points = 8). The user may specify partial points claimed (default: 5). Remaining = total - claimed.
+- `rename: <new name>` → use `update-tasks` to change the future stub's content
+- `p1`/`p2`/`p3`/`p4` → use `update-tasks` to change priority on the future stub
+- Additional notes → use `update-tasks` to append to description
 
-3. **Create stub A (today, completed)** for partial credit claimed today:
-   ```
-   content: "deferred: <original task name> (5) [CLAIMED_PTS]"
-   labels: ["posthoc"] + original labels
-   project_id: original project
-   due_date: today
-   ```
-   Then immediately close it.
+The future stub's task ID is in the JSON output at `.stubs.future`.
 
-4. **Create stub B (target date, open)** for remaining work:
-   ```
-   content: "<original task name> (N) [REMAINING_PTS]"
-   labels: original labels (no "posthoc")
-   project_id: original project
-   due_date: target date (default: tomorrow)
-   ```
-   This stays open so it appears on the target day's task list.
-
-5. Skip Steps 4 and 5 (changes and posthoc are handled inline above). Go to Step 6.
-
-**Defaults:**
-- Partial points claimed today: 5 (override with `[N]` in args)
-- Target date: tomorrow (override with `<new-date>` arg)
-- Duration on stub B: same `(N)` as original task
-
-### Step 4: Apply changes (non-recurring only)
-
-If the user specified changes, apply them in the same API call or a second call:
-
-- `rename: <new name>` → update `content` field
-- `[N]` in task name → update the `[N]` portion of the content string
-- `p1`/`p2`/`p3`/`p4` → update `priority` field (p1=4, p2=3, p3=2, p4=1 in API... actually use string values directly: `"priority": 4` for p1 in REST API v1)
-- Additional notes → update `description` field (append, don't overwrite)
-
-**Priority mapping for REST API v1:** p1→`priority:4`, p2→`priority:3`, p3→`priority:2`, p4→`priority:1`
-
-### Step 5: Create posthoc eval record (non-recurring only)
-
-Create a Todoist task representing "I evaluated this task today and chose to defer it," then immediately close it:
-
-**Content format:**
-```
-deferred: <original task name> → <new-date> (5) [0]
-```
-
-**Fields:**
-- `labels`: `["posthoc"]` + the original task's labels (carry them over for domain context)
-- `project_id`: same project as the original task
-- `due_date`: today in ISO format (`2026-04-05`)
-
-```bash
-# Create
-curl -s -X POST "https://api.todoist.com/api/v1/tasks" \
-  -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" \
-  -H "Content-Type: application/json" \
-  -d '{"content": "deferred: TASK_NAME → NEW_DATE (5) [0]", "labels": LABELS, "project_id": "PROJECT_ID", "due_date": "2026-04-05"}'
-
-# Immediately close
-curl -s -X POST "https://api.todoist.com/api/v1/tasks/NEW_TASK_ID/close" \
-  -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5"
-```
-
-### Step 6: Report
+### Step 5: Report
 
 ```
 deferred: <task name> → <new-date>

@@ -157,7 +157,10 @@ def fetch_current():
         STATE.current = toggl_api.get_current()
         STATE.last_current_fetch = time.monotonic()
     except Exception as e:
-        flash(f"toggl current err: {e}")
+        if "402" in str(e):
+            flash("toggl: rate limited (free tier)", 30.0)
+        else:
+            flash(f"toggl current err: {e}")
 
 
 def fetch_today():
@@ -192,7 +195,10 @@ def fetch_today():
         STATE.entries = out
         STATE.last_toggl_fetch = time.monotonic()
     except Exception as e:
-        flash(f"toggl today err: {e}")
+        if "402" in str(e):
+            flash("toggl: rate limited (free tier)", 30.0)
+        else:
+            flash(f"toggl today err: {e}")
 
 
 def fetch_gcal(force=False):
@@ -372,14 +378,21 @@ def render_detail() -> list[tuple[str, str]]:
 
         # Insert now line before this slot if applicable
         if not now_drawn and slot >= now:
-            now_text = f" ── now {now:%H:%M:%S}"
             if STATE.current:
+                cur_desc = STATE.current.get("description") or ""
+                cur_code = proj_code(STATE.current.get("project_id"))
                 try:
                     cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
-                    now_text += f"  ▶ {fmt_dur_live(int((now - cst).total_seconds()))}"
+                    elapsed = fmt_dur_live(int((now - cst).total_seconds()))
                 except Exception:
-                    pass
-            now_text += " "
+                    elapsed = "0m00s"
+                task_info = f"▶ {cur_desc}"
+                if cur_code:
+                    task_info += f" · {cur_code}"
+                task_info += f"  {elapsed}"
+                now_text = f" ── {now:%H:%M:%S}  {task_info} "
+            else:
+                now_text = f" ── {now:%H:%M:%S}  (no timer) "
             out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
             now_drawn = True
 
@@ -483,7 +496,6 @@ def render_footer() -> list[tuple[str, str]]:
 def render_all() -> list[tuple[str, str]]:
     parts: list[tuple[str, str]] = []
     parts += render_header()
-    parts += render_current()
     parts += render_morning()
     parts += render_detail()
     parts += render_evening()
@@ -643,7 +655,7 @@ style = Style.from_dict({
     "dim": "italic #888888",
     "past": "#aaaaaa",
     "future": "#dddddd",
-    "now": "bold magenta",
+    "now": "bold #ff1493",
     "flash": "bold yellow",
     "hint": "italic #666666",
     "prompt": "bold cyan",
@@ -655,14 +667,14 @@ app = Application(layout=Layout(root, focused_element=main_window),
 
 async def ticker_current(app):
     while True:
-        await asyncio.sleep(15)
+        await asyncio.sleep(30)
         fetch_current()
         app.invalidate()
 
 
 async def ticker_today(app):
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)
         fetch_today()
         app.invalidate()
 

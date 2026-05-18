@@ -118,6 +118,58 @@ echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"
 
+# --- Defer script used by fzf ctrl-d binding ---
+DTD_DEFER="/tmp/dtd-$$.defer.sh"
+cat > "$DTD_DEFER" << DEFEREOF
+#!/bin/zsh
+DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
+HDR="$DTD_HDR"
+task="\$1"
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+echo "⏳ deferring: \$clean" > "\$HDR"
+result=\$(python3 "\$DEFER_FAST" "\$clean" 2>/dev/null)
+ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
+if [[ -n "\$ok" ]]; then
+  echo "⏭ \$clean \$ok" > "\$HDR"
+else
+  echo "? defer failed: \$clean" > "\$HDR"
+fi
+DEFEREOF
+chmod +x "$DTD_DEFER"
+
+# --- Delete script used by fzf ctrl-x binding ---
+DTD_DELETE="/tmp/dtd-$$.delete.sh"
+CACHE_PATH="$CACHE"
+cat > "$DTD_DELETE" << DELETEEOF
+#!/bin/zsh
+HDR="$DTD_HDR"
+CACHE_FILE="$CACHE_PATH"
+task="\$1"
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+echo "⏳ deleting: \$clean" > "\$HDR"
+tid=\$(python3 -c "
+import json, re, sys
+q = sys.argv[1].lower()
+with open(sys.argv[2]) as f:
+    d = json.load(f)
+for s in d.values():
+    if not isinstance(s, list): continue
+    for t in s:
+        if not isinstance(t, dict): continue
+        c = re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', t.get('content','')).strip().lower()
+        if c == q:
+            print(t['id']); sys.exit(0)
+" "\$clean" "\$CACHE_FILE" 2>/dev/null)
+if [[ -n "\$tid" ]]; then
+  curl -s -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
+    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" >/dev/null 2>&1
+  echo "🗑 Deleted: \$clean" > "\$HDR"
+else
+  echo "? delete: task not found" > "\$HDR"
+fi
+DELETEEOF
+chmod +x "$DTD_DELETE"
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   worker_hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
@@ -185,7 +237,9 @@ while true; do
     printf "%s…%s\n", substr($0, 1, head_len), tail
   }' | fzf --height 40 --prompt="did> " --layout=reverse \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
-      --header="$combined_hdr  [ctrl-s: start timer]")
+      --bind "ctrl-d:execute-silent($DTD_DEFER {})+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {})+transform-header(cat $DTD_HDR)" \
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-x: delete]")
 
   task="$fzf_output"
 
@@ -256,4 +310,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE"
