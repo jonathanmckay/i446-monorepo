@@ -1253,13 +1253,7 @@ def write_toggl_totals_to_0n(col_totals: dict[str, int], target_date: dt.date,
     set_lines = []
     for col, minutes in col_totals.items():
         set_lines.append(
-            f'    set theCell to range ("{col}" & targetRow) of theSheet\n'
-            f'    set oldVal to formula of theCell\n'
-            f'    if oldVal = "" or oldVal = "0" then\n'
-            f'        set formula of theCell to "=0+{minutes}"\n'
-            f'    else\n'
-            f'        set formula of theCell to oldVal & "+{minutes}"\n'
-            f'    end if'
+            f'    set value of range ("{col}" & targetRow) of theSheet to {minutes}'
         )
     set_block = "\n".join(set_lines)
     month = target_date.month

@@ -121,24 +121,13 @@ def write_tag_minutes(tag_totals: dict[str, int], target_date: date,
     """Write tag and project minute sums to 0n columns for the target date's row."""
     if not tag_totals and not proj_totals:
         return "no tagged entries"
-    def _append_line(col, minutes):
-        """Generate AppleScript to append +N to existing formula (not overwrite)."""
-        return (
-            f'    set theCell to range ("{col}" & todayRow) of theSheet\n'
-            f'    set oldVal to formula of theCell\n'
-            f'    if oldVal = "" or oldVal = "0" then\n'
-            f'        set formula of theCell to "=0+{minutes}"\n'
-            f'    else\n'
-            f'        set formula of theCell to oldVal & "+{minutes}"\n'
-            f'    end if'
-        )
     set_lines = []
     for tag, minutes in tag_totals.items():
         col = TAG_COLUMNS[tag]
-        set_lines.append(_append_line(col, minutes))
+        set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
     for name, minutes in (proj_totals or {}).items():
         col = next(c for pid, (n, c) in PROJECT_COLUMNS.items() if n == name)
-        set_lines.append(_append_line(col, minutes))
+        set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
     set_block = "\n".join(set_lines)
     month = target_date.month
     day = target_date.day

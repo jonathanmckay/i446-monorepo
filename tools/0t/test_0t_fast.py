@@ -67,24 +67,22 @@ def test_xk87_matched_by_tag_not_project():
     assert not proj_totals, f"proj_totals should be empty, got {proj_totals}"
 
 
-def test_write_tag_minutes_appends_not_overwrites():
-    """Tag/project writes must append to existing cell formulas, not overwrite.
-    Overwriting destroys points from other sources (did-fast, manual)."""
+def test_write_tag_minutes_uses_absolute_overwrite():
+    """Tag/project minute totals in 0n must use absolute overwrite (set value of),
+    not append. These are recalculated totals from Toggl, not incremental points.
+    Appending caused ballooning values when 0t or the daemon ran multiple times."""
     import ast
     source = Path(__file__).parent.joinpath("0t-fast.py").read_text()
     tree = ast.parse(source)
 
-    # Find the write_tag_minutes function
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "write_tag_minutes":
             body_src = ast.get_source_segment(source, node)
-            # Must NOT contain "set value of" (overwrite pattern)
-            assert "set value of" not in body_src, (
-                "write_tag_minutes must append (formula & \"+N\"), not overwrite (set value of)"
+            assert "set value of" in body_src, (
+                "write_tag_minutes must use absolute overwrite (set value of) for Toggl minute totals"
             )
-            # Must contain the append pattern
-            assert '& "+"' in body_src or "& \"+{" in body_src or 'oldVal & "+"' in body_src or "oldVal" in body_src, (
-                "write_tag_minutes must read old formula and append"
+            assert "oldVal" not in body_src, (
+                "write_tag_minutes must NOT append to old formula — these are absolute totals"
             )
             return
     raise AssertionError("write_tag_minutes function not found")
