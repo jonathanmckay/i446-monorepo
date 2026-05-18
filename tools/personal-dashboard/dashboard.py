@@ -288,7 +288,7 @@ def load_toggl_data():
         return {}
 
     result = defaultdict(lambda: defaultdict(int))
-    entry_counts = defaultdict(int)
+    entry_counts = defaultdict(lambda: defaultdict(int))
     for e in entries:
         dur = e.get("duration", 0)
         if dur <= 0:
@@ -307,9 +307,9 @@ def load_toggl_data():
         proj_id = e.get("project_id")
         code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
         result[d.isoformat()][code] += dur // 60
-        entry_counts[d.isoformat()] += 1
+        entry_counts[d.isoformat()][code] += 1
 
-    return {k: dict(v) for k, v in result.items()}, dict(entry_counts)
+    return {k: dict(v) for k, v in result.items()}, {k: dict(v) for k, v in entry_counts.items()}
 
 
 _TASKS_CACHE_PATH = Path(__file__).parent / ".tasks-cache.json"
@@ -753,7 +753,20 @@ def _build_api_data():
     tasks_1n      = [tasks_raw.get(d, {}).get("one_n", 0)   for d in dates]
     tasks_other   = [tasks_raw.get(d, {}).get("other", 0)   for d in dates]
     tasks_values  = [tasks_raw.get(d, {}).get("total", 0)   for d in dates]
-    time_entries_values = [toggl_entry_counts.get(d, 0) for d in dates]
+    time_entries_values = [sum(toggl_entry_counts.get(d, {}).values()) for d in dates]
+
+    # Build stacked entry-count datasets (same project order as time chart)
+    entry_projects = {code for day_data in toggl_entry_counts.values() for code in day_data}
+    entry_projects_sorted = [p for p in all_projects if p in entry_projects]
+    entries_datasets = []
+    for code in entry_projects_sorted:
+        values = [toggl_entry_counts.get(d, {}).get(code, 0) for d in dates]
+        if any(v > 0 for v in values):
+            entries_datasets.append({
+                "label": code,
+                "data": values,
+                "backgroundColor": PROJECT_COLORS.get(code, "#424242"),
+            })
 
     # shots/task = tasks completed / turns (None when either is 0)
     shots_per_task = []
@@ -1034,6 +1047,7 @@ def _build_api_data():
         "tasks_1n": tasks_1n,
         "tasks_other": tasks_other,
         "time_entries": time_entries_values,
+        "entries": {"datasets": entries_datasets},
         "shots_per_task": shots_per_task,
         "ratio": {"datasets": ratio_datasets},
         "email": {"datasets": email_datasets, "summary": email_summary, "imessage": imsg_stats},
@@ -1144,12 +1158,9 @@ HTML = """<!DOCTYPE html>
     <div class="summary" id="emailSummary"></div>
   </div>
   <div class="card">
-    <h2>Tasks Complete / Day</h2>
+    <h2>Tasks &amp; Entries / Day</h2>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
     <div class="summary" id="tasksSummary"></div>
-  </div>
-  <div class="card">
-    <h2>Time Entries / Day</h2>
     <div class="chart-wrap xs"><canvas id="entriesChart"></canvas></div>
     <div class="summary" id="entriesSummary"></div>
   </div>
@@ -1266,19 +1277,19 @@ fetch('/api/data').then(r => r.json()).then(data => {
     tkEl.appendChild(b);
   });
 
-  // Time entries per day chart (simple bar, same color as time chart accent)
+  // Time entries per day chart (stacked by project, same colors as time chart)
   new Chart(document.getElementById('entriesChart'), {
     type: 'bar',
-    data: { labels, datasets: [{
-      label: 'Entries', data: data.time_entries,
-      backgroundColor: '#63ede0', borderColor: '#63ede0', borderWidth: 0,
-    }]},
+    data: { labels, datasets: data.entries.datasets.map(ds => ({
+      label: ds.label, data: ds.data,
+      backgroundColor: ds.backgroundColor, borderColor: ds.backgroundColor, borderWidth: 0,
+    }))},
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
       }
     }
   });
