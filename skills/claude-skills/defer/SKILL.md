@@ -63,9 +63,13 @@ Convert `<new-date>` to ISO format (`YYYY-MM-DD`) for use in the API. Examples:
 - `"May 1"` → `2026-05-01`
 - ISO passthrough: `"2026-05-01"` → `2026-05-01`
 
-### Step 3: Reschedule the task
+### Step 3: Reschedule or split (recurring vs non-recurring)
 
-Use the Todoist REST API to reschedule. Use `due_string` for natural language, or `due_date` for ISO:
+Check if the task is recurring: look for `due.is_recurring == true` in the task data.
+
+#### 3a: Non-recurring tasks
+
+Use the Todoist REST API to reschedule. Use `due_date` (ISO) rather than `due_string` to avoid ambiguity:
 
 ```bash
 curl -s -X POST "https://api.todoist.com/api/v1/tasks/TASK_ID" \
@@ -74,9 +78,46 @@ curl -s -X POST "https://api.todoist.com/api/v1/tasks/TASK_ID" \
   -d '{"due_date": "YYYY-MM-DD"}'
 ```
 
-**Important:** Use `due_date` (ISO) rather than `due_string` when you've already resolved the date, to avoid ambiguity.
+Then proceed to Step 4 (apply changes), Step 5 (posthoc record), Step 6 (report).
 
-### Step 4: Apply changes (if any)
+#### 3b: Recurring tasks (split into two stubs)
+
+For recurring tasks, do NOT reschedule (that destroys recurrence). Instead:
+
+1. **Close the recurring task** (advances it to its next natural occurrence):
+   ```bash
+   curl -s -X POST "https://api.todoist.com/api/v1/tasks/TASK_ID/close" \
+     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5"
+   ```
+
+2. **Parse points from the original task content.** Extract `[N]` from the content (e.g., `"0g (4) [8]"` has total points = 8). The user may specify partial points claimed (default: 5). Remaining = total - claimed.
+
+3. **Create stub A (today, completed)** for partial credit claimed today:
+   ```
+   content: "deferred: <original task name> (5) [CLAIMED_PTS]"
+   labels: ["posthoc"] + original labels
+   project_id: original project
+   due_date: today
+   ```
+   Then immediately close it.
+
+4. **Create stub B (target date, open)** for remaining work:
+   ```
+   content: "<original task name> (N) [REMAINING_PTS]"
+   labels: original labels (no "posthoc")
+   project_id: original project
+   due_date: target date (default: tomorrow)
+   ```
+   This stays open so it appears on the target day's task list.
+
+5. Skip Steps 4 and 5 (changes and posthoc are handled inline above). Go to Step 6.
+
+**Defaults:**
+- Partial points claimed today: 5 (override with `[N]` in args)
+- Target date: tomorrow (override with `<new-date>` arg)
+- Duration on stub B: same `(N)` as original task
+
+### Step 4: Apply changes (non-recurring only)
 
 If the user specified changes, apply them in the same API call or a second call:
 
@@ -87,7 +128,7 @@ If the user specified changes, apply them in the same API call or a second call:
 
 **Priority mapping for REST API v1:** p1→`priority:4`, p2→`priority:3`, p3→`priority:2`, p4→`priority:1`
 
-### Step 5: Create posthoc eval record for today
+### Step 5: Create posthoc eval record (non-recurring only)
 
 Create a Todoist task representing "I evaluated this task today and chose to defer it," then immediately close it:
 
@@ -119,7 +160,12 @@ curl -s -X POST "https://api.todoist.com/api/v1/tasks/NEW_TASK_ID/close" \
 deferred: <task name> → <new-date>
 ```
 
-If changes were applied, append them:
+If recurring:
+```
+deferred (recurring): <task name> → closed + [CLAIMED] today / [REMAINING] on <new-date>
+```
+
+If changes were applied:
 ```
 deferred: <task name> → <new-date> [renamed / p2 / ...]
 ```
@@ -139,6 +185,7 @@ deferred: <task name> → <new-date> [renamed / p2 / ...]
 
 ## Notes
 
-- Always use `reschedule` semantics (due_date) — do NOT use update-tasks with due_string on recurring tasks as it destroys recurrence. If the task is recurring, warn the user before rescheduling.
-- The posthoc record uses `[0]` points since deferral itself has no output value — it's just an eval log.
+- Non-recurring tasks use `due_date` reschedule. Recurring tasks use the close+split-stubs flow to preserve recurrence.
+- The posthoc record (non-recurring) uses `[0]` points since deferral itself has no output value.
+- For recurring tasks, stub A gets `[CLAIMED]` points (default 5) and stub B gets `[REMAINING]` points. Both inherit the original task's labels and project.
 - If the task has no project (inbox), use `"inbox"` as project_id.
