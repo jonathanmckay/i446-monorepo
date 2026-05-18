@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -692,15 +693,35 @@ async def ticker_clock(app):
         app.invalidate()
 
 
+async def _sigusr1_refresh():
+    """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer)."""
+    fetch_current()
+    fetch_today()
+    app.invalidate()
+
+
 async def main():
     fetch_current()
     fetch_today()
     fetch_gcal()
+
+    # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGUSR1, lambda: loop.create_task(_sigusr1_refresh()))
+
+    # Write PID so other tools can signal us
+    pid_file = Path.home() / ".cache" / "tg-tui.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()))
+
     app.create_background_task(ticker_clock(app))
     app.create_background_task(ticker_current(app))
     app.create_background_task(ticker_today(app))
     app.create_background_task(ticker_gcal(app))
-    await app.run_async()
+    try:
+        await app.run_async()
+    finally:
+        pid_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ Usage:
 import sys
 import os
 import json
+import signal
 import datetime
 
 # Load API key from ~/.claude.json MCP config if not already set
@@ -202,8 +203,23 @@ COMMANDS = {
     "delete": cmd_delete,
 }
 
+def _notify_tui():
+    """Signal tg-tui to refresh via SIGUSR1 after timer state changes."""
+    try:
+        from pathlib import Path
+        pid = int((Path.home() / ".cache" / "tg-tui.pid").read_text().strip())
+        os.kill(pid, signal.SIGUSR1)
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+
+# Commands that change timer state and should trigger tg-tui refresh
+_MUTATING_COMMANDS = {"start", "stop", "create", "delete"}
+
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print(f"Usage: toggl_cli.py <{'|'.join(COMMANDS)}> [args...]")
         sys.exit(1)
     COMMANDS[sys.argv[1]](sys.argv[2:])
+    if sys.argv[1] in _MUTATING_COMMANDS:
+        _notify_tui()

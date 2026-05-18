@@ -13,7 +13,9 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -24,6 +26,7 @@ CACHE = str(Path.home() / ".claude/skills/tg/cache.json")
 DO_SESSION = Path.home() / ".claude/skills/do/active.json"
 DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
 TASK_QUEUE = str(Path.home() / "vault/z_ibx/task-queue.json")
+TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
 
 # ── Shortcode table ──────────────────────────────────────────────────────────
 
@@ -358,5 +361,15 @@ def main():
     print(cmd_start(desc, project, tags))
 
 
+def notify_tui():
+    """Signal tg-tui to refresh immediately via SIGUSR1."""
+    try:
+        pid = int(TG_TUI_PID.read_text().strip())
+        os.kill(pid, signal.SIGUSR1)
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+
 if __name__ == "__main__":
     main()
+    notify_tui()
