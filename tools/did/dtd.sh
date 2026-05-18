@@ -238,17 +238,16 @@ for t in unique:
         line = line[:head_len] + '…' + tail
 
     print(f'{color}{line}{RESET}' if color else line)
-" "\$1" "\$2" "\$3" "\$4" "\$5"
+" "$1" "$2" "$3" "$4" "$5"
 LISTEOF
 chmod +x "$DTD_LIST"
 
 # --- Delete script used by fzf ctrl-x binding ---
 DTD_DELETE="/tmp/dtd-$$.delete.sh"
-CACHE_PATH="$CACHE"
 cat > "$DTD_DELETE" << DELETEEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
-CACHE_FILE="$CACHE_PATH"
+CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
 task="\$1"
 # Strip ANSI codes first
@@ -260,18 +259,33 @@ import json, re, sys
 q = sys.argv[1].lower()
 with open(sys.argv[2]) as f:
     d = json.load(f)
+# Handle truncated names (contain …): match by prefix before …
+prefix = q.split('\u2026')[0].strip() if '\u2026' in q else None
 for s in d.values():
     if not isinstance(s, list): continue
     for t in s:
         if not isinstance(t, dict): continue
         c = re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', t.get('content','')).strip().lower()
-        if c == q:
+        if c == q or (prefix and c.startswith(prefix)):
             print(t['id']); sys.exit(0)
 " "\$clean" "\$CACHE_FILE" 2>/dev/null)
 if [[ -n "\$tid" ]]; then
+  # Get full name from cache for the removed list (clean may be truncated)
+  fullname=\$(python3 -c "
+import json, re, sys
+tid = sys.argv[1]
+with open(sys.argv[2]) as f:
+    d = json.load(f)
+for s in d.values():
+    if not isinstance(s, list): continue
+    for t in s:
+        if isinstance(t, dict) and t.get('id') == tid:
+            print(re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', t.get('content','')).strip().lower())
+            sys.exit(0)
+" "\$tid" "\$CACHE_FILE" 2>/dev/null)
   curl -s -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" >/dev/null 2>&1
-  echo "\$clean" >> "\$REMOVED"
+  echo "\${fullname:-\$clean}" >> "\$REMOVED"
   echo "🗑 Deleted: \$clean" > "\$HDR"
 else
   echo "? delete: task not found" > "\$HDR"
