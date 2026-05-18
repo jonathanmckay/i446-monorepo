@@ -92,6 +92,38 @@ PROJECT_COLORS = {
 }
 
 
+CALENDAR_PROJECT_MAP = {
+    "m5x2 Cal": "m5x2",
+    "3494 House": "m5x2",
+    "CAIS School": "xk87",
+    "Habits": "hcm",
+    "lx@m5c7.com": "xk88",
+    "lxu888": "xk88",
+    "Calendar": "infra",
+    "jonathan.b.mckay@gmail.com": "infra",
+}
+
+EVENT_KEYWORDS = [
+    (["1:1", "1|1", "standup", "sprint", "retro", "slt", "metrics"], "i9"),
+    (["m5x2", "property", "tenant", "lease", "appfolio"], "m5x2"),
+    (["school", "cais", "pta", "ptc"], "xk87"),
+    (["bball", "basketball", "gym", "hiit"], "hcbp"),
+]
+
+
+def gcal_project_code(event: dict) -> str:
+    """Resolve a gcal event to a Neon project code."""
+    cal = event.get("calendar", "")
+    code = CALENDAR_PROJECT_MAP.get(cal)
+    if code:
+        return code
+    title_lower = event.get("title", "").lower()
+    for keywords, kw_code in EVENT_KEYWORDS:
+        if any(kw in title_lower for kw in keywords):
+            return kw_code
+    return ""
+
+
 def project_style(pid_or_code) -> str:
     """Return a prompt_toolkit style string for a project id or code."""
     code = pid_or_code if isinstance(pid_or_code, str) else proj_code(pid_or_code)
@@ -194,6 +226,15 @@ def fmt_dur(minutes: int) -> str:
     return f"{h}h{m:02d}m" if m else f"{h}h"
 
 
+def fmt_dur_live(total_seconds: int) -> str:
+    """Live elapsed with seconds, for the running timer."""
+    h, rem = divmod(max(0, total_seconds), 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m{s:02d}s"
+    return f"{m}m{s:02d}s"
+
+
 def detail_window():
     """Return (start, end) datetimes for the detail band, snapped to SLOT_MIN."""
     now = dt.datetime.now(TZ) + dt.timedelta(minutes=STATE.scroll_min)
@@ -257,13 +298,13 @@ def render_current() -> list[tuple[str, str]]:
     code = proj_code(pid)
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
-        elapsed = int((dt.datetime.now(TZ) - st).total_seconds() // 60)
+        elapsed_s = int((dt.datetime.now(TZ) - st).total_seconds())
     except Exception:
-        elapsed = 0
+        elapsed_s = 0
     line = f" ▶ {desc}"
     if code:
         line += f"  · {code}"
-    line += f"   {fmt_dur(elapsed)}\n"
+    line += f"   {fmt_dur_live(elapsed_s)}\n"
     style = project_style(pid) or "class:running"
     return [(f"bold {style}".strip(), line)]
 
@@ -316,21 +357,30 @@ def render_detail() -> list[tuple[str, str]]:
     while slot < end:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
         pid = None
+        gcal_sty = ""
         if slot_end <= now:
             label, pid = _slot_label_toggl(slot, slot_end)
             marker = "│"
         elif slot >= now:
-            label, _ = _slot_label_gcal(slot, slot_end)
+            label, gcal_sty = _slot_label_gcal(slot, slot_end)
             marker = "│"
         else:
             label, pid = _slot_label_toggl(slot, slot_end)
             if not label:
-                label, _ = _slot_label_gcal(slot, slot_end)
+                label, gcal_sty = _slot_label_gcal(slot, slot_end)
             marker = "│"
 
         # Insert now line before this slot if applicable
         if not now_drawn and slot >= now:
-            out.append(("class:now", f" ── now {now:%H:%M} " + "─" * max(0, WIDTH_HINT - 14) + "\n"))
+            now_text = f" ── now {now:%H:%M:%S}"
+            if STATE.current:
+                try:
+                    cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
+                    now_text += f"  ▶ {fmt_dur_live(int((now - cst).total_seconds()))}"
+                except Exception:
+                    pass
+            now_text += " "
+            out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
             now_drawn = True
 
         time_str = f"{slot:%H:%M}"
@@ -346,11 +396,12 @@ def render_detail() -> list[tuple[str, str]]:
         elif slot_end <= now:
             cls = project_style(pid) or "class:past"
         else:
-            cls = "class:future"
+            cls = gcal_sty or "class:future"
         out.append((cls, line))
         slot = slot_end
     if not now_drawn:
-        out.append(("class:now", f" ── now {now:%H:%M} " + "─" * max(0, WIDTH_HINT - 14) + "\n"))
+        now_text = f" ── now {now:%H:%M:%S} "
+        out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
     return out
 
 
@@ -369,6 +420,7 @@ def _slot_label_toggl(slot_s, slot_e):
 
 
 def _slot_label_gcal(slot_s, slot_e):
+    """Return (label, style_str) for a gcal slot. style_str may be empty."""
     overlapping = [
         ev for ev in STATE.events
         if ev["start_dt"] < slot_e and ev["end_dt"] > slot_s
@@ -376,11 +428,14 @@ def _slot_label_gcal(slot_s, slot_e):
         and not ev.get("all_day")
     ]
     if not overlapping:
-        return "", None
+        return "", ""
     if len(overlapping) == 1:
-        return f"◇ {overlapping[0]['title']}", None
+        sty = project_style(gcal_project_code(overlapping[0]))
+        return f"◇ {overlapping[0]['title']}", sty
+    dominant = max(overlapping, key=lambda ev: (min(ev["end_dt"], slot_e) - max(ev["start_dt"], slot_s)).total_seconds())
+    sty = project_style(gcal_project_code(dominant))
     titles = ", ".join(ev["title"] for ev in overlapping)
-    return f"◇ {len(overlapping)}× {titles}", None
+    return f"◇ {len(overlapping)}× {titles}", sty
 
 
 def render_evening() -> list[tuple[str, str]]:
@@ -406,7 +461,8 @@ def render_evening() -> list[tuple[str, str]]:
         right = fmt_dur(mins)
         space = max(1, WIDTH_HINT - 2 - len(prefix) - 1 - len(right) - 1)
         title = pad(truncate(ev["title"], space), space)
-        out.append(("class:future", f"  {prefix} {title} {right}\n"))
+        ev_sty = project_style(gcal_project_code(ev)) or "class:future"
+        out.append((ev_sty, f"  {prefix} {title} {right}\n"))
     return out
 
 

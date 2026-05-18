@@ -193,6 +193,20 @@ while true; do
     break
   fi
 
+  # Resolve truncated names: if fzf output contains "…", find the original
+  # full name from the cache snapshot by matching the prefix before "…"
+  if [[ "$task" == *"…"* ]]; then
+    prefix="${task%%…*}"
+    full=$(echo "$CACHE_SNAPSHOT" | jq -r --arg pfx "$prefix" '
+      [.. | objects | .content? // empty]
+      | map(select(startswith($pfx)))
+      | first // empty
+    ' 2>/dev/null)
+    if [[ -n "$full" ]]; then
+      task="$full"
+    fi
+  fi
+
   # Strip annotations
   clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
