@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-18T18:00:06.913939-07:00"
+  "tasks": {
+    "my session prepped for tomorrow": {
+      "todoist_id": "6ggMQrq2ch5VXHvR",
+      "minutes": 60
+    },
+    "check in with jon for tomorrow": {
+      "todoist_id": "6ggMQv2CFmjCCCX2",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-05-18T20:00:10.888536-07:00"
 }
