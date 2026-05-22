@@ -308,7 +308,8 @@ while true; do
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-x: delete]")
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_LIST_CMD)+transform-header(echo '🔄 refreshed')" \
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-x: delete | ctrl-r: refresh]")
 
   task="$fzf_output"
 
