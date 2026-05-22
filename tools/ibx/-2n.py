@@ -824,8 +824,8 @@ def main():
             card_num += 1
             resp = prompt_card(
                 card_num, total_cards, "-1g",
-                f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end}).\nType goals below (one per line), or skip.",
-                options="goals/skip", preserve_case=True, multiline=True,
+                f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end}).\nType goals (comma-separated), or skip.",
+                options="goals/skip", preserve_case=True,
             )
             if resp and resp.lower() != "skip":
                 # Local build-order write is fast and authoritative. Do it
