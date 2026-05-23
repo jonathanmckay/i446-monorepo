@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-22T18:00:06.348057-07:00"
+  "tasks": {
+    "0n + 1n": {
+      "todoist_id": "6ghFXWhVGMFvcXW2",
+      "minutes": 100
+    },
+    "math with kids": {
+      "todoist_id": "6ghHJG6RG8PP65r2",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-05-22T20:00:04.320480-07:00"
 }
