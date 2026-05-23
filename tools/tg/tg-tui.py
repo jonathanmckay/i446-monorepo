@@ -55,7 +55,40 @@ import gcal_client  # noqa: E402
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
 WIDTH_HINT = 50  # informs collapse logic, not strict
-BLOCK_HOURS = 2  # 2h blocks aligned to even hours
+DESC_MAX = 24  # max display width for task/event descriptions
+# Earthly branch blocks (name, start_hour, end_hour inclusive)
+BLOCKS = [
+    ("卯", 4, 5),
+    ("辰", 6, 7),
+    ("巳", 8, 9),
+    ("午", 10, 11),
+    ("未", 12, 13),
+    ("申", 14, 15),
+    ("酉", 16, 17),
+    ("戌", 18, 19),
+    ("亥", 20, 21),
+]
+
+
+def hour_to_block(h: int) -> tuple[str, int, int] | None:
+    """Return (name, start_hour, end_hour) for the block containing hour h."""
+    for name, sh, eh in BLOCKS:
+        if sh <= h <= eh:
+            return name, sh, eh
+    return None
+
+
+def next_block(h: int) -> tuple[str, int, int] | None:
+    """Return the block after the one containing hour h."""
+    for i, (name, sh, eh) in enumerate(BLOCKS):
+        if sh <= h <= eh:
+            if i + 1 < len(BLOCKS):
+                return BLOCKS[i + 1]
+            return None
+    # Before first block or after last: return first/None
+    if h < BLOCKS[0][1]:
+        return BLOCKS[0]
+    return None
 SLOT_MIN = 15
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
@@ -242,19 +275,25 @@ def fmt_dur_live(total_seconds: int) -> str:
 
 
 def detail_window():
-    """Return (start, end) datetimes for the detail band, snapped to 2h blocks."""
+    """Return (start, end) datetimes for the detail band covering current + next block."""
     now = dt.datetime.now(TZ) + dt.timedelta(minutes=STATE.scroll_min)
-    block_hour = (now.hour // 2) * 2
-    start = now.replace(hour=block_hour, minute=0, second=0, microsecond=0)
-    end = start + dt.timedelta(hours=4)  # current block + next block
+    cur = hour_to_block(now.hour)
+    nxt = next_block(now.hour)
+    if cur:
+        start_h = cur[1]
+    elif nxt:
+        start_h = nxt[1]
+    else:
+        start_h = max(0, now.hour - 2)
+    if nxt:
+        end_h = nxt[2] + 1
+    elif cur:
+        end_h = cur[2] + 1
+    else:
+        end_h = min(24, now.hour + 2)
+    start = now.replace(hour=start_h, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(hours=end_h)
     return start, end
-
-
-def block_boundary():
-    """Return the boundary between current and next 2h block."""
-    now = dt.datetime.now(TZ) + dt.timedelta(minutes=STATE.scroll_min)
-    block_hour = (now.hour // 2) * 2
-    return now.replace(hour=block_hour, minute=0, second=0, microsecond=0) + dt.timedelta(hours=2)
 
 
 try:
@@ -321,16 +360,17 @@ def render_current() -> list[tuple[str, str]]:
     return [(f"bold {style}".strip(), line)]
 
 
-def section_rule(label: str) -> list[tuple[str, str]]:
+def section_rule(label: str, focus: bool = False) -> list[tuple[str, str]]:
     s = f"─ {label} "
-    return [("class:rule", s + "─" * max(0, WIDTH_HINT - len(s)) + "\n")]
+    cls = "class:focus_rule" if focus else "class:rule"
+    return [(cls, s + "─" * max(0, WIDTH_HINT - len(s)) + "\n")]
 
 
 def render_morning() -> list[tuple[str, str]]:
     """Toggl-only collapsed view from 00:00 -> detail-band start."""
     start, _ = detail_window()
     cutoff = start
-    out: list[tuple[str, str]] = section_rule("morning · toggl")
+    out: list[tuple[str, str]] = section_rule("earlier · toggl")
     items = [e for e in STATE.entries if e["start_dt"] < cutoff]
     if not items:
         out.append(("class:dim", "  (nothing logged)\n"))
@@ -343,31 +383,42 @@ def render_morning() -> list[tuple[str, str]]:
             merged[-1]["end_dt"] = end
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"], "project_id": e["project_id"]})
+    last_block_name = None
     for m in merged:
         mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
         if mins < 1:
             continue
+        # Show block name instead of time for first entry in each block
+        blk = hour_to_block(m["start_dt"].hour)
+        blk_name = blk[0] if blk else None
+        if blk_name and blk_name != last_block_name:
+            time_col = f" {blk_name}   "
+            last_block_name = blk_name
+        else:
+            time_col = f"  {m['start_dt']:%H:%M} "
         code = proj_code(m["project_id"])
         label = m["desc"] or "(blank)"
         if code:
             label = f"{label} · {code}"
         right = fmt_dur(mins)
-        space = max(1, WIDTH_HINT - 2 - 6 - len(right) - 1)
+        space = min(DESC_MAX, max(1, WIDTH_HINT - dwidth(time_col) - len(right) - 1))
         style = project_style(m["project_id"])
-        out.append((style, f"  {m['start_dt']:%H:%M} {pad(truncate(label, space), space)} {right}\n"))
+        out.append((style, f"{time_col}{pad(truncate(label, space), space)} {right}\n"))
     return out
 
 
 def render_detail() -> list[tuple[str, str]]:
     start, end = detail_window()
-    boundary = block_boundary()
     now = dt.datetime.now(TZ)
+    cur = hour_to_block(now.hour + STATE.scroll_min // 60)
+    nxt = next_block(now.hour + STATE.scroll_min // 60)
 
     scroll_suffix = f" (+{STATE.scroll_min}m)" if STATE.scroll_min else ""
-    out: list[tuple[str, str]] = section_rule(
-        f"current block · {start:%H:%M}–{boundary:%H:%M}{scroll_suffix}"
-    )
+    cur_name = cur[0] if cur else "?"
+    cur_range = f"{cur[1]:02d}:00–{cur[2]+1:02d}:00" if cur else f"{start:%H:%M}–?"
+    out: list[tuple[str, str]] = section_rule(f"{cur_name} · {cur_range}{scroll_suffix}", focus=True)
 
+    nxt_boundary = now.replace(hour=cur[2]+1, minute=0, second=0, microsecond=0) if cur else end
     slot = start
     now_drawn = False
     block_rule_drawn = False
@@ -376,8 +427,9 @@ def render_detail() -> list[tuple[str, str]]:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
 
         # Insert next-block rule at boundary
-        if not block_rule_drawn and slot >= boundary:
-            out += section_rule(f"next block · {boundary:%H:%M}–{end:%H:%M}")
+        if not block_rule_drawn and nxt and slot >= nxt_boundary:
+            nxt_range = f"{nxt[1]:02d}:00–{nxt[2]+1:02d}:00"
+            out += section_rule(f"{nxt[0]} · {nxt_range}", focus=True)
             block_rule_drawn = True
 
         pid = None
@@ -428,7 +480,7 @@ def render_detail() -> list[tuple[str, str]]:
             cur_desc = STATE.current.get("description") or ""
             label = f"▶ {cur_desc}"
             pid = STATE.current.get("project_id")
-        space = max(1, WIDTH_HINT - len(time_str) - 4)
+        space = min(DESC_MAX, max(1, WIDTH_HINT - len(time_str) - 4))
         line = f" {time_str} {marker} {truncate(label or '·', space)}\n"
         if is_running:
             cls = f"bold {project_style(pid)}".strip() or "class:running"
@@ -498,7 +550,7 @@ def render_evening() -> list[tuple[str, str]]:
             continue
         prefix = "all-day" if ev.get("all_day") else f"{ev['start_dt']:%H:%M}"
         right = fmt_dur(mins)
-        space = max(1, WIDTH_HINT - 2 - len(prefix) - 1 - len(right) - 1)
+        space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1 - len(right) - 1))
         title = pad(truncate(ev["title"], space), space)
         ev_sty = project_style(gcal_project_code(ev)) or "class:future"
         out.append((ev_sty, f"  {prefix} {title} {right}\n"))
@@ -678,6 +730,7 @@ style = Style.from_dict({
     "running": "bold green",
     "idle": "italic #888888",
     "rule": "#666666",
+    "focus_rule": "bold #ffffff",
     "dim": "italic #888888",
     "past": "#aaaaaa",
     "future": "#dddddd",
