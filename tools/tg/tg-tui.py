@@ -55,8 +55,7 @@ import gcal_client  # noqa: E402
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
 WIDTH_HINT = 50  # informs collapse logic, not strict
-DETAIL_BEFORE_MIN = 120
-DETAIL_AFTER_MIN = 120
+BLOCK_HOURS = 2  # 2h blocks aligned to even hours
 SLOT_MIN = 15
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
@@ -243,13 +242,19 @@ def fmt_dur_live(total_seconds: int) -> str:
 
 
 def detail_window():
-    """Return (start, end) datetimes for the detail band, snapped to SLOT_MIN."""
+    """Return (start, end) datetimes for the detail band, snapped to 2h blocks."""
     now = dt.datetime.now(TZ) + dt.timedelta(minutes=STATE.scroll_min)
-    base = now.replace(second=0, microsecond=0)
-    base = base - dt.timedelta(minutes=base.minute % SLOT_MIN)
-    start = base - dt.timedelta(minutes=DETAIL_BEFORE_MIN)
-    end = base + dt.timedelta(minutes=DETAIL_AFTER_MIN)
+    block_hour = (now.hour // 2) * 2
+    start = now.replace(hour=block_hour, minute=0, second=0, microsecond=0)
+    end = start + dt.timedelta(hours=4)  # current block + next block
     return start, end
+
+
+def block_boundary():
+    """Return the boundary between current and next 2h block."""
+    now = dt.datetime.now(TZ) + dt.timedelta(minutes=STATE.scroll_min)
+    block_hour = (now.hour // 2) * 2
+    return now.replace(hour=block_hour, minute=0, second=0, microsecond=0) + dt.timedelta(hours=2)
 
 
 try:
@@ -355,14 +360,26 @@ def render_morning() -> list[tuple[str, str]]:
 
 def render_detail() -> list[tuple[str, str]]:
     start, end = detail_window()
-    out: list[tuple[str, str]] = section_rule(
-        "detail · ±2h" + (f" (+{STATE.scroll_min}m)" if STATE.scroll_min else "")
-    )
+    boundary = block_boundary()
     now = dt.datetime.now(TZ)
+
+    scroll_suffix = f" (+{STATE.scroll_min}m)" if STATE.scroll_min else ""
+    out: list[tuple[str, str]] = section_rule(
+        f"current block · {start:%H:%M}–{boundary:%H:%M}{scroll_suffix}"
+    )
+
     slot = start
     now_drawn = False
+    block_rule_drawn = False
+    gcal_shown: set[str] = set()  # track gcal event titles already labelled
     while slot < end:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
+
+        # Insert next-block rule at boundary
+        if not block_rule_drawn and slot >= boundary:
+            out += section_rule(f"next block · {boundary:%H:%M}–{end:%H:%M}")
+            block_rule_drawn = True
+
         pid = None
         gcal_sty = ""
         if slot_end <= now:
@@ -376,6 +393,14 @@ def render_detail() -> list[tuple[str, str]]:
             if not label:
                 label, gcal_sty = _slot_label_gcal(slot, slot_end)
             marker = "│"
+
+        # Deduplicate gcal labels: show title only on first slot, then just color bar
+        if label and label.startswith("◇ "):
+            raw_title = label[2:].strip()
+            if raw_title in gcal_shown:
+                label = "◇ │"
+            else:
+                gcal_shown.add(raw_title)
 
         # Insert now line before this slot if applicable
         if not now_drawn and slot >= now:
