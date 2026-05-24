@@ -43,6 +43,7 @@ rsync_one() {
   echo "[$(ts)] starting push"
   rsync_one "$HOME/.claude/stats-cache.json"            ".claude/stats-cache.json"
   rsync_one "$HOME/.claude/projects/"                   ".claude/projects/"
+  rsync_one "$HOME/.claude/projects-donnager/"          ".claude/projects-donnager/"
   rsync_one "$HOME/.claude/timing/"                     ".claude/timing/"
   # ~/.claude/skills/ is now a symlink on both machines to
   # ~/i446-monorepo/skills/claude-skills/, synced via git. Do not rsync.
