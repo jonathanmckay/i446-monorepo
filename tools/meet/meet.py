@@ -76,6 +76,20 @@ def _notify(title, body, critical=False):
             ], timeout=10, capture_output=True)
         except Exception:
             pass
+def _prompt_stop(title, body):
+    """Show a dialog with Stop/Keep Going buttons. Returns True if user clicks Stop."""
+    try:
+        escaped_body = body.replace('"', '\\"').replace('\n', '\\n')
+        escaped_title = title.replace('"', '\\"')
+        result = _sp.run([
+            "osascript", "-e",
+            f'display dialog "{escaped_title}: {escaped_body}" buttons {{"Stop", "Keep Going"}} default button "Keep Going" giving up after 30'
+        ], timeout=35, capture_output=True, text=True)
+        # "gave up:true" means timeout (keep going), button returned:"Stop" means stop
+        return "button returned:Stop" in result.stdout
+    except Exception:
+        return False
+
 from typing import Optional
 
 SAMPLE_RATE = 16000   # Whisper works best at 16kHz
@@ -115,7 +129,7 @@ def list_devices():
 
 
 def record_audio(teams_mode: bool = False, max_duration: int = 0,
-                  idle_timeout: int = 600) -> np.ndarray:
+                  idle_timeout: int = 600, meeting_name: str = "meeting") -> np.ndarray:
     """Record audio until Ctrl+C, max_duration, or idle timeout.
 
     teams_mode=True: mix BlackHole (system/Teams audio) + mic.
@@ -157,15 +171,18 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     signal.signal(signal.SIGTERM, _handle_stop)
 
     # Silence / one-sided detection
+    both_confirmed = False  # True once both channels have speech (popup once)
     onesided_warned = False
     last_teams_check = 0
     teams_warn_count = 0
+    last_overrun_prompt = 0.0    # elapsed time of last overrun prompt
     SILENCE_THRESH = 500       # int16 amplitude below this = silence
-    SPEECH_THRESH = 400        # int16 amplitude above this = likely speech
+    SPEECH_THRESH = 300        # int16 amplitude above this = likely speech (lowered from 400)
+    SIGNAL_THRESH = 50         # int16 amplitude above this = any signal (not silence)
     CHECK_INTERVAL_MIC = 120   # seconds before first check (mic-only mode)
     CHECK_INTERVAL_BOTH = 60   # seconds between teams-mode checks
     SILENCE_RATIO_WARN = 0.55  # warn if >55% of audio is silence
-    SPEECH_RATIO_MIN = 0.01    # need at least 1% of samples above speech threshold
+    SPEECH_RATIO_MIN = 0.005   # need at least 0.5% of samples above speech threshold (lowered from 1%)
 
     def _has_speech(frames, window_secs=60):
         """Check if the last N seconds of frames contain actual speech."""
@@ -178,6 +195,17 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
         speech_ratio = np.mean(np.abs(recent) > SPEECH_THRESH)
         return speech_ratio >= SPEECH_RATIO_MIN
 
+    def _has_signal(frames, window_secs=60):
+        """Check if frames have any non-silent signal (looser than speech detection)."""
+        if not frames:
+            return False
+        samples_needed = SAMPLE_RATE * window_secs
+        recent = np.concatenate(frames[-samples_needed:], axis=0) if len(frames) > 1 else frames[-1]
+        if len(recent) > samples_needed:
+            recent = recent[-samples_needed:]
+        signal_ratio = np.mean(np.abs(recent) > SIGNAL_THRESH)
+        return signal_ratio >= 0.002  # 0.2% of samples have any signal
+
     # Auto-stop state
     conversation_detected = False  # True once we've seen speech
     idle_since = 0.0              # elapsed time when silence started (after conversation)
@@ -186,6 +214,74 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
         print(f"   Auto-stop after {max_duration // 60}min (calendar duration)")
     if idle_timeout:
         print(f"   Auto-stop after {idle_timeout // 60}min of silence (post-conversation)")
+
+    # ── Pre-flight audio check (teams mode only) ─────────────────────────
+    if teams_mode and sys_idx is not None:
+        print("\n🔍 Pre-flight audio check...")
+        for s in streams:
+            s.start()
+        sd.sleep(2500)  # record 2.5s of audio
+        for s in streams:
+            s.stop()
+
+        bh_has_signal = _has_speech(bh_frames, window_secs=3) if bh_frames else False
+        mic_has_signal = _has_speech(mic_frames, window_secs=3) if mic_frames else False
+
+        if not bh_has_signal:
+            # Auto-fix: ensure system output is "Meet Output"
+            print("   ⚠ BlackHole has no signal. Attempting auto-fix...")
+            try:
+                fix = _sp.run(["SwitchAudioSource", "-s", "Meet Output"],
+                              capture_output=True, text=True, timeout=5)
+                if fix.returncode == 0:
+                    print("   ↳ Switched system output to 'Meet Output'")
+                else:
+                    print(f"   ↳ SwitchAudioSource failed: {fix.stderr.strip()}")
+            except FileNotFoundError:
+                print("   ↳ SwitchAudioSource not installed, cannot auto-fix")
+            except Exception as e:
+                print(f"   ↳ Auto-fix error: {e}")
+
+            # Re-test after fix
+            bh_frames.clear()
+            for s in streams:
+                s.start()
+            sd.sleep(2500)
+            for s in streams:
+                s.stop()
+            bh_has_signal = _has_speech(bh_frames, window_secs=3) if bh_frames else False
+
+            if bh_has_signal:
+                print("   ✓ Fixed! BlackHole now receiving audio.")
+            else:
+                # Check if BlackHole has ANY signal (not just speech)
+                if bh_frames:
+                    raw = np.concatenate(bh_frames, axis=0)
+                    peak = float(np.max(np.abs(raw.astype(np.float32) / 32768.0)))
+                    if peak > 0.001:
+                        print(f"   ✓ BlackHole has signal (peak={peak:.4f}), no speech yet (call may not have started).")
+                    else:
+                        print("   ✗ BlackHole still silent. Check: is the call app outputting to 'Meet Output'?")
+                        _notify("⚠ Audio Setup", f"{meeting_name}: BlackHole has no signal. Check system output device.", critical=True)
+                else:
+                    print("   ✗ No BlackHole frames captured at all.")
+                    _notify("⚠ Audio Setup", f"{meeting_name}: BlackHole capture failed.", critical=True)
+        else:
+            print("   ✓ BlackHole: receiving audio")
+
+        if mic_has_signal:
+            print(f"   ✓ Mic: receiving audio")
+        else:
+            print(f"   ~ Mic: no speech yet (you may not be talking)")
+
+        if bh_has_signal:
+            _started = datetime.now().strftime("%H:%M")
+            _notify("✓ Audio OK", f"{meeting_name} ({_started}). Both sides confirmed.", critical=False)
+
+        # Clear pre-flight frames so they don't contaminate the real recording
+        mic_frames.clear()
+        bh_frames.clear()
+
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
         s.start()
@@ -195,19 +291,28 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
             sd.sleep(500)
             elapsed += 0.5
 
-            # Auto-stop: max duration reached
-            if max_duration and elapsed >= max_duration:
-                msg = f"Auto-stopped after {int(elapsed // 60)}min (calendar duration)"
-                print(f"\n⏹  {msg}")
-                _notify("Recording Auto-Stopped", msg)
-                break
+            # Calendar overrun: prompt at +2min, then every 5min
+            if max_duration:
+                overrun = elapsed - max_duration
+                if overrun >= 120 and (elapsed - last_overrun_prompt) >= 300:  # first at +2min, then every 5min
+                    last_overrun_prompt = elapsed
+                    over_min = int(overrun // 60)
+                    msg = f"{meeting_name}: {over_min}min over scheduled time"
+                    print(f"\n⏰  {msg}")
+                    if _prompt_stop("⏰ Meeting Over", msg):
+                        msg = f"{meeting_name}: stopped by user ({over_min}min over)"
+                        print(f"\n⏹  {msg}")
+                        _notify("Recording Stopped", msg)
+                        break
 
             # Teams mode: check every 60s (repeating, not one-shot)
             if (teams_mode and elapsed >= CHECK_INTERVAL_BOTH
                     and elapsed - last_teams_check >= CHECK_INTERVAL_BOTH):
                 last_teams_check = elapsed
                 mic_has_speech = _has_speech(mic_frames)
+                mic_has_signal = _has_signal(mic_frames)
                 bh_has_speech = _has_speech(bh_frames)
+                bh_has_signal = _has_signal(bh_frames)
                 any_speech = mic_has_speech or bh_has_speech
 
                 # Track conversation state for idle auto-stop
@@ -218,44 +323,58 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     if idle_since == 0.0:
                         idle_since = elapsed  # start idle timer
                     elif idle_timeout and (elapsed - idle_since) >= idle_timeout:
-                        msg = f"Auto-stopped: {int(idle_timeout // 60)}min silence after conversation ended"
+                        msg = f"{meeting_name}: auto-stopped after {int(idle_timeout // 60)}min silence"
                         print(f"\n⏹  {msg}")
                         _notify("Recording Auto-Stopped", msg)
                         break
 
-                # Hard fail: mic works but call audio is dead after 3 min
-                if mic_has_speech and not bh_has_speech and elapsed >= 180:
+                # Auto-fix: mic works but call audio is dead after 3 min
+                # Skip if BlackHole has signal (audio flowing, just quiet)
+                if mic_has_speech and not bh_has_speech and not bh_has_signal and elapsed >= 180:
                     teams_warn_count += 1
-                    if teams_warn_count >= 3:
-                        msg = "STOPPED: call audio missing. Set system output to 'Meet Output' and restart."
+                    if teams_warn_count == 2:
+                        # Try auto-fix before giving up
+                        print(f"\n🔧  Attempting auto-fix: switching output to 'Meet Output'...")
+                        try:
+                            _sp.run(["SwitchAudioSource", "-s", "Meet Output"],
+                                    capture_output=True, text=True, timeout=5)
+                        except Exception:
+                            pass
+                    elif teams_warn_count >= 5:
+                        msg = f"{meeting_name}: STOPPED, call audio missing after auto-fix attempts. Check audio setup and restart."
                         print(f"\n🛑  {msg}")
                         _notify("🛑 Recording Failed", msg, critical=True)
                         break
 
-                if not mic_has_speech and not bh_has_speech:
+                if not mic_has_speech and not bh_has_speech and not bh_has_signal:
                     teams_warn_count += 1
-                    msg = f"NO SPEECH on either channel ({int(elapsed)}s, #{teams_warn_count})"
+                    msg = f"{meeting_name}: no speech on either channel ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Both mic and system audio lack speech.")
                     print("   Check: is the call connected? Is system output set to 'Meet Output'?\n")
                     _notify("⚠ Recording Problem", msg)
-                elif mic_has_speech and not bh_has_speech:
+                elif mic_has_speech and not bh_has_speech and not bh_has_signal:
                     teams_warn_count += 1
-                    msg = f"CALL AUDIO HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
+                    msg = f"{meeting_name}: call audio has no speech ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Your mic is picking up speech, but system audio is not.")
                     print("   Check: system output → 'Meet Output'? Is the other person talking?\n")
                     _notify("⚠ Recording Problem", msg)
-                elif not mic_has_speech and bh_has_speech:
+                elif not mic_has_speech and bh_has_speech and not mic_has_signal:
                     teams_warn_count += 1
-                    msg = f"MIC HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
+                    msg = f"{meeting_name}: mic has no speech ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Call audio has speech, but your mic does not.")
                     print("   Check your mic input device.\n")
                     _notify("⚠ Recording Problem", msg)
                 else:
+                    if not both_confirmed:
+                        both_confirmed = True
+                        print(f"\n✓  Both channels have speech ({int(elapsed)}s). Recording looks good.\n")
+                        _notify("✓ Audio OK", f"{meeting_name}. Both sides confirmed ({int(elapsed)}s).")
                     if teams_warn_count > 0:
-                        print(f"\n✓  Both channels now have speech ({int(elapsed)}s). Recording looks good.\n")
+                        print(f"\n✓  Both channels recovered ({int(elapsed)}s). Recording looks good.\n")
+                        _notify("✓ Audio Recovered", f"{meeting_name}: both channels back.")
                         teams_warn_count = 0
 
             # Mic-only mode: after 2 min, check for one-sided audio
@@ -564,6 +683,7 @@ def main():
             teams_mode=not args.no_teams,
             max_duration=args.max_duration * 60,  # convert min to sec
             idle_timeout=args.idle_timeout * 60,
+            meeting_name=meeting_name,
         )
         recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)

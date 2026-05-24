@@ -53,7 +53,11 @@ def format_date_prefix(iso_ts: str) -> str:
 def filename_for_session(session: dict) -> str:
     date = format_date_prefix(session["created_at"])
     slug = slugify(session["summary"])
-    return f"{date}_{slug}.md"
+    # Include short session-id hash to prevent filename collisions between
+    # multiple sessions sharing the same (date, slug). Same fix as
+    # export-claude-transcripts.py.
+    sid_short = (session.get("id") or "unknown")[:8]
+    return f"{date}_{slug}_{sid_short}.md"
 
 
 def render_markdown(session: dict, turns: list, checkpoints: list) -> str:
