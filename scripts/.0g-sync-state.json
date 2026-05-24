@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-24T06:00:06.143610-07:00"
+  "tasks": {
+    "1500分": {
+      "todoist_id": "6ghgqXX9C28mCWr2",
+      "minutes": 100
+    },
+    "all colors and start backfill": {
+      "todoist_id": "6ghgqXWFRqHm28C2",
+      "minutes": 60
+    },
+    "plan for hcb": {
+      "todoist_id": "6ghgqXgGGR2WWxjR",
+      "minutes": 40
+    },
+    "enjoy date": {
+      "todoist_id": "6ghgqXfcpJh8PWXR",
+      "minutes": 30
+    },
+    "hiit": {
+      "todoist_id": "6ghgqXj6jV7v6j92",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-05-24T10:00:07.707578-07:00"
 }
