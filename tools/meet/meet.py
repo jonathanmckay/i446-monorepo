@@ -247,10 +247,10 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                         print(f"   ✓ BlackHole has signal (peak={peak:.4f}), no speech yet (call may not have started).")
                     else:
                         print("   ✗ BlackHole still silent. Check: is the call app outputting to 'Meet Output'?")
-                        _notify("⚠ Audio Setup", "BlackHole has no signal. Check system output device.", critical=True)
+                        _notify("⚠ Audio Setup", f"{meeting_name}: BlackHole has no signal. Check system output device.", critical=True)
                 else:
                     print("   ✗ No BlackHole frames captured at all.")
-                    _notify("⚠ Audio Setup", "BlackHole capture failed.", critical=True)
+                    _notify("⚠ Audio Setup", f"{meeting_name}: BlackHole capture failed.", critical=True)
         else:
             print("   ✓ BlackHole: receiving audio")
 
@@ -278,7 +278,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
 
             # Auto-stop: max duration reached
             if max_duration and elapsed >= max_duration:
-                msg = f"Auto-stopped after {int(elapsed // 60)}min (calendar duration)"
+                msg = f"{meeting_name}: auto-stopped after {int(elapsed // 60)}min (calendar duration)"
                 print(f"\n⏹  {msg}")
                 _notify("Recording Auto-Stopped", msg)
                 break
@@ -301,7 +301,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     if idle_since == 0.0:
                         idle_since = elapsed  # start idle timer
                     elif idle_timeout and (elapsed - idle_since) >= idle_timeout:
-                        msg = f"Auto-stopped: {int(idle_timeout // 60)}min silence after conversation ended"
+                        msg = f"{meeting_name}: auto-stopped after {int(idle_timeout // 60)}min silence"
                         print(f"\n⏹  {msg}")
                         _notify("Recording Auto-Stopped", msg)
                         break
@@ -319,28 +319,28 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                         except Exception:
                             pass
                     elif teams_warn_count >= 5:
-                        msg = "STOPPED: call audio missing after auto-fix attempts. Check audio setup and restart."
+                        msg = f"{meeting_name}: STOPPED, call audio missing after auto-fix attempts. Check audio setup and restart."
                         print(f"\n🛑  {msg}")
                         _notify("🛑 Recording Failed", msg, critical=True)
                         break
 
                 if not mic_has_speech and not bh_has_speech and not bh_has_signal:
                     teams_warn_count += 1
-                    msg = f"NO SPEECH on either channel ({int(elapsed)}s, #{teams_warn_count})"
+                    msg = f"{meeting_name}: no speech on either channel ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Both mic and system audio lack speech.")
                     print("   Check: is the call connected? Is system output set to 'Meet Output'?\n")
                     _notify("⚠ Recording Problem", msg)
                 elif mic_has_speech and not bh_has_speech and not bh_has_signal:
                     teams_warn_count += 1
-                    msg = f"CALL AUDIO HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
+                    msg = f"{meeting_name}: call audio has no speech ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Your mic is picking up speech, but system audio is not.")
                     print("   Check: system output → 'Meet Output'? Is the other person talking?\n")
                     _notify("⚠ Recording Problem", msg)
                 elif not mic_has_speech and bh_has_speech and not mic_has_signal:
                     teams_warn_count += 1
-                    msg = f"MIC HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
+                    msg = f"{meeting_name}: mic has no speech ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Call audio has speech, but your mic does not.")
                     print("   Check your mic input device.\n")
@@ -352,7 +352,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                         _notify("✓ Audio OK", f"{meeting_name}. Both sides confirmed ({int(elapsed)}s).")
                     if teams_warn_count > 0:
                         print(f"\n✓  Both channels recovered ({int(elapsed)}s). Recording looks good.\n")
-                        _notify("✓ Audio Recovered", "Both channels back. Recording resumed.")
+                        _notify("✓ Audio Recovered", f"{meeting_name}: both channels back.")
                         teams_warn_count = 0
 
             # Mic-only mode: after 2 min, check for one-sided audio
