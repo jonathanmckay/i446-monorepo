@@ -56,11 +56,11 @@ _MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 STOPWORDS = {"the", "a", "an", "to", "with", "and", "of"}
 ALIASES = {"math": "问学", "skin2skin": "问学", "stats m5x2": "stats m5x2"}
 CUMULATIVE_0N = {"问学"}
-CUMULATIVE_1N = {"一起饭": 30}  # fixed increment per occurrence
+CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人"}
-VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp"}
+VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭"}
 
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
 HABIT_PROJECT: dict[str, str] = {
@@ -91,6 +91,7 @@ ONENEON_ALIASES: dict[str, str] = {
     "1 hcbp": "1 hcb",
     "家": "family",
     "relax": "relax {60}",
+    "一起吃": "一起饭",
 }
 
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
