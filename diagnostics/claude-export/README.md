@@ -61,3 +61,34 @@ This is *correct* behavior — if a session's `.md` is newer than the source `.j
 - Run `collect-logs.sh` on each remote → commit results
 - Compare cron + launchd config across machines
 - Check `~/.claude/projects/*/sessions/` mtimes vs `~/vault/i447/i446/ai-transcripts/` mtimes to see if Claude sessions are actually being generated
+
+## ROOT CAUSE IDENTIFIED (2026-05-24, all four machines collected)
+
+| Machine | Vault present | `export-claude-transcripts.py` on cron? | Source `~/.claude/projects` |
+|---------|---------------|-----------------------------------------|----------------------------|
+| straylight | yes | NO (only copilot exporter cron'd) | active, generates new sessions |
+| straylight-refit | yes | NO | active locally |
+| **ix** | **yes** | **YES** (`15 * * * *`) | mostly stale — Mac mini rarely runs Claude |
+| donnager | NO (Windows) | n/a | 1 session, no vault |
+
+**The log is being written by ix's cron job.** ix has 364 cached Claude sessions in `~/.claude/projects`, but they were all exported previously and no new sessions are being created on ix (it's a Mac mini that mostly runs Excel + remote osascript, not interactive Claude). So every run correctly skips all 364 → logs "Exported 0 file(s), skipped 364 session(s)" forever.
+
+**The "bug" is the log message**, not the export logic. The skip semantics are correct:
+- `needs_refresh = any((not p.exists()) or p.stat().st_mtime < src_mtime for p in paths)`
+- All sessions: output `.md` exists and is newer than source `.jsonl` → skipped → counted but nothing actually wrong.
+
+**Missing coverage:** Straylight and Refit, where Claude actually runs interactively, have NO cron for the export script. So new interactive sessions on those boxes aren't being exported automatically. That's the real gap.
+
+## Recommended fix
+
+1. **Quiet the misleading log on ix:** change the script's final log line to only emit when `exported > 0`, or split: `print(f"Up to date ({skipped} cached sessions)")` when nothing exported.
+2. **Add cron on Straylight (and optionally Refit):** Add `15 * * * * python3 ~/i446-monorepo/scripts/export-claude-transcripts.py >> ~/vault/i447/i446/ai-transcripts/claude-export.log 2>&1` to Straylight's crontab — that's where Dream + interactive Claude work happens.
+3. **Optional: rename `claude-export.log` per-host** to disambiguate (currently the same file is written by multiple machines via Syncthing, racing each other).
+
+## Status
+- [x] Locate export script on Straylight
+- [x] Collect log + script from donnager (Windows — no vault, n/a)
+- [x] Collect log + script from ix (cron'd here)
+- [x] Collect log + script from straylight-refit
+- [x] Identify root cause (misleading log msg + missing cron on Straylight)
+- [ ] Propose fix PR (this branch + a follow-up adding Straylight cron)
