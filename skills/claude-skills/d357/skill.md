@@ -25,7 +25,12 @@ Absent or `pid: null` → no recording active.
 
 ### `/d357 <name>` — start recording
 
-1. Check state.json; if a recording is running, **abort** and tell the user to stop it first.
+1. Check state.json; if a recording is running, **fast-handoff** the previous recording:
+   a. Save the old state (pid, name, log path, toggl_id, project, calendar_minutes, mic_only, started) to a local variable.
+   b. Stop the old Toggl timer: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`.
+   c. SIGTERM the old meet.py: `kill -TERM <old_pid>`. Do NOT wait for it to exit yet (it will transcribe in background).
+   d. Log the handoff: `Stopping previous recording "<old_name>" → starting <new_name>`.
+   e. After the new recording is started (step 8 below), **file the old recording in background**: poll `ps -p <old_pid>` every 2s until it exits, then tail the old log for `TXT ->`, compute duration, log points to 0分, read transcript, check new-notes, extract and file to vault/d357 (same as the normal stop flow steps 6-11). Write a temporary `/tmp/d357-handoff-<old_pid>.json` with the old state so the filing step has everything it needs, and clean it up after filing.
 2. **Parse the input.** Split on comma: `<name>[, <start_time>]`. If a trailing HHMM or HH:MM is present after a comma, use it as the Toggl start time (backdated). Also parse `--no-teams` flag from the name for mic-only mode.
    - Examples: `/d357 Francois 1:1, 1000` → name="Francois 1:1", start_time=10:00
    - `/d357 SLT metrics` → name="SLT metrics", start_time=now (default)
@@ -43,7 +48,7 @@ Absent or `pid: null` → no recording active.
    echo $!
    ```
 7. Write state.json with PID, name, timestamp, log path (`/tmp/d357-active.log`), toggl_id, project, calendar_minutes (null if no calendar match), and `mic_only` (true if `--no-teams` was passed, else false).
-8. Confirm in one line: `Recording → <name> (pid <pid>). Audio: <current output device>. /d357 stop when done.`
+8. Confirm in one line: `Recording → <name> (pid <pid>). Audio: both sides (<device>) | mic only. /d357 stop when done.` — say "both sides" if using Meet Output (BlackHole/Teams mode), "mic only" if `--no-teams` or no virtual audio device.
 
 ### `/d357 stop [HHMM]` — finalize
 
@@ -97,7 +102,7 @@ Report `Recording: <name> since <HH:MM> (pid <pid>)` if active, else `No recordi
 | Input | Expected |
 |-------|----------|
 | `/d357 joe 1:1` | Launches meet.py in bg, writes state.json with pid, confirms |
-| `/d357 joe 1:1` (while one is running) | Aborts with "already recording" |
+| `/d357 joe 1:1` (while one is running) | Fast-handoff: stops old Toggl, SIGTERMs old meet.py, starts new recording, files old transcript in background |
 | `/d357 stop` | SIGTERM, waits for filing, reports path, clears state |
 | `/d357 stop` (nothing running) | Reports "No recording active." |
 | `/d357` (nothing running) | Auto-detects calendar event name, starts recording |
