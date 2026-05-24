@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "do a fun event": {
-      "todoist_id": "6ghc8v6FPJQvwFr2",
-      "minutes": 40
-    },
-    "just be chill": {
-      "todoist_id": "6ghc8vGp2VXFCV9R",
-      "minutes": 20
-    },
-    "2x math with kids": {
-      "todoist_id": "6ghfP2ww8JcjGpw2",
-      "minutes": 60
-    }
-  },
-  "last_sync": "2026-05-24T03:55:03.624223-07:00"
+  "tasks": {},
+  "last_sync": "2026-05-24T04:00:07.760960-07:00"
 }
