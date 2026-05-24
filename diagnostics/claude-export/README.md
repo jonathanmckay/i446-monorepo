@@ -31,3 +31,33 @@ For each: `~/vault/i447/i446/ai-transcripts/claude-export.log` plus any `claude-
 - [ ] Identify root cause
 - [ ] Propose fix PR
 
+
+## Findings (Straylight, 2026-05-24)
+
+**Writer identified:** `~/i446-monorepo/scripts/export-claude-transcripts.py` (12.5 KB, last touched 2026-04-23). Line 352 emits the `Exported N file(s), skipped M session(s).` message.
+
+**Skip logic** (lines 237–247 in `export_session`):
+```python
+needs_refresh = any(
+    (not p.exists()) or p.stat().st_mtime < src_mtime
+    for p in paths
+)
+if not needs_refresh and not force:
+    return 0  # counted as "skipped"
+```
+This is *correct* behavior — if a session's `.md` is newer than the source `.jsonl`, no re-export needed.
+
+**Cron analysis (Straylight only so far):**
+- `export-copilot-transcripts.py` IS on cron (`0 * * * *`)
+- `export-claude-transcripts.py` is **NOT on cron**
+
+**Hypothesis (revised):** the chronic "Exported 0, skipped 364" log entries imply *something* is invoking the script repeatedly (every minute? on a watcher?) without producing fresh source data — so every session correctly skips. Possible drivers:
+1. A launchd job (not visible in `crontab -l`)
+2. A wrapper script that calls it (e.g. `~/bin/sync-claude.sh`)
+3. A fs-watcher that triggers on `~/.claude/` activity
+4. Or the export ran once during a Claude CLI version migration that changed mtimes, then nothing has been written since because no new Claude sessions are being created on this machine (Copilot CLI is being used instead).
+
+**Next** (needs ix + donnager + straylight-refit data):
+- Run `collect-logs.sh` on each remote → commit results
+- Compare cron + launchd config across machines
+- Check `~/.claude/projects/*/sessions/` mtimes vs `~/vault/i447/i446/ai-transcripts/` mtimes to see if Claude sessions are actually being generated
