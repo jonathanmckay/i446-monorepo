@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-23T22:00:05.979827-07:00"
+  "tasks": {
+    "do a fun event": {
+      "todoist_id": "6ghc8v6FPJQvwFr2",
+      "minutes": 40
+    },
+    "just be chill": {
+      "todoist_id": "6ghc8vGp2VXFCV9R",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-05-24T00:00:12.728211-07:00"
 }
