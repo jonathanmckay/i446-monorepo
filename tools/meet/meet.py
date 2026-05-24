@@ -115,7 +115,7 @@ def list_devices():
 
 
 def record_audio(teams_mode: bool = False, max_duration: int = 0,
-                  idle_timeout: int = 600) -> np.ndarray:
+                  idle_timeout: int = 600, meeting_name: str = "meeting") -> np.ndarray:
     """Record audio until Ctrl+C, max_duration, or idle timeout.
 
     teams_mode=True: mix BlackHole (system/Teams audio) + mic.
@@ -260,7 +260,8 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
             print(f"   ~ Mic: no speech yet (you may not be talking)")
 
         if bh_has_signal:
-            _notify("✓ Audio OK", "Both mic and call audio confirmed. Recording.", critical=False)
+            _started = datetime.now().strftime("%H:%M")
+            _notify("✓ Audio OK", f"{meeting_name} ({_started}). Both sides confirmed.", critical=False)
 
         # Clear pre-flight frames so they don't contaminate the real recording
         mic_frames.clear()
@@ -348,7 +349,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     if not both_confirmed:
                         both_confirmed = True
                         print(f"\n✓  Both channels have speech ({int(elapsed)}s). Recording looks good.\n")
-                        _notify("✓ Audio OK", f"Both mic and call audio confirmed ({int(elapsed)}s). Recording.")
+                        _notify("✓ Audio OK", f"{meeting_name}. Both sides confirmed ({int(elapsed)}s).")
                     if teams_warn_count > 0:
                         print(f"\n✓  Both channels recovered ({int(elapsed)}s). Recording looks good.\n")
                         _notify("✓ Audio Recovered", "Both channels back. Recording resumed.")
@@ -660,6 +661,7 @@ def main():
             teams_mode=not args.no_teams,
             max_duration=args.max_duration * 60,  # convert min to sec
             idle_timeout=args.idle_timeout * 60,
+            meeting_name=meeting_name,
         )
         recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)
