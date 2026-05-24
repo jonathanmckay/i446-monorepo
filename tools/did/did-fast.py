@@ -61,6 +61,7 @@ CUMULATIVE_1N = {}  # fixed increment per occurrence
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人"}
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭"}
+VARIABLE_1N_DEFAULTS: dict[str, int] = {"一起饭": 30}  # default points when no arg given
 
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
 HABIT_PROJECT: dict[str, str] = {
@@ -646,7 +647,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             # For variable 1n+ tasks, use user-provided value (points_override or time_value)
             var_val = None
             if is_var:
-                var_val = item.points_override or item.time_value or None
+                var_val = item.points_override or item.time_value or VARIABLE_1N_DEFAULTS.get(resolved_1n)
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
                             is_cumulative_1n=is_cumul,
