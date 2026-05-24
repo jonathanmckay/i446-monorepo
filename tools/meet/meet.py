@@ -175,7 +175,6 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     onesided_warned = False
     last_teams_check = 0
     teams_warn_count = 0
-    cal_warned = False           # True once 10-min warning sent
     last_overrun_prompt = 0.0    # elapsed time of last overrun prompt
     SILENCE_THRESH = 500       # int16 amplitude below this = silence
     SPEECH_THRESH = 300        # int16 amplitude above this = likely speech (lowered from 400)
@@ -292,14 +291,8 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
             sd.sleep(500)
             elapsed += 0.5
 
-            # Calendar duration: warn at -10min, prompt at +2min, then every 5min
+            # Calendar overrun: prompt at +2min, then every 5min
             if max_duration:
-                warn_at = max_duration - 600  # 10 min before end
-                if not cal_warned and warn_at > 0 and elapsed >= warn_at:
-                    cal_warned = True
-                    msg = f"{meeting_name}: 10 min left (scheduled {int(max_duration // 60)}min)"
-                    print(f"\n⏰  {msg}")
-                    _notify("⏰ Meeting Ending Soon", msg)
                 overrun = elapsed - max_duration
                 if overrun >= 120 and (elapsed - last_overrun_prompt) >= 300:  # first at +2min, then every 5min
                     last_overrun_prompt = elapsed
