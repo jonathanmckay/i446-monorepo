@@ -157,6 +157,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     signal.signal(signal.SIGTERM, _handle_stop)
 
     # Silence / one-sided detection
+    both_confirmed = False  # True once both channels have speech (popup once)
     onesided_warned = False
     last_teams_check = 0
     teams_warn_count = 0
@@ -186,6 +187,73 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
         print(f"   Auto-stop after {max_duration // 60}min (calendar duration)")
     if idle_timeout:
         print(f"   Auto-stop after {idle_timeout // 60}min of silence (post-conversation)")
+
+    # ── Pre-flight audio check (teams mode only) ─────────────────────────
+    if teams_mode and sys_idx is not None:
+        print("\n🔍 Pre-flight audio check...")
+        for s in streams:
+            s.start()
+        sd.sleep(2500)  # record 2.5s of audio
+        for s in streams:
+            s.stop()
+
+        bh_has_signal = _has_speech(bh_frames, window_secs=3) if bh_frames else False
+        mic_has_signal = _has_speech(mic_frames, window_secs=3) if mic_frames else False
+
+        if not bh_has_signal:
+            # Auto-fix: ensure system output is "Meet Output"
+            print("   ⚠ BlackHole has no signal. Attempting auto-fix...")
+            try:
+                fix = _sp.run(["SwitchAudioSource", "-s", "Meet Output"],
+                              capture_output=True, text=True, timeout=5)
+                if fix.returncode == 0:
+                    print("   ↳ Switched system output to 'Meet Output'")
+                else:
+                    print(f"   ↳ SwitchAudioSource failed: {fix.stderr.strip()}")
+            except FileNotFoundError:
+                print("   ↳ SwitchAudioSource not installed, cannot auto-fix")
+            except Exception as e:
+                print(f"   ↳ Auto-fix error: {e}")
+
+            # Re-test after fix
+            bh_frames.clear()
+            for s in streams:
+                s.start()
+            sd.sleep(2500)
+            for s in streams:
+                s.stop()
+            bh_has_signal = _has_speech(bh_frames, window_secs=3) if bh_frames else False
+
+            if bh_has_signal:
+                print("   ✓ Fixed! BlackHole now receiving audio.")
+            else:
+                # Check if BlackHole has ANY signal (not just speech)
+                if bh_frames:
+                    raw = np.concatenate(bh_frames, axis=0)
+                    peak = float(np.max(np.abs(raw.astype(np.float32) / 32768.0)))
+                    if peak > 0.001:
+                        print(f"   ✓ BlackHole has signal (peak={peak:.4f}), no speech yet (call may not have started).")
+                    else:
+                        print("   ✗ BlackHole still silent. Check: is the call app outputting to 'Meet Output'?")
+                        _notify("⚠ Audio Setup", "BlackHole has no signal. Check system output device.", critical=True)
+                else:
+                    print("   ✗ No BlackHole frames captured at all.")
+                    _notify("⚠ Audio Setup", "BlackHole capture failed.", critical=True)
+        else:
+            print("   ✓ BlackHole: receiving audio")
+
+        if mic_has_signal:
+            print(f"   ✓ Mic: receiving audio")
+        else:
+            print(f"   ~ Mic: no speech yet (you may not be talking)")
+
+        if bh_has_signal:
+            _notify("✓ Audio OK", "Both mic and call audio confirmed. Recording.", critical=False)
+
+        # Clear pre-flight frames so they don't contaminate the real recording
+        mic_frames.clear()
+        bh_frames.clear()
+
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
         s.start()
@@ -223,11 +291,19 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                         _notify("Recording Auto-Stopped", msg)
                         break
 
-                # Hard fail: mic works but call audio is dead after 3 min
+                # Auto-fix: mic works but call audio is dead after 3 min
                 if mic_has_speech and not bh_has_speech and elapsed >= 180:
                     teams_warn_count += 1
-                    if teams_warn_count >= 3:
-                        msg = "STOPPED: call audio missing. Set system output to 'Meet Output' and restart."
+                    if teams_warn_count == 2:
+                        # Try auto-fix before giving up
+                        print(f"\n🔧  Attempting auto-fix: switching output to 'Meet Output'...")
+                        try:
+                            _sp.run(["SwitchAudioSource", "-s", "Meet Output"],
+                                    capture_output=True, text=True, timeout=5)
+                        except Exception:
+                            pass
+                    elif teams_warn_count >= 5:
+                        msg = "STOPPED: call audio missing after auto-fix attempts. Check audio setup and restart."
                         print(f"\n🛑  {msg}")
                         _notify("🛑 Recording Failed", msg, critical=True)
                         break
@@ -254,8 +330,13 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     print("   Check your mic input device.\n")
                     _notify("⚠ Recording Problem", msg)
                 else:
+                    if not both_confirmed:
+                        both_confirmed = True
+                        print(f"\n✓  Both channels have speech ({int(elapsed)}s). Recording looks good.\n")
+                        _notify("✓ Audio OK", f"Both mic and call audio confirmed ({int(elapsed)}s). Recording.")
                     if teams_warn_count > 0:
-                        print(f"\n✓  Both channels now have speech ({int(elapsed)}s). Recording looks good.\n")
+                        print(f"\n✓  Both channels recovered ({int(elapsed)}s). Recording looks good.\n")
+                        _notify("✓ Audio Recovered", "Both channels back. Recording resumed.")
                         teams_warn_count = 0
 
             # Mic-only mode: after 2 min, check for one-sided audio
