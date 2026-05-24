@@ -344,7 +344,7 @@ while true; do
   # Tasks that need args (e.g. cpap needs a score)
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|冥想)
       REPLY="$clean "
       vared -p "→ " REPLY
       clean="$REPLY"
