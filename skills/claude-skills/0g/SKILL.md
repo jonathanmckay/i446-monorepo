@@ -82,7 +82,7 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 For each **new** goal (no existing match), create a Todoist task:
 - **Content**: goal text (with `(N)`, `[N]`, `{N}` preserved; `@code` stripped)
 - **Project**: `0g` (ID `6XfvCQ3p8Gq6fhGR`)
-- **Labels**: `["#0g"]` + the `@code` label if present (e.g. `"i9"`)
+- **Labels**: `["#0g"]` + the `@code` label if explicitly present, otherwise **auto-detect** a domain label from the goal text using keyword matching (see domain rules below)
 - **Priority**: `p1`
 - **Due**: today
 - **Duration**: from `(N)` if present
@@ -128,6 +128,27 @@ This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, an
 ```
 0g → N goals synced to todoist
 ```
+
+## Domain Auto-Detection
+
+When no explicit `@code` is present, infer a domain label from the goal text. First match wins:
+
+| Pattern | Label |
+|---------|-------|
+| Explicit codes: `i9`, `m5x2`, `g245`, `qz12`, `hcmp`, `hcbi`, `hcmc`, `xk88`, `xk87`, `s897`, `i447`, `epcn`, `m828`, `o314` | the code itself |
+| microsoft, msft, copilot, coreai, azure, github, xbox | `i9` |
+| mckay capital, fund, tenant, lease, property, appfolio | `m5x2` |
+| finance, investment, portfolio, stock, 401k, tax | `qz12` |
+| goal, review, neon, sprint, checkin | `g245` |
+| health, fitness, sleep, diet, exercise, basketball, workout, run | `hcbi` |
+| meditation, mindfulness, breathing, journal | `hcmp` |
+| read, book, article, podcast, kindle | `hcmc` |
+| theo, ren, kids, school, curriculum | `xk87` |
+| family, home, house | `xk88` |
+| friend, social, party, event, visit | `s897` |
+| ian, leeroy, stefanie, andie, louisa, olga | `m5x2` |
+
+If no pattern matches, omit the domain label (just `#0g` or `#-1g`).
 
 ## Response Style
 

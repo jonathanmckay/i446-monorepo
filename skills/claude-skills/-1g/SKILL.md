@@ -72,7 +72,7 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 For each **new** goal (no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
 - **Content**: the goal text
 - **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
-- **Labels**: `["#-1g"]`
+- **Labels**: `["#-1g"]` + auto-detected domain label from goal text (see Domain Auto-Detection in /0g skill). First keyword match wins; omit if no match.
 - **Priority**: `p1`
 - **Due**: `today`
 - **Duration**: from `{N}` annotation if present
