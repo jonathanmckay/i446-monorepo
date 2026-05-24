@@ -19,17 +19,21 @@ from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 PROJECTS_DIR_IX = Path.home() / ".claude" / "projects-ix"
+PROJECTS_DIR_DONNAGER = Path.home() / ".claude" / "projects-donnager"
 OUTPUT_BASE = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts"
 
 # Host-aware roots. We can't rely on hostname (ix is "Jonathans-Mac-mini").
-# Instead: the straylight box is the only one with a mirrored ix tree at
-# PROJECTS_DIR_IX. Any other box exports its own data into the ix/ subdir.
+# Instead: the straylight box is the only one with mirrored remote trees at
+# PROJECTS_DIR_IX / PROJECTS_DIR_DONNAGER. Any other box exports its own
+# data into the ix/ subdir (legacy convention).
 if PROJECTS_DIR_IX.exists():
-    # Straylight — own data direct, mirrored ix data into ix/
+    # Straylight — own data direct, mirrored remotes into per-host subdirs
     ROOTS = [
         ("straylight", PROJECTS_DIR, OUTPUT_BASE),
         ("ix",         PROJECTS_DIR_IX, OUTPUT_BASE / "ix"),
     ]
+    if PROJECTS_DIR_DONNAGER.exists():
+        ROOTS.append(("donnager", PROJECTS_DIR_DONNAGER, OUTPUT_BASE / "donnager"))
 else:
     # ix (or any other leaf) — own data into ix/
     ROOTS = [
