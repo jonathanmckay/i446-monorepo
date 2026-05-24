@@ -212,14 +212,19 @@ def output_paths_for_session(session: dict, out_dir: Path, segment_turns: int):
     pairs = session["pairs"]
     date = session["date"]
     slug = slugify(session["slug"])
+    # Include short session-id hash to prevent filename collisions when multiple
+    # sessions share the same (date, slug) — common when slug falls back to
+    # "untitled" (Dream v6 retro found 4 sessions all colliding on
+    # 2026-05-24_untitled.md, silently clobbering each other).
+    sid_short = session["session_id"][:8]
 
     if len(pairs) <= segment_turns:
-        return [out_dir / f"{date}_{slug}.md"]
+        return [out_dir / f"{date}_{slug}_{sid_short}.md"]
 
     # Split into segments
     segments = [pairs[i:i + segment_turns] for i in range(0, len(pairs), segment_turns)]
     total = len(segments)
-    return [out_dir / f"{date}_{slug}_p{i+1:02d}.md" for i in range(total)]
+    return [out_dir / f"{date}_{slug}_{sid_short}_p{i+1:02d}.md" for i in range(total)]
 
 
 def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool, verbose: bool) -> int:
@@ -349,7 +354,10 @@ def main():
         total_exported += exp
         total_skipped += skip
 
-    print(f"Exported {total_exported} file(s), skipped {total_skipped} session(s).")
+    if total_exported > 0:
+        print(f"Exported {total_exported} file(s), skipped {total_skipped} session(s).")
+    elif args.verbose:
+        print(f"Up to date ({total_skipped} cached session(s), nothing to export).")
 
 
 if __name__ == "__main__":
