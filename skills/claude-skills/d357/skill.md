@@ -93,7 +93,7 @@ Report `Recording: <name> since <HH:MM> (pid <pid>)` if active, else `No recordi
 - **Teams mode requires one-time setup** (BlackHole virtual audio device); see the docstring at the top of meet.py.
 - The `d357` domain maps to `vault/d357/<M.W>/` (Sunday-anchored week folders, matching 1n+).
 - **Sweeper safety net:** `~/i446-monorepo/tools/meet/d357-organize.py` runs hourly via cron and moves any loose `YYYY.MM.DD-*.md` at the `d357/` root into the right week folder. The sweeper does NOT add the `1S ` prefix — that decision lives in the skill's stop flow where `mic_only` is known.
-- **Calendar overrun (calendar):** When `calendar_minutes` is available, pass `--max-duration <minutes>`. meet.py warns 10 min before scheduled end, then starting 2 min after end prompts with a Stop/Keep Going dialog every 5 min. No hard auto-stop on calendar duration.
+- **Calendar overrun (calendar):** When `calendar_minutes` is available, pass `--max-duration <minutes>`. Starting 2 min after scheduled end, meet.py prompts with a Stop/Keep Going dialog every 5 min. No hard auto-stop on calendar duration.
 - **Auto-stop (idle):** meet.py auto-stops after 10 minutes of silence once conversation has been detected (default, override with `--idle-timeout <min>`). Both auto-stops send a macOS notification.
 - **Watchdog:** `~/i446-monorepo/scripts/d357-watchdog.py` runs every 10 min via `com.jm.d357-watchdog`. Reads state.json and notifies if (1) the recording pid has died (meet.py crashed) or (2) elapsed >= 2× calendar duration (or >=90 min if no calendar). Rate-limited to one overrun nudge every 30 min. Logs at `/tmp/d357-watchdog.log`.
 
