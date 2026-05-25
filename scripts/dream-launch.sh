@@ -11,8 +11,8 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/
 DREAM_RUNS="$HOME/vault/i447/i446/dream-runs"
 PROMPT_BASE="$HOME/vault/i447/i446/dream-prompt-base.md"
 CLAUDE="/opt/homebrew/bin/claude"
-DEFAULT_BUDGET=80
-DEFAULT_FLOOR=40
+DEFAULT_BUDGET=120
+DEFAULT_FLOOR=90
 
 # --- Parse args ---
 DRY_RUN=""
@@ -76,6 +76,17 @@ sed \
   "$PROMPT_BASE" > "$RUN_DIR/PROMPT.md"
 
 LOG="$RUN_DIR/logs/agent-run.log"
+
+# --- Run dream-intake before claude ---
+INTAKE_SCRIPT="$HOME/i446-monorepo/scripts/dream-intake.py"
+INTAKE_OUT="$RUN_DIR/dream-intake.json"
+if [[ -f "$INTAKE_SCRIPT" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running dream-intake.py..." >> "$LOG"
+  python3 "$INTAKE_SCRIPT" --output "$INTAKE_OUT" --run-dir "$RUN_DIR" >> "$LOG" 2>&1 || true
+  # Symlink to latest
+  ln -sf "$INTAKE_OUT" "$DREAM_RUNS/dream-intake-latest.json"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Intake complete: $INTAKE_OUT" >> "$LOG"
+fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION launcher starting" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] run_dir=$RUN_DIR budget=$BUDGET floor=$FLOOR" >> "$LOG"
