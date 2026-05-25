@@ -227,6 +227,24 @@ source: /1s
 
 Ensure `~/vault/g245/reviews/` directory exists (create if not).
 
+### Step 7b: Stale memory sweep
+
+Scan all `.md` files in the active memory directory (the project-level memory folder loaded into context). For each file with `last_verified:` in frontmatter, check if it's older than 90 days from today. List any stale memories:
+
+```
+## Stale memories (>90 days)
+
+| Memory | Last verified | Age | Action |
+|--------|--------------|-----|--------|
+| QB MCP auth blocked | 2026-04-26 | 93d | Re-verify or remove |
+```
+
+For each stale memory, either:
+- **Re-verify**: check if the claim is still true, update `last_verified` to today
+- **Remove**: if obsolete, delete the file and remove its line from MEMORY.md
+
+Ask the user which action to take for each stale entry.
+
 ### Step 8: Report + mark done
 
 Show the comparison table and narrative to the user. Then execute `/did 1s` to mark the weekly task complete.

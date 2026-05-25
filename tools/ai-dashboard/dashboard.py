@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI Tools Usage Dashboard
+jm-ai-dash
 
 A web dashboard showing LLM usage stats, costs, and GitHub activity.
 Run: python3 dashboard.py
@@ -1350,7 +1350,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Tools Usage Dashboard</title>
+    <title>jm-ai-dash</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='35' fill='none' stroke='%23FF10F0' stroke-width='16' stroke-dasharray='55 165' transform='rotate(-90 50 50)'/><circle cx='50' cy='50' r='35' fill='none' stroke='%2339FF14' stroke-width='16' stroke-dasharray='55 165' transform='rotate(0 50 50)'/><circle cx='50' cy='50' r='35' fill='none' stroke='%2300D4FF' stroke-width='16' stroke-dasharray='55 165' transform='rotate(90 50 50)'/><circle cx='50' cy='50' r='35' fill='none' stroke='%23FFD700' stroke-width='16' stroke-dasharray='55 165' transform='rotate(180 50 50)'/></svg>">
@@ -1588,7 +1588,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>🤖 AI Tools Usage Dashboard</h1>
+        <h1>🤖 jm-ai-dash</h1>
         <p class="subtitle">Real-time tracking of LLM usage, costs, and developer activity</p>
 
         <div class="grid">
@@ -2784,7 +2784,7 @@ def api_turns():
 
 
 if __name__ == "__main__":
-    print("🚀 Starting AI Tools Usage Dashboard...")
+    print("🚀 Starting jm-ai-dash...")
     print("📊 Dashboard: http://localhost:5555")
     print("🔌 API:       http://localhost:5555/api/stats")
     print("\nPress Ctrl+C to stop")

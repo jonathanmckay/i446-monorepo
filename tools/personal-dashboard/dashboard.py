@@ -1365,6 +1365,13 @@ fetch('/api/data').then(r => r.json()).then(data => {
   });
 });
 </script>
+
+<div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--h2);">
+  <a href="http://ix:5555" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ jm-ai-dash</a>
+  &nbsp;·&nbsp;
+  <a href="http://ix:5556" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ AI Dashboard (m5x2)</a>
+</div>
+
 </body>
 </html>"""
 
@@ -1398,6 +1405,12 @@ MORE_HTML = """<!DOCTYPE html>
     <div class="chart-wrap xs"><canvas id="ga4Chart"></canvas></div>
     <div class="summary" id="ga4Summary"></div>
   </div>
+</div>
+
+<div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--muted);">
+  <a href="http://ix:5555" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ jm-ai-dash</a>
+  &nbsp;·&nbsp;
+  <a href="http://ix:5556" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ AI Dashboard (m5x2)</a>
 </div>
 
 <script>

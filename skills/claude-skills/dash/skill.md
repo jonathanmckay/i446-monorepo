@@ -14,7 +14,7 @@ Opens all three local dashboards in Chrome.
 |------|-----|--------|
 | Personal Dashboard | http://ix:5558 | `i446-monorepo/tools/personal-dashboard/dashboard.py` |
 | AI Dashboard (m5x2) | http://ix:5556 | `i446-monorepo/tools/ai-dashboard/m5x2-dashboard.py` |
-| AI Stats Dashboard | http://ix:5555 | `i446-monorepo/tools/ai-dashboard/dashboard.py` |
+| jm-ai-dash | http://ix:5555 | `i446-monorepo/tools/ai-dashboard/dashboard.py` |
 
 ## Execution
 
