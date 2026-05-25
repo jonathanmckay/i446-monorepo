@@ -167,8 +167,9 @@ Create these tasks? (y/n/edit)
 **7d. Create confirmed tasks.**
 
 Use the Todoist MCP `add-tasks` tool. For each task:
-- `content`: the cleaned task text
+- `content`: the cleaned task text with `(N) [N]` included
 - `dueString`: the inferred due date in natural language (e.g., "tomorrow", "Friday")
+- `duration`: from `(N)` time estimate (e.g., `(30)` → `"30m"`). Always set when `(N)` is present.
 - Assign to the appropriate Todoist project using the label/domain code
 
 ### Step 8: Archive stale z_ibx files
