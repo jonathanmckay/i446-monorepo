@@ -49,6 +49,7 @@ rsync_one() {
   # ~/i446-monorepo/skills/claude-skills/, synced via git. Do not rsync.
   rsync_one "$HOME/.copilot/session-store.snapshot.db"  ".copilot/session-store-straylight.db"
   rsync_one "$HOME/m5x2-ai-stats/jm/stats-cache.json"   "m5x2-ai-stats/jm/stats-cache.json"
+  rsync_one "$HOME/m5x2-cache/"                         "m5x2-cache/"
   rsync_one "$HOME/vault/i447/i446/llm-sessions.db"     "vault/i447/i446/llm-sessions.db"
   echo "[$(ts)] done"
 } >> "$LOG" 2>&1
