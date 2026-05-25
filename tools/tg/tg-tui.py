@@ -426,13 +426,13 @@ def render_morning() -> list[tuple[str, str]]:
             # Color block label by dominant project
             dom_pid = max(block_durations.get(blk_name, {}), key=lambda p: block_durations[blk_name][p], default=None)
             blk_style = f"bold {project_style(dom_pid)}".strip() if dom_pid else "bold #ffffff"
-            space = min(DESC_MAX, max(1, WIDTH_HINT - 5))
-            out.append((blk_style, f" {blk_name} "))
-            out.append((style, f"  {truncate(label, space)}\n"))
+            space = min(DESC_MAX, max(1, WIDTH_HINT - 6))
+            out.append((blk_style, f"  {blk_name} "))
+            out.append((style, f" {truncate(label, space)}\n"))
         else:
-            time_col = f"  {display_time} "
-            space = min(DESC_MAX, max(1, WIDTH_HINT - dwidth(time_col)))
-            out.append((style, f"{time_col}{truncate(label, space)}\n"))
+            space = min(DESC_MAX, max(1, WIDTH_HINT - 8))
+            out.append(("class:time", f"  {display_time} "))
+            out.append((style, f"{truncate(label, space)}\n"))
     return out
 
 
@@ -499,6 +499,7 @@ def render_detail() -> list[tuple[str, str]]:
             if STATE.current:
                 cur_desc = STATE.current.get("description") or ""
                 cur_code = proj_code(STATE.current.get("project_id"))
+                cur_pid = STATE.current.get("project_id")
                 try:
                     cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
                     elapsed = fmt_dur_live(int((now - cst).total_seconds()))
@@ -508,10 +509,14 @@ def render_detail() -> list[tuple[str, str]]:
                 if cur_code:
                     task_info += f" · {cur_code}"
                 task_info += f"  {elapsed}"
-                now_text = f" ── {now:%H:%M:%S}  {task_info} "
+                task_style = project_style(cur_pid) or "class:now"
+                out.append(("class:now", f" ── {now:%H:%M:%S}  "))
+                out.append((task_style, task_info))
+                trail = max(0, WIDTH_HINT - 14 - len(task_info))
+                out.append(("class:now", " " + "─" * trail + "\n"))
             else:
                 now_text = f" ── {now:%H:%M:%S}  (no timer) "
-            out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
+                out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
             now_drawn = True
 
         time_str = f"{slot:%H:%M}"
@@ -521,14 +526,15 @@ def render_detail() -> list[tuple[str, str]]:
             label = f"▶ {cur_desc}"
             pid = STATE.current.get("project_id")
         space = min(DESC_MAX, max(1, WIDTH_HINT - len(time_str) - 4))
-        line = f" {time_str} {marker} {truncate(label or '·', space)}\n"
+        content = f" {marker} {truncate(label or '·', space)}\n"
         if is_running:
             cls = f"bold {project_style(pid)}".strip() or "class:running"
         elif slot_end <= now:
             cls = project_style(pid) or "class:past"
         else:
             cls = gcal_sty or "class:future"
-        out.append((cls, line))
+        out.append(("class:time", f" {time_str}"))
+        out.append((cls, content))
         slot = slot_end
     if not now_drawn:
         now_text = f" ── now {now:%H:%M:%S} "
@@ -602,7 +608,8 @@ def render_evening() -> list[tuple[str, str]]:
         space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1))
         title = truncate(ev["title"], space)
         ev_sty = project_style(gcal_project_code(ev)) or "class:future"
-        out.append((ev_sty, f"  {prefix} {title}\n"))
+        out.append(("class:time", f"  {prefix}"))
+        out.append((ev_sty, f" {title}\n"))
     return out
 
 
@@ -783,7 +790,8 @@ style = Style.from_dict({
     "dim": "italic #888888",
     "past": "#aaaaaa",
     "future": "#dddddd",
-    "now": "bold #ff1493",
+    "time": "#888888",
+    "now": "bold #ffffff",
     "flash": "bold yellow",
     "hint": "italic #666666",
     "prompt": "bold cyan",
