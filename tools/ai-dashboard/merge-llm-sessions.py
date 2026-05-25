@@ -170,19 +170,29 @@ def merge(stats: dict, daily_extra: dict, model_extra: dict, device: str | None 
     merged["mergedAt"] = datetime.now().isoformat(timespec="seconds")
 
     # ── deviceActivity ──────────────────────────────────────────────────
-    # Tag each dailyActivity entry with the device name so the dashboard
-    # can show a Turns / Device breakdown.
+    # Preserve any multi-device deviceActivity already produced upstream
+    # (build-stats-cache.py now emits one entry per (date, device) from each
+    # ~/.claude/projects[-host]/ root). Only synthesize entries from
+    # dailyActivity when the source had no deviceActivity at all — that's
+    # the legacy/single-host case.
     if device:
-        da_device = []
-        for entry in merged.get("dailyActivity", []):
-            da_device.append({
-                "date": entry["date"],
-                "device": device,
-                "messageCount": entry.get("messageCount", 0),
-                "sessionCount": entry.get("sessionCount", 0),
-                "toolCallCount": entry.get("toolCallCount", 0),
-            })
-        merged["deviceActivity"] = da_device
+        existing = stats.get("deviceActivity") or []
+        if existing:
+            # Carry through as-is; the upstream builder already attributes
+            # per-device correctly. Copilot llm-sessions.db merges only
+            # affect totals; we don't have device attribution for those yet.
+            merged["deviceActivity"] = existing
+        else:
+            da_device = []
+            for entry in merged.get("dailyActivity", []):
+                da_device.append({
+                    "date": entry["date"],
+                    "device": device,
+                    "messageCount": entry.get("messageCount", 0),
+                    "sessionCount": entry.get("sessionCount", 0),
+                    "toolCallCount": entry.get("toolCallCount", 0),
+                })
+            merged["deviceActivity"] = da_device
 
     return merged
 

@@ -22,8 +22,9 @@ from datetime import datetime, timezone, timedelta
 LOCAL_TZ_OFFSET_HOURS = -7  # PDT; matches the existing hourCounts buckets
 
 SOURCES = [
-    Path.home() / ".claude" / "projects",
-    Path.home() / ".claude" / "projects-ix",
+    (Path.home() / ".claude" / "projects",           "straylight-refit"),
+    (Path.home() / ".claude" / "projects-ix",        "ix"),
+    (Path.home() / ".claude" / "projects-donnager",  "donnager"),
 ]
 OUT = Path.home() / ".claude" / "stats-cache.json"
 
@@ -49,6 +50,7 @@ def local_hour(ts: datetime) -> int:
 def main():
     # Per-day aggregates
     msgs_per_day = Counter()                    # date -> message count
+    msgs_per_day_device = Counter()             # (date, device) -> message count
     tool_calls_per_day = Counter()              # date -> tool_use block count
     sessions_per_day = defaultdict(set)         # date -> {sessionId}
     tokens_per_day_model = defaultdict(Counter) # date -> Counter(model -> input+output tokens)
@@ -78,15 +80,16 @@ def main():
     # Dedupe across mirrored sources: (sessionId, uuid) is unique per record
     seen_uuids: set[tuple[str, str]] = set()
 
-    files = []
-    for src in SOURCES:
+    files = []  # list of (path, device)
+    for src, device in SOURCES:
         if src.exists():
-            files.extend(src.rglob("*.jsonl"))
+            for fp in src.rglob("*.jsonl"):
+                files.append((fp, device))
     if not files:
-        print(f"no JSONL sources found under {[str(s) for s in SOURCES]}", file=sys.stderr)
+        print(f"no JSONL sources found under {[str(s) for s,_ in SOURCES]}", file=sys.stderr)
         sys.exit(1)
 
-    for fp in files:
+    for fp, device in files:
         try:
             with open(fp, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
@@ -118,6 +121,7 @@ def main():
 
                     total_messages += 1
                     msgs_per_day[date] += 1
+                    msgs_per_day_device[(date, device)] += 1
                     hour_counts[hour] += 1
                     if sid:
                         all_session_ids.add(sid)
@@ -202,12 +206,19 @@ def main():
                      if longest_sid and longest_sid in session_first_seen_at else "",
     }
 
+    # Build deviceActivity (sorted by date, then device)
+    device_activity = [
+        {"date": d, "device": dev, "messageCount": cnt}
+        for (d, dev), cnt in sorted(msgs_per_day_device.items())
+    ]
+
     today = datetime.now(timezone.utc) + timedelta(hours=LOCAL_TZ_OFFSET_HOURS)
     out = {
         "version": 3,
         "lastComputedDate": today.date().isoformat(),
         "dailyActivity": daily_activity,
         "dailyModelTokens": daily_model_tokens,
+        "deviceActivity": device_activity,
         "modelUsage": dict(model_usage),
         "totalSessions": len(all_session_ids),
         "totalMessages": total_messages,
@@ -223,6 +234,7 @@ def main():
     print(f"  files scanned: {len(files)}")
     print(f"  date range:    {all_dates[0] if all_dates else '?'} .. {all_dates[-1] if all_dates else '?'}")
     print(f"  totals:        sessions={len(all_session_ids)}  messages={total_messages}")
+    print(f"  devices:       {sorted({dev for _,dev in msgs_per_day_device})}")
     print(f"  models:        {sorted(model_usage)}")
 
 
