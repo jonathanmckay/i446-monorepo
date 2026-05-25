@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-05-25T10:00:04.416021-07:00"
+  "tasks": {
+    "1n+0n": {
+      "todoist_id": "6ghx672xc4Wv2Qw2",
+      "minutes": 50
+    },
+    "tasks to 50": {
+      "todoist_id": "6ghx673rH54cvxJ2",
+      "minutes": 50
+    },
+    "lx act of service": {
+      "todoist_id": "6ghx677257wXC2MR",
+      "minutes": 20
+    },
+    "bball + hiit": {
+      "todoist_id": "6ghgqXj6jV7v6j92",
+      "minutes": 30
+    },
+    "have a i9 plan for the week": {
+      "todoist_id": "6ghx67Cgx4W3rQq2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-05-25T10:57:19.781612-07:00"
 }
