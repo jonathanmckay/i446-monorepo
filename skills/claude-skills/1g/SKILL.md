@@ -11,7 +11,8 @@ Set weekly goals for a domain in the `1g` tab of `Neon分v12.2.xlsx`. Estimates 
 ## Usage
 
 ```
-/1g <domain>: <goals>
+/1g <domain>: <goals>     # explicit goals
+/1g <domain>              # pull goals from domain source (see below)
 ```
 
 - `<domain>` — domain code (i9, m5x2, hcmp, hcb, g245, hci, xk87, hcmc, s897)
@@ -20,6 +21,20 @@ Set weekly goals for a domain in the `1g` tab of `Neon分v12.2.xlsx`. Estimates 
 Examples:
 - `/1g m5x2: 1. Close out Janowski 2. Get answers to March questions 3. AI usage handed off to Matt`
 - `/1g i9: SLT prep is solid, Recruiting daily, Ship the dashboard`
+- `/1g m5x2` — reads goals from the m5x2 source tab
+
+## Domain-only mode (no goals after `:`)
+
+When called with just a domain and no explicit goals, read goals from the domain's source location:
+
+| Domain | Source |
+|--------|--------|
+| m5x2 | `Neon分v12.2.xlsx` → sheet `m5x2` → col D, last non-empty row (one goal per numbered line) |
+
+Read the source, parse the goals, estimate 分 and focus bonus, then **show a draft table in the terminal and wait for user corrections** before writing to the 1g tab. The user may:
+- Adjust 分 values (e.g. `1 - 100分`)
+- Use `()` to mean "0分 for this goal" (the points are already distributed across constituent tasks; the weekly goal itself scores 0 but retains its focus bonus)
+- Approve with "yes" / "write" / "looks good"
 
 ## 1g Tab Structure
 
@@ -166,11 +181,14 @@ Output a table:
 
 ```
 1g → <domain> (rows <start>-<end>):
-  1. <goal> — <分>分, focus <bonus>
-  2. <goal> — <分>分, focus <bonus>
+  1. <goal> — <分>分 {<bonus>}
+  2. <goal> — <分>分 {<bonus>}
   ...
 ```
 
 ## Response Style
 
-Execute and confirm with the table. Do NOT ask for confirmation before writing. Do NOT explain the estimation process — just show the results.
+- **With explicit goals:** Execute and confirm with the table. Do NOT ask for confirmation before writing.
+- **Domain-only mode:** Show draft table in terminal and WAIT for user approval/corrections before writing.
+
+Do NOT explain the estimation process — just show the results.
