@@ -312,6 +312,15 @@ def parse_input(raw: str) -> list[ParsedItem]:
         if len(name_parts) >= 2 and name_parts[-1].isdigit():
             item.time_value = int(name_parts[-1])
             chunk = " ".join(name_parts[:-1])
+        # Extract leading number as time value (e.g. "46 xk88") but only
+        # when the remainder is a known variable 0₦ column — otherwise
+        # "1 xk88" would wrongly strip the "1" instead of matching the
+        # 1n+ header "1 xk88".
+        elif len(name_parts) >= 2 and name_parts[0].isdigit():
+            remainder = " ".join(name_parts[1:]).lower()
+            if remainder in {v.lower() for v in VARIABLE_0N}:
+                item.time_value = int(name_parts[0])
+                chunk = " ".join(name_parts[1:])
 
         # Apply aliases
         lower = chunk.strip().lower()
