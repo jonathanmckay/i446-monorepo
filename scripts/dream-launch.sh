@@ -4,6 +4,9 @@
 # Usage: dream-launch.sh [--dry-run] [--budget N] [--floor N]
 set -euo pipefail
 
+# --- Ensure full PATH for MCP servers (npx, uvx, python3) ---
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
 # --- Config ---
 DREAM_RUNS="$HOME/vault/i447/i446/dream-runs"
 PROMPT_BASE="$HOME/vault/i447/i446/dream-prompt-base.md"
