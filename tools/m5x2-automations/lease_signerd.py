@@ -39,6 +39,9 @@ from config import AUTOSIGN_SENDERS, DB_PATH
 
 POLL_INTERVAL = int(os.environ.get("LEASE_SIGNERD_POLL", "300"))  # 5 min default
 NOTIFY_TO = "mckay@m5c7.com"
+STALE_THRESHOLD_HOURS = 48  # alert if no successful signing in this window
+_LAST_SUCCESS_PATH = Path.home() / ".config/m5x2/lease_last_success"
+_STALE_ALERTED_PATH = Path.home() / ".config/m5x2/lease_stale_alerted"
 
 # File-based notification counter: write a number to this file to get notified
 # for that many upcoming successful signings. Decremented after each notification.
@@ -58,6 +61,48 @@ def _decrement_notify():
     n = _notify_remaining()
     if n > 0:
         _NOTIFY_REMAINING_PATH.write_text(str(n - 1))
+
+
+def _record_success():
+    """Record timestamp of last successful signing."""
+    _LAST_SUCCESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LAST_SUCCESS_PATH.write_text(str(time.time()))
+    # Reset stale alert so it can fire again next time
+    _STALE_ALERTED_PATH.unlink(missing_ok=True)
+
+
+def _check_stale(service):
+    """If no successful signing in STALE_THRESHOLD_HOURS, email JM (once)."""
+    if _STALE_ALERTED_PATH.exists():
+        return  # already alerted this dry spell
+    try:
+        last_ts = float(_LAST_SUCCESS_PATH.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return  # no history yet, don't alert on first run
+    elapsed_h = (time.time() - last_ts) / 3600
+    if elapsed_h < STALE_THRESHOLD_HOURS:
+        return
+    try:
+        days = int(elapsed_h // 24)
+        body = (
+            f"No lease signatures have completed in {days} days ({int(elapsed_h)}h).\n\n"
+            f"Last successful signing: {time.strftime('%Y-%m-%d %H:%M', time.localtime(last_ts))}\n\n"
+            f"Possible causes:\n"
+            f"- No new countersign emails received\n"
+            f"- Signing failures (check /tmp/lease_signerd.log)\n"
+            f"- AppFolio workflow changes\n"
+        )
+        msg = email.mime.text.MIMEText(body)
+        msg["To"] = NOTIFY_TO
+        msg["From"] = NOTIFY_TO
+        msg["Subject"] = f"\u26a0 No lease signatures in {days}d"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        _STALE_ALERTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _STALE_ALERTED_PATH.write_text(str(time.time()))
+        log.info(f"Stale alert sent ({days}d since last signing)")
+    except Exception as e:
+        log.warning(f"Stale alert email failed: {e}")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -193,6 +238,7 @@ def process_email(service, item: dict) -> bool:
 
     if status == "success":
         log.info(f"Signed successfully: {meta.get('unit', '')}")
+        _record_success()
         remaining = _notify_remaining()
         if remaining > 0:
             count = _autodb.count_successful(DB_PATH)
@@ -202,13 +248,16 @@ def process_email(service, item: dict) -> bool:
     else:
         log.warning(f"Signing failed ({status}): {error}")
 
-    # Archive the email
-    try:
-        email_id = item["_data"]["email"]["id"]
-        _ibx.archive(service, email_id)
-        log.info(f"Archived email {email_id}")
-    except Exception as e:
-        log.warning(f"Failed to archive: {e}")
+    # Archive only on successful signing — failed/timed-out emails stay in inbox
+    if status == "success":
+        try:
+            email_id = item["_data"]["email"]["id"]
+            _ibx.archive(service, email_id)
+            log.info(f"Archived email {email_id}")
+        except Exception as e:
+            log.warning(f"Failed to archive: {e}")
+    else:
+        log.info(f"Keeping email in inbox (status={status})")
 
     return status == "success"
 
@@ -256,6 +305,8 @@ def main():
         n = poll_once(service)
         if n:
             log.info(f"Processed {n} email(s) this cycle")
+
+        _check_stale(service)
 
         if once:
             break

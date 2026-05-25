@@ -38,7 +38,7 @@ BLOCKS = [
 ]
 
 # Markers to strip when parsing block names
-MARKERS = ["☀️", "📧", "⏰"]
+MARKERS = ["☀️", "📧", "⏰", "👹"]
 
 
 def get_current_block_idx():

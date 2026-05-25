@@ -92,7 +92,7 @@ HOUR_TO_BRANCH_BLOCK = {
     20: "戌",  # 戌 (18–20)
     22: "亥",  # 亥 (20–22)
 }
-DAEMON_FIRED_EMOJI = "⏰"
+DAEMON_FIRED_EMOJI = "👹"
 
 # At each fire hour, freeze the just-ended block's column in 0分 from formula
 # (`=D-SUM(prior blocks)`) to literal value, so the next block's residual

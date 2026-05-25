@@ -24,6 +24,7 @@ IS_AUTHORITATIVE=0
 if [[ "$HOST" == straylight* ]]; then
   IS_AUTHORITATIVE=1
   bash "$SCRIPT_DIR/pull-from-ix.sh" >/dev/null 2>&1 || true
+  bash "$SCRIPT_DIR/pull-from-donnager.sh" >/dev/null 2>&1 || true
   python3 "$SCRIPT_DIR/build-stats-cache.py" >>"$SCRIPT_DIR/.build-stats-cache.log" 2>&1 || true
 fi
 
