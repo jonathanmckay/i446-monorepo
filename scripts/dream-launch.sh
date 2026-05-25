@@ -51,7 +51,7 @@ VERSION="v${GLOBAL_VER}"
 VERSION_SHORT="v${GLOBAL_VER}"
 RUN_DIR="$DREAM_RUNS/${DATE_DOT}${DRY_RUN}-${VERSION}"
 
-# --- Prevent double-launch ---
+# --- Prevent double-launch (acquire lock BEFORE creating run dir) ---
 LOCK="/tmp/dream-launch.lock"
 if [[ -f "$LOCK" ]]; then
   LOCK_PID=$(cat "$LOCK")
@@ -59,7 +59,11 @@ if [[ -f "$LOCK" ]]; then
     echo "[$(date)] Dream already running (PID $LOCK_PID), skipping" >&2
     exit 0
   fi
+  # Stale lock from dead process — remove it
+  rm -f "$LOCK"
 fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
 
 # --- Create run dir ---
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/staged" "$RUN_DIR/drafts" "$RUN_DIR/approvals" "$RUN_DIR/branches" "$RUN_DIR/tmp"
@@ -91,10 +95,6 @@ fi
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION launcher starting" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] run_dir=$RUN_DIR budget=$BUDGET floor=$FLOOR" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] claude=$CLAUDE ($(${CLAUDE} --version 2>/dev/null || echo 'unknown'))" >> "$LOG"
-
-# --- Write PID lock ---
-echo $$ > "$LOCK"
-trap 'rm -f "$LOCK"' EXIT
 
 # --- Run claude ---
 cd "$HOME/vault"

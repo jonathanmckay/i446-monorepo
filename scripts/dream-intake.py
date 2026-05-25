@@ -103,7 +103,11 @@ def _http_request(url, method="GET", headers=None, body=None, timeout=25):
             req.add_header(k, v)
     ctx = ssl.create_default_context()
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-        return json.loads(resp.read())
+        raw = resp.read()
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise ValueError(f"Non-JSON response ({len(raw)} bytes) from {url}")
 
 
 # ---------------------------------------------------------------------------

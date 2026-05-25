@@ -307,7 +307,10 @@ def ingest_claude_sessions():
         if not projects_root.exists():
             continue
         for fpath in projects_root.rglob("*.jsonl"):
-            session_id = fpath.stem
+            # Prefix session_id with host for non-local roots to avoid
+            # cross-host collisions on ON CONFLICT(session_id) upsert.
+            raw_id = fpath.stem
+            session_id = raw_id if host == "straylight-refit" else f"{host}:{raw_id}"
             project_dir = f"{host}:{fpath.parent.name}"
             try:
                 messages = []
