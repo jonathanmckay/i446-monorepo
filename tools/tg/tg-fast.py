@@ -105,14 +105,11 @@ def _strip_annotations(s: str) -> str:
     return re.sub(r'  +', ' ', _ANNOTATION_RE.sub('', s)).strip()
 
 
-def _project_from_task_cache(content: str) -> str:
-    """Look up task content in task-queue.json, return first label that's a valid Toggl project."""
+def _search_task_cache(content: str, valid: set) -> str:
+    """Search task-queue.json for content, return first label that's a valid Toggl project."""
     try:
         data = json.loads(Path(TASK_QUEUE).read_text())
     except Exception:
-        return ""
-    valid = _get_toggl_projects()
-    if not valid:
         return ""
     section_tags = {"0neon", "1neon", "夜neon", "关键路径", "#0g", "#-1g"}
     clean = _strip_annotations(content).lower()
@@ -129,6 +126,26 @@ def _project_from_task_cache(content: str) -> str:
                         return label
                 return ""
     return ""
+
+
+def _project_from_task_cache(content: str) -> str:
+    """Look up task content in task-queue.json, return first label that's a valid Toggl project.
+    On cache miss, refreshes the cache once and retries."""
+    valid = _get_toggl_projects()
+    if not valid:
+        return ""
+    result = _search_task_cache(content, valid)
+    if result:
+        return result
+    # Cache miss: refresh and retry once
+    try:
+        subprocess.run(
+            ["python3", DID_FAST, "--refresh-cache"],
+            capture_output=True, timeout=30,
+        )
+    except Exception:
+        return ""
+    return _search_task_cache(content, valid)
 
 
 def _run_cli(*args):
@@ -253,16 +270,72 @@ def cmd_create_range(desc, project, tags, start_t, end_t):
     return out
 
 
+def _trim_overlapping(back_min, results):
+    """Find and trim any completed entries that overlap the backdate time."""
+    today_out = _run_cli("today")
+    # Parse entries: "HH:MM-HH:MM <desc> @<project> (Nm) [id:NNN]"
+    for line in today_out.split("\n"):
+        m = re.match(r'\s*(\d{2}:\d{2})-(\d{2}:\d{2})\s+(.+?)(?:\s+@(\S+))?\s+\(\d+', line)
+        if not m:
+            continue
+        start_s, end_s, e_desc, e_proj = m.group(1), m.group(2), m.group(3).strip(), m.group(4) or ""
+        s_min = int(start_s[:2]) * 60 + int(start_s[3:])
+        e_min = int(end_s[:2]) * 60 + int(end_s[3:])
+        # Entry overlaps if it starts before backdate and ends after backdate
+        if s_min < back_min and e_min > back_min:
+            id_match = re.search(r'\[id:(\d+)\]', line)
+            if not id_match:
+                continue
+            entry_id = id_match.group(1)
+            trim_end_min = back_min - 1
+            trim_end = "%02d:%02d" % (trim_end_min // 60, trim_end_min % 60)
+            _run_cli("delete", entry_id)
+            create_args = ["create", e_desc, start_s, trim_end]
+            if e_proj:
+                create_args.append(e_proj)
+            _run_cli(*create_args)
+            results.append("Trimmed: %s %s-%s @%s" % (e_desc, start_s, trim_end, e_proj))
+
+
 def cmd_backdated(backtime, desc, project, tags):
-    """Stop current, trim overlap, start backdated."""
+    """Stop current, trim overlapping entries, start backdated."""
     results = []
-    # Stop current
+    hhmm = backtime[:2] + ":" + backtime[2:]
+    back_h, back_m = int(backtime[:2]), int(backtime[2:])
+    back_min = back_h * 60 + back_m
+
+    # Handle running timer first
     cur = _run_cli("current")
     if "Running:" in cur:
+        id_match = re.search(r'\[id:(\d+)\]', cur)
+        time_match = re.search(r'(\d{2}:\d{2})-running', cur)
+        desc_match = re.search(r'\d{2}:\d{2}-running\s+(.+?)(?:\s+@(\S+))?\s+\(', cur)
+
+        old_id = id_match.group(1) if id_match else None
+        old_start = time_match.group(1) if time_match else None
+        old_desc = desc_match.group(1).strip() if desc_match else None
+        old_proj = desc_match.group(2) if desc_match and desc_match.group(2) else None
+
         stop_out = _run_cli("stop")
         results.append(stop_out)
+
+        # Trim the just-stopped entry
+        if old_id and old_start:
+            old_h, old_m = int(old_start.split(":")[0]), int(old_start.split(":")[1])
+            old_min = old_h * 60 + old_m
+            if old_min < back_min:
+                trim_end = "%02d:%02d" % ((back_min - 1) // 60, (back_min - 1) % 60)
+                _run_cli("delete", old_id)
+                create_args = ["create", old_desc or "unknown", old_start, trim_end]
+                if old_proj:
+                    create_args.append(old_proj)
+                _run_cli(*create_args)
+                results.append("Trimmed: %s %s-%s @%s" % (old_desc, old_start, trim_end, old_proj or ""))
+
+    # Also trim any completed entries that overlap the backdate time
+    _trim_overlapping(back_min, results)
+
     # Start backdated
-    hhmm = backtime[:2] + ":" + backtime[2:]
     args = ["start", desc or project]
     if project and desc:
         args.append(project)
