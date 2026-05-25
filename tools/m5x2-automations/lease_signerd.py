@@ -202,13 +202,16 @@ def process_email(service, item: dict) -> bool:
     else:
         log.warning(f"Signing failed ({status}): {error}")
 
-    # Archive the email
-    try:
-        email_id = item["_data"]["email"]["id"]
-        _ibx.archive(service, email_id)
-        log.info(f"Archived email {email_id}")
-    except Exception as e:
-        log.warning(f"Failed to archive: {e}")
+    # Archive only on successful signing — failed/timed-out emails stay in inbox
+    if status == "success":
+        try:
+            email_id = item["_data"]["email"]["id"]
+            _ibx.archive(service, email_id)
+            log.info(f"Archived email {email_id}")
+        except Exception as e:
+            log.warning(f"Failed to archive: {e}")
+    else:
+        log.info(f"Keeping email in inbox (status={status})")
 
     return status == "success"
 
