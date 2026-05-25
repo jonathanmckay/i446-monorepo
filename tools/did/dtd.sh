@@ -334,12 +334,12 @@ while true; do
     fi
   fi
 
-  # Strip annotations
-  clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+  # Strip annotations — keep {N} for did-fast.py (0g bonus), strip for filter
+  clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/  +/ /g; s/ *$//')
 
   # --- DONE MODE (existing behavior) ---
-  # Track original name for list filtering (before vared modifies it)
-  clean_for_filter="$clean"
+  # Track original name for list filtering (strip {N} too for matching)
+  clean_for_filter=$(echo "$clean" | sed -E 's/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
   # Tasks that need args (e.g. cpap needs a score)
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
