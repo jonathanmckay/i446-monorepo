@@ -279,15 +279,22 @@ def _toggl_today():
 # Source 4: appfolio_rent_roll
 # ---------------------------------------------------------------------------
 
-@source("appfolio_rent_roll", "AppFolio rent roll with occupancy metrics")
+# Properties excluded from core portfolio occupancy metric
+_AF_EXCLUDE = {
+    "Escrow Checking Corp Prop", "Funds to Be Received", "R202 Corp Prop",
+    "l925", "l912 (Community Association)", "c616", "h604", "sf21", "w225",
+}
+
+
+@source("appfolio_rent_roll", "AppFolio occupancy summary with core portfolio metrics")
 def _appfolio_rent_roll():
     vhost = _CREDS.get("af_vhost", "")
     if not vhost:
         return {"error": "AppFolio credentials not configured"}
 
-    url = f"https://{vhost}.appfolio.com/api/v2/reports/rent_roll_itemized.json"
+    url = f"https://{vhost}.appfolio.com/api/v2/reports/occupancy_summary.json"
     today = datetime.date.today().isoformat()
-    body = {"as_of_date": today}
+    body = {"as_of_to": today}
     headers = {
         "Authorization": _af_auth(),
         "Content-Type": "application/json",
@@ -296,47 +303,53 @@ def _appfolio_rent_roll():
     data = _http_request(url, method="POST", headers=headers, body=body)
     results = data.get("results", [])
 
-    # Group by property
+    # Group by property (results are per unit-type, need aggregation)
     by_property: dict[str, dict] = {}
     for row in results:
-        prop = row.get("property_name", row.get("property", "Unknown"))
+        prop_full = row.get("property", "Unknown")
+        prop = prop_full.split(" - ")[0].strip()
         if prop not in by_property:
             by_property[prop] = {
-                "units": 0,
-                "occupied": 0,
-                "vacant": 0,
-                "total_rent": 0.0,
-                "market_rent": 0.0,
+                "units": 0, "occupied": 0, "vacant_rented": 0,
+                "vacant_unrented": 0, "notice_rented": 0, "notice_unrented": 0,
             }
         p = by_property[prop]
-        p["units"] += 1
-        status = (row.get("status", "") or "").lower()
-        if "occupied" in status or "current" in status:
-            p["occupied"] += 1
-        else:
-            p["vacant"] += 1
+        p["units"] += row.get("number_of_units", 0)
+        p["occupied"] += row.get("occupied", 0)
+        p["vacant_rented"] += row.get("vacant_rented", 0)
+        p["vacant_unrented"] += row.get("vacant_unrented", 0)
+        p["notice_rented"] += row.get("notice_rented", 0)
+        p["notice_unrented"] += row.get("notice_unrented", 0)
 
-        rent = row.get("rent", row.get("actual_rent", 0)) or 0
-        market = row.get("market_rent", 0) or 0
-        try:
-            p["total_rent"] += float(rent)
-            p["market_rent"] += float(market)
-        except (ValueError, TypeError):
-            pass
-
-    # Compute occupancy and loss-to-lease per property
+    # Compute per-property metrics
     for prop, p in by_property.items():
+        p["rented"] = p["occupied"] + p["vacant_rented"]
         p["occupancy_pct"] = round(p["occupied"] / p["units"] * 100, 1) if p["units"] else 0
-        p["loss_to_lease"] = round(p["market_rent"] - p["total_rent"], 2)
+        p["rented_pct"] = round(p["rented"] / p["units"] * 100, 1) if p["units"] else 0
 
-    total_units = sum(p["units"] for p in by_property.values())
-    total_occupied = sum(p["occupied"] for p in by_property.values())
+    # Core portfolio (exclude non-operational properties)
+    core = {k: v for k, v in by_property.items() if k not in _AF_EXCLUDE}
+    core_units = sum(p["units"] for p in core.values())
+    core_occupied = sum(p["occupied"] for p in core.values())
+    core_rented = sum(p["rented"] for p in core.values())
+    core_vu = sum(p["vacant_unrented"] for p in core.values())
+
+    # All properties
+    all_units = sum(p["units"] for p in by_property.values())
+    all_occupied = sum(p["occupied"] for p in by_property.values())
 
     return {
         "as_of": today,
-        "total_units": total_units,
-        "total_occupied": total_occupied,
-        "overall_occupancy_pct": round(total_occupied / total_units * 100, 1) if total_units else 0,
+        "all_units": all_units,
+        "all_occupied": all_occupied,
+        "all_occupancy_pct": round(all_occupied / all_units * 100, 1) if all_units else 0,
+        "core_units": core_units,
+        "core_occupied": core_occupied,
+        "core_occupancy_pct": round(core_occupied / core_units * 100, 1) if core_units else 0,
+        "core_rented": core_rented,
+        "core_rented_pct": round(core_rented / core_units * 100, 1) if core_units else 0,
+        "core_vacant_unrented": core_vu,
+        "excluded": sorted(_AF_EXCLUDE),
         "by_property": by_property,
     }
 
