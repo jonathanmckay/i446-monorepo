@@ -31,7 +31,7 @@ Infer the correct domain label from keywords in the task content:
 | career, resume, job search, progression | `h335` |
 | non-profit, charity, volunteer | `m828` |
 
-If the task already has a label that matches a domain (i9, m5x2, g245, hcb, hcmc, xk87, xk88, s897, qz12, i447, f693, h335, m828, hcm, hci, epcn, infra, hcbp), skip it — it already has a domain label.
+If the task already has a label that matches a domain (i9, m5x2, g245, hcb, hcmc, xk87, xk88, s897, qz12, i447, f693, h335, m828, hcm, hci, epcn, infra, hcbp, 家), skip it — it already has a domain label.
 
 If the task is in a Todoist project that maps to a domain, use that as a strong signal:
 
@@ -81,6 +81,8 @@ For each task, check:
 1. **Has `(N)`?** — regex match for `\(\d+\)` in content
 2. **Has `[N]`?** — regex match for `\[\d+\]` in content
 3. **Has a domain label?** — check if any label matches a known domain code
+
+**Variable tasks exception:** If a task has empty parens `() []`, it is a variable-duration task and is acceptable as-is. Do not flag these for missing time or value estimates.
 
 ### Step 3: Build change list
 
