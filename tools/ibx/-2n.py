@@ -23,6 +23,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
+
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -695,6 +700,126 @@ def start_toggl(description, project=None):
     subprocess.run(cmd, capture_output=True, timeout=10)
 
 
+# ── Auto-suggest goals ────────────────────────────────────────────────────
+
+_TODOIST_API_BASE = "https://api.todoist.com/api/v1"
+_EXCLUDE_LABELS = {"#-1g", "#0g"}
+_EXCLUDE_PROJECTS = {"6XfvCQ3p8Gq6fhGR"}  # 0g project
+
+# Label → short display name for suggestion list
+_LABEL_DISPLAY = {
+    "i9": "i9", "m5x2": "m5x2", "xk87": "xk87", "xk88": "xk88",
+    "s897": "s897", "hcm": "hcm", "hcmc": "hcmc", "hcb": "hcb",
+    "hcbc": "hcb", "hci": "hci", "g245": "g245", "i447": "i447",
+    "f692": "f692", "f693": "f693", "家": "家", "epcn": "epcn",
+    "qz12": "qz12", "n156": "n156",
+}
+
+
+def _get_todoist_api_key():
+    """Get Todoist API key from env or macOS Keychain."""
+    key = os.environ.get("TODOIST_API_KEY")
+    if key:
+        return key
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def _parse_task_points(content: str):
+    """Extract [N] value and (N) time estimate from task content.
+    Returns (value, time_min) or (None, None) if not parseable."""
+    val_m = re.search(r'\[(\d+)\]', content)
+    time_m = re.search(r'\((\d+)\)', content)
+    value = int(val_m.group(1)) if val_m else None
+    time_min = int(time_m.group(1)) if time_m else None
+    return value, time_min
+
+
+def _domain_from_labels(labels: list) -> str:
+    """Pick the best domain display name from a task's labels."""
+    for label in labels:
+        if label in _LABEL_DISPLAY:
+            return _LABEL_DISPLAY[label]
+    return ""
+
+
+def fetch_suggested_goals(max_results=5):
+    """Fetch open Todoist tasks ranked by [N]/(N) ratio.
+
+    Returns list of dicts: {content, value, time, ratio, domain, id}
+    sorted by ratio descending. Excludes #-1g/#0g tasks and the 0g project."""
+    if _requests is None:
+        return []
+    api_key = _get_todoist_api_key()
+    if not api_key:
+        return []
+    headers = {"Authorization": f"Bearer {api_key}"}
+    candidates = []
+    cursor = None
+    try:
+        for _ in range(5):  # page limit safety
+            params = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            resp = _requests.get(
+                f"{_TODOIST_API_BASE}/tasks", headers=headers,
+                params=params, timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            tasks = data.get("results", []) if isinstance(data, dict) else data
+            for t in tasks:
+                labels = t.get("labels") or []
+                # Skip 0g project and #-1g/#0g tagged tasks
+                if t.get("project_id") in _EXCLUDE_PROJECTS:
+                    continue
+                if _EXCLUDE_LABELS & set(labels):
+                    continue
+                content = t.get("content", "")
+                value, time_min = _parse_task_points(content)
+                if value is None:
+                    continue  # no [N] = can't rank
+                if time_min and time_min > 0:
+                    ratio = value / time_min
+                else:
+                    ratio = value / 30  # no time estimate = assume 30min
+                candidates.append({
+                    "content": content,
+                    "value": value,
+                    "time": time_min,
+                    "ratio": ratio,
+                    "domain": _domain_from_labels(labels),
+                    "id": t.get("id"),
+                })
+            cursor = data.get("next_cursor") if isinstance(data, dict) else None
+            if not cursor:
+                break
+    except Exception:
+        return []
+    candidates.sort(key=lambda x: (-x["ratio"], -(x["value"] or 0)))
+    return candidates[:max_results]
+
+
+def format_suggestions(suggestions):
+    """Format suggestions as numbered lines for display in a card."""
+    lines = []
+    for i, s in enumerate(suggestions, 1):
+        content = s["content"]
+        if len(content) > 65:
+            content = content[:62] + "..."
+        domain = f"  [dim]@{s['domain']}[/dim]" if s["domain"] else ""
+        lines.append(f"  [bold]{i}.[/bold] {content}{domain}")
+    return "\n".join(lines)
+
+
 def snapshot_build_order():
     """Archive the build order to v_logs at the END of a day, not the start.
 
@@ -822,21 +947,42 @@ def main():
             return 0
         if not goals_set:
             card_num += 1
+            # Fetch auto-suggestions from Todoist
+            suggestions = fetch_suggested_goals()
+            body = f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end})."
+            if suggestions:
+                body += f"\n\n[cyan]Suggested (by value/min):[/cyan]\n{format_suggestions(suggestions)}"
+                body += "\n\n[dim]Pick numbers (e.g. 1,3), type custom goals, or skip.[/dim]"
+            else:
+                body += "\n[dim]Type goals (comma-separated), or skip.[/dim]"
             resp = prompt_card(
                 card_num, total_cards, "-1g",
-                f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end}).\nType goals (comma-separated), or skip.",
-                options="goals/skip", preserve_case=True,
+                body,
+                options="pick/goals/skip", preserve_case=True,
             )
             if resp and resp.lower() != "skip":
+                # Check if response is number picks from suggestions
+                goals_text = resp
+                if suggestions and re.match(r'^[\d,\s]+$', resp.strip()):
+                    picks = []
+                    for part in resp.split(","):
+                        part = part.strip()
+                        if part.isdigit():
+                            idx_pick = int(part)
+                            if 1 <= idx_pick <= len(suggestions):
+                                picks.append(suggestions[idx_pick - 1]["content"])
+                    if picks:
+                        goals_text = "\n".join(picks)
+
                 # Local build-order write is fast and authoritative. Do it
                 # synchronously so subsequent cards see the updated goals.
-                parsed_goals = parse_goals_text(resp)
+                parsed_goals = parse_goals_text(goals_text)
                 wrote_locally = write_block_goals(block_name, parsed_goals)
                 # Spawn claude in a detached subprocess for Todoist sync. The
                 # user proceeds to the next card immediately — claude's only
                 # remaining job (Todoist task creation) finishes asynchronously
                 # in the background and may outlive this TUI process.
-                spawn_1g_background(resp)
+                spawn_1g_background(goals_text)
                 if wrote_locally:
                     console.print(
                         f"[green]  ✓ -1g → {block_name}[/green] "
@@ -892,33 +1038,47 @@ def main():
 
     ibx0.main()
 
-    # ── After ibx0 exits (user quit) ──────────────────────────────────
-    # Show goals as a final prompt
+    # ── Persistent idle: show goals, wait for block change ────────────
+    # The watcher thread (above) will os._exit(0) on block change, which
+    # triggers the wrapper to restart with fresh ritual cards. Meanwhile,
+    # we idle here showing the goal panel so the user always has context.
+    console.print()
+    set_term_color("blue")
+
+    # Offer to start a timer on a goal before idling
     if current_goals:
-        console.print()
-        console.print(f"[bold]Goals for {block_name} ({block_start}-{block_end}):[/bold]")
-        for i, g in enumerate(current_goals, 1):
-            console.print(f"  {i}. {g}")
+        console.print(render_block_status_panel(block_name))
         console.print()
         try:
             resp = console.input("[dim]Start timer? (1/2/skip)>[/dim] ").strip()
             if resp.isdigit() and 1 <= int(resp) <= len(current_goals):
                 goal = current_goals[int(resp) - 1]
-                # Strip {N} annotations for the timer description
-                import re
                 desc = re.sub(r'\s*\{?\d+\}?\s*$', '', goal).strip()
                 start_toggl(desc, "g245")
                 console.print(f"[green]  ▶ Started: {desc} → g245[/green]")
-            elif resp == "y" or resp == "":
+            elif resp in ("y", ""):
                 goal = current_goals[0]
-                import re
                 desc = re.sub(r'\s*\{?\d+\}?\s*$', '', goal).strip()
                 start_toggl(desc, "g245")
                 console.print(f"[green]  ▶ Started: {desc} → g245[/green]")
         except (KeyboardInterrupt, EOFError):
             pass
 
-    set_term_color("blue")
+    # Idle loop: block watcher will kill us on transition. Refresh the
+    # goal panel every 60s so completed goals update in real time.
+    console.print()
+    console.print("[dim]Idle. Waiting for next block...[/dim]")
+    try:
+        while True:
+            console.clear()
+            console.print(Rule("[dim]-2n · idle[/dim]", style="dim"))
+            console.print()
+            console.print(render_block_status_panel())
+            console.print()
+            console.print("[dim]Waiting for next block... (Ctrl+C to quit)[/dim]")
+            time.sleep(60)
+    except KeyboardInterrupt:
+        return 2  # user quit; wrapper will not restart
 
 
 if __name__ == "__main__":
