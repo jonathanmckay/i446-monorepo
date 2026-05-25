@@ -71,12 +71,18 @@ tell application "Terminal"
   end repeat
   return ttys
 end tell' 2>/dev/null)
-        for candidate in "${SEEN_TTYS[@]}"; do
-            if echo "$KNOWN_TTYS" | grep -qF "$candidate"; then
-                TTY_DEVICE="$candidate"
-            fi
-        done
-        [ -z "$TTY_DEVICE" ] && TTY_DEVICE="${SEEN_TTYS[-1]}"
+        if [ -n "$KNOWN_TTYS" ]; then
+            for candidate in "${SEEN_TTYS[@]}"; do
+                if echo "$KNOWN_TTYS" | grep -qF "$candidate"; then
+                    TTY_DEVICE="$candidate"
+                fi
+            done
+        fi
+        # Fallback: outermost TTY (closest to the terminal emulator, e.g. cmux/Ghostty)
+        if [ -z "$TTY_DEVICE" ]; then
+            LAST_IDX=$((${#SEEN_TTYS[@]} - 1))
+            TTY_DEVICE="${SEEN_TTYS[$LAST_IDX]}"
+        fi
     fi
 fi
 

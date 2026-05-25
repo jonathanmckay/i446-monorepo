@@ -118,8 +118,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "T=$(date +%s$$); echo \"$T\" > /tmp/claude-prayer-token; ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh purple >/dev/null 2>&1; ( sleep 10; [ \"$(cat /tmp/claude-prayer-token 2>/dev/null)\" = \"$T\" ] && { ~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1; rm -f /tmp/claude-prayer-token; } ) &",
-            "async": true
+            "command": "T=$(date +%s$$); echo \"$T\" > /tmp/claude-prayer-token; ~/i446-monorepo/scripts/term-color.sh purple >/dev/null 2>&1; ( sleep 2; [ \"$(cat /tmp/claude-prayer-token 2>/dev/null)\" = \"$T\" ] && { ~/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1; rm -f /tmp/claude-prayer-token; } ) &",
+            "async": false
           },
           {
             "type": "command",
