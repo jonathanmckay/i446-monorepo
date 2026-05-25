@@ -118,7 +118,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "T=$(date +%s$$); echo \"$T\" > /tmp/claude-prayer-token; ~/i446-monorepo/scripts/term-color.sh purple >/dev/null 2>&1; ( sleep 2; [ \"$(cat /tmp/claude-prayer-token 2>/dev/null)\" = \"$T\" ] && { ~/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1; rm -f /tmp/claude-prayer-token; } ) &",
+            "command": "T=$(date +%s$$); echo \"$T\" > /tmp/claude-prayer-token; ~/i446-monorepo/scripts/term-color.sh purple >/dev/null 2>&1; ( sleep 5; [ \"$(cat /tmp/claude-prayer-token 2>/dev/null)\" = \"$T\" ] && { rm -f /tmp/claude-prayer-token; } ) &",
             "async": false
           },
           {

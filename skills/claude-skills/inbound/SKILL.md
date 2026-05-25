@@ -45,27 +45,26 @@ osascript -e 'tell application "Terminal" to do script "bash ~/i446-monorepo/too
 
 Confirm: `inbound opened in a new Terminal.app tab`
 
-### Path C — `--here` flag, or remote ssh / no GUI
+### Path C — remote SSH / no GUI (phone, Termius, any SSH session)
 
 Run inline in the current shell:
 
 ```bash
-bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh --here
+bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh
 ```
 
-Use this when ssh'd into a remote host (e.g. ix via Termius) where neither cmux nor Terminal.app is reachable, or whenever the user wants to keep inbound in the same pane.
+The wrapper handles Straylight delegation automatically. No special flags needed.
 
 ### Detection (one-liner)
 
 ```bash
-if [[ "$1" == "--here" ]]; then
-  bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh --here
-elif command -v cmux &>/dev/null; then
+if command -v cmux &>/dev/null; then
   # Path A — cmux flow
 elif [[ "$OSTYPE" == "darwin"* ]] && [[ -z "$SSH_CONNECTION" ]]; then
   # Path B — Terminal.app
 else
-  # Path C — inline
+  # Path C — inline (phone SSH, Termius, remote session)
+  bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh
 fi
 ```
 
