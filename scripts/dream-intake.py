@@ -211,7 +211,8 @@ def _completed_today():
 
 @source("d357_transcripts", "Today's meeting transcripts and action items")
 def _d357_transcripts():
-    today = datetime.date.today().isoformat()
+    # Vault transcript filenames use YYYY.MM.DD (dots), not ISO YYYY-MM-DD (hyphens)
+    today = datetime.date.today().strftime("%Y.%m.%d")
     d357_root = Path.home() / "vault" / "d357"
     pattern = str(d357_root / "**" / f"{today}*.md")
     files = glob_mod.glob(pattern, recursive=True)
