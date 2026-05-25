@@ -19,7 +19,7 @@ from pathlib import Path
 LOG_PATH = Path.home() / "vault/i447/i446/dream-runs/approval-log.json"
 
 VALID_OUTCOMES = {"approved", "rejected", "deferred", "edited", "held", "auto-dropped"}
-VALID_GRADES = {"A", "B", "C"}
+VALID_GRADES = {"A", "B", "C", "D", "F"}
 VALID_FOLDS = {"above", "below"}
 
 
