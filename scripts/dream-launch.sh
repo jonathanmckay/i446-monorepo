@@ -11,7 +11,7 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/
 DREAM_RUNS="$HOME/vault/i447/i446/dream-runs"
 PROMPT_BASE="$HOME/vault/i447/i446/dream-prompt-base.md"
 CLAUDE="/opt/homebrew/bin/claude"
-DEFAULT_BUDGET=120
+DEFAULT_BUDGET=180
 DEFAULT_FLOOR=90
 
 # --- Parse args ---
