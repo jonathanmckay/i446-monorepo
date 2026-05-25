@@ -75,7 +75,7 @@ For each **new** goal (no existing match), create a Todoist task using the Todoi
 - **Labels**: `["#-1g"]`
 - **Priority**: `p1`
 - **Due**: `today`
-- **Duration**: from `{N}` annotation if present
+- **Duration**: from `(N)` annotation if present (e.g., `(30)` → `"30m"`). If no `(N)`, omit.
 
 ### Step 5: Confirm
 
