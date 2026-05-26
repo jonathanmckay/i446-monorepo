@@ -153,16 +153,19 @@ touch "$DTD_REMOVED"
 DTD_LIST="/tmp/dtd-$$.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
-# Args: $1=cache_file $2=done_names_json $3=removed_file $4=today $5=columns
+# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns
 python3 -c "
 import json, sys, re
 
-cache_file, done_json, removed_file, today, cols = sys.argv[1:6]
+cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 cols = int(cols)
 
 with open(cache_file) as f:
     d = json.load(f)
-completed = json.loads(done_json)
+try:
+    with open(done_file) as f:
+        completed = json.load(f)
+except: completed = []
 
 # Load removed items
 try:
@@ -302,8 +305,13 @@ while true; do
   session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -c -R -s 'split("\n") | map(select(. != ""))')
   all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
+  # Write completed list to file to avoid shell quoting issues (apostrophes in task names)
+  DTD_DONE_FILE="/tmp/dtd-$$.done.json"
+  echo "$all_completed" > "$DTD_DONE_FILE"
+
   # Generate task list via reloadable script (supports colors + removal)
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$all_completed' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}'"
+  # Pass done file path instead of JSON string to avoid quoting issues
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}'"
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --ansi \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
@@ -383,4 +391,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
