@@ -146,17 +146,21 @@ def cmd_today(_args):
 
 def cmd_create(args):
     if len(args) < 3:
-        sys.exit("Usage: create <description> <HH:MM|HHMM> <HH:MM|HHMM> [project] [--date YYYY-MM-DD]")
+        sys.exit("Usage: create <description> <HH:MM|HHMM> <HH:MM|HHMM> [project] [tags...] [--date YYYY-MM-DD]")
     desc, start_str, end_str = args[0], args[1], args[2]
     project = ""
+    tags = []
     ref_date = datetime.datetime.now(TZ).date()
     i = 3
     while i < len(args):
         if args[i] == "--date" and i + 1 < len(args):
             ref_date = datetime.date.fromisoformat(args[i + 1])
             i += 2
-        else:
+        elif not project:
             project = args[i]
+            i += 1
+        else:
+            tags.append(args[i])
             i += 1
 
     def parse_t(t):
@@ -173,17 +177,18 @@ def cmd_create(args):
     midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, tzinfo=TZ)
     next_min = midnight + datetime.timedelta(minutes=1)
     project_id = _resolve_project(project)
+    tag_list = tags or None
 
     if start_dt.date() != end_dt.date():
         dur1 = int((midnight - start_dt).total_seconds())
         dur2 = int((end_dt - next_min).total_seconds())
-        e1 = toggl_api.create_entry(desc, start_dt.isoformat(), midnight.isoformat(), dur1, project_id)
-        e2 = toggl_api.create_entry(desc, next_min.isoformat(), end_dt.isoformat(), dur2, project_id)
+        e1 = toggl_api.create_entry(desc, start_dt.isoformat(), midnight.isoformat(), dur1, project_id, tag_list)
+        e2 = toggl_api.create_entry(desc, next_min.isoformat(), end_dt.isoformat(), dur2, project_id, tag_list)
         print(f"Created (split): {_fmt(e1)}")
         print(f"          cont.: {_fmt(e2)}")
     else:
         dur = int((end_dt - start_dt).total_seconds())
-        entry = toggl_api.create_entry(desc, start_dt.isoformat(), end_dt.isoformat(), dur, project_id)
+        entry = toggl_api.create_entry(desc, start_dt.isoformat(), end_dt.isoformat(), dur, project_id, tag_list)
         print(f"Created: {_fmt(entry)}")
 
 

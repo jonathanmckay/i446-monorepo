@@ -218,6 +218,7 @@ class ParsedItem:
     time_range: Optional[tuple[str, str]] = None  # (HHMM, HHMM)
     project_override: Optional[str] = None
     defer_date: Optional[str] = None  # ISO date (YYYY-MM-DD) for partial completion
+    toggl_tags: list = None  # #tag tokens → Toggl tags
 
 
 def parse_input(raw: str) -> list[ParsedItem]:
@@ -284,6 +285,12 @@ def parse_input(raw: str) -> list[ParsedItem]:
                         item.defer_date = defer_raw
                     except ValueError:
                         pass  # ignore unparseable defer
+
+        # Extract #tag tokens → Toggl tags (e.g. #-2, #focus)
+        tag_matches = re.findall(r"#(-?\w+)", chunk)
+        if tag_matches:
+            item.toggl_tags = tag_matches
+            chunk = re.sub(r"\s*#-?\w+", "", chunk).strip()
 
         # Extract @project override
         at_match = re.search(r"@(\w+)", chunk)
@@ -1402,11 +1409,12 @@ end tell'''
         return None
     toggl_items = [(r.item.name, r.item.time_range,
                     _resolve_toggl_project(r),
-                    r.item.target_date)
+                    r.item.target_date,
+                    r.item.toggl_tags or [])
                    for r in fast if r.item.time_range]
     if toggl_items:
         def _create_toggl(args):
-            name, tr, proj, td = args
+            name, tr, proj, td, tags = args
             today_str = date.today().isoformat()
             # If target_date differs from today, compute ISO date
             if td:
@@ -1417,6 +1425,8 @@ end tell'''
                    f"{tr[0][:2]}:{tr[0][2:]}", f"{tr[1][:2]}:{tr[1][2:]}"]
             if proj:
                 cmd.append(proj)
+            if tags:
+                cmd.extend(tags)
             cmd.extend(["--date", today_str])
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
