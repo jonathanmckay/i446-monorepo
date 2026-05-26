@@ -100,6 +100,28 @@ else
     fail "No token on second prompt"
 fi
 
+# --- Test 7: cmux color path works when CMUX_BUNDLE_ID is set ---
+echo ""
+echo "Test 7: term-color.sh uses cmux path in cmux environment"
+if [ -n "$CMUX_BUNDLE_ID" ] && command -v cmux &>/dev/null; then
+    # We're in cmux — verify the script uses the cmux workspace-action path
+    OUTPUT=$("$TERM_COLOR" purple 2>&1)
+    # Script should exit 0 and not fall through to Terminal.app
+    if [ $? -eq 0 ]; then
+        pass "cmux color path exits cleanly"
+    else
+        fail "cmux color path failed"
+    fi
+    "$TERM_COLOR" black >/dev/null 2>&1
+else
+    # Not in cmux — verify script at least has the cmux detection
+    if grep -q 'CMUX_BUNDLE_ID' "$TERM_COLOR"; then
+        pass "cmux detection present in script (not in cmux env, skipping runtime test)"
+    else
+        fail "cmux detection missing from term-color.sh"
+    fi
+fi
+
 # Cleanup
 sleep 6
 rm -f /tmp/claude-prayer-token

@@ -104,7 +104,16 @@ case "$COLOR" in
   *) exit 1 ;;
 esac
 
-# ── Step 3: Terminal.app (sets window chrome) ─────────────────────────────────
+HEX="#${RH}${GH}${BH}"
+
+# ── Step 3a: cmux (Ghostty-based terminal multiplexer) ───────────────────────
+
+if [ -n "$CMUX_BUNDLE_ID" ] && command -v cmux &>/dev/null; then
+    cmux workspace-action --action set-color --color "$HEX" >/dev/null 2>&1
+    exit 0
+fi
+
+# ── Step 3b: Terminal.app (sets window chrome) ────────────────────────────────
 
 TERM_FOUND=$(osascript <<APPLESCRIPT 2>/dev/null
 tell application "Terminal"
