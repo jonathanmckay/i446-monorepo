@@ -298,72 +298,132 @@ chmod +x "$DTD_DELETE"
 
 # --- Split script used by fzf ctrl-p binding ---
 DTD_SPLIT="/tmp/dtd-$$.split.sh"
-cat > "$DTD_SPLIT" << SPLITEOF
+cat > "$DTD_SPLIT" << 'SPLITEOF'
 #!/bin/zsh
-DID_FAST="\$HOME/i446-monorepo/tools/did/did-fast.py"
-DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
-HDR="$DTD_HDR"
-REMOVED="$DTD_REMOVED"
-task="\$1"
-# Strip ANSI codes
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
+# Split a task: claim partial points today, defer the rest to tomorrow.
+# Three dialogs: points, what you did, what remains.
+# All Todoist/Neon writes done inline via Python.
 
-# Extract total [N] from task
-total=\$(echo "\$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
-if [[ -z "\$total" ]]; then
-  total="?"
-fi
+HDR="PLACEHOLDER_HDR"
+REMOVED="PLACEHOLDER_REMOVED"
+CACHE_FILE="PLACEHOLDER_CACHE"
+DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 
-# Prompt for points + descriptions via osascript dialogs
-pts_today=\$(/usr/bin/osascript -e 'display dialog "Split: points done today? (total: ['""\$total""'])" default answer "" buttons {"Cancel","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
-if [[ -z "\$pts_today" || ! "\$pts_today" =~ ^[0-9]+$ ]]; then
-  echo "  cancelled" > "\$HDR"
-  exit 0
-fi
+task="$1"
+task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g')
 
-done_desc=\$(/usr/bin/osascript -e 'display dialog "What did you do?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+# Extract [N] and (N) from task
+total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
+duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
+[[ -z "$total" ]] && total="?"
 
-remaining_desc=\$(/usr/bin/osascript -e 'display dialog "What remains?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+# Dialog 1: points
+pts_today=$(/usr/bin/osascript -e 'display dialog "Split: points done today? (total: ['"$total"'])" default answer "" buttons {"Cancel","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+[[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "cancelled" > "$HDR"; exit 0; }
 
-# Strip annotations for clean name
-clean=\$(echo "\$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *\$//')
+# Dialog 2: what you did
+done_desc=$(/usr/bin/osascript -e 'display dialog "What did you do?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
 
-echo "⏳ split: +\$pts_today today, defer rest" > "\$HDR"
+# Dialog 3: what remains
+remaining_desc=$(/usr/bin/osascript -e 'display dialog "What remains?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
 
-# Build today's task content: "done_desc (pts) [pts]" or fallback to clean name
-if [[ -n "\$done_desc" ]]; then
-  today_content="\$done_desc [\$pts_today]"
-else
-  today_content="\$clean [\$pts_today]"
-fi
+clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+echo "⏳ splitting: $clean" > "$HDR"
 
-# 1. Log points for today via did-fast
-python3 "\$DID_FAST" "\$today_content" >/dev/null 2>&1
+# Find the original Todoist task and get its labels/project
+python3 -c "
+import json, re, sys, urllib.request
 
-# 2. Defer the task with claimed_points=pts_today
-result=\$(python3 "\$DEFER_FAST" "\$clean" "" "\$pts_today" 2>/dev/null)
+TOKEN = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+BASE = 'https://api.todoist.com/api/v1'
+HDR = {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'}
 
-# 3. If remaining description provided, update the deferred task content
-if [[ -n "\$remaining_desc" && -n "\$total" && "\$total" != "?" ]]; then
-  remaining_pts=\$(( total - pts_today ))
-  # Update the Todoist task content with remaining description
-  tid=\$(echo "\$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null)
-  if [[ -n "\$tid" ]]; then
-    curl -s -X POST "https://api.todoist.com/api/v1/tasks/\$tid" \
-      -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" \
-      -H "Content-Type: application/json" \
-      -d "{\"content\":\"\$remaining_desc (\$(echo "\$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')) [\$remaining_pts]\"}" >/dev/null 2>&1
-  fi
-fi
+clean = sys.argv[1]
+pts_today = int(sys.argv[2])
+total = int(sys.argv[3]) if sys.argv[3] != '?' else 0
+done_desc = sys.argv[4]
+remaining_desc = sys.argv[5]
+duration = sys.argv[6]
+hdr_file = sys.argv[7]
+removed_file = sys.argv[8]
 
-ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
-if [[ -n "\$ok" ]]; then
-  echo "\$clean" >> "\$REMOVED"
-  echo "✂ +\$pts_today today \$ok" > "\$HDR"
-else
-  echo "✂ +\$pts_today logged (defer failed)" > "\$HDR"
-fi
+remaining_pts = max(0, total - pts_today) if total > 0 else 0
+
+# Search for the task
+def api(method, path, body=None):
+    data = json.dumps(body).encode() if body else None
+    req = urllib.request.Request(f'{BASE}{path}', data=data, method=method, headers=HDR)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else None
+
+# Find task by substring in today|overdue
+tasks = []
+cursor = None
+for _ in range(3):
+    url = f'{BASE}/tasks?filter=today%20%7C%20overdue&limit=200'
+    if cursor: url += f'&cursor={cursor}'
+    req = urllib.request.Request(url, headers=HDR)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+    batch = data if isinstance(data, list) else data.get('results', [])
+    tasks.extend(batch)
+    cursor = data.get('next_cursor') if isinstance(data, dict) else None
+    if not cursor: break
+
+clean_lower = clean.lower()
+matches = [t for t in tasks if clean_lower in t.get('content','').lower()]
+if not matches:
+    with open(hdr_file, 'w') as f: f.write(f'? split: task not found')
+    sys.exit(1)
+task = matches[0]
+tid = task['id']
+labels = task.get('labels', [])
+project_id = task.get('project_id')
+
+# 1. Create completed posthoc for today's portion
+today_label = done_desc if done_desc else clean
+posthoc_content = f'{today_label} ({duration or pts_today}) [{pts_today}]'
+from datetime import date
+today_iso = date.today().isoformat()
+posthoc = api('POST', '/tasks', {
+    'content': posthoc_content,
+    'labels': labels + ['posthoc'],
+    'due_date': today_iso,
+    'project_id': project_id,
+})
+if posthoc:
+    api('POST', f'/tasks/{posthoc[\"id\"]}/close')
+
+# 2. Update original task: new content with remaining description + reschedule
+from datetime import timedelta
+tomorrow = (date.today() + timedelta(days=1)).isoformat()
+new_content = f'{remaining_desc or clean} ({duration}) [{remaining_pts}]' if remaining_pts > 0 else f'{remaining_desc or clean}'
+api('POST', f'/tasks/{tid}', {
+    'content': new_content,
+    'due_date': tomorrow,
+})
+
+# 3. Log points to 0分 via did-fast (use original task's labels for column mapping)
+import subprocess
+label_arg = ''
+for l in labels:
+    if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','s897'):
+        label_arg = f'@{l}'
+        break
+subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
+                f'{clean} [{pts_today}] {label_arg}'],
+               capture_output=True, timeout=30)
+
+# Write results
+with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
+msg = f'✂ +{pts_today} today / [{remaining_pts}] deferred to {tomorrow}'
+with open(hdr_file, 'w') as f: f.write(msg)
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED"
+
 SPLITEOF
+# Substitute placeholder paths
+sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_SPLIT"
 chmod +x "$DTD_SPLIT"
 
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
