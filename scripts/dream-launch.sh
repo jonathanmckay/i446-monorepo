@@ -68,6 +68,28 @@ trap 'rm -f "$LOCK"' EXIT
 # --- Create run dir ---
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/staged" "$RUN_DIR/drafts" "$RUN_DIR/approvals" "$RUN_DIR/branches" "$RUN_DIR/tmp"
 
+# --- Backfill date tracking ---
+# Each night, Dream also scans one historical day's conversation logs.
+# State file tracks the backfill pointer; advances one day back each run.
+BACKFILL_STATE="$DREAM_RUNS/.backfill-pointer"
+BACKFILL_STOP="2026-03-01"  # stop when we reach March 1
+if [[ -f "$BACKFILL_STATE" ]]; then
+  BACKFILL_DATE=$(cat "$BACKFILL_STATE")
+else
+  # Start from yesterday
+  BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
+fi
+# Check if backfill is complete
+if [[ "$BACKFILL_DATE" < "$BACKFILL_STOP" ]]; then
+  BACKFILL_DATE=""
+  BACKFILL_MSG="Backfill complete (reached $BACKFILL_STOP)."
+else
+  BACKFILL_MSG="Backfill date: $BACKFILL_DATE. Also scan AI transcripts from this date for loose threads."
+  # Advance pointer one day back for next run
+  NEXT_BACKFILL=$(date -j -f '%Y-%m-%d' "$BACKFILL_DATE" -v-1d '+%Y-%m-%d')
+  echo "$NEXT_BACKFILL" > "$BACKFILL_STATE"
+fi
+
 # --- Template the prompt ---
 sed \
   -e "s|{{VERSION}}|$VERSION|g" \
@@ -77,6 +99,8 @@ sed \
   -e "s|{{DATE_DOT}}|$DATE_DOT|g" \
   -e "s|{{COMPUTE_FLOOR}}|$FLOOR|g" \
   -e "s|{{BUDGET_USD}}|$BUDGET|g" \
+  -e "s|{{BACKFILL_DATE}}|$BACKFILL_DATE|g" \
+  -e "s|{{BACKFILL_MSG}}|$BACKFILL_MSG|g" \
   "$PROMPT_BASE" > "$RUN_DIR/PROMPT.md"
 
 LOG="$RUN_DIR/logs/agent-run.log"
