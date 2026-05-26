@@ -296,6 +296,76 @@ fi
 DELETEEOF
 chmod +x "$DTD_DELETE"
 
+# --- Split script used by fzf ctrl-p binding ---
+DTD_SPLIT="/tmp/dtd-$$.split.sh"
+cat > "$DTD_SPLIT" << SPLITEOF
+#!/bin/zsh
+DID_FAST="\$HOME/i446-monorepo/tools/did/did-fast.py"
+DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
+HDR="$DTD_HDR"
+REMOVED="$DTD_REMOVED"
+task="\$1"
+# Strip ANSI codes
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
+
+# Extract total [N] from task
+total=\$(echo "\$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
+if [[ -z "\$total" ]]; then
+  total="?"
+fi
+
+# Prompt for points + descriptions via osascript dialogs
+pts_today=\$(/usr/bin/osascript -e 'display dialog "Split: points done today? (total: ['""\$total""'])" default answer "" buttons {"Cancel","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+if [[ -z "\$pts_today" || ! "\$pts_today" =~ ^[0-9]+$ ]]; then
+  echo "  cancelled" > "\$HDR"
+  exit 0
+fi
+
+done_desc=\$(/usr/bin/osascript -e 'display dialog "What did you do?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+
+remaining_desc=\$(/usr/bin/osascript -e 'display dialog "What remains?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+
+# Strip annotations for clean name
+clean=\$(echo "\$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *\$//')
+
+echo "⏳ split: +\$pts_today today, defer rest" > "\$HDR"
+
+# Build today's task content: "done_desc (pts) [pts]" or fallback to clean name
+if [[ -n "\$done_desc" ]]; then
+  today_content="\$done_desc [\$pts_today]"
+else
+  today_content="\$clean [\$pts_today]"
+fi
+
+# 1. Log points for today via did-fast
+python3 "\$DID_FAST" "\$today_content" >/dev/null 2>&1
+
+# 2. Defer the task with claimed_points=pts_today
+result=\$(python3 "\$DEFER_FAST" "\$clean" "" "\$pts_today" 2>/dev/null)
+
+# 3. If remaining description provided, update the deferred task content
+if [[ -n "\$remaining_desc" && -n "\$total" && "\$total" != "?" ]]; then
+  remaining_pts=\$(( total - pts_today ))
+  # Update the Todoist task content with remaining description
+  tid=\$(echo "\$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null)
+  if [[ -n "\$tid" ]]; then
+    curl -s -X POST "https://api.todoist.com/api/v1/tasks/\$tid" \
+      -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" \
+      -H "Content-Type: application/json" \
+      -d "{\"content\":\"\$remaining_desc (\$(echo "\$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')) [\$remaining_pts]\"}" >/dev/null 2>&1
+  fi
+fi
+
+ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
+if [[ -n "\$ok" ]]; then
+  echo "\$clean" >> "\$REMOVED"
+  echo "✂ +\$pts_today today \$ok" > "\$HDR"
+else
+  echo "✂ +\$pts_today logged (defer failed)" > "\$HDR"
+fi
+SPLITEOF
+chmod +x "$DTD_SPLIT"
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
@@ -325,8 +395,9 @@ while true; do
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_LIST_CMD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-x: delete | ctrl-r: refresh]")
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-x: delete | ctrl-r: refresh]")
 
   task="$fzf_output"
 
@@ -400,4 +471,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
