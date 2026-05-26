@@ -298,6 +298,15 @@ chmod +x "$DTD_DELETE"
 
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
+  # Refresh date and completed-today on each iteration (handles midnight rollover)
+  NEW_TODAY=$(date +%Y-%m-%d)
+  if [[ "$NEW_TODAY" != "$LOCAL_TODAY" ]]; then
+    LOCAL_TODAY="$NEW_TODAY"
+    session_done=()  # reset session completions for new day
+  fi
+  DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
+    'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
+
   worker_hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
   combined_hdr="$TIMER_HDR
   $worker_hdr"
