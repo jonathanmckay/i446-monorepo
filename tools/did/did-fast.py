@@ -86,6 +86,13 @@ VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
     "nap": ("hcb", "W"),
     "lunch": ("家", "X"),
     "dinner": ("家", "X"),
+    "bball": ("hcbp", "W"),
+}
+
+# Habits that also write to the hcbi sheet (append +N to formula).
+# key = habit name (lowercase), value = hcbi column letter
+HCBI_HABITS: dict[str, str] = {
+    "bball": "Y",
 }
 # 1n+ header aliases: map variant names to actual 1n+ headers
 ONENEON_ALIASES: dict[str, str] = {
@@ -832,6 +839,40 @@ end tell'''
     return script
 
 
+def build_hcbi_script(appends: list[tuple[str, int]], target_date: str) -> Optional[str]:
+    """Build AppleScript for batch hcbi appends. appends = [(col_letter, minutes), ...]
+    Uses column B for date lookup (M/D format), appends +N to formula."""
+    if not appends:
+        return None
+
+    append_lines = []
+    for col, mins in appends:
+        append_lines.append(f'''    set theCell to range ("{col}" & todayRow) of ws
+    set oldFormula to formula of theCell
+    if oldFormula = "" or oldFormula = "0" then
+        set formula of theCell to "=0+{mins}"
+    else if character 1 of oldFormula is not "=" then
+        set formula of theCell to "=" & oldFormula & "+{mins}"
+    else
+        set formula of theCell to oldFormula & "+{mins}"
+    end if''')
+
+    script = f'''tell application "Microsoft Excel"
+    set ws to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+    set todayRow to 0
+    repeat with i from 2 to 500
+        if (string value of range ("B" & i) of ws) = "{target_date}" then
+            set todayRow to i
+            exit repeat
+        end if
+    end repeat
+    if todayRow = 0 then return "ERROR: date {target_date} not found in hcbi"
+{chr(10).join(append_lines)}
+    return "OK:hcbi row=" & todayRow
+end tell'''
+    return script
+
+
 def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     """Build AppleScript for batch 1n+ writes. Finds week row, reads row 3 points, writes."""
     if not writes:
@@ -1296,6 +1337,20 @@ end tell'''
         if script:
             fen_result = ix_run(script, timeout=30.0)
 
+    # 5b. hcbi writes (habits that log minutes to the hcbi sheet)
+    hcbi_appends = []
+    for r in fast:
+        hcbi_col = HCBI_HABITS.get(r.item.name.lower())
+        if hcbi_col:
+            mins = r.item.time_value or r.write_value or 0
+            if mins > 0:
+                hcbi_appends.append((hcbi_col, mins))
+    hcbi_result = None
+    if hcbi_appends:
+        script = build_hcbi_script(hcbi_appends, target_date)
+        if script:
+            hcbi_result = ix_run(script, timeout=30.0)
+
     # 6. Close or defer Todoist tasks in parallel
     task_ids = []
     defer_items = {}  # tid → (defer_date, points_claimed, content)
@@ -1518,13 +1573,20 @@ end tell'''
         }
         if fen_result.returncode != 0:
             output["0fen_write"]["error"] = fen_result.stderr.strip() or f"ix-osa exit {fen_result.returncode}"
+    if hcbi_result:
+        output["hcbi_write"] = {
+            "ok": hcbi_result.returncode == 0,
+            "output": hcbi_result.stdout.strip(),
+        }
+        if hcbi_result.returncode != 0:
+            output["hcbi_write"]["error"] = hcbi_result.stderr.strip() or f"ix-osa exit {hcbi_result.returncode}"
 
     # Fire-and-forget: invalidate personal-dashboard's 300s API cache so the
     # neon-fed cache cards (其他人, ص, o314, 冥想, hcbp, hcbc, xk88) reflect
     # this write on the next render instead of up to 5 minutes later.
     wrote_neon = any(
         r is not None and r.returncode == 0
-        for r in (on_result, fen_result, one_n_result, one_n_fen_result)
+        for r in (on_result, fen_result, one_n_result, one_n_fen_result, hcbi_result)
     )
     if wrote_neon:
         try:
