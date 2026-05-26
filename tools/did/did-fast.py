@@ -324,7 +324,21 @@ def parse_input(raw: str) -> list[ParsedItem]:
         # Extract trailing number as time value
         name_parts = chunk.split()
         if len(name_parts) >= 2 and name_parts[-1].isdigit():
-            item.time_value = int(name_parts[-1])
+            num = int(name_parts[-1])
+            remaining_name = " ".join(name_parts[:-1]).lower()
+            # 4-digit HHMM for variable 0₦ habits (e.g. "xk22 1823" = started at 18:23)
+            # Only for VARIABLE_0N habits where the number is always minutes, not points
+            if (len(name_parts[-1]) == 4
+                    and 0 <= num // 100 <= 23 and 0 <= num % 100 <= 59
+                    and remaining_name in {v.lower() for v in VARIABLE_0N}):
+                from datetime import datetime as _dt
+                now = _dt.now()
+                start_h, start_m = num // 100, num % 100
+                start_min = start_h * 60 + start_m
+                now_min = now.hour * 60 + now.minute
+                item.time_value = max(1, now_min - start_min)
+            else:
+                item.time_value = num
             chunk = " ".join(name_parts[:-1])
         # Extract leading number as time value (e.g. "46 xk88") but only
         # when the remainder is a known variable 0₦ column — otherwise
@@ -333,7 +347,16 @@ def parse_input(raw: str) -> list[ParsedItem]:
         elif len(name_parts) >= 2 and name_parts[0].isdigit():
             remainder = " ".join(name_parts[1:]).lower()
             if remainder in {v.lower() for v in VARIABLE_0N}:
-                item.time_value = int(name_parts[0])
+                num = int(name_parts[0])
+                if len(name_parts[0]) == 4 and 0 <= num // 100 <= 23 and 0 <= num % 100 <= 59:
+                    from datetime import datetime as _dt
+                    now = _dt.now()
+                    start_h, start_m = num // 100, num % 100
+                    start_min = start_h * 60 + start_m
+                    now_min = now.hour * 60 + now.minute
+                    item.time_value = max(1, now_min - start_min)
+                else:
+                    item.time_value = num
                 chunk = " ".join(name_parts[1:])
 
         # Apply aliases
