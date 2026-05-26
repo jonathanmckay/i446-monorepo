@@ -115,7 +115,7 @@ def list_devices():
 
 
 def record_audio(teams_mode: bool = False, max_duration: int = 0,
-                  idle_timeout: int = 600) -> np.ndarray:
+                  idle_timeout: int = 600, mic_name: str = None) -> np.ndarray:
     """Record audio until Ctrl+C, max_duration, or idle timeout.
 
     teams_mode=True: mix BlackHole (system/Teams audio) + mic.
@@ -123,13 +123,20 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     max_duration: auto-stop after this many seconds (0 = no limit).
     idle_timeout: auto-stop after this many seconds of silence once
                   conversation has been detected (default 600s = 10min).
+    mic_name: override mic device (name fragment). Default: MacBook Pro Microphone.
     """
     mic_frames: list = []
     bh_frames: list = []
     streams = []
 
     # Mic stream
-    mic_idx = find_device("MacBook Pro Microphone") or find_device("Built-in Microphone")
+    if mic_name:
+        mic_idx = find_device(mic_name)
+        if mic_idx is None:
+            print(f"⚠  Mic '{mic_name}' not found, falling back to default")
+            mic_idx = find_device("MacBook Pro Microphone") or find_device("Built-in Microphone")
+    else:
+        mic_idx = find_device("MacBook Pro Microphone") or find_device("Built-in Microphone")
     def mic_cb(indata, fc, ti, st):
         mic_frames.append(indata.copy())
     streams.append(sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
@@ -564,6 +571,8 @@ def main():
                         help="Auto-stop after N minutes (0 = no limit)")
     parser.add_argument("--idle-timeout", type=int, default=5, metavar="MIN",
                         help="Auto-stop after N min of silence post-conversation (default 5, 0 = off)")
+    parser.add_argument("--mic", metavar="NAME",
+                        help="Mic device name fragment (e.g. 'AirPods'). Default: MacBook Pro Microphone")
     parser.add_argument("--devices", action="store_true",
                         help="List available audio input devices and exit")
     args = parser.parse_args()
@@ -584,6 +593,7 @@ def main():
             teams_mode=not args.no_teams,
             max_duration=args.max_duration * 60,  # convert min to sec
             idle_timeout=args.idle_timeout * 60,
+            mic_name=args.mic,
         )
         recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)
