@@ -59,7 +59,7 @@ CUMULATIVE_0N = {"问学"}
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
-VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人"}
+VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻"}
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭"}
 VARIABLE_1N_DEFAULTS: dict[str, int] = {"一起饭": 30}  # default points when no arg given
 
