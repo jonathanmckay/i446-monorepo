@@ -108,8 +108,8 @@ HEX="#${RH}${GH}${BH}"
 
 # ── Step 3a: cmux (Ghostty-based terminal multiplexer) ───────────────────────
 
-if [ -n "$CMUX_BUNDLE_ID" ] && command -v cmux &>/dev/null; then
-    cmux workspace-action --action set-color --color "$HEX" >/dev/null 2>&1
+if [ -n "$CMUX_BUNDLE_ID" ] && [ -w "$TTY_DEVICE" ]; then
+    printf '\033]11;rgb:%s/%s/%s\a' "$RH" "$GH" "$BH" > "$TTY_DEVICE"
     exit 0
 fi
 

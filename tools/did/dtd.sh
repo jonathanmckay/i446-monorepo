@@ -131,6 +131,10 @@ task="\$1"
 # Strip ANSI codes first
 task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+# Strip truncation: if fzf truncated with …, use only the prefix before it
+if [[ "\$clean" == *"…"* ]]; then
+  clean="\${clean%%…*}"
+fi
 echo "⏳ deferring: \$clean" > "\$HDR"
 result=\$(python3 "\$DEFER_FAST" "\$clean" 2>/dev/null)
 ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
@@ -450,13 +454,16 @@ while true; do
 
   # Generate task list via reloadable script (supports colors + removal)
   # Pass done file path instead of JSON string to avoid quoting issues
+  # Every reload copies the live cache so external changes (/todo, other terminals) appear
+  DTD_SYNC="cp '$CACHE' '$DTD_CACHE_FILE' 2>/dev/null;"
   DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}'"
+  DTD_RELOAD="${DTD_SYNC}${DTD_LIST_CMD}"
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --ansi \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_LIST_CMD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_LIST_CMD)+transform-header(echo '🔄 refreshed')" \
+      --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
       --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-x: delete | ctrl-r: refresh]")
 
   task="$fzf_output"

@@ -99,3 +99,13 @@ Use the Todoist MCP `add-tasks` tool with:
 ## Project Assignment
 
 Tasks go to the **Inbox** by default. Do not assign a project — labels handle categorization.
+
+## After Creating
+
+Refresh the dtd task cache so the new task appears in any running dtd instance:
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &
+```
+
+Run in background, fire-and-forget. Do not wait for it or report its output.
