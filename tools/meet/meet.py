@@ -182,6 +182,8 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     conversation_detected = False  # True once we've seen speech
     idle_since = 0.0              # elapsed time when silence started (after conversation)
 
+    early_check_done = False  # quick 15s check for call audio signal
+
     if max_duration:
         print(f"   Auto-stop after {max_duration // 60}min (calendar duration)")
     if idle_timeout:
@@ -194,6 +196,14 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
         while not stop_event:
             sd.sleep(500)
             elapsed += 0.5
+
+            # Early check (15s): if call audio has zero signal, warn immediately
+            if teams_mode and not early_check_done and elapsed >= 15 and bh_frames:
+                early_check_done = True
+                bh_peak = int(np.max(np.abs(np.concatenate(bh_frames, axis=0))))
+                if bh_peak == 0:
+                    print("⚠  Call audio device has zero signal at 15s.")
+                    print("   Will auto-fallback to mic-only if still silent at 3min.")
 
             # Auto-stop: max duration reached
             if max_duration and elapsed >= max_duration:
@@ -223,14 +233,24 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                         _notify("Recording Auto-Stopped", msg)
                         break
 
-                # Hard fail: mic works but call audio is dead after 3 min
+                # Fallback: mic works but call audio is dead after 3 min
+                # Instead of stopping, drop the dead system audio stream and
+                # continue with mic-only. The mic picks up both sides (speaker
+                # bleed or AirPods passthrough) at lower quality.
                 if mic_has_speech and not bh_has_speech and elapsed >= 180:
                     teams_warn_count += 1
-                    if teams_warn_count >= 3:
-                        msg = "STOPPED: call audio missing. Set system output to 'Meet Output' and restart."
-                        print(f"\n🛑  {msg}")
-                        _notify("🛑 Recording Failed", msg, critical=True)
-                        break
+                    if teams_warn_count >= 2:
+                        msg = "Call audio silent — falling back to mic-only recording."
+                        print(f"\n⚠  {msg}")
+                        _notify("⚠ Recording: mic-only fallback", msg)
+                        # Stop and discard the system audio stream
+                        for s in streams:
+                            if hasattr(s, 'device') or True:
+                                pass  # keep all streams running but ignore bh_frames
+                        bh_frames.clear()
+                        teams_mode = False  # switch checks to mic-only mode
+                        teams_warn_count = 0  # reset so we don't re-trigger
+                        continue
 
                 if not mic_has_speech and not bh_has_speech:
                     teams_warn_count += 1
