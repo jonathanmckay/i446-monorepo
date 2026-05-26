@@ -14,12 +14,12 @@ Wraps `~/i446-monorepo/tools/meet/meet.py`:
 
 ## State
 
-Background PID + metadata stored at `~/.claude/skills/d357/state.json`:
+Background metadata stored at `~/.claude/skills/d357/state.json`:
 ```json
-{"pid": 12345, "name": "joe 1:1", "started": "2026-04-20T10:00:00", "log": "/tmp/d357-12345.log", "toggl_id": 98765, "project": "m5x2", "calendar_minutes": 30, "mic_only": false}
+{"pid": 12345, "tmux": "d357", "name": "joe 1:1", "started": "2026-04-20T10:00:00", "log": "/tmp/d357-active.log", "toggl_id": 98765, "project": "m5x2", "calendar_minutes": 30, "mic_only": false}
 ```
 
-Absent or `pid: null` → no recording active.
+Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux session name.
 
 ## Commands
 
@@ -29,77 +29,134 @@ Absent or `pid: null` → no recording active.
 2. **Parse the input.** Split on comma: `<name>[, <start_time>]`. If a trailing HHMM or HH:MM is present after a comma, use it as the Toggl start time (backdated). Also parse `--no-teams` flag from the name for mic-only mode.
    - Examples: `/d357 Francois 1:1, 1000` → name="Francois 1:1", start_time=10:00
    - `/d357 SLT metrics` → name="SLT metrics", start_time=now (default)
-3. **Kill stale dialogs + auto-switch audio** (Teams mode only, skip for `--no-teams`): Run `killall osascript 2>/dev/null` to dismiss any lingering warning dialogs from previous recordings. Then run `SwitchAudioSource -s "Meet Output"` to ensure system audio routes through BlackHole. If SwitchAudioSource is not installed or the device doesn't exist, warn but continue.
+3. **Audio pre-flight check** (skip for `--no-teams`):
+   a. Kill stale osascript dialogs: `killall osascript 2>/dev/null`
+   b. **Detect AirPods HFP mode** — if AirPods are connected but in HFP mode (1ch output, 24kHz sample rate), the Meet Output multi-output device will silently fail to route to BlackHole. Check with:
+      ```python
+      python3 -c "import sounddevice as sd; [print(f'{d[\"name\"]} out={d[\"max_output_channels\"]} rate={d[\"default_samplerate\"]}') for d in sd.query_devices() if 'AirPods' in d['name'] and d['max_output_channels'] > 0]"
+      ```
+      If output channels == 1 and rate == 24000: AirPods are in HFP mode. **Auto-switch to mic-only** and warn: `⚠ AirPods in HFP mode (Teams grabbed mic) — recording mic-only.`
+   c. If not HFP, switch system output: `SwitchAudioSource -s "Meet Output"`
+   d. If AirPods are BT-connected but missing from `SwitchAudioSource -a -t output`, reconnect: `blueutil --disconnect <MAC> && sleep 2 && blueutil --connect <MAC>` (MAC: `70-F9-4A-87-EC-D7`)
 4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
    - `calendar_minutes`: the event's scheduled duration
    - `project`: `i9` if the event came from the Work calendar id; `m5x2` otherwise (default)
    - Prefer the calendar event title as the Toggl description if it differs from user input
-   - Microsoft/Outlook events that aren't synced into the personal Google Work calendar won't be found — that's a known gap
-5. **Start Toggl timer**: If `start_time` was provided, use `--at HH:MM` to backdate: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project> --at <HH:MM>`. Otherwise start at now: `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py start "<name>" <project>`. Record the returned entry ID.
-6. Launch recording in background using a **fixed log path** (`/tmp/d357-active.log`), not `$$`:
+5. **Start Toggl timer**: If `start_time` was provided, use `--at HH:MM` to backdate. Otherwise start at now. Record the returned entry ID.
+6. **Launch recording in tmux** (NOT nohup — nohup dies from SIGTERM when Claude's bash subprocess exits):
    ```bash
-   cd ~/i446-monorepo/tools/meet && \
-   nohup python3 meet.py "<name>" --domain d357 [--no-teams] [--max-duration <calendar_minutes>] > /tmp/d357-active.log 2>&1 &
-   echo $!
+   tmux new-session -d -s d357 "cd ~/i446-monorepo/tools/meet && PYTHONUNBUFFERED=1 python3 -u meet.py '<name>' --domain d357 [--no-teams] [--mic '<mic_name>'] [--max-duration <calendar_minutes>] [--idle-timeout 0] > /tmp/d357-active.log 2>&1"
    ```
-7. Write state.json with PID, name, timestamp, log path (`/tmp/d357-active.log`), toggl_id, project, calendar_minutes (null if no calendar match), and `mic_only` (true if `--no-teams` was passed, else false).
-8. Confirm in one line: `Recording → <name> (pid <pid>). Audio: <current output device>. /d357 stop when done.`
+   **CRITICAL**: Use `>` redirect, NOT `| tee`. Tee creates a pipe; when tmux sends Ctrl-C, the pipe breaks and the shell exits before meet.py can finish transcription.
+
+   **Idle timeout rules**:
+   - If mic-only mode (`--no-teams`): always pass `--idle-timeout 0` (disable). The mic signal is too intermittent for idle detection to work reliably.
+   - If teams mode with BlackHole: use default idle timeout (5 min).
+
+7. **Post-launch health check** (THE CRITICAL STEP — do not skip):
+   Wait 15 seconds, then verify recording is healthy:
+   ```bash
+   sleep 15
+   tmux has-session -t d357 2>/dev/null && echo "session alive" || echo "SESSION DEAD"
+   tail -5 /tmp/d357-active.log
+   ```
+   Check the log for:
+   - `Recording... press Ctrl+C to stop` → good, recording is running
+   - `Done!` or `Stopped` → **BAD**: recording already exited. Diagnose and restart immediately.
+   - `⚠  Call audio device has zero signal` → expected if in HFP mode; should have been caught in pre-flight
+   - No output at all → process crashed, check stderr in log
+
+   **If the session died or the recording exited early**: diagnose from the log, fix the issue (usually: switch to mic-only, or reconnect AirPods), and restart. Do NOT report success to the user if the recording is dead. The user cannot babysit this.
+
+8. Write state.json with tmux session name, PID (from `tmux list-panes -t d357 -F '#{pane_pid}'`), name, timestamp, log path, toggl_id, project, calendar_minutes, and mic_only.
+9. Confirm in one line: `Recording → <name> (tmux:d357). Audio: <mode>. /d357 stop when done.`
 
 ### `/d357 stop [HHMM]` — finalize
 
-1. Read state.json. If no active PID, report `No recording active.` and exit.
-2. **Parse optional end time.** If `HHMM` or `HH:MM` is provided after `stop`, use it as the Toggl end time. Compute duration as `end_time - start_time` (from state.json `started`). Otherwise stop at now and use actual Toggl duration.
-3. **Stop Toggl timer**: If end time was provided, stop the timer and update the entry's stop time to `HHMM` via `toggl_cli.py stop` then update. Otherwise just `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`.
-4. Send SIGTERM: `kill -TERM <pid>`. meet.py stops recording, transcribes with Whisper, and saves a `.txt` transcript alongside the `.wav`.
-5. Poll `ps -p <pid>` every 2s until the process exits (~0.1x realtime for transcription).
-6. Tail the log for the `TXT ->` line to get the transcript path.
-7. **Log points to 0分**: Use the computed duration (from end_time - start_time if provided, else calendar_minutes, else actual Toggl duration). Write that many 分 to the appropriate 0分 column based on `project` (m5x2->S, i9->R, etc.) via the neon excel lib.
-7. Clear state.json (set `pid: null`).
-8. **Read the transcript** from the `.txt` file.
-9. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for any hand-written notes matching the meeting name.
-10. **Extract and file** -- Claude Code generates the structured meeting note (summary, key points, decisions, action items, my notes) and writes it to `vault/d357/<M.W>/YYYY.MM.DD-<slug>.md`, where `<M.W>` is the Sunday-anchored week folder (same convention as 1n+: `sunday = date - timedelta(days=(date.weekday()+1)%7); folder = f"{sunday.month}.{(sunday.day-1)//7+1}"`). Create the week folder if it doesn't exist. If `mic_only` is true in state.json, prefix the frontmatter `title:` and the H1 heading with `1S ` (one-sided audio marker). Clear the meeting's section from new-notes.
-11. **Link raw transcript** -- In the `## Raw Transcript` section of the d357 markdown file, include an Obsidian-style link to the `.txt` transcript file rather than inlining the full text. Format:
+1. Read state.json. If no active recording, report `No recording active.` and exit.
+2. **Parse optional end time.** If `HHMM` or `HH:MM` is provided after `stop`, use it as the Toggl end time.
+3. **Stop Toggl timer**.
+4. **Stop recording via tmux**: Send SIGINT (not SIGTERM) to the tmux session so meet.py handles it gracefully:
+   ```bash
+   tmux send-keys -t d357 C-c
+   ```
+5. **Wait for transcription** — poll the log for `TXT →` or `Done!` every 2s, up to 120s. meet.py needs time to save the wav and run Whisper.
+   ```bash
+   for i in $(seq 1 60); do
+       sleep 2
+       if grep -q "Done!\|TXT →" /tmp/d357-active.log 2>/dev/null; then break; fi
+       if ! tmux has-session -t d357 2>/dev/null; then break; fi
+   done
+   ```
+6. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
+7. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh.
+8. Clear state.json (set `pid: null`).
+9. **Read the transcript** from the `.txt` file.
+10. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for hand-written notes matching the meeting name.
+11. **Extract and file** — generate the structured meeting note and write to `vault/d357/<M.W>/YYYY.MM.DD-<slug>.md`. If `mic_only` is true, prefix title and H1 with `1S `.
+12. **Link raw transcript**:
     ```markdown
     ## Raw Transcript
 
     *(N words; see [transcript](../../h335/i9/recordings/YYYY.MM.DD-HHMM-slug.txt))*
     ```
-    The word count and relative path should match the actual transcript file written by meet.py.
-11. Report: `Stopped. Filed -> <path>. Logged N 分 to <project>.`
+13. Report: `Stopped. Filed -> <path>. Logged N 分 to <project>.`
 
 ### `/d357` (no args) — start recording with auto-detected name
 
-If a recording is running, report status: `Recording: <name> since <HH:MM> (pid <pid>)`.
+If a recording is running, report status: `Recording: <name> since <HH:MM> (tmux:d357)`.
 
-If no recording is running, **auto-detect the meeting name** and start recording:
-1. Query Google Calendar for the current event (happening now ± 5 min) using `mcp__google-calendar-mcp__list-events` with `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (primary + Work calendars).
-2. If found, use the event title as the meeting name. Set `project = i9` if it's a Work-calendar event, else `m5x2`.
-3. If no current event, fall back to `"meeting YYYY.MM.DD HHmm"`.
-4. Proceed with the standard start flow (launch meet.py, write state.json, confirm).
+If no recording is running, auto-detect from Google Calendar (both primary + Work calendars, ±5 min). Fall back to `"meeting YYYY.MM.DD HHmm"`. Proceed with standard start flow.
 
 ### `/d357 status` — show current state
 
-Report `Recording: <name> since <HH:MM> (pid <pid>)` if active, else `No recording active.`
+Report `Recording: <name> since <HH:MM> (tmux:d357)` if active, else `No recording active.`
+
+## Audio Routing Reference
+
+### How it's supposed to work (A2DP mode)
+```
+Teams → System Output ("Meet Output") → [AirPods (you hear) + BlackHole (capture)]
+MacBook Mic → meet.py mic stream
+BlackHole → meet.py system stream
+Both streams mixed → wav → Whisper → transcript
+```
+
+### What breaks it: AirPods HFP mode
+When Teams uses the AirPods mic for the call, macOS forces AirPods into HFP mode (mono, 24kHz). The Meet Output multi-output device was configured for A2DP (stereo, 48kHz). Channel mismatch breaks routing to BlackHole silently.
+
+**Detection**: AirPods output device shows `max_output_channels=1, default_samplerate=24000`
+**Mitigation**: Auto-switch to mic-only mode. The MacBook mic picks up your voice; the remote side is partially audible if AirPods have any bleed.
+**Prevention**: In Teams Settings > Devices, set mic to "MacBook Pro Microphone" (not AirPods). This keeps AirPods in A2DP mode.
+
+### Fallback chain
+1. Teams mode (BlackHole + mic) — best quality, captures both sides
+2. Mic-only with MacBook mic — captures your side clearly, remote side faintly via speaker/AirPods bleed
+3. If no audio devices work — abort and tell the user
 
 ## Notes
 
-- **Excel/OneDrive not required** — meet.py writes markdown to the vault directly.
-- **Whisper model:** `base.en` (default, ~150MB download on first run). Override with `--model small.en` for better accuracy at 3× the time.
-- **Teams mode requires one-time setup** (BlackHole virtual audio device); see the docstring at the top of meet.py.
-- The `d357` domain maps to `vault/d357/<M.W>/` (Sunday-anchored week folders, matching 1n+).
-- **Sweeper safety net:** `~/i446-monorepo/tools/meet/d357-organize.py` runs hourly via cron and moves any loose `YYYY.MM.DD-*.md` at the `d357/` root into the right week folder. The sweeper does NOT add the `1S ` prefix — that decision lives in the skill's stop flow where `mic_only` is known.
-- **Auto-stop (calendar):** When `calendar_minutes` is available, pass `--max-duration <minutes>` so meet.py auto-stops when the event should end. The process still runs transcription and saves normally.
-- **Auto-stop (idle):** meet.py auto-stops after 10 minutes of silence once conversation has been detected (default, override with `--idle-timeout <min>`). Both auto-stops send a macOS notification.
-- **Watchdog:** `~/i446-monorepo/scripts/d357-watchdog.py` runs every 10 min via `com.jm.d357-watchdog`. Reads state.json and notifies if (1) the recording pid has died (meet.py crashed) or (2) elapsed >= 2× calendar duration (or >=90 min if no calendar). Rate-limited to one overrun nudge every 30 min. Logs at `/tmp/d357-watchdog.log`.
+- **tmux, not nohup**: Always launch in tmux. `nohup &` dies from SIGTERM when Claude's bash subprocess exits.
+- **No tee**: Always `> /tmp/d357-active.log 2>&1`, never `| tee`. Tee creates a pipe that breaks on Ctrl-C.
+- **Whisper model:** `base.en` (default, ~150MB download on first run).
+- The `d357` domain maps to `vault/d357/<M.W>/` (Sunday-anchored week folders).
+- **Sweeper safety net:** `d357-organize.py` runs hourly via cron.
+- **Auto-stop (calendar):** When `calendar_minutes` is available, pass `--max-duration <minutes>`.
+- **Idle timeout**: Disabled for mic-only mode (`--idle-timeout 0`). Default 5 min for teams mode.
+- **Watchdog:** `d357-watchdog.py` runs every 10 min via launchd.
+- **`--mic` flag**: Override mic device. Use `--mic AirPods` to record from AirPods mic instead of MacBook mic.
+- **blueutil**: Installed at `/opt/homebrew/bin/blueutil`. Use to reconnect AirPods when they're BT-connected but missing from CoreAudio.
 
 ## Regression tests
 
 | Input | Expected |
 |-------|----------|
-| `/d357 joe 1:1` | Launches meet.py in bg, writes state.json with pid, confirms |
+| `/d357 joe 1:1` | tmux session, state.json, health check passes, confirms |
 | `/d357 joe 1:1` (while one is running) | Aborts with "already recording" |
-| `/d357 stop` | SIGTERM, waits for filing, reports path, clears state |
+| `/d357 stop` | Ctrl-C via tmux, waits for transcript, files, reports |
 | `/d357 stop` (nothing running) | Reports "No recording active." |
-| `/d357` (nothing running) | Auto-detects calendar event name, starts recording |
+| `/d357` (nothing running) | Auto-detects calendar event, starts recording |
 | `/d357` (while running) | Reports current recording status |
-| `/d357 standup --no-teams` | Launches mic-only (in-person) |
+| `/d357 standup --no-teams` | mic-only, idle-timeout 0 |
+| AirPods in HFP mode | Auto-detects, switches to mic-only, warns |
+| tmux session dies post-launch | Health check catches it, diagnoses, restarts |
