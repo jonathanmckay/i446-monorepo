@@ -134,22 +134,93 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION launcher starting" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] run_dir=$RUN_DIR budget=$BUDGET floor=$FLOOR" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] claude=$CLAUDE ($(${CLAUDE} --version 2>/dev/null || echo 'unknown'))" >> "$LOG"
 
-# --- Run claude ---
+# --- Run claude with activity watchdog ---
+# Watchdog checks every 3 min: if no new file writes in RUN_DIR for 15 min,
+# kill claude (stalled). Launcher then checks what pass completed and retries
+# the remaining pass with a fresh session.
 cd "$HOME/vault"
+STALL_THRESHOLD=900  # 15 min with no new file or log output = stalled
+WATCHDOG_INTERVAL=180  # check every 3 min
+DEADLINE=$(($(date +%s) + 10800))  # hard stop at 3h regardless
 
-caffeinate -s "$CLAUDE" \
-  --print \
-  --model opus \
-  --fallback-model sonnet \
-  --max-budget-usd "$BUDGET" \
-  --dangerously-skip-permissions \
-  --add-dir "$HOME/vault" \
-  --add-dir "$HOME/i446-monorepo" \
-  < "$RUN_DIR/PROMPT.md" \
-  >> "$LOG" 2>&1
+_run_claude() {
+  local prompt_file="$1"
+  local label="$2"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting claude ($label)" >> "$LOG"
 
+  caffeinate -s "$CLAUDE" \
+    --print \
+    --model opus \
+    --fallback-model sonnet \
+    --max-budget-usd "$BUDGET" \
+    --dangerously-skip-permissions \
+    --add-dir "$HOME/vault" \
+    --add-dir "$HOME/i446-monorepo" \
+    < "$prompt_file" \
+    >> "$LOG" 2>&1 &
+  CLAUDE_PID=$!
+
+  # Watchdog loop
+  while kill -0 "$CLAUDE_PID" 2>/dev/null; do
+    sleep "$WATCHDOG_INTERVAL"
+
+    # Hard deadline check
+    if [[ $(date +%s) -ge $DEADLINE ]]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] DEADLINE reached, killing claude ($label)" >> "$LOG"
+      kill "$CLAUDE_PID" 2>/dev/null; sleep 2; kill -9 "$CLAUDE_PID" 2>/dev/null
+      return 124
+    fi
+
+    # Activity check: any file in RUN_DIR modified in last STALL_THRESHOLD seconds?
+    NEWEST=$(find "$RUN_DIR" -type f -not -name "*.log" -newer "$RUN_DIR/PROMPT.md" -print -quit 2>/dev/null)
+    if [[ -z "$NEWEST" ]]; then
+      # No files newer than PROMPT.md at all — check log growth instead
+      NEWEST="$LOG"
+    fi
+    FILE_AGE=$(( $(date +%s) - $(stat -f %m "$NEWEST" 2>/dev/null || echo 0) ))
+    if [[ $FILE_AGE -gt $STALL_THRESHOLD ]]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] STALL detected ($label): no activity for ${FILE_AGE}s, killing" >> "$LOG"
+      kill "$CLAUDE_PID" 2>/dev/null; sleep 2; kill -9 "$CLAUDE_PID" 2>/dev/null
+      return 1
+    fi
+  done
+  wait "$CLAUDE_PID"
+  return $?
+}
+
+# --- Main run ---
+_run_claude "$RUN_DIR/PROMPT.md" "full-run"
 EXIT_CODE=$?
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION claude exited with code $EXIT_CODE" >> "$LOG"
+
+# --- If stalled, check what's missing and retry the remaining pass ---
+if [[ $EXIT_CODE -ne 0 && $(date +%s) -lt $DEADLINE ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking for incomplete passes..." >> "$LOG"
+
+  HAS_DRAFTS=$(ls "$RUN_DIR/drafts/"*.md 2>/dev/null | wc -l)
+  HAS_BRIEF=$(test -f "$RUN_DIR/morning-brief.md" && echo 1 || echo 0)
+
+  if [[ $HAS_DRAFTS -gt 0 && $HAS_BRIEF -eq 0 ]]; then
+    # Pass 1+2 done, Pass 3 missing — retry just Pass 3
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Pass 1+2 complete ($HAS_DRAFTS drafts), retrying Pass 3" >> "$LOG"
+    PASS3_PROMPT="$RUN_DIR/tmp/pass3-retry.md"
+    cat > "$PASS3_PROMPT" << PASS3EOF
+Complete Pass 3 of Dream $VERSION. Run dir: $RUN_DIR
+Today: $(date '+%Y-%m-%d')
+
+Read $RUN_DIR/PROMPT.md for the Pass 3 instructions, then:
+1. Read all files in $RUN_DIR/drafts/ and $RUN_DIR/approvals/
+2. Read $RUN_DIR/loose-threads.md
+3. Run the 5-filter and rubric on every card, drop C or worse
+4. Write morning-brief.md with ranked cards and multiple-choice responses
+5. Write cards.json, manifest.json, staged/changelog.md
+6. Write READY marker
+PASS3EOF
+    _run_claude "$PASS3_PROMPT" "pass3-retry"
+    EXIT_CODE=$?
+  fi
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION finished (exit=$EXIT_CODE)" >> "$LOG"
 
 # --- Write READY marker ---
 date '+%Y-%m-%d %H:%M:%S' > "$RUN_DIR/READY"

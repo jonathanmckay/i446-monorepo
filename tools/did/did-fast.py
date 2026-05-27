@@ -558,6 +558,12 @@ def _refresh_task_queue_inner() -> dict:
             results[futures[future]] = future.result()
     # Now fetch today sequentially (no rate-limit contention)
     today_result = fetch_today()
+    # Filter out tasks with due date in the future — Todoist's "today | overdue"
+    # returns recurring tasks whose next occurrence is future, inflating the count.
+    if today_result:
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+        today_result = [t for t in today_result
+                        if t.get("due") and t["due"] <= today_iso]
 
     # Atomic write: only update "today" if the fetch fully succeeded
     # Protect "today": if fetch returned empty/None but old cache had data, retry once then keep old
