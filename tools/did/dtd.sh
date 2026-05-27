@@ -470,8 +470,8 @@ try:
             if not isinstance(t, dict): continue
             if q in t.get('content','').lower():
                 labels = t.get('labels', [])
-                if 'agent' not in labels:
-                    labels.append('agent')
+                if 'a' not in labels:
+                    labels.append('a')
                     req = urllib.request.Request(
                         f'https://api.todoist.com/api/v1/tasks/{t[\"id\"]}',
                         data=json.dumps({'labels': labels}).encode(),
@@ -498,6 +498,28 @@ try:
 except: pass
 " "$clean" 2>/dev/null)
 
+# 2b. Get task ID and journal history
+task_id=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[2]))
+    q = sys.argv[1].lower()
+    for section in d.values():
+        if not isinstance(section, list): continue
+        for t in section:
+            if not isinstance(t, dict): continue
+            if q in t.get('content','').lower():
+                print(t.get('id',''))
+                sys.exit(0)
+except: pass
+" "$clean" "$CACHE_FILE" 2>/dev/null)
+
+journal=""
+JOURNAL_DIR="$HOME/vault/z_ibx/task-journal"
+if [[ -n "$task_id" && -f "$JOURNAL_DIR/$task_id.md" ]]; then
+  journal=$(cat "$JOURNAL_DIR/$task_id.md")
+fi
+
 # 3. Build the prompt
 prompt="Work on this task: $task"
 if [[ -n "$desc" ]]; then
@@ -506,9 +528,15 @@ if [[ -n "$desc" ]]; then
 Context from Todoist:
 $desc"
 fi
+if [[ -n "$journal" ]]; then
+  prompt="$prompt
+
+Prior attempts (task journal):
+$journal"
+fi
 prompt="$prompt
 
-When you're done, ask me if the task is complete. If I say yes, run /did to close it and stop the Toggl timer. If I say no or we didn't finish, leave everything as-is."
+When you're done, ask me if the task is complete. If I say yes, run /did to close it and stop the Toggl timer. If I say no or we didn't finish, append a journal entry to ~/vault/z_ibx/task-journal/$task_id.md with what you attempted, completed, what's blocked, and next steps."
 
 # 4. Write prompt to temp file (avoids shell quoting issues)
 PROMPT_FILE="/tmp/dtd-agent-$$.md"
