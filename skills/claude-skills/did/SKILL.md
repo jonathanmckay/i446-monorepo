@@ -56,7 +56,7 @@ A **UserPromptSubmit hook** (`did-next-hook.sh`) runs BEFORE Claude processes th
 When you see hook output containing "Next up:" and "Pick [1-N]:", do this:
 
 1. **Display the hook output verbatim** to the user. Do not re-run the script.
-2. **Wait for user's pick.** If they pick 1–5, run `/tg` for that task (strip `[N]`, `(N)`, suffixes like `- Daily 分`). If they pick the last number (skip), do nothing.
+2. **Wait for user's pick.** If they pick 1–5, run `/tg` for that task (strip `[N]`, `(N)`, suffixes like `- Daily 分`). If they pick the last number (skip), do nothing. If they pick `s<N>` (e.g. `s3`), push that task to the bottom of the list by running `python3 ~/i446-monorepo/tools/did/next-task.py --skip <task_id>` (extract the `#<id>` from the hook output), then re-display the updated list.
 3. **After the pick** (or if no hook output), invoke `run.py` directly (fast path). If it exits 2, fall back to launching the background agent.
 4. **Background agent** (only when run.py defers): handle Step 5 (Todoist match) or Step 6 (variable task), then refresh cache + update completed-today. Report results when done.
 
