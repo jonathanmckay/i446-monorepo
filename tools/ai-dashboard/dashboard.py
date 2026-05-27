@@ -206,25 +206,33 @@ _LAST_TURN_FILE = Path("/tmp/claude-turn-last")
 
 @_cached(
     "_parse_jsonl_daily_stats",
-    lambda since_date_str: (since_date_str, _dir_fingerprint(_SESSION_DIR)),
+    lambda since_date_str: (
+        since_date_str,
+        tuple(_rglob_fingerprint(r) for r, _ in _PROJECTS_ROOTS),
+    ),
 )
 def _parse_jsonl_daily_stats(since_date_str):
     """Parse JSONL session files to get daily activity/token stats after since_date_str (YYYY-MM-DD).
     Returns (activity_by_day, tokens_by_day, cost_by_model).
     cost_by_model uses full pricing (input+output+cache) for accurate cost totals.
     tokens_by_day uses input+output only to match stats-cache.json chart methodology.
+    Scans all _PROJECTS_ROOTS (local + mirrored from other hosts).
     """
     pacific = pytz.timezone("America/Los_Angeles")
-    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
-    if not session_dir.exists():
-        return {}, {}, {}
 
     daily_activity = defaultdict(lambda: {"messageCount": 0, "sessionCount": 0})
     daily_tokens = defaultdict(lambda: defaultdict(int))
     # model -> cost (for adding to total_cost)
     extra_model_costs = defaultdict(float)
 
-    for fpath in session_dir.glob("*.jsonl"):
+    all_jsonl = []
+    for projects_root, _host in _PROJECTS_ROOTS:
+        if projects_root.exists():
+            all_jsonl.extend(projects_root.rglob("*.jsonl"))
+    if not all_jsonl:
+        return {}, {}, {}
+
+    for fpath in all_jsonl:
         try:
             session_counted = set()
             with open(fpath) as fh:
