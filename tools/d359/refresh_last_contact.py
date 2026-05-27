@@ -32,7 +32,31 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # i446-monorepo
-sys.path.insert(0, str(ROOT / "mcp" / "toggl_server"))
+sys.path.insert(0, str(ROOT / "mcp"))
+
+
+def _ensure_toggl_env():
+    """Load TOGGL_API_KEY from ~/.claude.json MCP config if env is unset."""
+    import json
+    import os
+    if os.environ.get("TOGGL_API_KEY"):
+        return
+    claude_json = Path.home() / ".claude.json"
+    if not claude_json.exists():
+        return
+    try:
+        data = json.loads(claude_json.read_text())
+        key = (data.get("mcpServers", {})
+                   .get("toggl_server", {})
+                   .get("env", {})
+                   .get("TOGGL_API_KEY", ""))
+        if key:
+            os.environ["TOGGL_API_KEY"] = key
+    except Exception:
+        pass
+
+
+_ensure_toggl_env()
 
 VAULT = Path.home() / "vault"
 D359_DIR = VAULT / "d359"
@@ -111,26 +135,74 @@ def _slug_from_filename(path: Path) -> str | None:
 
 # ── Toggl signal ────────────────────────────────────────────────────────────
 
-def _fetch_toggl_signal(days: int) -> dict[str, date]:
-    """Return {slug: latest_date} from Toggl entries tagged 'd359/<slug>'.
+def _build_unambiguous_token_map(slugs: set[str]):
+    """Return ({token: slug} for unambiguous first-name tokens, aliases dict).
+    Excludes short tokens and stopwords to avoid noise."""
+    _STOPWORDS = {"the", "and", "for", "with", "to", "of", "in", "on", "at",
+                  "a", "an", "1", "2", "3", "old", "new"}
+    first_tokens: dict[str, list[str]] = {}
+    for slug in slugs:
+        tokens = [t for t in slug.split("-") if t and t not in _STOPWORDS]
+        if not tokens:
+            continue
+        ft = tokens[0]
+        if len(ft) < 3:
+            continue
+        first_tokens.setdefault(ft, []).append(slug)
+    unambiguous = {ft: ss[0] for ft, ss in first_tokens.items() if len(ss) == 1}
+    aliases = {"lx": "louisa-xu", "lr": "leeroy-phillips", "hz": "hanzhao"}
+    for alias, target in aliases.items():
+        if target in slugs:
+            unambiguous[alias] = target
+    return unambiguous
 
-    One API call covers all people. Silently returns {} on failure."""
+
+def _fetch_toggl_signal(days: int, slugs: set[str]) -> dict[str, date]:
+    """Return {slug: latest_date} from Toggl.
+
+    Matches in two ways:
+      1. Explicit tag 'd359/<slug>' (canonical convention; rarely used today)
+      2. Description token matches a slug's first-name token IF that token is
+         unambiguous across all d359 slugs (avoids 'Ian' colliding 5 ways)
+
+    One API call covers everyone. Silently returns {} on failure."""
     try:
-        import toggl_api
+        from toggl_server import toggl_api
     except ImportError:
         return {}
-    start = (date.today() - timedelta(days=days)).isoformat()
-    end = (date.today() + timedelta(days=1)).isoformat()
-    try:
-        entries = toggl_api.get_entries(start_date=start, end_date=end)
-    except Exception as exc:
-        print(f"warn: toggl fetch failed: {exc}", file=sys.stderr)
-        return {}
-    if not isinstance(entries, list):
-        return {}
+    # Toggl /me/time_entries caps at ~1000 entries per call. Chunk by 30 days
+    # to safely cover long windows for high-volume trackers.
+    chunk_days = 30
+    entries = []
+    end_d = date.today() + timedelta(days=1)
+    cursor = end_d
+    target = end_d - timedelta(days=days)
+    while cursor > target:
+        chunk_start = max(target, cursor - timedelta(days=chunk_days))
+        try:
+            batch = toggl_api.get_entries(
+                start_date=chunk_start.isoformat(),
+                end_date=cursor.isoformat(),
+            )
+        except Exception as exc:
+            print(f"warn: toggl fetch {chunk_start}..{cursor} failed: {exc}",
+                  file=sys.stderr)
+            break
+        if isinstance(batch, list):
+            entries.extend(batch)
+        cursor = chunk_start
+
+    # Build unambiguous first-token → slug map (shared with d358 scan).
+    unambiguous = _build_unambiguous_token_map(slugs)
+
     latest: dict[str, date] = {}
+
+    def _bump(slug: str, d: date):
+        if slug not in latest or d > latest[slug]:
+            latest[slug] = d
+
+    word_re = re.compile(r"[\w]+", re.UNICODE)
     for entry in entries:
-        tags = entry.get("tags") or []
         start_iso = entry.get("start")
         if not start_iso:
             continue
@@ -138,14 +210,20 @@ def _fetch_toggl_signal(days: int) -> dict[str, date]:
             d = datetime.fromisoformat(start_iso.replace("Z", "+00:00")).date()
         except ValueError:
             continue
-        for tag in tags:
-            if not tag.startswith("d359/"):
-                continue
-            slug = tag[5:].strip().lower()
-            if not slug:
-                continue
-            if slug not in latest or d > latest[slug]:
-                latest[slug] = d
+        # Canonical tag form
+        for tag in entry.get("tags") or []:
+            if tag.startswith("d359/"):
+                slug = tag[5:].strip().lower()
+                if slug:
+                    _bump(slug, d)
+        # Description token match
+        desc = (entry.get("description") or "").lower()
+        if not desc:
+            continue
+        for word in word_re.findall(desc):
+            slug = unambiguous.get(word)
+            if slug:
+                _bump(slug, d)
     return latest
 
 
@@ -165,48 +243,75 @@ def _extract_date_from_path(path: Path) -> date | None:
         return None
 
 
-def _fetch_d358_signal(slugs: set[str], days: int) -> dict[str, date]:
-    """Scan d358 meeting notes for slug mentions. Returns {slug: latest_date}.
+_FRONTMATTER_DATE_RE = re.compile(r"^date:\s*(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})",
+                                  re.MULTILINE)
 
-    'latest_date' = max of (date parsed from filename, file mtime). Filename
-    date is more reliable when notes get touched without semantic changes."""
+
+def _extract_date_from_content(content: str) -> date | None:
+    """Pull a date from YAML frontmatter `date:` field if present."""
+    head = content[:500]
+    m = _FRONTMATTER_DATE_RE.search(head)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def _fetch_d358_signal(slugs: set[str], days: int) -> dict[str, date]:
+    """Scan d358 meeting notes for person references.
+
+    Matches:
+      1. '<slug>-d359' canonical reference (explicit wikilink target)
+      2. Unambiguous first-name token (e.g. 'Stuart' if only one Stuart exists)
+
+    Date source: filename prefix > YAML frontmatter `date:` field. mtime is
+    NOT used as a fallback (bulk git syncs would flood updates with the sync
+    date). Files without a derivable date are skipped. Returns {slug: date}."""
     if not D358_DIR.exists() or not slugs:
         return {}
-    cutoff_ts = (datetime.now() - timedelta(days=days)).timestamp()
     cutoff_date = date.today() - timedelta(days=days)
+    today = date.today()
     latest: dict[str, date] = {}
-    # Match slug as wikilink target or bare token. We anchor on "<slug>-d359"
-    # which is unambiguous (the canonical reference form).
-    slug_patterns = {slug: re.compile(rf"\b{re.escape(slug)}-d359\b", re.IGNORECASE)
-                     for slug in slugs}
+    unambiguous = _build_unambiguous_token_map(slugs)
+    canonical = {slug: re.compile(rf"\b{re.escape(slug)}-d359\b", re.IGNORECASE)
+                 for slug in slugs}
+    word_re = re.compile(r"\b[\w]+\b", re.UNICODE)
+
     for path in D358_DIR.rglob("*.md"):
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            continue
-        if mtime < cutoff_ts:
-            # Could still have a fresh date in filename — check before skipping
-            file_date = _extract_date_from_path(path)
-            if not file_date or file_date < cutoff_date:
-                continue
-        try:
-            content = path.read_text(errors="ignore")
-        except OSError:
-            continue
-        if "d359" not in content.lower():
-            continue
         file_date = _extract_date_from_path(path)
-        mtime_date = date.fromtimestamp(mtime)
-        # Use the later of filename date and mtime, but cap at today (filename
-        # dates can be future-dated for planned meetings).
-        candidates = [d for d in (file_date, mtime_date) if d and d <= date.today()]
-        if not candidates:
+        content = None
+        if not file_date:
+            try:
+                content = path.read_text(errors="ignore")
+            except OSError:
+                continue
+            file_date = _extract_date_from_content(content)
+        if not file_date or file_date > today or file_date < cutoff_date:
             continue
-        best = max(candidates)
-        for slug, pat in slug_patterns.items():
-            if pat.search(content):
-                if slug not in latest or best > latest[slug]:
-                    latest[slug] = best
+        if content is None:
+            try:
+                content = path.read_text(errors="ignore")
+            except OSError:
+                continue
+        content_lower = content.lower()
+
+        if "d359" in content_lower:
+            for slug, pat in canonical.items():
+                if pat.search(content):
+                    if slug not in latest or file_date > latest[slug]:
+                        latest[slug] = file_date
+
+        hits = set()
+        for word in word_re.findall(content_lower):
+            slug = unambiguous.get(word)
+            if slug:
+                hits.add(slug)
+        for slug in hits:
+            if slug not in latest or file_date > latest[slug]:
+                latest[slug] = file_date
+
     return latest
 
 
@@ -247,7 +352,7 @@ def main(argv=None) -> int:
     slugs.discard(None)
 
     print(f"scanning {len(files)} d359 person files (lookback {args.days}d)")
-    toggl_sig = _fetch_toggl_signal(args.days)
+    toggl_sig = _fetch_toggl_signal(args.days, slugs)
     print(f"  toggl: {len(toggl_sig)} slugs with recent activity")
     d358_sig = _fetch_d358_signal(slugs, args.days)
     print(f"  d358:  {len(d358_sig)} slugs mentioned in recent notes")
