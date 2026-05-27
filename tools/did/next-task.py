@@ -16,6 +16,7 @@ from pathlib import Path
 
 CACHE = Path.home() / "vault/z_ibx/task-queue.json"
 COMPLETED = Path.home() / "vault/z_ibx/completed-today.json"
+SKIPPED = Path.home() / "vault/z_ibx/skipped-today.json"
 
 # Suffixes to strip when matching completed names against task content
 STRIP_SUFFIXES = [
@@ -36,7 +37,41 @@ def strip_task_name(content: str) -> str:
     return s.strip().lower()
 
 
+def read_skipped_ids() -> set[str]:
+    """Read today's skipped task IDs. Resets daily."""
+    if not SKIPPED.exists():
+        return set()
+    try:
+        data = json.loads(SKIPPED.read_text())
+        if data.get("date") == date.today().isoformat():
+            return set(data.get("ids", []))
+    except (json.JSONDecodeError, OSError):
+        pass
+    return set()
+
+
+def skip_task(task_id: str):
+    """Add a task ID to today's skip list (bottom of render order)."""
+    skipped = {"date": date.today().isoformat(), "ids": []}
+    if SKIPPED.exists():
+        try:
+            data = json.loads(SKIPPED.read_text())
+            if data.get("date") == date.today().isoformat():
+                skipped = data
+        except (json.JSONDecodeError, OSError):
+            pass
+    if task_id not in skipped["ids"]:
+        skipped["ids"].append(task_id)
+    SKIPPED.write_text(json.dumps(skipped, indent=2))
+
+
 def main():
+    # Handle --skip <id> mode
+    if len(sys.argv) >= 3 and sys.argv[1] == "--skip":
+        skip_task(sys.argv[2])
+        print(f"Skipped (moved to bottom)")
+        return
+
     just_completed = [a.lower() for a in sys.argv[1:]]
 
     # Read cache
@@ -61,9 +96,11 @@ def main():
         except (json.JSONDecodeError, OSError):
             pass
 
+    skipped_ids = read_skipped_ids()
     today_str = date.today().isoformat()  # YYYY-MM-DD
 
-    filtered = []
+    top = []
+    bottom = []
     for t in tasks:
         # Filter by due date: only today or overdue
         due = t.get("dueDate", "")
@@ -75,9 +112,12 @@ def main():
         if any(c in bare or bare in c for c in completed_names if c):
             continue
 
-        filtered.append(t)
-        if len(filtered) >= 5:
-            break
+        if t.get("id") in skipped_ids:
+            bottom.append(t)
+        else:
+            top.append(t)
+
+    filtered = (top + bottom)[:9]
 
     if not filtered:
         return
@@ -87,9 +127,11 @@ def main():
     max_content = max(len(t["content"]) for t in filtered)
     for i, t in enumerate(filtered, 1):
         pad = max_content - len(t["content"]) + 4
-        print(f"  {i}. {t['content']}{' ' * pad}{t['cat']}")
+        skipped_tag = " [skipped]" if t.get("id") in skipped_ids else ""
+        tid = t.get("id", "")
+        print(f"  {i}. {t['content']}{' ' * pad}{t['cat']}{skipped_tag}  #{tid}")
     print(f"  {len(filtered) + 1}. [skip]")
-    print(f"\nPick [1-{len(filtered) + 1}]:")
+    print(f"\nPick [1-{len(filtered) + 1}], or s<N> to push to bottom:")
 
 
 if __name__ == "__main__":
