@@ -18,6 +18,16 @@ Terse. No preamble. Run the sweep, report results.
 
 Run `date +%Y-%m-%d` to get today's date. Do not rely on context variables.
 
+### Step 0.5: Auto-refresh last_contact
+
+Before scanning, run the passive-signal refresher so `last_contact` reflects recent Toggl entries and d358 meeting notes (manual values are preserved as a floor):
+
+```bash
+python3 ~/i446-monorepo/tools/d359/refresh_last_contact.py --days 90 --apply
+```
+
+This cuts false-positive overdues from stale manual `last_contact` fields. Run with `--days 30` for a quick daily refresh; `--days 90` for a weekly catch-up. Without `--apply`, it dry-runs.
+
 ### Step 1: Scan d359 files
 
 Read all `.md` files in `~/vault/d359/`. For each file, parse YAML frontmatter and check for **both** `cadence` and `last_contact` fields. Skip files missing either field. Skip `CLAUDE.md`, `d359-index.md`, and any non-person docs.
