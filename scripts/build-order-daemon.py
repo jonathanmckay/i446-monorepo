@@ -515,17 +515,17 @@ def neon_set_marker(target_date: dt.date, col: str, dry_run: bool = False) -> st
 
 
 def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False) -> str:
-    """Add score to -1₦ column (P) for target_date's row. If empty, set to score."""
+    """Append score to -1₦ column (P) for target_date's row as =0+13+10+8 formula,
+    so the user can see a record of what was added at each block boundary."""
     body = (
         f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
-        '    set oldVal to value of yCell\n'
-        '    if oldVal is missing value or (oldVal as text) = "" or (oldVal as text) = "0" then\n'
-        f'        set value of yCell to {score}\n'
-        f'        return "P_SET {score}"\n'
+        '    set oldFormula to formula of yCell\n'
+        '    if oldFormula is "" or oldFormula is "0" then\n'
+        f'        set formula of yCell to "=0+{score}"\n'
+        f'        return "P_SET =0+{score}"\n'
         '    else\n'
-        f'        set newVal to (oldVal as number) + {score}\n'
-        '        set value of yCell to newVal\n'
-        f'        return "P_ADD " & (oldVal as text) & " + {score} = " & (newVal as text)\n'
+        f'        set formula of yCell to oldFormula & "+{score}"\n'
+        f'        return "P_APPEND " & oldFormula & "+{score}"\n'
         '    end if\n'
     )
     script = NEON_FIND_ROW_TEMPLATE.format(
