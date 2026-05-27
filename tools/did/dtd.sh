@@ -494,7 +494,7 @@ if command -v cmux &>/dev/null; then
   surface_id=$(echo "$surface_output" | grep -oE 'surface:[0-9]+' | head -1)
   pane_id=$(echo "$surface_output" | grep -oE 'pane:[0-9]+' | head -1)
   if [[ -n "$surface_id" ]]; then
-    cmux respawn-pane --surface "$surface_id" --command "claude -p \"\$(cat $PROMPT_FILE)\" --allowedTools 'Skill,Bash,Read,Edit,Write,Grep,Glob,WebFetch,WebSearch,mcp__todoist__complete-tasks,mcp__todoist__find-tasks,mcp__toggl_server__toggl_stop'; rm -f $PROMPT_FILE" 2>/dev/null
+    cmux respawn-pane --surface "$surface_id" --command "sleep 0.3 && claude -p \"\$(cat $PROMPT_FILE)\" --allowedTools 'Skill,Bash,Read,Edit,Write,Grep,Glob,WebFetch,WebSearch,mcp__todoist__complete-tasks,mcp__todoist__find-tasks,mcp__toggl_server__toggl_stop'; rm -f $PROMPT_FILE" 2>/dev/null
     if [[ -n "$pane_id" ]]; then
       cmux focus-pane --pane "$pane_id" 2>/dev/null
     fi

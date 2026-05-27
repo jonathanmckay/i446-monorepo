@@ -1263,7 +1263,7 @@ def main():
             resp = prompt_card(
                 card_num, total_cards, "-1g",
                 body,
-                options="pick/goals/skip", preserve_case=True,
+                options="pick/goals/skip", preserve_case=True, multiline=True,
             )
             if resp and resp.lower() != "skip":
                 # Check if response is number picks from suggestions
