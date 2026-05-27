@@ -915,20 +915,26 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         col = w.col_letter
         if w.is_cumulative_1n:
             inc = w.cumulative_increment
-            write_lines.append(f'''    set oldVal to string value of range ("{col}" & weekRow) of ws1n
-    if oldVal = "" or oldVal = "0" then
-        set value of range ("{col}" & weekRow) of ws1n to {inc}
+            write_lines.append(f'''    set theCellCum to range ("{col}" & weekRow) of ws1n
+    set oldFormulaCum to formula of theCellCum
+    if oldFormulaCum = "" or oldFormulaCum = "0" then
+        set formula of theCellCum to "=0+{inc}"
+    else if character 1 of oldFormulaCum is not "=" then
+        set formula of theCellCum to "=" & oldFormulaCum & "+{inc}"
     else
-        set value of range ("{col}" & weekRow) of ws1n to ((oldVal as number) + {inc})
+        set formula of theCellCum to oldFormulaCum & "+{inc}"
     end if''')
         elif w.is_variable_1n and w.variable_value:
-            # Variable 1n+ tasks: add user-provided value to existing cell
+            # Variable 1n+ tasks: append to formula so history is preserved
             val = w.variable_value
-            write_lines.append(f'''    set oldVal to string value of range ("{col}" & weekRow) of ws1n
-    if oldVal = "" or oldVal = "0" then
-        set value of range ("{col}" & weekRow) of ws1n to {val}
+            write_lines.append(f'''    set theCell1n to range ("{col}" & weekRow) of ws1n
+    set oldFormula1n to formula of theCell1n
+    if oldFormula1n = "" or oldFormula1n = "0" then
+        set formula of theCell1n to "=0+{val}"
+    else if character 1 of oldFormula1n is not "=" then
+        set formula of theCell1n to "=" & oldFormula1n & "+{val}"
     else
-        set value of range ("{col}" & weekRow) of ws1n to ((oldVal as number) + {val})
+        set formula of theCell1n to oldFormula1n & "+{val}"
     end if''')
         else:
             write_lines.append(f'''    set pts{col} to value of range ("{col}3") of ws1n
