@@ -420,13 +420,23 @@ def render_morning() -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for blk_name in block_entries:
         entries = block_entries[blk_name]
-        # Block header rule colored by dominant project
+        # Block label colored by dominant project, first entry inline
         dom_pid = max(block_durations.get(blk_name, {}), key=lambda p: block_durations[blk_name][p], default=None)
         blk_style = f"bold {project_style(dom_pid)}".strip() if dom_pid else "bold #ffffff"
-        rule_text = f"─ {blk_name} "
-        out.append((blk_style, rule_text + "─" * max(0, WIDTH_HINT - len(rule_text)) + "\n"))
-        # Limit to 4 entries per block
-        for m in entries[:4]:
+        first = entries[0]
+        code = proj_code(first["project_id"])
+        label = first["desc"] or "(blank)"
+        if code:
+            label = f"{label} · {code}"
+        style = project_style(first["project_id"])
+        label_trunc = truncate(label, min(DESC_MAX, max(1, WIDTH_HINT - 10)))
+        inner = f" {blk_name}  {label_trunc} "
+        trail = max(0, WIDTH_HINT - 2 - len(inner))
+        out.append((blk_style, f"─"))
+        out.append((style, inner))
+        out.append((blk_style, "─" * trail + "\n"))
+        # Remaining entries (up to 3 more)
+        for m in entries[1:4]:
             is_sleep = (m["desc"] or "").strip() == "睡觉"
             display_time = f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}"
             code = proj_code(m["project_id"])
@@ -471,9 +481,8 @@ def render_detail() -> list[tuple[str, str]]:
     while slot < end:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
 
-        # Insert white separator at block boundary
+        # Block boundary (no separator line; top/bottom rules are enough)
         if not block_rule_drawn and slot >= boundary:
-            out.append(("class:focus_rule", "─" * WIDTH_HINT + "\n"))
             block_rule_drawn = True
 
         pid = None
@@ -591,40 +600,61 @@ def _slot_label_gcal(slot_s, slot_e):
 def render_evening() -> list[tuple[str, str]]:
     _, end = detail_window()
     cutoff = end
-    day_end = dt.datetime.now(TZ).replace(hour=23, minute=59, second=59, microsecond=0)
-    items = [
-        ev for ev in STATE.events
-        if ev["end_dt"] > cutoff and ev["start_dt"] < day_end
-        and ev.get("transparency") != "transparent"
-    ]
-    if not items:
-        out: list[tuple[str, str]] = section_rule("later · gcal")
-        out.append(("class:dim", "  (nothing scheduled)\n"))
-        return out
-    # Group events by block
-    block_events: dict[str, list] = {}
-    for ev in items:
-        s = max(ev["start_dt"], cutoff)
-        e = min(ev["end_dt"], day_end)
-        mins = int((e - s).total_seconds() // 60)
-        if mins < 5:
+    now = dt.datetime.now(TZ)
+    sleep_time = now.replace(hour=22, minute=0, second=0, microsecond=0)
+
+    # Collect gcal events keyed by block
+    gcal_by_block: dict[str, list] = {}
+    for ev in STATE.events:
+        if ev["end_dt"] <= cutoff or ev["start_dt"] >= sleep_time:
+            continue
+        if ev.get("transparency") == "transparent":
             continue
         blk = hour_to_block(ev["start_dt"].hour)
         blk_name = blk[0] if blk else "?"
-        block_events.setdefault(blk_name, [])
-        block_events[blk_name].append(ev)
+        gcal_by_block.setdefault(blk_name, [])
+        gcal_by_block[blk_name].append(ev)
+
+    # Show every remaining block from cutoff through 22:00
     out: list[tuple[str, str]] = []
-    for blk_name, evs in block_events.items():
-        out += section_rule(f"{blk_name}")
-        for ev in evs[:4]:
-            prefix = "all-day" if ev.get("all_day") else f"{ev['start_dt']:%H:%M}"
-            space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1))
-            title = truncate(ev["title"], space)
-            ev_sty = project_style(gcal_project_code(ev)) or "class:future"
-            out.append(("class:time", f"  {prefix}"))
-            out.append((ev_sty, f" {title}\n"))
-        if len(evs) > 4:
-            out.append(("class:dim", f"  +{len(evs) - 4} more\n"))
+    for name, sh, eh in BLOCKS:
+        block_end_h = eh + 1
+        if block_end_h <= cutoff.hour:
+            continue
+        if sh >= 22:
+            break
+        evs = gcal_by_block.get(name, [])
+        if evs:
+            # Block rule with first event inline
+            first = evs[0]
+            ev_sty = project_style(gcal_project_code(first)) or "class:future"
+            prefix = f"{first['start_dt']:%H:%M}" if not first.get("all_day") else "all-day"
+            label = truncate(first["title"], min(DESC_MAX, max(1, WIDTH_HINT - 12)))
+            inner = f" {name}  {prefix} {label} "
+            trail = max(0, WIDTH_HINT - 1 - len(inner))
+            out.append(("class:rule", "─"))
+            out.append((ev_sty, inner))
+            out.append(("class:rule", "─" * trail + "\n"))
+            for ev in evs[1:4]:
+                prefix = "all-day" if ev.get("all_day") else f"{ev['start_dt']:%H:%M}"
+                space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1))
+                title = truncate(ev["title"], space)
+                ev_sty = project_style(gcal_project_code(ev)) or "class:future"
+                out.append(("class:time", f"  {prefix}"))
+                out.append((ev_sty, f" {title}\n"))
+        else:
+            # Empty block: just the rule with block name
+            rule_text = f" {name} "
+            trail = max(0, WIDTH_HINT - 1 - len(rule_text))
+            out.append(("class:rule", "─"))
+            out.append(("class:dim", rule_text))
+            out.append(("class:rule", "─" * trail + "\n"))
+    # Sleep marker
+    rule_text = f" 睡觉 "
+    trail = max(0, WIDTH_HINT - 1 - len(rule_text))
+    out.append(("class:rule", "─"))
+    out.append((f"fg:{PROJECT_COLORS.get('睡觉', '#666666')}", rule_text))
+    out.append(("class:rule", "─" * trail + "\n"))
     return out
 
 
