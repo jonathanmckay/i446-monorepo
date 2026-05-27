@@ -1,12 +1,19 @@
-"""Tests for meet.py — one-sided audio detection + transcript analysis."""
+"""Tests for meet.py — one-sided audio detection + recorder safety."""
 
+import signal
 import sys
 import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from meet import check_one_sided
+from meet import (
+    GracefulStop,
+    SAMPLE_RATE,
+    airpods_hfp_active,
+    capture_quality_warnings,
+    check_one_sided,
+)
 
 
 # ── Live audio silence detection (unit-level) ────────────────────────────────
@@ -126,3 +133,48 @@ def test_teams_warnings_send_notification():
     assert notify_calls >= 3, (
         f"Expected >=3 _notify calls (both-silent, mic-only, bh-only), got {notify_calls}"
     )
+
+
+def test_graceful_stop_handles_sigint_and_sigterm_without_keyboardinterrupt():
+    """First stop signal should request clean shutdown; repeats must not kill finalization."""
+    stopper = GracefulStop()
+    stopper._handle(signal.SIGINT, None)
+    stopper._handle(signal.SIGTERM, None)
+    assert stopper.requested is True
+    assert stopper.count == 2
+
+
+def test_irreplaceable_artifacts_are_saved_under_deferred_signals():
+    """WAV/TXT writes must be protected from repeated /d357 stop attempts."""
+    source = Path(__file__).parent.joinpath("meet.py").read_text()
+    assert "def defer_termination" in source
+    assert 'with defer_termination("wav save")' in source
+    assert 'with defer_termination("transcript save")' in source
+
+
+def test_airpods_hfp_detection(monkeypatch):
+    monkeypatch.setattr(
+        "meet.sd.query_devices",
+        lambda: [
+            {"name": "Jonathan's AirPods Max", "max_output_channels": 1, "default_samplerate": 24000.0},
+            {"name": "BlackHole 2ch", "max_output_channels": 2, "default_samplerate": 48000.0},
+        ],
+    )
+    assert airpods_hfp_active() is True
+
+
+def test_low_speech_long_recording_flagged():
+    audio = np.zeros(SAMPLE_RATE * 120, dtype=np.int16)
+    warnings = capture_quality_warnings(audio, "hello")
+    assert any("transcript too short" in warning for warning in warnings)
+    assert any("low speech signal" in warning for warning in warnings)
+
+
+def test_daemon_uses_tmux_and_valid_meet_flags():
+    """Daemon used to pass invalid --teams and stop with SIGTERM."""
+    source = Path(__file__).parent.joinpath("meeting-daemon.py").read_text()
+    assert '"--teams"' not in source
+    assert "new-session" in source
+    assert "send-keys" in source
+    assert '"C-c"' in source
+    assert "SIGTERM" not in source

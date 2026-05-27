@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
+import shlex
 import subprocess
 import sys
 import time
@@ -51,6 +51,7 @@ LOG_FILE = Path("/tmp/meeting-daemon.log")
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 AUDIO_SWITCH = Path.home() / "i446-monorepo/scripts/audio-switch.sh"
 DEFAULT_PROJECT = "m5x2"
+TMUX = "/opt/homebrew/bin/tmux" if Path("/opt/homebrew/bin/tmux").exists() else "tmux"
 
 IGNORE_PATTERNS = [
     "focus time", "focus block", "lunch", "block", "no meeting",
@@ -344,21 +345,36 @@ def start_recording(meeting: dict) -> None:
     name = meeting["subject"]
     audio_switch("meet")
     log_path = f"/tmp/d357-daemon-{int(time.time())}.log"
-    cmd = ["python3", str(MEETING_DIR / "meet.py"), name,
-           "--domain", "d357", "--teams"]
+    session = f"d357-daemon-{int(time.time())}"
+    cmd = ["python3", "-u", str(MEETING_DIR / "meet.py"), name,
+           "--domain", "d357"]
     minutes = calendar_minutes(meeting)
     if minutes:
         cmd.extend(["--max-duration", str(minutes)])
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=open(log_path, "w"),
-        stderr=subprocess.STDOUT,
-        cwd=str(MEETING_DIR),
+    shell_cmd = (
+        f"cd {shlex.quote(str(MEETING_DIR))} && "
+        f"PYTHONUNBUFFERED=1 exec {' '.join(shlex.quote(part) for part in cmd)} "
+        f"> {shlex.quote(log_path)} 2>&1"
     )
+    subprocess.run(
+        [TMUX, "new-session", "-d", "-s", session, shell_cmd],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    pane = subprocess.run(
+        [TMUX, "list-panes", "-t", session, "-F", "#{pane_pid}"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    pid = int(pane.stdout.strip()) if pane.stdout.strip().isdigit() else None
     toggl_id = toggl_start(name, DEFAULT_PROJECT)
     write_state({
-        "pid": proc.pid,
+        "pid": pid,
+        "tmux": session,
         "name": name,
         "started": datetime.now().isoformat(timespec="seconds"),
         "log": log_path,
@@ -367,11 +383,12 @@ def start_recording(meeting: dict) -> None:
         "calendar_minutes": minutes,
         "calendar_end": meeting["end"],
         "source": "daemon",
+        "mic_only": False,
     })
-    log(f"▶ Recording: {name!r} (pid {proc.pid}, {minutes}min, toggl {toggl_id})")
+    log(f"▶ Recording: {name!r} (tmux {session}, pid {pid}, {minutes}min, toggl {toggl_id})")
 
 
-def append_pending(state: dict) -> None:
+def append_pending(state: dict, status: str = "stopped", reason: str | None = None) -> None:
     PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "name": state.get("name"),
@@ -380,6 +397,8 @@ def append_pending(state: dict) -> None:
         "project": state.get("project"),
         "calendar_minutes": state.get("calendar_minutes"),
         "log": state.get("log"),
+        "status": status,
+        "reason": reason,
     }
     with open(PENDING_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -387,27 +406,60 @@ def append_pending(state: dict) -> None:
 
 def stop_recording(state: dict, reason: str) -> None:
     pid = state.get("pid")
+    session = state.get("tmux")
     name = state.get("name", "?")
-    if not pid:
+    if not pid and not session:
         return
 
     log(f"⏹ Stopping {name!r} ({reason})")
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        log(f"Process {pid} already dead")
+    if session:
+        subprocess.run([TMUX, "send-keys", "-t", session, "C-c"],
+                       capture_output=True, timeout=5)
+    elif pid:
+        try:
+            os.kill(pid, 2)  # SIGINT: graceful stop, same as tmux Ctrl-C
+        except OSError:
+            log(f"Process {pid} already dead")
 
     # Wait for transcription
+    completed = False
     for _ in range(150):  # 5 minutes max
-        try:
-            os.kill(pid, 0)
-            time.sleep(2)
-        except OSError:
+        log_text = ""
+        log_path = state.get("log")
+        if log_path and Path(log_path).exists():
+            try:
+                log_text = Path(log_path).read_text(errors="replace")
+            except OSError:
+                log_text = ""
+        if "TXT →" in log_text or "Done!" in log_text:
+            completed = True
             break
+        if session:
+            alive = subprocess.run([TMUX, "has-session", "-t", session],
+                                   capture_output=True).returncode == 0
+            if not alive:
+                completed = True
+                break
+        elif pid:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                completed = True
+                break
+        time.sleep(2)
+
+    if not completed:
+        log(f"Timed out waiting for {name!r}; leaving state intact for watchdog/manual /d357 stop")
+        append_pending(state, status="timeout", reason=reason)
+        return
+
+    if session:
+        subprocess.run([TMUX, "kill-session", "-t", session],
+                       capture_output=True, timeout=5)
 
     toggl_stop()
     audio_switch("default")
-    append_pending(state)
+    append_pending(state, reason=reason)
     clear_state()
     log(f"✓ Done: {name}. Pending file logged.")
 

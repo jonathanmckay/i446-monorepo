@@ -16,7 +16,7 @@ Teams/Zoom setup (one-time):
           ✓ MacBook Pro Speakers (or headphones)
        Name it "Meet Output"
     3. Before a call: set System Output → "Meet Output"
-    4. Run: python3 meet.py "meeting name" --teams
+    4. Run: python3 meet.py "meeting name"
     The script records both BlackHole (their audio) + mic (your audio) mixed together.
 """
 
@@ -28,6 +28,7 @@ import signal
 import tempfile
 import argparse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -49,10 +50,20 @@ def _notify(title, body, critical=False):
     - Always: terminal tab → orange
     - critical=True: also send iMessage to self
     """
-    # 1. Auto-dismissing dialog (gives up after 10s, never blocks forever)
+    escaped_body = body.replace('"', '\\"').replace('\n', '\\n')
+    escaped_title = title.replace('"', '\\"')
+
+    # 1. Notification Center alert (non-blocking, visible even when Terminal is hidden)
     try:
-        escaped_body = body.replace('"', '\\"').replace('\n', '\\n')
-        escaped_title = title.replace('"', '\\"')
+        _sp.run([
+            "osascript", "-e",
+            f'display notification "{escaped_body}" with title "{escaped_title}" sound name "Funk"'
+        ], timeout=5, capture_output=True)
+    except Exception:
+        pass
+
+    # 2. Auto-dismissing dialog (gives up after 10s, never blocks forever)
+    try:
         _sp.run([
             "osascript", "-e",
             f'display dialog "{escaped_title}: {escaped_body}" buttons {{"OK"}} default button "OK" giving up after 10'
@@ -60,13 +71,13 @@ def _notify(title, body, critical=False):
     except Exception:
         pass
 
-    # 2. Terminal tab → orange
+    # 3. Terminal tab → orange
     try:
         _sp.run([_TERM_COLOR, "orange"], timeout=5, capture_output=True)
     except Exception:
         pass
 
-    # 3. iMessage to self (critical alerts only, e.g. auto-stop)
+    # 4. iMessage to self (critical alerts only, e.g. auto-stop)
     if critical:
         try:
             msg = f"{title}: {body}"
@@ -83,6 +94,7 @@ CHANNELS = 1
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 VAULT_DIR = Path.home() / "vault"
 WHISPER_MODEL = "base.en"  # fast, English-only. Use "small.en" for more accuracy.
+SPEECH_THRESH = 400
 
 # Domain → Todoist label + vault subfolder
 DOMAIN_MAP = {
@@ -114,6 +126,97 @@ def list_devices():
     print()
 
 
+class GracefulStop:
+    """Turn SIGINT/SIGTERM into one graceful recording stop request."""
+
+    def __init__(self):
+        self.requested = False
+        self.count = 0
+        self._previous = {}
+
+    def _handle(self, sig, frame):
+        self.count += 1
+        name = signal.Signals(sig).name
+        if not self.requested:
+            print(f"\n⏹  {name} received — stopping recording and preserving audio...")
+            self.requested = True
+        else:
+            print(f"\n⏳  {name} received again — already stopping; preserving recording...")
+
+    def __enter__(self):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            self._previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, self._handle)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        for sig, handler in self._previous.items():
+            signal.signal(sig, handler)
+        return False
+
+
+@contextmanager
+def defer_termination(reason: str):
+    """Temporarily defer stop signals while writing irreplaceable artifacts."""
+    received = []
+    previous = {}
+
+    def _handle(sig, frame):
+        received.append(sig)
+        name = signal.Signals(sig).name
+        print(f"\n⏳  {name} received during {reason}; deferring until file write completes.")
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        previous[sig] = signal.getsignal(sig)
+        signal.signal(sig, _handle)
+    try:
+        yield received
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        if received:
+            names = ", ".join(signal.Signals(sig).name for sig in received)
+            print(f"   Deferred {names}; artifact preserved.")
+
+
+def airpods_hfp_active() -> bool:
+    """Return True when AirPods output is in mono/24kHz HFP mode."""
+    try:
+        for dev in sd.query_devices():
+            name = str(dev.get("name", ""))
+            if "airpods" not in name.lower() or dev.get("max_output_channels", 0) <= 0:
+                continue
+            channels = int(dev.get("max_output_channels") or 0)
+            rate = float(dev.get("default_samplerate") or 0)
+            if channels == 1 and rate <= 24000:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def speech_ratio(audio: np.ndarray) -> float:
+    if audio is None or len(audio) == 0:
+        return 0.0
+    return float(np.mean(np.abs(audio) > SPEECH_THRESH))
+
+
+def capture_quality_warnings(audio: np.ndarray, transcript: str) -> list[str]:
+    """Flag recordings likely to be silence, one-sided, or Whisper hallucination."""
+    duration = len(audio) / SAMPLE_RATE if audio is not None else 0
+    words = len(transcript.split())
+    wpm = (words / duration * 60) if duration else 0
+    ratio = speech_ratio(audio)
+    warnings = []
+    if duration >= 10 and words < 20:
+        warnings.append(f"transcript too short: {words} words over {duration:.0f}s")
+    if duration >= 300 and wpm < 40:
+        warnings.append(f"low word rate: {wpm:.0f} wpm over {duration / 60:.1f}min")
+    if duration >= 60 and ratio < 0.005:
+        warnings.append(f"low speech signal: {ratio:.2%} samples above speech threshold")
+    return warnings
+
+
 def record_audio(teams_mode: bool = False, max_duration: int = 0,
                   idle_timeout: int = 600, mic_name: str = None) -> np.ndarray:
     """Record audio until Ctrl+C, max_duration, or idle timeout.
@@ -128,6 +231,13 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     mic_frames: list = []
     bh_frames: list = []
     streams = []
+
+    if teams_mode and airpods_hfp_active():
+        msg = "AirPods are in HFP mode (mono/24kHz); BlackHole routing will fail. Recording mic-only."
+        print(f"⚠  {msg}")
+        _notify("⚠ Recording: AirPods HFP", msg, critical=True)
+        teams_mode = False
+        idle_timeout = 0
 
     # Mic stream
     if mic_name:
@@ -156,19 +266,14 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
             print(f"🖥  Call audio: {sys_name}")
         else:
             print("⚠  No call audio device found (tried Teams Audio, BlackHole) — mic only.")
-
-    stop_event = False
-    def _handle_stop(sig, frame):
-        nonlocal stop_event
-        stop_event = True
-    signal.signal(signal.SIGTERM, _handle_stop)
+            teams_mode = False
+            idle_timeout = 0
 
     # Silence / one-sided detection
     onesided_warned = False
     last_teams_check = 0
     teams_warn_count = 0
     SILENCE_THRESH = 500       # int16 amplitude below this = silence
-    SPEECH_THRESH = 400        # int16 amplitude above this = likely speech
     CHECK_INTERVAL_MIC = 120   # seconds before first check (mic-only mode)
     CHECK_INTERVAL_BOTH = 60   # seconds between teams-mode checks
     SILENCE_RATIO_WARN = 0.55  # warn if >55% of audio is silence
@@ -198,9 +303,9 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     print("\nRecording... press Ctrl+C to stop\n")
     for s in streams:
         s.start()
-    try:
+    with GracefulStop() as stop:
         elapsed = 0
-        while not stop_event:
+        while not stop.requested:
             sd.sleep(500)
             elapsed += 0.5
 
@@ -256,6 +361,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                                 pass  # keep all streams running but ignore bh_frames
                         bh_frames.clear()
                         teams_mode = False  # switch checks to mic-only mode
+                        idle_timeout = 0
                         teams_warn_count = 0  # reset so we don't re-trigger
                         continue
 
@@ -293,10 +399,8 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                 if silent > SILENCE_RATIO_WARN:
                     print(f"\n⚠  ONE-SIDED AUDIO DETECTED ({silent:.0%} silence)")
                     print("   Only your mic is being captured.")
-                    print("   Restart with --teams to capture both sides.\n")
+                    print("   Fix Teams/audio routing, then restart without --no-teams to capture both sides.\n")
                     onesided_warned = True
-    except KeyboardInterrupt:
-        pass
     for s in streams:
         s.stop()
         s.close()
@@ -337,7 +441,12 @@ def transcribe(wav_path: Path, model_name: str = WHISPER_MODEL) -> str:
     print("📝 Transcribing (first run downloads ~150MB model)...")
     from faster_whisper import WhisperModel
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
-    segments, info = model.transcribe(str(wav_path), beam_size=5)
+    segments, info = model.transcribe(
+        str(wav_path),
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
+    )
     text = " ".join(seg.text.strip() for seg in segments)
     print(f"   {len(text.split())} words transcribed.")
     return text
@@ -600,7 +709,8 @@ def main():
         date_slug = datetime.now().strftime("%Y.%m.%d-%H%M")
         name_slug = meeting_name.lower().replace(" ", "-")[:30]
         wav_path = recordings_dir / f"{date_slug}-{name_slug}.wav"
-        save_wav(audio, wav_path)
+        with defer_termination("wav save"):
+            save_wav(audio, wav_path)
         print(f"🎙  Saved recording: {wav_path}")
         transcript = transcribe(wav_path, whisper_model)
 
@@ -610,8 +720,16 @@ def main():
 
     # 2. Save transcript to a text file alongside the WAV
     tx_path = wav_path.with_suffix(".txt") if not args.tx else Path(args.tx).with_suffix(".transcript.txt")
-    tx_path.write_text(transcript)
+    with defer_termination("transcript save"):
+        tx_path.write_text(transcript)
     print(f"📄 Transcript saved: {tx_path}")
+    if not args.tx:
+        warnings = capture_quality_warnings(audio, transcript)
+        if warnings:
+            print("\n⚠  CAPTURE_QUALITY failure")
+            for warning in warnings:
+                print(f"   - {warning}")
+            _notify("⚠ Recording quality failure", "; ".join(warnings), critical=True)
 
     # Note: extraction + filing is handled by Claude Code on /d357 stop.
     # meet.py only records + transcribes.

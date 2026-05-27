@@ -80,9 +80,10 @@ Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux 
    ```bash
    tmux send-keys -t d357 C-c
    ```
-5. **Wait for transcription** — poll the log for `TXT →` or `Done!` every 2s, up to 120s. meet.py needs time to save the wav and run Whisper.
+   Send this **once**. Do not spam `C-c`, `kill -INT`, or `kill -TERM`; repeated interrupts can land while Whisper is saving artifacts. `meet.py` now protects WAV/TXT writes, but the correct operator behavior is one stop request, then wait.
+5. **Wait for transcription** — poll the log for `TXT →` or `Done!` every 2s, up to 300s. meet.py needs time to save the wav and run Whisper.
    ```bash
-   for i in $(seq 1 60); do
+   for i in $(seq 1 150); do
        sleep 2
        if grep -q "Done!\|TXT →" /tmp/d357-active.log 2>/dev/null; then break; fi
        if ! tmux has-session -t d357 2>/dev/null; then break; fi
@@ -138,6 +139,7 @@ When Teams uses the AirPods mic for the call, macOS forces AirPods into HFP mode
 
 - **tmux, not nohup**: Always launch in tmux. `nohup &` dies from SIGTERM when Claude's bash subprocess exits.
 - **No tee**: Always `> /tmp/d357-active.log 2>&1`, never `| tee`. Tee creates a pipe that breaks on Ctrl-C.
+- **One stop signal**: Stop with a single `tmux send-keys ... C-c`, then wait. If the log shows WAV saved but no TXT, recover from the WAV; do not escalate until artifact salvage is complete.
 - **Whisper model:** `base.en` (default, ~150MB download on first run).
 - The `d357` domain maps to `vault/d357/<M.W>/` (Sunday-anchored week folders).
 - **Sweeper safety net:** `d357-organize.py` runs hourly via cron.

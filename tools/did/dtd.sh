@@ -430,6 +430,89 @@ SPLITEOF
 sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_SPLIT"
 chmod +x "$DTD_SPLIT"
 
+# --- Agent script used by fzf ctrl-a binding ---
+DTD_AGENT="/tmp/dtd-$$.agent.sh"
+cat > "$DTD_AGENT" << 'AGENTEOF'
+#!/bin/zsh
+# Spawn a Claude agent in a new cmux tab to work on the selected task.
+# Starts a Toggl timer, fetches task context, launches claude interactively.
+
+TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
+TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
+HDR="PLACEHOLDER_HDR"
+CACHE_FILE="PLACEHOLDER_CACHE"
+
+task="$1"
+task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g')
+clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+
+# Handle truncation
+if [[ "$clean" == *"…"* ]]; then
+  clean="${clean%%…*}"
+fi
+
+# 1. Start Toggl timer
+project=$(python3 "$TG_FAST" --resolve "$clean" 2>/dev/null)
+python3 "$TOGGL_CLI" stop >/dev/null 2>&1
+python3 "$TOGGL_CLI" start "$clean" $project >/dev/null 2>&1
+
+# 2. Get task description from cache
+desc=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$CACHE_FILE'))
+    q = sys.argv[1].lower()
+    for section in d.values():
+        if not isinstance(section, list): continue
+        for t in section:
+            if not isinstance(t, dict): continue
+            if q in t.get('content','').lower():
+                print(t.get('description',''))
+                sys.exit(0)
+except: pass
+" "$clean" 2>/dev/null)
+
+# 3. Build the prompt
+prompt="Work on this task: $task"
+if [[ -n "$desc" ]]; then
+  prompt="$prompt
+
+Context from Todoist:
+$desc"
+fi
+prompt="$prompt
+
+When you're done, ask me if the task is complete. If I say yes, run /did to close it and stop the Toggl timer. If I say no or we didn't finish, leave everything as-is."
+
+# 4. Write prompt to temp file (avoids shell quoting issues)
+PROMPT_FILE="/tmp/dtd-agent-$$.md"
+echo "$prompt" > "$PROMPT_FILE"
+
+# 5. Spawn in cmux tab
+if command -v cmux &>/dev/null; then
+  surface_output=$(cmux new-surface --type terminal 2>&1)
+  surface_id=$(echo "$surface_output" | grep -oE 'surface:[0-9]+' | head -1)
+  pane_id=$(echo "$surface_output" | grep -oE 'pane:[0-9]+' | head -1)
+  if [[ -n "$surface_id" ]]; then
+    cmux respawn-pane --surface "$surface_id" --command "claude -p \"\$(cat $PROMPT_FILE)\" --allowedTools 'Skill,Bash,Read,Edit,Write,Grep,Glob,WebFetch,WebSearch,mcp__todoist__complete-tasks,mcp__todoist__find-tasks,mcp__toggl_server__toggl_stop'; rm -f $PROMPT_FILE" 2>/dev/null
+    if [[ -n "$pane_id" ]]; then
+      cmux focus-pane --pane "$pane_id" 2>/dev/null
+    fi
+    echo "🤖 agent → $clean (cmux)" > "$HDR"
+  else
+    # cmux failed, fall back to Terminal.app
+    osascript -e "tell application \"Terminal\" to do script \"claude -p \\\"\$(cat $PROMPT_FILE)\\\" --allowedTools 'Skill,Bash,Read,Edit,Write,Grep,Glob,WebFetch,WebSearch,mcp__todoist__complete-tasks,mcp__todoist__find-tasks,mcp__toggl_server__toggl_stop'; rm -f $PROMPT_FILE\"" 2>/dev/null
+    echo "🤖 agent → $clean (Terminal)" > "$HDR"
+  fi
+else
+  # No cmux: open Terminal.app tab
+  osascript -e "tell application \"Terminal\" to do script \"claude -p \\\"\$(cat $PROMPT_FILE)\\\" --allowedTools 'Skill,Bash,Read,Edit,Write,Grep,Glob,WebFetch,WebSearch,mcp__todoist__complete-tasks,mcp__todoist__find-tasks,mcp__toggl_server__toggl_stop'; rm -f $PROMPT_FILE\"" 2>/dev/null
+  echo "🤖 agent → $clean (Terminal)" > "$HDR"
+fi
+AGENTEOF
+sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_AGENT"
+chmod +x "$DTD_AGENT"
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
@@ -463,8 +546,9 @@ while true; do
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-a:execute-silent($DTD_AGENT {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-x: delete | ctrl-r: refresh]")
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-a: agent | ctrl-x: del | ctrl-r: refresh]")
 
   task="$fzf_output"
 
@@ -538,4 +622,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "/tmp/dtd-$$.done.json"

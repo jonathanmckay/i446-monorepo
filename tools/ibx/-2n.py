@@ -816,8 +816,310 @@ def format_suggestions(suggestions):
         if len(content) > 65:
             content = content[:62] + "..."
         domain = f"  [dim]@{s['domain']}[/dim]" if s["domain"] else ""
-        lines.append(f"  [bold]{i}.[/bold] {content}{domain}")
+        source = f"[dim cyan]\\[{s['source']}][/dim cyan] " if s.get("source") else ""
+        lines.append(f"  [bold]{i}.[/bold] {source}{content}{domain}")
     return "\n".join(lines)
+
+
+# ── Block-aware goal synthesis ─────────────────────────────────────────────
+# Synthesize 3 candidate goals for the current 2h block from 4 signals:
+#   [cal] meetings in-block (Google Calendar)
+#   [1g]  open weekly goals for the block's domain (1g sheet)
+#   [0g]  open daily goals from build order ## 0₲ section
+#   [0n]  unfinished habits in today's 0n row
+# Deterministic — no LLM. <2s budget; degrades silently if any source fails.
+
+# Block 地支 → typical domain in JM's ideal week. Used to prioritize which
+# weekly 1g goals to surface for the current block.
+_BLOCK_DOMAIN = {
+    "卯": "hci",   # 04-06 morning routine, image/personal brand
+    "辰": "hcb",   # 06-08 breakfast / body
+    "巳": "i9",    # 08-10 deep work
+    "午": "i9",    # 10-12 meetings
+    "未": "i9",    # 12-14 work block
+    "申": "i9",    # 14-16 work block
+    "酉": "m5x2",  # 16-18 personal ops
+    "戌": "xk87",  # 18-20 family
+    "亥": "hcm",   # 20-22 wind down / reflection
+}
+
+
+def _calendar_in_block(block_start_hhmm: str, block_end_hhmm: str):
+    """Return [{title, start_hhmm, end_hhmm, duration_min}] for events that
+    overlap the current 2h block today. Reads the m5c7 personal calendar via
+    OAuth creds shared with mtg.py. Returns [] silently on any failure."""
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build as _gbuild
+    except ImportError:
+        return []
+    creds_path = Path.home() / ".config/mtg/tokens.json"
+    oauth_path = Path.home() / ".config/mtg/oauth.json"
+    if not (creds_path.exists() and oauth_path.exists()):
+        return []
+    try:
+        oauth = json.loads(oauth_path.read_text())
+        tokens = json.loads(creds_path.read_text())
+        creds = Credentials(
+            token=tokens.get("access_token"),
+            refresh_token=tokens.get("refresh_token"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=oauth["client_id"],
+            client_secret=oauth["client_secret"],
+            scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+        )
+        if not creds.valid and creds.refresh_token:
+            creds.refresh(Request())
+        svc = _gbuild("calendar", "v3", credentials=creds)
+        today = datetime.now().date()
+        sh, sm = [int(x) for x in block_start_hhmm.split(":")]
+        eh, em = [int(x) for x in block_end_hhmm.split(":")]
+        local_start = datetime(today.year, today.month, today.day, sh, sm)
+        local_end = datetime(today.year, today.month, today.day, eh, em)
+        time_min = local_start.astimezone(timezone.utc).isoformat()
+        time_max = local_end.astimezone(timezone.utc).isoformat()
+        result = svc.events().list(
+            calendarId="mckay@m5c7.com",
+            timeMin=time_min, timeMax=time_max,
+            singleEvents=True, orderBy="startTime", maxResults=10,
+        ).execute()
+        out = []
+        skip_patterns = ("focus time", "ooo", "lunch", "block", "hold")
+        for ev in result.get("items", []):
+            title = ev.get("summary", "(no title)")
+            if any(p in title.lower() for p in skip_patterns):
+                continue
+            s = ev.get("start", {}).get("dateTime")
+            e = ev.get("end", {}).get("dateTime")
+            if not s or not e:
+                continue
+            try:
+                sdt = datetime.fromisoformat(s).astimezone()
+                edt = datetime.fromisoformat(e).astimezone()
+            except ValueError:
+                continue
+            dur = int((edt - sdt).total_seconds() / 60)
+            if dur < 15:
+                continue
+            out.append({
+                "title": title,
+                "start_hhmm": sdt.strftime("%H:%M"),
+                "end_hhmm": edt.strftime("%H:%M"),
+                "duration_min": dur,
+            })
+        return out
+    except Exception:
+        return []
+
+
+def _open_daily_goals():
+    """Parse open '## 0₲' items from build order. Returns list of
+    {text, bonus, domain}. Ignores ### 以后的目标 backlog."""
+    if not BUILD_ORDER.exists():
+        return []
+    out = []
+    in_section = False
+    for line in BUILD_ORDER.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## 0₲"):
+            in_section = True
+            continue
+        if in_section and stripped.startswith("##"):
+            break
+        if in_section and stripped.startswith("###"):
+            break  # stop at 以后的目标 sub-section
+        if in_section and stripped.startswith("- [ ]"):
+            text = stripped[5:].strip()
+            if not text:
+                continue
+            bonus_m = re.search(r'\{(\d+)\}', text)
+            bonus = int(bonus_m.group(1)) if bonus_m else 0
+            dom_m = re.search(r'@(\w+)', text)
+            domain = dom_m.group(1) if dom_m else ""
+            out.append({"text": text, "bonus": bonus, "domain": domain})
+    return out
+
+
+def _unfinished_0n_today():
+    """Return list of {habit, col} for habit columns in today's 0n row that
+    are blank. One AppleScript batch read. Returns [] on any error."""
+    headers_path = Path.home() / ".claude/skills/did/headers.json"
+    if not headers_path.exists():
+        return []
+    try:
+        hdrs = json.loads(headers_path.read_text()).get("0n", {})
+    except Exception:
+        return []
+    # Skip non-habit / structural columns
+    skip = {"周", "日", "2026.0", "2025.0", "2027.0", "n color", "⎣∀clr", "#", "0n"}
+    habits = [(name, col) for name, col in hdrs.items()
+              if name.lower() not in skip and name.lower() not in {n.lower() for n in skip}]
+    if not habits:
+        return []
+    cols_list = ",".join(str(c) for _, c in habits)
+    names_list = ",".join(f'"{n}"' for n, _ in habits)
+    today = datetime.now()
+    script = f'''tell application "Microsoft Excel"
+        set wb to workbook "Neon分v12.2.xlsx"
+        set theSheet to sheet "0n" of wb
+        set targetMonth to {today.month}
+        set targetDay to {today.day}
+        set todayRow to 0
+        repeat with r from 3 to 500
+            set cellDate to value of cell 3 of row r of theSheet
+            if cellDate is not missing value then
+                try
+                    set m to (month of (cellDate as date)) as integer
+                    set d to day of (cellDate as date)
+                    if m = targetMonth and d = targetDay then
+                        set todayRow to r
+                        exit repeat
+                    end if
+                end try
+            end if
+        end repeat
+        if todayRow = 0 then return ""
+        set cols to {{{cols_list}}}
+        set names to {{{names_list}}}
+        set out to ""
+        repeat with i from 1 to count of cols
+            set v to value of cell (item i of cols) of row todayRow of theSheet
+            if v is missing value or v as text = "" then
+                set out to out & (item i of names) & linefeed
+            end if
+        end repeat
+        return out
+    end tell'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+        return [{"habit": h.strip(), "col": ""} for h in result.stdout.splitlines() if h.strip()]
+    except Exception:
+        return []
+
+
+def _open_weekly_1g(domain_hint: str = ""):
+    """Read open weekly goals from the '1g' sheet. Returns
+    [{text, domain, fen, pct_done}] sorted by domain match then 分 desc.
+    'Open' = % Done (col G) is empty or < 1.0. Caps at 25 rows."""
+    script = '''tell application "Microsoft Excel"
+        set wb to workbook "Neon分v12.2.xlsx"
+        set theSheet to sheet "1g" of wb
+        set currentDomain to ""
+        set out to ""
+        repeat with r from 1 to 50
+            set aVal to value of cell 1 of row r of theSheet
+            set dVal to value of cell 4 of row r of theSheet
+            set eVal to value of cell 5 of row r of theSheet
+            set gVal to value of cell 7 of row r of theSheet
+            if aVal is not missing value and (aVal as text) is not "" then
+                set currentDomain to aVal as text
+            end if
+            if dVal is not missing value and (dVal as text) is not "" then
+                set fen to ""
+                if eVal is not missing value then set fen to eVal as text
+                set pct to ""
+                if gVal is not missing value then set pct to gVal as text
+                set out to out & currentDomain & tab & (dVal as text) & tab & fen & tab & pct & linefeed
+            end if
+        end repeat
+        return out
+    end tell'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=12,
+        )
+        if result.returncode != 0:
+            return []
+    except Exception:
+        return []
+    rows = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        domain = parts[0].strip()
+        text = parts[1].strip()
+        if not text:
+            continue
+        try:
+            fen = float(parts[2]) if len(parts) > 2 and parts[2].strip() else 0.0
+        except ValueError:
+            fen = 0.0
+        try:
+            pct = float(parts[3]) if len(parts) > 3 and parts[3].strip() else 0.0
+        except ValueError:
+            pct = 0.0
+        if pct >= 1.0:
+            continue  # already done
+        rows.append({"text": text, "domain": domain, "fen": fen, "pct_done": pct})
+    # Sort: domain match first, then by 分 desc
+    hint = domain_hint.lower()
+    norm = {"m5x2": "m5c7"}.get(hint, hint)
+    rows.sort(key=lambda x: (
+        0 if x["domain"].lower() == norm else 1,
+        -x["fen"],
+    ))
+    return rows[:25]
+
+
+def fetch_block_suggestions(block_name: str, block_start: str, block_end: str):
+    """Synthesize 3 goal candidates for the current 2h block.
+    Returns list of {content, source, domain} (≤3, dedup'd, prioritized)."""
+    domain_hint = _BLOCK_DOMAIN.get(block_name, "")
+    suggestions = []
+    seen = set()
+
+    def _add(content, source, domain=""):
+        key = content.lower().strip()
+        if key in seen or not key:
+            return
+        seen.add(key)
+        suggestions.append({"content": content, "source": source, "domain": domain})
+
+    # 1. Calendar — top in-block meeting becomes a prep card
+    cal_events = _calendar_in_block(block_start, block_end)
+    if cal_events:
+        ev = cal_events[0]
+        _add(f"prep for {ev['title']} ({ev['start_hhmm']})", "cal", domain_hint)
+        # If multiple meetings, surface the longest second
+        if len(cal_events) > 1:
+            ev2 = max(cal_events[1:], key=lambda e: e["duration_min"])
+            _add(f"prep for {ev2['title']} ({ev2['start_hhmm']})", "cal", domain_hint)
+
+    # 2. Weekly 1g — top open goal for this block's domain
+    weekly = _open_weekly_1g(domain_hint)
+    for w in weekly[:2]:
+        tag = f"1g {w['domain']}" if w['domain'] else "1g"
+        _add(w["text"], tag, w["domain"])
+        if len(suggestions) >= 3:
+            break
+
+    # 3. Daily 0g — top {bonus} goal (prefer domain match)
+    daily = _open_daily_goals()
+    daily.sort(key=lambda x: (
+        0 if x["domain"].lower() == domain_hint else 1,
+        -x["bonus"],
+    ))
+    for d in daily[:2]:
+        _add(d["text"], "0g", d["domain"])
+        if len(suggestions) >= 3:
+            break
+
+    # 4. 0n unfinished habits — fill remaining slots
+    if len(suggestions) < 3:
+        for h in _unfinished_0n_today()[:5]:
+            _add(h["habit"], "0n")
+            if len(suggestions) >= 3:
+                break
+
+    return suggestions[:3]
 
 
 def snapshot_build_order():
@@ -947,11 +1249,14 @@ def main():
             return 0
         if not goals_set:
             card_num += 1
-            # Fetch auto-suggestions from Todoist
-            suggestions = fetch_suggested_goals()
+            # Synthesize 3 block-aware suggestions from cal/1g/0g/0n.
+            # Falls back to Todoist [N]/(N) ratio list when no signals available.
+            suggestions = fetch_block_suggestions(block_name, block_start, block_end)
+            if not suggestions:
+                suggestions = fetch_suggested_goals(max_results=3)
             body = f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end})."
             if suggestions:
-                body += f"\n\n[cyan]Suggested (by value/min):[/cyan]\n{format_suggestions(suggestions)}"
+                body += f"\n\n[cyan]Suggested for this block:[/cyan]\n{format_suggestions(suggestions)}"
                 body += "\n\n[dim]Pick numbers (e.g. 1,3), type custom goals, or skip.[/dim]"
             else:
                 body += "\n[dim]Type goals (comma-separated), or skip.[/dim]"
@@ -1082,4 +1387,29 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--debug-suggest":
+        idx, block_name, block_start, block_end = get_current_block()
+        print(f"Block: {block_name} ({block_start}-{block_end}) idx={idx}")
+        print(f"Domain hint: {_BLOCK_DOMAIN.get(block_name, '(none)')}")
+        print()
+        print("== Calendar in block ==")
+        for ev in _calendar_in_block(block_start, block_end):
+            print(f"  {ev['start_hhmm']}-{ev['end_hhmm']} ({ev['duration_min']}m) {ev['title']}")
+        print()
+        print("== Open daily 0₲ ==")
+        for d in _open_daily_goals():
+            print(f"  bonus={d['bonus']} domain={d['domain']!r} {d['text']}")
+        print()
+        print("== Open weekly 1g ==")
+        for w in _open_weekly_1g(_BLOCK_DOMAIN.get(block_name, "")):
+            print(f"  {w['domain']:10} fen={w['fen']:.0f} pct={w['pct_done']:.2f} {w['text']}")
+        print()
+        print("== Unfinished 0n today ==")
+        for h in _unfinished_0n_today():
+            print(f"  {h['habit']}")
+        print()
+        print("== Synthesized (top 3) ==")
+        for i, s in enumerate(fetch_block_suggestions(block_name, block_start, block_end), 1):
+            print(f"  {i}. [{s['source']}] {s['content']}  @{s['domain']}")
+        sys.exit(0)
     main()
