@@ -456,6 +456,32 @@ project=$(python3 "$TG_FAST" --resolve "$clean" 2>/dev/null)
 python3 "$TOGGL_CLI" stop >/dev/null 2>&1
 python3 "$TOGGL_CLI" start "$clean" $project >/dev/null 2>&1
 
+# 1b. Auto-tag @agent in Todoist if not already tagged
+python3 -c "
+import json, sys, urllib.request
+q = sys.argv[1].lower()
+TOKEN = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+try:
+    with open(sys.argv[2]) as f:
+        d = json.load(f)
+    for section in d.values():
+        if not isinstance(section, list): continue
+        for t in section:
+            if not isinstance(t, dict): continue
+            if q in t.get('content','').lower():
+                labels = t.get('labels', [])
+                if 'agent' not in labels:
+                    labels.append('agent')
+                    req = urllib.request.Request(
+                        f'https://api.todoist.com/api/v1/tasks/{t[\"id\"]}',
+                        data=json.dumps({'labels': labels}).encode(),
+                        method='POST',
+                        headers={'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'})
+                    urllib.request.urlopen(req, timeout=10)
+                sys.exit(0)
+except: pass
+" "$clean" "$CACHE_FILE" 2>/dev/null &
+
 # 2. Get task description from cache
 desc=$(python3 -c "
 import json, sys
