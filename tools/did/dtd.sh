@@ -38,7 +38,7 @@ due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
     [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
     | flatten
     | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
-  ) + [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today)]
+  ) + [(.["today"] // [])[] | select(type == "object")]
   | map(select(.content != null))
   | group_by(.id) | map(.[0])
   | length
@@ -52,7 +52,7 @@ if [[ $due_today -lt 30 ]]; then
       [.["0neon"], .["1neon"], .["夜neon"], .["关键路径"]]
       | flatten
       | map(select(type == "object" and .due != null and .due != "" and .due <= $today))
-    ) + [(.["today"] // [])[] | select(type == "object" and .due != null and .due != "" and .due <= $today)]
+    ) + [(.["today"] // [])[] | select(type == "object")]
     | map(select(.content != null))
     | group_by(.id) | map(.[0])
     | length
@@ -204,8 +204,7 @@ for key in ['0neon', '1neon', '关键路径', '夜neon']:
     sections.extend([t for t in d.get(key, []) if isinstance(t, dict)
                      and t.get('due') and t['due'] <= today])
 # #0g tasks from today
-today_tasks = [t for t in d.get('today', []) if isinstance(t, dict)
-               and t.get('due') and t['due'] <= today]
+today_tasks = [t for t in d.get('today', []) if isinstance(t, dict)]
 goals = [t for t in today_tasks if any(l in ('#0g', '#-1g') for l in t.get('labels', []))]
 rest = sorted([t for t in today_tasks if not any(l in ('#0g', '#-1g') for l in t.get('labels', []))],
               key=lambda t: prank(t.get('priority')))

@@ -53,14 +53,28 @@ RUN_DIR="$DREAM_RUNS/${DATE_DOT}${DRY_RUN}-${VERSION}"
 
 # --- Prevent double-launch (acquire lock BEFORE creating run dir) ---
 LOCK="/tmp/dream-launch.lock"
+MAX_LOCK_AGE_SEC=14400  # 4 hours; any dream run beyond this is stuck
 if [[ -f "$LOCK" ]]; then
   LOCK_PID=$(cat "$LOCK")
   if kill -0 "$LOCK_PID" 2>/dev/null; then
-    echo "[$(date)] Dream already running (PID $LOCK_PID), skipping" >&2
-    exit 0
+    # Check lock age — kill stale runs that exceeded the budget
+    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCK") ))
+    if [[ $LOCK_AGE -gt $MAX_LOCK_AGE_SEC ]]; then
+      echo "[$(date)] Dream PID $LOCK_PID stale (${LOCK_AGE}s > ${MAX_LOCK_AGE_SEC}s), killing" >&2
+      kill "$LOCK_PID" 2>/dev/null
+      # Also kill any child claude processes
+      pkill -P "$LOCK_PID" 2>/dev/null || true
+      sleep 2
+      kill -9 "$LOCK_PID" 2>/dev/null || true
+      rm -f "$LOCK"
+    else
+      echo "[$(date)] Dream already running (PID $LOCK_PID, age ${LOCK_AGE}s), skipping" >&2
+      exit 0
+    fi
+  else
+    # Stale lock from dead process — remove it
+    rm -f "$LOCK"
   fi
-  # Stale lock from dead process — remove it
-  rm -f "$LOCK"
 fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
