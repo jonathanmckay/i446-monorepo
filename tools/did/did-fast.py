@@ -60,7 +60,7 @@ CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻"}
-VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭"}
+VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写"}
 VARIABLE_1N_DEFAULTS: dict[str, int] = {"一起饭": 30}  # default points when no arg given
 
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
@@ -122,7 +122,7 @@ ONENEON_TO_0FEN: dict[str, str] = {
     "1 f694": "S", "1 xk88": "Y", "1 xk87": "X",
     "1 xk87 wknd": "X", "1 s897": "Y", "1 hcbc": "W",
     "一起饭": "X", "family": "X", "s897": "Y",
-    "relax {60}": "W",
+    "relax {60}": "W", "业写": "R",
 }
 
 
