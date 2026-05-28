@@ -89,6 +89,12 @@ BACKFILL_STATE="$DREAM_RUNS/.backfill-pointer"
 BACKFILL_STOP="2026-03-01"  # stop when we reach March 1
 if [[ -f "$BACKFILL_STATE" ]]; then
   BACKFILL_DATE=$(cat "$BACKFILL_STATE")
+  # Validate YYYY-MM-DD format; reset if corrupted
+  if ! [[ "$BACKFILL_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: corrupted backfill pointer '$BACKFILL_DATE', resetting" >&2
+    BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
+    echo "$BACKFILL_DATE" > "$BACKFILL_STATE"
+  fi
 else
   # Start from yesterday
   BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
