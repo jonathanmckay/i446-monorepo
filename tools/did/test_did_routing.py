@@ -676,6 +676,67 @@ class ZeroNeonOverrideTests(unittest.TestCase):
         self.assertEqual(r.fen_points, 0)
 
 
+class DeferFlagParsingTests(unittest.TestCase):
+    """Regression: `/did 新闻 --tmrw` passed --tmrw through to the routing
+    query, breaking the registry match for 新闻 (a registered 0n habit).
+    The habit fell through to the unknown/one-off path and did the wrong thing.
+
+    Fix: _parse_input now extracts defer flags (--tmrw, --tomorrow, --Mon, etc.)
+    and returns them as a separate defer_date field. The query passed to route.py
+    is clean.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "run", _HERE / "run.py"
+        )
+        cls.run_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.run_mod)
+
+    def test_tmrw_stripped_from_query(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("新闻 --tmrw")
+        self.assertEqual(query, "新闻")
+        self.assertIsNotNone(defer)
+
+    def test_tomorrow_stripped_from_query(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("新闻 --tomorrow")
+        self.assertEqual(query, "新闻")
+        self.assertIsNotNone(defer)
+
+    def test_day_of_week_stripped(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("hcmc --Mon")
+        self.assertEqual(query, "hcmc")
+        self.assertIsNotNone(defer)
+
+    def test_iso_date_stripped(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("新闻 --2026-06-01")
+        self.assertEqual(query, "新闻")
+        self.assertEqual(defer, "2026-06-01")
+
+    def test_md_date_stripped(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("新闻 --6/15")
+        self.assertEqual(query, "新闻")
+        self.assertIsNotNone(defer)
+        self.assertIn("06-15", defer)
+
+    def test_no_defer_flag_returns_none(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("新闻")
+        self.assertEqual(query, "新闻")
+        self.assertIsNone(defer)
+
+    def test_defer_with_points_override(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("xbox analytics [10] --tmrw")
+        self.assertEqual(query, "xbox analytics")
+        self.assertEqual(mins, 10)
+        self.assertIsNotNone(defer)
+
+    def test_unrecognized_double_dash_not_treated_as_defer(self):
+        query, target, tr, mins, defer = self.run_mod._parse_input("stats --verbose")
+        # --verbose is not a recognized defer flag; should pass through
+        self.assertIsNone(defer)
+
+
 class HciLabelMapping(unittest.TestCase):
     """Regression: `/did 1st hci` fell through to Todoist step because
     (1) '1st hci' has no 0₦ column header — it's in Todoist as 0neon, and
@@ -730,6 +791,7 @@ def main() -> int:
         FormulaAppendTests,
         ZeroNeonOverrideTests,
         HciLabelMapping,
+        DeferFlagParsingTests,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

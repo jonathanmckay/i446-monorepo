@@ -55,6 +55,17 @@ TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")
 BRACKET_N_RE = re.compile(r"\[(\d+)\]")
 
+# Defer flags: --tmrw, --tomorrow, --Mon, --Tue, ..., --Sun, --<month> <day>,
+# --<M/D>, --<YYYY-MM-DD>
+_DAYS_OF_WEEK = {"mon", "tue", "wed", "thu", "fri", "sat", "sun",
+                 "monday", "tuesday", "wednesday", "thursday", "friday",
+                 "saturday", "sunday"}
+_MONTHS = {"jan", "feb", "mar", "apr", "may", "jun",
+           "jul", "aug", "sep", "oct", "nov", "dec",
+           "january", "february", "march", "april", "june",
+           "july", "august", "september", "october", "november", "december"}
+DEFER_FAST = str(Path.home() / "i446-monorepo/tools/did/defer-fast.py")
+
 
 def _today_md() -> str:
     n = datetime.now()
@@ -71,10 +82,109 @@ def _route(query: str, target_date: str) -> dict:
     return json.loads(r.stdout)
 
 
-def _parse_input(raw: str) -> tuple[str, str, Optional[tuple], Optional[int]]:
-    """Returns (query_for_routing, target_date, time_range_or_None, explicit_minutes_or_None)."""
+def _parse_defer(parts: list[str]) -> tuple[list[str], Optional[str]]:
+    """Extract trailing defer flag (--tmrw, --tomorrow, --Mon, --Jun 15, etc.).
+
+    Returns (remaining_parts, defer_iso_date_or_None).
+    """
+    if not parts:
+        return parts, None
+
+    # Scan from the end for a token starting with '--'
+    defer_tokens: list[str] = []
+    i = len(parts) - 1
+    while i >= 0 and parts[i].startswith("--"):
+        defer_tokens.insert(0, parts[i])
+        i -= 1
+    if not defer_tokens:
+        return parts, None
+
+    # Also grab a bare trailing number after --<month> (e.g. "--Jun 15")
+    raw_defer = " ".join(t.lstrip("-") for t in defer_tokens)
+
+    # Check if the next token after the -- block is a bare day number
+    # that belongs to the month (e.g. "新闻 --Jun 15" splits as
+    # parts=["新闻", "--Jun", "15"] but 15 doesn't start with --)
+    remaining = parts[:i + 1]
+    # Actually, "15" wouldn't start with --, so let's re-scan:
+    # Look at the last non--- tokens to see if the pattern is --<month> <day>
+    if len(defer_tokens) == 1:
+        word = defer_tokens[0].lstrip("-").lower()
+        if word in _MONTHS and remaining and re.fullmatch(r"\d{1,2}", remaining[-1]):
+            raw_defer = f"{defer_tokens[0].lstrip('-')} {remaining[-1]}"
+            remaining = remaining[:-1]
+
+    defer_str = raw_defer.lower().strip()
+
+    now = datetime.now()
+
+    # --tmrw / --tomorrow
+    if defer_str in ("tmrw", "tomorrow"):
+        d = now + timedelta(days=1)
+        return remaining, d.strftime("%Y-%m-%d")
+
+    # --Mon, --Tuesday, etc.
+    if defer_str in _DAYS_OF_WEEK:
+        target_day = {
+            "mon": 0, "monday": 0, "tue": 1, "tuesday": 1,
+            "wed": 2, "wednesday": 2, "thu": 3, "thursday": 3,
+            "fri": 4, "friday": 4, "sat": 5, "saturday": 5,
+            "sun": 6, "sunday": 6,
+        }[defer_str]
+        days_ahead = (target_day - now.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        d = now + timedelta(days=days_ahead)
+        return remaining, d.strftime("%Y-%m-%d")
+
+    # --YYYY-MM-DD
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", defer_str):
+        return remaining, defer_str
+
+    # --M/D
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", defer_str)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        d = datetime(now.year, month, day)
+        if d.date() <= now.date():
+            d = datetime(now.year + 1, month, day)
+        return remaining, d.strftime("%Y-%m-%d")
+
+    # --Jun 15 / --January 3
+    m = re.fullmatch(r"([a-z]+)\s+(\d{1,2})", defer_str)
+    if m:
+        from calendar import month_abbr, month_name
+        month_word = m.group(1).capitalize()
+        day = int(m.group(2))
+        month_num = None
+        for i_m, name in enumerate(month_abbr):
+            if name and name.lower() == month_word.lower():
+                month_num = i_m
+                break
+        if month_num is None:
+            for i_m, name in enumerate(month_name):
+                if name and name.lower() == month_word.lower():
+                    month_num = i_m
+                    break
+        if month_num:
+            d = datetime(now.year, month_num, day)
+            if d.date() <= now.date():
+                d = datetime(now.year + 1, month_num, day)
+            return remaining, d.strftime("%Y-%m-%d")
+
+    # Unrecognized -- flag: put it back, not a defer
+    return parts, None
+
+
+def _parse_input(raw: str) -> tuple[str, str, Optional[tuple], Optional[int], Optional[str]]:
+    """Returns (query_for_routing, target_date, time_range_or_None, explicit_minutes_or_None, defer_date_or_None)."""
     parts = raw.strip().split()
     target = _today_md()
+    defer_date = None
+
+    # Defer flag? (must check BEFORE past-date, since --tmrw is trailing too)
+    parts, defer_date = _parse_defer(parts)
+
     # past-date suffix?
     if parts and re.fullmatch(r"\d{1,2}/\d{1,2}", parts[-1]):
         target = parts[-1]
@@ -104,7 +214,7 @@ def _parse_input(raw: str) -> tuple[str, str, Optional[tuple], Optional[int]]:
         if m and len(parts) > 1:
             explicit_minutes = int(m.group(1))
             parts = parts[:-1]
-    return " ".join(parts), target, time_range, explicit_minutes
+    return " ".join(parts), target, time_range, explicit_minutes, defer_date
 
 
 def _minutes_from_time_range(tr: tuple[str, str]) -> int:
@@ -536,6 +646,45 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
     return 0
 
 
+def run_defer(query: str, defer_date: str, claimed_points: int) -> int:
+    """Defer path: reschedule task via defer-fast.py, don't write to Neon."""
+    r = subprocess.run(
+        ["python3", DEFER_FAST, query, defer_date, str(claimed_points)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        # Print stderr for diagnostics, stdout for structured errors
+        if r.stdout.strip():
+            try:
+                err = json.loads(r.stdout)
+                if err.get("error") == "multiple matches":
+                    print(f"  ✗ defer: multiple Todoist matches for {query!r}:", file=sys.stderr)
+                    for m in err.get("matches", []):
+                        print(f"    - {m['content']}", file=sys.stderr)
+                else:
+                    print(f"  ✗ defer failed: {err.get('error', r.stdout)}", file=sys.stderr)
+            except json.JSONDecodeError:
+                print(f"  ✗ defer failed: {r.stdout}", file=sys.stderr)
+        if r.stderr.strip():
+            print(r.stderr, file=sys.stderr)
+        return 1
+    try:
+        result = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print(f"  ✗ defer: unexpected output: {r.stdout}", file=sys.stderr)
+        return 1
+    task_name = result.get("task", query)
+    recurring = result.get("recurring", False)
+    claimed = result.get("claimed_points", claimed_points)
+    remaining = result.get("remaining_points", 0)
+    if recurring:
+        print(f"  ✓ deferred (recurring): {task_name} → closed + [{claimed}] today / [{remaining}] on {defer_date}")
+    else:
+        print(f"  ✓ deferred: {task_name} → {defer_date}")
+    _fire_refresh()
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: run.py <input>", file=sys.stderr)
@@ -546,7 +695,12 @@ def main() -> int:
     for item in items:
         if not item.strip():
             continue
-        query, target, time_range, explicit_minutes = _parse_input(item)
+        query, target, time_range, explicit_minutes, defer_date = _parse_input(item)
+        # Defer path: skip normal write, reschedule via defer-fast.py
+        if defer_date is not None:
+            claimed = explicit_minutes or 5
+            rc |= run_defer(query, defer_date, claimed)
+            continue
         d = _route(query, target)
         d["query_after_strip"] = d.get("query_after_strip", query)
         step = d.get("step")
