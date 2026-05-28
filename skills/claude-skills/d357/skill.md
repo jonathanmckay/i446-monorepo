@@ -25,11 +25,19 @@ Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux 
 
 ### `/d357 <name>` — start recording
 
-1. Check state.json; if a recording is running, **abort** and tell the user to stop it first.
+1. Check state.json; if a recording is running, **auto-stop it** before starting the new one:
+   a. Save `prev_mic_only = state.mic_only` (carry forward audio config).
+   b. Stop Toggl timer for the previous recording.
+   c. Send one `tmux send-keys -t d357 C-c` to stop meet.py.
+   d. Poll for transcript completion (same as `/d357 stop` step 5): wait for `TXT →` or `Done!` in the log, up to 120s (shorter than normal stop; we want to get the new recording going).
+   e. Read the transcript path from the log.
+   f. Clear state.json (`pid: null`).
+   g. **File the old meeting in the background** using an Agent: pass it the old meeting's name, transcript path, project, mic_only, and Toggl duration. The agent runs the full filing flow (steps 9-12 from `/d357 stop`) while the new recording starts. Do NOT block on this.
+   h. Report: `⏹ Stopped: <old name>. Filing in background.`
 2. **Parse the input.** Split on comma: `<name>[, <start_time>]`. If a trailing HHMM or HH:MM is present after a comma, use it as the Toggl start time (backdated). Also parse `--no-teams` flag from the name for mic-only mode.
    - Examples: `/d357 Francois 1:1, 1000` → name="Francois 1:1", start_time=10:00
    - `/d357 SLT metrics` → name="SLT metrics", start_time=now (default)
-3. **Audio pre-flight check** (skip for `--no-teams`):
+3. **Audio pre-flight check** (skip for `--no-teams`; also skip if `prev_mic_only` is true, and auto-set mic-only instead):
    a. Kill stale osascript dialogs: `killall osascript 2>/dev/null`
    b. **Detect AirPods HFP mode** — if AirPods are connected but in HFP mode (1ch output, 24kHz sample rate), the Meet Output multi-output device will silently fail to route to BlackHole. Check with:
       ```python
@@ -154,7 +162,8 @@ When Teams uses the AirPods mic for the call, macOS forces AirPods into HFP mode
 | Input | Expected |
 |-------|----------|
 | `/d357 joe 1:1` | tmux session, state.json, health check passes, confirms |
-| `/d357 joe 1:1` (while one is running) | Aborts with "already recording" |
+| `/d357 joe 1:1` (while one is running) | Auto-stops current, files in background, starts new recording |
+| `/d357 joe 1:1` (prev was mic_only) | Inherits mic-only mode, skips audio pre-flight |
 | `/d357 stop` | Ctrl-C via tmux, waits for transcript, files, reports |
 | `/d357 stop` (nothing running) | Reports "No recording active." |
 | `/d357` (nothing running) | Auto-detects calendar event, starts recording |
