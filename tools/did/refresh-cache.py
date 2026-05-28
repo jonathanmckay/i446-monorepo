@@ -47,9 +47,20 @@ def main() -> int:
         results = dict(pool.map(fetch, LABELS))
     data: dict = {"updated": datetime.now().isoformat(timespec="seconds")}
     data.update(results)
+    # Preserve the "today" bucket from the existing cache if present.
+    # The "today" bucket is populated by did-fast.py --refresh-cache (which
+    # fetches all tasks due today/overdue). This lightweight refresh only
+    # updates neon-labeled buckets and must not drop the broader task list.
+    if CACHE.exists():
+        try:
+            old = json.loads(CACHE.read_text())
+            if "today" in old and "today" not in data:
+                data["today"] = old["today"]
+        except (json.JSONDecodeError, OSError):
+            pass
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    counts = {k: len(v) for k, v in results.items()}
+    counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}
     print(f"refreshed {CACHE}: {counts}")
     return 0
 

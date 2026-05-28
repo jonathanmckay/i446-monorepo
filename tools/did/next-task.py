@@ -26,6 +26,21 @@ STRIP_SUFFIXES = [
 ]
 
 
+def _infer_cat(t: dict) -> str:
+    """Infer category from labels when 'cat' field is missing (bucketed format)."""
+    labels = t.get("labels", [])
+    for lbl in labels:
+        if lbl == "0neon":
+            return "0n"
+        if lbl == "1neon":
+            return "1n"
+        if lbl in ("夜neon",):
+            return "0n"
+        if lbl in ("関键路径", "关键路径", "关键径路", "#0g", "#-1g"):
+            return "0g"
+    return ""
+
+
 def strip_task_name(content: str) -> str:
     """Strip (N), [N], {N} and known suffixes to get bare name."""
     s = content
@@ -82,7 +97,21 @@ def main():
     except (json.JSONDecodeError, OSError):
         return
 
-    tasks = cache.get("tasks", [])
+    # Cache uses bucketed keys (0neon, 1neon, 夜neon, 関键路径, today).
+    # Flatten all list-valued keys into a single task list, deduping by ID.
+    if "tasks" in cache:
+        # Legacy flat format
+        tasks = cache["tasks"]
+    else:
+        seen_ids: set[str] = set()
+        tasks = []
+        for k, v in cache.items():
+            if isinstance(v, list):
+                for t in v:
+                    tid = t.get("id")
+                    if tid and tid not in seen_ids:
+                        seen_ids.add(tid)
+                        tasks.append(t)
     if not tasks:
         return
 
@@ -103,7 +132,7 @@ def main():
     bottom = []
     for t in tasks:
         # Filter by due date: only today or overdue
-        due = t.get("dueDate", "")
+        due = t.get("due") or t.get("dueDate") or ""
         if due and due > today_str:
             continue
 
@@ -129,7 +158,8 @@ def main():
         pad = max_content - len(t["content"]) + 4
         skipped_tag = " [skipped]" if t.get("id") in skipped_ids else ""
         tid = t.get("id", "")
-        print(f"  {i}. {t['content']}{' ' * pad}{t['cat']}{skipped_tag}  #{tid}")
+        cat = t.get("cat") or _infer_cat(t)
+        print(f"  {i}. {t['content']}{' ' * pad}{cat}{skipped_tag}  #{tid}")
     print(f"  {len(filtered) + 1}. [skip]")
     print(f"\nPick [1-{len(filtered) + 1}], or s<N> to push to bottom:")
 
