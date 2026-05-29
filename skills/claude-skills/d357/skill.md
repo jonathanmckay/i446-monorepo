@@ -77,6 +77,14 @@ Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux 
    **If the session died or the recording exited early**: diagnose from the log, fix the issue (usually: switch to mic-only, or reconnect AirPods), and restart. Do NOT report success to the user if the recording is dead. The user cannot babysit this.
 
 8. Write state.json with tmux session name, PID (from `tmux list-panes -t d357 -F '#{pane_pid}'`), name, timestamp, log path, toggl_id, project, calendar_minutes, and mic_only.
+8b. **Emit prof arrival event** (for professionalism daemon scoring):
+    ```bash
+    python3 ~/i446-monorepo/tools/prof/log_arrival.py start \
+        --name "<name>" \
+        ${calendar_minutes:+--calendar-minutes $calendar_minutes} \
+        ${scheduled_start:+--scheduled-start "$scheduled_start"}
+    ```
+    `scheduled_start` is the ISO8601 start from the calendar event found in step 4 (with offset). Omit both flags if no calendar match.
 9. Confirm in one line: `Recording → <name> (tmux:d357). Audio: <mode>. /d357 stop when done.`
 
 ### `/d357 stop [HHMM]` — finalize
@@ -100,6 +108,10 @@ Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux 
 6. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
 7. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh.
 8. Clear state.json (set `pid: null`).
+8b. **Emit prof stop event** (for professionalism daemon scoring):
+    ```bash
+    python3 ~/i446-monorepo/tools/prof/log_arrival.py stop --name "<name>"
+    ```
 9. **Read the transcript** from the `.txt` file.
 10. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for hand-written notes matching the meeting name.
 11. **Extract and file** — generate the structured meeting note and write to `vault/d357/<M.W>/YYYY.MM.DD-<slug>.md`. If `mic_only` is true, prefix title and H1 with `1S `.

@@ -70,7 +70,7 @@ Crontabs are per-machine: `crontab -e` on Straylight edits Straylight's, `ssh ix
 | Label | Status | Purpose |
 |---|---|---|
 | `com.mckay.ibx-email-watcher` | running | Gmail IMAP push notifications |
-| `com.mckay.ibx-imsg-watcher` | broken (exit 1) | iMessage new message watcher |
+| `com.mckay.ibx-imsg-watcher` | **disabled** (moved to ix 2026.05.28) | iMessage new message watcher |
 | `com.mckay.email-stats` | loaded | Email stats (may overlap with cron) |
 | `com.mckay.transcript-rsync` | daily 03:00 | Rsync .claude/projects/ to vault |
 | `com.mckay.screenshot-clipboard` | broken (exit 127) | Screenshot to clipboard |
@@ -82,8 +82,13 @@ Crontabs are per-machine: `crontab -e` on Straylight edits Straylight's, `ssh ix
 | `com.mckay.0g-sync.plist.disabled` | LaunchAgent, 2h | cron: 0g-sync.py sync |
 | `com.mckay.0g-cleanup.plist.disabled` | LaunchAgent, 05:30 | cron: 0g-sync.py cleanup |
 
+### Disabled (migrated to ix 2026.05.28)
+
+| Label | Was | Now on ix as |
+|---|---|---|
+| `com.mckay.ibx-imsg-watcher.plist.disabled-2026-05-28` | LaunchAgent, fswatch on chat.db | `com.mckay.ibx-imsg-watcher` with `IMSG_WATCHER_HEADLESS=1` (Todoist queueing only; iCloud Messages still notifies straylight natively) |
+
 ## Known Issues
 
-- `com.mckay.ibx-imsg-watcher` exits with code 1 on Straylight. Needs investigation.
 - `com.mckay.screenshot-clipboard` exits with code 127 (command not found). Binary missing or wrong path.
 - `com.mckay.email-stats` LaunchAgent may duplicate the `gen_email_stats.py` cron job. Check if both are needed.
