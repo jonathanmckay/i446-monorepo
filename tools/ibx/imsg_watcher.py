@@ -5,9 +5,15 @@ imsg_watcher — instant iMessage notifications via FSEvents (fswatch).
 Watches chat.db for changes. On each change, queries for new unread threads
 not yet notified. Sends a macOS notification via terminal-notifier.
 Clicking the notification opens imsg in a new cmux tab.
+
+Set IMSG_WATCHER_HEADLESS=1 to skip local notifications (e.g. on ix where
+JM isn't sitting in front of the screen). Todoist task creation still fires.
 """
 
+from __future__ import annotations
+
 import json
+import os
 import requests
 import shutil
 import sqlite3
@@ -112,6 +118,8 @@ def ensure_todoist_task(new_threads: dict):
 # ── Notify ────────────────────────────────────────────────────────────────────
 
 def notify(title: str, message: str):
+    if os.environ.get("IMSG_WATCHER_HEADLESS"):
+        return
     try:
         subprocess.run([
             "terminal-notifier",
