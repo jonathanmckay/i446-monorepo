@@ -12,6 +12,7 @@ Card order:
   5. suggest starting on goals
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -35,6 +36,14 @@ from rich.rule import Rule
 from rich.text import Text
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+# Import ix_osa for 0分 writes (hyphenated filename → importlib)
+_IX_PATH = Path.home() / ".claude/skills/_lib/ix-osa.py"
+_IX_SPEC = importlib.util.spec_from_file_location("ix_osa", _IX_PATH)
+_ix_mod = importlib.util.module_from_spec(_IX_SPEC)
+sys.modules["ix_osa"] = _ix_mod  # register before exec so dataclass resolution works
+_IX_SPEC.loader.exec_module(_ix_mod)  # type: ignore[union-attr]
+ix_run = _ix_mod.run
 
 console = Console()
 
@@ -603,6 +612,44 @@ def check_time_gaps(block_start, block_end, date_str=None):
     return gaps
 
 
+# ── Project → 0分 column mapping (mirrors did-fast.py LABEL_TO_0FEN) ──────
+_PROJECT_TO_0FEN = {
+    "i9": "R", "i447": "R", "f693": "R", "f694": "R",
+    "m5x2": "S",
+    "g245": "T", "infra": "T", "cc": "T",
+    "hcmc": "U",
+    "hcm": "V", "hci": "V",
+    "hcb": "W", "hcbp": "W",
+    "xk87": "X", "xk88": "X",
+    "s897": "Y",
+}
+
+
+def _build_0fen_append(col: str, pts: int, target_date: str) -> str:
+    """Build AppleScript to append +N to a 0分 cell."""
+    return f'''tell application "Microsoft Excel"
+    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
+    set todayRow to 0
+    repeat with i from 2 to 200
+        if (string value of range ("B" & i) of ws) = "{target_date}" then
+            set todayRow to i
+            exit repeat
+        end if
+    end repeat
+    if todayRow = 0 then return "ERROR: date {target_date} not found in 0分"
+    set theCell to range ("{col}" & todayRow) of ws
+    set oldFormula to formula of theCell
+    if oldFormula = "" or oldFormula = "0" then
+        set formula of theCell to "=0+{pts}"
+    else if character 1 of oldFormula is not "=" then
+        set formula of theCell to "=" & oldFormula & "+{pts}"
+    else
+        set formula of theCell to oldFormula & "+{pts}"
+    end if
+    return "OK:0fen row=" & todayRow
+end tell'''
+
+
 # ── /tg shortcode → project mapping (subset for gap fills) ───────────────
 _GAP_PROJECT_MAP = {
     "wake up": "infra", "get up": "infra", "bio": "infra", "shower": "hci",
@@ -622,10 +669,16 @@ _GAP_PROJECT_MAP = {
 
 
 def fill_time_gaps(response, gaps=None):
-    """Parse comma-separated gap fills and create Toggl entries.
+    """Parse comma-separated gap fills and create Toggl entries + optional 0分 points.
 
-    Each segment: 'HHMM-HHMM description [@project]'
-    e.g. '900-915 wake up, 915-930 2nd hci, 940-1005 startup @i9'
+    Each segment: '[HHMM-HHMM] description [+N] [@project]'
+    e.g. '900-915 wake up, 915-930 2nd hci, +30 @i9, DS:JM 1200-1230'
+
+    Tokens (order-insensitive within each segment):
+      HHMM-HHMM  — time range for Toggl entry (falls back to gap positional match)
+      +N         — points to write to 0分 (column determined by @project or auto-map)
+      @project   — Toggl project override AND 0分 column source
+      everything else — description
 
     If a segment has no time prefix and gaps is provided, the corresponding
     gap's time range is used (1:1 positional match, or the single gap if
@@ -634,45 +687,52 @@ def fill_time_gaps(response, gaps=None):
     cli = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
     segments = [s.strip() for s in response.split(",") if s.strip()]
     created = 0
+    points_appends = []  # collect (col, pts) for batch 0分 write
     for i, seg in enumerate(segments):
-        # Parse: HHMM-HHMM or H:MM-H:MM then description [@project]
-        m = re.match(r'(\d{3,4})-(\d{3,4})\s+(.*)', seg)
-        if not m:
-            m = re.match(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})\s+(.*)', seg)
-            if not m:
+        # Extract +N points token
+        points = None
+        pts_match = re.search(r'\+(\d+)', seg)
+        if pts_match:
+            points = int(pts_match.group(1))
+            seg = (seg[:pts_match.start()] + seg[pts_match.end():]).strip()
+
+        # Extract @project override
+        project = None
+        at_match = re.search(r'@(\S+)', seg)
+        if at_match:
+            project = at_match.group(1)
+            seg = (seg[:at_match.start()] + seg[at_match.end():]).strip()
+
+        # Parse time range: HHMM-HHMM or H:MM-H:MM (anywhere in segment)
+        start_t = end_t = None
+        m = re.search(r'(\d{3,4})-(\d{3,4})', seg)
+        if m:
+            raw_s, raw_e = m.group(1), m.group(2)
+            start_t = f"{int(raw_s) // 100:02d}:{int(raw_s) % 100:02d}"
+            end_t = f"{int(raw_e) // 100:02d}:{int(raw_e) % 100:02d}"
+            rest = (seg[:m.start()] + seg[m.end():]).strip()
+        else:
+            m = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', seg)
+            if m:
+                start_t, end_t = m.group(1), m.group(2)
+                rest = (seg[:m.start()] + seg[m.end():]).strip()
+            else:
+                rest = seg
                 # No time prefix; use gap time range if available
                 if gaps:
                     gap = gaps[i] if i < len(gaps) else (gaps[0] if len(gaps) == 1 else None)
                     if gap:
-                        start_t, end_t = gap  # already "HH:MM" format
-                        rest = seg
-                    else:
-                        console.print(f"  [dim yellow]skipped (no time range): {seg}[/dim yellow]")
-                        continue
-                else:
+                        start_t, end_t = gap
+                elif not points:
+                    # No time, no points — nothing to do
                     console.print(f"  [dim yellow]skipped (bad format): {seg}[/dim yellow]")
                     continue
-            else:
-                start_t, end_t, rest = m.group(1), m.group(2), m.group(3).strip()
-        else:
-            raw_s, raw_e, rest = m.group(1), m.group(2), m.group(3).strip()
-            # Normalize HHMM → HH:MM
-            start_t = f"{int(raw_s) // 100:02d}:{int(raw_s) % 100:02d}"
-            end_t = f"{int(raw_e) // 100:02d}:{int(raw_e) % 100:02d}"
-
-        # Extract @project override
-        project = None
-        at_match = re.search(r'@(\S+)', rest)
-        if at_match:
-            project = at_match.group(1)
-            rest = rest[:at_match.start()].strip()
 
         desc = rest or "gap"
 
         # Auto-map project from description if not overridden
         if not project:
             desc_lower = desc.lower()
-            # Try exact match, then check if desc ends with a known key
             project = _GAP_PROJECT_MAP.get(desc_lower)
             if not project:
                 for key, proj in _GAP_PROJECT_MAP.items():
@@ -680,14 +740,41 @@ def fill_time_gaps(response, gaps=None):
                         project = proj
                         break
 
-        cmd = ["python3", str(cli), "create", desc, start_t, end_t]
-        if project:
-            cmd.append(project)
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=15)
-            created += 1
-        except Exception as e:
-            console.print(f"  [dim yellow]toggl error: {e}[/dim yellow]")
+        # Create Toggl entry (if we have a time range)
+        if start_t and end_t:
+            cmd = ["python3", str(cli), "create", desc, start_t, end_t]
+            if project:
+                cmd.append(project)
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=15)
+                created += 1
+            except Exception as e:
+                console.print(f"  [dim yellow]toggl error: {e}[/dim yellow]")
+
+        # Queue 0分 points write
+        if points and project:
+            col = _PROJECT_TO_0FEN.get(project)
+            if col:
+                points_appends.append((col, points))
+                console.print(f"  [dim]+{points} → 0分 {col} ({project})[/dim]")
+            else:
+                console.print(f"  [dim yellow]+{points} skipped (no 0分 column for {project})[/dim yellow]")
+        elif points and not project:
+            console.print(f"  [dim yellow]+{points} skipped (no @project for 0分)[/dim yellow]")
+
+    # Batch write all 0分 appends
+    if points_appends:
+        today = datetime.now()
+        target_date = f"{today.month}/{today.day}"
+        for col, pts in points_appends:
+            script = _build_0fen_append(col, pts, target_date)
+            try:
+                result = ix_run(script)
+                if "ERROR" in (result or ""):
+                    console.print(f"  [red]0分 write failed: {result}[/red]")
+            except Exception as e:
+                console.print(f"  [red]0分 write error: {e}[/red]")
+
     return created
 
 
@@ -1175,11 +1262,14 @@ def main():
     # /inbound keeps prompting until the user manually acks each expired card.
     mtg_briefs = _prune_stale_briefs(mtg_briefs)
 
-    # Check time gaps in the previous block
-    prev_idx, prev_name, prev_start, prev_end = get_previous_block()
-    time_gaps = []
-    if idx > 0:  # skip if we're in the first block of the day
-        time_gaps = check_time_gaps(prev_start, prev_end)
+    # Check time gaps in all past blocks (separate card per block)
+    block_gaps = []  # list of (block_name, block_start, block_end, gaps)
+    if idx > 0:
+        for bi in range(idx):
+            bname, bstart, bend = BLOCKS[bi]
+            gaps = check_time_gaps(bstart, bend)
+            if gaps:
+                block_gaps.append((bname, bstart, bend, gaps))
 
     # Count cards needed
     prayer_marker_exists = has_prayer_marker(block_name)
@@ -1188,7 +1278,7 @@ def main():
     # the daily mark suppress the per-block prompt — only check the marker.
     if not prayer_marker_exists:
         cards_needed.append("salah")
-    if time_gaps:
+    for _ in block_gaps:
         cards_needed.append("gaps")
     if not goals_set:
         cards_needed.append("-1g")
@@ -1222,20 +1312,20 @@ def main():
             set_term_color("black")
             write_prayer_marker(block_name)
 
-        # ── Card 1.5: Time gap audit ─────────────────────────────────
-        if time_gaps:
+        # ── Card 1.5: Time gap audit (one card per block) ─────────────
+        for bg_name, bg_start, bg_end, bg_gaps in block_gaps:
             card_num += 1
             gap_lines = "  ".join(
-                f"你{gs}-{ge}做了什么？" for gs, ge in time_gaps
+                f"你{gs}-{ge}做了什么？" for gs, ge in bg_gaps
             )
             resp = prompt_card(
-                card_num, total_cards, f"⏱ Gaps · {prev_name} ({prev_start}-{prev_end})",
+                card_num, total_cards, f"⏱ Gaps · {bg_name} ({bg_start}-{bg_end})",
                 gap_lines,
-                options="fill/skip", preserve_case=True,
+                options="desc [HHMM-HHMM] [+N] [@proj] / skip", preserve_case=True,
             )
             if resp and resp.lower() != "skip":
                 console.print(f"[dim]  logging gaps...[/dim]")
-                n = fill_time_gaps(resp, gaps=time_gaps)
+                n = fill_time_gaps(resp, gaps=bg_gaps)
                 console.print(f"[green]  ✓ {n} gap(s) filled[/green]")
 
         # ── Card 2: -1g ───────────────────────────────────────────────
