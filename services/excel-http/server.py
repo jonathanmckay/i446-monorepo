@@ -98,13 +98,19 @@ def do_append(req: dict) -> dict:
     sheet = req["sheet"]
     val = str(req.get("value", ""))
     val_esc = safe_str(val)
+    is_numeric = val.lstrip().startswith("+") or val.lstrip().startswith("=")
+    if is_numeric:
+        empty_set = f'set formula of theCell to "={val_esc.lstrip("+")}"'
+    else:
+        clean_esc = safe_str(val.lstrip(", "))
+        empty_set = f'set value of theCell to "{clean_esc}"'
     script = f'''
 tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of active workbook
     set theCell to cell ("{col}{row}") of theSheet
     set oldFormula to formula of theCell
     if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "={val_esc.lstrip("+")}"
+        {empty_set}
     else
         set formula of theCell to oldFormula & "{val_esc}"
     end if
