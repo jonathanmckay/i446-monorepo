@@ -180,9 +180,44 @@ open -a "Google Chrome" "https://www.goodreads.com/search?q=$(python3 -c "import
 cd /Users/mckay/vault/hcmp/o315/blog && python3 scripts/sync-vault-reviews.py
 ```
 
+5. **Commit, push, and verify the deploy:**
+
+```bash
+cd /Users/mckay/vault/hcmp/o315/blog
+git add content/reviews/<slug>.md
+git commit -m "Add review: <Title>"
+git push
+```
+
+Then wait for the GitHub Actions deploy to complete:
+
+```bash
+# Get the latest run ID
+gh run list --repo jonathanmckay/o315-blog-v3 --limit 1
+# Watch it until it finishes
+gh run watch <run_id> --repo jonathanmckay/o315-blog-v3
+```
+
+If the deploy fails, check `gh run view <run_id> --repo jonathanmckay/o315-blog-v3 --log-failed` and fix before continuing.
+
+6. **Verify the review is live** by fetching the prod URL:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" "https://jonathanmckay.com/reviews/<slug>/"
+```
+
+If the response is `200`, open it in Chrome for the user to see:
+
+```bash
+open -a "Google Chrome" "https://jonathanmckay.com/reviews/<slug>/"
+```
+
+If not `200`, diagnose and fix. The review is not done until it loads in prod.
+
 ### Step 7: Report
 
 ```
 Published: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
-Goodreads opened, final review copied to clipboard, and o315 blog synced.
+Live at: https://jonathanmckay.com/reviews/<slug>/
+Goodreads opened, final review copied to clipboard, blog deployed and verified.
 ```
