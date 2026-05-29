@@ -353,7 +353,10 @@ def prompt_card(card_num, total, title, body, options="y/skip", preserve_case=Fa
         else:
             raw = console.input(f"[bold red]({options})>[/bold red] ").strip()
         response = raw if preserve_case else raw.lower()
-    except (KeyboardInterrupt, EOFError):
+    except KeyboardInterrupt:
+        set_term_color("black")
+        raise
+    except EOFError:
         response = "skip"
     set_term_color("black")
     return response
@@ -1307,7 +1310,10 @@ def main():
             console.print(panel)
             try:
                 console.input("[dim]any key to continue[/dim] ")
-            except (KeyboardInterrupt, EOFError):
+            except KeyboardInterrupt:
+                set_term_color("black")
+                raise
+            except EOFError:
                 pass
             set_term_color("black")
             write_prayer_marker(block_name)
@@ -1456,7 +1462,9 @@ def main():
                 desc = re.sub(r'\s*\{?\d+\}?\s*$', '', goal).strip()
                 start_toggl(desc, "g245")
                 console.print(f"[green]  ▶ Started: {desc} → g245[/green]")
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt:
+            return 2
+        except EOFError:
             pass
 
     # Idle loop: block watcher will kill us on transition. Refresh the
