@@ -28,6 +28,28 @@ Goals may include these inline annotations:
 
 Strip `@code` from the displayed task content in Todoist (it becomes a label). Keep `(N)`, `[N]`, and `{N}` in the task content as-is — they are read by `/did` and other skills at completion time.
 
+## Domain Auto-Categorization
+
+If a goal has an explicit `@code` annotation, use that. Otherwise, infer the domain from keywords in the goal text:
+
+| Keywords | Domain |
+|----------|--------|
+| xbox, platform, copilot, github, teams, metrics, standup, sprint, retro, SLT, 1:1 (work context), PR, deploy, pipeline, experimentation, forza, halo, activation | `i9` |
+| property, tenant, lease, rent, AppFolio, occupancy, maintenance, P&L, bookkeeping, eviction, unit, renewal, vacancy | `m5x2` |
+| school, math, kids, Theo, Ren, Aurora, homework, reading, lego, PTC | `xk87` |
+| exercise, gym, HIIT, bball, basketball, run, walk, yoga, stretch, legs | `hcbp` |
+| eat, food, meal, calories, nutrition, breakfast, lunch, dinner, snack | `hcb` |
+| meditat, journal, prayer, reflect, o314, 冥想, dream | `hcm` |
+| news, 新闻, YouTube, podcast, read (media), article, book review | `hcmc` |
+| invest, stocks, portfolio, taxes, budget, finance | `qz12` |
+| goal, review, plan, weekly, 1s | `g245` |
+| social, friends, dinner out, call (non-work) | `s897` |
+| admin, tooling, setup, infra, fix computer, claude, system | `i447` |
+
+If no keywords match and no `@code` is provided, default to `g245` (daily goals are meta by nature).
+
+The inferred domain is added as a Todoist label alongside `#0g`.
+
 ## Behavior
 
 ### Step 0: Toggl 0g time carve-out
@@ -82,7 +104,7 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 For each **new** goal (no existing match), create a Todoist task:
 - **Content**: goal text (with `(N)`, `[N]`, `{N}` preserved; `@code` stripped)
 - **Project**: `0g` (ID `6XfvCQ3p8Gq6fhGR`)
-- **Labels**: `["#0g"]` + the `@code` label if present (e.g. `"i9"`)
+- **Labels**: `["#0g", "<domain>"]` — domain from explicit `@code` or auto-inferred (see Domain Auto-Categorization above)
 - **Priority**: `p1`
 - **Due**: today
 - **Duration**: from `(N)` if present

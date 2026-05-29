@@ -40,7 +40,27 @@ Times outside 04:00-21:59 default to 卯 (block 0).
 - **Build order**: `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`
 - **Section**: `## -1₲` — goals go under the matching 地支 time heading
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
-- **Todoist labels**: `#-1g` on every task
+- **Todoist labels**: `#-1g` on every task, plus an auto-inferred domain label
+
+## Domain Auto-Categorization
+
+If a goal has an explicit `@code` annotation (e.g. `@i9`, `@m5x2`), use that as the domain label and strip it from the content. Otherwise, infer the domain from keywords in the goal text:
+
+| Keywords | Domain |
+|----------|--------|
+| xbox, platform, copilot, github, teams, metrics, standup, sprint, retro, SLT, 1:1 (work context), PR, deploy, pipeline, experimentation, forza, halo, activation | `i9` |
+| property, tenant, lease, rent, AppFolio, occupancy, maintenance, P&L, bookkeeping, eviction, unit, renewal, vacancy | `m5x2` |
+| school, math, kids, Theo, Ren, Aurora, homework, reading, lego, PTC | `xk87` |
+| exercise, gym, HIIT, bball, basketball, run, walk, yoga, stretch, legs | `hcbp` |
+| eat, food, meal, calories, nutrition, breakfast, lunch, dinner, snack | `hcb` |
+| meditat, journal, prayer, reflect, o314, 冥想 | `hcm` |
+| news, 新闻, YouTube, podcast, read (media), article, book review | `hcmc` |
+| invest, stocks, portfolio, taxes, budget, finance | `qz12` |
+| goal, review, plan, weekly, 1s, 0g, dream | `g245` |
+| social, friends, dinner out, call (non-work) | `s897` |
+| admin, tooling, setup, infra, fix computer, claude, system | `i447` |
+
+If no keywords match, default to the block's typical domain (from the block→domain mapping in -2n.py: 巳/午/未/申 → `i9`, 酉 → `m5x2`, 戌 → `xk87`, 亥 → `hcm`).
 
 ## Steps
 
@@ -72,7 +92,7 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 For each **new** goal (no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
 - **Content**: the goal text
 - **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
-- **Labels**: `["#-1g"]`
+- **Labels**: `["#-1g", "<domain>"]` (e.g. `["#-1g", "i9"]`)
 - **Priority**: `p1`
 - **Due**: `today`
 - **Duration**: from `(N)` annotation if present (e.g., `(30)` → `"30m"`). If no `(N)`, omit.
