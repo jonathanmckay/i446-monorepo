@@ -12,7 +12,6 @@ Card order:
   5. suggest starting on goals
 """
 
-import importlib.util
 import json
 import os
 import re
@@ -36,14 +35,6 @@ from rich.rule import Rule
 from rich.text import Text
 
 sys.path.insert(0, os.path.dirname(__file__))
-
-# Import ix_osa for 0分 writes (hyphenated filename → importlib)
-_IX_PATH = Path.home() / ".claude/skills/_lib/ix-osa.py"
-_IX_SPEC = importlib.util.spec_from_file_location("ix_osa", _IX_PATH)
-_ix_mod = importlib.util.module_from_spec(_IX_SPEC)
-sys.modules["ix_osa"] = _ix_mod  # register before exec so dataclass resolution works
-_IX_SPEC.loader.exec_module(_ix_mod)  # type: ignore[union-attr]
-ix_run = _ix_mod.run
 
 console = Console()
 
@@ -615,44 +606,6 @@ def check_time_gaps(block_start, block_end, date_str=None):
     return gaps
 
 
-# ── Project → 0分 column mapping (mirrors did-fast.py LABEL_TO_0FEN) ──────
-_PROJECT_TO_0FEN = {
-    "i9": "R", "i447": "R", "f693": "R", "f694": "R",
-    "m5x2": "S",
-    "g245": "T", "infra": "T", "cc": "T",
-    "hcmc": "U",
-    "hcm": "V", "hci": "V",
-    "hcb": "W", "hcbp": "W",
-    "xk87": "X", "xk88": "X",
-    "s897": "Y",
-}
-
-
-def _build_0fen_append(col: str, pts: int, target_date: str) -> str:
-    """Build AppleScript to append +N to a 0分 cell."""
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
-    set todayRow to 0
-    repeat with i from 2 to 200
-        if (string value of range ("B" & i) of ws) = "{target_date}" then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_date} not found in 0分"
-    set theCell to range ("{col}" & todayRow) of ws
-    set oldFormula to formula of theCell
-    if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "=0+{pts}"
-    else if character 1 of oldFormula is not "=" then
-        set formula of theCell to "=" & oldFormula & "+{pts}"
-    else
-        set formula of theCell to oldFormula & "+{pts}"
-    end if
-    return "OK:0fen row=" & todayRow
-end tell'''
-
-
 # ── /tg shortcode → project mapping (subset for gap fills) ───────────────
 _GAP_PROJECT_MAP = {
     "wake up": "infra", "get up": "infra", "bio": "infra", "shower": "hci",
@@ -688,9 +641,9 @@ def fill_time_gaps(response, gaps=None):
     there's only one).
     """
     cli = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
+    did_fast = Path.home() / "i446-monorepo/tools/did/did-fast.py"
     segments = [s.strip() for s in response.split(",") if s.strip()]
     created = 0
-    points_appends = []  # collect (col, pts) for batch 0分 write
     for i, seg in enumerate(segments):
         # Extract +N points token
         points = None
@@ -754,29 +707,23 @@ def fill_time_gaps(response, gaps=None):
             except Exception as e:
                 console.print(f"  [dim yellow]toggl error: {e}[/dim yellow]")
 
-        # Queue 0分 points write
+        # Write points to 0分 via did-fast.py (Step 6: variable task)
         if points and project:
-            col = _PROJECT_TO_0FEN.get(project)
-            if col:
-                points_appends.append((col, points))
-                console.print(f"  [dim]+{points} → 0分 {col} ({project})[/dim]")
-            else:
-                console.print(f"  [dim yellow]+{points} skipped (no 0分 column for {project})[/dim yellow]")
+            did_input = f"gap [{points}] @{project}"
+            console.print(f"  [dim]+{points} → did-fast ({project})[/dim]")
+            try:
+                did_result = subprocess.run(
+                    ["python3", str(did_fast), did_input],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if did_result.returncode == 0:
+                    console.print(f"  [green]✓ +{points} → 0分 ({project})[/green]")
+                else:
+                    console.print(f"  [red]did-fast error: {did_result.stderr or did_result.stdout}[/red]")
+            except Exception as e:
+                console.print(f"  [red]did-fast error: {e}[/red]")
         elif points and not project:
             console.print(f"  [dim yellow]+{points} skipped (no @project for 0分)[/dim yellow]")
-
-    # Batch write all 0分 appends
-    if points_appends:
-        today = datetime.now()
-        target_date = f"{today.month}/{today.day}"
-        for col, pts in points_appends:
-            script = _build_0fen_append(col, pts, target_date)
-            try:
-                result = ix_run(script)
-                if "ERROR" in (result or ""):
-                    console.print(f"  [red]0分 write failed: {result}[/red]")
-            except Exception as e:
-                console.print(f"  [red]0分 write error: {e}[/red]")
 
     return created
 

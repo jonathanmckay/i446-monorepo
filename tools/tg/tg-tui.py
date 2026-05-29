@@ -478,6 +478,7 @@ def render_detail() -> list[tuple[str, str]]:
     now_drawn = False
     block_rule_drawn = False
     gcal_shown: set[str] = set()  # track gcal event titles already labelled
+    toggl_shown: set[str] = set()  # track toggl descriptions already labelled
     while slot < end:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
 
@@ -538,6 +539,14 @@ def render_detail() -> list[tuple[str, str]]:
             cur_desc = STATE.current.get("description") or ""
             label = f"▶ {cur_desc}"
             pid = STATE.current.get("project_id")
+
+        # Deduplicate Toggl labels: show description only on first slot
+        if label and not is_running and not label.startswith("◇ "):
+            if label in toggl_shown:
+                label = "″"
+            else:
+                toggl_shown.add(label)
+
         space = min(DESC_MAX, max(1, WIDTH_HINT - len(time_str) - 4))
         content = f" {marker} {truncate(label or '·', space)}\n"
         if is_running:
