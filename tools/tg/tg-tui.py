@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import os
 import signal
 import subprocess
@@ -51,6 +52,7 @@ from prompt_toolkit.styles import Style  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
 import gcal_client  # noqa: E402
+import outlook_client  # noqa: E402
 
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
@@ -99,6 +101,8 @@ def next_block(h: int) -> tuple[str, int, int] | None:
         return BLOCKS[0]
     return None
 SLOT_MIN = 15
+BUILD_ORDER = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "⏰"]
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
 PROJECT_CODE = {}
@@ -143,6 +147,7 @@ CALENDAR_PROJECT_MAP = {
     "lxu888": "xk88",
     "Calendar": "infra",
     "jonathan.b.mckay@gmail.com": "infra",
+    "Outlook": "i9",
 }
 
 EVENT_KEYWORDS = [
@@ -179,15 +184,18 @@ class State:
     def __init__(self):
         self.current = None  # running entry
         self.entries: list[dict] = []  # today's entries
-        self.events: list[dict] = []  # today's gcal events
+        self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
         self.flash = ""  # one-line status
         self.flash_until = 0.0
         self.flash_style = ""  # optional override style for flash
         self.command_mode = False
+        self.today_points = 0  # 分 earned today
+        self.block_points: dict[str, int] = {}  # per-block 分
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
+        self.last_points_fetch = 0.0
 
 
 STATE = State()
@@ -249,10 +257,52 @@ def fetch_gcal(force=False):
         now = dt.datetime.now(TZ)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + dt.timedelta(days=1)
-        STATE.events = gcal_client.list_events(day_start, day_end, force=force)
+        gcal_events = gcal_client.list_events(day_start, day_end, force=force)
+        outlook_events = []
+        try:
+            outlook_events = outlook_client.list_events(day_start, day_end, force=force)
+        except Exception:
+            pass  # Outlook is best-effort; don't block on it
+        # Merge and sort by start time
+        combined = gcal_events + outlook_events
+        combined.sort(key=lambda e: e["start_dt"])
+        STATE.events = combined
         STATE.last_gcal_fetch = time.monotonic()
     except Exception as e:
         flash(f"gcal err: {e}")
+
+
+COMPLETED_TODAY = Path.home() / "vault/z_ibx/completed-today.json"
+
+
+def fetch_points():
+    """Read today's 分 from completed-today.json. Computes total and per-block."""
+    try:
+        data = json.loads(COMPLETED_TODAY.read_text())
+        today_str = dt.datetime.now(TZ).strftime("%Y-%m-%d")
+        if data.get("date") != today_str:
+            STATE.today_points = 0
+            STATE.block_points = {}
+            return
+        pts = data.get("points", {})
+        timestamps = data.get("timestamps", {})
+        STATE.today_points = sum(pts.values())
+        # Compute per-block points using timestamps
+        bp: dict[str, int] = {}
+        for name, val in pts.items():
+            ts = timestamps.get(name, "")
+            if ts and val:
+                try:
+                    h = int(ts.split(":")[0])
+                    blk = hour_to_block(h)
+                    if blk:
+                        bp[blk[0]] = bp.get(blk[0], 0) + val
+                except Exception:
+                    pass
+        STATE.block_points = bp
+        STATE.last_points_fetch = time.monotonic()
+    except Exception:
+        pass
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
@@ -349,7 +399,9 @@ def pad(s: str, n: int) -> str:
 
 def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(TZ)
-    title = f" tg · {now:%a %H:%M:%S} "
+    pts = STATE.today_points
+    pts_str = f" · {pts}分" if pts else ""
+    title = f" tg · {now:%a %H:%M:%S}{pts_str} "
     line = title + "─" * max(0, WIDTH_HINT - len(title))
     return [("class:header", line + "\n")]
 
@@ -380,8 +432,38 @@ def section_rule(label: str, focus: bool = False) -> list[tuple[str, str]]:
     return [(cls, s + "─" * max(0, WIDTH_HINT - len(s)) + "\n")]
 
 
+def _read_block_emojis() -> dict[str, str]:
+    """Read build order file, return {branch_char: emoji_string} for today's blocks."""
+    try:
+        text = BUILD_ORDER.read_text()
+    except Exception:
+        return {}
+    result = {}
+    in_section = False
+    for line in text.splitlines():
+        if line.strip().startswith("## -1₲"):
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if not in_section:
+            continue
+        if line.startswith("- ") and not line.startswith("    "):
+            tail = line[2:].strip()
+            if tail:
+                branch = tail[0]
+                emojis = "".join(ch for ch in BLOCK_EMOJIS if ch in tail)
+                if emojis:
+                    result[branch] = emojis
+    return result
+
+
 def render_morning() -> list[tuple[str, str]]:
-    """Toggl-only collapsed view from 00:00 -> detail-band start."""
+    """Toggl-only collapsed view from 00:00 -> detail-band start.
+
+    For each completed block: top 4 entries by duration (shown chronologically),
+    plus build-order emojis and block total duration.
+    """
     start, _ = detail_window()
     cutoff = start
     items = [e for e in STATE.entries if e["start_dt"] < cutoff]
@@ -389,7 +471,6 @@ def render_morning() -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = section_rule("earlier · toggl")
         out.append(("class:dim", "  (nothing logged)\n"))
         return out
-    # Merge adjacent same-desc runs
     merged = []
     for e in items:
         end = min(e["end_dt"], cutoff)
@@ -397,7 +478,6 @@ def render_morning() -> list[tuple[str, str]]:
             merged[-1]["end_dt"] = end
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"], "project_id": e["project_id"]})
-    # Pre-compute dominant project per block for coloring block labels
     block_durations: dict[str, dict[int | None, int]] = {}
     for m in merged:
         mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
@@ -407,50 +487,56 @@ def render_morning() -> list[tuple[str, str]]:
         if blk:
             block_durations.setdefault(blk[0], {})
             block_durations[blk[0]][m["project_id"]] = block_durations[blk[0]].get(m["project_id"], 0) + mins
-
-    # Group entries by block
     block_entries: dict[str, list] = {}
     for m in merged:
         mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
         if mins < 5:
-            continue  # skip very short entries (< 5min)
+            continue
         blk = hour_to_block(m["start_dt"].hour)
         blk_name = blk[0] if blk else "?"
         block_entries.setdefault(blk_name, [])
         block_entries[blk_name].append(m)
 
+    bo_emojis = _read_block_emojis()
+
     out: list[tuple[str, str]] = []
     for blk_name in block_entries:
         entries = block_entries[blk_name]
-        # Block label colored by dominant project, first entry inline
+        for ent in entries:
+            ent["_dur_min"] = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
+        top4 = sorted(entries, key=lambda e: e["_dur_min"], reverse=True)[:4]
+        top4.sort(key=lambda e: e["start_dt"])
+
         dom_pid = max(block_durations.get(blk_name, {}), key=lambda p: block_durations[blk_name][p], default=None)
         blk_style = f"bold {project_style(dom_pid)}".strip() if dom_pid else "bold #ffffff"
-        first = entries[0]
-        code = proj_code(first["project_id"])
-        label = first["desc"] or "(blank)"
-        if code:
-            label = f"{label} · {code}"
-        style = project_style(first["project_id"])
-        label_trunc = truncate(label, min(DESC_MAX, max(1, WIDTH_HINT - 10)))
-        inner = f" {blk_name}  {label_trunc} "
-        trail = max(0, WIDTH_HINT - 2 - len(inner))
-        out.append((blk_style, f"─"))
-        out.append((style, inner))
+        emojis = bo_emojis.get(blk_name, "")
+        total_min = sum(block_durations.get(blk_name, {}).values())
+        blk_pts = STATE.block_points.get(blk_name, 0)
+        blk_label = f" {blk_name}"
+        if emojis:
+            blk_label += f" {emojis}"
+        blk_label += f"  {fmt_dur(total_min)}"
+        if blk_pts:
+            blk_label += f" · {blk_pts}分"
+        blk_label += " "
+        trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label))
+        out.append((blk_style, "─"))
+        out.append((blk_style, blk_label))
         out.append((blk_style, "─" * trail + "\n"))
-        # Remaining entries (up to 3 more)
-        for m in entries[1:4]:
+
+        for m in top4:
             is_sleep = (m["desc"] or "").strip() == "睡觉"
             display_time = f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}"
             code = proj_code(m["project_id"])
+            dur = fmt_dur(m["_dur_min"])
             label = m["desc"] or "(blank)"
             if code:
                 label = f"{label} · {code}"
             style = project_style(m["project_id"])
-            space = min(DESC_MAX, max(1, WIDTH_HINT - 8))
+            space = max(1, WIDTH_HINT - 8 - len(dur) - 1)
             out.append(("class:time", f"  {display_time} "))
-            out.append((style, f"{truncate(label, space)}\n"))
-        if len(entries) > 4:
-            out.append(("class:dim", f"  +{len(entries) - 4} more\n"))
+            out.append((style, f"{pad(truncate(label, space), space)}"))
+            out.append(("class:dim", f" {dur}\n"))
     return out
 
 
@@ -706,7 +792,12 @@ def render_all() -> list[tuple[str, str]]:
     parts += render_morning()
     parts += render_detail()
     parts += render_evening()
-    parts += render_current_bottom()
+    return parts
+
+
+def render_bottom_bar() -> list[tuple[str, str]]:
+    """Pinned bar: current timer + flash + hints. Lives outside the scroll area."""
+    parts = render_current_bottom()
     parts += render_footer()
     return parts
 
@@ -836,11 +927,18 @@ main_window = Window(
     width=Dimension(preferred=WIDTH_HINT),
 )
 
+# Pinned bottom bar: current timer + flash + hints (never scrolls)
+bottom_bar = Window(
+    content=FormattedTextControl(render_bottom_bar),
+    height=3,  # timer line + flash/hint line + input line headroom
+    wrap_lines=False,
+)
+
 
 def render_input_prompt():
     if STATE.command_mode:
         return [("class:prompt", " tg> ")]
-    return [("class:hint", " (press c to change task)\n")]
+    return [("class:hint", "")]
 
 
 input_window = Window(
@@ -851,8 +949,8 @@ prompt_window = Window(content=FormattedTextControl(render_input_prompt), height
 
 from prompt_toolkit.layout import VSplit  # noqa: E402
 
-bottom = VSplit([prompt_window, input_window])
-root = HSplit([main_window, bottom])
+input_row = VSplit([prompt_window, input_window])
+root = HSplit([main_window, bottom_bar, input_row])
 
 style = Style.from_dict({
     "header": "bold cyan",
@@ -901,11 +999,19 @@ async def ticker_clock(app):
         app.invalidate()
 
 
+async def ticker_points(app):
+    while True:
+        await asyncio.sleep(60)
+        fetch_points()
+        app.invalidate()
+
+
 async def _sigusr1_refresh():
     """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer)."""
     old_count = len(STATE.entries)
     fetch_current()
     fetch_today()
+    fetch_points()
     # If entry count grew (task completed → new entry, or timer stopped),
     # flash purple as a prayer/mindfulness prompt
     if len(STATE.entries) != old_count or STATE.current is None:
@@ -917,6 +1023,7 @@ async def main():
     fetch_current()
     fetch_today()
     fetch_gcal()
+    fetch_points()
 
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
     loop = asyncio.get_running_loop()
@@ -931,6 +1038,7 @@ async def main():
     app.create_background_task(ticker_current(app))
     app.create_background_task(ticker_today(app))
     app.create_background_task(ticker_gcal(app))
+    app.create_background_task(ticker_points(app))
     try:
         await app.run_async()
     finally:
