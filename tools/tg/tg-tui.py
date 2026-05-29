@@ -183,6 +183,7 @@ class State:
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
         self.flash = ""  # one-line status
         self.flash_until = 0.0
+        self.flash_style = ""  # optional override style for flash
         self.command_mode = False
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
@@ -256,9 +257,10 @@ def fetch_gcal(force=False):
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
-def flash(msg: str, secs: float = 4.0):
+def flash(msg: str, secs: float = 4.0, style: str = ""):
     STATE.flash = msg
     STATE.flash_until = time.monotonic() + secs
+    STATE.flash_style = style or ""
 
 
 def proj_code(pid):
@@ -667,16 +669,33 @@ def render_evening() -> list[tuple[str, str]]:
     return out
 
 
-def render_outlook() -> list[tuple[str, str]]:
-    out = section_rule("outlook")
-    out.append(("class:dim", "  (placeholder — wire later)\n"))
-    return out
+def render_current_bottom() -> list[tuple[str, str]]:
+    """Mirror of the running timer, pinned above the footer so it's always visible."""
+    cur = STATE.current
+    if not cur:
+        return [("class:idle", " (no timer running)\n")]
+    desc = cur.get("description") or "(no description)"
+    pid = cur.get("project_id")
+    code = proj_code(pid)
+    try:
+        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
+        elapsed_s = int((dt.datetime.now(TZ) - st).total_seconds())
+    except Exception:
+        elapsed_s = 0
+    line = f" ▶ {desc}"
+    if code:
+        line += f"  · {code}"
+    line += f"   {fmt_dur_live(elapsed_s)}"
+    rule = "─" * max(0, WIDTH_HINT - len(line) - 1)
+    style = project_style(pid) or "class:running"
+    return [(f"bold {style}".strip(), line), ("class:rule", f" {rule}\n")]
 
 
 def render_footer() -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     if STATE.flash and time.monotonic() < STATE.flash_until:
-        out.append(("class:flash", f" ▸ {STATE.flash}\n"))
+        sty = STATE.flash_style or "class:flash"
+        out.append((sty, f" ▸ {STATE.flash}\n"))
     out.append(("class:hint", " [c]hange [s]top [r]efresh [j/k]scroll [q]uit\n"))
     return out
 
@@ -687,7 +706,7 @@ def render_all() -> list[tuple[str, str]]:
     parts += render_morning()
     parts += render_detail()
     parts += render_evening()
-    parts += render_outlook()
+    parts += render_current_bottom()
     parts += render_footer()
     return parts
 
@@ -884,8 +903,13 @@ async def ticker_clock(app):
 
 async def _sigusr1_refresh():
     """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer)."""
+    old_count = len(STATE.entries)
     fetch_current()
     fetch_today()
+    # If entry count grew (task completed → new entry, or timer stopped),
+    # flash purple as a prayer/mindfulness prompt
+    if len(STATE.entries) != old_count or STATE.current is None:
+        flash("☀️", 6.0, style="bold fg:#aa00ff")
     app.invalidate()
 
 
