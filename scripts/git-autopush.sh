@@ -2,10 +2,11 @@
 # git-autopush.sh — auto-commit and push any changes in i446-monorepo
 # Runs every 10 minutes via cron.
 
-REPO_DIR="$HOME/i446-monorepo"
+REPO_DIR="${1:-$HOME/i446-monorepo}"
+PREFIX="${2:-auto}"
 TS=$(date '+%Y-%m-%d %H:%M:%S')
 
-cd "$REPO_DIR" || { echo "[$TS] ERROR: cd failed"; exit 1; }
+cd "$REPO_DIR" || { echo "[$TS] ERROR: cd $REPO_DIR failed"; exit 1; }
 
 # Stage all changes
 git add -A
@@ -17,7 +18,7 @@ if git diff --cached --quiet; then
 fi
 
 CHANGED=$(git diff --cached --stat | tail -1)
-git commit -m "auto: $(date '+%Y-%m-%d %H:%M')" -q
+git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q
 echo "[$TS] committed: $CHANGED"
 
 git pull --rebase origin main -q 2>&1 || echo "[$TS] WARNING: pull failed"
