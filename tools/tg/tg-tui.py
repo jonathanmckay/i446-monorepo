@@ -756,25 +756,38 @@ def render_evening() -> list[tuple[str, str]]:
 
 
 def render_current_bottom() -> list[tuple[str, str]]:
-    """Mirror of the running timer, pinned above the footer so it's always visible."""
+    """Mirror of the running timer, pinned above the footer so it's always visible.
+    Clock on left, timer desc on right, sub-second decimals as a heartbeat."""
+    now = dt.datetime.now(TZ)
+    clock = f" {now:%H:%M:%S}"
     cur = STATE.current
     if not cur:
-        return [("class:idle", " (no timer running)\n")]
+        return [("class:time", clock), ("class:idle", "  (no timer)\n")]
     desc = cur.get("description") or "(no description)"
     pid = cur.get("project_id")
     code = proj_code(pid)
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
-        elapsed_s = int((dt.datetime.now(TZ) - st).total_seconds())
+        elapsed = (now - st).total_seconds()
     except Exception:
-        elapsed_s = 0
-    line = f" ▶ {desc}"
+        elapsed = 0.0
+    h, rem = divmod(max(0, int(elapsed)), 3600)
+    m, s = divmod(rem, 60)
+    frac = int((elapsed % 1) * 10)  # tenths of a second
+    if h:
+        dur = f"{h}h{m:02d}m{s:02d}.{frac}s"
+    else:
+        dur = f"{m}m{s:02d}.{frac}s"
+    right = f" ▶ {desc}"
     if code:
-        line += f"  · {code}"
-    line += f"   {fmt_dur_live(elapsed_s)}"
-    rule = "─" * max(0, WIDTH_HINT - len(line) - 1)
+        right += f" · {code}"
+    right += f"  {dur}"
+    pad = max(0, WIDTH_HINT - len(clock) - len(right))
     style = project_style(pid) or "class:running"
-    return [(f"bold {style}".strip(), line), ("class:rule", f" {rule}\n")]
+    return [
+        ("class:time", clock),
+        (f"bold {style}".strip(), f"{'':>{pad}}{right}\n"),
+    ]
 
 
 def render_footer() -> list[tuple[str, str]]:
