@@ -140,6 +140,21 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION launcher starting" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] run_dir=$RUN_DIR budget=$BUDGET floor=$FLOOR" >> "$LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] claude=$CLAUDE ($(${CLAUDE} --version 2>/dev/null || echo 'unknown'))" >> "$LOG"
 
+# --- Keychain access: ensure we can read credentials ---
+# launchd/SSH sessions can't access the login keychain. If we detect that,
+# try unlocking it. If that fails, we're in a GUI session and it should work.
+if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Keychain locked, attempting unlock..." >> "$LOG"
+  if [[ -f "$HOME/.dream-keychain-pass" ]]; then
+    security unlock-keychain -p "$(cat "$HOME/.dream-keychain-pass")" ~/Library/Keychains/login.keychain-db >> "$LOG" 2>&1 || true
+  fi
+  # Verify
+  if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Cannot access keychain. Claude will fail to authenticate." >> "$LOG"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Fix: log in via GUI, or create ~/.dream-keychain-pass with your login password." >> "$LOG"
+  fi
+fi
+
 # --- Run claude with activity watchdog ---
 # Watchdog checks every 3 min: if no new file writes in RUN_DIR for 15 min,
 # kill claude (stalled). Launcher then checks what pass completed and retries
