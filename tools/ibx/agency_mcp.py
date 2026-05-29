@@ -137,9 +137,32 @@ def get_server(name):
         return port
 
 
+def _remote_endpoint(server_name):
+    """Return (host, port) if AGENCY_REMOTE_<NAME>_PORT is set, else None.
+
+    Used to delegate to a remote Agency MCP (e.g., ix → straylight via ssh
+    -L tunnel). Host defaults to localhost (assume a forward tunnel binds
+    the remote port locally).
+    """
+    env_key = f"AGENCY_REMOTE_{server_name.upper()}_PORT"
+    port = os.environ.get(env_key)
+    if not port:
+        return None
+    host = os.environ.get("AGENCY_REMOTE_HOST", "localhost")
+    try:
+        return host, int(port)
+    except ValueError:
+        return None
+
+
 def call_tool(server_name, tool_name, arguments=None, timeout=120):
     """Call an MCP tool via SSE HTTP. Returns the result dict."""
-    port = get_server(server_name)
+    remote = _remote_endpoint(server_name)
+    if remote:
+        host, port = remote
+    else:
+        host = "localhost"
+        port = get_server(server_name)
     payload = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
@@ -147,9 +170,9 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
         "params": {"name": tool_name, "arguments": arguments or {}},
     }).encode()
 
-    sock = socket.create_connection(("localhost", port), timeout=10)
+    sock = socket.create_connection((host, port), timeout=10)
     sock.sendall(
-        f"POST / HTTP/1.1\r\nHost: localhost:{port}\r\n"
+        f"POST / HTTP/1.1\r\nHost: {host}:{port}\r\n"
         f"Content-Type: application/json\r\n"
         f"Content-Length: {len(payload)}\r\n"
         f"Connection: close\r\n\r\n".encode() + payload

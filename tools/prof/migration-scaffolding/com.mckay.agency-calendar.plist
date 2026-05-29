@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- STRAYLIGHT — fixed-port Agency calendar MCP for ix tunnel. Do not load
+     until ready to migrate. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.mckay.agency-calendar</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mckay/.config/agency/CurrentVersion/agency</string>
+        <string>mcp</string>
+        <string>calendar</string>
+        <string>--transport</string><string>http</string>
+        <string>--port</string><string>7001</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>/Users/mckay/.config/agency/calendar-mcp.log</string>
+    <key>StandardErrorPath</key><string>/Users/mckay/.config/agency/calendar-mcp.log</string>
+</dict>
+</plist>

@@ -14,6 +14,8 @@ Usage:
   prof_score.py --no-no-show    # skip the -10 penalty for missing /d357
                                 # (useful while rolling out)
   prof_score.py --json          # machine-readable output
+  prof_score.py --write-neon    # also append sum_points to 0分!Y (s897 col)
+                                # for the target date
 """
 
 from __future__ import annotations
@@ -270,6 +272,8 @@ def main() -> int:
     p.add_argument("--no-no-show", action="store_true",
                    help="skip -10 penalty when /d357 didn't fire")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--write-neon", action="store_true",
+                   help="append sum_points to 0分!Y (s897) for the target date")
     args = p.parse_args()
 
     target = datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else date.today()
@@ -328,7 +332,29 @@ def main() -> int:
             print(f"       {h.rule:4s} {h.points:+d}  {h.note}")
 
     print()
+
+    if args.write_neon and total > 0:
+        _write_neon(target, sum_pts)
+
     return 0
+
+
+def _write_neon(target: date, sum_pts: int) -> None:
+    """Append today's prof sum to 0分!Y (s897 column)."""
+    try:
+        sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+        from neon import excel  # type: ignore
+    except Exception as e:
+        print(f"  ! neon write skipped: import failed ({e})")
+        return
+    sign = "+" if sum_pts >= 0 else ""
+    value = f"{sign}{sum_pts}"
+    date_str = f"{target.month}/{target.day}"
+    try:
+        res = excel.append("0分", "Y", date=date_str, value=value)
+        print(f"  → neon: 0分!Y {date_str} {value}  ({res})")
+    except Exception as e:
+        print(f"  ! neon write failed: {e}")
 
 
 if __name__ == "__main__":

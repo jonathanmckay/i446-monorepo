@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- STRAYLIGHT — daily 7am morning brief. Output piped to log so JM can
+     read it as he sits down. To activate:
+       cp tools/prof/migration-scaffolding/com.mckay.prof-morning.plist \
+          ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mckay.prof-morning.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.mckay.prof-morning</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/mckay/i446-monorepo/tools/prof/prof_morning.py</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>7</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+    <key>RunAtLoad</key><false/>
+    <key>StandardOutPath</key><string>/Users/mckay/.config/prof/morning.log</string>
+    <key>StandardErrorPath</key><string>/Users/mckay/.config/prof/morning.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
