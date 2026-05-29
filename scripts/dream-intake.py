@@ -773,6 +773,106 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
+@source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
+def _outlook_inbox():
+    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
+    import agency_mcp as mcp
+    from datetime import timezone
+    cutoff = (datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Unread inbox
+    query = (
+        f"?$top=50"
+        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
+        f"&$select=id,subject,from,receivedDateTime,bodyPreview"
+        f"&$orderby=receivedDateTime desc"
+    )
+    raw = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
+        "queryParameters": query
+    }, timeout=30)
+    unread = []
+    if raw and raw.get("content"):
+        for item in raw["content"]:
+            text = item.get("text", "")
+            try:
+                data = json.loads(text)
+                messages = data if isinstance(data, list) else data.get("value", [])
+                for msg in messages:
+                    unread.append({
+                        "subject": msg.get("subject", ""),
+                        "from": (msg.get("from", {}).get("emailAddress", {}).get("name", "")
+                                 or msg.get("from", {}).get("emailAddress", {}).get("address", "")),
+                        "received": msg.get("receivedDateTime", ""),
+                        "preview": msg.get("bodyPreview", "")[:200],
+                    })
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # Recent sent (last 24h) for context on what JM communicated
+    sent_query = (
+        f"?$top=20"
+        f"&$filter=sentDateTime ge {cutoff}"
+        f"&$select=subject,toRecipients,sentDateTime,bodyPreview"
+        f"&$orderby=sentDateTime desc"
+    )
+    raw_sent = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
+        "queryParameters": f"/me/mailFolders/SentItems/messages{sent_query}"
+    }, timeout=30)
+    sent = []
+    if raw_sent and raw_sent.get("content"):
+        for item in raw_sent["content"]:
+            text = item.get("text", "")
+            try:
+                data = json.loads(text)
+                messages = data if isinstance(data, list) else data.get("value", [])
+                for msg in messages:
+                    to_list = [r.get("emailAddress", {}).get("name", "")
+                               for r in msg.get("toRecipients", [])]
+                    sent.append({
+                        "subject": msg.get("subject", ""),
+                        "to": to_list,
+                        "sent": msg.get("sentDateTime", ""),
+                        "preview": msg.get("bodyPreview", "")[:200],
+                    })
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return {"unread": unread, "unread_count": len(unread),
+            "sent": sent, "sent_count": len(sent)}
+
+
+@source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
+def _outlook_calendar():
+    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
+    import agency_mcp as mcp
+    from datetime import timezone
+    yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+    day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
+    raw = mcp.call_tool("mail", "GetCalendarEvents", {
+        "startDateTime": yesterday,
+        "endDateTime": day_after,
+        "$top": "50",
+    }, timeout=30)
+    events = []
+    if raw and raw.get("content"):
+        for item in raw["content"]:
+            text = item.get("text", "")
+            try:
+                data = json.loads(text)
+                ev_list = data if isinstance(data, list) else data.get("value", [])
+                for ev in ev_list:
+                    events.append({
+                        "subject": ev.get("subject", ""),
+                        "start": ev.get("start", {}).get("dateTime", ""),
+                        "end": ev.get("end", {}).get("dateTime", ""),
+                        "organizer": ev.get("organizer", {}).get("emailAddress", {}).get("name", ""),
+                        "is_online": bool(ev.get("onlineMeeting")),
+                    })
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return {"events": events, "count": len(events)}
+
+
 @source("slack", "Slack status (stub)")
 def _slack():
     return {"status": "not_configured"}
