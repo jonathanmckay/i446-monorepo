@@ -251,4 +251,11 @@ if [[ -f "$HOME/i446-monorepo/scripts/dream-morning-context.py" ]]; then
   python3 "$HOME/i446-monorepo/scripts/dream-morning-context.py" "$RUN_DIR" >> "$LOG" 2>&1 || true
 fi
 
+# --- Email the morning brief ---
+EMAIL_SCRIPT="$HOME/i446-monorepo/scripts/dream-email-brief.py"
+if [[ -f "$EMAIL_SCRIPT" && -f "$RUN_DIR/morning-brief.md" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Sending morning brief email..." >> "$LOG"
+  python3 "$EMAIL_SCRIPT" "$RUN_DIR" >> "$LOG" 2>&1 || echo "[$(date '+%Y-%m-%d %H:%M:%S')] Email send failed (non-fatal)" >> "$LOG"
+fi
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION complete. Run dir: $RUN_DIR" >> "$LOG"
