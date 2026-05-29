@@ -69,8 +69,8 @@ def normalize_event(ev: dict, my_email: str) -> dict:
     return {
         "id": ev.get("id"),
         "subject": ev.get("subject", ""),
-        "start": ev.get("start", {}).get("dateTime"),
-        "end": ev.get("end", {}).get("dateTime"),
+        "start": _to_iso(ev.get("start", {})),
+        "end": _to_iso(ev.get("end", {})),
         "is_cancelled": bool(ev.get("isCancelled")),
         "is_online_meeting": bool(ev.get("isOnlineMeeting")),
         "organizer": organizer_addr,
@@ -80,6 +80,49 @@ def normalize_event(ev: dict, my_email: str) -> dict:
         "body_preview_len": len(body_preview),
         "type": ev.get("type", ""),
     }
+
+
+# Minimal Windows tz → IANA map. Add as needed.
+_WIN_TZ = {
+    "Pacific Standard Time": "America/Los_Angeles",
+    "Eastern Standard Time": "America/New_York",
+    "Central Standard Time": "America/Chicago",
+    "Mountain Standard Time": "America/Denver",
+    "UTC": "UTC",
+    "GMT Standard Time": "Europe/London",
+    "Romance Standard Time": "Europe/Paris",
+    "W. Europe Standard Time": "Europe/Berlin",
+    "China Standard Time": "Asia/Shanghai",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "India Standard Time": "Asia/Kolkata",
+}
+
+
+def _to_iso(slot: dict) -> str | None:
+    """Convert a Graph dateTime/timeZone slot to an ISO8601 string with offset."""
+    if not isinstance(slot, dict):
+        return None
+    dt_str = slot.get("dateTime")
+    tz_name = slot.get("timeZone", "UTC")
+    if not dt_str:
+        return None
+    # Truncate 7-digit fractional seconds to 6 for py3.9 fromisoformat
+    import re as _re
+    m = _re.match(r"^(.*\.\d{6})\d+$", dt_str)
+    if m:
+        dt_str = m.group(1)
+    try:
+        naive = datetime.fromisoformat(dt_str)
+    except ValueError:
+        return None
+    iana = _WIN_TZ.get(tz_name, tz_name)
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(iana)
+        return naive.replace(tzinfo=tz).isoformat()
+    except Exception:
+        # Fallback: assume UTC
+        return naive.replace(tzinfo=timezone.utc).isoformat()
 
 
 def main() -> int:
