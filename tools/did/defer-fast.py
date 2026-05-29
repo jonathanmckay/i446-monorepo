@@ -179,45 +179,37 @@ def handle_non_recurring(task: dict, target_date: str,
 
 def handle_recurring(task: dict, target_date: str,
                      claimed_points: int) -> dict:
-    """Close a recurring task, create today stub + future stub."""
+    """Reschedule a recurring task and create a posthoc eval record.
+
+    Uses due_date update (not close+recreate) to preserve recurrence pattern.
+    """
     task_id = task["id"]
     content = task["content"]
     labels = task.get("labels", [])
     project_id = task.get("project_id")
-    priority = task.get("priority")
 
     # 1. Parse total points from [N]
     pts_match = POINTS_RE.search(content)
     total_points = int(pts_match.group(1)) if pts_match else 0
-    remaining = max(0, total_points - claimed_points)
 
-    # 2. Close the recurring task (advances recurrence)
-    close_task(task_id)
+    # 2. Reschedule the task (preserves recurrence pattern)
+    _api("POST", f"/tasks/{task_id}", {"due_date": target_date})
 
-    # 3. Stub A: today, completed
+    # 3. Create posthoc eval record (due today, immediately closed)
     today_iso = date.today().isoformat()
-    stub_a_content = f"deferred: {content} ({claimed_points}) [{claimed_points}]"
-    stub_a_labels = list(set(["posthoc"] + labels))
-    stub_a = create_task(stub_a_content, stub_a_labels, project_id, today_iso)
-    close_task(stub_a["id"])
-
-    # 4. Stub B: future, open, with updated [N]
-    stub_b_content = re.sub(r"\[\d+\]", f"[{remaining}]", content)
-    if not POINTS_RE.search(stub_b_content):
-        # Original had no [N]; append it
-        stub_b_content += f" [{remaining}]"
-
-    stub_b = create_task(stub_b_content, labels, project_id, target_date,
-                         priority=priority)
+    posthoc_content = f"deferred: {content} → {target_date} ({claimed_points}) [0]"
+    posthoc_labels = list(set(["posthoc"] + labels))
+    posthoc = create_task(posthoc_content, posthoc_labels, project_id, today_iso)
+    close_task(posthoc["id"])
 
     return {
         "task": content,
         "recurring": True,
         "target_date": target_date,
         "claimed_points": claimed_points,
-        "remaining_points": remaining,
-        "closed": True,
-        "stubs": {"today": stub_a["id"], "future": stub_b["id"]},
+        "remaining_points": total_points,
+        "closed": False,
+        "stubs": {"today": posthoc["id"], "future": task_id},
     }
 
 
