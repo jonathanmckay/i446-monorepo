@@ -1286,10 +1286,10 @@ def main():
         # were being displayed (user was slow to respond to salah/gaps).
         new_idx, new_block, new_start, new_end = get_current_block()
         if new_idx != idx:
-            # Block changed during card display; skip remaining cards and
-            # let the wrapper restart with fresh state for the new block.
-            console.print(f"[yellow]  block changed → {new_block}, restarting...[/yellow]")
-            return 0
+            # Block changed; update state and re-check goals for new block.
+            console.print(f"[dim]  block → {new_block}[/dim]")
+            idx, block_name, block_start, block_end = new_idx, new_block, new_start, new_end
+            goals_set = bool(read_block_goals_with_status().get(block_name))
         if not goals_set:
             card_num += 1
             # Synthesize 3 block-aware suggestions from cal/1g/0g/0n.
