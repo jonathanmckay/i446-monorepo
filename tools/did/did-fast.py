@@ -503,7 +503,8 @@ def _refresh_task_queue_inner() -> dict:
                 return [{"id": t["id"], "content": t["content"],
                          "labels": t.get("labels", []),
                          "priority": t.get("priority", "p4"),
-                         "due": t.get("due", {}).get("date", "") if t.get("due") else ""}
+                         "due": t.get("due", {}).get("date", "") if t.get("due") else "",
+                         "recurring": bool((t.get("due") or {}).get("is_recurring"))}
                         for t in tasks]
         except Exception as e:
             print(f"WARN: fetch {label}: {e}", file=sys.stderr)
@@ -542,7 +543,8 @@ def _refresh_task_queue_inner() -> dict:
                     "content": t.get("content", ""),
                     "labels": t.get("labels", []),
                     "priority": t.get("priority", "p4"),
-                    "due": t.get("due", {}).get("date", "") if t.get("due") else ""
+                    "due": t.get("due", {}).get("date", "") if t.get("due") else "",
+                    "recurring": bool(t.get("due", {}).get("is_recurring")) if t.get("due") else False,
                 })
             cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
             if not cursor:

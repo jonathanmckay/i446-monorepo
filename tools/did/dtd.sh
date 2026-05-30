@@ -111,7 +111,7 @@ TG_FAST="\$HOME/i446-monorepo/tools/tg/tg-fast.py"
 HDR="$DTD_HDR"
 task="\$1"
 # Strip ANSI codes first
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
@@ -128,8 +128,8 @@ DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
 HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
 task="\$1"
-# Strip ANSI codes first
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
+# Strip ANSI codes and recurring indicator
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 # Strip truncation: if fzf truncated with …, use only the prefix before it
 if [[ "\$clean" == *"…"* ]]; then
@@ -233,6 +233,9 @@ for t in unique:
             color = COLORS[lbl]
             break
 
+    # Recurring indicator
+    recurring = t.get('recurring', False)
+
     # Middle-truncate if needed
     line = raw
     if len(line) > cols - 2:
@@ -244,7 +247,8 @@ for t in unique:
         head_len = max(10, cols - len(tail) - 2)
         line = line[:head_len] + '…' + tail
 
-    print(f'{color}{line}{RESET}' if color else line)
+    repeat = '↻ ' if recurring else ''
+    print(f'{color}{repeat}{line}{RESET}' if color else f'{repeat}{line}')
 " "$1" "$2" "$3" "$4" "$5"
 LISTEOF
 chmod +x "$DTD_LIST"
@@ -257,8 +261,8 @@ HDR="$DTD_HDR"
 CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
 task="\$1"
-# Strip ANSI codes first
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g')
+# Strip ANSI codes and recurring indicator
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "⏳ deleting: \$clean" > "\$HDR"
 tid=\$(python3 -c "
@@ -314,7 +318,7 @@ CACHE_FILE="PLACEHOLDER_CACHE"
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 
 task="$1"
-task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g')
+task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 
 # Extract [N] and (N) from task
 total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
@@ -443,7 +447,7 @@ HDR="PLACEHOLDER_HDR"
 CACHE_FILE="PLACEHOLDER_CACHE"
 
 task="$1"
-task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g')
+task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
 # Handle truncation
@@ -610,8 +614,8 @@ while true; do
     break
   fi
 
-  # Strip ANSI color codes from fzf selection
-  task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g')
+  # Strip ANSI color codes and recurring indicator from fzf selection
+  task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 
   # Resolve truncated names: if fzf output contains "…", find the original
   # full name from the cache snapshot by matching the prefix before "…"
