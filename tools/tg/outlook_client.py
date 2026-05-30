@@ -46,10 +46,10 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
 
     # Fetch from Agency
     try:
-        raw = mcp.call_tool("mail", "GetCalendarEvents", {
+        raw = mcp.call_tool("calendar", "ListEvents", {
             "startDateTime": day_start.strftime("%Y-%m-%dT00:00:00"),
             "endDateTime": day_end.strftime("%Y-%m-%dT00:00:00"),
-            "$top": "50",
+            "top": "50",
         }, timeout=15)
     except Exception:
         # Agency not available; return cached data if any
@@ -61,6 +61,13 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
     if raw and raw.get("content"):
         for item in raw["content"]:
             text = item.get("text", "")
+            # calendar.ListEvents prefixes the JSON payload with a status line
+            # like "Events retrieved successfully.\n{...}". Strip anything
+            # before the first '{' or '[' so json.loads succeeds.
+            brace = min((i for i in (text.find("{"), text.find("[")) if i != -1),
+                        default=-1)
+            if brace > 0:
+                text = text[brace:]
             try:
                 data = json.loads(text)
                 ev_list = data if isinstance(data, list) else data.get("value", [])
@@ -91,6 +98,16 @@ def _parse_cache(cache_file: Path) -> list[dict]:
         return []
 
 
+def _parse_graph_dt(s: str) -> dt.datetime:
+    """Parse a Graph API datetime, tolerating 7-digit fractional seconds."""
+    s = s.rstrip("Z")
+    if "." in s:
+        head, frac = s.split(".", 1)
+        # Truncate fractional seconds to 6 digits (Python max precision)
+        s = f"{head}.{frac[:6]}"
+    return dt.datetime.fromisoformat(s)
+
+
 def _normalize(raw_events: list[dict]) -> list[dict]:
     """Convert raw API events to the tg-tui event format."""
     out = []
@@ -101,9 +118,9 @@ def _normalize(raw_events: list[dict]) -> list[dict]:
             if not start_str or not end_str:
                 continue
             # Graph API returns UTC datetimes (sometimes with Z, sometimes without)
-            start_dt = dt.datetime.fromisoformat(start_str.rstrip("Z")).replace(
+            start_dt = _parse_graph_dt(start_str).replace(
                 tzinfo=dt.timezone.utc).astimezone(TZ)
-            end_dt = dt.datetime.fromisoformat(end_str.rstrip("Z")).replace(
+            end_dt = _parse_graph_dt(end_str).replace(
                 tzinfo=dt.timezone.utc).astimezone(TZ)
             out.append({
                 "start_dt": start_dt,
