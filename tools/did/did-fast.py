@@ -1400,6 +1400,8 @@ end tell'''
     defer_items = {}  # tid → (defer_date, points_claimed, content)
     id_to_name = {}
     future_skipped = []  # tasks skipped because due date is in the future
+    # 0neon recurring tasks that may be completed in advance
+    ADVANCE_ALLOWED = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
     today_str = date.today().isoformat()
     for r in fast:
         if r.todoist_task:
@@ -1408,13 +1410,26 @@ end tell'''
             # Guard: don't close tasks due in the future (prevents double-tap on recurring)
             task_due = r.todoist_task.get("due", "")
             if task_due and task_due > today_str:
-                future_skipped.append({
-                    "id": tid,
-                    "name": r.item.name,
-                    "content": r.todoist_task.get("content", ""),
-                    "due": task_due,
-                })
-                continue
+                # Allow advance-completion for specific 0neon tasks
+                is_0neon = "0neon" in r.todoist_task.get("labels", [])
+                name_lower = r.item.name.lower()
+                if is_0neon and name_lower not in ADVANCE_ALLOWED:
+                    future_skipped.append({
+                        "id": tid,
+                        "name": r.item.name,
+                        "content": r.todoist_task.get("content", ""),
+                        "due": task_due,
+                        "warning": "already done today",
+                    })
+                    continue
+                elif not is_0neon:
+                    future_skipped.append({
+                        "id": tid,
+                        "name": r.item.name,
+                        "content": r.todoist_task.get("content", ""),
+                        "due": task_due,
+                    })
+                    continue
             if r.item.defer_date:
                 pts = r.item.points_override or r.fen_points or 0
                 defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
@@ -1585,7 +1600,8 @@ end tell'''
         output["future_skipped"] = future_skipped
         # Also emit to stderr so dtd/callers see the warning
         for fs in future_skipped:
-            print(f"⚠ SKIPPED: \"{fs['name']}\" due {fs['due']} (future) — not closing",
+            warn = fs.get("warning", "future")
+            print(f"⚠ SKIPPED: \"{fs['name']}\" — {warn} (due {fs['due']}, not closing Todoist)",
                   file=sys.stderr)
 
     if toggl_stop:

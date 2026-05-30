@@ -549,6 +549,7 @@ def render_detail() -> list[tuple[str, str]]:
     prv = prev_block(effective_hour)
 
     scroll_suffix = f" (+{STATE.scroll_min}m)" if STATE.scroll_min else ""
+    bo_emojis = _read_block_emojis()
 
     if nxt:
         # Normal: current block header at top
@@ -559,7 +560,9 @@ def render_detail() -> list[tuple[str, str]]:
         top_name = prv[0] if prv else "?"
         boundary_h = cur[1] if cur else end.hour
 
-    out: list[tuple[str, str]] = section_rule(f"{top_name}{scroll_suffix}", focus=True)
+    top_emojis = bo_emojis.get(top_name, "")
+    top_label = f"{top_name}{' ' + top_emojis if top_emojis else ''}{scroll_suffix}"
+    out: list[tuple[str, str]] = section_rule(top_label, focus=True)
 
     boundary = now.replace(hour=boundary_h, minute=0, second=0, microsecond=0)
     slot = start
@@ -598,6 +601,8 @@ def render_detail() -> list[tuple[str, str]]:
 
         # Insert now line before this slot if applicable
         if not now_drawn and slot >= now:
+            frac = int((now.microsecond / 1_000_000) * 10)
+            time_now = f"{now:%H:%M:%S}.{frac}"
             if STATE.current:
                 cur_desc = STATE.current.get("description") or ""
                 cur_code = proj_code(STATE.current.get("project_id"))
@@ -607,18 +612,17 @@ def render_detail() -> list[tuple[str, str]]:
                     elapsed = fmt_dur_live(int((now - cst).total_seconds()))
                 except Exception:
                     elapsed = "0m00s"
-                task_info = f"▶ {cur_desc}"
+                task_label = f"▶ {cur_desc}"
                 if cur_code:
-                    task_info += f" · {cur_code}"
-                task_info += f"  {elapsed}"
-                task_style = project_style(cur_pid) or "class:now"
-                out.append(("class:now", f" ── {now:%H:%M:%S}  "))
-                out.append((task_style, task_info))
-                trail = max(0, WIDTH_HINT - 14 - len(task_info))
-                out.append(("class:now", " " + "─" * trail + "\n"))
+                    task_label += f" · {cur_code}"
+                task_label += f"  {elapsed}"
+                task_style = f"bold {project_style(cur_pid)}".strip() or "bold class:now"
+                space = max(1, WIDTH_HINT - len(time_now) - 4)
+                out.append(("bold class:now", f" {time_now}"))
+                out.append((task_style, f" │ {truncate(task_label, space)}\n"))
             else:
-                now_text = f" ── {now:%H:%M:%S}  (no timer) "
-                out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
+                out.append(("bold class:now", f" {time_now}"))
+                out.append(("bold class:idle", f" │ (no timer)\n"))
             now_drawn = True
 
         time_str = f"{slot:%H:%M}"
@@ -647,8 +651,10 @@ def render_detail() -> list[tuple[str, str]]:
         out.append((cls, content))
         slot = slot_end
     if not now_drawn:
-        now_text = f" ── now {now:%H:%M:%S} "
-        out.append(("class:now", now_text + "─" * max(0, WIDTH_HINT - len(now_text)) + "\n"))
+        frac = int((now.microsecond / 1_000_000) * 10)
+        time_now = f"{now:%H:%M:%S}.{frac}"
+        out.append(("bold class:now", f" {time_now}"))
+        out.append(("bold class:idle", f" │ (no timer)\n"))
     # Bottom block header
     if nxt:
         bot_name, bot_sh, bot_eh = nxt
@@ -657,7 +663,9 @@ def render_detail() -> list[tuple[str, str]]:
     else:
         bot_name = None
     if bot_name:
-        out += section_rule(f"{bot_name}", focus=True)
+        bot_emojis = bo_emojis.get(bot_name, "")
+        bot_label = f"{bot_name}{' ' + bot_emojis if bot_emojis else ''}"
+        out += section_rule(bot_label, focus=True)
     return out
 
 
@@ -982,7 +990,8 @@ style = Style.from_dict({
 })
 
 app = Application(layout=Layout(root, focused_element=main_window),
-                  key_bindings=kb, full_screen=True, style=style)
+                  key_bindings=kb, full_screen=True, style=style,
+                  refresh_interval=0.1)
 
 
 async def ticker_current(app):
@@ -1003,12 +1012,6 @@ async def ticker_gcal(app):
     while True:
         await asyncio.sleep(300)
         fetch_gcal()
-        app.invalidate()
-
-
-async def ticker_clock(app):
-    while True:
-        await asyncio.sleep(1)
         app.invalidate()
 
 
@@ -1047,7 +1050,6 @@ async def main():
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()))
 
-    app.create_background_task(ticker_clock(app))
     app.create_background_task(ticker_current(app))
     app.create_background_task(ticker_today(app))
     app.create_background_task(ticker_gcal(app))
