@@ -468,9 +468,7 @@ def render_morning() -> list[tuple[str, str]]:
     cutoff = start
     items = [e for e in STATE.entries if e["start_dt"] < cutoff]
     if not items:
-        out: list[tuple[str, str]] = section_rule("earlier · toggl")
-        out.append(("class:dim", "  (nothing logged)\n"))
-        return out
+        return []
     merged = []
     for e in items:
         end = min(e["end_dt"], cutoff)
@@ -500,22 +498,28 @@ def render_morning() -> list[tuple[str, str]]:
     bo_emojis = _read_block_emojis()
 
     out: list[tuple[str, str]] = []
-    for blk_name in block_entries:
-        entries = block_entries[blk_name]
+    for blk_name, blk_sh, blk_eh in BLOCKS:
+        if blk_eh + 1 > cutoff.hour:
+            break  # rest handled by detail view
+        if blk_eh < 4:
+            continue  # skip before 卯
+        entries = block_entries.get(blk_name, [])
         for ent in entries:
             ent["_dur_min"] = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
         top4 = sorted(entries, key=lambda e: e["_dur_min"], reverse=True)[:4]
         top4.sort(key=lambda e: e["start_dt"])
 
-        dom_pid = max(block_durations.get(blk_name, {}), key=lambda p: block_durations[blk_name][p], default=None)
-        blk_style = f"bold {project_style(dom_pid)}".strip() if dom_pid else "bold #ffffff"
+        bd = block_durations.get(blk_name, {})
+        dom_pid = max(bd, key=lambda p: bd[p], default=None) if bd else None
+        blk_style = f"bold {project_style(dom_pid)}".strip() if dom_pid else "class:dim"
         emojis = bo_emojis.get(blk_name, "")
-        total_min = sum(block_durations.get(blk_name, {}).values())
+        total_min = sum(bd.values())
         blk_pts = STATE.block_points.get(blk_name, 0)
         blk_label = f" {blk_name}"
         if emojis:
             blk_label += f" {emojis}"
-        blk_label += f"  {fmt_dur(total_min)}"
+        if total_min:
+            blk_label += f"  {fmt_dur(total_min)}"
         if blk_pts:
             blk_label += f" · {blk_pts}分"
         blk_label += " "
@@ -767,7 +771,8 @@ def render_current_bottom() -> list[tuple[str, str]]:
     """Mirror of the running timer, pinned above the footer so it's always visible.
     Clock on left, timer desc on right, sub-second decimals as a heartbeat."""
     now = dt.datetime.now(TZ)
-    clock = f" {now:%H:%M:%S}"
+    frac = int((now.microsecond / 1_000_000) * 10)
+    clock = f" {now:%H:%M:%S}.{frac}"
     cur = STATE.current
     if not cur:
         return [("class:time", clock), ("class:idle", "  (no timer)\n")]

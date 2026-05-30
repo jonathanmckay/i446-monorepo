@@ -83,6 +83,8 @@ Always add the estimate. Never leave a goal without `{N}`.
 
 Read the build order file. Find the `## -1₲` heading (match any line starting with `## -1₲`, ignoring trailing characters). If no match is found, error with "ERROR: ## -1₲ section not found in build order". Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new goals as `    - [ ] <goal>` lines (4-space indent).
 
+Also add `🎯` to the block's header line (e.g., `- 巳` becomes `- 巳 🎯`) if it is not already present. Append it after any existing emojis/text on that line.
+
 Keep all other time blocks untouched.
 
 ### Step 4: Create Todoist tasks (with dedup)
