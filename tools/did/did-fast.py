@@ -127,15 +127,18 @@ ONENEON_TO_0FEN: dict[str, str] = {
 
 
 def calc_week_mw(d: date) -> str:
-    """Calculate M.W format: month.ceil(day/7).
+    """Calculate M.W format using Sunday-anchored weeks.
 
-    The spreadsheet has a fixed set of week rows per month. Not every month
-    has a .5 row (e.g. April 2026 has 4.1-4.4 but no 4.5). We compute the
-    ideal week, then the build_1n_script will search for it; if not found,
-    the script falls back to the last row for that month.
+    Find the Sunday that starts this date's week, then count which
+    Sunday-block of the month it falls in. The week label uses the
+    Sunday's month, so Mon-Sat after a month-boundary Sunday still
+    belong to the Sunday's month (e.g. Jun 1 Mon → 5.5 if Sunday
+    was May 31).
     """
-    import math
-    return f"{d.month}.{math.ceil(d.day / 7)}"
+    days_since_sunday = (d.weekday() + 1) % 7  # Sun=0, Mon=1, ..., Sat=6
+    week_start = date.fromordinal(d.toordinal() - days_since_sunday)
+    week_num = ((week_start.day - 1) // 7) + 1
+    return f"{week_start.month}.{week_num}"
 
 # Label → 0分 column mapping (updated 2026.04.28 after 9-column removal)
 LABEL_TO_0FEN = {
