@@ -73,6 +73,8 @@ This lets the user finish a task and immediately start the next one in a single 
 
 **Points override:** `[N]` or `{N}` in user input → set `pointsOverride` to N, strip from item. When set, this overrides the `[N]` extracted from the matched Todoist task in Step 5. `{N}` also triggers a 0g bonus write (append +N to 0分 column Z).
 
+**Bonus points:** `+N` in user input → adds N bonus points on top of the computed value (duration or default). Written to 0分 alongside the base points. Example: `/did xk22 1430-1501 +5` → 31 min duration + 5 bonus = 36 points to 0分.
+
 **Time range:** `HHMM-HHMM` pattern → extract start/end, compute duration as `[time]`, set `hasTimeRange`.
 
 ## Routing (Step 0)
@@ -176,3 +178,4 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did 1 xk88` — 1n+ header is "1 xk88" | Step 0.2 matches 1n+ header → Step 1n, closes 1neon Todoist task | Must NOT treat leading "1" as points and route to Step 6 |
 | `/did 1 i9` — 1n+ header is "1 i9" | Step 0.2 matches 1n+ header → Step 1n | Must NOT route to Step 6 as "1 point to i9" |
 | `/did PTC` — Todoist match "PTC feedback [180]" with label xk87 | Step 5: extract [180] from task, write +180 to 0分 AG | Must NOT use 0 pts just because user input had no [N] — always extract from the matched Todoist task |
+| `/did xk22 1430-1501 +5` — 0₦ variable habit with bonus | Step 0.1: write 31 to 0₦, write 36 (31+5) to 0分 X | Must NOT ignore +5 bonus; must NOT treat +5 as the time value |

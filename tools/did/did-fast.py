@@ -219,6 +219,7 @@ class ParsedItem:
     project_override: Optional[str] = None
     defer_date: Optional[str] = None  # ISO date (YYYY-MM-DD) for partial completion
     toggl_tags: list = None  # #tag tokens → Toggl tags
+    bonus_points: Optional[int] = None  # +N bonus points added on top of computed value
 
 
 def parse_input(raw: str) -> list[ParsedItem]:
@@ -312,6 +313,13 @@ def parse_input(raw: str) -> list[ParsedItem]:
         if bracket_match:
             item.points_override = int(bracket_match.group(1))
             chunk = chunk[:bracket_match.start()] + chunk[bracket_match.end():]
+            chunk = chunk.strip()
+
+        # Extract +N bonus points
+        bonus_match = re.search(r"\+(\d+)\b", chunk)
+        if bonus_match:
+            item.bonus_points = int(bonus_match.group(1))
+            chunk = chunk[:bonus_match.start()] + chunk[bonus_match.end():]
             chunk = chunk.strip()
 
         # Extract HHMM-HHMM time range
@@ -674,6 +682,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
                 # formulas roll up 0n data into 0分, and writing here
                 # would double-count.
 
+            # +N bonus points: write duration + bonus to 0分
+            if item.bonus_points:
+                proj = HABIT_PROJECT.get(name_lower)
+                fen_col_bonus = LABEL_TO_0FEN.get(proj) if proj else None
+                if fen_col_bonus:
+                    r.fen_col = fen_col_bonus
+                    r.fen_points = val + item.bonus_points
+
             # Exception: explicit [N] override on a 0₦ habit appends +N
             # to that habit's domain column in 0分 — a deliberate boost
             # on top of the rollup. Triggered ONLY by [N], not {N}: {N}
@@ -702,6 +718,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             var_val = None
             if is_var:
                 var_val = item.points_override or item.time_value or VARIABLE_1N_DEFAULTS.get(resolved_1n)
+                if var_val and item.bonus_points:
+                    var_val += item.bonus_points
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
                             is_cumulative_1n=is_cumul,
@@ -777,6 +795,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
         pts = item.points_override or 0
         if pts == 0 and item.time_range:
             pts = time_range_minutes(item.time_range[0], item.time_range[1])
+        if item.bonus_points:
+            pts += item.bonus_points
 
         r = RouteResult(item=item, step="variable",
                         fen_col=fen_col, fen_points=pts)
@@ -1395,6 +1415,30 @@ end tell'''
         if script:
             hcbi_result = ix_run(script, timeout=30.0)
 
+    # 5c. Prayer marker: write ☀️ to build order for current block
+    PRAYER_HABITS = {"冥想", "o314", "其他人"}
+    prayer_done = any(r.item.name.lower() in PRAYER_HABITS for r in fast if r.step == "0n")
+    if prayer_done:
+        try:
+            _bo = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+            if _bo.exists():
+                _now_h = datetime.now().hour
+                _bidx = max(0, min(8, (_now_h - 4) // 2))
+                _branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+                _bname = _branches[_bidx]
+                _bo_text = _bo.read_text()
+                if "## -1₲" in _bo_text:
+                    _lines = _bo_text.split("\n")
+                    _new = []
+                    for _l in _lines:
+                        if (_l.startswith(f"- {_bname}") and "☀️" not in _l):
+                            _new.append(f"{_l.rstrip()} ☀️")
+                        else:
+                            _new.append(_l)
+                    _bo.write_text("\n".join(_new))
+        except Exception:
+            pass  # non-critical
+
     # 6. Close or defer Todoist tasks in parallel
     task_ids = []
     defer_items = {}  # tid → (defer_date, points_claimed, content)
@@ -1584,7 +1628,10 @@ end tell'''
         if r.step == "variable" and r.item.name in posthoc_results:
             entry["posthoc"] = posthoc_results[r.item.name]
         if r.fen_col:
-            entry["0fen"] = {"col": r.fen_col, "points": r.fen_points}
+            fen_entry = {"col": r.fen_col, "points": r.fen_points}
+            if r.item.bonus_points:
+                fen_entry["bonus"] = r.item.bonus_points
+            entry["0fen"] = fen_entry
         if r.item.time_range and r.item.name in toggl_created:
             entry["toggl"] = toggl_created[r.item.name]
         output["results"].append(entry)
