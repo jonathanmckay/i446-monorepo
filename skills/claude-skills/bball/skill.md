@@ -1,12 +1,12 @@
 ---
 name: "bball"
-description: "Log a basketball game to bball-log.md. Usage: /bball <shots> <pts> <opp> <len> [notes...]"
+description: "Log a basketball game to bball.md. Usage: /bball <shots> <pts> <opp> <len> [notes...]"
 user-invocable: true
 ---
 
 # BBall (/bball)
 
-Append a basketball game row to `~/vault/hcbi/hcbp/bball-log.md`.
+Append a basketball game row to `~/vault/hcbi/hcbp/bball.md`.
 
 ## Response Style
 
@@ -47,15 +47,15 @@ If notes contain `|`, escape as `\|` so the markdown table doesn't break.
 
 3. **Compute margin.** `margin = pts - opp`. Prefix with `+` if >= 0, else `-`.
 
-4. **Read** `~/vault/hcbi/hcbp/bball-log.md`.
+4. **Read** `~/vault/hcbi/hcbp/bball.md`.
 
-5. **Append a row** to the end of the markdown table:
+5. **Append a row** to the end of the **2026 table** in the Game Log section (the last year table before "## Shooting Practice"):
 
    ```
-   | YYYY-MM-DD | <shots> | <pts> | <opp> | <len> | <±margin> | <notes> |
+   | M.DD | <shots> | <pts> | <opp> | <±net> | | | <notes> |
    ```
 
-   Pad cells for alignment; leave the notes cell empty (with whitespace) if no notes were provided.
+   Date format is `M.DD` (e.g. `5.3`). Net = pts - opp, prefixed with `+` if >= 0. Players and Location columns left empty (the user can fill them in later). Leave the notes cell empty if no notes were provided.
 
 6. **Update frontmatter `updated:`** to today's date.
 
