@@ -848,15 +848,19 @@ def _outlook_calendar():
     from datetime import timezone
     yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
     day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
-    raw = mcp.call_tool("mail", "GetCalendarEvents", {
+    raw = mcp.call_tool("calendar", "ListEvents", {
         "startDateTime": yesterday,
         "endDateTime": day_after,
-        "$top": "50",
+        "top": "50",
     }, timeout=30)
     events = []
     if raw and raw.get("content"):
         for item in raw["content"]:
             text = item.get("text", "")
+            # Strip "Events retrieved successfully.\n" status prefix
+            idx = min((text.find(c) for c in "{[" if text.find(c) != -1), default=-1)
+            if idx > 0:
+                text = text[idx:]
             try:
                 data = json.loads(text)
                 ev_list = data if isinstance(data, list) else data.get("value", [])
