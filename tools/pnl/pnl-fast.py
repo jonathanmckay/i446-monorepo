@@ -221,6 +221,19 @@ def fetch_prior_year_12m(prop_ids, from_month, to_month):
     return appfolio_post("twelve_month_income_statement.json", payload)
 
 
+def fetch_budget_comparison(prop_ids, period_from, period_to):
+    """Fetch budget vs actual comparison for a period (YYYY-MM). Returns raw rows."""
+    payload = {
+        "period_from": period_from,
+        "period_to": period_to,
+        "comparison_period_from": period_from,
+        "comparison_period_to": period_to,
+        "properties": {"properties_ids": prop_ids},
+        "property_visibility": "active",
+    }
+    return appfolio_post("budget_comparison.json", payload)
+
+
 def fetch_lease_expiration(prop_ids, from_month, to_month):
     """Fetch lease expiration detail by month from AppFolio v2 API."""
     payload = {
@@ -349,6 +362,87 @@ def parse_api_rows(rows, months):
     return dict(monthly), dict(af_totals), dict(gl_lines), dict(gpr_monthly)
 
 
+def make_budget_struct(rows):
+    """Parse budget_comparison rows into a struct keyed by the same P&L labels.
+
+    Each per-line label maps to (budget, actual, favorable_variance) via the
+    shared ACCOUNT_LOOKUP. AppFolio's own variance is favorable-signed
+    (positive = better than budget: more income or less expense), and we keep
+    that convention. Total rows (account_number is null) provide operating
+    income/expense and total expense, from which NOI / Deductions / Cashflow
+    budgets are derived.
+
+    Returns dict: {"lb": {label: budget}, "la": {label: actual},
+    "lv": {label: favorable_variance}, "<Total label>": (actual, budget, var)}
+    or None if rows is falsy.
+    """
+    if not rows:
+        return None
+
+    lb = defaultdict(float)  # budget by label
+    la = defaultdict(float)  # actual by label
+    lv = defaultdict(float)  # favorable variance by label
+    tot = {}
+
+    for row in rows:
+        code = row.get("account_number")
+        name = (row.get("account_name") or "").strip().lower()
+        try:
+            a = float(row.get("total_period_actual") or 0)
+            b = float(row.get("total_period_budget") or 0)
+            v = float(row.get("total_period_variance") or 0)
+        except (TypeError, ValueError):
+            continue
+
+        if code is None or code == "":
+            if "operating income" in name:
+                tot["op_inc"] = (a, b, v)
+            elif "operating expense" in name:
+                tot["op_exp"] = (a, b, v)
+            elif "expense" in name:
+                tot["tot_exp"] = (a, b, v)
+            # "Total Budgeted Income" (== operating income) is ignored
+            continue
+
+        cs = str(code).strip()
+        if cs in ACCOUNT_LOOKUP:
+            _, label = ACCOUNT_LOOKUP[cs]
+            lb[label] += b
+            la[label] += a
+            lv[label] += v
+
+    op_inc = tot.get("op_inc", (0.0, 0.0, 0.0))
+    op_exp = tot.get("op_exp", (0.0, 0.0, 0.0))
+    tx = tot.get("tot_exp", (0.0, 0.0, 0.0))
+    # NOI: higher is better -> favorable var = income_var + expense_var
+    noi = (op_inc[0] - op_exp[0], op_inc[1] - op_exp[1], op_inc[2] + op_exp[2])
+    # Below-NOI deductions: expense -> favorable var = total_exp_var - op_exp_var
+    ded = (tx[0] - op_exp[0], tx[1] - op_exp[1], tx[2] - op_exp[2])
+    cf = (noi[0] - ded[0], noi[1] - ded[1], noi[2] + ded[2])
+
+    return {
+        "lb": dict(lb), "la": dict(la), "lv": dict(lv),
+        "Total Income": op_inc, "Total OpEx": op_exp,
+        "NOI": noi, "Total Deductions": ded, "Cashflow": cf,
+    }
+
+
+def find_anchor_idx(months, af_totals):
+    """Return the index of the latest month with BOTH income and expense posted.
+
+    Booking lag means the most recent month often has income but zero expense
+    (expenses not yet posted). The comparisons anchor on the latest *complete*
+    month. Falls back to the last month if none qualify.
+    """
+    for i in range(len(months) - 1, -1, -1):
+        af = af_totals.get(months[i], {})
+        inc = af.get("Total Income", 0)
+        exp = af.get("Total Expense", 0)
+        if abs(inc) > 0.005 and abs(exp) > 0.005:
+            return i
+    return len(months) - 1
+
+
 # ---------------------------------------------------------------------------
 # Computation
 # ---------------------------------------------------------------------------
@@ -398,19 +492,20 @@ def fmt_k(val):
     return f"{r:,}K"
 
 
+def fmt_signed(val):
+    """Signed integer with thousands separators, no percentage. None -> em-dash."""
+    if val is None:
+        return "\u2014"
+    r = round(val)
+    sign = "+" if r > 0 else ""
+    return f"{sign}{r:,}"
+
+
 def fmt_delta(cur, prev):
+    """Dollar delta only (percentages removed per report spec)."""
     if cur is None or prev is None:
         return "\u2014"
-    diff = cur - prev
-    if prev == 0:
-        return "0 (0.0%)" if diff == 0 else "n/m"
-    if (prev > 0 and cur < 0) or (prev < 0 and cur > 0):
-        pct = (diff / abs(prev)) * 100
-        sign = "+" if diff > 0 else ""
-        return f"{sign}{round(diff):,} (sign flip)"
-    pct = (diff / abs(prev)) * 100
-    sign = "+" if diff > 0 else ""
-    return f"{sign}{round(diff):,} ({sign}{pct:.1f}%)"
+    return fmt_signed(cur - prev)
 
 
 # ---------------------------------------------------------------------------
@@ -718,39 +813,80 @@ def build_lease_exposure(lease_data, exposure_months):
 
 
 def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_vals,
-                      prior_monthly=None, prior_summaries=None):
-    """Build the comparisons section with full GL detail."""
+                      prior_monthly=None, prior_summaries=None,
+                      anchor_idx=None, budget_month=None, budget_ytd=None):
+    """Build the comparisons section with full GL detail.
+
+    Anchors on the latest *complete* month (anchor_idx), and adds five
+    budget-based columns when budget data is available: month Budget,
+    \u0394 Budget (favorable variance), Budget YTD, Actual YTD, and YTD Variance
+    (all calendar-year-to-date through the anchor month). MoM/YoY deltas are
+    dollar-only (no percentages).
+    """
     lines = ["## Comparisons", ""]
-    last = months[-1]
-    prev = months[-2]
+    if anchor_idx is None:
+        anchor_idx = len(months) - 1
+    last = months[anchor_idx]
+    prev = months[anchor_idx - 1]
 
     ly, lm = int(last[:4]), int(last[5:7])
-    py, pm_num = ly - 1, lm
-    yoy_month = f"{py:04d}-{pm_num:02d}"
+    yoy_month = f"{ly - 1:04d}-{lm:02d}"
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     last_label = f"{month_names[lm - 1]} {str(ly)[2:]}"
     prev_y, prev_m_num = int(prev[:4]), int(prev[5:7])
     prev_label = f"{month_names[prev_m_num - 1]} {str(prev_y)[2:]}"
-    yoy_label = f"{month_names[pm_num - 1]} {str(py)[2:]}"
+    yoy_label = f"{month_names[lm - 1]} {str(ly - 1)[2:]}"
 
     has_yoy = prior_summaries is not None and yoy_month in prior_summaries
+    has_budget = budget_month is not None and budget_ytd is not None
 
-    hdr = f"| Account | {last_label} | {prev_label} | \u0394 MoM |"
-    sep_line = "|:--------|-------:|-------:|:------|"
+    ytd_label = f"YTD {ly} (Jan\u2013{month_names[lm - 1]})"
+
+    # Header: actual | budget | \u0394bud | prev | \u0394MoM [| yoy | \u0394YoY] | budYTD | actYTD | YTD var
+    hdr = f"| Account | {last_label} |"
+    sep_line = "|:--------|-------:|"
+    if has_budget:
+        hdr += " Budget | \u0394 Bud |"
+        sep_line += "-------:|------:|"
+    hdr += f" {prev_label} | \u0394 MoM |"
+    sep_line += "-------:|------:|"
     if has_yoy:
         hdr += f" {yoy_label} | \u0394 YoY |"
-        sep_line += "-------:|:------|"
+        sep_line += "-------:|------:|"
+    if has_budget:
+        hdr += f" Bud {ytd_label} | Act {ytd_label} | YTD Var |"
+        sep_line += "-------:|-------:|------:|"
     lines.extend([hdr, sep_line])
 
-    def add_comp(label, cur, prv, yoy=None, bold=False):
+    def budget_cells(label, is_budget_row):
+        """Return (month_budget_str, month_var_str, ytd_bud_str, ytd_act_str, ytd_var_str)."""
+        if not has_budget:
+            return None
+        if not is_budget_row:
+            return ("\u2014", "\u2014", "\u2014", "\u2014", "\u2014")
+        bm = _budget_lookup(budget_month, label)
+        by = _budget_lookup(budget_ytd, label)
+        if bm is None or by is None:
+            return ("\u2014", "\u2014", "\u2014", "\u2014", "\u2014")
+        m_bud, _, m_var = bm
+        y_bud, y_act, y_var = by
+        return (fmt(m_bud), fmt_signed(m_var), fmt(y_bud), fmt(y_act), fmt_signed(y_var))
+
+    def add_comp(label, cur, prv, yoy=None, bold=False, is_budget_row=True):
         lbl = f"**{label}**" if bold else label
-        row = f"| {lbl} | {fmt(cur, bold)} | {fmt(prv, bold)} | {fmt_delta(cur, prv)} |"
+        bc = budget_cells(label, is_budget_row)
+        row = f"| {lbl} | {fmt(cur, bold)} |"
+        if has_budget:
+            row += f" {bc[0]} | {bc[1]} |"
+        row += f" {fmt(prv, bold)} | {fmt_delta(cur, prv)} |"
         if has_yoy:
             yoy_fmt = fmt(yoy, bold) if yoy is not None else "\u2014"
             yoy_delta = fmt_delta(cur, yoy) if yoy is not None else "\u2014"
             row += f" {yoy_fmt} | {yoy_delta} |"
+        if has_budget:
+            row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
         lines.append(row)
 
     last_m = monthly.get(last, {})
@@ -806,73 +942,92 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     y_cf = prior_summaries[yoy_month]["Cashflow"] if has_yoy else None
     add_comp("Cashflow", c_cf, p_cf, y_cf, bold=True)
 
-    # Derived metrics
+    # Derived metrics (no budget concept -> dashes in budget columns)
     t12_last = t12_vals.get(last)
     t12_prev = t12_vals.get(prev)
     add_comp("T-12 NOI", t12_last, t12_prev,
-             t12_vals.get(yoy_month) if has_yoy else None)
+             t12_vals.get(yoy_month) if has_yoy else None, is_budget_row=False)
+
     if t12_last is not None:
         iv_last = t12_last / cap_rate
         iv_prev = t12_prev / cap_rate if t12_prev else None
-        yoy_iv = None
-        # Custom row for Implied Value (use K format)
         iv_last_s = fmt_k(iv_last)
         iv_prev_s = fmt_k(iv_prev) if iv_prev else "\u2014"
-        if iv_last is not None and iv_prev is not None:
-            iv_diff = round(iv_last / 1000) - round(iv_prev / 1000)
-            iv_pct = (iv_last - iv_prev) / abs(iv_prev) * 100 if iv_prev else 0
-            sign = "+" if iv_diff > 0 else ""
-            iv_delta = f"{sign}{iv_diff:,}K ({sign}{iv_pct:.1f}%)"
+        if iv_prev is not None:
+            iv_delta = fmt_signed(round(iv_last / 1000) - round(iv_prev / 1000)) + "K"
         else:
             iv_delta = "\u2014"
-        row = f"| Implied Value | {iv_last_s} | {iv_prev_s} | {iv_delta} |"
+        bc = budget_cells("Implied Value", is_budget_row=False)
+        row = f"| Implied Value | {iv_last_s} |"
+        if has_budget:
+            row += f" {bc[0]} | {bc[1]} |"
+        row += f" {iv_prev_s} | {iv_delta} |"
         if has_yoy:
             yoy_t12 = t12_vals.get(yoy_month)
             if yoy_t12 is not None and yoy_t12 != 0:
                 iv_yoy = yoy_t12 / cap_rate
-                iv_yoy_s = fmt_k(iv_yoy)
-                iv_yoy_diff = round(iv_last / 1000) - round(iv_yoy / 1000)
-                iv_yoy_pct = (iv_last - iv_yoy) / abs(iv_yoy) * 100
-                ys = "+" if iv_yoy_diff > 0 else ""
-                row += f" {iv_yoy_s} | {ys}{iv_yoy_diff:,}K ({ys}{iv_yoy_pct:.1f}%) |"
+                iv_yoy_delta = fmt_signed(round(iv_last / 1000) - round(iv_yoy / 1000)) + "K"
+                row += f" {fmt_k(iv_yoy)} | {iv_yoy_delta} |"
             else:
                 row += " \u2014 | \u2014 |"
+        if has_budget:
+            row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
         lines.append(row)
 
-    # DSCR
+    # DSCR (ratio, no budget concept)
     dscr_last = summaries[last]["DSCR"]
     dscr_prev = summaries[prev]["DSCR"]
     dscr_y = prior_summaries[yoy_month]["DSCR"] if has_yoy else None
     dl = f"{dscr_last:.2f}x" if dscr_last else "\u2014"
     dp = f"{dscr_prev:.2f}x" if dscr_prev else "\u2014"
     dy = f"{dscr_y:.2f}x" if dscr_y else "\u2014"
-    if dscr_last and dscr_prev and dscr_prev != 0:
-        diff = dscr_last - dscr_prev
-        pct = (diff / abs(dscr_prev)) * 100
-        sign = "+" if diff > 0 else ""
-        dd_mom = f"{sign}{diff:.2f}x ({sign}{pct:.1f}%)"
-    else:
-        dd_mom = "\u2014"
-    if dscr_last and dscr_y and dscr_y != 0:
-        diff = dscr_last - dscr_y
-        pct = (diff / abs(dscr_y)) * 100
-        sign = "+" if diff > 0 else ""
-        dd_yoy = f"{sign}{diff:.2f}x ({sign}{pct:.1f}%)"
-    else:
-        dd_yoy = "\u2014"
-    row = f"| DSCR | {dl} | {dp} | {dd_mom} |"
+    dd_mom = f"{dscr_last - dscr_prev:+.2f}x" if (dscr_last and dscr_prev) else "\u2014"
+    dd_yoy = f"{dscr_last - dscr_y:+.2f}x" if (dscr_last and dscr_y) else "\u2014"
+    bc = budget_cells("DSCR", is_budget_row=False)
+    row = f"| DSCR | {dl} |"
+    if has_budget:
+        row += f" {bc[0]} | {bc[1]} |"
+    row += f" {dp} | {dd_mom} |"
     if has_yoy:
         row += f" {dy} | {dd_yoy} |"
+    if has_budget:
+        row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
     lines.append(row)
 
     # NOI/Unit/Mo
     c_nu = summaries[last]["NOI/Unit/Mo"]
     p_nu = summaries[prev]["NOI/Unit/Mo"]
     y_nu = prior_summaries[yoy_month]["NOI/Unit/Mo"] if has_yoy else None
-    add_comp("NOI/Unit/Mo", c_nu, p_nu, y_nu)
+    add_comp("NOI/Unit/Mo", c_nu, p_nu, y_nu, is_budget_row=False)
 
     lines.append("")
+    if has_budget:
+        lines.append("\u0394 Bud / YTD Var are favorable variances (positive = better "
+                     "than budget: more income or less expense), per AppFolio. "
+                     f"YTD is calendar year {ly} through {month_names[lm - 1]}.")
+        lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _budget_lookup(struct, label):
+    """Return (budget, actual, favorable_variance) for a label, or None.
+
+    Total/derived labels (Total Income, NOI, etc.) are stored as
+    (actual, budget, var) tuples directly on the struct; GL line labels live
+    in the lb/la/lv dicts.
+    """
+    if struct is None:
+        return None
+    if label in ("Total Income", "Total OpEx", "NOI", "Total Deductions", "Cashflow"):
+        a, b, v = struct[label]
+        return (b, a, v)
+    if label in struct["lb"] or label in struct["la"]:
+        return (struct["lb"].get(label, 0.0), struct["la"].get(label, 0.0),
+                struct["lv"].get(label, 0.0))
+    # Known P&L line with no budget rows posted -> treat as zero budget
+    if label in INCOME_ROWS or label in OPEX_ROWS or label in BELOW_NOI_ROWS:
+        return (0.0, 0.0, 0.0)
+    return None
 
 
 def build_commentary(monthly, summaries, months):
@@ -995,13 +1150,19 @@ def build_validation(monthly, summaries, months, af_totals, units):
 
 
 def build_summary(summaries, months, cap_rate, units, t12_vals,
-                  prior_summaries, occupancy_data):
-    """Build a compact Summary section: current values with MoM/YoY % deltas."""
+                  prior_summaries, occupancy_data, anchor_idx=None):
+    """Build a compact Summary section: current values with MoM/YoY % deltas.
+
+    Anchors on the latest complete month (anchor_idx) so the headline never
+    reflects a partial month with unposted expenses.
+    """
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    latest = months[-1]
-    prior = months[-2]
+    if anchor_idx is None:
+        anchor_idx = len(months) - 1
+    latest = months[anchor_idx]
+    prior = months[anchor_idx - 1]
     ly, lm = int(latest[:4]), int(latest[5:7])
     yoy_key = f"{ly - 1:04d}-{lm:02d}"
 
@@ -1094,7 +1255,8 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
                          cap_rate, units, report_date, report_date_iso,
                          prior_monthly=None, prior_summaries=None, prior_t12_noi=None,
                          gpr_monthly=None, lease_data=None, exposure_months=None,
-                         occupancy_data=None):
+                         occupancy_data=None, anchor_idx=None,
+                         budget_month=None, budget_ytd=None):
     """Generate the complete markdown report."""
     addr = prop["addr"]
     fund = prop["fund"]
@@ -1142,7 +1304,7 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
 
     # Summary (top section)
     r.append(build_summary(summaries, months, cap_rate, units, t12_vals,
-                           prior_summaries, occupancy_data))
+                           prior_summaries, occupancy_data, anchor_idx))
 
     # Main P&L table
     r.append(build_pnl_table(monthly, summaries, months, labels))
@@ -1183,7 +1345,8 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
 
     # Comparisons
     r.append(build_comparisons(monthly, summaries, months, labels, cap_rate, units,
-                               t12_vals, prior_monthly, prior_summaries))
+                               t12_vals, prior_monthly, prior_summaries,
+                               anchor_idx, budget_month, budget_ytd))
 
     # Commentary
     r.append(build_commentary(monthly, summaries, months))

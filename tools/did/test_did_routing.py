@@ -800,6 +800,41 @@ class BuildOrderCheckboxTests(unittest.TestCase):
         self.assertEqual(bare, "HIIT+bball")
 
 
+class ExactMatchTiebreakTests(unittest.TestCase):
+    """When a bare query's tokens are fully contained in two different tasks,
+    the matcher must prefer the EXACT task (fewest leftover tokens), not
+    whichever happened to be iterated first.
+
+    Real bug: `stats` (i9, [15]) and `m5x2 stats` ([8]) both scored a perfect
+    1.0 on query-token overlap, so `/did stats` matched whichever Todoist
+    returned first. That closed the wrong task and wrote a bare "stats" into
+    completed-today.json, which then hid the still-open i9 "stats" task from
+    `dtd`. See memory: "/did stats defaults to i9, not m5x2."
+    """
+
+    TASKS = [
+        {"content": "m5x2 stats (4) [8]", "id": "m5x2"},
+        {"content": "stats (15) [15]", "id": "i9"},
+    ]
+
+    def test_bare_query_prefers_exact_task_either_order(self):
+        for order in (self.TASKS, list(reversed(self.TASKS))):
+            got = _df_module.match_todoist_task("stats", order)
+            self.assertIsNotNone(got)
+            self.assertEqual(
+                got["id"], "i9",
+                msg=f"bare 'stats' must match the exact i9 task, order={[t['id'] for t in order]}",
+            )
+
+    def test_qualified_query_still_prefers_superset_task(self):
+        # The tiebreak must not regress the normal case: a multi-token query
+        # should still match the task that contains all its tokens.
+        for order in (self.TASKS, list(reversed(self.TASKS))):
+            got = _df_module.match_todoist_task("m5x2 stats", order)
+            self.assertIsNotNone(got)
+            self.assertEqual(got["id"], "m5x2")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -818,6 +853,7 @@ def main() -> int:
         ThresholdTests,
         FormulaAppendTests,
         ZeroNeonOverrideTests,
+        ExactMatchTiebreakTests,
         HciLabelMapping,
         DeferFlagParsingTests,
         BuildOrderCheckboxTests,

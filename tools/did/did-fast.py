@@ -191,19 +191,27 @@ def match_todoist_task(query: str, tasks: list[dict]) -> Optional[dict]:
     if alias and alias != query.strip().lower():
         queries.append(alias)
 
-    best_ratio, best_task = 0.0, None
+    best_score, best_task = (0.0, 0.0), None
     for q in queries:
         q_tokens = tokenize(dash_normalize(q))
         if not q_tokens:
             continue
+        q_set = set(q_tokens)
         for task in tasks:
             c_tokens = tokenize(dash_normalize(task["content"]))
             ratio = overlap_ratio(q_tokens, c_tokens)
-            if ratio > best_ratio:
-                best_ratio, best_task = ratio, task
+            # Tiebreak on task-side coverage: when two tasks share the query's
+            # tokens equally (e.g. "stats" matches both "stats" and "m5x2
+            # stats"), prefer the task with fewer leftover tokens — the exact
+            # match — instead of whichever happened to be iterated first.
+            task_cov = (sum(1 for t in c_tokens if t in q_set) / len(c_tokens)
+                        if c_tokens else 0.0)
+            score = (ratio, task_cov)
+            if score > best_score:
+                best_score, best_task = score, task
 
     threshold = 0.4 if len(tasks) == 1 else 0.6
-    return best_task if best_ratio >= threshold else None
+    return best_task if best_score[0] >= threshold else None
 
 
 # ---------------------------------------------------------------------------
