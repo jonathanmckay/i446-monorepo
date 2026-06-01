@@ -61,21 +61,33 @@ Cap rates sourced from SREO: `q1 sreo` tab, column L, in [2026 Q1 PFS + SREO](ht
 
 ## Execution
 
-Run the fast path script:
+### Step 1: Run the fast path script
 
 ```bash
 python3 ~/i446-monorepo/tools/pnl/pnl-fast.py <property_code> [--date YYYY-MM]
 ```
 
-The script handles everything: AppFolio API calls, GL mapping, derived metrics, historical T-12, comparisons (full GL detail with MoM + YoY), commentary, and validation. Runs in ~3 seconds.
+The script handles: AppFolio API calls, GL mapping, derived metrics, historical T-12, comparisons, and validation. Runs in ~3 seconds.
 
-Echo the JSON output to the user. Done.
+### Step 2: Generate insights
 
-## Response Style
+Read the Comparisons section of the report just written. Produce 2-4 bullet-point insights covering:
 
-Show one summary line from the script output:
+1. **What moved NOI this month?** Identify the 1-2 GL lines that drove MoM change. Be specific: "R&M Turns dropped from $1,384 to $0" not "OpEx decreased."
+2. **YoY trajectory.** Is the property gaining or losing ground vs last year? What's driving the gap?
+3. **Risk or anomaly.** Flag anything unusual: DSCR below 1.2, vacancy spikes, R&M > 25% of income, negative cashflow, one-time charges, insurance repricing.
+4. **Trend.** Is T-12 NOI rising, falling, or plateauing? How many months of improvement/decline?
+
+Write the insights as a `## Insights` section appended to the report file (before the "Generated from AppFolio" footer). Keep each bullet to 1-2 sentences. No hedging, no filler.
+
+### Step 3: Report
+
+Show the summary line plus the insights:
 ```
 pnl → <code> (<fund>, <units> units)
   T-12 NOI: $X | Implied Value: $XK | DSCR: X.XX
-  File: <path>
+
+  Insights:
+  - ...
+  - ...
 ```
