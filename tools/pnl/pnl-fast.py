@@ -652,7 +652,7 @@ def build_lease_exposure(rent_roll_data, months):
 
 
 def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_vals,
-                      prior_monthly=None, prior_summaries=None, prior_t12_noi=None):
+                      prior_monthly=None, prior_summaries=None):
     """Build the comparisons section with full GL detail."""
     lines = ["## Comparisons", ""]
     last = months[-1]
@@ -743,10 +743,8 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     # Derived metrics
     t12_last = t12_vals.get(last)
     t12_prev = t12_vals.get(prev)
-    yoy_t12 = t12_vals.get(yoy_month)
-    if yoy_t12 is None and prior_t12_noi is not None:
-        yoy_t12 = prior_t12_noi
-    add_comp("T-12 NOI", t12_last, t12_prev, yoy_t12 if has_yoy else None)
+    add_comp("T-12 NOI", t12_last, t12_prev,
+             t12_vals.get(yoy_month) if has_yoy else None)
     if t12_last is not None:
         iv_last = t12_last / cap_rate
         iv_prev = t12_prev / cap_rate if t12_prev else None
@@ -763,13 +761,14 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
             iv_delta = "\u2014"
         row = f"| Implied Value | {iv_last_s} | {iv_prev_s} | {iv_delta} |"
         if has_yoy:
-            if yoy_t12 is not None:
+            yoy_t12 = t12_vals.get(yoy_month)
+            if yoy_t12 is not None and yoy_t12 != 0:
                 iv_yoy = yoy_t12 / cap_rate
                 iv_yoy_s = fmt_k(iv_yoy)
                 iv_yoy_diff = round(iv_last / 1000) - round(iv_yoy / 1000)
-                iv_yoy_pct = (iv_last - iv_yoy) / abs(iv_yoy) * 100 if iv_yoy else 0
-                yoy_sign = "+" if iv_yoy_diff > 0 else ""
-                row += f" {iv_yoy_s} | {yoy_sign}{iv_yoy_diff:,}K ({yoy_sign}{iv_yoy_pct:.1f}%) |"
+                iv_yoy_pct = (iv_last - iv_yoy) / abs(iv_yoy) * 100
+                ys = "+" if iv_yoy_diff > 0 else ""
+                row += f" {iv_yoy_s} | {ys}{iv_yoy_diff:,}K ({ys}{iv_yoy_pct:.1f}%) |"
             else:
                 row += " \u2014 | \u2014 |"
         lines.append(row)
@@ -1022,6 +1021,13 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
 
     # Lease Exposure
     r.append(build_lease_exposure(lease_data, months))
+
+    # Inject prior-year T-12 NOI into t12_vals so Comparisons can show YoY
+    if prior_t12_noi is not None:
+        ly, lm = int(months[-1][:4]), int(months[-1][5:7])
+        yoy_key = f"{ly - 1:04d}-{lm:02d}"
+        if yoy_key not in t12_vals:
+            t12_vals[yoy_key] = prior_t12_noi
 
     # Comparisons
     r.append(build_comparisons(monthly, summaries, months, labels, cap_rate, units,
