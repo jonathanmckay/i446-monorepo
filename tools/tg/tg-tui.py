@@ -51,7 +51,9 @@ from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
 from prompt_toolkit.styles import Style  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
 import gcal_client  # noqa: E402
+from neon import excel as neon_excel  # noqa: E402
 import outlook_client  # noqa: E402
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -272,33 +274,101 @@ def fetch_gcal(force=False):
         flash(f"gcal err: {e}")
 
 
-COMPLETED_TODAY = Path.home() / "vault/z_ibx/completed-today.json"
+# Domain column → project codes mapping (reverse of LABEL_TO_0FEN in did-fast)
+_0FEN_DOMAIN_COLS = {
+    "R": ["i9", "i447", "f693", "f694"],
+    "S": ["m5x2"],
+    "T": ["g245", "infra", "n156"],
+    "U": ["hcmc", "hcmc2"],
+    "V": ["hcm", "hci", "hcmp", "hcmr"],
+    "W": ["hcb", "hcbp"],
+    "X": ["xk87", "xk88"],
+    "Y": ["s897"],
+}
+# Invert: project_code → 0分 column
+_PROJ_TO_0FEN = {}
+for _col, _codes in _0FEN_DOMAIN_COLS.items():
+    for _c in _codes:
+        _PROJ_TO_0FEN[_c] = _col
 
 
 def fetch_points():
-    """Read today's 分 from completed-today.json. Computes total and per-block."""
+    """Read today's 分 from Neon 0分 sheet. Distribute to blocks via Toggl entries."""
     try:
-        data = json.loads(COMPLETED_TODAY.read_text())
-        today_str = dt.datetime.now(TZ).strftime("%Y-%m-%d")
-        if data.get("date") != today_str:
-            STATE.today_points = 0
-            STATE.block_points = {}
-            return
-        pts = data.get("points", {})
-        timestamps = data.get("timestamps", {})
-        STATE.today_points = sum(pts.values())
-        # Compute per-block points using timestamps
+        now = dt.datetime.now(TZ)
+        today_md = f"{now.month}/{now.day}"
+
+        # Read all domain columns from 0分 in one SSH+osascript call
+        domain_pts: dict[str, float] = {}  # col_letter → points
+        total = 0.0
+        cols_to_read = ["R", "S", "T", "U", "V", "W", "X", "Y"]
+        try:
+            import subprocess as _sp
+            script = f'''tell application "Microsoft Excel"
+    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
+    set todayRow to 0
+    repeat with i from 2 to 200
+        if (string value of range ("B" & i) of ws) = "{today_md}" then
+            set todayRow to i
+            exit repeat
+        end if
+    end repeat
+    if todayRow = 0 then return "ERR"
+    set r to ""
+    repeat with c in {{{",".join('"' + c + '"' for c in cols_to_read)}}}
+        set v to value of range (c & todayRow) of ws
+        set r to r & c & "=" & v & "|"
+    end repeat
+    return r
+end tell'''
+            r = _sp.run(["ssh", "ix", "osascript", "-e", script],
+                        capture_output=True, text=True, timeout=15)
+            if r.returncode == 0 and r.stdout.strip() != "ERR":
+                for pair in r.stdout.strip().split("|"):
+                    if "=" in pair:
+                        col, val = pair.split("=", 1)
+                        try:
+                            pts = float(val)
+                            domain_pts[col] = pts
+                            total += pts
+                        except (ValueError, TypeError):
+                            pass
+        except Exception:
+            pass
+
+        STATE.today_points = int(total)
+
+        # Distribute to blocks using Toggl entries
+        # For each entry, find its domain column and attribute its share of points
         bp: dict[str, int] = {}
-        for name, val in pts.items():
-            ts = timestamps.get(name, "")
-            if ts and val:
-                try:
-                    h = int(ts.split(":")[0])
-                    blk = hour_to_block(h)
-                    if blk:
-                        bp[blk[0]] = bp.get(blk[0], 0) + val
-                except Exception:
-                    pass
+        # Build per-block, per-domain minute totals from Toggl
+        block_domain_mins: dict[str, dict[str, int]] = {}  # block_name → {col → mins}
+        domain_total_mins: dict[str, int] = {}  # col → total mins today
+        for e in STATE.entries:
+            code = proj_code(e.get("project_id"))
+            col = _PROJ_TO_0FEN.get(code)
+            if not col:
+                continue
+            mins = int((e["end_dt"] - e["start_dt"]).total_seconds() // 60)
+            if mins < 1:
+                continue
+            blk = hour_to_block(e["start_dt"].hour)
+            if blk:
+                block_domain_mins.setdefault(blk[0], {})
+                block_domain_mins[blk[0]][col] = block_domain_mins[blk[0]].get(col, 0) + mins
+            domain_total_mins[col] = domain_total_mins.get(col, 0) + mins
+
+        # Proportional attribution: block gets (block_mins / total_mins) * domain_pts
+        for blk_name, col_mins in block_domain_mins.items():
+            blk_pts = 0.0
+            for col, mins in col_mins.items():
+                total_mins = domain_total_mins.get(col, 0)
+                col_pts = domain_pts.get(col, 0)
+                if total_mins > 0 and col_pts > 0:
+                    blk_pts += (mins / total_mins) * col_pts
+            if blk_pts > 0:
+                bp[blk_name] = int(blk_pts)
+
         STATE.block_points = bp
         STATE.last_points_fetch = time.monotonic()
     except Exception:
@@ -1022,8 +1092,8 @@ async def ticker_gcal(app):
 
 async def ticker_points(app):
     while True:
-        await asyncio.sleep(60)
-        fetch_points()
+        await asyncio.sleep(120)
+        await asyncio.to_thread(fetch_points)
         app.invalidate()
 
 
