@@ -239,7 +239,7 @@ for t in unique:
     if clean in completed or prefix in completed or clean in removed:
         continue
 
-    is_skipped = clean in skipped or prefix in skipped
+    is_skipped = clean in skipped
 
     # Find color from labels
     color = ''
@@ -274,7 +274,7 @@ for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
-" "$1" "$2" "$3" "$4" "$5"
+" "$1" "$2" "$3" "$4" "$5" "$6"
 LISTEOF
 chmod +x "$DTD_LIST"
 
