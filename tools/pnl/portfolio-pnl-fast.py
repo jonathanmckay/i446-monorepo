@@ -104,8 +104,11 @@ def get_fund_properties(fund):
 
 
 def determine_quarter(end_month):
-    """Determine fiscal quarter folder from end month."""
+    """Determine fiscal quarter folder from end month.
+    Matches pnl-fast.py convention: months <= 6 map to q1 (Q1 reports cover through April)."""
     y, m = int(end_month[:4]), int(end_month[5:7])
+    if m <= 6:
+        return f"{y}.q1"
     q = (m - 1) // 3 + 1
     return f"{y}.q{q}"
 
