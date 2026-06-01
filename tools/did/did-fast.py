@@ -1442,6 +1442,29 @@ end tell'''
         except Exception:
             pass  # non-critical
 
+    # 5d. Task marker: write ✅ to build order when a Todoist task is completed
+    task_done = any(r.step == "todoist" for r in fast)
+    if task_done:
+        try:
+            _bo = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+            if _bo.exists():
+                _now_h = datetime.now().hour
+                _bidx = max(0, min(8, (_now_h - 4) // 2))
+                _branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+                _bname = _branches[_bidx]
+                _bo_text = _bo.read_text()
+                if "## -1₲" in _bo_text:
+                    _lines = _bo_text.split("\n")
+                    _new = []
+                    for _l in _lines:
+                        if (_l.startswith(f"- {_bname}") and "✅" not in _l):
+                            _new.append(f"{_l.rstrip()} ✅")
+                        else:
+                            _new.append(_l)
+                    _bo.write_text("\n".join(_new))
+        except Exception:
+            pass  # non-critical
+
     # 6. Close or defer Todoist tasks in parallel
     task_ids = []
     defer_items = {}  # tid → (defer_date, points_claimed, content)
