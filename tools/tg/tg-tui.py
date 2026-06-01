@@ -274,33 +274,20 @@ def fetch_gcal(force=False):
         flash(f"gcal err: {e}")
 
 
-# Domain column → project codes mapping (reverse of LABEL_TO_0FEN in did-fast)
-_0FEN_DOMAIN_COLS = {
-    "R": ["i9", "i447", "f693", "f694"],
-    "S": ["m5x2"],
-    "T": ["g245", "infra", "n156"],
-    "U": ["hcmc", "hcmc2"],
-    "V": ["hcm", "hci", "hcmp", "hcmr"],
-    "W": ["hcb", "hcbp"],
-    "X": ["xk87", "xk88"],
-    "Y": ["s897"],
-}
-# Invert: project_code → 0分 column
-_PROJ_TO_0FEN = {}
-for _col, _codes in _0FEN_DOMAIN_COLS.items():
-    for _c in _codes:
-        _PROJ_TO_0FEN[_c] = _col
-
-
 def fetch_points():
-    """Read today's 分 from Neon 0分 sheet. Distribute to blocks via Toggl entries."""
+    """Read today's 分 from Neon 0分 sheet, then distribute to blocks via Toggl entries.
+
+    The topline total is the Σ column (D) — the authoritative grand total the
+    personal dashboard also reads (see dashboard.py /api/points-today). Reading
+    the same cell keeps the two toplines in lockstep. Summing per-domain columns
+    (R:Y) here undercounts: it omits Q (g245/infra/0g), Z (n156), and the -1₦
+    penalty in P, which is exactly why the numbers used to diverge.
+    """
     try:
         now = dt.datetime.now(TZ)
         today_md = f"{now.month}/{now.day}"
 
-        # Read all domain columns from 0分 in one ix-osa call
-        domain_pts: dict[str, float] = {}  # col_letter → points
-        total = 0.0
+        # Read the Σ total (column D) for today's row in one ix-osa call.
         try:
             import subprocess as _sp
             IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
@@ -314,33 +301,22 @@ def fetch_points():
         end if
     end repeat
     if todayRow = 0 then return "ERR"
-    set r to ""
-    repeat with c in {{"R", "S", "T", "U", "V", "W", "X", "Y"}}
-        set v to value of range (c & todayRow) of ws
-        set r to r & c & "=" & v & "|"
-    end repeat
-    return r
+    return value of range ("D" & todayRow) of ws
 end tell'''
             r = _sp.run([IX_OSA], input=script,
                         capture_output=True, text=True, timeout=15)
-            if r.returncode == 0 and r.stdout.strip() != "ERR":
-                for pair in r.stdout.strip().split("|"):
-                    if "=" in pair:
-                        col, val = pair.split("=", 1)
-                        # Handle formula strings like "70+12"
-                        try:
-                            pts = float(val)
-                        except ValueError:
-                            try:
-                                pts = float(eval(val))  # safe: only digits and +
-                            except Exception:
-                                continue
-                        domain_pts[col] = pts
-                        total += pts
+            if r.returncode == 0 and r.stdout.strip() not in ("", "ERR"):
+                val = r.stdout.strip()
+                # Handle formula strings like "70+12" defensively.
+                try:
+                    STATE.today_points = int(round(float(val)))
+                except ValueError:
+                    try:
+                        STATE.today_points = int(round(float(eval(val))))  # safe: digits and +
+                    except Exception:
+                        pass
         except Exception:
             pass
-
-        STATE.today_points = int(total)
 
         # Per-block points: use completed-today.json timestamps
         # (Neon doesn't have per-block columns; timestamps are best-effort)
