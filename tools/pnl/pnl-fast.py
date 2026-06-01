@@ -221,13 +221,16 @@ def fetch_prior_year_12m(prop_ids, from_month, to_month):
     return appfolio_post("twelve_month_income_statement.json", payload)
 
 
-def fetch_rent_roll(prop_ids):
-    """Fetch rent roll itemized from AppFolio v2 API for lease exposure."""
+def fetch_lease_expiration(prop_ids, from_month, to_month):
+    """Fetch lease expiration detail by month from AppFolio v2 API."""
     payload = {
+        "ends_on_from": from_month,
+        "ends_on_to": to_month,
         "properties": {"properties_ids": prop_ids},
-        "property_visibility": "active",
+        "exclude_month_to_month": "0",
+        "exclude_occupancies_with_move_out": "1",
     }
-    return appfolio_post("rent_roll_itemized.json", payload)
+    return appfolio_post("lease_expiration_detail.json", payload)
 
 
 # ---------------------------------------------------------------------------
@@ -547,26 +550,47 @@ def _prior_month_key(first_month, offset):
 
 
 def build_ancillary_income(monthly, months, gpr_monthly):
-    """Build the Ancillary Income section."""
+    """Build the Ancillary Income section with latest month, T-3, and T-12."""
     ancillary_labels = ["Utility Reimb", "Laundry", "Pet Rent/Fee", "Parking",
                         "Late Fees", "Move-In/Out", "Other Income"]
-    lines = ["## Ancillary Income", ""]
-    lines.append("| Metric | T-12 | % of GPR |")
-    lines.append("|--------|-----:|--------:|")
+
+    latest_month = months[-1]
+    t3_months = months[-3:]
 
     t12_gpr = sum(gpr_monthly.get(m, 0) for m in months)
-    total_ancillary = 0
+    t3_gpr = sum(gpr_monthly.get(m, 0) for m in t3_months)
+    latest_gpr = gpr_monthly.get(latest_month, 0)
+
+    # Build month label for latest
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    ly, lm = int(latest_month[:4]), int(latest_month[5:7])
+    latest_label = f"{month_names[lm - 1]} {str(ly)[2:]}"
+
+    lines = ["## Ancillary Income", ""]
+    lines.append(f"| Metric | {latest_label} | T-3 Ann | T-12 | % of GPR |")
+    lines.append("|--------|-----:|-----:|-----:|--------:|")
+
+    total_latest = 0
+    total_t3 = 0
+    total_t12 = 0
 
     for label in ancillary_labels:
+        latest_val = monthly.get(latest_month, {}).get(label, 0)
+        t3_val = sum(monthly.get(m, {}).get(label, 0) for m in t3_months)
         t12_val = sum(monthly.get(m, {}).get(label, 0) for m in months)
-        if t12_val == 0:
+        if t12_val == 0 and latest_val == 0:
             continue
         pct = (t12_val / t12_gpr * 100) if t12_gpr != 0 else 0
-        total_ancillary += t12_val
-        lines.append(f"| {label} | ${t12_val:,.0f} | {pct:.1f}% |")
+        t3_ann = t3_val * 4  # annualize the 3-month total
+        total_latest += latest_val
+        total_t3 += t3_val
+        total_t12 += t12_val
+        lines.append(f"| {label} | ${latest_val:,.0f} | ${t3_ann:,.0f} | ${t12_val:,.0f} | {pct:.1f}% |")
 
-    pct_total = (total_ancillary / t12_gpr * 100) if t12_gpr != 0 else 0
-    lines.append(f"| **Total Ancillary** | **${total_ancillary:,.0f}** | **{pct_total:.1f}%** |")
+    pct_total = (total_t12 / t12_gpr * 100) if t12_gpr != 0 else 0
+    t3_ann_total = total_t3 * 4
+    lines.append(f"| **Total Ancillary** | **${total_latest:,.0f}** | **${t3_ann_total:,.0f}** | **${total_t12:,.0f}** | **{pct_total:.1f}%** |")
 
     # Arrears Billing = Utility Reimb / (Water + Electric/Gas)
     t12_util_reimb = sum(monthly.get(m, {}).get("Utility Reimb", 0) for m in months)
@@ -574,79 +598,81 @@ def build_ancillary_income(monthly, months, gpr_monthly):
     t12_electric = sum(monthly.get(m, {}).get("Electric/Gas", 0) for m in months)
     util_cost = t12_water + t12_electric
     arrears_pct = (t12_util_reimb / util_cost * 100) if util_cost != 0 else 0
-    lines.append(f"| **Arrears Billing (Util Reimb / Water+Electric+Gas)** | | **{arrears_pct:.1f}%** |")
+    lines.append(f"| **Arrears Billing (Util Reimb / Water+Electric+Gas)** | | | | **{arrears_pct:.1f}%** |")
 
     lines.append("")
-    return "\n".join(lines) + "\n", total_ancillary, pct_total, arrears_pct
+    return "\n".join(lines) + "\n", total_t12, pct_total, arrears_pct
 
 
-def build_lease_exposure(rent_roll_data, months):
-    """Build the Lease Exposure section from rent_roll_itemized data.
+def build_lease_exposure(lease_data, exposure_months):
+    """Build horizontal Lease Exposure section from lease_expiration_detail_by_month data.
 
-    Uses lease_to date from rent roll. A unit is MTM if lease_to is in the
-    past (before T-12 start) or null. Otherwise it counts as an expiration
-    in the month of lease_to.
+    exposure_months is a list of 'YYYY-MM' strings (forward-looking, typically 6 months).
     """
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
     lines = ["## Lease Exposure", ""]
-    lines.append("| Month | Expirations | MTM |")
-    lines.append("|-------|----------:|----:|")
 
-    if not rent_roll_data:
-        lines.append("| (data unavailable) | | |")
+    if not lease_data:
+        lines.append("(data unavailable)")
         lines.append("")
         return "\n".join(lines) + "\n"
 
-    results = rent_roll_data.get("results", [])
-    if not results:
-        lines.append("| (no lease data returned) | | |")
-        lines.append("")
-        return "\n".join(lines) + "\n"
+    results = lease_data.get("results", [])
 
-    t12_start = months[0]
-    months_set = set(months)
-
-    expirations_by_month = defaultdict(int)
+    # Count by month and status
+    exp_by_month = defaultdict(int)
     mtm_count = 0
-    total_exp = 0
+    renewed_by_month = defaultdict(int)
+    status_counts = defaultdict(int)
 
     for rec in results:
-        # Skip units with move_out in the past (already moved out before T-12)
-        move_out = rec.get("move_out")
-        if move_out and move_out < t12_start:
-            continue
-
+        expires_month_str = rec.get("lease_expires_month", "")
         status = rec.get("status", "")
-        # Skip vacants if they show up
-        if status == "Vacant":
-            continue
 
-        lease_to = rec.get("lease_to")
-        if not lease_to:
-            # No lease end date = MTM
+        if expires_month_str == "Month-To-Month":
             mtm_count += 1
             continue
 
-        # Extract month from lease_to (YYYY-MM-DD)
-        lease_month = lease_to[:7]  # "YYYY-MM"
-        if lease_month < t12_start:
-            # Lease already expired before T-12 window = effectively MTM
-            mtm_count += 1
-        elif lease_month in months_set:
-            expirations_by_month[lease_month] += 1
-            total_exp += 1
-        # Leases expiring after the T-12 window are not counted (future)
+        # Parse "Jul 2026" -> "2026-07"
+        parts = expires_month_str.split()
+        if len(parts) == 2:
+            try:
+                mi = month_names.index(parts[0][:3]) + 1
+                yi = int(parts[1])
+                month_key = f"{yi:04d}-{mi:02d}"
+            except (ValueError, IndexError):
+                continue
+        else:
+            continue
 
-    for m in months:
+        exp_by_month[month_key] += 1
+        status_counts[status] += 1
+        if status == "Renewed":
+            renewed_by_month[month_key] += 1
+
+    # Build header
+    labels = []
+    for m in exposure_months:
         y, mo = int(m[:4]), int(m[5:7])
         short_yr = str(y)[2:]
-        label = f"{month_names[mo - 1]} {short_yr}"
-        exp = expirations_by_month.get(m, 0)
-        lines.append(f"| {label} | {exp} | {mtm_count} |")
+        labels.append(f"{month_names[mo - 1]} {short_yr}")
 
-    lines.append(f"| **T-12** | **{total_exp}** | **{mtm_count}** |")
+    header = "| | MTM | " + " | ".join(labels) + " | **Total** |"
+    sep = "|:--|--:|" + "".join("--:|" for _ in exposure_months) + "--:|"
+
+    total_exp = sum(exp_by_month.get(m, 0) for m in exposure_months)
+    total_renewed = sum(renewed_by_month.get(m, 0) for m in exposure_months)
+
+    exp_cells = " | ".join(str(exp_by_month.get(m, 0)) for m in exposure_months)
+    ren_cells = " | ".join(str(renewed_by_month.get(m, 0)) for m in exposure_months)
+
+    lines.append(header)
+    lines.append(sep)
+    lines.append(f"| Expiring | {mtm_count} | {exp_cells} | **{total_exp + mtm_count}** |")
+    lines.append(f"| Renewed | — | {ren_cells} | **{total_renewed}** |")
+
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -949,7 +975,7 @@ def determine_quarter(end_month):
 def generate_full_report(code, prop, monthly, summaries, af_totals, months, labels,
                          cap_rate, units, report_date, report_date_iso,
                          prior_monthly=None, prior_summaries=None, prior_t12_noi=None,
-                         gpr_monthly=None, lease_data=None):
+                         gpr_monthly=None, lease_data=None, exposure_months=None):
     """Generate the complete markdown report."""
     addr = prop["addr"]
     fund = prop["fund"]
@@ -1013,14 +1039,16 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     dm_text, t12_vals = build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi, sreo_val)
     r.append(dm_text)
 
+    # Lease Exposure (2nd section, forward-looking)
+    if exposure_months is None:
+        exposure_months = []
+    r.append(build_lease_exposure(lease_data, exposure_months))
+
     # Ancillary Income
     if gpr_monthly is None:
         gpr_monthly = {}
     anc_text, _, _, _ = build_ancillary_income(monthly, months, gpr_monthly)
     r.append(anc_text)
-
-    # Lease Exposure
-    r.append(build_lease_exposure(lease_data, months))
 
     # Inject prior-year T-12 NOI into t12_vals so Comparisons can show YoY
     if prior_t12_noi is not None:
@@ -1118,12 +1146,28 @@ def main():
         print(f"Warning: Could not fetch prior year data: {e.code}", file=sys.stderr)
         raw_prior = None
 
-    # Fetch rent roll for lease exposure
+    # Fetch lease expiration detail (forward-looking 6 months from end of T-12)
     lease_data = None
+    # Compute exposure window: 6 months starting from month after T-12 end
+    le_start_y, le_start_m = int(months[-1][:4]), int(months[-1][5:7])
+    le_start_m += 1
+    if le_start_m > 12:
+        le_start_m = 1
+        le_start_y += 1
+    exposure_months = []
+    ey, em = le_start_y, le_start_m
+    for _ in range(6):
+        exposure_months.append(f"{ey:04d}-{em:02d}")
+        em += 1
+        if em > 12:
+            em = 1
+            ey += 1
+    le_from = exposure_months[0]
+    le_to = exposure_months[-1]
     try:
-        lease_data = fetch_rent_roll(prop["ids"])
+        lease_data = fetch_lease_expiration(prop["ids"], le_from, le_to)
     except Exception as e:
-        print(f"Warning: Could not fetch rent roll data: {e}", file=sys.stderr)
+        print(f"Warning: Could not fetch lease expiration data: {e}", file=sys.stderr)
 
     # Parse
     monthly, af_totals, _, gpr_monthly = parse_api_rows(raw_current, months)
@@ -1150,7 +1194,7 @@ def main():
         code, prop, monthly, summaries, af_totals, months, labels,
         cap_rate, units, report_date, report_date_iso,
         prior_monthly, prior_summaries, prior_t12_noi,
-        gpr_monthly, lease_data,
+        gpr_monthly, lease_data, exposure_months,
     )
 
     if args.dry_run:
