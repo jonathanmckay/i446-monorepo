@@ -142,11 +142,11 @@ def main():
             continue
 
         if t.get("id") in skipped_ids:
-            bottom.append(t)
+            continue  # hidden for the rest of the day
         else:
             top.append(t)
 
-    filtered = (top + bottom)[:9]
+    filtered = top[:9]
 
     if not filtered:
         return
@@ -156,10 +156,9 @@ def main():
     max_content = max(len(t["content"]) for t in filtered)
     for i, t in enumerate(filtered, 1):
         pad = max_content - len(t["content"]) + 4
-        skipped_tag = " [skipped]" if t.get("id") in skipped_ids else ""
         tid = t.get("id", "")
         cat = t.get("cat") or _infer_cat(t)
-        print(f"  {i}. {t['content']}{' ' * pad}{cat}{skipped_tag}  #{tid}")
+        print(f"  {i}. {t['content']}{' ' * pad}{cat}  #{tid}")
     print(f"  {len(filtered) + 1}. [skip]")
     print(f"\nPick [1-{len(filtered) + 1}], or s<N> to push to bottom:")
 
