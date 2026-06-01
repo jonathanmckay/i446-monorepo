@@ -79,6 +79,17 @@ PROPERTIES = {
     "v202": {"fund": "fund-iv", "units": 15, "ids": ["719"], "cap": 0.065, "addr": "12002 E Valleyway Ave, Spokane Valley WA 99206"},
 }
 
+# SREO Values from q1 sreo tab, column E (in thousands)
+SREO_VALUES = {
+    "a210": 1111, "a511": 974, "a916": 1100, "b101": 1450, "c313": 5570,
+    "e328": 825, "h731": 1150, "hl65": 1250, "hl73": 591, "j312": 2174,
+    "k104": 8000, "k308": 1220, "kn47": 25400, "l912": 2188, "m221": 1800,
+    "m405": 2000, "m608": 1123, "ms22": 875, "ms43": 1850, "o155": 4300,
+    "p705": 2700, "ps17": 1600, "ps25": 6300, "ps91": 1650, "rl16": 14000,
+    "rl21": 1600, "s129": 2574, "s300": 1350, "tc34": 3300, "tc68": 15800,
+    "v202": 2600, "w117": 800, "w225": 900, "w226": 1345,
+}
+
 # ---------------------------------------------------------------------------
 # GL Account Mapping
 # ---------------------------------------------------------------------------
@@ -210,6 +221,27 @@ def fetch_prior_year_12m(prop_ids, from_month, to_month):
     return appfolio_post("twelve_month_income_statement.json", payload)
 
 
+def fetch_lease_expirations(prop_ids, from_month, to_month):
+    """Fetch lease expiration data from AppFolio v1 API."""
+    url = f"https://{VHOST}.appfolio.com/api/v1/reports/lease_expirations.json"
+    # v1 API uses form-encoded POST
+    params = f"paginate_results=false&from_date={from_month}&to_date={to_month}"
+    for pid in prop_ids:
+        params += f"&property_id={pid}"
+    data = params.encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": _auth_header(),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode())
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -246,6 +278,8 @@ def parse_api_rows(rows, months):
     af_totals = defaultdict(lambda: defaultdict(float))
     # Also track raw GL lines for comparisons
     gl_lines = defaultdict(lambda: defaultdict(float))  # gl_lines[month][(code, name)]
+    # Track GPR (GL 40110) separately for ancillary income % calculation
+    gpr_monthly = defaultdict(float)
 
     for row in rows:
         code = row.get("account_code")
@@ -272,11 +306,15 @@ def parse_api_rows(rows, months):
             code_str = str(code).strip()
             gl_lines[mk][(code_str, name)] = val
 
+            # Track GPR separately
+            if code_str == "40110":
+                gpr_monthly[mk] += val
+
             if code_str in ACCOUNT_LOOKUP:
                 _, label = ACCOUNT_LOOKUP[code_str]
                 monthly[mk][label] += val
 
-    return dict(monthly), dict(af_totals), dict(gl_lines)
+    return dict(monthly), dict(af_totals), dict(gl_lines), dict(gpr_monthly)
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +433,7 @@ def build_pnl_table(monthly, summaries, months, labels):
     return "\n".join(lines) + "\n"
 
 
-def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi=None):
+def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi=None, sreo_value=None):
     """Build derived metrics table. prior_monthly_noi is dict[month] -> NOI for prior year months."""
     lines = ["### Derived Metrics", ""]
     hdr = "| Metric |" + "".join(f" {l} |" for l in labels)
@@ -486,6 +524,19 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
         row += f" {fmt(summaries[m]['NOI/Unit/Mo'])} |"
     lines.append(row)
 
+    # SREO Value
+    if sreo_value is not None:
+        val_str = f"{sreo_value:,}K"
+        row = "| SREO Value |"
+        for m in months:
+            row += f" {val_str} |"
+        lines.append(row)
+    else:
+        row = "| SREO Value |"
+        for m in months:
+            row += " \u2014 |"
+        lines.append(row)
+
     lines.append(f"T-3 Ann NOI = average of trailing 3 months NOI x 12.")
     lines.append(f"T-12 NOI = rolling 12-month sum ending at that month.")
     lines.append(f"Implied Value = T-12 NOI / {cap_pct}.")
@@ -506,35 +557,118 @@ def _prior_month_key(first_month, offset):
     return f"{y:04d}-{m:02d}"
 
 
-def build_historical_table(months, t12_vals, cap_rate, prior_t12_noi=None):
-    """Build the historical T-12 NOI table."""
-    cap_pct = f"{cap_rate*100:.1f}%"
-    lines = ["## Historical T-12 NOI & Implied Valuation", ""]
-    lines.append(f"| Month | T-12 NOI | Implied Value ({cap_pct}) |")
-    lines.append("| -------- | -------: | -------------------: |")
 
+def build_ancillary_income(monthly, months, gpr_monthly):
+    """Build the Ancillary Income section."""
+    ancillary_labels = ["Utility Reimb", "Laundry", "Pet Rent/Fee", "Parking",
+                        "Late Fees", "Move-In/Out", "Other Income"]
+    lines = ["## Ancillary Income", ""]
+    lines.append("| Metric | T-12 | % of GPR |")
+    lines.append("|--------|-----:|--------:|")
+
+    t12_gpr = sum(gpr_monthly.get(m, 0) for m in months)
+    total_ancillary = 0
+
+    for label in ancillary_labels:
+        t12_val = sum(monthly.get(m, {}).get(label, 0) for m in months)
+        if t12_val == 0:
+            continue
+        pct = (t12_val / t12_gpr * 100) if t12_gpr != 0 else 0
+        total_ancillary += t12_val
+        lines.append(f"| {label} | ${t12_val:,.0f} | {pct:.1f}% |")
+
+    pct_total = (total_ancillary / t12_gpr * 100) if t12_gpr != 0 else 0
+    lines.append(f"| **Total Ancillary** | **${total_ancillary:,.0f}** | **{pct_total:.1f}%** |")
+
+    # Arrears Billing = Utility Reimb / (Water + Electric/Gas)
+    t12_util_reimb = sum(monthly.get(m, {}).get("Utility Reimb", 0) for m in months)
+    t12_water = sum(monthly.get(m, {}).get("Water", 0) for m in months)
+    t12_electric = sum(monthly.get(m, {}).get("Electric/Gas", 0) for m in months)
+    util_cost = t12_water + t12_electric
+    arrears_pct = (t12_util_reimb / util_cost * 100) if util_cost != 0 else 0
+    lines.append(f"| **Arrears Billing (Util Reimb / Water+Electric+Gas)** | | **{arrears_pct:.1f}%** |")
+
+    lines.append("")
+    return "\n".join(lines) + "\n", total_ancillary, pct_total, arrears_pct
+
+
+def build_lease_exposure(lease_data, months):
+    """Build the Lease Exposure section from API data."""
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    # Include prior-year T-12 NOI as the first row if available
-    if prior_t12_noi is not None:
-        first_m = months[0]
-        y, m = int(first_m[:4]), int(first_m[5:7])
-        # Prior month is one month before our window
-        pm = m - 1
-        py = y
-        if pm <= 0:
-            pm += 12
-            py -= 1
-        label = f"{month_names[pm - 1]} {py}"
-        lines.append(f"| {label} | {fmt(prior_t12_noi)} | {fmt_k(prior_t12_noi / cap_rate)} |")
+    lines = ["## Lease Exposure", ""]
+    lines.append("| Month | Expirations | MTM |")
+    lines.append("|-------|----------:|----:|")
 
-    for mk in months:
-        if t12_vals.get(mk) is not None:
-            y, m = int(mk[:4]), int(mk[5:7])
-            label = f"{month_names[m - 1]} {y}"
-            lines.append(f"| {label} | {fmt(t12_vals[mk])} | {fmt_k(t12_vals[mk] / cap_rate)} |")
+    if not lease_data:
+        lines.append("| (data unavailable) | | |")
+        lines.append("")
+        return "\n".join(lines) + "\n"
 
+    results = lease_data.get("results", [])
+    if not results:
+        lines.append("| (no lease data returned) | | |")
+        lines.append("")
+        return "\n".join(lines) + "\n"
+
+    # Build set of T-12 month keys
+    t12_start = months[0]
+
+    # For each unit, find the most recent occupancy (latest move_in)
+    # Group by unit identifier
+    unit_occupancies = defaultdict(list)
+    for rec in results:
+        unit_key = rec.get("unit_id") or rec.get("unit_name", "")
+        unit_occupancies[unit_key].append(rec)
+
+    # For each unit, take the most recent occupancy
+    expirations_by_month = defaultdict(int)  # "YYYY-MM" -> count
+    mtm_by_month = defaultdict(int)  # "YYYY-MM" -> count
+    total_exp = 0
+    total_mtm = 0
+
+    for unit_key, occs in unit_occupancies.items():
+        # Sort by move_in descending, pick most recent
+        occs.sort(key=lambda x: x.get("move_in", ""), reverse=True)
+        rec = occs[0]
+
+        # Skip if moved out before T-12 start
+        move_out = rec.get("move_out", "")
+        if move_out and move_out < t12_start:
+            continue
+
+        lease_expires_month = rec.get("lease_expires_month", "")
+        if lease_expires_month == "Month-To-Month":
+            # Count MTM in every month of the T-12 window
+            for m in months:
+                mtm_by_month[m] += 1
+            total_mtm += 1
+        elif lease_expires_month:
+            # Parse "Mon YYYY" format
+            parts = lease_expires_month.split()
+            if len(parts) == 2:
+                try:
+                    mon_abbr, yr_str = parts
+                    mon_idx = month_names.index(mon_abbr) + 1
+                    yr = int(yr_str)
+                    mk = f"{yr:04d}-{mon_idx:02d}"
+                    if mk in months:
+                        expirations_by_month[mk] += 1
+                        total_exp += 1
+                except (ValueError, IndexError):
+                    pass
+
+    for m in months:
+        y, mo = int(m[:4]), int(m[5:7])
+        short_yr = str(y)[2:]
+        label = f"{month_names[mo - 1]} {short_yr}"
+        exp = expirations_by_month.get(m, 0)
+        mtm = mtm_by_month.get(m, 0)
+        lines.append(f"| {label} | {exp} | {mtm} |")
+
+    t12_mtm = mtm_by_month.get(months[-1], 0)  # MTM count is constant
+    lines.append(f"| **T-12** | **{total_exp}** | **{t12_mtm}** |")
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -983,12 +1117,12 @@ def main():
         raw_prior = None
 
     # Parse
-    monthly, af_totals, _ = parse_api_rows(raw_current, months)
+    monthly, af_totals, _, gpr_monthly = parse_api_rows(raw_current, months)
     prior_monthly = None
     prior_summaries = None
     prior_t12_noi = None
     if raw_prior:
-        prior_monthly, _, _ = parse_api_rows(raw_prior, prior_months)
+        prior_monthly, _, _, _ = parse_api_rows(raw_prior, prior_months)
         prior_summaries = compute_summaries(prior_monthly, prior_months, prop["units"])
         prior_t12_noi = sum(prior_summaries[m]["NOI"] for m in prior_months)
 
