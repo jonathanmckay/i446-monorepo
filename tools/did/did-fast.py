@@ -772,6 +772,46 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             results.append(r)
             continue
 
+        # Step 0.37: Build order -1₲ goal match
+        # If the input matches an unchecked goal in the build order, flip it
+        # and write {N} bonus points to 0分 column Z.
+        bo_path = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+        if bo_path.exists():
+            bo_text = bo_path.read_text()
+            if "## -1₲" in bo_text:
+                bo_lines = bo_text.split("\n")
+                in_1g = False
+                for bi, bline in enumerate(bo_lines):
+                    if bline.strip() == "## -1₲":
+                        in_1g = True
+                        continue
+                    if in_1g and bline.startswith("## "):
+                        break
+                    if not in_1g:
+                        continue
+                    if re.match(r"^    - \[ \] .+", bline):
+                        goal_text = bline.strip()[6:]  # strip "- [ ] "
+                        # Extract {N} from goal
+                        curly = re.search(r"\{(\d+)\}", goal_text)
+                        bare_goal = re.sub(r"\s*\{(\d+)\}", "", goal_text).strip()
+                        q_tokens = tokenize(item.name)
+                        g_tokens = tokenize(bare_goal)
+                        ratio = overlap_ratio(q_tokens, g_tokens) if q_tokens else 0
+                        if ratio >= 0.6 or bare_goal.lower().startswith(item.name.lower()):
+                            # Flip checkbox
+                            bo_lines[bi] = bline.replace("- [ ]", "- [x]", 1)
+                            bo_path.write_text("\n".join(bo_lines))
+                            bonus = int(curly.group(1)) if curly else 0
+                            r = RouteResult(item=item, step="build_order",
+                                            fen_col="Z" if bonus else None,
+                                            fen_points=bonus)
+                            results.append(r)
+                            break
+                else:
+                    pass  # no match; fall through to step 0.4
+                if results and results[-1].item is item:
+                    continue  # matched in build order
+
         # Step 0.4: Variable task
         # Resolve domain from @project override, keyword map, or bail
         domain_label, fen_col = None, None
@@ -1464,6 +1504,38 @@ end tell'''
                     _bo.write_text("\n".join(_new))
         except Exception:
             pass  # non-critical
+
+    # 5e. Flip build order checkboxes for completed tasks
+    # Matches closed Todoist tasks and build_order items against -1₲ goals
+    try:
+        _bo = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+        if _bo.exists():
+            _bo_text = _bo.read_text()
+            if "## -1₲" in _bo_text:
+                _bo_lines = _bo_text.split("\n")
+                _changed = False
+                for r in fast:
+                    if r.step in ("todoist", "build_order"):
+                        content = ""
+                        if r.todoist_task:
+                            content = r.todoist_task.get("content", "")
+                        elif r.step == "build_order":
+                            content = r.item.name
+                        if not content:
+                            continue
+                        bare = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", content).strip().lower()
+                        for bi, bl in enumerate(_bo_lines):
+                            if re.match(r"^ {2,4}- \[ \] .+", bl):
+                                goal = bl.strip()[6:]
+                                bare_goal = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", goal).strip().lower()
+                                if bare_goal and (bare_goal == bare or bare_goal in bare or bare in bare_goal):
+                                    _bo_lines[bi] = bl.replace("- [ ]", "- [x]", 1)
+                                    _changed = True
+                                    break
+                if _changed:
+                    _bo.write_text("\n".join(_bo_lines))
+    except Exception:
+        pass  # non-critical
 
     # 6. Close or defer Todoist tasks in parallel
     task_ids = []

@@ -772,6 +772,34 @@ class HciLabelMapping(unittest.TestCase):
         self.assertEqual(r.fen_points, 26)
 
 
+class BuildOrderCheckboxTests(unittest.TestCase):
+    """Step 5e: completing a -1g goal should flip its build order checkbox."""
+
+    def test_build_order_checkbox_flip_regex(self):
+        """The 5e regex must match both 2-space (0₲) and 4-space (-1₲) indented checkboxes."""
+        import re
+        pattern = r"^ {2,4}- \[ \] .+"
+        self.assertTrue(re.match(pattern, "  - [ ] HIIT+bball {30}"))
+        self.assertTrue(re.match(pattern, "    - [ ] Do something {10}"))
+        self.assertFalse(re.match(pattern, "- [ ] top-level"))
+        self.assertFalse(re.match(pattern, "  - [x] already done {5}"))
+
+    def test_build_order_goal_match_via_overlap(self):
+        """A -1g goal not in Todoist should still match via build order text overlap."""
+        q_tokens = tokenize("Do at least two tasks that are recorded")
+        g_tokens = tokenize("Do at least two tasks that are recorded.")
+        ratio = overlap_ratio(q_tokens, g_tokens)
+        self.assertGreaterEqual(ratio, 0.6,
+            "Query should match build order goal with ≥0.6 overlap")
+
+    def test_bare_goal_extraction_strips_curly(self):
+        """Stripping {N} from goal text should leave the bare description."""
+        import re
+        goal = "HIIT+bball {30}"
+        bare = re.sub(r"\s*\{(\d+)\}", "", goal).strip()
+        self.assertEqual(bare, "HIIT+bball")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -792,6 +820,7 @@ def main() -> int:
         ZeroNeonOverrideTests,
         HciLabelMapping,
         DeferFlagParsingTests,
+        BuildOrderCheckboxTests,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 
