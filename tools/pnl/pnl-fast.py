@@ -221,25 +221,13 @@ def fetch_prior_year_12m(prop_ids, from_month, to_month):
     return appfolio_post("twelve_month_income_statement.json", payload)
 
 
-def fetch_lease_expirations(prop_ids, from_month, to_month):
-    """Fetch lease expiration data from AppFolio v1 API."""
-    url = f"https://{VHOST}.appfolio.com/api/v1/reports/lease_expirations.json"
-    # v1 API uses form-encoded POST
-    params = f"paginate_results=false&from_date={from_month}&to_date={to_month}"
-    for pid in prop_ids:
-        params += f"&property_id={pid}"
-    data = params.encode()
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": _auth_header(),
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+def fetch_rent_roll(prop_ids):
+    """Fetch rent roll itemized from AppFolio v2 API for lease exposure."""
+    payload = {
+        "properties": {"properties_ids": prop_ids},
+        "property_visibility": "active",
+    }
+    return appfolio_post("rent_roll_itemized.json", payload)
 
 
 # ---------------------------------------------------------------------------
@@ -592,8 +580,13 @@ def build_ancillary_income(monthly, months, gpr_monthly):
     return "\n".join(lines) + "\n", total_ancillary, pct_total, arrears_pct
 
 
-def build_lease_exposure(lease_data, months):
-    """Build the Lease Exposure section from API data."""
+def build_lease_exposure(rent_roll_data, months):
+    """Build the Lease Exposure section from rent_roll_itemized data.
+
+    Uses lease_to date from rent roll. A unit is MTM if lease_to is in the
+    past (before T-12 start) or null. Otherwise it counts as an expiration
+    in the month of lease_to.
+    """
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -601,80 +594,65 @@ def build_lease_exposure(lease_data, months):
     lines.append("| Month | Expirations | MTM |")
     lines.append("|-------|----------:|----:|")
 
-    if not lease_data:
+    if not rent_roll_data:
         lines.append("| (data unavailable) | | |")
         lines.append("")
         return "\n".join(lines) + "\n"
 
-    results = lease_data.get("results", [])
+    results = rent_roll_data.get("results", [])
     if not results:
         lines.append("| (no lease data returned) | | |")
         lines.append("")
         return "\n".join(lines) + "\n"
 
-    # Build set of T-12 month keys
     t12_start = months[0]
+    months_set = set(months)
 
-    # For each unit, find the most recent occupancy (latest move_in)
-    # Group by unit identifier
-    unit_occupancies = defaultdict(list)
-    for rec in results:
-        unit_key = rec.get("unit_id") or rec.get("unit_name", "")
-        unit_occupancies[unit_key].append(rec)
-
-    # For each unit, take the most recent occupancy
-    expirations_by_month = defaultdict(int)  # "YYYY-MM" -> count
-    mtm_by_month = defaultdict(int)  # "YYYY-MM" -> count
+    expirations_by_month = defaultdict(int)
+    mtm_count = 0
     total_exp = 0
-    total_mtm = 0
 
-    for unit_key, occs in unit_occupancies.items():
-        # Sort by move_in descending, pick most recent
-        occs.sort(key=lambda x: x.get("move_in", ""), reverse=True)
-        rec = occs[0]
-
-        # Skip if moved out before T-12 start
-        move_out = rec.get("move_out", "")
+    for rec in results:
+        # Skip units with move_out in the past (already moved out before T-12)
+        move_out = rec.get("move_out")
         if move_out and move_out < t12_start:
             continue
 
-        lease_expires_month = rec.get("lease_expires_month", "")
-        if lease_expires_month == "Month-To-Month":
-            # Count MTM in every month of the T-12 window
-            for m in months:
-                mtm_by_month[m] += 1
-            total_mtm += 1
-        elif lease_expires_month:
-            # Parse "Mon YYYY" format
-            parts = lease_expires_month.split()
-            if len(parts) == 2:
-                try:
-                    mon_abbr, yr_str = parts
-                    mon_idx = month_names.index(mon_abbr) + 1
-                    yr = int(yr_str)
-                    mk = f"{yr:04d}-{mon_idx:02d}"
-                    if mk in months:
-                        expirations_by_month[mk] += 1
-                        total_exp += 1
-                except (ValueError, IndexError):
-                    pass
+        status = rec.get("status", "")
+        # Skip vacants if they show up
+        if status == "Vacant":
+            continue
+
+        lease_to = rec.get("lease_to")
+        if not lease_to:
+            # No lease end date = MTM
+            mtm_count += 1
+            continue
+
+        # Extract month from lease_to (YYYY-MM-DD)
+        lease_month = lease_to[:7]  # "YYYY-MM"
+        if lease_month < t12_start:
+            # Lease already expired before T-12 window = effectively MTM
+            mtm_count += 1
+        elif lease_month in months_set:
+            expirations_by_month[lease_month] += 1
+            total_exp += 1
+        # Leases expiring after the T-12 window are not counted (future)
 
     for m in months:
         y, mo = int(m[:4]), int(m[5:7])
         short_yr = str(y)[2:]
         label = f"{month_names[mo - 1]} {short_yr}"
         exp = expirations_by_month.get(m, 0)
-        mtm = mtm_by_month.get(m, 0)
-        lines.append(f"| {label} | {exp} | {mtm} |")
+        lines.append(f"| {label} | {exp} | {mtm_count} |")
 
-    t12_mtm = mtm_by_month.get(months[-1], 0)  # MTM count is constant
-    lines.append(f"| **T-12** | **{total_exp}** | **{t12_mtm}** |")
+    lines.append(f"| **T-12** | **{total_exp}** | **{mtm_count}** |")
     lines.append("")
     return "\n".join(lines) + "\n"
 
 
 def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_vals,
-                      prior_monthly=None, prior_summaries=None):
+                      prior_monthly=None, prior_summaries=None, prior_t12_noi=None):
     """Build the comparisons section with full GL detail."""
     lines = ["## Comparisons", ""]
     last = months[-1]
@@ -765,8 +743,10 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     # Derived metrics
     t12_last = t12_vals.get(last)
     t12_prev = t12_vals.get(prev)
-    add_comp("T-12 NOI", t12_last, t12_prev,
-             t12_vals.get(yoy_month) if has_yoy else None)
+    yoy_t12 = t12_vals.get(yoy_month)
+    if yoy_t12 is None and prior_t12_noi is not None:
+        yoy_t12 = prior_t12_noi
+    add_comp("T-12 NOI", t12_last, t12_prev, yoy_t12 if has_yoy else None)
     if t12_last is not None:
         iv_last = t12_last / cap_rate
         iv_prev = t12_prev / cap_rate if t12_prev else None
@@ -783,7 +763,15 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
             iv_delta = "\u2014"
         row = f"| Implied Value | {iv_last_s} | {iv_prev_s} | {iv_delta} |"
         if has_yoy:
-            row += " \u2014 | \u2014 |"
+            if yoy_t12 is not None:
+                iv_yoy = yoy_t12 / cap_rate
+                iv_yoy_s = fmt_k(iv_yoy)
+                iv_yoy_diff = round(iv_last / 1000) - round(iv_yoy / 1000)
+                iv_yoy_pct = (iv_last - iv_yoy) / abs(iv_yoy) * 100 if iv_yoy else 0
+                yoy_sign = "+" if iv_yoy_diff > 0 else ""
+                row += f" {iv_yoy_s} | {yoy_sign}{iv_yoy_diff:,}K ({yoy_sign}{iv_yoy_pct:.1f}%) |"
+            else:
+                row += " \u2014 | \u2014 |"
         lines.append(row)
 
     # DSCR
@@ -961,7 +949,8 @@ def determine_quarter(end_month):
 
 def generate_full_report(code, prop, monthly, summaries, af_totals, months, labels,
                          cap_rate, units, report_date, report_date_iso,
-                         prior_monthly=None, prior_summaries=None, prior_t12_noi=None):
+                         prior_monthly=None, prior_summaries=None, prior_t12_noi=None,
+                         gpr_monthly=None, lease_data=None):
     """Generate the complete markdown report."""
     addr = prop["addr"]
     fund = prop["fund"]
@@ -1021,11 +1010,18 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
             prior_monthly_noi[pm_key] = ps["NOI"]
 
     # Derived metrics
-    dm_text, t12_vals = build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi)
+    sreo_val = SREO_VALUES.get(code)
+    dm_text, t12_vals = build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi, sreo_val)
     r.append(dm_text)
 
-    # Historical table
-    r.append(build_historical_table(months, t12_vals, cap_rate, prior_t12_noi))
+    # Ancillary Income
+    if gpr_monthly is None:
+        gpr_monthly = {}
+    anc_text, _, _, _ = build_ancillary_income(monthly, months, gpr_monthly)
+    r.append(anc_text)
+
+    # Lease Exposure
+    r.append(build_lease_exposure(lease_data, months))
 
     # Comparisons
     r.append(build_comparisons(monthly, summaries, months, labels, cap_rate, units,
@@ -1109,12 +1105,19 @@ def main():
         print(json.dumps({"error": f"AppFolio API error: {e.code} {e.reason}"}))
         sys.exit(1)
 
-    # Fetch prior year for historical + YoY
+    # Fetch prior year for YoY
     try:
         raw_prior = fetch_prior_year_12m(prop["ids"], prior_start, prior_end)
     except urllib.error.HTTPError as e:
         print(f"Warning: Could not fetch prior year data: {e.code}", file=sys.stderr)
         raw_prior = None
+
+    # Fetch rent roll for lease exposure
+    lease_data = None
+    try:
+        lease_data = fetch_rent_roll(prop["ids"])
+    except Exception as e:
+        print(f"Warning: Could not fetch rent roll data: {e}", file=sys.stderr)
 
     # Parse
     monthly, af_totals, _, gpr_monthly = parse_api_rows(raw_current, months)
@@ -1141,6 +1144,7 @@ def main():
         code, prop, monthly, summaries, af_totals, months, labels,
         cap_rate, units, report_date, report_date_iso,
         prior_monthly, prior_summaries, prior_t12_noi,
+        gpr_monthly, lease_data,
     )
 
     if args.dry_run:
@@ -1163,6 +1167,9 @@ def main():
     t12_cf = sum(summaries[m]["Cashflow"] for m in months)
     last_dscr = summaries[months[-1]]["DSCR"]
 
+    # Compute ancillary metrics for JSON
+    _, _, ancillary_pct, arrears_pct = build_ancillary_income(monthly, months, gpr_monthly)
+
     summary = {
         "property": code,
         "period": f"{months[0]} to {months[-1]}",
@@ -1173,6 +1180,8 @@ def main():
         "implied_value": round(t12_noi / cap_rate),
         "DSCR_last_month": round(last_dscr, 2) if last_dscr else None,
         "NOI_per_unit_mo": round(t12_noi / 12 / units),
+        "ancillary_pct_gpr": round(ancillary_pct, 1),
+        "arrears_billing_pct": round(arrears_pct, 1),
     }
     if not args.dry_run:
         summary["file"] = str(out_path)
