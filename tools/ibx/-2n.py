@@ -1175,6 +1175,8 @@ def snapshot_build_order():
     if BUILD_ORDER.exists():
         v_logs.mkdir(parents=True, exist_ok=True)
         snapshot.write_text(BUILD_ORDER.read_text())
+        # After archiving yesterday, clear stale emojis for the new day
+        clear_prayer_markers()
 
 
 def main():
