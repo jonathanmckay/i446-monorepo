@@ -106,7 +106,19 @@ Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux 
    done
    ```
 6. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
-7. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh.
+7. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh. **CRITICAL: use `formula` not `value`** to preserve existing formula chains. Pattern:
+    ```applescript
+    set theCell to range (targetCol & todayRow) of theSheet
+    set oldFormula to formula of theCell
+    if oldFormula = "" or oldFormula = "0" then
+        set formula of theCell to "=0+" & N
+    else if character 1 of oldFormula is not "=" then
+        set formula of theCell to "=" & oldFormula & "+" & N
+    else
+        set formula of theCell to oldFormula & "+" & N
+    end if
+    ```
+    Never use `set value of range ... to oldVal & "+N"` as this destroys existing formulas.
 8. Clear state.json (set `pid: null`).
 8b. **Emit prof stop event** (for professionalism daemon scoring):
     ```bash
