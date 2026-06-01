@@ -1030,10 +1030,12 @@ def _budget_lookup(struct, label):
     return None
 
 
-def build_commentary(monthly, summaries, months):
-    """Auto-generate commentary from top 3 movers."""
-    last = months[-1]
-    prev = months[-2]
+def build_commentary(monthly, summaries, months, anchor_idx=None):
+    """Auto-generate commentary from top 3 movers (anchored on latest complete month)."""
+    if anchor_idx is None:
+        anchor_idx = len(months) - 1
+    last = months[anchor_idx]
+    prev = months[anchor_idx - 1]
     last_m = monthly.get(last, {})
     prev_m = monthly.get(prev, {})
 
@@ -1349,7 +1351,7 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
                                anchor_idx, budget_month, budget_ytd))
 
     # Commentary
-    r.append(build_commentary(monthly, summaries, months))
+    r.append(build_commentary(monthly, summaries, months, anchor_idx))
     r.append("")
 
     # Validation
@@ -1471,14 +1473,35 @@ def main():
     cap_rate = prop["cap"]
     units = prop["units"]
 
+    # Anchor on the latest complete month (income + expense both posted).
+    # Booking lag often leaves the most recent month with income but no expense.
+    anchor_idx = find_anchor_idx(months, af_totals)
+    anchor_month = months[anchor_idx]
+    if anchor_idx != len(months) - 1:
+        print(f"Note: anchoring comparisons on {anchor_month} "
+              f"(latest month with both income and expense posted).", file=sys.stderr)
+
+    # Fetch budget vs actual for the anchor month and calendar YTD (Jan..anchor)
+    ay = int(anchor_month[:4])
+    ytd_start = f"{ay}-01"
+    budget_month = None
+    budget_ytd = None
+    try:
+        budget_month = make_budget_struct(
+            fetch_budget_comparison(prop["ids"], anchor_month, anchor_month))
+        budget_ytd = make_budget_struct(
+            fetch_budget_comparison(prop["ids"], ytd_start, anchor_month))
+    except Exception as e:
+        print(f"Warning: Could not fetch budget comparison: {e}", file=sys.stderr)
+
     # Report date
     today = date.today()
     report_date = today.strftime("%Y.%m.%d")
     report_date_iso = today.strftime("%Y-%m-%d")
 
-    # Fetch occupancy for summary (latest, prior month, YoY)
-    latest_m = months[-1]
-    prior_m = months[-2]
+    # Fetch occupancy for summary (anchor month, its prior month, YoY)
+    latest_m = anchor_month
+    prior_m = months[anchor_idx - 1]
     lmy, lmm = int(latest_m[:4]), int(latest_m[5:7])
     yoy_m = f"{lmy - 1:04d}-{lmm:02d}"
     occupancy_data = {}
@@ -1493,6 +1516,7 @@ def main():
         cap_rate, units, report_date, report_date_iso,
         prior_monthly, prior_summaries, prior_t12_noi,
         gpr_monthly, lease_data, exposure_months, occupancy_data,
+        anchor_idx, budget_month, budget_ytd,
     )
 
     if args.dry_run:
@@ -1508,12 +1532,22 @@ def main():
             f.write(report)
         print(f"Wrote: {out_path}", file=sys.stderr)
 
-    # Summary JSON to stdout
-    t12_noi = sum(summaries[m]["NOI"] for m in months)
-    t12_income = sum(summaries[m]["Total Income"] for m in months)
-    t12_opex = sum(summaries[m]["Total OpEx"] for m in months)
-    t12_cf = sum(summaries[m]["Cashflow"] for m in months)
-    last_dscr = summaries[months[-1]]["DSCR"]
+    # Summary JSON to stdout — use the clean T-12 ending at the anchor month
+    # (the full window may include a partial latest month with unposted expenses).
+    def _metric_at(idx, key):
+        if 0 <= idx < len(months):
+            return summaries[months[idx]][key]
+        pk = _prior_month_key(months[0], idx)
+        if prior_summaries and pk in prior_summaries:
+            return prior_summaries[pk][key]
+        return 0
+
+    window = range(anchor_idx - 11, anchor_idx + 1)
+    t12_noi = sum(_metric_at(j, "NOI") for j in window)
+    t12_income = sum(_metric_at(j, "Total Income") for j in window)
+    t12_opex = sum(_metric_at(j, "Total OpEx") for j in window)
+    t12_cf = sum(_metric_at(j, "Cashflow") for j in window)
+    last_dscr = summaries[anchor_month]["DSCR"]
 
     # Compute ancillary metrics for JSON
     _, _, ancillary_pct, arrears_pct = build_ancillary_income(monthly, months, gpr_monthly)
