@@ -28,6 +28,15 @@ Generate a trailing 12-month income statement for a single property, with Compar
 | s300 | fund-i | 14 | 8 | 8.0% | 9300 E Sprague Ave, Spokane Valley WA 99206 |
 | b101 | fund-i | 17 | 42 | 8.0% | 1010 W Boone Ave, Spokane WA 99201 |
 | m405 | fund-i | 26 | 50 | 8.0% | 405 S Maple St, Spokane WA 99201 |
+| h731 | fund-i | 8 | 228 | 8.0% | 731 S Hatch St, Spokane WA 99202 |
+| hl73 | fund-i | 6 | 49 | 8.0% | 730 N Jackson St, Helena MT 59601 |
+| k104 | fund-i | 59 | 220 | 8.0% | 314 N LeFevre St, Medical Lake WA 99022 |
+| m221 | fund-i | 14 | 223 | 8.0% | 1221 N Monroe St, Spokane WA 99201 |
+| ms22 | fund-i | 8 | 46 | 8.0% | 2252 W Central Ave, Missoula MT 59801 |
+| ms43 | fund-i | 15 | 43 | 8.0% | 430 Washington, Missoula MT 59802 |
+| ps17 | fund-i | 18 | 222 | 8.0% | 1740 N 5th Ave, Pasco WA 99301 |
+| ps25 | fund-i | 44 | 221 | 8.0% | 2524 W Sylvester St, Pasco WA 99301 |
+| ps91 | fund-i | 14 | 227 | 8.0% | 908 W Ruby, Pasco WA 99301 |
 | w117 | fund-ii | 10 | 225 | 8.0% | 1117 W 5th Ave, Spokane WA 99204 |
 | w226 | fund-ii | 10 | 224 | 8.0% | 1226 W 5th Ave, Spokane WA 99204 |
 | hl65 | fund-ii | 13 | 44 | 8.0% | 645 N Ewing, Helena MT 59601 |
@@ -139,10 +148,23 @@ Use the generator script at `~/vault/m5x2/reports/2026.q1/generate_pnl_reports.p
 **Historical T-12 NOI table:**
 Show monthly rolling T-12 from at least prior_year_end through end_month. Use Call 3 data to compute the prior-year T-12 baseline, then add/subtract monthly NOI to roll forward. Format as vertical table (one row per month).
 
-**Comparisons section:**
-| Metric | end_month | end_month-1 | Δ MoM | prior_year_end | Δ YoY |
-Use summary metrics: Total Income, Total OpEx, NOI, Cashflow, T-12 NOI, Implied Value, DSCR, NOI/Unit/Mo.
-Follow with 1-2 sentence narrative on key drivers.
+**Comparisons section (full GL detail):**
+| Account | end_month | end_month-1 | Δ MoM | prior_year_end | Δ YoY |
+
+Include ALL GL rows, not just summaries. Full row order:
+1. Each income line: Rent Income, Utility Reimb, Late Fees, Laundry, Pet Rent/Fee, Parking, Move-In/Out, Concessions, Other Income
+2. **Total Income**
+3. Each OpEx line: Prop Mgmt, Pest Control, Insurance, Prop Taxes, R&M Repairs, R&M Turns, R&M Grounds, Electric/Gas, Water, Garbage
+4. **Total OpEx**
+5. **NOI**
+6. Each below-NOI line: Mortgage Interest, Mortgage Principal, Legal, CapEx Turns, CapEx Appliances, CapEx Disc, CapEx Non-disc
+7. **Total Deductions**
+8. **Cashflow**
+9. T-12 NOI, Implied Value, DSCR, NOI/Unit/Mo
+
+Skip GL rows where both current and prior month are zero.
+Use prior-year data from Call 2 for YoY on individual lines. If Call 2 data unavailable, show "—".
+Follow with 2-3 sentence narrative on key MoM movers.
 
 **Commentary:**
 2-3 bullets on NOI trend, R&M pattern, notable items.
