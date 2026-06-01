@@ -150,18 +150,21 @@ chmod +x "$DTD_DEFER"
 # --- Temp files for list generation ---
 DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
 DTD_REMOVED="/tmp/dtd-$$.removed"
+DTD_SKIPPED="/tmp/dtd-$$.skipped"
 echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
 touch "$DTD_REMOVED"
+touch "$DTD_SKIPPED"
 
 # --- List generation script (reloadable by fzf) ---
 DTD_LIST="/tmp/dtd-$$.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
-# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns
+# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file
 python3 -c "
 import json, sys, re
 
 cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
+skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
 cols = int(cols)
 
 with open(cache_file) as f:
@@ -176,6 +179,12 @@ try:
     with open(removed_file) as f:
         removed = [l.strip().lower() for l in f if l.strip()]
 except: removed = []
+
+# Load skipped items (display at bottom, not hidden)
+try:
+    with open(skipped_file) as f:
+        skipped = [l.strip().lower() for l in f if l.strip()]
+except: skipped = []
 
 # Neon color palette (label → ANSI 256-color)
 COLORS = {
@@ -219,12 +228,18 @@ for t in all_tasks:
         seen.add(t['id'])
         unique.append(t)
 
+DIM = '\033[2m'
+normal_lines = []
+skipped_lines = []
+
 for t in unique:
     raw = t['content']
     clean = strip_ann(raw).lower()
     prefix = clean.split(' - ')[0]
     if clean in completed or prefix in completed or clean in removed:
         continue
+
+    is_skipped = clean in skipped or prefix in skipped
 
     # Find color from labels
     color = ''
@@ -248,10 +263,34 @@ for t in unique:
         line = line[:head_len] + '…' + tail
 
     repeat = '↻ ' if recurring else ''
-    print(f'{color}{repeat}{line}{RESET}' if color else f'{repeat}{line}')
+    if is_skipped:
+        skipped_lines.append(f'{DIM}{color}{repeat}{line}{RESET}')
+    elif color:
+        normal_lines.append(f'{color}{repeat}{line}{RESET}')
+    else:
+        normal_lines.append(f'{repeat}{line}')
+
+for l in normal_lines:
+    print(l)
+for l in skipped_lines:
+    print(l)
 " "$1" "$2" "$3" "$4" "$5"
 LISTEOF
 chmod +x "$DTD_LIST"
+
+# --- Skip script used by fzf ctrl-k binding ---
+DTD_SKIP="/tmp/dtd-$$.skip.sh"
+cat > "$DTD_SKIP" << SKIPEOF
+#!/bin/zsh
+SKIPPED="$DTD_SKIPPED"
+HDR="$DTD_HDR"
+task="\$1"
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+echo "\$clean" | tr '[:upper:]' '[:lower:]' >> "\$SKIPPED"
+echo "⏭ \$clean" > "\$HDR"
+SKIPEOF
+chmod +x "$DTD_SKIP"
 
 # --- Delete script used by fzf ctrl-x binding ---
 DTD_DELETE="/tmp/dtd-$$.delete.sh"
@@ -597,7 +636,7 @@ while true; do
   # Pass done file path instead of JSON string to avoid quoting issues
   # Every reload copies the live cache so external changes (/todo, other terminals) appear
   DTD_SYNC="cp '$CACHE' '$DTD_CACHE_FILE' 2>/dev/null;"
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}'"
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED'"
   DTD_RELOAD="${DTD_SYNC}${DTD_LIST_CMD}"
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --ansi \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
@@ -605,8 +644,9 @@ while true; do
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {})+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-k:execute-silent($DTD_SKIP {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-a: agent | ctrl-x: del | ctrl-r: refresh]")
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-r: refresh]")
 
   task="$fzf_output"
 
@@ -680,4 +720,4 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_SKIPPED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
