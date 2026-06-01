@@ -298,12 +298,12 @@ def fetch_points():
         now = dt.datetime.now(TZ)
         today_md = f"{now.month}/{now.day}"
 
-        # Read all domain columns from 0分 in one SSH+osascript call
+        # Read all domain columns from 0分 in one ix-osa call
         domain_pts: dict[str, float] = {}  # col_letter → points
         total = 0.0
-        cols_to_read = ["R", "S", "T", "U", "V", "W", "X", "Y"]
         try:
             import subprocess as _sp
+            IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
             script = f'''tell application "Microsoft Excel"
     set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set todayRow to 0
@@ -315,60 +315,55 @@ def fetch_points():
     end repeat
     if todayRow = 0 then return "ERR"
     set r to ""
-    repeat with c in {{{",".join('"' + c + '"' for c in cols_to_read)}}}
+    repeat with c in {{"R", "S", "T", "U", "V", "W", "X", "Y"}}
         set v to value of range (c & todayRow) of ws
         set r to r & c & "=" & v & "|"
     end repeat
     return r
 end tell'''
-            r = _sp.run(["ssh", "ix", "osascript", "-e", script],
+            r = _sp.run([IX_OSA], input=script,
                         capture_output=True, text=True, timeout=15)
             if r.returncode == 0 and r.stdout.strip() != "ERR":
                 for pair in r.stdout.strip().split("|"):
                     if "=" in pair:
                         col, val = pair.split("=", 1)
+                        # Handle formula strings like "70+12"
                         try:
                             pts = float(val)
-                            domain_pts[col] = pts
-                            total += pts
-                        except (ValueError, TypeError):
-                            pass
+                        except ValueError:
+                            try:
+                                pts = float(eval(val))  # safe: only digits and +
+                            except Exception:
+                                continue
+                        domain_pts[col] = pts
+                        total += pts
         except Exception:
             pass
 
         STATE.today_points = int(total)
 
-        # Distribute to blocks using Toggl entries
-        # For each entry, find its domain column and attribute its share of points
+        # Per-block points: use completed-today.json timestamps
+        # (Neon doesn't have per-block columns; timestamps are best-effort)
         bp: dict[str, int] = {}
-        # Build per-block, per-domain minute totals from Toggl
-        block_domain_mins: dict[str, dict[str, int]] = {}  # block_name → {col → mins}
-        domain_total_mins: dict[str, int] = {}  # col → total mins today
-        for e in STATE.entries:
-            code = proj_code(e.get("project_id"))
-            col = _PROJ_TO_0FEN.get(code)
-            if not col:
-                continue
-            mins = int((e["end_dt"] - e["start_dt"]).total_seconds() // 60)
-            if mins < 1:
-                continue
-            blk = hour_to_block(e["start_dt"].hour)
-            if blk:
-                block_domain_mins.setdefault(blk[0], {})
-                block_domain_mins[blk[0]][col] = block_domain_mins[blk[0]].get(col, 0) + mins
-            domain_total_mins[col] = domain_total_mins.get(col, 0) + mins
-
-        # Proportional attribution: block gets (block_mins / total_mins) * domain_pts
-        for blk_name, col_mins in block_domain_mins.items():
-            blk_pts = 0.0
-            for col, mins in col_mins.items():
-                total_mins = domain_total_mins.get(col, 0)
-                col_pts = domain_pts.get(col, 0)
-                if total_mins > 0 and col_pts > 0:
-                    blk_pts += (mins / total_mins) * col_pts
-            if blk_pts > 0:
-                bp[blk_name] = int(blk_pts)
-
+        try:
+            ct_path = Path.home() / "vault/z_ibx/completed-today.json"
+            ct_data = json.loads(ct_path.read_text())
+            today_str = now.strftime("%Y-%m-%d")
+            if ct_data.get("date") == today_str:
+                ct_pts = ct_data.get("points", {})
+                ct_ts = ct_data.get("timestamps", {})
+                for name, val in ct_pts.items():
+                    ts = ct_ts.get(name, "")
+                    if ts and val:
+                        try:
+                            h = int(ts.split(":")[0])
+                            blk = hour_to_block(h)
+                            if blk:
+                                bp[blk[0]] = bp.get(blk[0], 0) + val
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         STATE.block_points = bp
         STATE.last_points_fetch = time.monotonic()
     except Exception:
@@ -635,7 +630,11 @@ def render_detail() -> list[tuple[str, str]]:
         boundary_h = cur[1] if cur else end.hour
 
     top_emojis = bo_emojis.get(top_name, "")
-    top_label = f"{top_name}{' ' + top_emojis if top_emojis else ''}{scroll_suffix}"
+    top_pts = STATE.block_points.get(top_name, 0)
+    top_label = f"{top_name}{' ' + top_emojis if top_emojis else ''}"
+    if top_pts:
+        top_label += f" · {top_pts}分"
+    top_label += scroll_suffix
     out: list[tuple[str, str]] = section_rule(top_label, focus=True)
 
     boundary = now.replace(hour=boundary_h, minute=0, second=0, microsecond=0)
@@ -738,7 +737,10 @@ def render_detail() -> list[tuple[str, str]]:
         bot_name = None
     if bot_name:
         bot_emojis = bo_emojis.get(bot_name, "")
+        bot_pts = STATE.block_points.get(bot_name, 0)
         bot_label = f"{bot_name}{' ' + bot_emojis if bot_emojis else ''}"
+        if bot_pts:
+            bot_label += f" · {bot_pts}分"
         out += section_rule(bot_label, focus=True)
     return out
 
