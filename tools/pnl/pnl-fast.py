@@ -514,13 +514,12 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
                 t12_vals[m] = None
                 row += " \u2014 |"
         else:
-            if i < 11:
-                t12_vals[m] = None
-                row += " \u2014 |"
-            else:
-                t12 = sum(summaries[months[j]]["NOI"] for j in range(0, 12))
-                t12_vals[m] = t12
-                row += f" {fmt(t12)} |"
+            # No prior year data: annualize available months
+            available_count = i + 1  # months 0..i
+            noi_sum = sum(summaries[months[j]]["NOI"] for j in range(0, i + 1))
+            t12 = noi_sum / available_count * 12
+            t12_vals[m] = t12
+            row += f" {fmt(t12)} |"
     lines.append(row)
 
     # Implied Value
@@ -997,7 +996,7 @@ def build_validation(monthly, summaries, months, af_totals, units):
 
 def build_summary(summaries, months, cap_rate, units, t12_vals,
                   prior_summaries, occupancy_data):
-    """Build the Summary section: key metrics with MoM and YoY comparisons."""
+    """Build a compact Summary section: current values with MoM/YoY % deltas."""
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -1010,8 +1009,6 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
 
     s_latest = summaries[latest]
     s_prior = summaries[prior]
-
-    # YoY data from prior_summaries
     s_yoy = prior_summaries.get(yoy_key) if prior_summaries else None
 
     def fmt_dollar(v):
@@ -1019,118 +1016,57 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
             return f"({abs(v):,.0f})"
         return f"{v:,.0f}"
 
-    def fmt_delta(curr, prev):
+    def pct_delta(curr, prev):
         if prev is None:
-            return "n/a"
-        d = curr - prev
+            return "—"
         if prev == 0:
             return "n/m"
-        pct = d / abs(prev) * 100
-        sign = "+" if d >= 0 else ""
-        if d < 0:
-            return f"{sign}{d:,.0f} ({sign}{pct:.1f}%)"
-        return f"+{d:,.0f} (+{pct:.1f}%)"
+        pct = (curr - prev) / abs(prev) * 100
+        return f"{pct:+.1f}%"
 
     def occ_pct(month_key):
         if not occupancy_data or month_key not in occupancy_data:
             return None
         occ, total = occupancy_data[month_key]
-        if total == 0:
-            return None
-        return occ / total * 100
+        return (occ / total * 100) if total else None
 
-    def fmt_occ_delta(curr_pct, prev_pct):
+    def occ_delta(curr_pct, prev_pct):
         if curr_pct is None or prev_pct is None:
-            return "n/a"
-        d = curr_pct - prev_pct
-        sign = "+" if d >= 0 else ""
-        return f"{sign}{d:.1f}pp"
+            return "—"
+        return f"{curr_pct - prev_pct:+.1f}pp"
 
-    # T-12 NOI
+    noi = s_latest["NOI"]
+    cf = s_latest["Cashflow"]
+    occ = occ_pct(latest)
     t12_noi = t12_vals.get(latest) if t12_vals else sum(summaries[m]["NOI"] for m in months)
-    t12_noi_prior = t12_vals.get(prior) if t12_vals else None
-
-    # Implied value
-    implied = t12_noi / cap_rate if cap_rate else None
-
-    # DSCR (pre-computed in summaries)
-    dscr_latest = s_latest.get("DSCR")
-    dscr_prior = s_prior.get("DSCR")
-    dscr_yoy = s_yoy.get("DSCR") if s_yoy else None
-
-    noi_latest = s_latest["NOI"]
-    noi_prior = s_prior["NOI"]
-    noi_yoy = s_yoy["NOI"] if s_yoy else None
-
-    cf_latest = s_latest["Cashflow"]
-    cf_prior = s_prior["Cashflow"]
-    cf_yoy = s_yoy["Cashflow"] if s_yoy else None
-
-    occ_latest = occ_pct(latest)
-    occ_prior = occ_pct(prior)
-    occ_yoy = occ_pct(yoy_key)
-
-    # Prior month label
-    pm = int(prior[5:7])
-    prior_label = f"{month_names[pm - 1]} {str(int(prior[:4]))[2:]}"
-    yoy_label = f"{month_names[lm - 1]} {str(ly - 1)[2:]}"
+    implied = (t12_noi / cap_rate) if (t12_noi and cap_rate) else None
 
     lines = ["## Summary", ""]
-    lines.append(f"| Metric | {latest_label} | {prior_label} | Δ MoM | {yoy_label} | Δ YoY |")
-    lines.append("|:-------|-------:|-------:|:------|-------:|:------|")
+    lines.append(f"| Metric | {latest_label} | MoM | YoY |")
+    lines.append("|:-------|-------:|:------|:------|")
 
-    # NOI row
-    yoy_noi_str = fmt_dollar(noi_yoy) if noi_yoy is not None else "—"
-    yoy_noi_delta = fmt_delta(noi_latest, noi_yoy)
-    lines.append(f"| NOI | {fmt_dollar(noi_latest)} | {fmt_dollar(noi_prior)} | {fmt_delta(noi_latest, noi_prior)} | {yoy_noi_str} | {yoy_noi_delta} |")
+    # NOI
+    lines.append(f"| NOI | {fmt_dollar(noi)} | {pct_delta(noi, s_prior['NOI'])} | {pct_delta(noi, s_yoy['NOI'] if s_yoy else None)} |")
 
-    # Cashflow row
-    yoy_cf_str = fmt_dollar(cf_yoy) if cf_yoy is not None else "—"
-    yoy_cf_delta = fmt_delta(cf_latest, cf_yoy)
-    lines.append(f"| Cashflow | {fmt_dollar(cf_latest)} | {fmt_dollar(cf_prior)} | {fmt_delta(cf_latest, cf_prior)} | {yoy_cf_str} | {yoy_cf_delta} |")
+    # Cashflow
+    lines.append(f"| Cashflow | {fmt_dollar(cf)} | {pct_delta(cf, s_prior['Cashflow'])} | {pct_delta(cf, s_yoy['Cashflow'] if s_yoy else None)} |")
 
-    # Occupancy row
-    occ_l_str = f"{occ_latest:.1f}%" if occ_latest is not None else "—"
-    occ_p_str = f"{occ_prior:.1f}%" if occ_prior is not None else "—"
-    occ_y_str = f"{occ_yoy:.1f}%" if occ_yoy is not None else "—"
-    occ_mom_str = fmt_occ_delta(occ_latest, occ_prior)
-    occ_yoy_str = fmt_occ_delta(occ_latest, occ_yoy)
-    lines.append(f"| Occupancy | {occ_l_str} | {occ_p_str} | {occ_mom_str} | {occ_y_str} | {occ_yoy_str} |")
+    # Occupancy
+    occ_str = f"{occ:.1f}%" if occ is not None else "—"
+    lines.append(f"| Occupancy | {occ_str} | {occ_delta(occ, occ_pct(prior))} | {occ_delta(occ, occ_pct(yoy_key))} |")
 
     # T-12 NOI
     if t12_noi is not None:
-        t12_prior_val = t12_noi_prior
-        t12_yoy_val = t12_vals.get(yoy_key) if t12_vals else None
-        t12_p_str = f"{t12_prior_val:,.0f}" if t12_prior_val else "—"
-        t12_y_str = f"{t12_yoy_val:,.0f}" if t12_yoy_val else "—"
-        lines.append(f"| T-12 NOI | {t12_noi:,.0f} | {t12_p_str} | {fmt_delta(t12_noi, t12_prior_val)} | {t12_y_str} | {fmt_delta(t12_noi, t12_yoy_val) if t12_yoy_val else 'n/a'} |")
+        t12_prior = t12_vals.get(prior) if t12_vals else None
+        t12_yoy = t12_vals.get(yoy_key) if t12_vals else None
+        lines.append(f"| T-12 NOI | {t12_noi:,.0f} | {pct_delta(t12_noi, t12_prior)} | {pct_delta(t12_noi, t12_yoy)} |")
 
     # Implied Value
-    def fmt_delta_k(curr, prev):
-        if prev is None:
-            return "n/a"
-        d = curr - prev
-        if prev == 0:
-            return "n/m"
-        pct = d / abs(prev) * 100
-        sign = "+" if d >= 0 else ""
-        return f"{sign}{d / 1000:,.0f}K ({sign}{pct:.1f}%)"
-
     if implied is not None:
-        iv_prior = (t12_noi_prior / cap_rate) if t12_noi_prior else None
-        iv_yoy_val = t12_vals.get(yoy_key)
+        iv_prior = (t12_vals.get(prior) / cap_rate) if t12_vals and t12_vals.get(prior) else None
+        iv_yoy_val = t12_vals.get(yoy_key) if t12_vals else None
         iv_yoy = (iv_yoy_val / cap_rate) if iv_yoy_val else None
-        iv_p_str = f"{iv_prior / 1000:,.0f}K" if iv_prior else "—"
-        iv_y_str = f"{iv_yoy / 1000:,.0f}K" if iv_yoy else "—"
-        lines.append(f"| Implied Value | {implied / 1000:,.0f}K | {iv_p_str} | {fmt_delta_k(implied, iv_prior) if iv_prior else 'n/a'} | {iv_y_str} | {fmt_delta_k(implied, iv_yoy) if iv_yoy else 'n/a'} |")
-
-    # DSCR
-    if dscr_latest is not None:
-        dscr_p_str = f"{dscr_prior:.2f}x" if dscr_prior is not None else "—"
-        dscr_y_str = f"{dscr_yoy:.2f}x" if dscr_yoy is not None else "—"
-        dscr_mom = f"{dscr_latest - dscr_prior:+.2f}x" if dscr_prior is not None else "n/a"
-        dscr_yoy_d = f"{dscr_latest - dscr_yoy:+.2f}x" if dscr_yoy is not None else "n/a"
-        lines.append(f"| DSCR | {dscr_latest:.2f}x | {dscr_p_str} | {dscr_mom} | {dscr_y_str} | {dscr_yoy_d} |")
+        lines.append(f"| Implied Value | {implied / 1000:,.0f}K | {pct_delta(implied, iv_prior)} | {pct_delta(implied, iv_yoy)} |")
 
     lines.append("")
     return "\n".join(lines) + "\n"
