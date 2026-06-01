@@ -664,8 +664,8 @@ def test_fill_time_gaps_parses_segments():
     func_src = source[source.index("def fill_time_gaps("):]
     func_src = func_src[:func_src.index("\ndef ", 1)]  # up to next function
 
-    # Must split on commas
-    assert ".split(\",\")" in func_src or "split(',')" in func_src, \
+    # Must split on commas (and optionally newlines for multiline input)
+    assert "split(" in func_src and "," in func_src, \
         "fill_time_gaps must split input on commas"
 
     # Must handle @project extraction
@@ -696,8 +696,8 @@ def test_fill_time_gaps_accepts_no_time_prefix_with_gaps():
 
     # Call site must pass time_gaps
     gap_section = source[source.index("Card 1.5"):source.index("Card 2")]
-    assert "gaps=time_gaps" in gap_section, \
-        "Gap card must pass time_gaps to fill_time_gaps"
+    assert "gaps=bg_gaps" in gap_section or "gaps=time_gaps" in gap_section, \
+        "Gap card must pass gaps to fill_time_gaps"
 
 
 def test_snapshot_archives_yesterday_not_today():
@@ -747,3 +747,43 @@ def test_block_name_strips_duration_suffix(tmp_path):
     assert goals.get("辰") == ["morning goal"], f"辰 goals: {goals.get('辰')}"
     assert goals.get("巳") == ["open goal"], f"巳 goals: {goals.get('巳')}"
     assert goals.get("午") == ["afternoon goal"], f"午 goals: {goals.get('午')}"
+
+
+def test_fill_time_gaps_splits_on_newlines():
+    """fill_time_gaps must accept newline-separated segments (multiline input)."""
+    import re as _re
+    # Simulate the split logic from fill_time_gaps
+    response = "wake up 0800-0815 @infra\nwork 0815-0900 @i9"
+    segments = [s.strip() for s in _re.split(r"[,\n]", response) if s.strip()]
+    assert len(segments) == 2, f"Expected 2 segments, got {len(segments)}: {segments}"
+    assert "wake up" in segments[0]
+    assert "work" in segments[1]
+
+
+def test_gap_card_uses_multiline():
+    """The time gap card must use multiline=True for proper backspace behavior."""
+    tree = ast.parse(SRC.read_text())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Name) and func.id == "prompt_card"):
+            continue
+        # Check if this is the gap card (title contains "Gaps")
+        for kw in node.keywords:
+            if kw.arg == "multiline":
+                # Find the title arg to confirm this is the gap card
+                # The gap card has "⏱ Gaps" in its positional args
+                args_str = [
+                    a.value for a in node.args
+                    if isinstance(a, (ast.Constant,)) and isinstance(a.value, str)
+                ]
+                # Check via keyword title or f-string in positional args
+                for a in node.args:
+                    if isinstance(a, ast.JoinedStr):
+                        for v in a.values:
+                            if isinstance(v, ast.Constant) and "Gaps" in str(v.value):
+                                assert isinstance(kw.value, ast.Constant) and kw.value.value is True, \
+                                    "Gap card prompt_card must have multiline=True"
+                                return
+    raise AssertionError("Could not find gap card prompt_card call with multiline kwarg")

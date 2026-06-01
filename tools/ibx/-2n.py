@@ -642,7 +642,8 @@ def fill_time_gaps(response, gaps=None):
     """
     cli = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
     did_fast = Path.home() / "i446-monorepo/tools/did/did-fast.py"
-    segments = [s.strip() for s in response.split(",") if s.strip()]
+    # Split on commas or newlines (multiline input from prompt_card)
+    segments = [s.strip() for s in re.split(r"[,\n]", response) if s.strip()]
     created = 0
     for i, seg in enumerate(segments):
         # Extract +N points token
@@ -1277,6 +1278,7 @@ def main():
                 card_num, total_cards, f"⏱ Gaps · {bg_name} ({bg_start}-{bg_end})",
                 gap_lines,
                 options="desc [HHMM-HHMM] [+N] [@proj] / skip", preserve_case=True,
+                multiline=True,
             )
             if resp and resp.lower() != "skip":
                 console.print(f"[dim]  logging gaps...[/dim]")
