@@ -78,7 +78,7 @@ Read the Comparisons section of the report just written. Produce 2-4 bullet-poin
 3. **Risk or anomaly.** Flag anything unusual: DSCR below 1.2, vacancy spikes, R&M > 25% of income, negative cashflow, one-time charges, insurance repricing.
 4. **Trend.** Is T-12 NOI rising, falling, or plateauing? How many months of improvement/decline?
 
-Write the insights as a `## Insights` section appended to the report file (before the "Generated from AppFolio" footer). Keep each bullet to 1-2 sentences. No hedging, no filler.
+Write the insights as a `## Insights` section inserted right after the `## Summary` section (before the main P&L table). Keep each bullet to 1-2 sentences. No hedging, no filler.
 
 ### Step 3: Report
 

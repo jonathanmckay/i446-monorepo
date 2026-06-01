@@ -233,6 +233,47 @@ def fetch_lease_expiration(prop_ids, from_month, to_month):
     return appfolio_post("lease_expiration_detail.json", payload)
 
 
+def fetch_occupancy(prop_ids, as_of_date):
+    """Fetch occupancy summary for a property as of a specific date.
+
+    Returns (occupied, total_units) tuple.
+    """
+    payload = {
+        "as_of_to": as_of_date,
+        "properties": {"properties_ids": prop_ids},
+        "unit_visibility": "active",
+    }
+    data = appfolio_post("occupancy_summary.json", payload)
+    results = data.get("results", [])
+    total = sum(r.get("number_of_units", 0) for r in results)
+    occupied = sum(r.get("occupied", 0) for r in results)
+    return occupied, total
+
+
+def fetch_occupancy_trio(prop_ids, latest_month, prior_month, yoy_month):
+    """Fetch occupancy for 3 month-ends: latest, prior (MoM), YoY.
+
+    Returns dict of {month_key: (occupied, total)} or None on failure.
+    """
+    import calendar
+
+    def month_end(ym):
+        y, m = int(ym[:4]), int(ym[5:7])
+        _, last_day = calendar.monthrange(y, m)
+        return f"{y:04d}-{m:02d}-{last_day:02d}"
+
+    occ = {}
+    for mk in [latest_month, prior_month, yoy_month]:
+        if mk is None:
+            continue
+        try:
+            occupied, total = fetch_occupancy(prop_ids, month_end(mk))
+            occ[mk] = (occupied, total)
+        except Exception:
+            pass
+    return occ
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -954,6 +995,147 @@ def build_validation(monthly, summaries, months, af_totals, units):
     return "\n".join(lines) + "\n"
 
 
+def build_summary(summaries, months, cap_rate, units, t12_vals,
+                  prior_summaries, occupancy_data):
+    """Build the Summary section: key metrics with MoM and YoY comparisons."""
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    latest = months[-1]
+    prior = months[-2]
+    ly, lm = int(latest[:4]), int(latest[5:7])
+    yoy_key = f"{ly - 1:04d}-{lm:02d}"
+
+    latest_label = f"{month_names[lm - 1]} {str(ly)[2:]}"
+
+    s_latest = summaries[latest]
+    s_prior = summaries[prior]
+
+    # YoY data from prior_summaries
+    s_yoy = prior_summaries.get(yoy_key) if prior_summaries else None
+
+    def fmt_dollar(v):
+        if v < 0:
+            return f"({abs(v):,.0f})"
+        return f"{v:,.0f}"
+
+    def fmt_delta(curr, prev):
+        if prev is None:
+            return "n/a"
+        d = curr - prev
+        if prev == 0:
+            return "n/m"
+        pct = d / abs(prev) * 100
+        sign = "+" if d >= 0 else ""
+        if d < 0:
+            return f"{sign}{d:,.0f} ({sign}{pct:.1f}%)"
+        return f"+{d:,.0f} (+{pct:.1f}%)"
+
+    def occ_pct(month_key):
+        if not occupancy_data or month_key not in occupancy_data:
+            return None
+        occ, total = occupancy_data[month_key]
+        if total == 0:
+            return None
+        return occ / total * 100
+
+    def fmt_occ_delta(curr_pct, prev_pct):
+        if curr_pct is None or prev_pct is None:
+            return "n/a"
+        d = curr_pct - prev_pct
+        sign = "+" if d >= 0 else ""
+        return f"{sign}{d:.1f}pp"
+
+    # T-12 NOI
+    t12_noi = t12_vals.get(latest) if t12_vals else sum(summaries[m]["NOI"] for m in months)
+    t12_noi_prior = t12_vals.get(prior) if t12_vals else None
+
+    # Implied value
+    implied = t12_noi / cap_rate if cap_rate else None
+
+    # DSCR (pre-computed in summaries)
+    dscr_latest = s_latest.get("DSCR")
+    dscr_prior = s_prior.get("DSCR")
+    dscr_yoy = s_yoy.get("DSCR") if s_yoy else None
+
+    noi_latest = s_latest["NOI"]
+    noi_prior = s_prior["NOI"]
+    noi_yoy = s_yoy["NOI"] if s_yoy else None
+
+    cf_latest = s_latest["Cashflow"]
+    cf_prior = s_prior["Cashflow"]
+    cf_yoy = s_yoy["Cashflow"] if s_yoy else None
+
+    occ_latest = occ_pct(latest)
+    occ_prior = occ_pct(prior)
+    occ_yoy = occ_pct(yoy_key)
+
+    # Prior month label
+    pm = int(prior[5:7])
+    prior_label = f"{month_names[pm - 1]} {str(int(prior[:4]))[2:]}"
+    yoy_label = f"{month_names[lm - 1]} {str(ly - 1)[2:]}"
+
+    lines = ["## Summary", ""]
+    lines.append(f"| Metric | {latest_label} | {prior_label} | Δ MoM | {yoy_label} | Δ YoY |")
+    lines.append("|:-------|-------:|-------:|:------|-------:|:------|")
+
+    # NOI row
+    yoy_noi_str = fmt_dollar(noi_yoy) if noi_yoy is not None else "—"
+    yoy_noi_delta = fmt_delta(noi_latest, noi_yoy)
+    lines.append(f"| NOI | {fmt_dollar(noi_latest)} | {fmt_dollar(noi_prior)} | {fmt_delta(noi_latest, noi_prior)} | {yoy_noi_str} | {yoy_noi_delta} |")
+
+    # Cashflow row
+    yoy_cf_str = fmt_dollar(cf_yoy) if cf_yoy is not None else "—"
+    yoy_cf_delta = fmt_delta(cf_latest, cf_yoy)
+    lines.append(f"| Cashflow | {fmt_dollar(cf_latest)} | {fmt_dollar(cf_prior)} | {fmt_delta(cf_latest, cf_prior)} | {yoy_cf_str} | {yoy_cf_delta} |")
+
+    # Occupancy row
+    occ_l_str = f"{occ_latest:.1f}%" if occ_latest is not None else "—"
+    occ_p_str = f"{occ_prior:.1f}%" if occ_prior is not None else "—"
+    occ_y_str = f"{occ_yoy:.1f}%" if occ_yoy is not None else "—"
+    occ_mom_str = fmt_occ_delta(occ_latest, occ_prior)
+    occ_yoy_str = fmt_occ_delta(occ_latest, occ_yoy)
+    lines.append(f"| Occupancy | {occ_l_str} | {occ_p_str} | {occ_mom_str} | {occ_y_str} | {occ_yoy_str} |")
+
+    # T-12 NOI
+    if t12_noi is not None:
+        t12_prior_val = t12_noi_prior
+        t12_yoy_val = t12_vals.get(yoy_key) if t12_vals else None
+        t12_p_str = f"{t12_prior_val:,.0f}" if t12_prior_val else "—"
+        t12_y_str = f"{t12_yoy_val:,.0f}" if t12_yoy_val else "—"
+        lines.append(f"| T-12 NOI | {t12_noi:,.0f} | {t12_p_str} | {fmt_delta(t12_noi, t12_prior_val)} | {t12_y_str} | {fmt_delta(t12_noi, t12_yoy_val) if t12_yoy_val else 'n/a'} |")
+
+    # Implied Value
+    def fmt_delta_k(curr, prev):
+        if prev is None:
+            return "n/a"
+        d = curr - prev
+        if prev == 0:
+            return "n/m"
+        pct = d / abs(prev) * 100
+        sign = "+" if d >= 0 else ""
+        return f"{sign}{d / 1000:,.0f}K ({sign}{pct:.1f}%)"
+
+    if implied is not None:
+        iv_prior = (t12_noi_prior / cap_rate) if t12_noi_prior else None
+        iv_yoy_val = t12_vals.get(yoy_key)
+        iv_yoy = (iv_yoy_val / cap_rate) if iv_yoy_val else None
+        iv_p_str = f"{iv_prior / 1000:,.0f}K" if iv_prior else "—"
+        iv_y_str = f"{iv_yoy / 1000:,.0f}K" if iv_yoy else "—"
+        lines.append(f"| Implied Value | {implied / 1000:,.0f}K | {iv_p_str} | {fmt_delta_k(implied, iv_prior) if iv_prior else 'n/a'} | {iv_y_str} | {fmt_delta_k(implied, iv_yoy) if iv_yoy else 'n/a'} |")
+
+    # DSCR
+    if dscr_latest is not None:
+        dscr_p_str = f"{dscr_prior:.2f}x" if dscr_prior is not None else "—"
+        dscr_y_str = f"{dscr_yoy:.2f}x" if dscr_yoy is not None else "—"
+        dscr_mom = f"{dscr_latest - dscr_prior:+.2f}x" if dscr_prior is not None else "n/a"
+        dscr_yoy_d = f"{dscr_latest - dscr_yoy:+.2f}x" if dscr_yoy is not None else "n/a"
+        lines.append(f"| DSCR | {dscr_latest:.2f}x | {dscr_p_str} | {dscr_mom} | {dscr_y_str} | {dscr_yoy_d} |")
+
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Report assembly
 # ---------------------------------------------------------------------------
@@ -975,7 +1157,8 @@ def determine_quarter(end_month):
 def generate_full_report(code, prop, monthly, summaries, af_totals, months, labels,
                          cap_rate, units, report_date, report_date_iso,
                          prior_monthly=None, prior_summaries=None, prior_t12_noi=None,
-                         gpr_monthly=None, lease_data=None, exposure_months=None):
+                         gpr_monthly=None, lease_data=None, exposure_months=None,
+                         occupancy_data=None):
     """Generate the complete markdown report."""
     addr = prop["addr"]
     fund = prop["fund"]
@@ -1005,7 +1188,27 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     r.append("Source: AppFolio income statement (12-month detail view).")
     r.append("")
 
-    # Main table
+    # Pre-compute derived metrics and T-12 vals (needed by Summary)
+    prior_monthly_noi = {}
+    if prior_summaries:
+        for pm_key, ps in prior_summaries.items():
+            prior_monthly_noi[pm_key] = ps["NOI"]
+
+    sreo_val = SREO_VALUES.get(code)
+    dm_text, t12_vals = build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi, sreo_val)
+
+    # Inject prior-year T-12 NOI into t12_vals for YoY
+    if prior_t12_noi is not None:
+        ly, lm = int(months[-1][:4]), int(months[-1][5:7])
+        yoy_key = f"{ly - 1:04d}-{lm:02d}"
+        if yoy_key not in t12_vals:
+            t12_vals[yoy_key] = prior_t12_noi
+
+    # Summary (top section)
+    r.append(build_summary(summaries, months, cap_rate, units, t12_vals,
+                           prior_summaries, occupancy_data))
+
+    # Main P&L table
     r.append(build_pnl_table(monthly, summaries, months, labels))
 
     # Cross-check warnings
@@ -1028,18 +1231,10 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
             r.append(f"> - {mm}")
         r.append("")
 
-    # Build prior monthly NOI map for T-12 rolling
-    prior_monthly_noi = {}
-    if prior_summaries:
-        for pm_key, ps in prior_summaries.items():
-            prior_monthly_noi[pm_key] = ps["NOI"]
-
     # Derived metrics
-    sreo_val = SREO_VALUES.get(code)
-    dm_text, t12_vals = build_derived_metrics(summaries, months, labels, cap_rate, units, prior_monthly_noi, sreo_val)
     r.append(dm_text)
 
-    # Lease Exposure (2nd section, forward-looking)
+    # Lease Exposure (forward-looking)
     if exposure_months is None:
         exposure_months = []
     r.append(build_lease_exposure(lease_data, exposure_months))
@@ -1049,13 +1244,6 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
         gpr_monthly = {}
     anc_text, _, _, _ = build_ancillary_income(monthly, months, gpr_monthly)
     r.append(anc_text)
-
-    # Inject prior-year T-12 NOI into t12_vals so Comparisons can show YoY
-    if prior_t12_noi is not None:
-        ly, lm = int(months[-1][:4]), int(months[-1][5:7])
-        yoy_key = f"{ly - 1:04d}-{lm:02d}"
-        if yoy_key not in t12_vals:
-            t12_vals[yoy_key] = prior_t12_noi
 
     # Comparisons
     r.append(build_comparisons(monthly, summaries, months, labels, cap_rate, units,
@@ -1189,12 +1377,23 @@ def main():
     report_date = today.strftime("%Y.%m.%d")
     report_date_iso = today.strftime("%Y-%m-%d")
 
+    # Fetch occupancy for summary (latest, prior month, YoY)
+    latest_m = months[-1]
+    prior_m = months[-2]
+    lmy, lmm = int(latest_m[:4]), int(latest_m[5:7])
+    yoy_m = f"{lmy - 1:04d}-{lmm:02d}"
+    occupancy_data = {}
+    try:
+        occupancy_data = fetch_occupancy_trio(prop["ids"], latest_m, prior_m, yoy_m)
+    except Exception as e:
+        print(f"Warning: Could not fetch occupancy data: {e}", file=sys.stderr)
+
     # Generate
     report = generate_full_report(
         code, prop, monthly, summaries, af_totals, months, labels,
         cap_rate, units, report_date, report_date_iso,
         prior_monthly, prior_summaries, prior_t12_noi,
-        gpr_monthly, lease_data, exposure_months,
+        gpr_monthly, lease_data, exposure_months, occupancy_data,
     )
 
     if args.dry_run:
