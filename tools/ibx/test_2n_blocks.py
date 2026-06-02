@@ -749,6 +749,33 @@ def test_block_name_strips_duration_suffix(tmp_path):
     assert goals.get("午") == ["afternoon goal"], f"午 goals: {goals.get('午')}"
 
 
+def test_block_name_strips_status_focus_timer_markers(tmp_path):
+    """Regression: block headers can carry ✅ (done), 🎯 (focus), and ⏱️ (timer)
+    markers in addition to ☀️ 📧 ⏰. _block_name_from_header only stripped the
+    latter three, so '- 午 ✅ 🎯' resolved to '午 ✅ 🎯' instead of '午'. That
+    made write_block_goals fail to match the current block and report
+    'failed to write goals to build order' even though the block existed."""
+    m = _load_two_n()
+    assert m._block_name_from_header("- 午 ✅ 🎯") == "午"
+    assert m._block_name_from_header("- 巳 ✅ 🎯 ⏱️ ⏰") == "巳"
+    assert m._block_name_from_header("- 辰 🎯 ⏰") == "辰"
+
+    # End-to-end: writing goals to a block whose header has ✅/🎯 must succeed.
+    fake_bo = tmp_path / "bo.md"
+    fake_bo.write_text(
+        "## -1₲\n\n"
+        "- 巳 ✅ 🎯 ⏱️ ⏰\n    - [ ] \n"
+        "- 午 ✅ 🎯\n    - [ ] \n"
+        "- 未\n    - [ ] \n"
+    )
+    with patch.object(m, "BUILD_ORDER", fake_bo):
+        ok = m.write_block_goals("午", ["Get down to 60 tasks {10}"])
+    assert ok is True, "write_block_goals must match a 午 header carrying ✅/🎯 markers"
+    out = fake_bo.read_text()
+    section = out[out.index("- 午"):out.index("- 未")]
+    assert "Get down to 60 tasks {10}" in section
+
+
 def test_fill_time_gaps_splits_on_newlines():
     """fill_time_gaps must accept newline-separated segments (multiline input)."""
     import re as _re

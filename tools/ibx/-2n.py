@@ -132,12 +132,12 @@ def _block_name_from_header(line: str) -> str:
     """Extract the clean 地支 block name from a header line, stripping any
     trailing markers (e.g. '- 申 ☀️ 📧 ⏰ (134min)' → '申')."""
     name = line.strip().lstrip("- ").strip()
-    for marker in (PRAYER_MARKER, INBOX_MARKER, TIME_MARKER):
-        if marker in name:
-            name = name.replace(marker, "").strip()
-    # Strip duration suffix like (134min)
-    name = re.sub(r"\s*\(\d+min\)\s*$", "", name)
-    return name
+    # The block name is always the first whitespace-delimited token (a single
+    # 地支 character). Everything after it is marker/duration decoration
+    # (☀️ 📧 ⏰ ✅ 🎯 ⏱️ … or "(134min)"), so we don't need to enumerate every
+    # possible marker — just take the leading token.
+    tokens = name.split()
+    return tokens[0] if tokens else name
 
 
 def read_block_goals():
