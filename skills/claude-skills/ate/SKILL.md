@@ -26,8 +26,11 @@ If `ssh ix` fails (timeout/unreachable), fall back to local `osascript` and warn
 ## Usage
 
 ```
-/ate <name>, <kcal>, <servings> [(<group> <count>, ...)]
+/ate [<branch>] <name>, <kcal>, <servings> [(<group> <count>, ...)]
 ```
+
+Optional leading **branch glyph** (one of 卯辰巳午未申戌) forces the time band
+instead of picking by the current hour. Still lands in today's row.
 
 Examples:
 ```
@@ -35,6 +38,7 @@ Examples:
 /ate oatmeal with flax, 350, 2 (grains 1, flax 1)
 /ate salad, 200, 1 (greens 2, cruciferous 1, vegetables 1)
 /ate 1 cup oat milk, 120, 1
+/ate 卯 leftover oatmeal, 300, 1     # force the 卯 (early morning) band
 ```
 
 ### Nutrition groups (Daily Dozen)
@@ -86,8 +90,18 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
 
 ## Steps
 
-1. **Parse args.** Split user input on the **last two commas** (so the name may
-   itself contain commas):
+1. **Parse args.** First, peel off an optional leading **branch glyph**: if the
+   input begins with one of `卯辰巳午未申戌` followed by whitespace, strip it and
+   remember it as `forced_branch`; otherwise `forced_branch = None`.
+   ```python
+   BRANCHES = "卯辰巳午未申戌"
+   forced_branch = None
+   parts = user_input.strip().split(None, 1)
+   if parts and parts[0] in BRANCHES:
+       forced_branch, user_input = parts[0], parts[1]
+   ```
+   Then split the remainder on the **last two commas** (so the name may itself
+   contain commas):
    ```python
    name, kcal, srv = [s.strip() for s in user_input.rsplit(",", 2)]
    ```
@@ -102,7 +116,8 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
    from neon import excel, cols
 
    today = f"{datetime.now().month}/{datetime.now().day}"
-   band  = cols.hcbi_band(datetime.now().hour)        # → {branch, cols: [name, kcal, srv]}
+   band  = (cols.hcbi_band_by_branch(forced_branch) if forced_branch
+            else cols.hcbi_band(datetime.now().hour))  # → {branch, cols: [name, kcal, srv]}
    name_col, kcal_col, srv_col = band["cols"]
 
    excel.append("hcbi", name_col, date=today, value=", " + name)   # name col uses comma-append

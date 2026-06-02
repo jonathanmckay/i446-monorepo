@@ -73,5 +73,14 @@ def hcbi_band(hour: int) -> dict:
     return bands[-1]
 
 
+def hcbi_band_by_branch(branch: str) -> dict:
+    """Return the hcbi /ate band entry for a given Earthly Branch glyph."""
+    bands = _cfg()["sheets"]["hcbi"]["ate_bands"]
+    for b in bands:
+        if b["branch"] == branch:
+            return b
+    raise KeyError(f"no hcbi band for branch {branch!r}")
+
+
 def daily_dozen_col(name: str) -> str:
     return _cfg()["sheets"]["hcbi"]["daily_dozen"][name]
