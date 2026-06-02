@@ -6,7 +6,9 @@ user-invocable: true
 
 # Property P&L Report (/pnl)
 
-Generate a trailing 12-month income statement for a single property, with Comparisons (MoM + YoY) and Historical T-12 NOI.
+Generate a trailing 12-month income statement for a single property, with Comparisons (MoM, YoY, and budget) and Historical T-12 NOI.
+
+The Comparisons section anchors on the latest month with both income and expense posted (booking lag often leaves the most recent month income-only), and adds budget columns: month Budget, Δ Budget (favorable variance), Budget YTD, Actual YTD, and YTD Variance (calendar year-to-date through the anchor month). MoM/YoY deltas are dollar-only.
 
 ## Arguments
 
