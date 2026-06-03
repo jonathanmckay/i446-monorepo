@@ -1304,13 +1304,13 @@ def main():
             body = f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end})."
             if suggestions:
                 body += f"\n\n[cyan]Suggested for this block:[/cyan]\n{format_suggestions(suggestions)}"
-                body += "\n\n[dim]Pick numbers (e.g. 1,3), type custom goals, or skip.[/dim]"
+                body += "\n\n[dim]Pick numbers (e.g. 1,3), type custom goals (comma-separated), or skip.[/dim]"
             else:
                 body += "\n[dim]Type goals (comma-separated), or skip.[/dim]"
             resp = prompt_card(
                 card_num, total_cards, "-1g",
                 body,
-                options="pick/goals/skip", preserve_case=True, multiline=True,
+                options="pick/goals/skip", preserve_case=True,
             )
             if resp and resp.lower() != "skip":
                 # Check if response is number picks from suggestions

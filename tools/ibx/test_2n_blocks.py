@@ -248,17 +248,18 @@ def test_1g_card_rechecks_block_before_showing():
     being displayed. The -1g card would then show goals for the old block.
 
     Fix: re-check get_current_block() right before the -1g card. If the
-    block changed, return 0 to let the wrapper restart with fresh state."""
+    block changed, update block state in place and re-read goals for the
+    new block."""
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
     next_section = card_section.index("# ── Card 3")
     before_1g = card_section[:next_section]
     assert "get_current_block()" in before_1g, \
         "Must re-check current block before showing -1g card"
-    assert "new_idx != idx" in before_1g or "new_idx != idx" in before_1g, \
+    assert "new_idx != idx" in before_1g, \
         "Must compare new block index against launch block index"
-    assert "return 0" in before_1g, \
-        "Must exit (return 0) if block changed so wrapper restarts"
+    assert "read_block_goals_with_status" in before_1g, \
+        "Must re-read goals for the new block when the block changed"
 
 
 def test_time_gap_audit_card_exists():
@@ -461,10 +462,11 @@ def test_salah_card_gated_only_by_prayer_marker():
     assert "prayer_marker_exists" in render_block
 
 
-def test_1g_card_uses_multiline_input():
-    """Regression: -1g card needs multiline input so users can hit Enter
-    between goals. prompt_card must accept a multiline=True flag, and the
-    -1g card must pass it."""
+def test_1g_card_uses_single_line_input():
+    """Regression: -1g card used multiline input, forcing a double Enter
+    (goal, then blank line) to submit. Goals are comma-separated, so a single
+    line suffices — one Enter must submit. prompt_card keeps the multiline
+    param (the gap-audit card still uses it), but the -1g card must NOT."""
     tree = ast.parse(SRC.read_text())
     found = False
     for node in ast.walk(tree):
@@ -477,8 +479,8 @@ def test_1g_card_uses_multiline_input():
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
     next_card = card_section.index("# ── Card 3")
     card_section = card_section[:next_card]
-    assert "multiline=True" in card_section, \
-        "-1g card must pass multiline=True so multiple goals can be entered with newlines"
+    assert "multiline=True" not in card_section, \
+        "-1g card must use single-line input so one Enter submits"
 
 
 def test_prompt_card_multiline_reads_until_blank(monkeypatch):
