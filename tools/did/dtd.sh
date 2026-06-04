@@ -5,6 +5,7 @@
 # KEY: cache is snapshotted ONCE at startup. No mid-session re-reads.
 
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
+UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
@@ -12,6 +13,11 @@ DONE="$HOME/vault/z_ibx/completed-today.json"
 DTD_FIFO="/tmp/dtd-$$.fifo"
 DTD_HDR="/tmp/dtd-$$.hdr"
 DTD_LOG="/tmp/dtd-$$.log"
+# ctrl-z undo state: journal of reversible actions + in-flight counters
+DTD_JOURNAL="/tmp/dtd-$$.undo.jsonl"
+DTD_PUSHED="/tmp/dtd-$$.pushed"
+DTD_PROCESSED="/tmp/dtd-$$.processed"
+DTD_SESSION="/tmp/dtd-$$.session"
 
 if [[ ! -f "$CACHE" ]]; then
   echo "No task cache found at $CACHE" >&2
@@ -23,7 +29,6 @@ if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
 fi
 
-typeset -a session_done
 setopt NO_MONITOR 2>/dev/null
 LOCAL_TODAY=$(date +%Y-%m-%d)
 DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
@@ -61,15 +66,20 @@ if [[ $due_today -lt 30 ]]; then
 fi
 
 # --- Background worker ---
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "/tmp/dtd-$$.start.sh"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$$.start.sh" \
+      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
+touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
 
 (
   while IFS= read -r task_clean; do
     [[ -z "$task_clean" ]] && continue
     echo "⏳ $task_clean" > "$DTD_HDR"
-    result=$(python3 "$DID_FAST" "$task_clean" 2>&1)
+    result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
+    # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
+    # the pushed/processed counters, so the journal entry must land first)
+    echo "$result" | python3 "$UNDO_FAST" --journal-done "$DTD_JOURNAL" 2>/dev/null
     ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
     if [[ -n "$ok" ]]; then
       echo "✓ $ok" > "$DTD_HDR"
@@ -78,12 +88,23 @@ echo "ready" > "$DTD_HDR"
       echo "? $task_clean" > "$DTD_HDR"
       echo "? $task_clean" >> "$DTD_LOG"
     fi
+    echo "x" >> "$DTD_PROCESSED"
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
 ) &
 WORKER_PID=$!
 
 exec 3>"$DTD_FIFO"
+
+# --- Temp files for list generation (defined before the binding scripts
+# below so their heredocs expand to real paths, not empty strings) ---
+DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
+DTD_REMOVED="/tmp/dtd-$$.removed"
+DTD_SKIPPED="/tmp/dtd-$$.skipped"
+DTD_DONE_FILE="/tmp/dtd-$$.done.json"
+echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
+touch "$DTD_REMOVED"
+touch "$DTD_SKIPPED"
 
 # --- Helper: format toggl current output into 1-line string ---
 _parse_toggl() {
@@ -140,20 +161,14 @@ result=\$(python3 "\$DEFER_FAST" "\$clean" 2>/dev/null)
 ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
 if [[ -n "\$ok" ]]; then
   echo "\$clean" >> "\$REMOVED"
+  # Journal for ctrl-z undo
+  echo "\$result" | python3 "$UNDO_FAST" --journal-defer "$DTD_JOURNAL" "\$clean" 2>/dev/null
   echo "⏭ \$clean \$ok" > "\$HDR"
 else
   echo "? defer failed: \$clean" > "\$HDR"
 fi
 DEFEREOF
 chmod +x "$DTD_DEFER"
-
-# --- Temp files for list generation ---
-DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
-DTD_REMOVED="/tmp/dtd-$$.removed"
-DTD_SKIPPED="/tmp/dtd-$$.skipped"
-echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
-touch "$DTD_REMOVED"
-touch "$DTD_SKIPPED"
 
 # --- List generation script (reloadable by fzf) ---
 DTD_LIST="/tmp/dtd-$$.list.sh"
@@ -427,6 +442,9 @@ task = matches[0]
 tid = task['id']
 labels = task.get('labels', [])
 project_id = task.get('project_id')
+# Pre-image for ctrl-z undo
+prev_content = task.get('content', '')
+prev_due = (task.get('due') or {}).get('date', '')
 
 # 1. Create completed posthoc for today's portion
 today_label = done_desc if done_desc else clean
@@ -451,16 +469,37 @@ api('POST', f'/tasks/{tid}', {
     'due_date': tomorrow,
 })
 
-# 3. Log points to 0分 via did-fast (use original task's labels for column mapping)
+# 3. Log points to 0分 via did-fast (use original task's labels for column
+#    mapping). --points-only skips Todoist matching: without it did-fast
+#    re-finds the just-renamed remainder task and closes it.
 import subprocess
 label_arg = ''
 for l in labels:
     if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','s897'):
         label_arg = f'@{l}'
         break
-subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
-                f'{clean} [{pts_today}] {label_arg}'],
-               capture_output=True, timeout=30)
+df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
+                '--points-only', f'{clean} [{pts_today}] {label_arg}'],
+               capture_output=True, text=True, timeout=30)
+try:
+    didfast_out = json.loads(df.stdout)
+except Exception:
+    didfast_out = None
+
+# 4. Journal for ctrl-z undo
+record = {
+    'type': 'split',
+    'names': [clean],
+    'task_id': tid,
+    'prev_content': prev_content,
+    'prev_due': prev_due,
+    'posthoc_id': posthoc['id'] if posthoc else None,
+    'didfast': didfast_out,
+}
+subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
+                '--append', 'PLACEHOLDER_JOURNAL'],
+               input=json.dumps(record, ensure_ascii=False), text=True,
+               capture_output=True, timeout=10)
 
 # Write results
 with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
@@ -470,7 +509,7 @@ with open(hdr_file, 'w') as f: f.write(msg)
 
 SPLITEOF
 # Substitute placeholder paths
-sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_SPLIT"
+sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_JOURNAL|$DTD_JOURNAL|g" "$DTD_SPLIT"
 chmod +x "$DTD_SPLIT"
 
 # --- Agent script used by fzf ctrl-a binding ---
@@ -610,13 +649,39 @@ AGENTEOF
 sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_AGENT"
 chmod +x "$DTD_AGENT"
 
+# --- Undo script used by fzf ctrl-z binding ---
+# Pops the last journaled action (done/split/defer) and reverses it via
+# undo-fast.py, which also removes the task from the session/removed/done
+# filter files so it reappears in the list on reload.
+DTD_UNDO="/tmp/dtd-$$.undo.sh"
+cat > "$DTD_UNDO" << UNDOEOF
+#!/bin/zsh
+HDR="$DTD_HDR"
+pushed=\$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0)
+processed=\$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0)
+if (( pushed > processed )); then
+  echo "⏳ \$((pushed - processed)) task(s) still processing — retry ctrl-z in a moment" > "\$HDR"
+  exit 0
+fi
+result=\$(python3 "$UNDO_FAST" --undo "$DTD_JOURNAL" \\
+  --session "$DTD_SESSION" --removed "$DTD_REMOVED" --done-json "$DTD_DONE_FILE" 2>&1)
+summary=\$(echo "\$result" | jq -r '.summary // .error // "undo failed"' 2>/dev/null)
+if [[ \$(echo "\$result" | jq -r '.ok // empty' 2>/dev/null) == "true" ]]; then
+  echo "↩ \$summary" > "\$HDR"
+else
+  echo "? \${summary:-undo failed}" > "\$HDR"
+fi
+UNDOEOF
+chmod +x "$DTD_UNDO"
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
   NEW_TODAY=$(date +%Y-%m-%d)
   if [[ "$NEW_TODAY" != "$LOCAL_TODAY" ]]; then
     LOCAL_TODAY="$NEW_TODAY"
-    session_done=()  # reset session completions for new day
+    : > "$DTD_SESSION"   # reset session completions for new day
+    : > "$DTD_JOURNAL"   # yesterday's actions are no longer undoable
   fi
   DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
     'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
@@ -625,11 +690,10 @@ while true; do
   combined_hdr="$TIMER_HDR
   $worker_hdr"
 
-  session_exclude=$(printf '%s\n' "${session_done[@]}" | jq -c -R -s 'split("\n") | map(select(. != ""))')
+  session_exclude=$(jq -c -R -s 'split("\n") | map(select(. != ""))' < "$DTD_SESSION")
   all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
   # Write completed list to file to avoid shell quoting issues (apostrophes in task names)
-  DTD_DONE_FILE="/tmp/dtd-$$.done.json"
   echo "$all_completed" > "$DTD_DONE_FILE"
 
   # Generate task list via reloadable script (supports colors + removal)
@@ -645,8 +709,9 @@ while true; do
       --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-k:execute-silent($DTD_SKIP {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-r: refresh]")
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
 
   task="$fzf_output"
 
@@ -688,15 +753,18 @@ while true; do
       ;;
   esac
 
-  session_done+=("$clean_for_filter")
+  echo "$clean_for_filter" >> "$DTD_SESSION"
+  echo "x" >> "$DTD_PUSHED"
   echo "$clean" >&3
 done
 
 exec 3>&-
 
-if [[ ${#session_done[@]} -gt 0 ]]; then
+session_count=$(grep -c . "$DTD_SESSION" 2>/dev/null)
+session_count=${session_count:-0}
+if [[ $session_count -gt 0 ]]; then
   echo ""
-  echo "Waiting for ${#session_done[@]} tasks..."
+  echo "Waiting for $session_count tasks..."
   while kill -0 $WORKER_PID 2>/dev/null; do
     sleep 1
     printf "."
@@ -709,15 +777,16 @@ if [[ ${#session_done[@]} -gt 0 ]]; then
 
   logged=$(wc -l < "$DTD_LOG" 2>/dev/null || echo 0)
   logged=${logged// /}
-  if [[ $logged -lt ${#session_done[@]} ]]; then
-    echo "⚠ $logged/${#session_done[@]} processed. Running remaining..."
-    for clean in "${session_done[@]}"; do
+  if [[ $logged -lt $session_count ]]; then
+    echo "⚠ $logged/$session_count processed. Running remaining..."
+    while IFS= read -r clean; do
+      [[ -z "$clean" ]] && continue
       if ! grep -qi "$(echo "$clean" | head -c 20)" "$DTD_LOG" 2>/dev/null; then
         echo "  → /did $clean"
         python3 "$DID_FAST" "$clean" 2>&1 | jq -r '.results[]? | "  ✓ \(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null
       fi
-    done
+    done < "$DTD_SESSION"
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_SKIPPED" "$DTD_LIST" "/tmp/dtd-$$.done.json"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_SKIPPED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"

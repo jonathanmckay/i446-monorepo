@@ -523,6 +523,7 @@ def _refresh_task_queue_inner() -> dict:
                          "labels": t.get("labels", []),
                          "priority": t.get("priority", "p4"),
                          "due": t.get("due", {}).get("date", "") if t.get("due") else "",
+                         "due_string": (t.get("due") or {}).get("string", "") or "",
                          "recurring": bool((t.get("due") or {}).get("is_recurring"))}
                         for t in tasks]
         except Exception as e:
@@ -563,6 +564,7 @@ def _refresh_task_queue_inner() -> dict:
                     "labels": t.get("labels", []),
                     "priority": t.get("priority", "p4"),
                     "due": t.get("due", {}).get("date", "") if t.get("due") else "",
+                    "due_string": (t.get("due") or {}).get("string", "") or "",
                     "recurring": bool(t.get("due", {}).get("is_recurring")) if t.get("due") else False,
                 })
             cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
@@ -642,8 +644,16 @@ class RouteResult:
     error: Optional[str] = None
 
 
-def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteResult]:
-    """Route each item through 0₦ → 1n+ → Todoist → variable."""
+def route_items(items: list[ParsedItem], headers: dict, tq: dict,
+                skip_todoist: bool = False) -> list[RouteResult]:
+    """Route each item through 0₦ → 1n+ → Todoist → variable.
+
+    skip_todoist=True bypasses the Todoist match/close and build-order steps
+    (0.3/0.35/0.37) and routes straight to the variable path. Used by dtd's
+    split flow, which has already handled the Todoist task itself and only
+    wants the points logged — matching here would re-find the just-renamed
+    remainder task and close it.
+    """
     h0n = headers.get("0n", {})
     h1n = headers.get("1n", {})
     # Build hyphen/space-tolerant lookups so `wake-up` matches header `wake up`
@@ -746,7 +756,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
             continue
 
         # Step 0.3: Todoist match
-        matched = match_todoist_task(item.name, all_tasks)
+        matched = None if skip_todoist else match_todoist_task(item.name, all_tasks)
         if matched:
             # Extract points
             pts_match = POINTS_RE.search(matched["content"])
@@ -766,7 +776,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
 
         # Step 0.35: Live Todoist search (fallback when cache misses)
         # Searches all open tasks by text, not just neon-labeled ones.
-        live_matched = _live_todoist_search(item.name)
+        live_matched = None if skip_todoist else _live_todoist_search(item.name)
         if live_matched:
             pts_match = POINTS_RE.search(live_matched["content"])
             points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
@@ -784,7 +794,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict) -> list[RouteR
         # If the input matches an unchecked goal in the build order, flip it
         # and write {N} bonus points to 0分 column Z.
         bo_path = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
-        if bo_path.exists():
+        if not skip_todoist and bo_path.exists():
             bo_text = bo_path.read_text()
             if "## -1₲" in bo_text:
                 bo_lines = bo_text.split("\n")
@@ -872,10 +882,18 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
 
     set_lines = []
     verify_lines = []
+    pre_lines = []
     for w in writes:
         is_cumulative = w.item.name in CUMULATIVE_0N
         col = w.col_num
         val = w.write_value
+        # Pre-image capture (for ctrl-z undo): read the cell BEFORE writing.
+        pre_lines.append(f'''    set pv{col} to value of cell {col} of row todayRow of ws
+    if pv{col} is missing value then
+        set preOut to preOut & "PRE" & tab & "{col}" & tab & linefeed
+    else
+        set preOut to preOut & "PRE" & tab & "{col}" & tab & (pv{col} as text) & linefeed
+    end if''')
         if is_cumulative:
             set_lines.append(f'''    set oldVal to value of cell {col} of row todayRow of ws
     if oldVal is missing value or (oldVal as text) = "" or (oldVal as text) = "0" then
@@ -907,10 +925,12 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
         end if
     end repeat
     if todayRow = 0 then return "ERROR: date {target_date} not found"
+    set preOut to ""
+{chr(10).join(pre_lines)}
 {chr(10).join(set_lines)}
     set results to ""
 {chr(10).join(verify_lines)}
-    return "OK:row=" & todayRow & "|" & results
+    return "OK:row=" & todayRow & "|" & results & linefeed & preOut
 end tell'''
     return script
 
@@ -990,8 +1010,16 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     # Build per-column write + verify lines
     write_lines = []
     verify_lines = []
+    pre_lines = []
     for w in writes:
         col = w.col_letter
+        # Pre-image capture (for ctrl-z undo): formula text before writing.
+        pre_lines.append(f'''    try
+        set pf{col} to (formula of range ("{col}" & weekRow) of ws1n) as text
+    on error
+        set pf{col} to ""
+    end try
+    set preOut to preOut & "PRE" & tab & "{col}" & tab & pf{col} & linefeed''')
         if w.is_cumulative_1n:
             inc = w.cumulative_increment
             write_lines.append(f'''    set theCellCum to range ("{col}" & weekRow) of ws1n
@@ -1042,10 +1070,12 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         set weekRow to fallbackRow
     end if
     if weekRow = 0 then return "ERROR: week {week_mw} not found"
+    set preOut to ""
+{chr(10).join(pre_lines)}
 {chr(10).join(write_lines)}
     set results to "weekRow=" & weekRow & "|"
 {chr(10).join(verify_lines)}
-    return "OK:" & results
+    return "OK:" & results & linefeed & preOut
 end tell'''
     return script
 
@@ -1083,6 +1113,18 @@ def build_1n_0fen_script(refs: list[tuple[str, str, str]], target_date: str) -> 
     return "OK:1n_0fen row=" & todayRow
 end tell'''
     return script
+
+
+def parse_pre_lines(stdout: str) -> dict[str, str]:
+    """Parse 'PRE\\t<col>\\t<value>' pre-image lines emitted by the 0n/1n+
+    write scripts. Returns {col_key: prev_value_text}; missing value → ''."""
+    pre: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if line.startswith("PRE\t"):
+            parts = line.split("\t", 2)
+            if len(parts) >= 2:
+                pre[parts[1]] = parts[2] if len(parts) > 2 else ""
+    return pre
 
 
 # ---------------------------------------------------------------------------
@@ -1226,6 +1268,11 @@ def _live_todoist_search(query: str) -> Optional[dict]:
                         "id": t.get("id", ""),
                         "content": t.get("content", ""),
                         "labels": t.get("labels", []),
+                        # Carry due info so the future-due close guard in main()
+                        # works for live-search matches too (it reads .due).
+                        "due": (t.get("due") or {}).get("date", ""),
+                        "due_string": (t.get("due") or {}).get("string", "") or "",
+                        "recurring": bool((t.get("due") or {}).get("is_recurring")),
                     })
                 cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
                 if not cursor:
@@ -1340,7 +1387,13 @@ def main():
         print(json.dumps({"status": "ok", "counts": counts}, indent=2))
         return
 
-    raw = " ".join(sys.argv[1:])
+    argv = sys.argv[1:]
+    # --points-only: log points to 0分/completed-today but skip all Todoist
+    # side effects (match/close/posthoc/build-order). Used by dtd's split.
+    points_only = "--points-only" in argv
+    if points_only:
+        argv = [a for a in argv if a != "--points-only"]
+    raw = " ".join(argv)
 
     # 1. Parse
     items = parse_input(raw)
@@ -1353,7 +1406,7 @@ def main():
     tq = load_task_queue()
 
     # 3. Route
-    routes = route_items(items, headers, tq)
+    routes = route_items(items, headers, tq, skip_todoist=points_only)
 
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
@@ -1641,8 +1694,9 @@ end tell'''
                 toggl_created[name] = {"ok": ok, "output": out}
 
     # 6c. Create posthoc Todoist tasks for variable items (parallel)
+    # Skipped under --points-only: the caller (split) makes its own posthoc.
     posthoc_results = {}
-    variable_items = [r for r in fast if r.step == "variable"]
+    variable_items = [] if points_only else [r for r in fast if r.step == "variable"]
     if variable_items:
         today_iso = date.today().isoformat()
         target_md = variable_items[0].item.target_date or f"{date.today().month}/{date.today().day}"
@@ -1698,6 +1752,10 @@ end tell'''
     # 8. Build output
     output = {"results": [], "agent_needed": []}
 
+    # Pre-image maps for undo (captured by the write scripts themselves)
+    pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}
+    pre_1n = parse_pre_lines(one_n_result.stdout) if one_n_result and one_n_result.returncode == 0 else {}
+
     for r in fast:
         entry = {
             "name": r.item.name,
@@ -1705,6 +1763,21 @@ end tell'''
             "value": r.write_value if r.step == "0n" else None,
             "col": r.col_num,
         }
+        if r.step == "0n" and r.col_num is not None and on_result and on_result.returncode == 0:
+            entry["undo"] = {"prev_0n": pre_0n.get(str(r.col_num), "")}
+        if r.step == "1n" and r.col_letter:
+            entry["col_letter"] = r.col_letter
+            entry["week_row"] = week_row
+            entry["fen_col"] = r.fen_col
+            if one_n_result and one_n_result.returncode == 0:
+                entry["undo"] = {"prev_1n_formula": pre_1n.get(r.col_letter, "")}
+        if r.item.curly_points and r.item.curly_points > 0:
+            entry["curly_q"] = r.item.curly_points
+        hcbi_col = HCBI_HABITS.get(r.item.name.lower())
+        if hcbi_col:
+            mins = r.item.time_value or r.write_value or 0
+            if mins > 0:
+                entry["hcbi"] = {"col": hcbi_col, "mins": mins}
         if r.is_variable_1n:
             entry["variable_1n"] = True
             entry["variable_value"] = r.variable_value
@@ -1730,6 +1803,11 @@ end tell'''
                 }
                 if not ok and err:
                     td_entry["error"] = err
+            # Pre-close state for undo: recurring closes advance the due date
+            # instead of archiving, so undo needs the original due to restore.
+            td_entry["prev_due"] = r.todoist_task.get("due", "")
+            td_entry["due_string"] = r.todoist_task.get("due_string", "")
+            td_entry["recurring"] = r.todoist_task.get("recurring", False)
             entry["todoist"] = td_entry
         if r.step == "variable" and r.item.name in posthoc_results:
             entry["posthoc"] = posthoc_results[r.item.name]

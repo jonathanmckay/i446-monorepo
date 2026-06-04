@@ -160,6 +160,40 @@ def append_names(new_names: list[str], *, today: str | None = None,
             os.close(fd)
 
 
+def remove_names(names: list[str], *, path: Path | None = None) -> dict:
+    """Remove names from completed-today.json (ctrl-z undo path).
+
+    Removal is keyed on `_dup_key` (lowercase + annotation-strip) so an undo
+    of `buy plants [20]` clears the stored `buy plants` entry. Also clears the
+    matching `points` and `timestamps` keys. Locked with flock like
+    append_names. Returns the resulting dict.
+    """
+    if path is None:
+        path = COMPLETED
+    if not path.exists():
+        return {"date": "", "names": []}
+
+    remove_keys = {_dup_key(n) for n in names if _dup_key(n)}
+
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        data = _load(path)
+        kept = [n for n in data["names"] if _dup_key(n) not in remove_keys]
+        data["names"] = kept
+        for bucket in ("points", "timestamps"):
+            if isinstance(data.get(bucket), dict):
+                data[bucket] = {k: v for k, v in data[bucket].items()
+                                if _dup_key(k) not in remove_keys}
+        _atomic_write(path, data)
+        return data
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def is_duplicate_today(name: str, *, today: str | None = None, path: Path | None = None) -> str | None:
     """Check whether `name` is already recorded in today's completed-today bucket.
 
@@ -208,6 +242,13 @@ def main(argv: list[str]) -> int:
             return 0
         print("no-dup")
         return 1
+    if len(argv) >= 2 and argv[1] == "--remove":
+        if len(argv) < 3:
+            print("usage: mark-completed.py --remove <name> [<name2> ...]", file=sys.stderr)
+            return 2
+        result = remove_names(argv[2:])
+        print(f"date={result['date']} count={len(result['names'])}")
+        return 0
     if len(argv) < 2:
         print("usage: mark-completed.py <name> [<name2> ...]", file=sys.stderr)
         return 2

@@ -164,8 +164,11 @@ def handle_non_recurring(task: dict, target_date: str,
 
     return {
         "task": content,
+        "task_id": task_id,
         "recurring": False,
         "target_date": target_date,
+        "prev_due": (task.get("due") or {}).get("date", ""),
+        "prev_due_string": (task.get("due") or {}).get("string", "") or "",
         "claimed_points": claimed_points,
         "remaining_points": total_points,
         "closed": False,
@@ -204,8 +207,11 @@ def handle_recurring(task: dict, target_date: str,
 
     return {
         "task": content,
+        "task_id": task_id,
         "recurring": True,
         "target_date": target_date,
+        "prev_due": (task.get("due") or {}).get("date", ""),
+        "prev_due_string": (task.get("due") or {}).get("string", "") or "",
         "claimed_points": claimed_points,
         "remaining_points": total_points,
         "closed": False,
