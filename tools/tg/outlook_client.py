@@ -13,6 +13,14 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Los_Angeles")
 CACHE_DIR = Path.home() / ".cache" / "tg-tui"
+WINDOWS_TZ_MAP = {
+    "UTC": "UTC",
+    "Coordinated Universal Time": "UTC",
+    "Eastern Standard Time": "America/New_York",
+    "Central Standard Time": "America/Chicago",
+    "Mountain Standard Time": "America/Denver",
+    "Pacific Standard Time": "America/Los_Angeles",
+}
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
 try:
@@ -29,7 +37,7 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
     transparency (always "opaque" for Outlook events).
     """
     if mcp is None:
-        return []
+        raise RuntimeError("agency_mcp unavailable")
 
     today_str = day_start.strftime("%Y-%m-%d")
     cache_file = CACHE_DIR / f"outlook-{today_str}.json"
@@ -51,11 +59,11 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
             "endDateTime": day_end.strftime("%Y-%m-%dT00:00:00"),
             "top": "50",
         }, timeout=15)
-    except Exception:
+    except Exception as exc:
         # Agency not available; return cached data if any
         if cache_file.exists():
             return _parse_cache(cache_file)
-        return []
+        raise RuntimeError(f"outlook fetch failed: {exc}") from exc
 
     events = []
     if raw and raw.get("content"):
@@ -76,6 +84,8 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
                         "subject": ev.get("subject", ""),
                         "start": ev.get("start", {}).get("dateTime", ""),
                         "end": ev.get("end", {}).get("dateTime", ""),
+                        "start_tz": ev.get("start", {}).get("timeZone", ""),
+                        "end_tz": ev.get("end", {}).get("timeZone", ""),
                         "is_all_day": ev.get("isAllDay", False),
                     })
             except (json.JSONDecodeError, TypeError):
@@ -98,14 +108,23 @@ def _parse_cache(cache_file: Path) -> list[dict]:
         return []
 
 
-def _parse_graph_dt(s: str) -> dt.datetime:
-    """Parse a Graph API datetime, tolerating 7-digit fractional seconds."""
+def _parse_graph_dt(s: str, timezone_name: str = "") -> dt.datetime:
+    """Parse a Graph API datetime, preserving Graph's separate timeZone field."""
     s = s.rstrip("Z")
     if "." in s:
         head, frac = s.split(".", 1)
         # Truncate fractional seconds to 6 digits (Python max precision)
         s = f"{head}.{frac[:6]}"
-    return dt.datetime.fromisoformat(s)
+    parsed = dt.datetime.fromisoformat(s)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(TZ)
+
+    zone_key = WINDOWS_TZ_MAP.get(timezone_name, timezone_name)
+    try:
+        event_tz = ZoneInfo(zone_key) if zone_key else dt.timezone.utc
+    except Exception:
+        event_tz = dt.timezone.utc
+    return parsed.replace(tzinfo=event_tz).astimezone(TZ)
 
 
 def _normalize(raw_events: list[dict]) -> list[dict]:
@@ -117,11 +136,8 @@ def _normalize(raw_events: list[dict]) -> list[dict]:
             end_str = ev.get("end", "")
             if not start_str or not end_str:
                 continue
-            # Graph API returns UTC datetimes (sometimes with Z, sometimes without)
-            start_dt = _parse_graph_dt(start_str).replace(
-                tzinfo=dt.timezone.utc).astimezone(TZ)
-            end_dt = _parse_graph_dt(end_str).replace(
-                tzinfo=dt.timezone.utc).astimezone(TZ)
+            start_dt = _parse_graph_dt(start_str, ev.get("start_tz", ""))
+            end_dt = _parse_graph_dt(end_str, ev.get("end_tz", ev.get("start_tz", "")))
             out.append({
                 "start_dt": start_dt,
                 "end_dt": end_dt,

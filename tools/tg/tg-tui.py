@@ -263,8 +263,8 @@ def fetch_gcal(force=False):
         outlook_events = []
         try:
             outlook_events = outlook_client.list_events(day_start, day_end, force=force)
-        except Exception:
-            pass  # Outlook is best-effort; don't block on it
+        except Exception as e:
+            flash(f"outlook err: {e}", 10.0)
         # Merge and sort by start time
         combined = gcal_events + outlook_events
         combined.sort(key=lambda e: e["start_dt"])
