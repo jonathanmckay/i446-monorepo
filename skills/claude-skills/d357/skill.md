@@ -46,6 +46,7 @@ Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux 
       If output channels == 1 and rate == 24000: AirPods are in HFP mode. **Auto-switch to mic-only** and warn: `⚠ AirPods in HFP mode (Teams grabbed mic) — recording mic-only.`
    c. If not HFP, switch system output: `SwitchAudioSource -s "Meet Output"`
    d. If AirPods are BT-connected but missing from `SwitchAudioSource -a -t output`, reconnect: `blueutil --disconnect <MAC> && sleep 2 && blueutil --connect <MAC>` (MAC: `70-F9-4A-87-EC-D7`)
+      **MID-CALL GUARD**: NEVER bounce Bluetooth if a call is likely in progress — it cuts the user's live call audio for several seconds (regression: 2026-06-04 Adam Habig call, user lost audio mid-conversation). Treat a call as likely in progress when the current calendar event window (step 4) covers now, or when the meeting name was given for a meeting that has already started. In that case skip the bounce entirely and fall back to mic-only. The bounce is also futile mid-call: the conferencing app re-grabs the AirPods mic immediately and forces HFP again.
 4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
    - `calendar_minutes`: the event's scheduled duration
    - `project`: `i9` if the event came from the Work calendar id; `m5x2` otherwise (default)
@@ -179,7 +180,7 @@ When Teams uses the AirPods mic for the call, macOS forces AirPods into HFP mode
 - **Idle timeout**: Disabled for mic-only mode (`--idle-timeout 0`). Default 5 min for teams mode.
 - **Watchdog:** `d357-watchdog.py` runs every 10 min via launchd.
 - **`--mic` flag**: Override mic device. Use `--mic AirPods` to record from AirPods mic instead of MacBook mic.
-- **blueutil**: Installed at `/opt/homebrew/bin/blueutil`. Use to reconnect AirPods when they're BT-connected but missing from CoreAudio.
+- **blueutil**: Installed at `/opt/homebrew/bin/blueutil`. Use to reconnect AirPods when they're BT-connected but missing from CoreAudio — but ONLY when no call is in progress (see pre-flight step 3d MID-CALL GUARD); bouncing BT mid-call cuts the user's live audio.
 
 ## Regression tests
 
@@ -195,3 +196,4 @@ When Teams uses the AirPods mic for the call, macOS forces AirPods into HFP mode
 | `/d357 standup --no-teams` | mic-only, idle-timeout 0 |
 | AirPods in HFP mode | Auto-detects, switches to mic-only, warns |
 | tmux session dies post-launch | Health check catches it, diagnoses, restarts |
+| AirPods missing from CoreAudio, call in progress | Skips BT bounce (no audio cut), records mic-only |
