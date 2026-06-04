@@ -18,9 +18,11 @@ Exit codes match ix-osa.sh: 0 ok, 2 logic error, 3 ssh transport,
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 IX_HOST = os.environ.get("IX_HOST", "ix")
 UNREACHABLE_MSG = (
@@ -67,7 +69,25 @@ def run(script: str, *, timeout: float = 30.0) -> IxResult:
     if first.startswith("ERROR:") or first.startswith("ERR:"):
         return IxResult(2, proc.stdout, proc.stderr)
 
+    _notify_tg_tui(script)
     return IxResult(0, proc.stdout, proc.stderr)
+
+
+def _notify_tg_tui(script: str) -> None:
+    """Best-effort SIGUSR1 to tg-tui after a successful Excel *write*.
+
+    Keeps tg-tui's neon status event-driven instead of waiting on its 120s
+    ticker. Write detection is by AppleScript verb so read-only scripts
+    (e.g. tg-tui's own fetch_points) never signal — that would self-loop.
+    A missing pidfile or dead pid is silently ignored.
+    """
+    if "set value" not in script and "set formula" not in script:
+        return
+    try:
+        pid = int((Path.home() / ".cache" / "tg-tui.pid").read_text().strip())
+        os.kill(pid, signal.SIGUSR1)
+    except (OSError, ValueError):
+        pass
 
 
 def main() -> int:
