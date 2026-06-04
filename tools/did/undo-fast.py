@@ -227,6 +227,15 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
     """Reverse all side effects recorded in one did-fast output JSON."""
     results = out.get("results", [])
 
+    # Per-script success flags: don't strip/negate a term whose original
+    # append never landed (that would subtract points never added). A
+    # missing *_write key means the write wasn't attempted for that batch;
+    # entries gate on their own data presence, so default True is safe.
+    fen_ok = (out.get("0fen_write") or {}).get("ok", True)
+    hcbi_ok = (out.get("hcbi_write") or {}).get("ok", True)
+    n1_ok = (out.get("1n_write") or {}).get("ok", True)
+    n1fen_ok = (out.get("1n_0fen_write") or {}).get("ok", True)
+
     on_restores: list[tuple[int, str]] = []
     fen_strips: list[tuple[str, str]] = []
     hcbi_strips: list[tuple[str, str]] = []
@@ -241,24 +250,25 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
             on_restores.append((e["col"], undo["prev_0n"]))
 
         fen = e.get("0fen")
-        if (fen and fen.get("points", 0) > 0
+        if (fen_ok and fen and fen.get("points", 0) > 0
                 and not (step == "1n" and not e.get("variable_1n"))):
             fen_strips.append((fen["col"], f"+{fen['points']}"))
 
-        if e.get("curly_q"):
+        if fen_ok and e.get("curly_q"):
             fen_strips.append(("Q", f"+{e['curly_q']}"))
 
-        if e.get("hcbi"):
+        if hcbi_ok and e.get("hcbi"):
             hcbi_strips.append((e["hcbi"]["col"], f"+{e['hcbi']['mins']}"))
 
         if step == "1n" and e.get("col_letter") and e.get("week_row"):
             row, col = str(e["week_row"]), e["col_letter"]
             if e.get("variable_1n") and e.get("variable_value"):
-                n1_strips.append((row, col, f"+{e['variable_value']}"))
+                if n1_ok:
+                    n1_strips.append((row, col, f"+{e['variable_value']}"))
             else:
                 if "prev_1n_formula" in undo:
                     n1_restores.append((row, col, undo["prev_1n_formula"]))
-                if e.get("fen_col"):
+                if n1fen_ok and e.get("fen_col"):
                     fen_strips.append((e["fen_col"], f"+'1n+'!{col}{row}"))
 
         td = e.get("todoist")

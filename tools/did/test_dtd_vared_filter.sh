@@ -10,15 +10,16 @@ set -e
 
 SCRIPT="$HOME/i446-monorepo/tools/did/dtd.sh"
 
-# Verify that session_done gets clean_for_filter (original), not clean (modified)
-# The key pattern: session_done+=("$clean_for_filter") must appear AFTER the case block,
-# and echo "$clean" (the vared-modified version) goes to the worker.
+# Verify that the session filter gets clean_for_filter (original), not clean
+# (modified). The session list lives in $DTD_SESSION (a file, so the ctrl-z
+# undo binding can edit it); the append must use clean_for_filter, and
+# echo "$clean" (the vared-modified version) goes to the worker.
 
-# Check session_done uses clean_for_filter
-if grep -q 'session_done+=("$clean_for_filter")' "$SCRIPT"; then
-  echo "PASS: session_done uses clean_for_filter (original name)"
+# Check session filter file uses clean_for_filter
+if grep -q 'echo "$clean_for_filter" >> "$DTD_SESSION"' "$SCRIPT"; then
+  echo "PASS: session filter uses clean_for_filter (original name)"
 else
-  echo "FAIL: session_done should use clean_for_filter, not clean"
+  echo "FAIL: session filter should use clean_for_filter, not clean"
   exit 1
 fi
 

@@ -1763,14 +1763,16 @@ end tell'''
             "value": r.write_value if r.step == "0n" else None,
             "col": r.col_num,
         }
-        if r.step == "0n" and r.col_num is not None and on_result and on_result.returncode == 0:
-            entry["undo"] = {"prev_0n": pre_0n.get(str(r.col_num), "")}
+        # Only attach pre-images when the write script actually captured them
+        # (a failed/ERROR script emits no PRE lines — undo must not guess).
+        if r.step == "0n" and r.col_num is not None and str(r.col_num) in pre_0n:
+            entry["undo"] = {"prev_0n": pre_0n[str(r.col_num)]}
         if r.step == "1n" and r.col_letter:
             entry["col_letter"] = r.col_letter
             entry["week_row"] = week_row
             entry["fen_col"] = r.fen_col
-            if one_n_result and one_n_result.returncode == 0:
-                entry["undo"] = {"prev_1n_formula": pre_1n.get(r.col_letter, "")}
+            if r.col_letter in pre_1n:
+                entry["undo"] = {"prev_1n_formula": pre_1n[r.col_letter]}
         if r.item.curly_points and r.item.curly_points > 0:
             entry["curly_q"] = r.item.curly_points
         hcbi_col = HCBI_HABITS.get(r.item.name.lower())
