@@ -34,6 +34,9 @@ try:
     import importlib.util
     spec = importlib.util.spec_from_file_location("ix_osa", os.path.join(_LIB, "ix-osa.py"))
     ix_osa = importlib.util.module_from_spec(spec)
+    # Register before exec: py3.9 dataclasses resolve string annotations via
+    # sys.modules[cls.__module__], which is None for unregistered modules.
+    sys.modules["ix_osa"] = ix_osa
     spec.loader.exec_module(ix_osa)
 except Exception as e:  # pragma: no cover
     print(f"Error: cannot load ix-osa helper from {_LIB}: {e}", file=sys.stderr)
