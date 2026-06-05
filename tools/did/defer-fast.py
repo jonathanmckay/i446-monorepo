@@ -8,8 +8,9 @@ Usage:
     python3 defer-fast.py "<task_name>" [target_date] [claimed_points]
 
     task_name      — substring to search for in Todoist (required)
-    target_date    — ISO date YYYY-MM-DD (default: tomorrow)
-    claimed_points — points for today's stub (default: 5)
+    target_date    — ISO date YYYY-MM-DD (default: next instance of the
+                     recurrence for recurring tasks, tomorrow otherwise)
+    claimed_points — points for today's stub (default: 2)
 """
 from __future__ import annotations
 
@@ -30,6 +31,90 @@ TODOIST_BASE = "https://api.todoist.com/api/v1"
 
 POINTS_RE = re.compile(r"\[(\d+)\]")
 DURATION_RE = re.compile(r"\((\d+)\)")
+
+DEFAULT_CLAIMED_POINTS = 2
+
+WEEKDAYS = {
+    "monday": 0, "mon": 0,
+    "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2,
+    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+    "friday": 4, "fri": 4,
+    "saturday": 5, "sat": 5,
+    "sunday": 6, "sun": 6,
+}
+
+
+def _add_months(d: date, n: int) -> date:
+    """Add n months, clamping the day to the target month's length."""
+    month = d.month - 1 + n
+    year = d.year + month // 12
+    month = month % 12 + 1
+    # Clamp day (e.g. Jan 31 + 1 month → Feb 28)
+    for day in range(d.day, 27, -1):
+        try:
+            return date(year, month, day)
+        except ValueError:
+            continue
+    return date(year, month, min(d.day, 28))
+
+
+def next_instance(due_string: str, current_due: date) -> date:
+    """Next occurrence of a Todoist recurrence strictly after current_due.
+
+    Parses the common patterns used in this vault (every day, every Friday,
+    every N days/weeks/months, every other day/week, every weekday, weekday
+    lists, monthly, yearly). Unknown patterns fall back to +7 days.
+    """
+    s = (due_string or "").lower()
+
+    if "every other week" in s:
+        return current_due + timedelta(days=14)
+    if "every other day" in s:
+        return current_due + timedelta(days=2)
+    m = re.search(r"every (\d+) days?", s)
+    if m:
+        return current_due + timedelta(days=int(m.group(1)))
+    m = re.search(r"every (\d+) weeks?", s)
+    if m:
+        return current_due + timedelta(weeks=int(m.group(1)))
+    m = re.search(r"every (\d+) months?", s)
+    if m:
+        return _add_months(current_due, int(m.group(1)))
+    if re.search(r"\bevery (day|morning|afternoon|evening|night)\b", s) or "daily" in s:
+        return current_due + timedelta(days=1)
+    if "every weekday" in s or "every workday" in s:
+        d = current_due + timedelta(days=1)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        return d
+    # Weekday names ("every friday", "every mon, wed, fri")
+    days = sorted({v for k, v in WEEKDAYS.items() if re.search(rf"\b{k}\b", s)})
+    if days:
+        d = current_due + timedelta(days=1)
+        while d.weekday() not in days:
+            d += timedelta(days=1)
+        return d
+    if re.search(r"\bevery week\b", s) or "weekly" in s:
+        return current_due + timedelta(days=7)
+    # "every month", "every 15th", "every last day"
+    if "every month" in s or "monthly" in s or re.search(r"every \d+(st|nd|rd|th)", s):
+        return _add_months(current_due, 1)
+    if "every year" in s or "yearly" in s or "annually" in s:
+        return _add_months(current_due, 12)
+    return current_due + timedelta(days=7)
+
+
+def default_target_date(task: dict) -> str:
+    """Default defer target: next recurrence instance for recurring tasks
+    (so the task simply skips ahead but stays recurring), tomorrow otherwise.
+    Overdue bases advance from today so the target is always in the future."""
+    due = task.get("due") or {}
+    if due.get("is_recurring") and due.get("date"):
+        current = date.fromisoformat(str(due["date"])[:10])
+        base = max(current, date.today())
+        return next_instance(due.get("string", ""), base).isoformat()
+    return (date.today() + timedelta(days=1)).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -230,12 +315,15 @@ def main():
         sys.exit(1)
 
     task_name = sys.argv[1]
-    target_date = (sys.argv[2] if len(sys.argv) > 2
-                   else (date.today() + timedelta(days=1)).isoformat())
-    claimed_points = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+    explicit_target = sys.argv[2] if len(sys.argv) > 2 else None
+    claimed_points = (int(sys.argv[3]) if len(sys.argv) > 3
+                      else DEFAULT_CLAIMED_POINTS)
 
     # Find the task
     task = find_task(task_name)
+
+    # Default target: next recurrence instance (recurring) or tomorrow.
+    target_date = explicit_target or default_target_date(task)
 
     # Route by recurrence
     due = task.get("due") or {}
