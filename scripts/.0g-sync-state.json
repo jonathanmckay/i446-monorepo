@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "bball + hiit": {
-      "todoist_id": "6ghgqXj6jV7v6j92",
-      "minutes": 30
-    },
-    "have a i9 plan for the week": {
-      "todoist_id": "6ghx67Cgx4W3rQq2",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-05-25T20:00:06.098383-07:00"
+  "tasks": {},
+  "last_sync": "2026-06-05T03:55:02.771408-07:00"
 }
