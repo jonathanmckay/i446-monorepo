@@ -12,7 +12,7 @@ Start a Toggl timer for an input-based activity and save session state. When the
 
 Only these tasks are valid for /do:
 
-**0n (daily):** xk20, xk22, xk26, xk88, 冥想, o314, 其他人
+**0n (daily):** xk20, xk22, xk26, xk88, 冥想, o314, 其他人, hiit, bball
 
 **1n+ (weekly):** s897, 家 (alias for family), relax, s+hcbp
 
