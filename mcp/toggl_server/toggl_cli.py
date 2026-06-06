@@ -132,10 +132,28 @@ def cmd_today(_args):
     for e in raw:
         try:
             st = datetime.datetime.fromisoformat(e.get("start", "")).astimezone(TZ)
-            if st.date() == today:
-                entries.append(e)
         except Exception:
             continue
+        if st.date() == today:
+            entries.append(e)
+        elif st.date() < today:
+            # Cross-midnight entry (e.g. an overnight 睡觉 timer stopped this
+            # morning): started before today but ends today / still running.
+            # Include it clipped to 00:00 — the day-barrier view — so today's
+            # coverage (gap checks, etc.) sees the morning portion.
+            stop_raw = e.get("stop")
+            try:
+                en = (datetime.datetime.fromisoformat(stop_raw).astimezone(TZ)
+                      if stop_raw else datetime.datetime.now(TZ))
+            except Exception:
+                continue
+            if en.date() >= today:
+                midnight = datetime.datetime.combine(today, datetime.time(0, 0), tzinfo=TZ)
+                clipped = dict(e)
+                clipped["start"] = midnight.isoformat()
+                if e.get("duration", 0) > 0:
+                    clipped["duration"] = max(0, int((en - midnight).total_seconds()))
+                entries.append(clipped)
     entries.sort(key=lambda e: e.get("start", ""))
     total = sum(e.get("duration", 0) for e in entries if e.get("duration", 0) > 0)
     for e in entries:

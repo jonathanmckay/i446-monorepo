@@ -76,7 +76,14 @@ def _parse_time(time_str: str, ref_date: datetime.date = None) -> datetime.datet
 
 
 def _filter_entries_by_local_date(entries: list[dict], target_date: datetime.date) -> list[dict]:
-    """Filter entries whose start time falls on target_date in local timezone."""
+    """Filter entries overlapping target_date in local timezone.
+
+    Entries that started on target_date are included as-is. Cross-midnight
+    entries (started earlier, ended on/after target_date — e.g. an overnight
+    睡觉 timer stopped in the morning) are included clipped to 00:00 with a
+    clipped duration: the day-barrier view. Without this, the morning portion
+    of overnight entries is invisible to day views and gap checks.
+    """
     result = []
     for e in entries:
         start_str = e.get("start", "")
@@ -84,10 +91,27 @@ def _filter_entries_by_local_date(entries: list[dict], target_date: datetime.dat
             continue
         try:
             start_dt = datetime.datetime.fromisoformat(start_str).astimezone(TZ)
-            if start_dt.date() == target_date:
-                result.append(e)
         except (ValueError, TypeError):
             continue
+        if start_dt.date() == target_date:
+            result.append(e)
+        elif start_dt.date() < target_date:
+            stop_raw = e.get("stop")
+            try:
+                end_dt = (datetime.datetime.fromisoformat(stop_raw).astimezone(TZ)
+                          if stop_raw else datetime.datetime.now(TZ))
+            except (ValueError, TypeError):
+                continue
+            if end_dt.date() >= target_date:
+                midnight = datetime.datetime.combine(
+                    target_date, datetime.time(0, 0), tzinfo=TZ)
+                day_end = midnight + datetime.timedelta(days=1)
+                clipped = dict(e)
+                clipped["start"] = midnight.isoformat()
+                if e.get("duration", 0) > 0:
+                    clipped["duration"] = max(
+                        0, int((min(end_dt, day_end) - midnight).total_seconds()))
+                result.append(clipped)
     return result
 
 

@@ -674,6 +674,10 @@ fi
 UNDOEOF
 chmod +x "$DTD_UNDO"
 
+# Clear leftover terminal scrollback so the picker starts on a clean screen
+# (fzf --height renders inline below whatever was already on the terminal).
+clear
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
@@ -702,7 +706,10 @@ while true; do
   DTD_SYNC="cp '$CACHE' '$DTD_CACHE_FILE' 2>/dev/null;"
   DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED'"
   DTD_RELOAD="${DTD_SYNC}${DTD_LIST_CMD}"
-  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --ansi \
+  # --no-sort: keep dtd's priority order while filtering, so the cursor
+  # always sits on the topmost (highest-priority) match instead of jumping
+  # to whatever scores best by fuzzy ranking (regression 2026-06-06)
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
