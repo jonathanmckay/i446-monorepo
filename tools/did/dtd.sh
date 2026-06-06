@@ -295,7 +295,9 @@ for t in unique:
 
     repeat = '↻ ' if recurring else ''
     if is_skipped:
-        # No dimming — skipped just means "later today", keep normal colors
+        # No dimming — skipped just means later-today; keep normal colors.
+        # NB: this python lives inside a zsh double-quoted string — never use
+        # double quotes in here, they terminate the -c argument.
         skipped_lines.append(f'{color}{repeat}{line}{RESET}')
     elif color:
         normal_lines.append(f'{color}{repeat}{line}{RESET}')

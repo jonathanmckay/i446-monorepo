@@ -365,3 +365,74 @@ class TestLoadProcessedMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTapbacksDoNotResurfaceThreads:
+    """Regression (2026-06-06): an archived thread reappeared in /inbound 3x
+    in one day. Tapbacks (associated_message_type 2000+) and group events
+    (item_type != 0) were advancing latest_date past the processed watermark,
+    resurfacing the thread with no visibly new message."""
+
+    def _conn(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("""CREATE TABLE chat (
+            ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT,
+            display_name TEXT)""")
+        conn.execute("""CREATE TABLE message (
+            ROWID INTEGER PRIMARY KEY, text TEXT, attributedBody BLOB,
+            date INTEGER, is_from_me INTEGER, handle_id INTEGER,
+            item_type INTEGER, associated_message_type INTEGER)""")
+        conn.execute("CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER)")
+        conn.execute("INSERT INTO chat VALUES (1, 'guid1', '+15551234567', NULL)")
+        return conn
+
+    def _now_ns(self):
+        import time, imsg
+        return int((time.time() - imsg.APPLE_EPOCH_OFFSET) * 1e9)
+
+    def _add(self, conn, rowid, date, is_from_me, item_type=0, assoc=0, text="hi"):
+        conn.execute("INSERT INTO message VALUES (?,?,?,?,?,?,?,?)",
+                     (rowid, text, None, date, is_from_me, 1, item_type, assoc))
+        conn.execute("INSERT INTO chat_message_join VALUES (1, ?)", (rowid,))
+
+    def test_tapback_after_archive_does_not_resurface(self):
+        import imsg
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 3_600_000_000_000, 0)              # real msg 1h ago
+        self._add(conn, 2, now - 60_000_000_000, 0, assoc=2000)     # Like 1min ago
+        processed = {"+15551234567": now - 3_600_000_000_000}        # archived at real msg
+        threads = imsg.fetch_unread_threads(conn, processed)
+        assert threads == [], "tapback must not resurface an archived thread"
+
+    def test_group_event_does_not_resurface(self):
+        import imsg
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 3_600_000_000_000, 0)
+        self._add(conn, 2, now - 60_000_000_000, 0, item_type=1, text=None)  # rename/join
+        processed = {"+15551234567": now - 3_600_000_000_000}
+        assert imsg.fetch_unread_threads(conn, processed) == []
+
+    def test_genuine_new_message_still_surfaces(self):
+        import imsg
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 3_600_000_000_000, 0)
+        self._add(conn, 2, now - 60_000_000_000, 0)                  # real new msg
+        processed = {"+15551234567": now - 3_600_000_000_000}
+        threads = imsg.fetch_unread_threads(conn, processed)
+        assert len(threads) == 1 and threads[0]["chat_identifier"] == "+15551234567"
+
+    def test_own_tapback_counts_as_reply(self):
+        """Design choice: the user reacting to a message counts as handled —
+        own tapbacks DO advance latest_sent_date and suppress the thread."""
+        import imsg
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 3_600_000_000_000, 0)               # their msg, unprocessed
+        self._add(conn, 2, now - 60_000_000_000, 1, assoc=2000)      # my Like
+        threads = imsg.fetch_unread_threads(conn, {})
+        assert threads == [], "own tapback should suppress the thread as a reply"

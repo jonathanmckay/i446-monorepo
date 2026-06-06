@@ -638,7 +638,87 @@ def test_drain_sites_apply_stale_filter():
     """Both mid-session bg_injected drains must route staged items through
     _drop_stale_imsg before re-injecting into the queue."""
     src = IBX_ALL_PY.read_text()
-    assert src.count("_drop_stale_imsg(staged)") >= 2, (
+    # Drains now route through _drop_suppressed (stale-imsg + day-skips)
+    assert src.count("_drop_suppressed(staged)") >= 2, (
         "both bg_injected drain sites must filter staged items through "
-        "_drop_stale_imsg"
+        "_drop_suppressed"
     )
+    assert "_drop_day_skipped(_drop_stale_imsg(items))" in src, (
+        "_drop_suppressed must compose the stale-imsg and day-skip filters"
+    )
+
+
+# ── Regression: skips must persist across sessions for one day ──
+# (2026-06-06: same Family thread shown 4x in one day — the 's' skip list
+# was in-memory per session, so every new inbound session re-surfaced it.)
+
+def _load_day_skip_fns(tmp_path, today="2026-06-06"):
+    """Exec the day-skip helpers from ibx0.py with stubbed deps."""
+    import ast as _ast, json as _json
+    src = IBX_ALL_PY.read_text()
+    tree = _ast.parse(src)
+    code = []
+    for n in _ast.walk(tree):
+        if isinstance(n, _ast.FunctionDef) and n.name in (
+                "_load_day_skips", "_save_day_skip", "_drop_day_skipped"):
+            code.append(_ast.get_source_segment(src, n))
+    assert len(code) == 3, "day-skip helpers missing from ibx0.py"
+
+    class _FakeDate:
+        @staticmethod
+        def today():
+            class _D:
+                def isoformat(self):
+                    return today
+            return _D()
+
+    import datetime as _dt
+    ns = {
+        "json": _json,
+        "Path": Path,
+        "_DAY_SKIPS_FILE": tmp_path / "day-skips.json",
+        "_item_uid": lambda it: ("imsg", it["_data"]["thread"]["chat_identifier"])
+                     if it["type"] == "imsg" else (it["type"], it.get("id", "x")),
+    }
+    exec("\n\n".join(code), ns)
+    # Patch date.today inside the functions via module datetime
+    return ns
+
+
+def _imsg_card(ident, ts):
+    return {"type": "imsg",
+            "_data": {"thread": {"chat_identifier": ident, "latest_apple_ts": ts}}}
+
+
+def test_day_skip_suppresses_across_sessions(tmp_path):
+    ns = _load_day_skip_fns(tmp_path)
+    fam = _imsg_card("chat313", 1000)
+    ns["_save_day_skip"](fam)                       # session 1 skips it
+    # session 2: same thread, same latest ts → suppressed
+    assert ns["_drop_day_skipped"]([_imsg_card("chat313", 1000)]) == []
+
+
+def test_day_skip_newer_message_resurfaces(tmp_path):
+    ns = _load_day_skip_fns(tmp_path)
+    ns["_save_day_skip"](_imsg_card("chat313", 1000))
+    fresh = _imsg_card("chat313", 2000)             # genuinely new inbound
+    assert ns["_drop_day_skipped"]([fresh]) == [fresh]
+
+
+def test_day_skip_resets_on_new_day(tmp_path):
+    import json as _json
+    ns = _load_day_skip_fns(tmp_path)
+    # Write skips dated yesterday directly
+    (tmp_path / "day-skips.json").write_text(_json.dumps(
+        {"date": "2026-06-05", "skips": {str(("imsg", "chat313")): 1000}}))
+    item = _imsg_card("chat313", 1000)
+    assert ns["_drop_day_skipped"]([item]) == [item], \
+        "yesterday's skips must not suppress today"
+
+
+def test_unskipped_items_untouched(tmp_path):
+    ns = _load_day_skip_fns(tmp_path)
+    ns["_save_day_skip"](_imsg_card("chat313", 1000))
+    other = _imsg_card("chat999", 500)
+    email = {"type": "email", "id": "e1", "_data": {}}
+    assert ns["_drop_day_skipped"]([other, email]) == [other, email]

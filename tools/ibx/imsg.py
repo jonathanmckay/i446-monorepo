@@ -198,14 +198,27 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
     import time
     cutoff_apple_ts = int((time.time() - APPLE_EPOCH_OFFSET - days * 86400) * 1e9)
 
+    # Inbound freshness counts only REAL messages: tapbacks/reactions
+    # (associated_message_type 2000+) and group events (item_type != 0)
+    # must not advance latest_date, or an already-archived thread
+    # resurfaces every time someone reacts to an old message
+    # (regression 2026-06-06: same thread reappearing 3x in one day).
+    # The user's own side (latest_sent_date) deliberately INCLUDES
+    # tapbacks — reacting to a message counts as having handled it.
     rows = conn.execute("""
         SELECT
             c.ROWID as chat_id,
             c.guid,
             c.chat_identifier,
             c.display_name,
-            COUNT(DISTINCT CASE WHEN m.is_from_me = 0 THEN m.ROWID END) as unread_count,
-            MAX(CASE WHEN m.is_from_me = 0 THEN m.date END) as latest_date,
+            COUNT(DISTINCT CASE WHEN m.is_from_me = 0
+                AND COALESCE(m.item_type, 0) = 0
+                AND COALESCE(m.associated_message_type, 0) = 0
+                THEN m.ROWID END) as unread_count,
+            MAX(CASE WHEN m.is_from_me = 0
+                AND COALESCE(m.item_type, 0) = 0
+                AND COALESCE(m.associated_message_type, 0) = 0
+                THEN m.date END) as latest_date,
             MAX(CASE WHEN m.is_from_me = 1 THEN m.date END) as latest_sent_date
         FROM chat c
         JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id

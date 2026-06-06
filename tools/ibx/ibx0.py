@@ -987,6 +987,67 @@ def _drop_stale_imsg(items):
     return out
 
 
+_DAY_SKIPS_FILE = Path.home() / ".config/ibx/day-skips.json"
+
+
+def _load_day_skips() -> dict:
+    """{uid_str: watermark_ts_or_None} of items skipped today. Resets daily."""
+    from datetime import date as _date
+    try:
+        data = json.loads(_DAY_SKIPS_FILE.read_text())
+        if data.get("date") == _date.today().isoformat():
+            return data.get("skips", {})
+    except Exception:
+        pass
+    return {}
+
+
+def _save_day_skip(item):
+    """Persist a skip for the rest of the day (across sessions).
+
+    For imsg items, store the thread's current latest ts as a watermark so a
+    genuinely NEWER message still resurfaces; other types suppress by uid.
+    (Regression 2026-06-06: same Family thread shown 4x in one day — skips
+    were in-memory per session.)"""
+    from datetime import date as _date
+    skips = _load_day_skips()
+    ts = None
+    if item.get("type") == "imsg":
+        ts = item.get("_data", {}).get("thread", {}).get("latest_apple_ts")
+    skips[str(_item_uid(item))] = ts
+    try:
+        _DAY_SKIPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _DAY_SKIPS_FILE.write_text(json.dumps(
+            {"date": _date.today().isoformat(), "skips": skips}))
+    except Exception:
+        pass  # non-fatal: worst case the skip lasts only this session
+
+
+def _drop_day_skipped(items):
+    """Drop items skipped earlier today (any session). An imsg item survives
+    only if it carries inbound newer than its skip-time watermark."""
+    skips = _load_day_skips()
+    if not skips:
+        return items
+    out = []
+    for it in items:
+        key = str(_item_uid(it))
+        if key not in skips:
+            out.append(it)
+            continue
+        wm = skips[key]
+        if it.get("type") == "imsg" and wm is not None:
+            ts = it.get("_data", {}).get("thread", {}).get("latest_apple_ts", 0)
+            if ts and ts > wm:
+                out.append(it)
+    return out
+
+
+def _drop_suppressed(items):
+    """Combined drain filter: archived-stale imsg copies + day-skipped items."""
+    return _drop_day_skipped(_drop_stale_imsg(items))
+
+
 def _poll_resolved(items_snapshot, resolved, stop_event, msg_queue, interval=60):
     """
     Background thread: every `interval` seconds, re-check each email item.
@@ -1227,6 +1288,7 @@ def main():
     slack_items_init = [it for it in all_items if it.get("type") == "slack"]
     other_items_init = [it for it in all_items if it.get("type") != "slack"]
     all_items = sorted(slack_items_init, key=lambda x: -x.get("ts", 0)) + other_items_init
+    all_items = _drop_day_skipped(all_items)  # day-skips persist across sessions
 
     # Background drainer: keeps pulling from _incoming as slow sources finish
     _bg_injected = []  # shared list for late items (read from main loop)
@@ -1329,7 +1391,7 @@ def main():
                 else:
                     staged = []
             if staged:
-                fresh = [it for it in _drop_stale_imsg(staged)
+                fresh = [it for it in _drop_suppressed(staged)
                          if _item_uid(it) not in resolved]
                 if fresh:
                     all_items = fresh
@@ -1424,7 +1486,7 @@ def main():
                     if staged:
                         existing_uids_now = {_item_uid(it) for it in all_items + skipped}
                         existing_uids_now.update(resolved)
-                        fresh = [it for it in _drop_stale_imsg(staged)
+                        fresh = [it for it in _drop_suppressed(staged)
                                  if _item_uid(it) not in existing_uids_now]
                         if fresh:
                             all_items = fresh
@@ -1486,7 +1548,8 @@ def main():
         if new_late:
             existing_uids_now = {_item_uid(it) for it in all_items + skipped}
             existing_uids_now.update(resolved)
-            fresh = [it for it in new_late if _item_uid(it) not in existing_uids_now]
+            fresh = [it for it in _drop_suppressed(new_late)
+                     if _item_uid(it) not in existing_uids_now]
             if fresh:
                 all_items.extend(fresh)
                 status_line = _build_status()
@@ -1538,6 +1601,7 @@ def main():
 
         elif cmd == "s":
             skipped.append(item)
+            _save_day_skip(item)  # persists across sessions for the day
             console.print("[dim]Skipped.[/dim]")
             index += 1
 
@@ -1561,7 +1625,8 @@ def main():
             new_imsgs = fetch_imsgs()
             new_slack = fetch_slack()
             new_all = new_emails + new_imsgs + new_slack
-            added = [it for it in new_all if _item_uid(it) not in existing_uids and _item_uid(it) not in resolved]
+            added = [it for it in _drop_suppressed(new_all)
+                     if _item_uid(it) not in existing_uids and _item_uid(it) not in resolved]
             if added:
                 all_items.extend(added)
                 console.print(f"[green]  + {len(added)} new item(s) added to queue[/green]")
