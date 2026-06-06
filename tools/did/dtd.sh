@@ -390,6 +390,14 @@ done_desc=$(/usr/bin/osascript -e 'display dialog "What did you do?" default ans
 remaining_desc=$(/usr/bin/osascript -e 'display dialog "What remains?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+# Strip truncation: if fzf middle-truncated the name with …, search by the
+# prefix before it — otherwise the Todoist substring match fails with
+# "task not found" after the user already answered all three dialogs
+# (regression 2026-06-06; same fix as the defer script)
+if [[ "$clean" == *"…"* ]]; then
+  clean="${clean%%…*}"
+  clean=$(echo "$clean" | sed 's/ *$//')
+fi
 echo "⏳ splitting: $clean" > "$HDR"
 
 # Find the original Todoist task and get its labels/project
