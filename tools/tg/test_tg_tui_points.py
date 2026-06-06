@@ -44,24 +44,30 @@ def test_block_points_read_from_neon_g_to_o_columns(monkeypatch):
     }, "per-block points must come from 0分 G:O, not logging timestamps"
 
 
-def test_block_points_fallback_to_timestamps_when_excel_unreachable(monkeypatch, tmp_path):
+def test_block_points_kept_when_excel_unreachable(monkeypatch):
+    """When the Neon read fails, keep the last good per-block values — do NOT
+    fall back to completed-today.json timestamps (the 313-in-酉 bug: batch
+    logging piles every point into the block it was logged in)."""
     m = _load_tui()
 
     def _boom(*a, **k):
         raise RuntimeError("ix unreachable")
 
     monkeypatch.setattr(subprocess, "run", _boom)
-    # Craft a completed-today.json under a fake home
-    ct_dir = tmp_path / "vault/z_ibx"
-    ct_dir.mkdir(parents=True)
-    today = dtm.datetime.now().strftime("%Y-%m-%d")
-    (ct_dir / "completed-today.json").write_text(json.dumps({
-        "date": today,
-        "names": ["thing"],
-        "points": {"thing": 10},
-        "timestamps": {"thing": "08:30"},  # 8am → 巳 block
-    }))
-    monkeypatch.setattr(m.Path, "home", classmethod(lambda cls: tmp_path))
-    m.STATE.block_points = {}
+    prior = {"酉": 33, "巳": 247}
+    m.STATE.block_points = dict(prior)
     m.fetch_points()
-    assert m.STATE.block_points == {"巳": 10}
+    assert m.STATE.block_points == prior, \
+        "failed Neon read must not clobber block_points with timestamp guesses"
+
+
+def test_block_points_no_timestamp_reconstruction(monkeypatch):
+    """A successful-but-empty Neon read (genuine zero day) sets {} — and the
+    completed-today.json timestamp path must be gone entirely."""
+    m = _load_tui()
+    # Successful read, all blocks empty
+    out = "0|||||||||"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(out))
+    m.STATE.block_points = {"酉": 999}  # stale value must be cleared on a good read
+    m.fetch_points()
+    assert m.STATE.block_points == {}, "good read with no points must clear to {}"

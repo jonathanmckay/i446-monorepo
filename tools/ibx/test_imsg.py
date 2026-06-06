@@ -383,7 +383,8 @@ class TestTapbacksDoNotResurfaceThreads:
         conn.execute("""CREATE TABLE message (
             ROWID INTEGER PRIMARY KEY, text TEXT, attributedBody BLOB,
             date INTEGER, is_from_me INTEGER, handle_id INTEGER,
-            item_type INTEGER, associated_message_type INTEGER)""")
+            item_type INTEGER, associated_message_type INTEGER,
+            is_read INTEGER DEFAULT 0)""")
         conn.execute("CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER)")
         conn.execute("INSERT INTO chat VALUES (1, 'guid1', '+15551234567', NULL)")
         return conn
@@ -392,9 +393,10 @@ class TestTapbacksDoNotResurfaceThreads:
         import time, imsg
         return int((time.time() - imsg.APPLE_EPOCH_OFFSET) * 1e9)
 
-    def _add(self, conn, rowid, date, is_from_me, item_type=0, assoc=0, text="hi"):
-        conn.execute("INSERT INTO message VALUES (?,?,?,?,?,?,?,?)",
-                     (rowid, text, None, date, is_from_me, 1, item_type, assoc))
+    def _add(self, conn, rowid, date, is_from_me, item_type=0, assoc=0, text="hi",
+             is_read=0):
+        conn.execute("INSERT INTO message VALUES (?,?,?,?,?,?,?,?,?)",
+                     (rowid, text, None, date, is_from_me, 1, item_type, assoc, is_read))
         conn.execute("INSERT INTO chat_message_join VALUES (1, ?)", (rowid,))
 
     def test_tapback_after_archive_does_not_resurface(self):
@@ -436,3 +438,49 @@ class TestTapbacksDoNotResurfaceThreads:
         self._add(conn, 2, now - 60_000_000_000, 1, assoc=2000)      # my Like
         threads = imsg.fetch_unread_threads(conn, {})
         assert threads == [], "own tapback should suppress the thread as a reply"
+
+
+class TestReadElsewhereMute(TestTapbacksDoNotResurfaceThreads):
+    """Regression (2026-06-06, 6th sighting): high-traffic threads the user
+    always reads on the phone never converge under archive-watermark
+    semantics. Muted ("read elsewhere = handled") threads surface only
+    while they hold UNREAD real messages."""
+
+    def _muted(self, monkeypatch, idents):
+        import imsg
+        monkeypatch.setattr(imsg, "load_read_elsewhere", lambda: set(idents))
+
+    def test_muted_thread_with_read_messages_suppressed(self, monkeypatch):
+        import imsg
+        self._muted(monkeypatch, ["+15551234567"])
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 60_000_000_000, 0, is_read=1)  # new but read on phone
+        assert imsg.fetch_unread_threads(conn, {}) == []
+
+    def test_muted_thread_with_unread_messages_surfaces(self, monkeypatch):
+        import imsg
+        self._muted(monkeypatch, ["+15551234567"])
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 60_000_000_000, 0, is_read=0)  # genuinely unread
+        threads = imsg.fetch_unread_threads(conn, {})
+        assert len(threads) == 1
+
+    def test_unmuted_thread_ignores_read_status(self, monkeypatch):
+        import imsg
+        self._muted(monkeypatch, [])
+        conn = self._conn()
+        now = self._now_ns()
+        self._add(conn, 1, now - 60_000_000_000, 0, is_read=1)  # read elsewhere
+        threads = imsg.fetch_unread_threads(conn, {})
+        assert len(threads) == 1, "non-muted threads must surface even if read"
+
+    def test_muted_unread_older_than_watermark_suppressed(self, monkeypatch):
+        import imsg
+        self._muted(monkeypatch, ["+15551234567"])
+        conn = self._conn()
+        now = self._now_ns()
+        ts = now - 60_000_000_000
+        self._add(conn, 1, ts, 0, is_read=0)
+        assert imsg.fetch_unread_threads(conn, {"+15551234567": ts}) == []

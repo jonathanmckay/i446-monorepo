@@ -92,7 +92,7 @@ Keep all other time blocks untouched.
 First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists (substring match).
 
 For each **new** goal (no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
-- **Content**: the goal text
+- **Content**: the goal text **including its `{N}` marker verbatim** (e.g. `tasks down to 70 {20}`, not `tasks down to 70`). Stripping the `{N}` causes /did to log 0 pts on completion.
 - **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
 - **Labels**: `["#-1g", "<domain>"]` (e.g. `["#-1g", "i9"]`)
 - **Priority**: `p1`

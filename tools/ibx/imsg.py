@@ -55,6 +55,22 @@ def save_processed(processed: dict):
     with open(STATE_FILE, "w") as f:
         json.dump(processed, f)
 
+READ_ELSEWHERE_FILE = STATE_DIR / "read-elsewhere.json"
+
+def load_read_elsewhere() -> set:
+    """Chat identifiers where reading on another device counts as handled.
+    These threads surface only while they have UNREAD real messages —
+    for high-traffic chats (e.g. the family group) that the user always
+    reads on the phone, so archive-watermark semantics never converge
+    (2026-06-06: same thread surfaced 6x in one day)."""
+    if READ_ELSEWHERE_FILE.exists():
+        try:
+            return set(json.loads(READ_ELSEWHERE_FILE.read_text()))
+        except Exception:
+            pass
+    return set()
+
+
 def mark_thread_read(chat_identifier: str):
     """Mark all incoming messages in a chat as read in the live chat.db."""
     try:
@@ -219,6 +235,11 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
                 AND COALESCE(m.item_type, 0) = 0
                 AND COALESCE(m.associated_message_type, 0) = 0
                 THEN m.date END) as latest_date,
+            MAX(CASE WHEN m.is_from_me = 0
+                AND COALESCE(m.item_type, 0) = 0
+                AND COALESCE(m.associated_message_type, 0) = 0
+                AND COALESCE(m.is_read, 0) = 0
+                THEN m.date END) as latest_unread_date,
             MAX(CASE WHEN m.is_from_me = 1 THEN m.date END) as latest_sent_date
         FROM chat c
         JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
@@ -229,6 +250,7 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
         ORDER BY latest_date DESC
     """, (cutoff_apple_ts,)).fetchall()
 
+    read_elsewhere = load_read_elsewhere()
     threads = []
     for row in rows:
         last_ts = processed.get(row["chat_identifier"], -1)
@@ -237,6 +259,12 @@ def fetch_unread_threads(conn: sqlite3.Connection, processed: set, days: int = 7
         # Skip if user already replied after the latest inbound message
         if row["latest_sent_date"] and row["latest_sent_date"] > row["latest_date"]:
             continue
+        # Muted ("read elsewhere = handled") threads surface only while
+        # they hold UNREAD real messages newer than the watermark
+        if row["chat_identifier"] in read_elsewhere:
+            lu = row["latest_unread_date"]
+            if not lu or lu <= last_ts:
+                continue
         threads.append(dict(row))
     return threads
 

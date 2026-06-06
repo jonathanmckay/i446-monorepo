@@ -299,6 +299,7 @@ def fetch_points():
         # completed-today.json logging timestamps lumps batch-logged points
         # into whichever block they were *recorded* in, not earned in.
         bp_excel: dict[str, int] = {}
+        read_ok = False
         try:
             import subprocess as _sp
             IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
@@ -328,6 +329,7 @@ end tell'''
             r = _sp.run([IX_OSA], input=script,
                         capture_output=True, text=True, timeout=15)
             if r.returncode == 0 and r.stdout.strip() not in ("", "ERR"):
+                read_ok = True
                 parts = r.stdout.strip().split("|")
                 val = parts[0].strip()
                 # Handle formula strings like "70+12" defensively.
@@ -352,35 +354,14 @@ end tell'''
         except Exception:
             pass
 
-        if bp_excel:
+        # Only overwrite block_points when the Neon read SUCCEEDED. G:O is the
+        # sole source of truth; if Excel is unreachable we keep the last good
+        # values rather than substituting completed-today.json timestamps,
+        # which attribute batch-logged points to the block they were *logged*
+        # in (the 313-in-酉 bug: 33 earned there, 280 logged there in a batch).
+        if read_ok:
             STATE.block_points = bp_excel
             STATE.last_points_fetch = time.monotonic()
-            return
-
-        # Fallback only (Excel unreachable): completed-today.json timestamps.
-        # Best-effort — attributes points to the block they were LOGGED in.
-        bp: dict[str, int] = {}
-        try:
-            ct_path = Path.home() / "vault/z_ibx/completed-today.json"
-            ct_data = json.loads(ct_path.read_text())
-            today_str = now.strftime("%Y-%m-%d")
-            if ct_data.get("date") == today_str:
-                ct_pts = ct_data.get("points", {})
-                ct_ts = ct_data.get("timestamps", {})
-                for name, val in ct_pts.items():
-                    ts = ct_ts.get(name, "")
-                    if ts and val:
-                        try:
-                            h = int(ts.split(":")[0])
-                            blk = hour_to_block(h)
-                            if blk:
-                                bp[blk[0]] = bp.get(blk[0], 0) + val
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-        STATE.block_points = bp
-        STATE.last_points_fetch = time.monotonic()
     except Exception:
         pass
 
@@ -412,6 +393,14 @@ def _extend_codes_from_api():
                 PROJECT_CODE[pid] = name
     except Exception:
         pass  # offline / rate-limited: keep static mapping
+
+
+def _idle_since(now):
+    """Latest end-time among today's completed entries at/before now, or None.
+    Used to show how long there's been NO running timer."""
+    ends = [e["end_dt"] for e in STATE.entries
+            if not e.get("running") and e["end_dt"] <= now]
+    return max(ends) if ends else None
 
 
 def proj_code(pid):
@@ -736,7 +725,9 @@ def render_detail() -> list[tuple[str, str]]:
         # (no separate inserted now-line, so each block stays exactly 8 slots;
         # the live wall clock lives on the pinned bottom bar).
         time_str = f"{slot:%H:%M}"
-        is_running = STATE.current and slot <= now < slot_end
+        is_now_slot = bool(slot <= now < slot_end)
+        is_running = bool(STATE.current) and is_now_slot
+        is_idle_now = is_now_slot and not STATE.current
         if is_running:
             cur_desc = STATE.current.get("description") or ""
             cur_code = proj_code(STATE.current.get("project_id"))
@@ -752,9 +743,34 @@ def render_detail() -> list[tuple[str, str]]:
             label = f"▶ {cur_desc}" + (f" · {cur_code}" if cur_code else "")
             if elapsed:
                 label += f"  {elapsed}"
+        elif is_idle_now:
+            # No timer running: flashing alarm in the spot the task would be.
+            since = _idle_since(now)
+            gap = ""
+            if since is not None:
+                _gt = max(0.0, (now - since).total_seconds())
+                _gm, _gs = divmod(int(_gt), 60)
+                _gfr = int((_gt % 1) * 10)  # tenths, matching the running clock
+                gap = f"  {_gm}m{_gs:02d}.{_gfr}s"
+            # Flash the cursor every 0.5s (toggle each half-second).
+            cursor = "█" if int(now.timestamp() * 2) % 2 == 0 else " "
+            label = f"{cursor} NO TIME ENTRY{gap}"
+            pid = None
+
+        # The now-row (running task or idle alarm) draws a rule across the
+        # width so "you are here" stands out from the plain slots.
+        if is_running or is_idle_now:
+            cls = ("class:no_entry" if is_idle_now
+                   else (f"bold {project_style(pid)}".strip() or "class:running"))
+            prefix = f" {time_str} "
+            trail = max(0, WIDTH_HINT - dwidth(prefix) - dwidth(label) - 1)
+            out.append(("class:time", prefix))
+            out.append((cls, f"{label} " + "─" * trail + "\n"))
+            slot = slot_end
+            continue
 
         # Deduplicate Toggl labels: show description only on first slot
-        if label and not is_running and not label.startswith("◇ "):
+        if label and not label.startswith("◇ "):
             if label in toggl_shown:
                 label = "″"
             else:
@@ -762,9 +778,7 @@ def render_detail() -> list[tuple[str, str]]:
 
         space = min(DESC_MAX, max(1, WIDTH_HINT - len(time_str) - 4))
         content = f" {marker} {truncate(label or '·', space)}\n"
-        if is_running:
-            cls = f"bold {project_style(pid)}".strip() or "class:running"
-        elif slot_end <= now:
+        if slot_end <= now:
             cls = project_style(pid) or "class:past"
         else:
             cls = gcal_sty or "class:future"
@@ -1088,6 +1102,7 @@ style = Style.from_dict({
     "future": "#dddddd",
     "time": "#888888",
     "now": "bold #ffffff",
+    "no_entry": "bold #ff4444",
     "flash": "bold yellow",
     "hint": "italic #666666",
     "prompt": "bold cyan",
