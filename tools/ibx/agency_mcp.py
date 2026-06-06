@@ -155,14 +155,65 @@ def _remote_endpoint(server_name):
         return None
 
 
+class AgencyTimeout(RuntimeError):
+    """The server accepted the connection but never returned a result.
+
+    Distinct from a tool-level error (plain RuntimeError): a timeout means the
+    server process is likely wedged and worth restarting; a tool error means
+    the server answered and a retry against a fresh process won't help."""
+
+
+def restart_server(name):
+    """Kill a wedged server (in-memory + pidfile) so the next call respawns it."""
+    with _lock:
+        srv = _servers.pop(name, None)
+        pids = set()
+        if srv:
+            if srv.get("pid"):
+                pids.add(srv["pid"])
+            proc = srv.get("proc")
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+        fpid, _ = _read_pidfile(name)
+        if fpid:
+            pids.add(fpid)
+        for p in pids:
+            if _is_alive(p):
+                try:
+                    os.kill(p, signal.SIGTERM)
+                    time.sleep(0.5)
+                    if _is_alive(p):
+                        os.kill(p, signal.SIGKILL)
+                except Exception:
+                    pass
+        _clear_pidfile(name)
+
+
 def call_tool(server_name, tool_name, arguments=None, timeout=120):
-    """Call an MCP tool via SSE HTTP. Returns the result dict."""
+    """Call an MCP tool via SSE HTTP. Returns the result dict.
+
+    Self-healing: pidfile reuse means a single long-lived server process is
+    shared by all callers — and a wedged one (seen after multi-day uptimes)
+    poisons everything until killed by hand. On a timeout or socket error,
+    kill + respawn the server and retry the call once. Remote endpoints are
+    not restarted (we don't own the process)."""
     remote = _remote_endpoint(server_name)
     if remote:
         host, port = remote
-    else:
-        host = "localhost"
+        return _call_tool_once(host, port, server_name, tool_name, arguments, timeout)
+    try:
         port = get_server(server_name)
+        return _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)
+    except (AgencyTimeout, OSError):
+        restart_server(server_name)
+        port = get_server(server_name)
+        return _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)
+
+
+def _call_tool_once(host, port, server_name, tool_name, arguments, timeout):
     payload = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
@@ -218,7 +269,7 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
                     raise RuntimeError(data["error"])
             except json.JSONDecodeError:
                 pass
-    raise RuntimeError(f"No result from {server_name}/{tool_name} (timeout={timeout}s)")
+    raise AgencyTimeout(f"No result from {server_name}/{tool_name} (timeout={timeout}s)")
 
 
 def stop_all():

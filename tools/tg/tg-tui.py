@@ -1115,15 +1115,15 @@ async def ticker_today(app):
 async def ticker_gcal(app):
     while True:
         await asyncio.sleep(300)
-        fetch_gcal()
-        app.invalidate()
+        # gcal+outlook can take up to ~15s (subprocess timeouts) — keep it off
+        # the event loop (UI freeze) and on a daemon thread (exit block).
+        _bg_fetch(app, fetch_gcal)
 
 
 async def ticker_points(app):
     while True:
         await asyncio.sleep(120)
-        await asyncio.to_thread(fetch_points)
-        app.invalidate()
+        _bg_fetch(app, fetch_points)
 
 
 async def _sigusr1_refresh():
@@ -1139,11 +1139,38 @@ async def _sigusr1_refresh():
     app.invalidate()
 
 
+def _bg_fetch(app, fn):
+    """Run a slow fetch on a daemon thread, repaint when done.
+
+    Daemon (not asyncio.to_thread): executor threads are non-daemon, so an
+    in-flight 15s gcal fetch would block process exit after 'q'. fetch_* are
+    all internally try/except'd; invalidate() is thread-safe."""
+    import threading
+
+    def run():
+        try:
+            fn()
+        finally:
+            try:
+                app.invalidate()
+            except Exception:
+                pass
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+async def _initial_slow_fetches(app):
+    """First gcal + points load, off the event loop. These take ~4-15s
+    (Excel-over-ssh, gcal/outlook subprocess timeouts); running them before
+    first paint left the terminal blank for ~20s — it looked like a hang."""
+    _bg_fetch(app, fetch_gcal)
+    _bg_fetch(app, fetch_points)
+
+
 async def main():
+    # Fast fetches only (sub-second) — enough content for an instant first paint.
     fetch_current()
     fetch_today()
-    fetch_gcal()
-    fetch_points()
 
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
     loop = asyncio.get_running_loop()
@@ -1154,6 +1181,7 @@ async def main():
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()))
 
+    app.create_background_task(_initial_slow_fetches(app))
     app.create_background_task(ticker_current(app))
     app.create_background_task(ticker_today(app))
     app.create_background_task(ticker_gcal(app))

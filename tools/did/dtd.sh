@@ -295,7 +295,8 @@ for t in unique:
 
     repeat = '↻ ' if recurring else ''
     if is_skipped:
-        skipped_lines.append(f'{DIM}{color}{repeat}{line}{RESET}')
+        # No dimming — skipped just means "later today", keep normal colors
+        skipped_lines.append(f'{color}{repeat}{line}{RESET}')
     elif color:
         normal_lines.append(f'{color}{repeat}{line}{RESET}')
     else:
