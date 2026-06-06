@@ -582,3 +582,63 @@ def test_first_zero_of_day_runs_ibx0_habits(tmp_path, monkeypatch):
     assert not any(c[0] == "run" for c in calls), (
         "did-fast.py must NOT be re-invoked when state already records today"
     )
+
+
+# ── Regression: archived iMessage threads must not be re-injected by the ──
+# ── background fetch (2026-06-06: archived iMessages reappearing in /inbound) ──
+
+def _load_drop_stale_imsg(processed_map):
+    """Extract _drop_stale_imsg from ibx0.py and exec it with a stub _imsg."""
+    import ast as _ast
+    tree = _ast.parse(IBX_ALL_PY.read_text())
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "_drop_stale_imsg")
+    code = _ast.get_source_segment(IBX_ALL_PY.read_text(), fn)
+
+    class _StubImsg:
+        @staticmethod
+        def load_processed():
+            return processed_map
+
+    ns = {"_imsg": _StubImsg}
+    exec(code, ns)
+    return ns["_drop_stale_imsg"]
+
+
+def _imsg_item(chat_identifier, latest_apple_ts):
+    return {"type": "imsg",
+            "_data": {"thread": {"chat_identifier": chat_identifier,
+                                 "latest_apple_ts": latest_apple_ts}}}
+
+
+def test_bg_drain_drops_archived_imsg_thread():
+    """A staged copy fetched BEFORE the user archived the thread must be
+    dropped at drain time (its latest ts <= processed watermark)."""
+    drop = _load_drop_stale_imsg({"+15551234567": 1000})
+    stale = _imsg_item("+15551234567", 1000)   # snapshot from before archive
+    out = drop([stale])
+    assert out == [], "archived thread copy must not re-enter the queue"
+
+
+def test_bg_drain_keeps_genuinely_new_messages():
+    """New inbound after the archive (ts > watermark) must still surface."""
+    drop = _load_drop_stale_imsg({"+15551234567": 1000})
+    fresh = _imsg_item("+15551234567", 2000)
+    assert drop([fresh]) == [fresh]
+
+
+def test_bg_drain_keeps_unseen_threads_and_other_types():
+    drop = _load_drop_stale_imsg({})
+    unseen = _imsg_item("+15559999999", 500)
+    email = {"type": "email", "_data": {"email": {"id": "x"}}}
+    assert drop([unseen, email]) == [unseen, email]
+
+
+def test_drain_sites_apply_stale_filter():
+    """Both mid-session bg_injected drains must route staged items through
+    _drop_stale_imsg before re-injecting into the queue."""
+    src = IBX_ALL_PY.read_text()
+    assert src.count("_drop_stale_imsg(staged)") >= 2, (
+        "both bg_injected drain sites must filter staged items through "
+        "_drop_stale_imsg"
+    )

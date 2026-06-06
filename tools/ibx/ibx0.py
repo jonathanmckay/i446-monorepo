@@ -959,6 +959,34 @@ def _item_uid(item):
     return None
 
 
+def _drop_stale_imsg(items):
+    """Filter out staged iMessage items already archived per processed.json.
+
+    The background fetch snapshots threads before staging them; if the user
+    archives a thread between that snapshot and the drain, the stale copy
+    would re-enter the queue (regression 2026-06-06: archived iMessages
+    reappearing in /inbound). An imsg item survives only if it carries
+    inbound messages newer than the processed watermark — so genuinely new
+    messages in an archived thread still surface.
+    """
+    out = []
+    proc = None
+    for it in items:
+        if it.get("type") != "imsg":
+            out.append(it)
+            continue
+        if proc is None:
+            try:
+                proc = _imsg.load_processed()
+            except Exception:
+                proc = {}
+        th = it.get("_data", {}).get("thread", {})
+        watermark = proc.get(th.get("chat_identifier"), -1)
+        if th.get("latest_apple_ts", 0) > watermark:
+            out.append(it)
+    return out
+
+
 def _poll_resolved(items_snapshot, resolved, stop_event, msg_queue, interval=60):
     """
     Background thread: every `interval` seconds, re-check each email item.
@@ -1301,7 +1329,8 @@ def main():
                 else:
                     staged = []
             if staged:
-                fresh = [it for it in staged if _item_uid(it) not in resolved]
+                fresh = [it for it in _drop_stale_imsg(staged)
+                         if _item_uid(it) not in resolved]
                 if fresh:
                     all_items = fresh
                     set_term_color("red")
@@ -1395,7 +1424,8 @@ def main():
                     if staged:
                         existing_uids_now = {_item_uid(it) for it in all_items + skipped}
                         existing_uids_now.update(resolved)
-                        fresh = [it for it in staged if _item_uid(it) not in existing_uids_now]
+                        fresh = [it for it in _drop_stale_imsg(staged)
+                                 if _item_uid(it) not in existing_uids_now]
                         if fresh:
                             all_items = fresh
                             index = 0

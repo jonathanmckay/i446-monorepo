@@ -83,6 +83,11 @@ def get_entries(start_date=None, end_date=None):
     return _request("GET", f"/me/time_entries{qs}")
 
 
+def get_projects():
+    """List all workspace projects (id, name, active, ...)."""
+    return _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/projects")
+
+
 def update_entry(entry_id, **fields):
     """Update a time entry. Supported fields: description, start, stop, duration, project_id, tags."""
     body = {"workspace_id": TOGGL_WORKSPACE_ID}

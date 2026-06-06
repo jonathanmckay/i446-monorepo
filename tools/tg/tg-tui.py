@@ -354,10 +354,35 @@ def flash(msg: str, secs: float = 4.0, style: str = ""):
     STATE.flash_style = style or ""
 
 
+_PROJECTS_FETCHED = False
+
+
+def _extend_codes_from_api():
+    """One-shot fallback: map unknown project ids to codes by project NAME.
+
+    Catches duplicate/recreated Toggl projects (e.g. a second project named
+    'xk87' created via the mobile picker) that aren't in the static
+    PROJECT_MAP — without this they render uncolored (white)."""
+    global _PROJECTS_FETCHED
+    _PROJECTS_FETCHED = True
+    try:
+        known = set(PROJECT_COLORS) | set(PROJECT_CODE.values())
+        for p in toggl_api.get_projects() or []:
+            pid, name = p.get("id"), (p.get("name") or "").strip()
+            if pid and name and pid not in PROJECT_CODE and name in known:
+                PROJECT_CODE[pid] = name
+    except Exception:
+        pass  # offline / rate-limited: keep static mapping
+
+
 def proj_code(pid):
     if not pid:
         return ""
-    return PROJECT_CODE.get(pid) or PROJECT_NAMES.get(pid, "") or ""
+    code = PROJECT_CODE.get(pid) or PROJECT_NAMES.get(pid, "")
+    if not code and not _PROJECTS_FETCHED:
+        _extend_codes_from_api()
+        code = PROJECT_CODE.get(pid, "")
+    return code or ""
 
 
 def fmt_dur(minutes: int) -> str:
