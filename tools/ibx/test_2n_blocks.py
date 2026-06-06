@@ -816,3 +816,39 @@ def test_gap_card_uses_multiline():
                                     "Gap card prompt_card must have multiline=True"
                                 return
     raise AssertionError("Could not find gap card prompt_card call with multiline kwarg")
+
+
+def test_gap_card_rechecks_gaps_at_display_time():
+    """Regression: the gap card must re-run check_time_gaps inside the display
+    loop (and skip when empty), not rely on the stale block_gaps computed at
+    main() startup. Bug: user filled 6:00-7:38 in Toggl while the queue idled,
+    but inbound still asked about it because gaps were only gathered once."""
+    tree = ast.parse(SRC.read_text())
+    main_fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "main"
+    )
+    # Find the for-loop over block_gaps whose target unpacks bg_gaps
+    gap_loop = None
+    for node in ast.walk(main_fn):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Tuple):
+            names = [e.id for e in node.target.elts if isinstance(e, ast.Name)]
+            if "bg_gaps" in names:
+                gap_loop = node
+                break
+    assert gap_loop is not None, "gap-card for-loop over block_gaps not found in main()"
+
+    # Inside the loop body: a fresh check_time_gaps call must exist...
+    recheck_calls = [
+        n for n in ast.walk(gap_loop)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name) and n.func.id == "check_time_gaps"
+    ]
+    assert recheck_calls, (
+        "gap card loop must call check_time_gaps at display time "
+        "(stale startup gaps caused already-filled windows to be prompted)"
+    )
+
+    # ...and an empty re-check must skip the card via continue
+    has_continue = any(isinstance(n, ast.Continue) for n in ast.walk(gap_loop))
+    assert has_continue, "gap card loop must skip (continue) when re-check finds no gaps"

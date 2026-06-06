@@ -1271,6 +1271,14 @@ def main():
         # ── Card 1.5: Time gap audit (one card per block) ─────────────
         for bg_name, bg_start, bg_end, bg_gaps in block_gaps:
             card_num += 1
+            # Re-check gaps at DISPLAY time: state was gathered at startup,
+            # and the user may have filled the window in Toggl while earlier
+            # cards sat on screen (or the session idled). Only show the card
+            # for gaps that still exist right now.
+            bg_gaps = check_time_gaps(bg_start, bg_end)
+            if not bg_gaps:
+                console.print(f"[dim]  ⏱ {bg_name} ({bg_start}-{bg_end}): already filled in Toggl — skipping[/dim]")
+                continue
             gap_lines = "  ".join(
                 f"你{gs}-{ge}做了什么？" for gs, ge in bg_gaps
             )
