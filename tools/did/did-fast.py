@@ -1134,10 +1134,54 @@ def parse_pre_lines(stdout: str) -> dict[str, str]:
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 
 
+def _parse_stop_minutes(output: str) -> Optional[int]:
+    """Parse duration minutes from toggl_cli stop output.
+
+    Handles '(39m)', '(48min)', '(1h03m)', '(2h)'. Returns None if absent.
+    """
+    m = re.search(r"\((?:(\d+)h)?(\d+)m(?:in)?\)", output)
+    if m:
+        return int(m.group(1) or 0) * 60 + int(m.group(2))
+    m = re.search(r"\((\d+)h\)", output)
+    if m:
+        return int(m.group(1)) * 60
+    return None
+
+
+def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
+    """Backfill variable-task values from the stopped Toggl timer.
+
+    Variable tasks picked without an explicit time (e.g. from dtd) default to
+    1 minute (0n) or a static default (1n+). If the timer we just stopped
+    matches the task, its elapsed minutes are the time the user would have
+    typed — use them. Explicit user-provided values always win.
+    """
+    if not toggl_stop or not toggl_stop.get("minutes"):
+        return
+    mins = toggl_stop["minutes"]
+    desc = toggl_stop.get("description", "").lower()
+    var_0n = {v.lower() for v in VARIABLE_0N}
+    for r in results:
+        if r.item.name.lower() != desc:
+            continue
+        explicit = (r.item.time_value is not None
+                    or r.item.points_override is not None
+                    or r.item.time_range)
+        if explicit:
+            continue
+        if r.step == "0n" and r.item.name.lower() in var_0n and r.write_value == 1:
+            r.write_value = mins
+            r.item.time_value = mins
+        elif r.step == "1n" and getattr(r, "is_variable_1n", False):
+            r.variable_value = mins + (r.item.bonus_points or 0)
+            r.item.time_value = mins
+
+
 def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
     """If a running Toggl timer matches any item name, stop it.
 
-    Returns dict with timer info if stopped, None otherwise.
+    Returns dict with timer info (including parsed duration "minutes")
+    if stopped, None otherwise.
     """
     try:
         proc = subprocess.run(
@@ -1174,7 +1218,8 @@ def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
             capture_output=True, text=True, timeout=10,
         )
         return {"description": desc, "stopped": stop_proc.returncode == 0,
-                "output": stop_proc.stdout.strip()}
+                "output": stop_proc.stdout.strip(),
+                "minutes": _parse_stop_minutes(stop_proc.stdout)}
     except Exception:
         return None
 
@@ -1412,9 +1457,12 @@ def main():
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
     agent_needed = [r for r in routes if r.step == "needs_agent"]
 
-    # 3b. Stop matching Toggl timer
+    # 3b. Stop matching Toggl timer; backfill variable-task values from
+    # the timer's elapsed minutes (dtd: no need to type the time when a
+    # matching timer is running)
     all_names = [r.item.name for r in fast]
     toggl_stop = stop_matching_toggl(all_names) if all_names else None
+    apply_timer_minutes(fast, toggl_stop)
 
     # 4. Batch 0₦ writes
     on_writes = [r for r in fast if r.step == "0n" and r.col_num]

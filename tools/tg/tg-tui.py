@@ -819,8 +819,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     """Mirror of the running timer, pinned above the footer so it's always visible.
     Clock on left, timer desc on right, sub-second decimals as a heartbeat."""
     now = dt.datetime.now(TZ)
-    frac = int((now.microsecond / 1_000_000) * 10)
-    clock = f" {now:%H:%M:%S}.{frac}"
+    clock = f" {now:%H:%M:%S}"  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
     if not cur:
         return [("class:time", clock), ("class:idle", "  (no timer)\n")]
