@@ -185,6 +185,12 @@ def find_task(query: str) -> dict:
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
+            # Prefer an exact content match — dtd passes the full row content
+            # so duplicate names differing only in annotations resolve cleanly
+            exact = [m for m in matches
+                     if m.get("content", "").lower().strip() == query_lower.strip()]
+            if len(exact) == 1:
+                return exact[0]
             print(json.dumps({
                 "error": "multiple matches",
                 "matches": [{"id": m["id"], "content": m["content"]}

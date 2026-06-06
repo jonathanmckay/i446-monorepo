@@ -103,3 +103,34 @@ def test_default_claimed_points_is_2(df):
     main_src = src[src.index("def main()"):]
     assert "DEFAULT_CLAIMED_POINTS" in main_src
     assert "else 5" not in main_src
+
+
+# ── find_task disambiguation ────────────────────────────────────────────────
+# Regression (2026-06-06): "defer failed: call dad" — two tasks shared the
+# name and differed only in [N]; dtd's stripped query matched both and
+# defer-fast bailed. find_task must prefer an exact content match.
+
+def test_find_task_prefers_exact_match_among_duplicates(df, monkeypatch):
+    tasks = [
+        {"id": "1", "content": "call dad (20) [20]"},
+        {"id": "2", "content": "call dad (20) [15]"},
+    ]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    t = df.find_task("call dad (20) [15]")
+    assert t["id"] == "2"
+
+
+def test_find_task_still_errors_on_true_ambiguity(df, monkeypatch):
+    tasks = [
+        {"id": "1", "content": "call dad (20) [20]"},
+        {"id": "2", "content": "call dad (20) [15]"},
+    ]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    with pytest.raises(SystemExit):
+        df.find_task("call dad")  # genuinely ambiguous stripped query
+
+
+def test_find_task_single_substring_match_unchanged(df, monkeypatch):
+    tasks = [{"id": "9", "content": "call dad (20) [20]"}]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    assert df.find_task("call dad")["id"] == "9"

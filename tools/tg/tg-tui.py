@@ -275,19 +275,30 @@ def fetch_gcal(force=False):
 
 
 def fetch_points():
-    """Read today's 分 from Neon 0分 sheet, then distribute to blocks via Toggl entries.
+    """Read today's 分 from Neon 0分: Σ total (col D) + per-block points (G:O).
 
     The topline total is the Σ column (D) — the authoritative grand total the
     personal dashboard also reads (see dashboard.py /api/points-today). Reading
     the same cell keeps the two toplines in lockstep. Summing per-domain columns
     (R:Y) here undercounts: it omits Q (g245/infra/0g), Z (n156), and the -1₦
     penalty in P, which is exactly why the numbers used to diverge.
+
+    Per-block points come from columns G:O (headed 卯辰巳午未申酉戌亥) in the
+    same row — the authoritative distribution. The completed-today.json
+    timestamp reconstruction is a fallback only: it attributes points to the
+    block they were logged in, which piles batch-logged work into the current
+    block (the "everything shows in 申" bug).
     """
     try:
         now = dt.datetime.now(TZ)
         today_md = f"{now.month}/{now.day}"
 
-        # Read the Σ total (column D) for today's row in one ix-osa call.
+        # Read the Σ total (column D) AND the per-block columns (G:O, headed
+        # 卯辰巳午未申酉戌亥) for today's row in one ix-osa call. G:O is the
+        # authoritative per-block distribution — reconstructing blocks from
+        # completed-today.json logging timestamps lumps batch-logged points
+        # into whichever block they were *recorded* in, not earned in.
+        bp_excel: dict[str, int] = {}
         try:
             import subprocess as _sp
             IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
@@ -301,12 +312,24 @@ def fetch_points():
         end if
     end repeat
     if todayRow = 0 then return "ERR"
-    return value of range ("D" & todayRow) of ws
+    set out to ""
+    try
+        set out to (value of range ("D" & todayRow) of ws) as text
+    end try
+    repeat with c from 7 to 15
+        set v to ""
+        try
+            set v to (value of cell c of row todayRow of ws) as text
+        end try
+        set out to out & "|" & v
+    end repeat
+    return out
 end tell'''
             r = _sp.run([IX_OSA], input=script,
                         capture_output=True, text=True, timeout=15)
             if r.returncode == 0 and r.stdout.strip() not in ("", "ERR"):
-                val = r.stdout.strip()
+                parts = r.stdout.strip().split("|")
+                val = parts[0].strip()
                 # Handle formula strings like "70+12" defensively.
                 try:
                     STATE.today_points = int(round(float(val)))
@@ -315,11 +338,27 @@ end tell'''
                         STATE.today_points = int(round(float(eval(val))))  # safe: digits and +
                     except Exception:
                         pass
+                branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+                for bname, raw in zip(branches, parts[1:10]):
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        v = int(round(float(raw)))
+                    except ValueError:
+                        continue
+                    if v:
+                        bp_excel[bname] = v
         except Exception:
             pass
 
-        # Per-block points: use completed-today.json timestamps
-        # (Neon doesn't have per-block columns; timestamps are best-effort)
+        if bp_excel:
+            STATE.block_points = bp_excel
+            STATE.last_points_fetch = time.monotonic()
+            return
+
+        # Fallback only (Excel unreachable): completed-today.json timestamps.
+        # Best-effort — attributes points to the block they were LOGGED in.
         bp: dict[str, int] = {}
         try:
             ct_path = Path.home() / "vault/z_ibx/completed-today.json"
@@ -386,18 +425,13 @@ def proj_code(pid):
 
 
 def fmt_dur(minutes: int) -> str:
-    if minutes < 60:
-        return f"{minutes}m"
-    h, m = divmod(minutes, 60)
-    return f"{h}h{m:02d}m" if m else f"{h}h"
+    # All durations denominated in minutes (95m, not 1h35m)
+    return f"{minutes}m"
 
 
 def fmt_dur_live(total_seconds: int) -> str:
-    """Live elapsed with seconds, for the running timer."""
-    h, rem = divmod(max(0, total_seconds), 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h{m:02d}m{s:02d}s"
+    """Live elapsed with seconds, for the running timer. Minutes-denominated."""
+    m, s = divmod(max(0, total_seconds), 60)
     return f"{m}m{s:02d}s"
 
 
@@ -492,10 +526,18 @@ def render_current() -> list[tuple[str, str]]:
     return [(f"bold {style}".strip(), line)]
 
 
-def section_rule(label: str, focus: bool = False) -> list[tuple[str, str]]:
+def section_rule(label: str, focus: bool = False, pts: int = 0) -> list[tuple[str, str]]:
+    """Full-width rule line. If pts is given, render it right-justified in
+    bold white so the day's 分 are scannable at a glance."""
     s = f"─ {label} "
     cls = "class:focus_rule" if focus else "class:rule"
-    return [(cls, s + "─" * max(0, WIDTH_HINT - len(s)) + "\n")]
+    pts_str = f" {pts}分" if pts else ""
+    trail = max(0, WIDTH_HINT - dwidth(s) - dwidth(pts_str))
+    out: list[tuple[str, str]] = [(cls, s + "─" * trail)]
+    if pts_str:
+        out.append(("bold #ffffff", pts_str))
+    out.append((cls, "\n"))
+    return out
 
 
 def _read_block_emojis() -> dict[str, str]:
@@ -592,10 +634,14 @@ def render_morning() -> list[tuple[str, str]]:
             if total_min:
                 blk_label += f"  {fmt_dur(total_min)}"
             blk_label += " "
-            trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label))
+            pts_str = f" {blk_pts}分" if blk_pts else ""
+            trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label) - dwidth(pts_str))
             out.append((blk_style, "─"))
             out.append((blk_style, blk_label))
-            out.append((blk_style, "─" * trail + "\n"))
+            out.append((blk_style, "─" * trail))
+            if pts_str:
+                out.append(("bold #ffffff", pts_str))
+            out.append((blk_style, "\n"))
             continue
 
         # Every other past block: header + exactly 3 body rows (padded).
@@ -604,13 +650,15 @@ def render_morning() -> list[tuple[str, str]]:
             blk_label += f" {emojis}"
         if total_min:
             blk_label += f"  {fmt_dur(total_min)}"
-        if blk_pts:
-            blk_label += f" · {blk_pts}分"
         blk_label += " "
-        trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label))
+        pts_str = f" {blk_pts}分" if blk_pts else ""
+        trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label) - dwidth(pts_str))
         out.append((blk_style, "─"))
         out.append((blk_style, blk_label))
-        out.append((blk_style, "─" * trail + "\n"))
+        out.append((blk_style, "─" * trail))
+        if pts_str:
+            out.append(("bold #ffffff", pts_str))
+        out.append((blk_style, "\n"))
 
         top3 = sorted(entries, key=lambda e: e["_dur_min"], reverse=True)[:3]
         top3.sort(key=lambda e: e["start_dt"])
@@ -653,10 +701,8 @@ def render_detail() -> list[tuple[str, str]]:
     top_emojis = bo_emojis.get(top_name, "")
     top_pts = STATE.block_points.get(top_name, 0)
     top_label = f"{top_name}{' ' + top_emojis if top_emojis else ''}"
-    if top_pts:
-        top_label += f" · {top_pts}分"
     top_label += scroll_suffix
-    out: list[tuple[str, str]] = section_rule(top_label, focus=True)
+    out: list[tuple[str, str]] = section_rule(top_label, focus=True, pts=top_pts)
 
     slot = start
     gcal_shown: set[str] = set()  # track gcal event titles already labelled
@@ -698,10 +744,9 @@ def render_detail() -> list[tuple[str, str]]:
             try:
                 cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
                 _el = (now - cst).total_seconds()
-                _h, _r = divmod(max(0, int(_el)), 3600)
-                _m, _s = divmod(_r, 60)
+                _m, _s = divmod(max(0, int(_el)), 60)
                 _fr = int((_el % 1) * 10)  # tenths heartbeat on the task clock
-                elapsed = f"{_h}h{_m:02d}m{_s:02d}.{_fr}s" if _h else f"{_m}m{_s:02d}.{_fr}s"
+                elapsed = f"{_m}m{_s:02d}.{_fr}s"
             except Exception:
                 elapsed = ""
             label = f"▶ {cur_desc}" + (f" · {cur_code}" if cur_code else "")
@@ -737,9 +782,7 @@ def render_detail() -> list[tuple[str, str]]:
         bot_emojis = bo_emojis.get(bot_name, "")
         bot_pts = STATE.block_points.get(bot_name, 0)
         bot_label = f"{bot_name}{' ' + bot_emojis if bot_emojis else ''}"
-        if bot_pts:
-            bot_label += f" · {bot_pts}分"
-        out += section_rule(bot_label, focus=True)
+        out += section_rule(bot_label, focus=True, pts=bot_pts)
     return out
 
 
@@ -844,13 +887,9 @@ def render_current_bottom() -> list[tuple[str, str]]:
         elapsed = (now - st).total_seconds()
     except Exception:
         elapsed = 0.0
-    h, rem = divmod(max(0, int(elapsed)), 3600)
-    m, s = divmod(rem, 60)
+    m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
-    if h:
-        dur = f"{h}h{m:02d}m{s:02d}.{frac}s"
-    else:
-        dur = f"{m}m{s:02d}.{frac}s"
+    dur = f"{m}m{s:02d}.{frac}s"
     right = f" ▶ {desc}"
     if code:
         right += f" · {code}"

@@ -152,12 +152,17 @@ task="\$1"
 # Strip ANSI codes and recurring indicator
 task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-# Strip truncation: if fzf truncated with …, use only the prefix before it
+# Query with the FULL row content (annotations intact) so duplicate names
+# differing only in (N)/[N] resolve to the exact selected task; fall back
+# to the stripped prefix when fzf truncated the row (regression 2026-06-06:
+# "defer failed: call dad" with two call-dad tasks)
+query="\$task"
 if [[ "\$clean" == *"…"* ]]; then
   clean="\${clean%%…*}"
+  query="\$clean"
 fi
 echo "⏳ deferring: \$clean" > "\$HDR"
-result=\$(python3 "\$DEFER_FAST" "\$clean" 2>/dev/null)
+result=\$(python3 "\$DEFER_FAST" "\$query" 2>/dev/null)
 ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
 if [[ -n "\$ok" ]]; then
   echo "\$clean" >> "\$REMOVED"
@@ -212,7 +217,8 @@ COLORS = {
     'hcbp': '\033[38;2;255;64;129m',   'infra':'\033[38;2;158;158;158m',
     'i444': '\033[38;2;97;97;97m',     'i447': '\033[38;2;168;156;138m',
     'hcm':  '\033[38;2;170;0;255m',    'hcmp': '\033[38;2;124;77;255m',
-    'hcmr': '\033[38;2;189;166;255m',
+    'hcmr': '\033[38;2;189;166;255m',  '家':   '\033[38;2;255;65;54m',
+    '睡觉': '\033[38;2;102;102;102m',
 }
 RESET = '\033[0m'
 
