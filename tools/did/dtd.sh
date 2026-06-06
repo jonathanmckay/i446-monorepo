@@ -251,7 +251,11 @@ for t in unique:
     raw = t['content']
     clean = strip_ann(raw).lower()
     prefix = clean.split(' - ')[0]
-    if clean in completed or prefix in completed or clean in removed:
+    # removed entries may be truncated prefixes (fzf middle-truncates long
+    # names in the defer/split bindings) — match by startswith, not equality
+    # (regression 2026-06-06: split task stayed in the list)
+    if (clean in completed or prefix in completed
+            or any(clean == r or (r and clean.startswith(r)) for r in removed)):
         continue
 
     is_skipped = clean in skipped
