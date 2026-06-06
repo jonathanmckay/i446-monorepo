@@ -44,6 +44,14 @@ NOTIFY_TO = "mckay@m5c7.com"
 # for that many upcoming successful signings. Decremented after each notification.
 _NOTIFY_REMAINING_PATH = Path.home() / ".config/m5x2/lease_notify_remaining"
 
+# Throttle flag: written when we've alerted the operator that the 2FA session
+# expired; cleared on the next successful sign. Prevents an alert every cycle.
+_AUTH_ALERT_PATH = Path.home() / ".config/m5x2/lease_auth_alert_sent"
+
+# Gmail label applied to emails that failed for non-auth reasons (so they're
+# flagged for manual review instead of archived into oblivion or retried forever).
+_REVIEW_LABEL = "lease-signer/needs-review"
+
 
 def _notify_remaining() -> int:
     """Read how many notifications are still requested."""
@@ -123,6 +131,44 @@ def normalize(msg, service) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+def _flag_for_review(service, msg_id: str):
+    """Label a content-failed email and drop it from the unread queue (but keep
+    it in the inbox — never archive a failure). Stops infinite re-attempts
+    without losing the lease."""
+    label_id = _ibx.get_or_create_label(service, _REVIEW_LABEL)
+    service.users().messages().modify(
+        userId="me", id=msg_id,
+        body={"addLabelIds": [label_id], "removeLabelIds": ["UNREAD"]},
+    ).execute()
+
+
+def maybe_send_auth_alert(service):
+    """Email the operator once when the 2FA session expires (throttled via flag)."""
+    if _AUTH_ALERT_PATH.exists():
+        return
+    try:
+        body = (
+            "The lease auto-signer's AppFolio 2FA session has expired.\n"
+            "Countersign requests are NOT being signed; they're being held\n"
+            "(left unread in the inbox) until you re-authenticate.\n\n"
+            "Fix — on the Mac running the daemon:\n"
+            "    cd ~/i446-monorepo/tools/m5x2-automations\n"
+            "    python3 lease_signer.py --login\n"
+            "Then complete 2FA in the browser window that opens.\n"
+        )
+        msg = email.mime.text.MIMEText(body)
+        msg["To"] = NOTIFY_TO
+        msg["From"] = NOTIFY_TO
+        msg["Subject"] = "⚠ Lease auto-signer paused — 2FA re-login needed"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        _AUTH_ALERT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _AUTH_ALERT_PATH.write_text("sent")
+        log.info("Sent 2FA-expired alert email to operator.")
+    except Exception as e:
+        log.warning(f"Failed to send auth alert: {e}")
+
+
 def send_notification(service, item: dict, meta: dict, result: dict, count: int):
     """Email mckay@m5c7.com about a successful signing."""
     try:
@@ -156,15 +202,22 @@ def send_notification(service, item: dict, meta: dict, result: dict, count: int)
 # ---------------------------------------------------------------------------
 
 
-def process_email(service, item: dict) -> bool:
-    """Sign a single countersign email. Returns True on success."""
+def process_email(service, item: dict) -> str:
+    """Sign a single countersign email.
+
+    Returns one of: "success", "auth_failed", "failed", "skipped".
+    Archives ONLY on success. Auth failures are left fully untouched (unread,
+    in inbox) so they retry after re-login; content failures are labeled for
+    review and dropped from the unread queue. A failure is never archived —
+    that was the bug that silently lost ~3 weeks of leases.
+    """
     url = _signer.extract_appfolio_url(item.get("body", ""))
     if not url:
         html_body = item.get("_data", {}).get("email", {}).get("html_body", "")
         url = _signer.extract_appfolio_url(html_body)
     if not url:
         log.warning(f"No AppFolio URL in email from {item.get('from', '?')}")
-        return False
+        return "skipped"
 
     meta = _signer.parse_email_metadata(item)
     log.info(f"Signing: {meta.get('unit', url[:60])}")
@@ -191,26 +244,44 @@ def process_email(service, item: dict) -> bool:
         status=status,
     )
 
+    email_id = item.get("_data", {}).get("email", {}).get("id", "")
+
     if status == "success":
         log.info(f"Signed successfully: {meta.get('unit', '')}")
+        # We're healthy again — clear any prior auth-expired alert.
+        _AUTH_ALERT_PATH.unlink(missing_ok=True)
         remaining = _notify_remaining()
         if remaining > 0:
             count = _autodb.count_successful(DB_PATH)
             send_notification(service, item, meta, result, count)
             _decrement_notify()
             log.info(f"Notification sent ({remaining - 1} remaining)")
-    else:
-        log.warning(f"Signing failed ({status}): {error}")
+        # Archive ONLY on success.
+        try:
+            _ibx.archive(service, email_id)
+            log.info(f"Archived email {email_id}")
+        except Exception as e:
+            log.warning(f"Failed to archive: {e}")
+        return "success"
 
-    # Archive the email
+    # --- Failure: never archive. ---
+    if "2FA" in error or "no browser session" in error.lower():
+        # Transient auth/session failure. Leave the email fully untouched
+        # (unread, in inbox) so it retries automatically after re-login.
+        log.warning(f"Auth/session failure — holding {meta.get('unit', email_id)} for retry: {error}")
+        return "auth_failed"
+
+    # Content failure (no sign button, no confirmation, etc.): flag for manual
+    # review and remove from the unread queue so we don't reattempt forever —
+    # but keep it in the inbox (do NOT archive).
+    log.warning(f"Signing failed ({status}) for {meta.get('unit', email_id)}: {error}")
     try:
-        email_id = item["_data"]["email"]["id"]
-        _ibx.archive(service, email_id)
-        log.info(f"Archived email {email_id}")
+        if email_id:
+            _flag_for_review(service, email_id)
+            log.info(f"Flagged email {email_id} for manual review ({_REVIEW_LABEL})")
     except Exception as e:
-        log.warning(f"Failed to archive: {e}")
-
-    return status == "success"
+        log.warning(f"Failed to flag {email_id} for review: {e}")
+    return "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +304,16 @@ def poll_once(service) -> int:
             continue
         if not _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
             continue
-        process_email(service, item)
+        status = process_email(service, item)
         processed += 1
+        if status == "auth_failed":
+            # Every remaining email would fail identically. Stop this cycle so
+            # we don't launch a browser per email, alert the operator once, and
+            # leave all pending leases unread for retry after re-login.
+            maybe_send_auth_alert(service)
+            log.warning("2FA session expired — pausing cycle until re-login "
+                        "(python3 lease_signer.py --login). Pending leases held unread.")
+            break
 
     return processed
 
