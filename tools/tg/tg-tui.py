@@ -547,8 +547,6 @@ def render_morning() -> list[tuple[str, str]]:
         entries = block_entries.get(blk_name, [])
         for ent in entries:
             ent["_dur_min"] = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
-        top4 = sorted(entries, key=lambda e: e["_dur_min"], reverse=True)[:4]
-        top4.sort(key=lambda e: e["start_dt"])
 
         bd = block_durations.get(blk_name, {})
         dom_pid = max(bd, key=lambda p: bd[p], default=None) if bd else None
@@ -556,6 +554,26 @@ def render_morning() -> list[tuple[str, str]]:
         emojis = bo_emojis.get(blk_name, "")
         total_min = sum(bd.values())
         blk_pts = STATE.block_points.get(blk_name, 0)
+
+        # 卯 (4-5am): single line — header rule with the activities inline.
+        if blk_name == "卯":
+            descs = list(dict.fromkeys(
+                (e["desc"] or "·") for e in sorted(entries, key=lambda e: e["start_dt"])))
+            blk_label = f" {blk_name}"
+            if emojis:
+                blk_label += f" {emojis}"
+            if descs:
+                blk_label += f"  {', '.join(descs[:3])}"
+            if total_min:
+                blk_label += f"  {fmt_dur(total_min)}"
+            blk_label += " "
+            trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label))
+            out.append((blk_style, "─"))
+            out.append((blk_style, blk_label))
+            out.append((blk_style, "─" * trail + "\n"))
+            continue
+
+        # Every other past block: header + exactly 3 body rows (padded).
         blk_label = f" {blk_name}"
         if emojis:
             blk_label += f" {emojis}"
@@ -569,7 +587,9 @@ def render_morning() -> list[tuple[str, str]]:
         out.append((blk_style, blk_label))
         out.append((blk_style, "─" * trail + "\n"))
 
-        for m in top4:
+        top3 = sorted(entries, key=lambda e: e["_dur_min"], reverse=True)[:3]
+        top3.sort(key=lambda e: e["start_dt"])
+        for m in top3:
             is_sleep = (m["desc"] or "").strip() == "睡觉"
             display_time = f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}"
             code = proj_code(m["project_id"])
@@ -582,6 +602,8 @@ def render_morning() -> list[tuple[str, str]]:
             out.append(("class:time", f"  {display_time} "))
             out.append((style, f"{pad(truncate(label, space), space)}"))
             out.append(("class:dim", f" {dur}\n"))
+        for _ in range(3 - len(top3)):  # pad to keep every block exactly 4 lines
+            out.append(("class:idle", "\n"))
     return out
 
 
@@ -599,11 +621,9 @@ def render_detail() -> list[tuple[str, str]]:
     if nxt:
         # Normal: current block header at top
         top_name = cur[0] if cur else "?"
-        boundary_h = cur[2] + 1 if cur else end.hour
     else:
         # No next block: show prev block header at top, current at bottom
         top_name = prv[0] if prv else "?"
-        boundary_h = cur[1] if cur else end.hour
 
     top_emojis = bo_emojis.get(top_name, "")
     top_pts = STATE.block_points.get(top_name, 0)
@@ -613,18 +633,11 @@ def render_detail() -> list[tuple[str, str]]:
     top_label += scroll_suffix
     out: list[tuple[str, str]] = section_rule(top_label, focus=True)
 
-    boundary = now.replace(hour=boundary_h, minute=0, second=0, microsecond=0)
     slot = start
-    now_drawn = False
-    block_rule_drawn = False
     gcal_shown: set[str] = set()  # track gcal event titles already labelled
     toggl_shown: set[str] = set()  # track toggl descriptions already labelled
     while slot < end:
         slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
-
-        # Block boundary (no separator line; top/bottom rules are enough)
-        if not block_rule_drawn and slot >= boundary:
-            block_rule_drawn = True
 
         pid = None
         gcal_sty = ""
@@ -648,38 +661,27 @@ def render_detail() -> list[tuple[str, str]]:
             else:
                 gcal_shown.add(raw_title)
 
-        # Insert now line before this slot if applicable
-        if not now_drawn and slot >= now:
-            frac = int((now.microsecond / 1_000_000) * 10)
-            time_now = f"{now:%H:%M:%S}.{frac}"
-            if STATE.current:
-                cur_desc = STATE.current.get("description") or ""
-                cur_code = proj_code(STATE.current.get("project_id"))
-                cur_pid = STATE.current.get("project_id")
-                try:
-                    cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
-                    elapsed = fmt_dur_live(int((now - cst).total_seconds()))
-                except Exception:
-                    elapsed = "0m00s"
-                task_label = f"▶ {cur_desc}"
-                if cur_code:
-                    task_label += f" · {cur_code}"
-                task_label += f"  {elapsed}"
-                task_style = f"bold {project_style(cur_pid)}".strip() or "bold class:now"
-                space = max(1, WIDTH_HINT - len(time_now) - 4)
-                out.append(("bold class:now", f" {time_now}"))
-                out.append((task_style, f" │ {truncate(task_label, space)}\n"))
-            else:
-                out.append(("bold class:now", f" {time_now}"))
-                out.append(("bold class:idle", f" │ (no timer)\n"))
-            now_drawn = True
-
+        # The slot containing "now" is the live row: ▶ + task + ticking elapsed
+        # (no separate inserted now-line, so each block stays exactly 8 slots;
+        # the live wall clock lives on the pinned bottom bar).
         time_str = f"{slot:%H:%M}"
         is_running = STATE.current and slot <= now < slot_end
         if is_running:
             cur_desc = STATE.current.get("description") or ""
-            label = f"▶ {cur_desc}"
+            cur_code = proj_code(STATE.current.get("project_id"))
             pid = STATE.current.get("project_id")
+            try:
+                cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
+                _el = (now - cst).total_seconds()
+                _h, _r = divmod(max(0, int(_el)), 3600)
+                _m, _s = divmod(_r, 60)
+                _fr = int((_el % 1) * 10)  # tenths heartbeat on the task clock
+                elapsed = f"{_h}h{_m:02d}m{_s:02d}.{_fr}s" if _h else f"{_m}m{_s:02d}.{_fr}s"
+            except Exception:
+                elapsed = ""
+            label = f"▶ {cur_desc}" + (f" · {cur_code}" if cur_code else "")
+            if elapsed:
+                label += f"  {elapsed}"
 
         # Deduplicate Toggl labels: show description only on first slot
         if label and not is_running and not label.startswith("◇ "):
@@ -699,11 +701,6 @@ def render_detail() -> list[tuple[str, str]]:
         out.append(("class:time", f" {time_str}"))
         out.append((cls, content))
         slot = slot_end
-    if not now_drawn:
-        frac = int((now.microsecond / 1_000_000) * 10)
-        time_now = f"{now:%H:%M:%S}.{frac}"
-        out.append(("bold class:now", f" {time_now}"))
-        out.append(("bold class:idle", f" │ (no timer)\n"))
     # Bottom block header
     if nxt:
         bot_name, bot_sh, bot_eh = nxt
@@ -780,32 +777,23 @@ def render_evening() -> list[tuple[str, str]]:
             continue
         if sh >= 22:
             break
-        evs = gcal_by_block.get(name, [])
-        if evs:
-            # Block rule with first event inline
-            first = evs[0]
-            ev_sty = project_style(gcal_project_code(first)) or "class:future"
-            prefix = f"{first['start_dt']:%H:%M}" if not first.get("all_day") else "all-day"
-            label = truncate(first["title"], min(DESC_MAX, max(1, WIDTH_HINT - 12)))
-            inner = f" {name}  {prefix} {label} "
-            trail = max(0, WIDTH_HINT - 1 - len(inner))
-            out.append(("class:rule", "─"))
-            out.append((ev_sty, inner))
-            out.append(("class:rule", "─" * trail + "\n"))
-            for ev in evs[1:4]:
-                prefix = "all-day" if ev.get("all_day") else f"{ev['start_dt']:%H:%M}"
-                space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1))
-                title = truncate(ev["title"], space)
-                ev_sty = project_style(gcal_project_code(ev)) or "class:future"
-                out.append(("class:time", f"  {prefix}"))
-                out.append((ev_sty, f" {title}\n"))
-        else:
-            # Empty block: just the rule with block name
-            rule_text = f" {name} "
-            trail = max(0, WIDTH_HINT - 1 - len(rule_text))
-            out.append(("class:rule", "─"))
-            out.append(("class:dim", rule_text))
-            out.append(("class:rule", "─" * trail + "\n"))
+        # Header rule (block name, colored by dominant event) + 3 padded rows.
+        evs = gcal_by_block.get(name, [])[:3]
+        rule_sty = (project_style(gcal_project_code(evs[0])) or "class:dim") if evs else "class:dim"
+        rule_text = f" {name} "
+        trail = max(0, WIDTH_HINT - 1 - len(rule_text))
+        out.append(("class:rule", "─"))
+        out.append((rule_sty, rule_text))
+        out.append(("class:rule", "─" * trail + "\n"))
+        for ev in evs:
+            prefix = "all-day" if ev.get("all_day") else f"{ev['start_dt']:%H:%M}"
+            space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1))
+            title = truncate(ev["title"], space)
+            ev_sty = project_style(gcal_project_code(ev)) or "class:future"
+            out.append(("class:time", f"  {prefix}"))
+            out.append((ev_sty, f" {title}\n"))
+        for _ in range(3 - len(evs)):  # pad to keep every block exactly 4 lines
+            out.append(("class:idle", "\n"))
     # Sleep marker
     rule_text = f" 睡觉 "
     trail = max(0, WIDTH_HINT - 1 - len(rule_text))
