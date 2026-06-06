@@ -1463,6 +1463,11 @@ def main():
                 index = len(all_items)
 
         if index >= len(all_items):
+            # Day-skipped items don't cycle back in-session: 's' means "not
+            # today". Only skipped imsg threads with NEWER activity than
+            # their skip-time watermark return (regression 2026-06-06:
+            # Family thread re-shown by the cycle right after skipping).
+            skipped = _drop_day_skipped(skipped)
             if skipped:
                 console.print(f"\n[dim]Cycling through {len(skipped)} skipped...[/dim]")
                 all_items = skipped

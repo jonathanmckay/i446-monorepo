@@ -722,3 +722,16 @@ def test_unskipped_items_untouched(tmp_path):
     other = _imsg_card("chat999", 500)
     email = {"type": "email", "id": "e1", "_data": {}}
     assert ns["_drop_day_skipped"]([other, email]) == [other, email]
+
+
+def test_skipped_cycle_respects_day_skips():
+    """Regression (2026-06-06, 5th Family sighting): the end-of-queue
+    'Cycling through skipped' must filter through _drop_day_skipped so
+    's'-skipped items don't re-show in the same session."""
+    src = IBX_ALL_PY.read_text()
+    cycle_idx = src.index("Cycling through")
+    # The day-skip filter must be applied to `skipped` shortly before the cycle
+    window = src[max(0, cycle_idx - 600):cycle_idx]
+    assert "skipped = _drop_day_skipped(skipped)" in window, (
+        "the skipped-cycle must drop day-skipped items before re-showing"
+    )

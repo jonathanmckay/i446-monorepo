@@ -167,17 +167,29 @@ if [[ "\$clean" == *"…"* ]]; then
   clean="\${clean%%…*}"
   query="\$clean"
 fi
+# Optimistic UI: hide the task and show status IMMEDIATELY, then run the
+# Todoist round trips (paginated search, reschedule, posthoc create+close —
+# 3-10s) detached so fzf never blocks on the network. On failure the hide is
+# rolled back so the task reappears. The pushed/processed counters keep
+# ctrl-z honest while the defer is in flight.
+echo "\$clean" >> "\$REMOVED"
 echo "⏳ deferring: \$clean" > "\$HDR"
-result=\$(python3 "\$DEFER_FAST" "\$query" 2>/dev/null)
-ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
-if [[ -n "\$ok" ]]; then
-  echo "\$clean" >> "\$REMOVED"
-  # Journal for ctrl-z undo
-  echo "\$result" | python3 "$UNDO_FAST" --journal-defer "$DTD_JOURNAL" "\$clean" 2>/dev/null
-  echo "⏭ \$clean \$ok" > "\$HDR"
-else
-  echo "? defer failed: \$clean" > "\$HDR"
-fi
+echo "x" >> "$DTD_PUSHED"
+(
+  result=\$(python3 "\$DEFER_FAST" "\$query" 2>/dev/null)
+  ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
+  if [[ -n "\$ok" ]]; then
+    # Journal for ctrl-z undo
+    echo "\$result" | python3 "$UNDO_FAST" --journal-defer "$DTD_JOURNAL" "\$clean" 2>/dev/null
+    echo "⏭ \$clean \$ok" > "\$HDR"
+  else
+    # Roll back the optimistic hide so the task reappears on next reload
+    grep -v -x -F -- "\$clean" "\$REMOVED" > "\$REMOVED.tmp" 2>/dev/null
+    mv "\$REMOVED.tmp" "\$REMOVED"
+    echo "? defer failed: \$clean (restored to list)" > "\$HDR"
+  fi
+  echo "x" >> "$DTD_PROCESSED"
+) >/dev/null 2>&1 &!
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
@@ -505,8 +517,13 @@ for l in labels:
     if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','s897'):
         label_arg = f'@{l}'
         break
+# did-fast splits its input on commas/semicolons — a task name containing
+# one would be parsed as multiple items, detaching [pts]/@label from the
+# name and scattering the points (regression 2026-06-06: "Rev on ground
+# transit. Buy nightshade, 2" logged its 10 points as a task named "2")
+safe_name = re.sub(r'[,;]+', ' ', clean)
 df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
-                '--points-only', f'{clean} [{pts_today}] {label_arg}'],
+                '--points-only', f'{safe_name} [{pts_today}] {label_arg}'],
                capture_output=True, text=True, timeout=30)
 try:
     didfast_out = json.loads(df.stdout)
