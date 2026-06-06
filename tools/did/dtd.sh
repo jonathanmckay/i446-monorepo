@@ -100,7 +100,13 @@ exec 3>"$DTD_FIFO"
 # below so their heredocs expand to real paths, not empty strings) ---
 DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
 DTD_REMOVED="/tmp/dtd-$$.removed"
-DTD_SKIPPED="/tmp/dtd-$$.skipped"
+# Skips persist across dtd sessions for the duration of one day (stable
+# path + date guard), unlike the other per-session temp files
+DTD_SKIPPED="$HOME/vault/z_ibx/dtd-skipped-today.txt"
+if [[ -f "$DTD_SKIPPED.date" && "$(cat "$DTD_SKIPPED.date" 2>/dev/null)" != "$LOCAL_TODAY" ]]; then
+  rm -f "$DTD_SKIPPED"
+fi
+echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
 DTD_DONE_FILE="/tmp/dtd-$$.done.json"
 echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
 touch "$DTD_REMOVED"
@@ -814,4 +820,5 @@ if [[ $session_count -gt 0 ]]; then
   fi
 fi
 
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_SKIPPED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
+# Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
