@@ -464,13 +464,6 @@
       "domain": "hcm",
       "todoist_label": "1neon"
     },
-    "1-hci": {
-      "name": "1 hci",
-      "category": "1n+",
-      "neon_header": "1 hci",
-      "domain": "hci",
-      "todoist_label": "1neon"
-    },
     "1-hcme": {
       "name": "1 hcme",
       "category": "1n+",
@@ -658,6 +651,13 @@
       "category": "1n+",
       "neon_header": "对身",
       "domain": "hcb",
+      "todoist_label": "1neon"
+    },
+    "2-hci": {
+      "name": "2 hci",
+      "category": "1n+",
+      "neon_header": "2 hci",
+      "domain": "hci",
       "todoist_label": "1neon"
     }
   }
