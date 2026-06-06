@@ -26,7 +26,7 @@ If `ssh ix` fails (timeout/unreachable), fall back to local `osascript` and warn
 ## Usage
 
 ```
-/ate [<branch>] <name>, <kcal>, <servings> [(<group> <count>, ...)]
+/ate [<branch>] <name>, <kcal>, <protein_g> [(<group> <count>, ...)]
 ```
 
 Optional leading **branch glyph** (one of 卯辰巳午未申戌) forces the time band
@@ -63,7 +63,7 @@ Pass to the script as `--groups abbrev:count ...`, e.g. `--groups br:3 g:1`.
 
 ## Time bands (Earthly Branches)
 
-Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, servings).
+Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, protein grams). Column P aggregates the protein triad cells via =SUM — never append to P directly; write protein into the band's third column only.
 
 | Hours       | Branch | Cols       |
 |-------------|--------|------------|
@@ -81,7 +81,7 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
 
 - **Food name** (col 1 of triad): if cell is empty, set; else append `", " + name`.
 - **Kcal** (col 2): if empty, set to the number; else convert to formula `=<old>+<kcal>`.
-- **Servings** (col 3): same formula-append logic.
+- **Protein g** (col 3): same formula-append logic.
 - **Date row**: matched by `M/D` in column `B` of `hcbi`.
 - **Row 1 labels**: every invocation idempotently writes the seven branch glyphs
   to `AK1, AN1, AQ1, AT1, AW1, AZ1, BC1` and clears the other two header cells
@@ -103,9 +103,9 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
    Then split the remainder on the **last two commas** (so the name may itself
    contain commas):
    ```python
-   name, kcal, srv = [s.strip() for s in user_input.rsplit(",", 2)]
+   name, kcal, protein = [s.strip() for s in user_input.rsplit(",", 2)]
    ```
-   Validate that `kcal` and `srv` parse as numbers. If not, ask the user to
+   Validate that `kcal` and `protein` parse as numbers (arithmetic expressions like 300+200+60 are fine — evaluate them). If not, ask the user to
    reformat.
 
 2. **Run the writer.** Excel must be open with `Neon分v12.2.xlsx` loaded on **ix**. Use the `neon.excel` client (which routes through the excel-http daemon on ix at `localhost:9876`, falling back to `ssh ix osascript` if the daemon is down):
@@ -118,11 +118,11 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
    today = f"{datetime.now().month}/{datetime.now().day}"
    band  = (cols.hcbi_band_by_branch(forced_branch) if forced_branch
             else cols.hcbi_band(datetime.now().hour))  # → {branch, cols: [name, kcal, srv]}
-   name_col, kcal_col, srv_col = band["cols"]
+   name_col, kcal_col, protein_col = band["cols"]
 
    excel.append("hcbi", name_col, date=today, value=", " + name)   # name col uses comma-append
    excel.append("hcbi", kcal_col, date=today, value=f"+{kcal}")
-   excel.append("hcbi", srv_col,  date=today, value=f"+{srv}")
+   excel.append("hcbi", protein_col,  date=today, value=f"+{protein}")
    for abbrev, count in groups:                         # e.g. ("br", 3)
        excel.append("hcbi", cols.daily_dozen_col(abbrev), date=today, value=f"+{count}")
    ```
@@ -131,7 +131,7 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, serv
 
 3. **Report.** Echo the script's one-line confirmation, e.g.:
    ```
-   ate raspberries (80 kcal, 1 srv) → hcbi 巳 band (AQ/AR/AS), row 113
+   ate raspberries (80 kcal, 2g protein) → hcbi 巳 band (AQ/AR/AS), row 113
    ```
 
 ## Failure modes
