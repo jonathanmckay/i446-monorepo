@@ -81,8 +81,8 @@ When `/did` is called with **no arguments**:
 2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes. Apply the d359 bump (Step C) to the stopped entry's tags, same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
 3. **Check for /do session.** Read `~/.claude/skills/do/active.json`. If it exists and is valid:
    - The task is a variable-point activity started by `/do`.
-   - Use the duration (minutes) from step 2 as the points value.
-   - Route as `/did <task_name> <duration_minutes>` where `task_name` comes from `active.json`.
+   - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks; 5 for xk20s/xk22s, 15 for 一起饭).
+   - Route as `/did <points_task> <points>` where `points_task` comes from `active.json` (fall back to `task` for old sessions without the field).
    - After success, delete `active.json` to clear the session.
    - Skip to step 5 (do NOT use the raw timer description as input).
 4. **Standard path (no /do session).** Use the timer description as the /did input. Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 to 6) as if the user had typed `/did <description>`.

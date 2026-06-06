@@ -21,6 +21,14 @@ Check the input (case-insensitive, after stripping `(N)`, `[N]`, `@tag` annotati
 
 **1n+ (weekly):** s897, 家 (alias for family), relax, s+hcbp
 
+**Start-bonus (variable, with a bonus granted for starting):**
+
+| Task | Start bonus | Rate | Points route to |
+|------|------------|------|-----------------|
+| xk20s | +5 | 1 pt/min | `xk20` (0n col AJ) |
+| xk22s | +5 | 1 pt/min | `xk22` (0n col AK) |
+| 一起饭 | +15 | 1 pt/min | `一起饭` (1n+ → 0分 col X, xk87) |
+
 Match → Variable mode. No match → Task mode.
 
 ## Variable mode
@@ -43,6 +51,8 @@ Match → Variable mode. No match → Task mode.
    - 家 → 家
    - relax → hcb
    - s+hcbp → hcbp
+   - xk20s, xk22s → xk87
+   - 一起饭 → xk87
 
 3. **Stop any running timer** first:
    ```bash
@@ -59,11 +69,14 @@ Match → Variable mode. No match → Task mode.
    {
      "task": "<task name as entered>",
      "resolved_name": "<resolved name, e.g. family for 家>",
+     "points_task": "<where points route: xk20 for xk20s, xk22 for xk22s, 一起饭 for 一起饭; otherwise same as resolved_name>",
+     "start_bonus": 0,
      "type": "0n or 1n+",
      "started_at": "<ISO 8601 timestamp>",
      "project": "<toggl project code>"
    }
    ```
+   For start-bonus tasks set `start_bonus` from the table (5/5/15) and `points_task` to the route column; for all other variable tasks `start_bonus` is 0 and `points_task` equals the resolved name.
 
 6. **Update tg cache** at `~/.claude/skills/tg/cache.json`:
    ```json
@@ -74,14 +87,15 @@ Match → Variable mode. No match → Task mode.
    ```
    Started: <task> → <project> (variable)
    ```
+   For start-bonus tasks: `Started: <task> → <project> (variable, +<bonus> start bonus)`
 
 ### Variable completion flow
 
 When `/done` or `/did` (no args) is called, the /did skill detects the active /do session and:
 1. Stops the timer
 2. Reads duration from the stopped timer
-3. Uses duration (minutes) as points
-4. Runs `/did <task> <minutes>` to write to Neon and close Todoist
+3. Computes points = duration (minutes) + `start_bonus` (0 for plain variable tasks)
+4. Runs `/did <points_task> <points>` to write to Neon and close Todoist
 5. Clears active.json
 
 This is handled by /did, not by /do. The /do skill only starts the session.
