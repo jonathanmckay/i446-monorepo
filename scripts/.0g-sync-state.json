@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "tasks to 60": {
-      "todoist_id": "6gppCGfxGh5F5xHR",
-      "minutes": 25
-    },
-    "yesterday's goals": {
-      "todoist_id": "6gppCGmHCmMh9XQ2",
-      "minutes": 20
-    }
-  },
-  "last_sync": "2026-06-07T03:55:03.347458-07:00"
+  "tasks": {},
+  "last_sync": "2026-06-07T04:00:09.584415-07:00"
 }
