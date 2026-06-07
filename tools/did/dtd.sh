@@ -798,9 +798,28 @@ while true; do
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
     cpap|ibx\ s897|ibx\ i9|ibx\ m5x2)
-      REPLY="$clean "
-      vared -p "→ " REPLY
-      clean="$REPLY"
+      # If a Toggl timer for this exact task is running, use its elapsed
+      # minutes as the value instead of prompting. Stop it here to read the
+      # duration; did-fast then sees the explicit number (clean + N) and the
+      # already-stopped timer, so it won't re-stop or override.
+      timer_mins=""
+      cur=$(python3 "$TOGGL_CLI" current 2>/dev/null)
+      if [[ "$cur" == Running:* ]]; then
+        cur_desc=$(echo "$cur" | sed -E 's/^Running: [0-9]{2}:[0-9]{2}-running //; s/ *@.*//; s/ *\(running\).*//; s/ *\[id:[0-9]*\].*//; s/ *$//' | tr '[:upper:]' '[:lower:]')
+        if [[ "$cur_desc" == "$clean_lower" ]]; then
+          stop_out=$(python3 "$TOGGL_CLI" stop 2>/dev/null)
+          # Reuse did-fast's duration grammar: (39m) (48min) (1h03m) (2h)
+          timer_mins=$(echo "$stop_out" | python3 -c "import sys,re; o=sys.stdin.read(); m=re.search(r'\((?:(\d+)h)?(\d+)m(?:in)?\)',o); hm=re.search(r'\((\d+)h\)',o); print((int(m.group(1) or 0)*60+int(m.group(2))) if m else (int(hm.group(1))*60 if hm else ''))" 2>/dev/null)
+        fi
+      fi
+      if [[ -n "$timer_mins" ]]; then
+        clean="$clean $timer_mins"
+        echo "▶ $clean (from timer)" > "$DTD_HDR"
+      else
+        REPLY="$clean "
+        vared -p "→ " REPLY
+        clean="$REPLY"
+      fi
       ;;
   esac
 

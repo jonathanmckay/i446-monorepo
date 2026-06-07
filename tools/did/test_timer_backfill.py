@@ -94,3 +94,58 @@ def test_non_variable_0n_not_touched(df):
     r = _mk(df, "0l", "0n", write_value=1)
     df.apply_timer_minutes([r], {"description": "0l", "minutes": 42})
     assert r.write_value == 1
+
+
+# ── variable-domain (bball/run/walk/...) backfill ───────────────────────────
+# Regression (2026-06-07): VARIABLE_DOMAIN tasks (step "variable") were not
+# backfilled — completing `bball` from dtd with a running timer logged 0
+# points. apply_timer_minutes now covers the "variable" step too.
+
+def _mk_var(df, name, fen_points=0, **kw):
+    r = _mk(df, name, "variable", **kw)
+    r.fen_points = fen_points
+    return r
+
+
+def test_variable_domain_backfilled_from_timer(df):
+    r = _mk_var(df, "bball")
+    df.apply_timer_minutes([r], {"description": "bball", "minutes": 45})
+    assert r.fen_points == 45
+    assert r.item.time_value == 45
+
+
+def test_variable_domain_bonus_added(df):
+    r = _mk_var(df, "bball", bonus_points=10)
+    df.apply_timer_minutes([r], {"description": "bball", "minutes": 45})
+    assert r.fen_points == 55
+
+
+def test_variable_domain_explicit_wins(df):
+    # User typed "bball 30" → time_value set → timer must not override.
+    r = _mk_var(df, "bball", fen_points=30, time_value=30)
+    df.apply_timer_minutes([r], {"description": "bball", "minutes": 45})
+    assert r.fen_points == 30
+
+
+def test_variable_domain_non_matching_timer_ignored(df):
+    r = _mk_var(df, "run")
+    df.apply_timer_minutes([r], {"description": "bball", "minutes": 45})
+    assert r.fen_points == 0
+
+
+def test_non_domain_variable_not_touched(df):
+    # A project-override variable task (not in VARIABLE_DOMAIN) is left alone.
+    r = _mk_var(df, "some custom task")
+    df.apply_timer_minutes([r], {"description": "some custom task", "minutes": 45})
+    assert r.fen_points == 0
+
+
+# ── manual path parity: "bball 30" must log 30, not 0 ───────────────────────
+# Regression (2026-06-07): the variable route honored [N] and time_range but
+# ignored a typed trailing number (time_value), so `/did bball 30` logged 0.
+
+def test_variable_domain_typed_minutes_route_to_points(df):
+    items = df.parse_input("bball 30")
+    routes = df.route_items(items, {"0n": {}, "1n": {}}, {}, skip_todoist=True)
+    assert routes[0].step == "variable"
+    assert routes[0].fen_points == 30

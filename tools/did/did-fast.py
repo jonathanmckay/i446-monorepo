@@ -852,8 +852,10 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                 results.append(r)
                 continue
 
-        # Compute points: explicit override > time_range duration > 0
-        pts = item.points_override or 0
+        # Compute points: explicit [N] > typed minutes (e.g. "bball 30") >
+        # time_range duration > 0. Honoring time_value here keeps the manual
+        # path ("bball 30") and the timer path (apply_timer_minutes) in sync.
+        pts = item.points_override or item.time_value or 0
         if pts == 0 and item.time_range:
             pts = time_range_minutes(item.time_range[0], item.time_range[1])
         if item.bonus_points:
@@ -1174,6 +1176,11 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
             r.item.time_value = mins
         elif r.step == "1n" and getattr(r, "is_variable_1n", False):
             r.variable_value = mins + (r.item.bonus_points or 0)
+            r.item.time_value = mins
+        elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
+            # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
+            # Without this they log 0 when completed from dtd with a timer up.
+            r.fen_points = mins + (r.item.bonus_points or 0)
             r.item.time_value = mins
 
 
