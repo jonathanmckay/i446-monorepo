@@ -108,3 +108,66 @@ def test_neon_template_uses_named_workbook():
     assert "Neon" in template, (
         "NEON_FIND_ROW_TEMPLATE must reference Neon workbook by name"
     )
+
+
+# ── Stale-marker scoring guard ──────────────────────────────────────────────
+# Bug: a block earned 3 pts for a 🎯 (goals-set) marker left over from a prior
+# day even though no goals were set today, because score_block_from_emojis
+# trusted any emoji on the header. Fix: scoring validates each daemon-owned
+# marker against the run's live results via _marker_earned; ☀️/📧 (written by
+# /inbound, no daemon validator) are still trusted on presence.
+import importlib.util
+
+
+def _load_daemon():
+    spec = importlib.util.spec_from_file_location("build_order_daemon", DAEMON)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_marker_earned_rejects_stale_daemon_marker():
+    mod = _load_daemon()
+    line = "- 巳 🎯 ⏰"
+    # Live says no goals today → stale 🎯 must not earn
+    assert mod._marker_earned("🎯", line, {"🎯": False}) is False
+    # Live confirms goals → earns
+    assert mod._marker_earned("🎯", line, {"🎯": True}) is True
+
+
+def test_marker_earned_trusts_inbound_markers():
+    mod = _load_daemon()
+    line = "- 巳 ☀️ 📧"
+    # /inbound markers have no daemon validator; presence alone earns even when
+    # live has no opinion on them
+    assert mod._marker_earned("☀️", line, {"🎯": False}) is True
+    assert mod._marker_earned("📧", line, {"🎯": False}) is True
+    # Absent marker never earns
+    assert mod._marker_earned("✅", line, {}) is False
+
+
+def test_marker_earned_legacy_trust_when_live_none():
+    mod = _load_daemon()
+    line = "- 巳 🎯"
+    # No live results → preserve legacy trust-the-header behavior
+    assert mod._marker_earned("🎯", line, None) is True
+
+
+def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    # ⏰ (fired stamp) is written in Phase 3, after scoring, so the header has
+    # only the sub-habit markers at score time.
+    build.write_text(
+        "## -1₲\n\n"
+        "- 巳 🎯\n"
+        "    - [ ] \n"          # empty goal: 🎯 is stale
+        "- 午 ✅\n"
+        "    - [ ] real goal\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+    # Live results for 巳: no goals, no toggl, no todoist → score 0 despite 🎯
+    assert mod.score_block_from_emojis("巳", live={"🎯": False, "⏱️": False, "✅": False}) == 0
+    # With live confirming goals, the 🎯 earns its 3
+    assert mod.score_block_from_emojis("巳", live={"🎯": True, "⏱️": False, "✅": False}) == 3

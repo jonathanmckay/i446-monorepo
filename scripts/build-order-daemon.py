@@ -22,6 +22,8 @@ Usage:
   python3 build-order-daemon.py archive        [--dry-run]
 """
 
+from __future__ import annotations  # PEP 604 `dict | None` hints on Python 3.9
+
 import argparse
 import base64
 import datetime as dt
@@ -752,10 +754,17 @@ def _todoist_has_completions(target_date: dt.date, start_hour: int, end_hour: in
 
 
 def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
-                            dry_run: bool = False) -> None:
-    """Evaluate -1g, -1t, -1l for the just-ended block and write emojis."""
+                            dry_run: bool = False) -> dict:
+    """Evaluate -1g, -1t, -1l for the just-ended block, write emojis, and return
+    the live validation results keyed by marker. The returned dict is the
+    authoritative source for scoring: a marker on the header only earns points
+    if its live check passed in THIS run, so a stale marker left over from a
+    prior day (e.g. a 🎯 with no goals today) cannot award phantom points."""
+    live: dict = {}
+
     # -1g: goals were set for this block
-    if _block_has_goals(block_name):
+    live[GOAL_MARKER] = _block_has_goals(block_name)
+    if live[GOAL_MARKER]:
         _write_block_marker(block_name, GOAL_MARKER, dry_run=dry_run)
     else:
         log(f"score: {block_name} no goals found")
@@ -764,20 +773,41 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
     # Find block hours from HOUR_TO_BRANCH_BLOCK (fire_hour maps to just-ended block)
     block_start = hour - 2  # block that just ended started 2h before fire
     block_end = hour
-    if _toggl_covers_block(target_date, block_start, block_end):
+    live[TOGGL_MARKER] = _toggl_covers_block(target_date, block_start, block_end)
+    if live[TOGGL_MARKER]:
         _write_block_marker(block_name, TOGGL_MARKER, dry_run=dry_run)
     else:
         log(f"score: {block_name} toggl coverage below threshold")
 
     # -1l: todoist completions during the block
-    if _todoist_has_completions(target_date, block_start, block_end):
+    live[TODOIST_MARKER] = _todoist_has_completions(target_date, block_start, block_end)
+    if live[TODOIST_MARKER]:
         _write_block_marker(block_name, TODOIST_MARKER, dry_run=dry_run)
     else:
         log(f"score: {block_name} no todoist completions")
 
+    return live
 
-def score_block_from_emojis(block_name: str) -> int:
-    """Read emojis on a block header and sum points. Pure function of markers."""
+
+def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
+    """Decide whether a marker earns its points for a block header `line`.
+
+    The emoji must be present on the header. For daemon-owned markers
+    (🎯/⏱️/✅) `live` must also confirm the habit happened today — this is what
+    blocks stale markers from prior days. ☀️/📧 are written by /inbound and have
+    no daemon-side validator, so header presence alone is trusted. When `live`
+    is None (e.g. a re-score with no evaluation pass), all markers are trusted,
+    preserving the legacy behavior."""
+    if emoji not in line:
+        return False
+    if live is not None and emoji in live and not live[emoji]:
+        return False
+    return True
+
+
+def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
+    """Sum points from emojis on the block header, validated against `live`
+    results so stale markers don't score. See `_marker_earned`."""
     if not BUILD_ORDER.exists():
         return 0
     text = BUILD_ORDER.read_text(encoding="utf-8")
@@ -793,8 +823,15 @@ def score_block_from_emojis(block_name: str) -> int:
                 name = name.replace(m, "")
             name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
             if name == block_name:
-                score = sum(pts for emoji, pts in SCORE_EMOJI_MAP.items() if emoji in line)
-                log(f"score: {block_name} = {score} pts (from: {[e for e in SCORE_EMOJI_MAP if e in line]})")
+                earned = [e for e, pts in SCORE_EMOJI_MAP.items()
+                          if _marker_earned(e, line, live)]
+                stale = [e for e in SCORE_EMOJI_MAP
+                         if e in line and e not in earned]
+                score = sum(SCORE_EMOJI_MAP[e] for e in earned)
+                msg = f"score: {block_name} = {score} pts (from: {earned})"
+                if stale:
+                    msg += f" [ignored stale markers: {stale}]"
+                log(msg)
                 return score
     return 0
 
@@ -853,10 +890,11 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
 
     # Phase 1: evaluate daemon-checkable habits and write emojis
     if block_name:
-        evaluate_and_mark_block(block_name, hour, today, dry_run=dry_run)
+        live = evaluate_and_mark_block(block_name, hour, today, dry_run=dry_run)
 
-        # Phase 2: score purely from emojis on the block header
-        score = score_block_from_emojis(block_name)
+        # Phase 2: score from header emojis, validated against this run's live
+        # results so stale markers from prior days don't award phantom points
+        score = score_block_from_emojis(block_name, live=live)
         log(f"lock-and-mark: {block_name} scored {score}/13")
 
         # Phase 3: write score to neon
@@ -864,7 +902,7 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
         annotate_block_fired(hour, dry_run=dry_run)
 
         # Phase 4: notify with score breakdown
-        notify_block_score(block_name, score, dry_run=dry_run)
+        notify_block_score(block_name, score, dry_run=dry_run, live=live)
     else:
         log(f"lock-and-mark: hour={hour:02d} has no block to score (day start)")
 
@@ -876,7 +914,8 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
 NOTIFY_REMAINING_FILE = Path.home() / ".cache" / "build-order-notify-remaining"
 
 
-def notify_block_score(block_name: str, score: int, dry_run: bool = False) -> None:
+def notify_block_score(block_name: str, score: int, dry_run: bool = False,
+                       live: dict | None = None) -> None:
     """Send macOS notification + email with block score breakdown. Auto-disables after 20 fires."""
     # Check remaining count
     remaining = 0
@@ -906,7 +945,7 @@ def notify_block_score(block_name: str, score: int, dry_run: bool = False) -> No
                 name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
                 if name == block_name:
                     for emoji, pts in SCORE_EMOJI_MAP.items():
-                        if emoji in line:
+                        if _marker_earned(emoji, line, live):
                             earned.append(f"{emoji}+{pts}")
                         else:
                             missed.append(f"{emoji}+{pts}")
