@@ -249,10 +249,15 @@ def fetch_lease_history(prop_ids, from_year, to_year):
     """Fetch the full occupancy history (incl. moved-out tenants) for lease
     activity flows. Each record carries move_in, lease_expires, last_lease_renewal
     and move_out dates, which we bucket into Acquired / Expired / Renewed per month.
-    exclude_occupancies_with_move_out=0 is what makes past tenants visible."""
+    exclude_occupancies_with_move_out=0 is what makes past tenants visible.
+
+    The ends_on window filters on lease EXPIRY, so it's padded ±2 years beyond
+    the target years: a lease renewed (or moved into) in a target year can have
+    a term that ends outside it (e.g. renewed in 2026, expires 2027), and a too-
+    narrow window would drop those activity events."""
     payload = {
-        "ends_on_from": f"{from_year}-01",
-        "ends_on_to": f"{to_year}-12",
+        "ends_on_from": f"{from_year - 2}-01",
+        "ends_on_to": f"{to_year + 2}-12",
         "properties": {"properties_ids": prop_ids},
         "exclude_month_to_month": "0",
         "exclude_occupancies_with_move_out": "0",
