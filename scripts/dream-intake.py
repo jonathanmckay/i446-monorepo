@@ -291,7 +291,47 @@ _AF_EXCLUDE = {
 }
 
 
-@source("appfolio_rent_roll", "AppFolio occupancy summary with core portfolio metrics")
+def _parse_money(x):
+    """Parse an AppFolio money string ('1,025.00', '$930') to float, else None."""
+    if x is None:
+        return None
+    try:
+        return float(str(x).replace(",", "").replace("$", "").strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _appfolio_avg_rent(vhost: str, as_of: str) -> dict:
+    """Mean in-place rent per property code from the plain rent_roll report.
+
+    Returns {property_code: avg_rent_int}. Occupied units only: a tenant is on
+    the lease and Rent > 0. The rent_roll report is served on the v1 API and
+    only answers to GET (POST 404s), unlike the v2 occupancy report. Any error
+    yields an empty dict so the caller still emits occupancy data."""
+    url = (
+        f"https://{vhost}.appfolio.com/api/v1/reports/rent_roll.json"
+        f"?as_of_date={as_of}"
+    )
+    try:
+        data = _http_request(url, method="GET", headers={"Authorization": _af_auth()})
+    except Exception:
+        return {}  # leave avg_rent as None; occupancy data still emits
+
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for row in data.get("results", []):
+        if not (row.get("Tenant") or "").strip():
+            continue  # vacant unit — exclude from in-place average
+        rent = _parse_money(row.get("Rent"))
+        if rent is None or rent <= 0:
+            continue
+        prop = str(row.get("Property", "Unknown")).split(" - ")[0].strip()
+        sums[prop] = sums.get(prop, 0.0) + rent
+        counts[prop] = counts.get(prop, 0) + 1
+    return {prop: round(sums[prop] / counts[prop]) for prop in sums}
+
+
+@source("appfolio_rent_roll", "AppFolio occupancy + in-place avg rent per property")
 def _appfolio_rent_roll():
     vhost = _CREDS.get("af_vhost", "")
     if not vhost:
@@ -325,6 +365,17 @@ def _appfolio_rent_roll():
         p["vacant_unrented"] += row.get("vacant_unrented", 0)
         p["notice_rented"] += row.get("notice_rented", 0)
         p["notice_unrented"] += row.get("notice_unrented", 0)
+
+    # Per-property in-place average rent, from the rent roll's authoritative
+    # `Rent` column (actual base rent of the current lease). We use the plain
+    # rent_roll report, NOT rent_roll_itemized: the itemized report has no clean
+    # rent field — `total - monthly_charges` only matches the real Rent ~70% of
+    # the time (concessions/credits skew it). avg_rent is the mean over occupied
+    # units only (a tenant on the lease and Rent > 0), so vacants don't drag it
+    # down. A rent-roll failure must not break the occupancy output.
+    avg_rent_by_prop = _appfolio_avg_rent(vhost, today)
+    for prop, p in by_property.items():
+        p["avg_rent"] = avg_rent_by_prop.get(prop)  # None = no occupied units / unavailable
 
     # Compute per-property metrics
     for prop, p in by_property.items():
