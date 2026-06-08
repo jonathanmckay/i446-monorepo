@@ -118,7 +118,7 @@ OPEX_MAP = {
     "Water": {"51002"},
     "Garbage": {"51003", "51004"},
 }
-OPEX_OTHER_CODES = {"53001", "50800"}
+OPEX_OTHER_CODES = {"53001", "50800", "50003"}  # 50003 = Lease Bonus Fee
 
 BELOW_NOI_MAP = {
     "Mortgage Interest": {"80310"},
@@ -193,6 +193,14 @@ def appfolio_post(endpoint, payload):
 # Data fetching
 # ---------------------------------------------------------------------------
 
+# Accrual basis: books expenses when incurred, not when paid. The default
+# (cash) basis leaves the most recent closed month income-only until vendor
+# payments clear, which forced the comparisons to anchor a month back. Accrual
+# posts a closed month's expenses immediately and keeps all 12 months on one
+# consistent method, so NOI/comparisons reflect the latest closed month.
+ACCOUNTING_BASIS = "Accrual"
+
+
 def fetch_12m_income_statement(prop_ids, from_month, to_month):
     """Fetch the 12-month income statement. Returns raw API rows."""
     payload = {
@@ -202,6 +210,7 @@ def fetch_12m_income_statement(prop_ids, from_month, to_month):
         "fund_type": "all",
         "level_of_detail": "detail_view",
         "include_zero_balance_gl_accounts": "0",
+        "accounting_basis": ACCOUNTING_BASIS,
         "properties": {"properties_ids": prop_ids},
     }
     return appfolio_post("twelve_month_income_statement.json", payload)
@@ -216,6 +225,7 @@ def fetch_prior_year_12m(prop_ids, from_month, to_month):
         "fund_type": "all",
         "level_of_detail": "detail_view",
         "include_zero_balance_gl_accounts": "0",
+        "accounting_basis": ACCOUNTING_BASIS,
         "properties": {"properties_ids": prop_ids},
     }
     return appfolio_post("twelve_month_income_statement.json", payload)
@@ -230,20 +240,34 @@ def fetch_budget_comparison(prop_ids, period_from, period_to):
         "comparison_period_to": period_to,
         "properties": {"properties_ids": prop_ids},
         "property_visibility": "active",
+        "accounting_basis": ACCOUNTING_BASIS,
     }
     return appfolio_post("budget_comparison.json", payload)
 
 
-def fetch_lease_expiration(prop_ids, from_month, to_month):
-    """Fetch lease expiration detail by month from AppFolio v2 API."""
+def fetch_lease_history(prop_ids, from_year, to_year):
+    """Fetch the full occupancy history (incl. moved-out tenants) for lease
+    activity flows. Each record carries move_in, lease_expires, last_lease_renewal
+    and move_out dates, which we bucket into Acquired / Expired / Renewed per month.
+    exclude_occupancies_with_move_out=0 is what makes past tenants visible."""
     payload = {
-        "ends_on_from": from_month,
-        "ends_on_to": to_month,
+        "ends_on_from": f"{from_year}-01",
+        "ends_on_to": f"{to_year}-12",
         "properties": {"properties_ids": prop_ids},
         "exclude_month_to_month": "0",
-        "exclude_occupancies_with_move_out": "1",
+        "exclude_occupancies_with_move_out": "0",
     }
     return appfolio_post("lease_expiration_detail.json", payload)
+
+
+def fetch_unit_snapshot(prop_ids, as_of_date):
+    """Fetch a per-unit rent roll snapshot for the current term/MTM/vacant
+    reconciliation. One row per unit, so it sums to the unit count exactly."""
+    payload = {
+        "as_of_date": as_of_date,
+        "properties": {"properties_ids": prop_ids},
+    }
+    return appfolio_post("rent_roll_itemized.json", payload)
 
 
 def fetch_occupancy(prop_ids, as_of_date):
@@ -739,75 +763,100 @@ def build_ancillary_income(monthly, months, gpr_monthly):
     return "\n".join(lines) + "\n", total_t12, pct_total, arrears_pct
 
 
-def build_lease_exposure(lease_data, exposure_months):
-    """Build horizontal Lease Exposure section from lease_expiration_detail_by_month data.
+def build_lease_activity(history_data, snapshot_data, units, today):
+    """Lease activity & exposure section.
 
-    exposure_months is a list of 'YYYY-MM' strings (forward-looking, typically 6 months).
+    A current per-unit snapshot (term / MTM / vacant, reconciling to the unit
+    count) followed by a monthly activity matrix for the prior and current
+    calendar years:
+      - Expired:  fixed lease term ends in the month (lease_expires)
+      - Renewed:  lease renewal signed in the month (last_lease_renewal)
+      - Acquired: new tenant moved in during the month (move_in)
+    Prior year is fully known. Current year: expirations are scheduled for the
+    full year, renewals are knowable ~a month ahead, acquisitions only through
+    the current month; cells beyond what's knowable are left blank.
     """
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    lines = ["## Lease Activity & Exposure", ""]
 
-    lines = ["## Lease Exposure", ""]
+    cy = today.year
+    py = cy - 1
+    renewed_known = min(today.month + 1, 12)   # renewals land ~a month ahead
+    acquired_known = today.month               # move-ins are historical fact
 
-    if not lease_data:
-        lines.append("(data unavailable)")
+    # --- Current snapshot (reconciles to unit count) ---
+    snap = (snapshot_data or {}).get("results", []) if snapshot_data else []
+    term = mtm = vacant = 0
+    for u in snap:
+        status = (u.get("status") or "")
+        if status.startswith("Vacant"):
+            vacant += 1
+        elif u.get("lease_to"):
+            term += 1
+        else:
+            mtm += 1
+    counted = term + mtm + vacant
+    if snap:
+        # If the snapshot row count disagrees with the registry unit count, trust
+        # the registry and fold the difference into vacant so it still reconciles.
+        if counted != units:
+            vacant += units - counted
+        occupied = term + mtm
+        lines.append(
+            f"**Current ({units} units):** {occupied} occupied "
+            f"({term} term · {mtm} MTM) · {max(vacant, 0)} vacant"
+        )
+        lines.append("")
+
+    # --- Activity flows ---
+    def bucket(field):
+        out = defaultdict(int)
+        for rec in (history_data or {}).get("results", []):
+            d = rec.get(field)
+            if d and len(d) >= 7:
+                out[d[:7]] += 1
+        return out
+
+    if not history_data:
+        lines.append("(activity data unavailable)")
         lines.append("")
         return "\n".join(lines) + "\n"
 
-    results = lease_data.get("results", [])
+    acquired = bucket("move_in")
+    expired = bucket("lease_expires")
+    renewed = bucket("last_lease_renewal")
 
-    # Count by month and status
-    exp_by_month = defaultdict(int)
-    mtm_count = 0
-    renewed_by_month = defaultdict(int)
-    status_counts = defaultdict(int)
-
-    for rec in results:
-        expires_month_str = rec.get("lease_expires_month", "")
-        status = rec.get("status", "")
-
-        if expires_month_str == "Month-To-Month":
-            mtm_count += 1
-            continue
-
-        # Parse "Jul 2026" -> "2026-07"
-        parts = expires_month_str.split()
-        if len(parts) == 2:
-            try:
-                mi = month_names.index(parts[0][:3]) + 1
-                yi = int(parts[1])
-                month_key = f"{yi:04d}-{mi:02d}"
-            except (ValueError, IndexError):
-                continue
-        else:
-            continue
-
-        exp_by_month[month_key] += 1
-        status_counts[status] += 1
-        if status == "Renewed":
-            renewed_by_month[month_key] += 1
-
-    # Build header
-    labels = []
-    for m in exposure_months:
-        y, mo = int(m[:4]), int(m[5:7])
-        short_yr = str(y)[2:]
-        labels.append(f"{month_names[mo - 1]} {short_yr}")
-
-    header = "| | MTM | " + " | ".join(labels) + " | **Total** |"
-    sep = "|:--|--:|" + "".join("--:|" for _ in exposure_months) + "--:|"
-
-    total_exp = sum(exp_by_month.get(m, 0) for m in exposure_months)
-    total_renewed = sum(renewed_by_month.get(m, 0) for m in exposure_months)
-
-    exp_cells = " | ".join(str(exp_by_month.get(m, 0)) for m in exposure_months)
-    ren_cells = " | ".join(str(renewed_by_month.get(m, 0)) for m in exposure_months)
-
+    header = "| Flow | " + " | ".join(month_names) + " | **Total** |"
+    sep = "|:-----|" + "--:|" * 12 + "--:|"
     lines.append(header)
     lines.append(sep)
-    lines.append(f"| Expiring | {mtm_count} | {exp_cells} | **{total_exp + mtm_count}** |")
-    lines.append(f"| Renewed | — | {ren_cells} | **{total_renewed}** |")
 
+    def row(label, data, year, known_through):
+        cells, total = [], 0
+        for mo in range(1, 13):
+            if mo > known_through:
+                cells.append("")          # not yet knowable
+                continue
+            n = data.get(f"{year}-{mo:02d}", 0)
+            total += n
+            cells.append(str(n) if n else "·")
+        return f"| {label} | " + " | ".join(cells) + f" | **{total}** |"
+
+    lines.append(row(f"{py} Expired",  expired,  py, 12))
+    lines.append(row(f"{py} Renewed",  renewed,  py, 12))
+    lines.append(row(f"{py} Acquired", acquired, py, 12))
+    lines.append(row(f"{cy} Expired",  expired,  cy, 12))
+    lines.append(row(f"{cy} Renewed",  renewed,  cy, renewed_known))
+    lines.append(row(f"{cy} Acquired", acquired, cy, acquired_known))
+
+    lines.append("")
+    lines.append(
+        "Expired = fixed term ends · Renewed = renewal signed · "
+        "Acquired = new move-in. "
+        f"{cy} renewals known through {month_names[renewed_known - 1]}, "
+        f"acquisitions through {month_names[acquired_known - 1]}; later cells blank."
+    )
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -1256,7 +1305,8 @@ def determine_quarter(end_month):
 def generate_full_report(code, prop, monthly, summaries, af_totals, months, labels,
                          cap_rate, units, report_date, report_date_iso,
                          prior_monthly=None, prior_summaries=None, prior_t12_noi=None,
-                         gpr_monthly=None, lease_data=None, exposure_months=None,
+                         gpr_monthly=None, lease_history=None, lease_snapshot=None,
+                         lease_today=None,
                          occupancy_data=None, anchor_idx=None,
                          budget_month=None, budget_ytd=None):
     """Generate the complete markdown report."""
@@ -1285,7 +1335,7 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     r.append(f"# {code.upper()} \u2014 {addr}")
     r.append(f"## Trailing 12-Month P&L {period_short}")
     r.append("")
-    r.append("Source: AppFolio income statement (12-month detail view).")
+    r.append("Source: AppFolio income statement (12-month detail view, accrual basis).")
     r.append("")
 
     # Pre-compute derived metrics and T-12 vals (needed by Summary)
@@ -1334,10 +1384,9 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     # Derived metrics
     r.append(dm_text)
 
-    # Lease Exposure (forward-looking)
-    if exposure_months is None:
-        exposure_months = []
-    r.append(build_lease_exposure(lease_data, exposure_months))
+    # Lease Activity & Exposure (snapshot + CY-1/CY activity matrix)
+    r.append(build_lease_activity(lease_history, lease_snapshot, units,
+                                  lease_today or date.today()))
 
     # Ancillary Income
     if gpr_monthly is None:
@@ -1435,28 +1484,18 @@ def main():
         print(f"Warning: Could not fetch prior year data: {e.code}", file=sys.stderr)
         raw_prior = None
 
-    # Fetch lease expiration detail (forward-looking 6 months from end of T-12)
-    lease_data = None
-    # Compute exposure window: 6 months starting from month after T-12 end
-    le_start_y, le_start_m = int(months[-1][:4]), int(months[-1][5:7])
-    le_start_m += 1
-    if le_start_m > 12:
-        le_start_m = 1
-        le_start_y += 1
-    exposure_months = []
-    ey, em = le_start_y, le_start_m
-    for _ in range(6):
-        exposure_months.append(f"{ey:04d}-{em:02d}")
-        em += 1
-        if em > 12:
-            em = 1
-            ey += 1
-    le_from = exposure_months[0]
-    le_to = exposure_months[-1]
+    # Fetch lease data: full occupancy history (activity flows) + per-unit snapshot.
+    lease_today = date.today()
+    lease_history = None
+    lease_snapshot = None
     try:
-        lease_data = fetch_lease_expiration(prop["ids"], le_from, le_to)
+        lease_history = fetch_lease_history(prop["ids"], lease_today.year - 1, lease_today.year)
     except Exception as e:
-        print(f"Warning: Could not fetch lease expiration data: {e}", file=sys.stderr)
+        print(f"Warning: Could not fetch lease history: {e}", file=sys.stderr)
+    try:
+        lease_snapshot = fetch_unit_snapshot(prop["ids"], lease_today.isoformat())
+    except Exception as e:
+        print(f"Warning: Could not fetch unit snapshot: {e}", file=sys.stderr)
 
     # Parse
     monthly, af_totals, _, gpr_monthly = parse_api_rows(raw_current, months)
@@ -1515,7 +1554,7 @@ def main():
         code, prop, monthly, summaries, af_totals, months, labels,
         cap_rate, units, report_date, report_date_iso,
         prior_monthly, prior_summaries, prior_t12_noi,
-        gpr_monthly, lease_data, exposure_months, occupancy_data,
+        gpr_monthly, lease_history, lease_snapshot, lease_today, occupancy_data,
         anchor_idx, budget_month, budget_ytd,
     )
 
