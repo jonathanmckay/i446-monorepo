@@ -6,9 +6,11 @@ user-invocable: true
 
 # Property P&L Report (/pnl)
 
-Generate a trailing 12-month income statement for a single property, with Comparisons (MoM, YoY, and budget) and Historical T-12 NOI.
+Generate a trailing 12-month income statement for a single property, with Comparisons (MoM, YoY, and budget), a Lease Activity & Exposure matrix, and Historical T-12 NOI.
 
-The Comparisons section anchors on the latest month with both income and expense posted (booking lag often leaves the most recent month income-only), and adds budget columns: month Budget, Δ Budget (favorable variance), Budget YTD, Actual YTD, and YTD Variance (calendar year-to-date through the anchor month). MoM/YoY deltas are dollar-only.
+All income-statement and budget data is pulled on an **accrual basis** so a closed month's expenses post immediately and all 12 months stay on one consistent method. (Cash basis leaves the most recent closed month income-only until vendor payments clear, which previously forced the anchor back a month.) The Comparisons section therefore anchors on the latest month in the T-12 window (e.g., May for a report run in June), comparing it to the prior month (MoM) and the same month a year earlier (YoY), and adds budget columns: month Budget, Δ Budget (favorable variance), Budget YTD, Actual YTD, and YTD Variance (calendar year-to-date through the anchor month). MoM/YoY deltas are dollar-only.
+
+The Lease Activity & Exposure section shows a current per-unit snapshot (term / MTM / vacant, reconciling to the unit count) plus a monthly matrix of Expired (lease term ends), Renewed (renewal signed), and Acquired (new move-in) for the prior and current calendar years. The prior year is fully known; for the current year, expirations are scheduled for the full year, renewals are shown through roughly one month ahead, and acquisitions through the current month, with later cells left blank.
 
 ## Arguments
 
