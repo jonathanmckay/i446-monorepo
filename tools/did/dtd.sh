@@ -750,10 +750,13 @@ while true; do
   DTD_SYNC="cp '$CACHE' '$DTD_CACHE_FILE' 2>/dev/null;"
   DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED'"
   DTD_RELOAD="${DTD_SYNC}${DTD_LIST_CMD}"
-  # --no-sort: keep dtd's priority order while filtering, so the cursor
-  # always sits on the topmost (highest-priority) match instead of jumping
-  # to whatever scores best by fuzzy ranking (regression 2026-06-06)
+  # --no-sort: keep dtd's priority order while filtering, so matches stay in
+  # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
+  # --bind change:first: with --no-sort, fzf does not snap the cursor back to
+  # the top as you type, so it can land on the last match. Force it to the
+  # first (highest-priority) match on every query keystroke.
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
+      --bind "change:first" \
       --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
