@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-06-07T16:00:03.866946-07:00"
+  "tasks": {
+    "think about what the xbox strategy is and ask as many questions as i can": {
+      "todoist_id": "6gq4Jrm3Cj293fV2",
+      "minutes": 100
+    },
+    "show my face at showcase and the mixer tonight": {
+      "todoist_id": "6gq4JrjMr5XWrPr2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-06-07T18:00:05.527355-07:00"
 }
