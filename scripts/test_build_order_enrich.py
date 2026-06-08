@@ -106,6 +106,33 @@ def test_block_name_clean_strips_duration_suffix():
     assert mod.block_name_clean("- 午 ☀️ 📧 ⏰") == "午"
 
 
+def test_block_name_clean_strips_scoring_markers():
+    """Regression: block headers also carry the daemon/-1g scoring markers
+    🎯 (goals set), ✅ (todoist), ⏱️ (toggl). If block_name_clean doesn't strip
+    them, the cleaned name (e.g. '巳 ✅ 🎯') won't match a 地支 block and enrich
+    silently collects no time entries or tasks for that block."""
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location("boe_markers", SRC)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["boe_markers"] = mod
+    spec.loader.exec_module(mod)
+
+    block_names = {b[0] for b in mod.BLOCKS}
+    headers = [
+        "- 卯 🎯 ⏰",
+        "- 巳 ✅ 🎯 ⏰",
+        "- 午 ☀️ 📧 🎯 ✅",
+        "- 申 (23min) 🎯 ⏰",
+        "- 未 ⏱️",
+    ]
+    for h in headers:
+        cleaned = mod.block_name_clean(h)
+        assert cleaned in block_names, (
+            f"{h!r} cleaned to {cleaned!r}, which is not a 地支 block name; "
+            "enrichment would be skipped for this block"
+        )
+
+
 def _load_boe():
     import importlib.util, sys
     spec = importlib.util.spec_from_file_location("boe_load", SRC)

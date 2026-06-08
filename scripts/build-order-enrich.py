@@ -37,8 +37,12 @@ BLOCKS = [
     ("亥", 20, 21),
 ]
 
-# Markers to strip when parsing block names
-MARKERS = ["☀️", "📧", "⏰"]
+# Markers to strip when parsing block names. Must include every emoji that
+# build-order-daemon and /-1g append to a block header, or the cleaned name
+# won't match a 地支 block and enrichment is silently skipped for that block:
+#   ☀️ prayer, 📧 ibx (from /inbound) · 🎯 goals-set (/-1g) ·
+#   ⏱️ toggl, ✅ todoist, ⏰ fired (build-order-daemon)
+MARKERS = ["☀️", "📧", "⏰", "🎯", "✅", "⏱️"]
 
 
 def get_current_block_idx():
