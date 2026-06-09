@@ -1463,9 +1463,9 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
     # Occupancy (no budget; deltas in percentage points)
     occ_prior = occ_pct(prior)
     occ_yoy = occ_pct(yoy_key)
-    occ_str = f"{occ:.1f}%" if occ is not None else "—"
-    occ_prior_str = f"{occ_prior:.1f}%" if occ_prior is not None else "—"
-    occ_yoy_str = f"{occ_yoy:.1f}%" if occ_yoy is not None else "—"
+    occ_str = f"{occ:.0f}%" if occ is not None else "—"
+    occ_prior_str = f"{occ_prior:.0f}%" if occ_prior is not None else "—"
+    occ_yoy_str = f"{occ_yoy:.0f}%" if occ_yoy is not None else "—"
     lines.append(f"| Occupancy | {occ_str} | — | {occ_prior_str} | {occ_yoy_str} | — | "
                  f"{occ_delta(occ, occ_prior)} | {occ_delta(occ, occ_yoy)} |")
 
