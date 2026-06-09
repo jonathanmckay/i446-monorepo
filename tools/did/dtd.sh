@@ -193,6 +193,31 @@ echo "x" >> "$DTD_PUSHED"
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
+# --- Change-points script used by fzf ctrl-v binding ---
+# Prompts for a new [N] value (needs a tty, so the binding uses execute(), not
+# execute-silent), updates the task in Todoist, and patches $CACHE so the new
+# value shows on reload.
+DTD_POINTS="/tmp/dtd-$$.points.sh"
+cat > "$DTD_POINTS" << POINTSEOF
+#!/bin/zsh
+POINTS_FAST="\$HOME/i446-monorepo/tools/did/points-fast.py"
+HDR="$DTD_HDR"
+CACHE="$CACHE"
+task="\$1"
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+query="\$task"
+if [[ "\$clean" == *"…"* ]]; then
+  clean="\${clean%%…*}"
+  query="\$clean"
+fi
+printf "\nNew points for: %s\n[N]> " "\$clean" > /dev/tty
+read newpts < /dev/tty
+out=\$(python3 "\$POINTS_FAST" "\$query" "\$newpts" "\$CACHE" 2>/dev/null)
+echo "\${out:-✗ points update failed}" > "\$HDR"
+POINTSEOF
+chmod +x "$DTD_POINTS"
+
 # --- List generation script (reloadable by fzf) ---
 DTD_LIST="/tmp/dtd-$$.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
@@ -761,11 +786,12 @@ while true; do
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-v:execute($DTD_POINTS {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {})+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-k:execute-silent($DTD_SKIP {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
+      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
 
   task="$fzf_output"
 

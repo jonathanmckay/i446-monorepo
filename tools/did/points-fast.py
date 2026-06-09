@@ -11,6 +11,8 @@ $CACHE over the snapshot, so we must patch $CACHE itself).
 Prints a one-line summary for the dtd header. Reuses defer-fast's Todoist API
 helper for auth/transport.
 """
+from __future__ import annotations  # PEP 604 `dict | None` hints on Python 3.9
+
 import importlib.util
 import json
 import re

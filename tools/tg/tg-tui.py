@@ -48,7 +48,7 @@ from prompt_toolkit.key_binding import KeyBindings  # noqa: E402
 from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
-from prompt_toolkit.styles import Style  # noqa: E402
+from prompt_toolkit.styles import Style, StyleTransformation  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
@@ -1108,8 +1108,32 @@ style = Style.from_dict({
     "prompt": "bold cyan",
 })
 
+def _no_timer_flash_on() -> bool:
+    """Whole-screen flash cue: true during the first half of each second
+    while no Toggl timer is running — a nag to go start one."""
+    if STATE.current:
+        return False
+    return dt.datetime.now(TZ).microsecond < 500_000
+
+
+class _NoTimerFlash(StyleTransformation):
+    """Invert fg/bg across the entire screen during the flash 'on' phase.
+    Toggled at 1 Hz by the wall clock; the app's 0.1s refresh animates it."""
+
+    def transform_attrs(self, attrs):
+        if _no_timer_flash_on():
+            return attrs._replace(reverse=not attrs.reverse)
+        return attrs
+
+    def invalidation_hash(self):
+        # Flip the style cache key when the phase changes so each 0.1s
+        # refresh actually redraws the inverted/normal frame.
+        return _no_timer_flash_on()
+
+
 app = Application(layout=Layout(root, focused_element=main_window),
                   key_bindings=kb, full_screen=True, style=style,
+                  style_transformation=_NoTimerFlash(),
                   refresh_interval=0.1)
 
 
