@@ -91,6 +91,19 @@ SREO_VALUES = {
     "v202": 2600, "w117": 800, "w225": 900, "w226": 1345,
 }
 
+# Value one year ago from q1 sreo tab, column C ("Value Y-1", in thousands).
+# Used as the prior-year value baseline for change-in-value and the ROE/RORE
+# denominators. Properties absent here (the newest acquisitions, blank in col C)
+# show ROE/RORE as unknown. Refresh alongside SREO_VALUES when the sheet updates.
+SREO_VALUES_1YR_AGO = {
+    "a210": 1013, "a916": 1413, "b101": 1638, "c313": 5540, "e328": 825,
+    "h604": 295, "h731": 1202, "hl65": 1213, "hl73": 645, "j312": 2174,
+    "k104": 9140, "k308": 1220, "l912": 2188, "m221": 1780, "m405": 2572,
+    "m608": 1239, "ms22": 900, "ms43": 1652, "p705": 3000, "ps17": 1800,
+    "ps25": 6525, "ps91": 1579, "rl16": 15295, "rl21": 1850, "s129": 2630,
+    "s300": 1374, "tc34": 3300, "w117": 840, "w225": 800, "w226": 1316,
+}
+
 # Outstanding mortgage balances (whole dollars) from the "M5x2 Outstanding
 # Mortgages" sheet (1MSQ9wuA2WgMjiE4FrSVJ4v37ncp1ed_J3JKSXe-GzJU), as of
 # DEBT_AS_OF. Per-property total includes construction loans / LOC where the
@@ -737,24 +750,71 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
     return "\n".join(lines) + "\n", t12_vals
 
 
-def build_equity(code, sreo_value, debt):
-    """Build the Equity section: Equity = SREO Value - outstanding debt.
+def compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_principal):
+    """Equity and trailing-12-month return metrics (ROE / RORE).
 
-    SREO value is stored in thousands; debt in whole dollars. When either input
-    is missing the dependent rows show an em-dash rather than a wrong number.
-    Return and projected return are placeholders pending future work.
+    sreo_value and sreo_value_1yr are in thousands; debt and flows in dollars.
+
+    Total Return (the shared numerator) = T-12 cashflow + T-12 debt paydown
+    + change in value, where change in value = current SREO value − value one
+    year ago (q1 sreo col C).
+
+    Prior-year equity is reconstructed from the balance sheet rather than rolled
+    back through owner equity payments (AppFolio posts no owner contributions at
+    the property level): equity 1yr ago = value_1yr − debt_1yr, with
+    debt_1yr = debt_today + T-12 principal paid down. ROE divides Total Return by
+    equity 1yr ago; RORE divides it by net realizable equity 1yr ago
+    (equity 1yr ago − 9% sale cost on value_1yr). Ratios/numerator are None when
+    an input is missing.
+    """
+    sreo = sreo_value * 1000 if sreo_value is not None else None
+    sreo_1yr = sreo_value_1yr * 1000 if sreo_value_1yr is not None else None
+
+    equity_today = (sreo - debt) if (sreo is not None and debt is not None) else None
+    realizable_today = (equity_today - sreo * 0.09) if equity_today is not None else None
+
+    debt_1yr = (debt + t12_principal) if debt is not None else None
+    equity_1yr = (sreo_1yr - debt_1yr) if (sreo_1yr is not None and debt_1yr is not None) else None
+    realizable_1yr = (equity_1yr - sreo_1yr * 0.09) if equity_1yr is not None else None
+
+    change_in_value = (sreo - sreo_1yr) if (sreo is not None and sreo_1yr is not None) else None
+    numerator = (t12_cashflow + t12_principal + change_in_value) if change_in_value is not None else None
+
+    roe = (numerator / equity_1yr) if (numerator is not None and equity_1yr not in (None, 0)) else None
+    rore = (numerator / realizable_1yr) if (numerator is not None and realizable_1yr not in (None, 0)) else None
+
+    return {
+        "equity_today": equity_today, "realizable_today": realizable_today,
+        "equity_1yr": equity_1yr, "realizable_1yr": realizable_1yr,
+        "debt_1yr": debt_1yr, "change_in_value": change_in_value,
+        "t12_cashflow": t12_cashflow, "t12_principal": t12_principal,
+        "numerator": numerator, "roe": roe, "rore": rore,
+    }
+
+
+def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_principal):
+    """Build the Equity section: Equity = SREO Value - outstanding debt, plus the
+    trailing-12-month ROE and RORE.
+
+    SREO value is stored in thousands; debt and flows in whole dollars. When an
+    input is missing the dependent rows show an em-dash rather than a wrong
+    number. See compute_equity_returns for the ROE/RORE definitions.
     """
     lines = ["## Equity", ""]
     lines.append("| Metric | Value |")
     lines.append("|:-------|------:|")
 
+    er = compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_principal)
     sreo_dollars = sreo_value * 1000 if sreo_value is not None else None
-    equity = (sreo_dollars - debt) if (sreo_dollars is not None and debt is not None) else None
+    equity = er["equity_today"]
     sale_cost = sreo_dollars * 0.09 if sreo_dollars is not None else None
-    realizable_equity = (equity - sale_cost) if (equity is not None and sale_cost is not None) else None
+    realizable_equity = er["realizable_today"]
 
     def dollars(v):
         return f"${v:,.0f}" if v is not None else "—"
+
+    def pct(v):
+        return f"{v * 100:.1f}%" if v is not None else "—"
 
     lines.append(f"| SREO Value | {dollars(sreo_dollars)} |")
     lines.append(f"| Outstanding Debt | {dollars(debt)} |")
@@ -768,6 +828,16 @@ def build_equity(code, sreo_value, debt):
         lines.append(f"| LTV | {ltv:.1f}% |")
         lines.append(f"| Equity % | {eq_pct:.1f}% |")
 
+    # Trailing-12-month return on equity
+    lines.append(f"| T-12 Cashflow | {dollars(er['t12_cashflow'])} |")
+    lines.append(f"| Debt Paydown | {dollars(er['t12_principal'])} |")
+    lines.append(f"| Change in Value (YoY) | {dollars(er['change_in_value'])} |")
+    lines.append(f"| **Total Return** | **{dollars(er['numerator'])}** |")
+    lines.append(f"| Equity 1yr Ago | {dollars(er['equity_1yr'])} |")
+    lines.append(f"| Realizable Equity 1yr Ago | {dollars(er['realizable_1yr'])} |")
+    lines.append(f"| **ROE** | **{pct(er['roe'])}** |")
+    lines.append(f"| **RORE** | **{pct(er['rore'])}** |")
+
     lines.append("")
     lines.append(
         "Equity = SREO Value − outstanding debt. SREO value from 2026 Q1 "
@@ -775,6 +845,16 @@ def build_equity(code, sreo_value, debt):
         f"from M5x2 Outstanding Mortgages as of {DEBT_AS_OF} (includes "
         "construction loans / LOC where applicable). Net Realizable Equity = "
         "Equity − sale cost (9% of SREO Value), the net cash from a disposition."
+    )
+    lines.append("")
+    lines.append(
+        "Total Return = T-12 cashflow + T-12 debt paydown + change in value "
+        "(current SREO value − value one year ago, q1 sreo col C). ROE = Total "
+        "Return ÷ equity one year ago; RORE = Total Return ÷ realizable equity "
+        "one year ago. Equity one year ago is reconstructed from the balance "
+        "sheet: value_1yr − (debt_today + T-12 principal paid down), since "
+        "AppFolio carries no property-level owner equity payments to roll back. "
+        "ROE/RORE are blank when no prior-year value is on file for the property."
     )
     if debt is None:
         lines.append("")
@@ -840,13 +920,17 @@ def build_ancillary_income(monthly, months, gpr_monthly):
     t3_ann_total = total_t3 * 4
     lines.append(f"| **Total Ancillary** | **${total_latest:,.0f}** | **${t3_ann_total:,.0f}** | **${total_t12:,.0f}** | **{pct_total:.1f}%** |")
 
-    # Arrears Billing = Utility Reimb / (Water + Electric/Gas)
+    # Arrears Billing = Utility Reimb / (Water + Electric/Gas + Garbage).
+    # Garbage is in the denominator because tenants are billed back for it
+    # (RUBS) just like water; omitting it inflates recovery above 100% at
+    # properties where the owner pays little/no electric/gas (e.g. ms22).
     t12_util_reimb = sum(monthly.get(m, {}).get("Utility Reimb", 0) for m in months)
     t12_water = sum(monthly.get(m, {}).get("Water", 0) for m in months)
     t12_electric = sum(monthly.get(m, {}).get("Electric/Gas", 0) for m in months)
-    util_cost = t12_water + t12_electric
+    t12_garbage = sum(monthly.get(m, {}).get("Garbage", 0) for m in months)
+    util_cost = t12_water + t12_electric + t12_garbage
     arrears_pct = (t12_util_reimb / util_cost * 100) if util_cost != 0 else 0
-    lines.append(f"| **Arrears Billing (Util Reimb / Water+Electric+Gas)** | | | | **{arrears_pct:.1f}%** |")
+    lines.append(f"| **Arrears Billing (Util Reimb / Water+Electric+Gas+Garbage)** | | | | **{arrears_pct:.1f}%** |")
 
     lines.append("")
     return "\n".join(lines) + "\n", total_t12, pct_total, arrears_pct
@@ -1501,8 +1585,26 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     # Derived metrics
     r.append(dm_text)
 
-    # Equity (SREO Value - outstanding debt)
-    equity_text, _ = build_equity(code, sreo_val, DEBT_BALANCES.get(code))
+    # Equity (SREO Value - outstanding debt) + ROE / RORE.
+    # T-12 cashflow and debt paydown use the clean anchor-based window (matching
+    # the Summary/JSON), so a partial latest month doesn't understate the flows.
+    _aidx = anchor_idx if anchor_idx is not None else len(months) - 1
+    _eq_window = range(_aidx - 11, _aidx + 1)
+
+    def _cf_at(j):
+        if 0 <= j < len(months):
+            return summaries[months[j]]["Cashflow"]
+        pk = _prior_month_key(months[0], j)
+        if prior_summaries and pk in prior_summaries:
+            return prior_summaries[pk]["Cashflow"]
+        return 0.0
+
+    t12_cashflow = sum(_cf_at(j) for j in _eq_window)
+    t12_principal = sum(monthly[months[j]].get("Mortgage Principal", 0.0)
+                        for j in _eq_window if 0 <= j < len(months))
+
+    equity_text, _ = build_equity(code, sreo_val, SREO_VALUES_1YR_AGO.get(code),
+                                  DEBT_BALANCES.get(code), t12_cashflow, t12_principal)
     r.append(equity_text)
 
     # Lease Activity & Exposure (snapshot + CY-1/CY activity matrix)
@@ -1707,6 +1809,10 @@ def main():
     t12_income = sum(_metric_at(j, "Total Income") for j in window)
     t12_opex = sum(_metric_at(j, "Total OpEx") for j in window)
     t12_cf = sum(_metric_at(j, "Cashflow") for j in window)
+    t12_principal = sum(monthly[months[j]].get("Mortgage Principal", 0.0)
+                        for j in window if 0 <= j < len(months))
+    eq_ret = compute_equity_returns(SREO_VALUES.get(code), SREO_VALUES_1YR_AGO.get(code),
+                                    DEBT_BALANCES.get(code), t12_cf, t12_principal)
     last_dscr = summaries[anchor_month]["DSCR"]
 
     # Compute ancillary metrics for JSON

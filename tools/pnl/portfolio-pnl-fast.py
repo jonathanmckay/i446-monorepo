@@ -304,8 +304,11 @@ def parse_report_pnl(filepath):
             if len(cells) < 2:
                 continue
             label = cells[0].replace("**", "").strip()
-            if label in ("Outstanding Debt", "Equity", "Net Realizable Equity"):
-                summary_data[f"_{label}"] = parse_number(cells[1])
+            if label in ("Outstanding Debt", "Equity"):
+                val_cell = cells[1].replace("**", "").strip()
+                # Em-dash means "not computed" (no debt on file) — keep it None
+                # rather than letting parse_number collapse it to a real 0.
+                summary_data[f"_{label}"] = None if val_cell in ("", "—", "—") else parse_number(cells[1])
 
     t12_cashflow = summary_data.get("Cashflow", 0)
     return gl_data, summary_data, dscr, t12_cashflow
@@ -353,7 +356,10 @@ def aggregate_fund_data(prop_reports):
             "implied_value": round(t12_noi / cap) if cap and cap > 0 else 0,
             "debt": summary_data.get("_Outstanding Debt"),
             "equity": summary_data.get("_Equity"),
-            "realizable_equity": summary_data.get("_Net Realizable Equity"),
+            # Derived here (not parsed) so it's robust to older reports that
+            # predate the Net Realizable Equity row: Equity − 9% of SREO Value.
+            "realizable_equity": (summary_data["_Equity"] - SREO_VALUES.get(code, 0) * 1000 * 0.09)
+                                 if summary_data.get("_Equity") is not None else None,
         }
 
     return dict(fund_gl), prop_metrics
