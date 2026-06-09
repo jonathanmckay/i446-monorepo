@@ -148,6 +148,42 @@ def _archive_before_reset():
         print(f"[{LOG_PREFIX}] archived {snapshot.name}")
 
 
+def _archive_0g_goals(goal_lines):
+    """Append the just-ended day's 0₲ goals (with their done/undone state) to a
+    durable, reverse-chronological log so they survive the daily reset and can be
+    looked back on. Idempotent per date. `goal_lines` are raw markdown checkbox
+    lines for the day being reset (i.e. yesterday)."""
+    from datetime import datetime, timedelta
+    day = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
+    log = MD_FILE.parent / "0g-log.md"
+    section = f"## {day}\n\n" + "\n".join(l.strip() for l in goal_lines) + "\n"
+
+    if log.exists():
+        existing = log.read_text(encoding="utf-8")
+        if f"## {day}\n" in existing:  # already logged this date
+            return
+        lines = existing.split("\n")
+        # Insert above the first existing date heading (newest first)
+        insert_at = next((k for k, ln in enumerate(lines) if ln.startswith("## ")), len(lines))
+        lines[insert_at:insert_at] = section.split("\n") + [""]
+        log.write_text("\n".join(lines), encoding="utf-8")
+    else:
+        header = (
+            "---\n"
+            "title: \"0₲ Goals Log\"\n"
+            f"date: {day.replace('.', '-')}\n"
+            "type: log\n"
+            "tags: [g245, 0g]\n"
+            "source: -1g-cron\n"
+            "---\n\n"
+            "# 0₲ Daily Goals Log\n\n"
+            "Each day's 0₲ goals (with done/undone state), archived before the daily "
+            "reset wipes the live section. Newest first.\n\n"
+        )
+        log.write_text(header + section, encoding="utf-8")
+    print(f"[{LOG_PREFIX}] archived {len(goal_lines)} 0₲ goal(s) to 0g-log.md ({day})")
+
+
 def run_daily_reset(dry_run: bool):
     """Reset the -1₲ section in build order to empty checkboxes."""
     if not MD_FILE.exists():
@@ -204,6 +240,12 @@ def run_daily_reset(dry_run: bool):
             og_end = i
             break
     if og_start >= 0 and og_end > og_start:
+        # Preserve the day's actual goals to a durable log BEFORE wiping them, so
+        # the reset can't erase them without a trace. Only real (non-empty) goals.
+        goal_lines = [l for l in new_lines[og_start + 1:og_end]
+                      if re.match(r"^\s*- \[[ xX]\]\s*\S", l)]
+        if goal_lines:
+            _archive_0g_goals(goal_lines)
         og_replacement = [new_lines[og_start], "- [ ] ", "- [ ] ", "- [ ] ", ""]
         new_lines = new_lines[:og_start] + og_replacement + new_lines[og_end:]
         print(f"[{LOG_PREFIX}] daily-reset: 0₲ section reset (3 empty checkboxes)")
