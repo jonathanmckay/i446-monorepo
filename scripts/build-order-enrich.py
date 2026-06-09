@@ -465,6 +465,7 @@ def enrich_build_order():
             # - other: everything else (old enrichment, stray text)
             i += 1
             goal_lines = []
+            existing_other = []  # prior enrichment under this block (Time/Completed/Meetings)
             while i < len(lines):
                 l = lines[i]
                 # Stop at next block header or section header
@@ -475,47 +476,57 @@ def enrich_build_order():
                 # Checkbox lines are goals (keep them)
                 if re.match(r"^    - \[[ xX]\]", l):
                     goal_lines.append(l)
-                # Everything else under this block is old enrichment (discard)
-                # This includes **Meetings**, **Time**, meeting links, time entries
+                elif l.strip():
+                    # Prior enrichment (**Time**/**Completed**/**Other Tasks**/links).
+                    # PRESERVE it: the build order is a durable record of the day, so a
+                    # run with no fresh data (transient Toggl failure, or a block this
+                    # run can't recognize) must NOT erase what's already been logged.
+                    existing_other.append(l)
                 i += 1
 
-            # Add enrichment for past blocks only
+            # Build fresh enrichment for recognized past blocks.
+            new_enrichment = []
+            total_min = total_pts = 0
             if current_block_idx is not None and current_block_idx < current_idx:
-                prev_claimed = set(completed_claimed)
                 enrichment, total_min, total_pts = build_enrichment_sections(
                     current_block_idx, toggl_entries, completed, d357_docs,
                     completed_claimed, points_map=points_map,
                 )
-                # Append 分 and/or minutes to header line
-                annotations = []
-                if total_pts > 0:
-                    annotations.append(f"{total_pts}分")
-                if total_min > 0:
-                    annotations.append(f"{total_min}min")
-                if annotations:
-                    new_lines.append(f"{clean_header} ({', '.join(annotations)})")
-                else:
-                    new_lines.append(clean_header)
-                # Write goal lines
-                for gl in goal_lines:
-                    new_lines.append(gl)
-                for el in enrichment:
-                    new_lines.append(el)
+                new_enrichment.extend(enrichment)
                 # Per-block "Other Tasks": timestamp-bucketed tasks for this block
                 block_other = [
                     t for t in completed_by_block.get(current_block_idx, [])
                     if t not in completed_claimed
                 ]
                 if block_other:
-                    new_lines.append("    **Other Tasks**")
+                    new_enrichment.append("    **Other Tasks**")
                     for t in block_other:
-                        new_lines.append(f"    - {t} ✓")
+                        new_enrichment.append(f"    - {t} ✓")
                         completed_claimed.add(t)
-                last_past_block_insert = len(new_lines)
-            else:
-                new_lines.append(clean_header)
+
+            if new_enrichment:
+                # Fresh data → replace: refresh the header annotation and write the
+                # newly-computed record (Toggl `today` is authoritative when present).
+                annotations = []
+                if total_pts > 0:
+                    annotations.append(f"{total_pts}分")
+                if total_min > 0:
+                    annotations.append(f"{total_min}min")
+                header_out = (f"{clean_header} ({', '.join(annotations)})"
+                              if annotations else clean_header)
+                new_lines.append(header_out)
                 for gl in goal_lines:
                     new_lines.append(gl)
+                new_lines.extend(new_enrichment)
+                last_past_block_insert = len(new_lines)
+            else:
+                # No fresh enrichment (current/future block, an unrecognized header,
+                # or an empty Toggl/completed read) → keep the ORIGINAL header (with any
+                # prior annotation) plus goals and previously-recorded enrichment. Never erase.
+                new_lines.append(line)
+                for gl in goal_lines:
+                    new_lines.append(gl)
+                new_lines.extend(existing_other)
 
             continue
 

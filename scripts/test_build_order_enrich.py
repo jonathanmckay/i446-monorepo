@@ -168,8 +168,11 @@ def test_completed_tasks_bucketed_by_timestamp(tmp_path):
         "- 未\n    - [ ] goal4\n"
     )
     fake_completed = tmp_path / "completed-today.json"
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    _today = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
     fake_completed.write_text(json.dumps({
-        "date": "2026-04-28",
+        "date": _today,  # must match today or get_completed_today's date-gate drops it
         "names": ["cpap", "push", "notes"],
         "points": {},
         "timestamps": {"cpap": "06:45", "push": "06:50", "notes": "09:30"},
@@ -197,3 +200,45 @@ def test_completed_tasks_bucketed_by_timestamp(tmp_path):
     assert "cpap" not in 午_section
     assert "push" not in 午_section
     assert "notes" not in 午_section
+
+
+def test_enrich_preserves_record_on_empty_run(tmp_path):
+    """Regression: a run with no fresh Toggl/completed data must NOT erase the
+    Time/Completed sections already recorded under a block. The build order is a
+    durable record of the day, so empty/failed reads preserve, never wipe."""
+    import json
+    from unittest.mock import patch
+    mod = _load_boe()
+
+    fake_bo = tmp_path / "bo.md"
+    fake_bo.write_text(
+        "## -1₲\n\n"
+        "- 辰 (26min)\n"
+        "    - [ ] goal1\n"
+        "    **Time**\n"
+        "    - 06:10-06:36 deep work @i9\n"
+        "    **Other Tasks**\n"
+        "    - cpap ✓\n"
+        "- 巳\n    - [ ] goal2\n"
+    )
+    fake_completed = tmp_path / "completed-today.json"
+    fake_completed.write_text(json.dumps(
+        {"date": "2026-01-01", "names": [], "points": {}, "timestamps": {}}))
+    fake_archive = tmp_path / "archive"
+    fake_archive.mkdir()
+
+    # Empty Toggl + empty completed → no fresh enrichment for any block.
+    with patch.object(mod, "BUILD_ORDER", fake_bo), \
+         patch.object(mod, "COMPLETED_TODAY", fake_completed), \
+         patch.object(mod, "COMPLETED_ARCHIVE_DIR", fake_archive), \
+         patch.object(mod, "get_current_block_idx", return_value=4), \
+         patch.object(mod, "get_toggl_today", return_value=""), \
+         patch.object(mod, "get_completed_today", return_value=([], {}, {})), \
+         patch.object(mod, "get_d357_docs_today", return_value=[]):
+        mod.enrich_build_order()
+
+    result = fake_bo.read_text()
+    assert "**Time**" in result, f"Time section was erased!\n{result}"
+    assert "deep work @i9" in result, "time entry was erased"
+    assert "cpap ✓" in result, "completed task was erased"
+    assert "(26min)" in result, "header annotation was erased"
