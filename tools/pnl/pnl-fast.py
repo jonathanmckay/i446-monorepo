@@ -90,6 +90,27 @@ SREO_VALUES = {
     "v202": 2600, "w117": 800, "w225": 900, "w226": 1345,
 }
 
+# Outstanding mortgage balances (whole dollars) from the "M5x2 Outstanding
+# Mortgages" sheet (1MSQ9wuA2WgMjiE4FrSVJ4v37ncp1ed_J3JKSXe-GzJU), as of
+# DEBT_AS_OF. Per-property total includes construction loans / LOC where the
+# property carries more than one note (m608 + construction, k104 + LOC).
+# Equity = SREO Value - debt. Properties absent here carry no listed debt
+# (e.g. w225), so equity can't be computed and is shown as unknown.
+DEBT_AS_OF = "May 31, 2026"
+DEBT_BALANCES = {
+    "a916": 545_924, "m608": 472_141 + 249_700, "h604": 115_354,
+    "a210": 596_017, "p705": 1_948_147,
+    "s300": 738_175, "ms43": 1_136_467, "b101": 915_438, "ms22": 462_967,
+    "hl73": 340_744, "k104": 4_140_674 + 980_914, "m405": 1_248_579,
+    "h731": 844_503, "m221": 1_338_033, "ps17": 1_123_983, "ps25": 4_616_551,
+    "ps91": 927_998,
+    "w226": 678_273, "w117": 679_916, "hl65": 620_103,
+    "c313": 3_946_978, "e328": 660_000, "j312": 1_674_000, "k308": 917_095,
+    "l912": 895_060, "rl16": 9_919_198, "rl21": 1_209_723, "s129": 1_892_909,
+    "a511": 716_894, "kn47": 19_050_000, "tc34": 2_475_000, "v202": 2_160_000,
+    "o155": 3_225_353, "tc68": 11_887_500,
+}
+
 # ---------------------------------------------------------------------------
 # GL Account Mapping
 # ---------------------------------------------------------------------------
@@ -697,6 +718,47 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
     lines.append(f"Implied Value = T-12 NOI / {cap_pct}.")
     lines.append("")
     return "\n".join(lines) + "\n", t12_vals
+
+
+def build_equity(code, sreo_value, debt):
+    """Build the Equity section: Equity = SREO Value - outstanding debt.
+
+    SREO value is stored in thousands; debt in whole dollars. When either input
+    is missing the dependent rows show an em-dash rather than a wrong number.
+    Return and projected return are placeholders pending future work.
+    """
+    lines = ["## Equity", ""]
+    lines.append("| Metric | Value |")
+    lines.append("|:-------|------:|")
+
+    sreo_dollars = sreo_value * 1000 if sreo_value is not None else None
+    equity = (sreo_dollars - debt) if (sreo_dollars is not None and debt is not None) else None
+
+    def dollars(v):
+        return f"${v:,.0f}" if v is not None else "—"
+
+    lines.append(f"| SREO Value | {dollars(sreo_dollars)} |")
+    lines.append(f"| Outstanding Debt | {dollars(debt)} |")
+    lines.append(f"| **Equity** | **{dollars(equity)}** |")
+
+    if sreo_dollars and debt is not None and sreo_dollars != 0:
+        ltv = debt / sreo_dollars * 100
+        eq_pct = equity / sreo_dollars * 100
+        lines.append(f"| LTV | {ltv:.1f}% |")
+        lines.append(f"| Equity % | {eq_pct:.1f}% |")
+
+    lines.append("")
+    lines.append(
+        "Equity = SREO Value − outstanding debt. SREO value from 2026 Q1 "
+        "PFS + SREO (q1 sreo tab, col E). Debt = outstanding mortgage balance(s) "
+        f"from M5x2 Outstanding Mortgages as of {DEBT_AS_OF} (includes "
+        "construction loans / LOC where applicable)."
+    )
+    if debt is None:
+        lines.append("")
+        lines.append(f"_No debt on file for {code} in the mortgages sheet; equity not computed._")
+    lines.append("")
+    return "\n".join(lines) + "\n", equity
 
 
 def _prior_month_key(first_month, offset):
@@ -1389,6 +1451,10 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     # Derived metrics
     r.append(dm_text)
 
+    # Equity (SREO Value - outstanding debt)
+    equity_text, _ = build_equity(code, sreo_val, DEBT_BALANCES.get(code))
+    r.append(equity_text)
+
     # Lease Activity & Exposure (snapshot + CY-1/CY activity matrix)
     r.append(build_lease_activity(lease_history, lease_snapshot, units,
                                   lease_today or date.today()))
@@ -1604,6 +1670,10 @@ def main():
         "T12_NOI": round(t12_noi),
         "T12_cashflow": round(t12_cf),
         "implied_value": round(t12_noi / cap_rate),
+        "sreo_value": SREO_VALUES.get(code) * 1000 if SREO_VALUES.get(code) else None,
+        "debt": DEBT_BALANCES.get(code),
+        "equity": (SREO_VALUES.get(code) * 1000 - DEBT_BALANCES.get(code))
+                  if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
         "DSCR_last_month": round(last_dscr, 2) if last_dscr else None,
         "NOI_per_unit_mo": round(t12_noi / 12 / units),
         "ancillary_pct_gpr": round(ancillary_pct, 1),

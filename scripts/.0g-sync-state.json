@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-06-06T08:00:06.663654-07:00"
+  "tasks": {
+    "rob": {
+      "todoist_id": "6gqQ59C6p5MHHRfR",
+      "minutes": 20
+    },
+    "new org makes sense": {
+      "todoist_id": "6gqQ59FCXCQx2RCR",
+      "minutes": 40
+    },
+    "first pass at a first 90 days doc": {
+      "todoist_id": "6gqQ59G5HHVRQR3R",
+      "minutes": 30
+    },
+    "send forza v1 analysis": {
+      "todoist_id": "6gqQ59MX54HQqcH2",
+      "minutes": 60
+    },
+    "do a run on may financials": {
+      "todoist_id": "6gqQ59PrmhggfpmR",
+      "minutes": 80
+    }
+  },
+  "last_sync": "2026-06-09T09:32:56.501545-07:00"
 }
