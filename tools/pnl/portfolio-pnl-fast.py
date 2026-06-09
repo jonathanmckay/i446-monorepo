@@ -286,6 +286,27 @@ def parse_report_pnl(filepath):
                     dscr = None
             break
 
+    # Parse the Equity section (separate 2-column Metric/Value table below the
+    # P&L). Stash into summary_data under reserved keys so the return signature
+    # stays put. Debt and equity are computed in pnl-fast and only surfaced here.
+    in_equity = False
+    for line in lines:
+        line = line.rstrip()
+        if line.startswith("## Equity"):
+            in_equity = True
+            continue
+        if in_equity:
+            if line.startswith("##"):
+                break
+            if not line.startswith("|"):
+                continue
+            cells = [c.strip() for c in line.split("|")][1:-1]
+            if len(cells) < 2:
+                continue
+            label = cells[0].replace("**", "").strip()
+            if label in ("Outstanding Debt", "Equity", "Net Realizable Equity"):
+                summary_data[f"_{label}"] = parse_number(cells[1])
+
     t12_cashflow = summary_data.get("Cashflow", 0)
     return gl_data, summary_data, dscr, t12_cashflow
 
@@ -330,6 +351,9 @@ def aggregate_fund_data(prop_reports):
             "noi_unit_mo": noi_unit_mo,
             "sreo": SREO_VALUES.get(code, 0),
             "implied_value": round(t12_noi / cap) if cap and cap > 0 else 0,
+            "debt": summary_data.get("_Outstanding Debt"),
+            "equity": summary_data.get("_Equity"),
+            "realizable_equity": summary_data.get("_Net Realizable Equity"),
         }
 
     return dict(fund_gl), prop_metrics
@@ -475,6 +499,36 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
     total_gap_pct_s = f"+{total_gap_pct:.1f}%" if total_gap_pct >= 0 else f"-{abs(total_gap_pct):.1f}%"
     r.append(f"| **Total** | **{total_sreo:,}K** | **{total_implied_sum:,}K** | **{total_gap_s}** | **{total_gap_pct_s}** |")
     r.append("")
+
+    # Equity (rolled up from each property's Equity section)
+    eq_props = [c for c in props if prop_metrics[c].get("equity") is not None]
+    if eq_props:
+        t_sreo_eq = sum(prop_metrics[c]["sreo"] * 1000 for c in eq_props)
+        t_debt = sum(prop_metrics[c]["debt"] for c in eq_props)
+        t_equity = sum(prop_metrics[c]["equity"] for c in eq_props)
+        t_sale_cost = t_sreo_eq * 0.09
+        t_realizable = sum(prop_metrics[c]["realizable_equity"] for c in eq_props)
+        r.append("## Equity")
+        r.append("")
+        r.append("| Property | SREO Value | Debt | Equity | Sale Cost (9%) | Net Realizable Equity |")
+        r.append("|----------|----------:|-----:|-------:|---------------:|----------------------:|")
+        for code in sorted(eq_props, key=lambda c: prop_metrics[c]["realizable_equity"], reverse=True):
+            m = prop_metrics[code]
+            sale_cost = m["sreo"] * 1000 * 0.09
+            r.append(f"| {code} | {fmt_k(m['sreo']*1000)} | {fmt_k(m['debt'])} | "
+                     f"{fmt_k(m['equity'])} | {fmt_k(sale_cost)} | {fmt_k(m['realizable_equity'])} |")
+        ltv = t_debt / t_sreo_eq * 100 if t_sreo_eq else 0
+        eq_pct = t_equity / t_sreo_eq * 100 if t_sreo_eq else 0
+        r.append(f"| **Total** | **{fmt_k(t_sreo_eq)}** | **{fmt_k(t_debt)}** | "
+                 f"**{fmt_k(t_equity)}** | **{fmt_k(t_sale_cost)}** | **{fmt_k(t_realizable)}** |")
+        r.append("")
+        r.append(f"LTV = {ltv:.1f}% | Equity % = {eq_pct:.1f}%. Net Realizable Equity = "
+                 "Equity − sale cost (9% of SREO Value), the net cash from a disposition.")
+        missing = [c for c in props if prop_metrics[c].get("equity") is None]
+        if missing:
+            r.append("")
+            r.append(f"_Excludes {', '.join(sorted(missing))} (no debt on file; equity not computed)._")
+        r.append("")
 
     # Cashflow Negative Properties
     neg_cf_props = [(c, prop_metrics[c]) for c in props if prop_metrics[c]["t12_cashflow"] < 0]
@@ -756,6 +810,10 @@ def main():
         "weighted_cap_rate": round(weighted_cap * 100, 2),
         "NOI_per_unit_mo": round(total_noi / 12 / total_units) if total_units > 0 else 0,
         "fund_DSCR": None,
+        "equity": round(sum(prop_metrics[c]["equity"] for c in prop_metrics
+                            if prop_metrics[c].get("equity") is not None)),
+        "realizable_equity": round(sum(prop_metrics[c]["realizable_equity"] for c in prop_metrics
+                                       if prop_metrics[c].get("realizable_equity") is not None)),
         "file": str(out_path),
     }
 

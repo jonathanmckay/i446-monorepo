@@ -33,7 +33,7 @@ Cap rates sourced from SREO: `q1 sreo` tab, column L, in [2026 Q1 PFS + SREO](ht
 | a210 | fund-0 | 10 | 39 | 7.8% | 4210 N Avalon Rd, Spokane Valley WA 99216 |
 | h604 | fund-0 | 1 | 36 | n/a | 604 E Hartson Ave, Spokane WA 99202 |
 | m608 | fund-0 | 9 | 35 | 7.5% | 1608 W Main Ave, Spokane WA 99201 |
-| p705 | fund-0 | 4 | 40 | 7.5% | 705 S Perry St, Spokane WA 99202 |
+| p705 | fund-0 | 20 | 47 | 7.5% | 2705 N Pines Rd, Spokane Valley WA 99206 |
 | s300 | fund-i | 14 | 8 | 8.3% | 9300 E Sprague Ave, Spokane Valley WA 99206 |
 | b101 | fund-i | 17 | 42 | 8.0% | 1010 W Boone Ave, Spokane WA 99201 |
 | m405 | fund-i | 26 | 50 | 8.5% | 405 S Maple St, Spokane WA 99201 |
