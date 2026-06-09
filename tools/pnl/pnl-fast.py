@@ -850,7 +850,21 @@ def compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow,
     num_implied = _num(change_implied)
     num_sreo = _num(change_sreo)
 
+    # No prior-year value on file: fall back to reconstructing beginning equity
+    # from today's equity less the equity built over the year (debt paydown),
+    # which needs no prior value. Total Return then carries no change-in-value
+    # term, so there is a single ROE/RORE rather than the implied/SREO split.
+    no_prior_value = sreo_1yr is None
+    numerator_fallback = roe_fallback = rore_fallback = None
+    if no_prior_value:
+        equity_1yr = (equity_today - t12_principal) if equity_today is not None else None
+        realizable_1yr = (realizable_today - t12_principal) if realizable_today is not None else None
+        numerator_fallback = t12_cashflow + t12_principal
+        roe_fallback = _ratio(numerator_fallback, equity_1yr)
+        rore_fallback = _ratio(numerator_fallback, realizable_1yr)
+
     return {
+        "no_prior_value": no_prior_value,
         "equity_today": equity_today, "realizable_today": realizable_today,
         "equity_1yr": equity_1yr, "realizable_1yr": realizable_1yr,
         "debt_1yr": debt_1yr,
@@ -858,10 +872,12 @@ def compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow,
         "t12_implied_value": t12_implied_value,
         "change_implied": change_implied, "change_sreo": change_sreo,
         "numerator_implied": num_implied, "numerator_sreo": num_sreo,
+        "numerator_fallback": numerator_fallback,
         "roe_implied": _ratio(num_implied, equity_1yr),
         "roe_sreo": _ratio(num_sreo, equity_1yr),
         "rore_implied": _ratio(num_implied, realizable_1yr),
         "rore_sreo": _ratio(num_sreo, realizable_1yr),
+        "roe_fallback": roe_fallback, "rore_fallback": rore_fallback,
     }
 
 
@@ -905,22 +921,31 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow,
         lines.append(f"| LTV | {ltv:.1f}% |")
         lines.append(f"| Equity % | {eq_pct:.1f}% |")
 
-    # Trailing-12-month return on equity. Change in value (and hence Total Return,
-    # ROE, RORE) is shown two ways: implied (T-12 implied value vs value 1yr ago)
-    # and SREO (current SREO value vs value 1yr ago).
+    # Trailing-12-month return on equity.
     lines.append(f"| T-12 Cashflow | {dollars(er['t12_cashflow'])} |")
     lines.append(f"| Debt Paydown | {dollars(er['t12_principal'])} |")
-    lines.append(f"| T-12 Implied Value | {dollars(er['t12_implied_value'])} |")
-    lines.append(f"| Δ Value (Implied) | {dollars(er['change_implied'])} |")
-    lines.append(f"| Δ Value (SREO) | {dollars(er['change_sreo'])} |")
-    lines.append(f"| **Total Return (Implied)** | **{dollars(er['numerator_implied'])}** |")
-    lines.append(f"| **Total Return (SREO)** | **{dollars(er['numerator_sreo'])}** |")
-    lines.append(f"| Equity 1yr Ago | {dollars(er['equity_1yr'])} |")
-    lines.append(f"| Realizable Equity 1yr Ago | {dollars(er['realizable_1yr'])} |")
-    lines.append(f"| **ROE (Implied)** | **{pct(er['roe_implied'])}** |")
-    lines.append(f"| **ROE (SREO)** | **{pct(er['roe_sreo'])}** |")
-    lines.append(f"| **RORE (Implied)** | **{pct(er['rore_implied'])}** |")
-    lines.append(f"| **RORE (SREO)** | **{pct(er['rore_sreo'])}** |")
+    if er["no_prior_value"]:
+        # No prior-year value: single Total Return / ROE / RORE, equity one year
+        # ago reconstructed as current equity − debt paydown.
+        lines.append(f"| **Total Return** | **{dollars(er['numerator_fallback'])}** |")
+        lines.append(f"| Equity 1yr Ago | {dollars(er['equity_1yr'])} |")
+        lines.append(f"| Realizable Equity 1yr Ago | {dollars(er['realizable_1yr'])} |")
+        lines.append(f"| **ROE** | **{pct(er['roe_fallback'])}** |")
+        lines.append(f"| **RORE** | **{pct(er['rore_fallback'])}** |")
+    else:
+        # Change in value (and hence Total Return, ROE, RORE) two ways: implied
+        # (T-12 implied value vs value 1yr ago) and SREO (current value vs 1yr ago).
+        lines.append(f"| T-12 Implied Value | {dollars(er['t12_implied_value'])} |")
+        lines.append(f"| Δ Value (Implied) | {dollars(er['change_implied'])} |")
+        lines.append(f"| Δ Value (SREO) | {dollars(er['change_sreo'])} |")
+        lines.append(f"| **Total Return (Implied)** | **{dollars(er['numerator_implied'])}** |")
+        lines.append(f"| **Total Return (SREO)** | **{dollars(er['numerator_sreo'])}** |")
+        lines.append(f"| Equity 1yr Ago | {dollars(er['equity_1yr'])} |")
+        lines.append(f"| Realizable Equity 1yr Ago | {dollars(er['realizable_1yr'])} |")
+        lines.append(f"| **ROE (Implied)** | **{pct(er['roe_implied'])}** |")
+        lines.append(f"| **ROE (SREO)** | **{pct(er['roe_sreo'])}** |")
+        lines.append(f"| **RORE (Implied)** | **{pct(er['rore_implied'])}** |")
+        lines.append(f"| **RORE (SREO)** | **{pct(er['rore_sreo'])}** |")
 
     lines.append("")
     lines.append(
@@ -931,17 +956,27 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow,
         "Equity − sale cost (9% of SREO Value), the net cash from a disposition."
     )
     lines.append("")
-    lines.append(
-        "Total Return = T-12 cashflow + T-12 debt paydown + change in value. "
-        "Change in value is shown two ways, both vs value one year ago (q1 sreo "
-        "col C): Implied uses T-12 implied value (T-12 NOI ÷ cap rate); SREO uses "
-        "the current SREO value. ROE = Total Return ÷ equity one year ago; "
-        "RORE = Total Return ÷ realizable equity one year ago. Equity one year "
-        "ago is reconstructed from the balance sheet: value_1yr − (debt_today + "
-        "T-12 principal paid down), since AppFolio carries no property-level "
-        "owner equity payments to roll back. Rows are blank when no prior-year "
-        "value is on file for the property."
-    )
+    if er["no_prior_value"]:
+        lines.append(
+            "Total Return = T-12 cashflow + T-12 debt paydown (no prior-year "
+            "value on file, so no change-in-value term). ROE = Total Return ÷ "
+            "equity one year ago; RORE = Total Return ÷ realizable equity one "
+            "year ago. With no prior value, equity one year ago is reconstructed "
+            "as current equity − debt paydown (the equity built over the year), "
+            "and realizable equity one year ago as current realizable equity − "
+            "debt paydown."
+        )
+    else:
+        lines.append(
+            "Total Return = T-12 cashflow + T-12 debt paydown + change in value. "
+            "Change in value is shown two ways, both vs value one year ago (q1 sreo "
+            "col C): Implied uses T-12 implied value (T-12 NOI ÷ cap rate); SREO uses "
+            "the current SREO value. ROE = Total Return ÷ equity one year ago; "
+            "RORE = Total Return ÷ realizable equity one year ago. Equity one year "
+            "ago is reconstructed from the balance sheet: value_1yr − (debt_today + "
+            "T-12 principal paid down), since AppFolio carries no property-level "
+            "owner equity payments to roll back."
+        )
     if debt is None:
         lines.append("")
         lines.append(f"_No debt on file for {code} in the mortgages sheet; equity not computed._")
@@ -1953,6 +1988,10 @@ def main():
         "ROE_sreo": round(eq_ret["roe_sreo"], 4) if eq_ret["roe_sreo"] is not None else None,
         "RORE_implied": round(eq_ret["rore_implied"], 4) if eq_ret["rore_implied"] is not None else None,
         "RORE_sreo": round(eq_ret["rore_sreo"], 4) if eq_ret["rore_sreo"] is not None else None,
+        "no_prior_value": eq_ret["no_prior_value"],
+        "total_return_fallback": round(eq_ret["numerator_fallback"]) if eq_ret["numerator_fallback"] is not None else None,
+        "ROE_fallback": round(eq_ret["roe_fallback"], 4) if eq_ret["roe_fallback"] is not None else None,
+        "RORE_fallback": round(eq_ret["rore_fallback"], 4) if eq_ret["rore_fallback"] is not None else None,
         "DSCR_last_month": round(last_dscr, 2) if last_dscr else None,
         "NOI_per_unit_mo": round(t12_noi / 12 / units),
         "ancillary_pct_gpr": round(ancillary_pct, 1),
