@@ -6,7 +6,9 @@ user-invocable: true
 
 # Property P&L Report (/pnl)
 
-Generate a trailing 12-month income statement for a single property, with Comparisons (MoM, YoY, and budget), a Lease Activity & Exposure matrix, and Historical T-12 NOI.
+Generate a trailing 12-month income statement for a single property, with Comparisons (MoM, YoY, and budget), a Lease Activity & Exposure matrix, an Equity section, and Historical T-12 NOI.
+
+The Equity section computes **Equity = SREO Value − outstanding debt**, plus LTV and equity %. SREO value comes from the q1 sreo tab (col E); outstanding mortgage balances come from the [M5x2 Outstanding Mortgages](https://docs.google.com/spreadsheets/d/1MSQ9wuA2WgMjiE4FrSVJ4v37ncp1ed_J3JKSXe-GzJU/edit) sheet (as of the `DEBT_AS_OF` date in `pnl-fast.py`), summing construction loans / LOC where a property carries more than one note. Both lookup tables are hardcoded in the script; refresh them when the source sheets update. Return and projected return are not yet implemented. A property absent from the mortgages sheet shows equity as unknown.
 
 All income-statement and budget data is pulled on an **accrual basis** so a closed month's expenses post immediately and all 12 months stay on one consistent method. (Cash basis leaves the most recent closed month income-only until vendor payments clear, which previously forced the anchor back a month.) The Comparisons section therefore anchors on the latest month in the T-12 window (e.g., May for a report run in June), comparing it to the prior month (MoM) and the same month a year earlier (YoY), and adds budget columns: month Budget, Δ Budget (favorable variance), Budget YTD, Actual YTD, and YTD Variance (calendar year-to-date through the anchor month). MoM/YoY deltas are dollar-only.
 

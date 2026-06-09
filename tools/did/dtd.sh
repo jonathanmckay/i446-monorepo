@@ -18,6 +18,7 @@ DTD_JOURNAL="/tmp/dtd-$$.undo.jsonl"
 DTD_PUSHED="/tmp/dtd-$$.pushed"
 DTD_PROCESSED="/tmp/dtd-$$.processed"
 DTD_SESSION="/tmp/dtd-$$.session"
+DTD_TIMER="/tmp/dtd-$$.timer"
 
 if [[ ! -f "$CACHE" ]]; then
   echo "No task cache found at $CACHE" >&2
@@ -67,10 +68,10 @@ fi
 
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$$.start.sh" \
-      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
+      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
-touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
+touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
 
 (
   while IFS= read -r task_clean; do
@@ -129,23 +130,63 @@ _parse_toggl() {
 TOGGL_CURRENT=$(python3 "$TOGGL_CLI" current 2>/dev/null)
 TIMER_HDR=$(_parse_toggl "$TOGGL_CURRENT")
 
-# --- Start script used by fzf ctrl-s binding ---
+# --- Start script used by fzf enter/ctrl-s binding ---
 DTD_START="/tmp/dtd-$$.start.sh"
 cat > "$DTD_START" << STARTEOF
 #!/bin/zsh
 TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST="\$HOME/i446-monorepo/tools/tg/tg-fast.py"
 HDR="$DTD_HDR"
+TIMER="$DTD_TIMER"
 task="\$1"
 # Strip ANSI codes first
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
 python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
+printf '%s\t%s\n' "\$clean" "\$(date +%s)" > "\$TIMER"
 echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"
+
+# --- Enter script: start selected task; if already timing, complete it ---
+DTD_ENTER="/tmp/dtd-$$.enter.sh"
+cat > "$DTD_ENTER" << ENTEREOF
+#!/bin/zsh
+TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
+START="$DTD_START"
+HDR="$DTD_HDR"
+FIFO="$DTD_FIFO"
+SESSION="$DTD_SESSION"
+PUSHED="$DTD_PUSHED"
+REMOVED="$DTD_REMOVED"
+TIMER="$DTD_TIMER"
+task="\$1"
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
+clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
+
+cur=\$(python3 "\$TOGGL_CLI" current 2>/dev/null)
+cur_desc=""
+if [[ "\$cur" == Running:* ]]; then
+  cur_desc=\$(echo "\$cur" | sed -E 's/^Running: [0-9]{2}:[0-9]{2}-running //; s/ *@.*//; s/ *\\(running\\).*//; s/ *\\[id:[0-9]*\\].*//; s/ *\$//' | tr '[:upper:]' '[:lower:]')
+fi
+timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
+  echo "\$clean_for_filter" >> "\$SESSION"
+  echo "\$clean_for_filter" >> "\$REMOVED"
+  echo "x" >> "\$PUSHED"
+  : > "\$TIMER"
+  echo "⏳ completing: \$clean_for_filter" > "\$HDR"
+  printf '%s\n' "\$clean" > "\$FIFO"
+else
+  "\$START" "\$task"
+fi
+ENTEREOF
+chmod +x "$DTD_ENTER"
 
 # --- Defer script used by fzf ctrl-d binding ---
 DTD_DEFER="/tmp/dtd-$$.defer.sh"
@@ -156,7 +197,7 @@ HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
 task="\$1"
 # Strip ANSI codes and recurring indicator
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 # Query with the FULL row content (annotations intact) so duplicate names
 # differing only in (N)/[N] resolve to the exact selected task; fall back
@@ -204,7 +245,7 @@ POINTS_FAST="\$HOME/i446-monorepo/tools/did/points-fast.py"
 HDR="$DTD_HDR"
 CACHE="$CACHE"
 task="\$1"
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 query="\$task"
 if [[ "\$clean" == *"…"* ]]; then
@@ -222,12 +263,13 @@ chmod +x "$DTD_POINTS"
 DTD_LIST="/tmp/dtd-$$.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
-# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file
+# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file
 python3 -c "
-import json, sys, re
+import json, sys, re, time
 
 cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
+timer_file = sys.argv[7] if len(sys.argv) > 7 else ''
 cols = int(cols)
 
 with open(cache_file) as f:
@@ -248,6 +290,17 @@ try:
     with open(skipped_file) as f:
         skipped = [l.strip().lower() for l in f if l.strip()]
 except: skipped = []
+
+# Load running timer hint written by dtd's Enter/ctrl-s start path.
+running_clean = ''
+running_started = 0
+try:
+    timer_raw = open(timer_file).read().strip()
+    if timer_raw:
+        parts = timer_raw.split('\t')
+        running_clean = parts[0].strip().lower()
+        running_started = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+except: pass
 
 # Neon color palette (label → ANSI 256-color)
 COLORS = {
@@ -293,6 +346,7 @@ for t in all_tasks:
         unique.append(t)
 
 DIM = '\033[2m'
+running_lines = []
 normal_lines = []
 skipped_lines = []
 
@@ -331,7 +385,10 @@ for t in unique:
         line = line[:head_len] + '…' + tail
 
     repeat = '↻ ' if recurring else ''
-    if is_skipped:
+    if running_clean and clean == running_clean:
+        elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
+        running_lines.append(f'{color}▶ {elapsed}m · {line}{RESET}')
+    elif is_skipped:
         # No dimming — skipped just means later-today; keep normal colors.
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
@@ -341,11 +398,13 @@ for t in unique:
     else:
         normal_lines.append(f'{repeat}{line}')
 
+for l in running_lines:
+    print(l)
 for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
-" "$1" "$2" "$3" "$4" "$5" "$6"
+" "$1" "$2" "$3" "$4" "$5" "$6" "$7"
 LISTEOF
 chmod +x "$DTD_LIST"
 
@@ -356,7 +415,7 @@ cat > "$DTD_SKIP" << SKIPEOF
 SKIPPED="$DTD_SKIPPED"
 HDR="$DTD_HDR"
 task="\$1"
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "\$clean" | tr '[:upper:]' '[:lower:]' >> "\$SKIPPED"
 echo "⏭ \$clean" > "\$HDR"
@@ -372,7 +431,7 @@ CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
 task="\$1"
 # Strip ANSI codes and recurring indicator
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "⏳ deleting: \$clean" > "\$HDR"
 tid=\$(python3 -c "
@@ -428,7 +487,7 @@ CACHE_FILE="PLACEHOLDER_CACHE"
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 
 task="$1"
-task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 
 # Extract [N] and (N) from task
 total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
@@ -594,7 +653,7 @@ HDR="PLACEHOLDER_HDR"
 CACHE_FILE="PLACEHOLDER_CACHE"
 
 task="$1"
-task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
 # Handle truncation
@@ -759,6 +818,8 @@ while true; do
   DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
     'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
 
+  TOGGL_CURRENT=$(python3 "$TOGGL_CLI" current 2>/dev/null)
+  TIMER_HDR=$(_parse_toggl "$TOGGL_CURRENT")
   worker_hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
   combined_hdr="$TIMER_HDR
   $worker_hdr"
@@ -773,7 +834,7 @@ while true; do
   # Pass done file path instead of JSON string to avoid quoting issues
   # Every reload copies the live cache so external changes (/todo, other terminals) appear
   DTD_SYNC="cp '$CACHE' '$DTD_CACHE_FILE' 2>/dev/null;"
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED'"
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER'"
   DTD_RELOAD="${DTD_SYNC}${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
@@ -782,7 +843,8 @@ while true; do
   # first (highest-priority) match on every query keystroke.
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
       --bind "change:first" \
-      --bind "ctrl-s:execute-silent($DTD_START {})+transform-header(cat $DTD_HDR)" \
+      --bind "enter:execute-silent($DTD_ENTER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-s:execute-silent($DTD_START {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
@@ -791,7 +853,7 @@ while true; do
       --bind "ctrl-k:execute-silent($DTD_SKIP {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
+      --header="$combined_hdr  [enter: start/complete | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
 
   task="$fzf_output"
 
@@ -800,7 +862,7 @@ while true; do
   fi
 
   # Strip ANSI color codes and recurring indicator from fzf selection
-  task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed 's/^↻ //')
+  task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
 
   # Resolve truncated names: if fzf output contains "…", find the original
   # full name from the cache snapshot by matching the prefix before "…"
@@ -889,4 +951,4 @@ if [[ $session_count -gt 0 ]]; then
 fi
 
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
