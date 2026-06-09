@@ -827,12 +827,322 @@ def build_observations(fund_gl, months, total_noi, total_cf, props, prop_metrics
 
 
 # ---------------------------------------------------------------------------
+# All-funds roll-up (invoked when no fund argument is given)
+# ---------------------------------------------------------------------------
+
+FUND_LABEL = {"fund-0": "Fund 0", "fund-i": "Fund I", "fund-ii": "Fund II",
+              "fund-iii": "Fund III", "fund-iv": "Fund IV"}
+
+ROLLUP_PNL_ORDER = [
+    ("Income", ["Rent Income", "Concessions", "Utility Reimb", "Late Fees", "Laundry",
+                "Pet Rent/Fee", "Parking", "Move-In/Out", "Other Income"]),
+    ("Total Income", None),
+    ("Operating Expenses", ["Prop Mgmt", "Pest Control", "Insurance", "Prop Taxes",
+                            "R&M Repairs", "R&M Turns", "R&M Grounds", "Electric/Gas",
+                            "Water", "Garbage", "Other OpEx"]),
+    ("Total OpEx", None),
+    ("NOI", None),
+    ("Below-NOI Deductions", ["Mortgage Interest", "Mortgage Principal", "Legal",
+                              "CapEx Turns", "CapEx Appliances", "CapEx Disc",
+                              "CapEx Non-disc"]),
+    ("Total Deductions", None),
+    ("Cashflow", None),
+]
+
+
+def all_funds():
+    """Funds in canonical order (0, i, ii, iii, iv)."""
+    return sorted(set(p["fund"] for p in PROPERTIES.values()))
+
+
+def _run_one_fund(fund, args):
+    """Run this script for a single fund as a subprocess, return its JSON dict."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), fund]
+    if args.date:
+        cmd += ["--date", args.date]
+    if args.skip_existing:
+        cmd += ["--skip-existing"]
+    if args.parse_only:
+        cmd += ["--parse-only"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.stderr:
+        print(res.stderr, file=sys.stderr, end="")
+    js = [l for l in res.stdout.splitlines() if l.strip().startswith("{")]
+    if not js:
+        raise RuntimeError(f"{fund}: no JSON returned.\nstdout:\n{res.stdout}")
+    return json.loads(js[-1])
+
+
+def _rollup_fmt(v):
+    if v is None:
+        return "\u2014"
+    v = round(v)
+    return f"({abs(v):,})" if v < 0 else f"{v:,}"
+
+
+def _parse_noi_budget_rows(md_path, fund):
+    """Parse the per-property NOI vs Budget table from a fund summary."""
+    rows = []
+    in_seg = False
+    for ln in md_path.read_text().splitlines():
+        if ln.startswith("## NOI vs Budget"):
+            in_seg = True
+            continue
+        if in_seg and ln.startswith("## "):
+            break
+        if in_seg and ln.lstrip().startswith("|"):
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if len(cells) < 8:
+                continue
+            code = cells[0].replace("**", "")
+            if code in ("Property", "Total") or set(cells[0]) <= set(":-"):
+                continue
+            z_raw = cells[6].replace("**", "")
+            rows.append({
+                "code": code, "fund": fund, "units": cells[1],
+                "actual": parse_number(cells[3]), "budget": parse_number(cells[4]),
+                "pct": cells[5],
+                "z": float(z_raw) if z_raw not in ("", "\u2014", "—") else None,
+                "flag": cells[7],
+                "has_budget": cells[4].strip() not in ("", "\u2014", "—"),
+            })
+    return rows
+
+
+def _parse_consolidated_pnl(md_path):
+    """Parse {label: [12 monthly + T12]} from a fund's consolidated P&L section."""
+    data = {}
+    in_seg = False
+    for ln in md_path.read_text().splitlines():
+        if re.search(r"Consolidated P&L", ln) and ln.startswith("## "):
+            in_seg = True
+            continue
+        if in_seg and ln.startswith("### "):
+            break
+        if in_seg and ln.lstrip().startswith("|"):
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            label = cells[0].replace("**", "").strip()
+            if not label or label == "Account" or set(cells[0].strip()) <= set(":-"):
+                continue
+            nums = [parse_number(c) for c in cells[1:]]
+            if len(nums) >= 13:
+                data[label] = nums[:13]
+    return data
+
+
+def generate_rollup(args):
+    """Generate the all-funds portfolio roll-up doc from the five fund summaries."""
+    funds = all_funds()
+    end_month = compute_end_month(args.date)
+    period = period_folder(end_month)
+    months, labels = compute_month_labels(end_month)
+    today = date.today()
+    report_date_file = today.strftime("%Y.%m.%d")
+    report_date = today.strftime("%Y.%m.%d")
+    report_date_iso = today.strftime("%Y-%m-%d")
+
+    month_names = ["January", "February", "March", "April", "May", "June",
+                   "July", "August", "September", "October", "November", "December"]
+    fy, fm = int(months[0][:4]), int(months[0][5:7])
+    ly, lm = int(months[-1][:4]), int(months[-1][5:7])
+    span = f"{month_names[fm-1]} {fy} \u2013 {month_names[lm-1]} {ly}"
+
+    print(f"Generating all-funds roll-up across {len(funds)} funds...", file=sys.stderr)
+    meta = {}
+    for f in funds:
+        print(f"===== {f} =====", file=sys.stderr)
+        meta[f] = _run_one_fund(f, args)
+
+    base = REPORTS_BASE / period
+    noi_rows, pnls = [], {}
+    for f in funds:
+        md = base / f / f"{report_date_file}-{f}-summary.md"
+        noi_rows += _parse_noi_budget_rows(md, f)
+        pnls[f] = _parse_consolidated_pnl(md)
+
+    # Sum consolidated P&Ls label-by-label.
+    combined = {}
+    for f in funds:
+        for label, vals in pnls[f].items():
+            acc = combined.setdefault(label, [0.0] * 13)
+            for i in range(13):
+                acc[i] += vals[i]
+
+    def t12(label):
+        return combined.get(label, [0.0] * 13)[12]
+
+    # Portfolio totals from fund JSON.
+    tot_props = sum(meta[f]["properties"] for f in funds)
+    tot_units = sum(meta[f]["units"] for f in funds)
+    tot_noi = sum(meta[f]["T12_NOI"] for f in funds)
+    tot_cf = sum(meta[f]["T12_cashflow"] for f in funds)
+    tot_sreo_k = sum(meta[f]["SREO_value_K"] for f in funds)
+    tot_impl_k = sum(meta[f]["implied_value_K"] or 0 for f in funds)
+    tot_equity = sum(meta[f]["equity"] for f in funds)
+    tot_realiz = sum(meta[f]["realizable_equity"] for f in funds)
+    debt = tot_sreo_k * 1000 - tot_equity
+    # weighted_cap_rate from JSON is already a percentage.
+    wcap = sum(meta[f]["SREO_value_K"] * meta[f]["weighted_cap_rate"] for f in funds) / tot_sreo_k
+    noi_unit_mo = tot_noi / tot_units / 12 if tot_units else 0
+    ds = t12("Mortgage Interest") + t12("Mortgage Principal")
+    dscr = tot_noi / ds if ds else 0
+
+    out = []
+    out.append("---")
+    out.append(f'title: "All-Funds Portfolio Roll-Up ({month_names[lm-1]} {ly})"')
+    out.append(f"date: {report_date_iso}")
+    out.append("type: report")
+    out.append("tags: [m5x2, pnl, summary, rollup, all-funds]")
+    out.append("source: appfolio")
+    out.append("---")
+    out.append("")
+    out.append(f"## All-Funds Portfolio Roll-Up ({span})")
+    out.append("")
+    out.append(f"**{tot_props} properties \u00b7 {tot_units} units \u00b7 {len(funds)} funds** "
+               f"| Value-Weighted Cap Rate: {wcap:.2f}%")
+    out.append("")
+    out.append("| Metric | Value |")
+    out.append("|--------|------:|")
+    out.append(f"| T-12 NOI | ${_rollup_fmt(tot_noi)} |")
+    out.append(f"| T-12 Cashflow | ${_rollup_fmt(tot_cf)} |")
+    out.append(f"| SREO Value | ${_rollup_fmt(tot_sreo_k)}K |")
+    out.append(f"| Implied Value ({wcap:.2f}% cap) | ${_rollup_fmt(tot_impl_k)}K |")
+    out.append(f"| NOI/Unit/Mo | ${_rollup_fmt(noi_unit_mo)} |")
+    out.append(f"| Portfolio DSCR | {dscr:.2f} |")
+    out.append(f"| Equity | ${_rollup_fmt(tot_equity)} |")
+    out.append(f"| Net Realizable Equity | ${_rollup_fmt(tot_realiz)} |")
+    out.append("")
+
+    out.append("## Fund Breakdown")
+    out.append("")
+    out.append("| Fund | Props | Units | T-12 NOI | Cashflow | DSCR | Cap | SREO | Implied | Equity | Net Realiz. |")
+    out.append("|------|------:|------:|---------:|---------:|-----:|----:|-----:|--------:|-------:|------------:|")
+    for f in funds:
+        m = meta[f]
+        d = f"{m['fund_DSCR']:.2f}" if m.get("fund_DSCR") else "\u2014"
+        out.append(f"| {FUND_LABEL.get(f, f)} | {m['properties']} | {m['units']} | "
+                   f"{_rollup_fmt(m['T12_NOI'])} | {_rollup_fmt(m['T12_cashflow'])} | {d} | "
+                   f"{m['weighted_cap_rate']:.2f}% | {_rollup_fmt(m['SREO_value_K'])}K | "
+                   f"{_rollup_fmt(m['implied_value_K'])}K | {_rollup_fmt(m['equity'])} | "
+                   f"{_rollup_fmt(m['realizable_equity'])} |")
+    out.append(f"| **Total** | **{tot_props}** | **{tot_units}** | **{_rollup_fmt(tot_noi)}** | "
+               f"**{_rollup_fmt(tot_cf)}** | **{dscr:.2f}** | **{wcap:.2f}%** | "
+               f"**{_rollup_fmt(tot_sreo_k)}K** | **{_rollup_fmt(tot_impl_k)}K** | "
+               f"**{_rollup_fmt(tot_equity)}** | **{_rollup_fmt(tot_realiz)}** |")
+    out.append("")
+
+    out.append(f"## NOI vs Budget \u2014 All Properties ({month_names[lm-1][:3]}, worst z first)")
+    out.append("")
+    out.append("| Property | Fund | Units | Actual NOI | Budget NOI | \u0394 vs Budget | z | Flag |")
+    out.append("|----------|------|------:|-----------:|-----------:|------------:|----:|:----:|")
+    flagged = sorted([r for r in noi_rows if r["z"] is not None], key=lambda r: r["z"])
+    unflagged = [r for r in noi_rows if r["z"] is None]
+    counts = {"\U0001F7E2": 0, "\U0001F7E1": 0, "\U0001F534": 0}
+    sa = sb = 0.0
+    for r in flagged + unflagged:
+        z_s = f"{r['z']:+.1f}" if r["z"] is not None else "\u2014"
+        out.append(f"| {r['code']} | {FUND_LABEL.get(r['fund'], r['fund'])} | {r['units']} | "
+                   f"{_rollup_fmt(r['actual'])} | {_rollup_fmt(r['budget'])} | {r['pct']} | {z_s} | {r['flag']} |")
+        if r["flag"] in counts:
+            counts[r["flag"]] += 1
+        if r["has_budget"]:
+            sa += r["actual"]
+            sb += r["budget"]
+    tot_pct = (sa - sb) / sb * 100 if sb else 0
+    out.append(f"| **Total (budgeted)** | | | **{_rollup_fmt(sa)}** | **{_rollup_fmt(sb)}** | "
+               f"**{tot_pct:+.0f}%** | | |")
+    out.append("")
+    out.append("Flag = size-adjusted significance of the miss (z = \u0394% \u00f7 \u221a(p(1\u2212p)/n), p=0.93): "
+               "\U0001F7E2 z>\u22121 (noise) \u00b7 \U0001F7E1 \u22122<z\u2264\u22121 (watch) \u00b7 "
+               "\U0001F534 z\u2264\u22122 (real problem). "
+               f"**Portfolio: \U0001F7E2 {counts['🟢']} \u00b7 \U0001F7E1 {counts['🟡']} \u00b7 \U0001F534 {counts['🔴']}.**")
+    reds = [r for r in flagged if r["flag"] == "\U0001F534"]
+    if reds:
+        out.append("")
+        out.append(f"**Red flags ({len(reds)}):** " + ", ".join(
+            f"{r['code']} ({FUND_LABEL.get(r['fund'], r['fund'])}, {r['units']}u, {r['pct']}, z {r['z']:+.1f})"
+            for r in reds))
+    out.append("")
+
+    out.append("## Equity")
+    out.append("")
+    out.append("| Metric | Value |")
+    out.append("|--------|------:|")
+    out.append(f"| SREO Value | ${_rollup_fmt(tot_sreo_k)}K |")
+    out.append(f"| Outstanding Debt | ${_rollup_fmt(debt)} |")
+    out.append(f"| **Equity** | **${_rollup_fmt(tot_equity)}** |")
+    out.append(f"| Net Realizable Equity | ${_rollup_fmt(tot_realiz)} |")
+    out.append(f"| LTV | {debt/(tot_sreo_k*1000)*100:.1f}% |")
+    out.append(f"| Equity % | {tot_equity/(tot_sreo_k*1000)*100:.1f}% |")
+    out.append("")
+
+    out.append(f"## All-Funds Consolidated P&L ({span})")
+    out.append("")
+    out.append("| Account | " + " | ".join(labels) + " | **T12** |")
+    out.append("|:--------|" + "|".join(["-------:"] * 13) + "|")
+
+    def emit(label, bold=False):
+        vals = combined.get(label)
+        if vals is None:
+            return
+        lab = f"**{label}**" if bold else label
+        out.append(f"| {lab} | " + " | ".join(_rollup_fmt(v) for v in vals) + " |")
+
+    for header, sublines in ROLLUP_PNL_ORDER:
+        if sublines is None:
+            emit(header, bold=True)
+            out.append("| |" + " |" * 13)
+        else:
+            out.append(f"| **{header}** |" + " |" * 13)
+            for label in sublines:
+                emit(label)
+    out.append("")
+
+    inc = t12("Total Income")
+    rm = t12("R&M Repairs") + t12("R&M Turns") + t12("R&M Grounds")
+    capex = sum(t12(l) for l in ("CapEx Turns", "CapEx Appliances", "CapEx Disc", "CapEx Non-disc"))
+    inc_first = combined.get("Total Income", [0.0]*13)[0]
+    inc_last = combined.get("Total Income", [0.0]*13)[11]
+    out.append("### Portfolio Observations")
+    out.append("")
+    out.append(f"- **T-12 NOI ${_rollup_fmt(tot_noi)}** on ${_rollup_fmt(inc)} income; portfolio DSCR {dscr:.2f}.")
+    if tot_noi:
+        out.append(f"- **Debt service (T-12) ${_rollup_fmt(ds)}** ({ds/tot_noi*100:.0f}% of NOI).")
+        out.append(f"- **T-12 CapEx ${_rollup_fmt(capex)}** = {capex/tot_noi*100:.0f}% of NOI.")
+    if inc:
+        out.append(f"- **R&M (Repairs + Turns + Grounds) ${_rollup_fmt(rm)}** = {rm/inc*100:.1f}% of income.")
+    out.append(f"- **T-12 Cashflow ${_rollup_fmt(tot_cf)}** after debt service and CapEx.")
+    if inc_first:
+        out.append(f"- **Income trend:** ${_rollup_fmt(inc_first)} ({labels[0]}) \u2192 "
+                   f"${_rollup_fmt(inc_last)} ({month_names[lm-1][:3]}), {(inc_last/inc_first-1)*100:+.1f}%.")
+    out.append("")
+    out.append(f"Generated from AppFolio on {report_date}. Rolls up {', '.join(funds)} {month_names[lm-1]} summaries.")
+    out.append("")
+
+    out_path = base / f"{report_date_file}-all-funds-rollup.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(out))
+    print(f"\nWrote: {out_path}", file=sys.stderr)
+    print(json.dumps({
+        "scope": "all-funds", "funds": funds, "properties": tot_props, "units": tot_units,
+        "period": f"{months[0]} to {months[-1]}", "T12_NOI": round(tot_noi),
+        "T12_cashflow": round(tot_cf), "SREO_value_K": round(tot_sreo_k),
+        "implied_value_K": round(tot_impl_k), "weighted_cap_rate": round(wcap, 2),
+        "portfolio_DSCR": round(dscr, 2), "equity": round(tot_equity),
+        "realizable_equity": round(tot_realiz),
+        "flags": {"green": counts["🟢"], "yellow": counts["🟡"], "red": counts["🔴"]},
+        "file": str(out_path),
+    }))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Generate fund-level P&L summary")
-    parser.add_argument("fund", help="Fund name (e.g. fund-i, fund-ii, fund-iii)")
+    parser.add_argument("fund", nargs="?", default=None,
+                        help="Fund name (e.g. fund-i). Omit (or 'all') for the all-funds roll-up.")
     parser.add_argument("--date", help="End month YYYY-MM (default: previous full month)", default=None)
     parser.add_argument("--skip-existing", action="store_true",
                         help="Skip regeneration if report dated today already exists")
@@ -841,6 +1151,11 @@ def main():
     args = parser.parse_args()
     if args.parse_only:
         args.skip_existing = True
+
+    # No fund (or 'all'/'rollup') -> generate the portfolio-wide roll-up.
+    if args.fund is None or args.fund.lower() in ("all", "rollup", "portfolio", "all-funds"):
+        generate_rollup(args)
+        return
 
     fund = args.fund.lower()
     fund_props = get_fund_properties(fund)
