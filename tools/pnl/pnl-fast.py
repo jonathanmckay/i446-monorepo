@@ -1229,9 +1229,9 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     y_noi = prior_summaries[yoy_month]["NOI"] if has_yoy else None
     noi_b = _budget_lookup(budget_month, "NOI") if has_budget else None
     noi_budget_val = noi_b[0] if noi_b else None   # _budget_lookup -> (budget, actual, var)
-    noi_flag_emoji, _, _ = noi_budget_flag(c_noi, noi_budget_val, units)
+    noi_flag_emoji, noi_z, _ = noi_budget_flag(c_noi, noi_budget_val, units)
     add_comp("NOI", c_noi, p_noi, y_noi, bold=True,
-             label_suffix=f" {noi_flag_emoji}" if noi_flag_emoji else "")
+             label_suffix=f" {noi_flag_emoji} z{noi_z:+.1f}" if noi_flag_emoji else "")
 
     # Below-NOI lines
     for label in BELOW_NOI_ROWS:
@@ -1543,8 +1543,8 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
     # NOI
     noi_bud = budget_val("NOI")
     noi_yoy = s_yoy["NOI"] if s_yoy else None
-    noi_flag_emoji, _, _ = noi_budget_flag(noi, noi_bud, units)
-    noi_lbl = f"NOI {noi_flag_emoji}" if noi_flag_emoji else "NOI"
+    noi_flag_emoji, noi_z, _ = noi_budget_flag(noi, noi_bud, units)
+    noi_lbl = f"NOI {noi_flag_emoji} z{noi_z:+.1f}" if noi_flag_emoji else "NOI"
     lines.append(f"| {noi_lbl} | {fmt_dollar(noi)} | {dollar_or_dash(noi_bud)} | {fmt_dollar(s_prior['NOI'])} | "
                  f"{dollar_or_dash(noi_yoy)} | {pct_delta(noi, noi_bud)} | "
                  f"{pct_delta(noi, s_prior['NOI'])} | {pct_delta(noi, noi_yoy)} |")

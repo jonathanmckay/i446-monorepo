@@ -550,8 +550,8 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
         budget_props.sort(key=lambda c: prop_metrics[c]["noi_last_actual"], reverse=True)
         r.append("## NOI vs Budget (Last Month)")
         r.append("")
-        r.append("| Property | Units | Month | Actual NOI | Budget NOI | NOI Δ vs Budget | Flag |")
-        r.append("|----------|------:|------:|-----------:|-----------:|----------------:|:----:|")
+        r.append("| Property | Units | Month | Actual NOI | Budget NOI | NOI Δ vs Budget | z | Flag |")
+        r.append("|----------|------:|------:|-----------:|-----------:|----------------:|----:|:----:|")
         sum_actual = 0.0   # only over properties that have a budget (apples-to-apples)
         sum_budget = 0.0
         no_budget = []
@@ -568,20 +568,22 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
             units = m.get("units")
             label = m.get("noi_last_label") or "—"
             flag = "—"
+            z_s = "—"
             if budget:
                 pct_s = var_pct(actual, budget)
-                emoji, _, _ = noi_budget_flag(actual, budget, units)
+                emoji, z, _ = noi_budget_flag(actual, budget, units)
                 if emoji:
                     flag = emoji
+                    z_s = f"{z:+.1f}"
                     flag_counts[emoji] += 1
                 sum_actual += actual
                 sum_budget += budget
             else:
                 pct_s = "—"
                 no_budget.append(code)
-            r.append(f"| {code} | {units or '—'} | {label} | {fmt(actual)} | {fmt(budget)} | {pct_s} | {flag} |")
+            r.append(f"| {code} | {units or '—'} | {label} | {fmt(actual)} | {fmt(budget)} | {pct_s} | {z_s} | {flag} |")
         tot_pct = var_pct(sum_actual, sum_budget) if sum_budget else "—"
-        r.append(f"| **Total** | | | **{fmt(sum_actual)}** | **{fmt(sum_budget)}** | **{tot_pct}** | |")
+        r.append(f"| **Total** | | | **{fmt(sum_actual)}** | **{fmt(sum_budget)}** | **{tot_pct}** | | |")
         r.append("")
         r.append("NOI Δ vs Budget = (anchor-month actual NOI − budgeted NOI) / budgeted NOI. "
                  "Positive = beating budget. Total row covers only properties with a budget on file.")
