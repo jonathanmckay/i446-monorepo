@@ -314,6 +314,55 @@ def parse_report_pnl(filepath):
     return gl_data, summary_data, dscr, t12_cashflow
 
 
+def parse_report_comparisons(filepath):
+    """Parse the anchor-month NOI Actual vs Budget from the Comparisons section.
+
+    The Comparisons table's header names the anchor month in its first value
+    column (e.g. "May 26"); the **NOI** row holds Actual in col 1 and Budget in
+    col 2. Returns (anchor_label, noi_actual, noi_budget). noi_budget is None
+    when the budget cell is blank/em-dash. Returns (None, None, None) if absent.
+    """
+    if not filepath or not filepath.exists():
+        return None, None, None
+
+    with open(filepath) as f:
+        lines = f.readlines()
+
+    in_comp = False
+    anchor_label = None
+    for line in lines:
+        line = line.rstrip()
+        if line.startswith("## Comparisons"):
+            in_comp = True
+            continue
+        if not in_comp:
+            continue
+        # Leaving the section
+        if line.startswith("## ") and not line.startswith("## Comparisons"):
+            break
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.split("|")][1:-1]
+        if not cells:
+            continue
+        # Header row names the anchor month in its first value column
+        if cells[0].replace("*", "").strip() == "Account":
+            anchor_label = cells[1] if len(cells) > 1 else None
+            continue
+        if cells[0].startswith(":--") or cells[0].startswith("--"):
+            continue
+        if cells[0].replace("**", "").strip() == "NOI":
+            actual = parse_number(cells[1]) if len(cells) > 1 else None
+            # Distinguish a real budget from an em-dash placeholder: a budget
+            # cell with no digit means "no budget on file" -> None, not 0.
+            budget = None
+            if len(cells) > 2 and any(ch.isdigit() for ch in cells[2]):
+                budget = parse_number(cells[2])
+            return anchor_label, actual, budget
+
+    return anchor_label, None, None
+
+
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
@@ -462,6 +511,45 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
     total_cf_s = f"({abs(round(total_cf)):,})" if total_cf < 0 else f"{round(total_cf):,}"
     r.append(f"| **Total** | **{total_units}** | **{round(total_noi):,}** | **{total_cf_s}** | | **{weighted_cap_pct}** | **{total_sreo:,}K** | **{noi_unit_mo:,}** | **{total_implied_k}** |")
     r.append("")
+
+    # NOI vs Budget (last closed month) - per property, actual vs budget %
+    budget_props = [c for c in props if prop_metrics[c].get("noi_last_actual") is not None]
+    if budget_props:
+        budget_props.sort(key=lambda c: prop_metrics[c]["noi_last_actual"], reverse=True)
+        r.append("## NOI vs Budget (Last Month)")
+        r.append("")
+        r.append("| Property | Month | Actual NOI | Budget NOI | NOI Δ vs Budget |")
+        r.append("|----------|------:|-----------:|-----------:|----------------:|")
+        sum_actual = 0.0   # only over properties that have a budget (apples-to-apples)
+        sum_budget = 0.0
+        no_budget = []
+
+        def var_pct(actual, budget):
+            v = (actual - budget) / budget * 100
+            return f"+{v:.0f}%" if v >= 0 else f"{v:.0f}%"
+
+        for code in budget_props:
+            m = prop_metrics[code]
+            actual = m["noi_last_actual"]
+            budget = m["noi_last_budget"]
+            label = m.get("noi_last_label") or "—"
+            if budget:
+                pct_s = var_pct(actual, budget)
+                sum_actual += actual
+                sum_budget += budget
+            else:
+                pct_s = "—"
+                no_budget.append(code)
+            r.append(f"| {code} | {label} | {fmt(actual)} | {fmt(budget)} | {pct_s} |")
+        tot_pct = var_pct(sum_actual, sum_budget) if sum_budget else "—"
+        r.append(f"| **Total** | | **{fmt(sum_actual)}** | **{fmt(sum_budget)}** | **{tot_pct}** |")
+        r.append("")
+        r.append("NOI Δ vs Budget = (anchor-month actual NOI − budgeted NOI) / budgeted NOI. "
+                 "Positive = beating budget. Total row covers only properties with a budget on file.")
+        if no_budget:
+            r.append("")
+            r.append(f"_No budget on file: {', '.join(sorted(no_budget))} (excluded from total)._")
+        r.append("")
 
     # Value-Weighted Cap Rate Calculation
     r.append("## Value-Weighted Cap Rate Calculation")
@@ -781,6 +869,15 @@ def main():
 
     # Step 3: Aggregate
     fund_gl, prop_metrics = aggregate_fund_data(prop_reports)
+
+    # Step 3b: Parse each property's anchor-month NOI vs Budget for the
+    # NOI-vs-Budget section.
+    for code in prop_metrics:
+        report_path = find_latest_report(code, fund, period)
+        anchor_label, noi_actual, noi_budget = parse_report_comparisons(report_path)
+        prop_metrics[code]["noi_last_label"] = anchor_label
+        prop_metrics[code]["noi_last_actual"] = noi_actual
+        prop_metrics[code]["noi_last_budget"] = noi_budget
 
     # Step 4: Build report
     report = build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, report_date_iso)
