@@ -380,7 +380,10 @@ def parse_report_comparisons(filepath):
             continue
         if cells[0].startswith(":--") or cells[0].startswith("--"):
             continue
-        if cells[0].replace("**", "").strip() == "NOI":
+        # The NOI row label may carry a trailing flag emoji (e.g. "**NOI** 🔴"),
+        # so match on the first whitespace-delimited token rather than equality.
+        noi_label = cells[0].replace("**", "").strip()
+        if noi_label.split()[:1] == ["NOI"]:
             actual = parse_number(cells[1]) if len(cells) > 1 else None
             # Distinguish a real budget from an em-dash placeholder: a budget
             # cell with no digit means "no budget on file" -> None, not 0.
