@@ -41,7 +41,7 @@ PROPERTIES = {
     "a210": {"fund": "fund-0", "units": 10, "ids": ["39"], "cap": 0.078, "addr": "4210 N Avalon Rd, Spokane Valley WA 99216"},
     "h604": {"fund": "fund-0", "units": 1, "ids": ["36"], "cap": None, "addr": "604 E Hartson Ave, Spokane WA 99202"},
     "m608": {"fund": "fund-0", "units": 9, "ids": ["35"], "cap": 0.075, "addr": "1608 W Main Ave, Spokane WA 99201"},
-    "p705": {"fund": "fund-0", "units": 4, "ids": ["40"], "cap": 0.075, "addr": "705 S Perry St, Spokane WA 99202"},
+    "p705": {"fund": "fund-0", "units": 20, "ids": ["47"], "cap": 0.075, "addr": "2705 N Pines Rd, Spokane Valley WA 99206"},
     "s300": {"fund": "fund-i", "units": 14, "ids": ["8"], "cap": 0.083, "addr": "9300 E Sprague Ave, Spokane Valley WA 99206"},
     "b101": {"fund": "fund-i", "units": 17, "ids": ["42"], "cap": 0.080, "addr": "1010 W Boone Ave, Spokane WA 99201"},
     "m405": {"fund": "fund-i", "units": 26, "ids": ["50"], "cap": 0.085, "addr": "405 S Maple St, Spokane WA 99201"},

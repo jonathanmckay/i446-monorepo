@@ -646,7 +646,7 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
     hdr = "| Metric |" + "".join(f" {l} |" for l in labels)
     sep = "|:-------|" + " -------:|" * len(labels)
     lines.extend([hdr, sep])
-    cap_pct = f"{cap_rate*100:.1f}%"
+    cap_pct = f"{cap_rate*100:.1f}%" if cap_rate else "n/a"
 
     # T-3 Ann NOI
     row = "| T-3 Ann NOI |"
@@ -700,7 +700,7 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
     # Implied Value
     row = f"| Implied Value ({cap_pct}) |"
     for m in months:
-        if t12_vals.get(m) is not None:
+        if t12_vals.get(m) is not None and cap_rate:
             row += f" {fmt_k(t12_vals[m] / cap_rate)} |"
         else:
             row += " \u2014 |"
@@ -709,7 +709,7 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
     # T-3 Ann Value
     row = f"| T-3 Ann Value ({cap_pct}) |"
     for i, m in enumerate(months):
-        if i < 2:
+        if i < 2 or not cap_rate:
             row += " \u2014 |"
         else:
             three = [months[j] for j in range(i - 2, i + 1)]
@@ -811,7 +811,9 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_princ
     realizable_equity = er["realizable_today"]
 
     def dollars(v):
-        return f"${v:,.0f}" if v is not None else "—"
+        if v is None:
+            return "—"
+        return f"-${abs(v):,.0f}" if v < 0 else f"${v:,.0f}"
 
     def pct(v):
         return f"{v * 100:.1f}%" if v is not None else "—"
@@ -1166,7 +1168,7 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     add_comp("T-12 NOI", t12_last, t12_prev,
              t12_vals.get(yoy_month) if has_yoy else None, is_budget_row=False)
 
-    if t12_last is not None:
+    if t12_last is not None and cap_rate:
         iv_last = t12_last / cap_rate
         iv_prev = t12_prev / cap_rate if t12_prev else None
         iv_last_s = fmt_k(iv_last)
@@ -1825,13 +1827,21 @@ def main():
         "T12_opex": round(t12_opex),
         "T12_NOI": round(t12_noi),
         "T12_cashflow": round(t12_cf),
-        "implied_value": round(t12_noi / cap_rate),
+        "implied_value": round(t12_noi / cap_rate) if cap_rate else None,
         "sreo_value": SREO_VALUES.get(code) * 1000 if SREO_VALUES.get(code) else None,
         "debt": DEBT_BALANCES.get(code),
         "equity": (SREO_VALUES.get(code) * 1000 - DEBT_BALANCES.get(code))
                   if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
         "realizable_equity": (SREO_VALUES.get(code) * 1000 * 0.91 - DEBT_BALANCES.get(code))
                   if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
+        "value_1yr_ago": SREO_VALUES_1YR_AGO.get(code) * 1000 if SREO_VALUES_1YR_AGO.get(code) else None,
+        "debt_paydown_t12": round(t12_principal),
+        "change_in_value": round(eq_ret["change_in_value"]) if eq_ret["change_in_value"] is not None else None,
+        "total_return": round(eq_ret["numerator"]) if eq_ret["numerator"] is not None else None,
+        "equity_1yr_ago": round(eq_ret["equity_1yr"]) if eq_ret["equity_1yr"] is not None else None,
+        "realizable_equity_1yr_ago": round(eq_ret["realizable_1yr"]) if eq_ret["realizable_1yr"] is not None else None,
+        "ROE": round(eq_ret["roe"], 4) if eq_ret["roe"] is not None else None,
+        "RORE": round(eq_ret["rore"], 4) if eq_ret["rore"] is not None else None,
         "DSCR_last_month": round(last_dscr, 2) if last_dscr else None,
         "NOI_per_unit_mo": round(t12_noi / 12 / units),
         "ancillary_pct_gpr": round(ancillary_pct, 1),
