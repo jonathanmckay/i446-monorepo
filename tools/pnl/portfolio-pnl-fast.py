@@ -15,6 +15,7 @@ Examples:
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -23,6 +24,34 @@ import time
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
+from statistics import NormalDist
+
+# ---------------------------------------------------------------------------
+# NOI-vs-budget significance flag (green / yellow / red), size-adjusted by unit
+# count. Occupancy is a Binomial(n, p) process, so the standard error of a
+# percentage miss scales as sqrt(p*(1-p)/n): a given % miss is far more
+# significant on a large building. Kept in sync with pnl-fast.py; full spec in
+# vault/m5x2/reports/pnl-meta.md.
+NOI_FLAG_P = 0.93      # stabilized occupancy baseline; sets the noise model
+NOI_FLAG_VOL_K = 1.0   # volatility multiplier on sigma (raise to widen bands)
+
+
+def noi_budget_flag(actual, budget, units):
+    """Return (emoji, z, var_frac); emoji is None when not computable."""
+    if budget is None or budget <= 0 or not units or units <= 0:
+        return None, None, None
+    var_frac = (actual - budget) / budget
+    sigma = NOI_FLAG_VOL_K * math.sqrt(NOI_FLAG_P * (1 - NOI_FLAG_P) / units)
+    if sigma == 0:
+        return None, None, None
+    z = var_frac / sigma
+    if z > -1.0:
+        emoji = "\U0001F7E2"
+    elif z > -2.0:
+        emoji = "\U0001F7E1"
+    else:
+        emoji = "\U0001F534"
+    return emoji, z, var_frac
 
 # ---------------------------------------------------------------------------
 # Config
@@ -518,11 +547,12 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
         budget_props.sort(key=lambda c: prop_metrics[c]["noi_last_actual"], reverse=True)
         r.append("## NOI vs Budget (Last Month)")
         r.append("")
-        r.append("| Property | Month | Actual NOI | Budget NOI | NOI Δ vs Budget |")
-        r.append("|----------|------:|-----------:|-----------:|----------------:|")
+        r.append("| Property | Units | Month | Actual NOI | Budget NOI | NOI Δ vs Budget | Flag |")
+        r.append("|----------|------:|------:|-----------:|-----------:|----------------:|:----:|")
         sum_actual = 0.0   # only over properties that have a budget (apples-to-apples)
         sum_budget = 0.0
         no_budget = []
+        flag_counts = {"\U0001F7E2": 0, "\U0001F7E1": 0, "\U0001F534": 0}
 
         def var_pct(actual, budget):
             v = (actual - budget) / budget * 100
@@ -532,20 +562,30 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
             m = prop_metrics[code]
             actual = m["noi_last_actual"]
             budget = m["noi_last_budget"]
+            units = m.get("units")
             label = m.get("noi_last_label") or "—"
+            flag = "—"
             if budget:
                 pct_s = var_pct(actual, budget)
+                emoji, _, _ = noi_budget_flag(actual, budget, units)
+                if emoji:
+                    flag = emoji
+                    flag_counts[emoji] += 1
                 sum_actual += actual
                 sum_budget += budget
             else:
                 pct_s = "—"
                 no_budget.append(code)
-            r.append(f"| {code} | {label} | {fmt(actual)} | {fmt(budget)} | {pct_s} |")
+            r.append(f"| {code} | {units or '—'} | {label} | {fmt(actual)} | {fmt(budget)} | {pct_s} | {flag} |")
         tot_pct = var_pct(sum_actual, sum_budget) if sum_budget else "—"
-        r.append(f"| **Total** | | **{fmt(sum_actual)}** | **{fmt(sum_budget)}** | **{tot_pct}** |")
+        r.append(f"| **Total** | | | **{fmt(sum_actual)}** | **{fmt(sum_budget)}** | **{tot_pct}** | |")
         r.append("")
         r.append("NOI Δ vs Budget = (anchor-month actual NOI − budgeted NOI) / budgeted NOI. "
                  "Positive = beating budget. Total row covers only properties with a budget on file.")
+        r.append("")
+        r.append(f"Flag = size-adjusted significance of the miss (z = Δ% ÷ √(p(1−p)/n), p={NOI_FLAG_P}): "
+                 "🟢 z>−1 (noise) · 🟡 −2<z≤−1 (watch) · 🔴 z≤−2 (real problem). "
+                 f"This month: 🟢 {flag_counts['🟢']} · 🟡 {flag_counts['🟡']} · 🔴 {flag_counts['🔴']}.")
         if no_budget:
             r.append("")
             r.append(f"_No budget on file: {', '.join(sorted(no_budget))} (excluded from total)._")

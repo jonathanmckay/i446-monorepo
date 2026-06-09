@@ -21,9 +21,65 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import math
 from collections import defaultdict
 from datetime import datetime, date
 from pathlib import Path
+from statistics import NormalDist
+
+# ---------------------------------------------------------------------------
+# NOI-vs-budget significance flag (green / yellow / red)
+# ---------------------------------------------------------------------------
+# A % miss vs budget is more alarming on a large building than a small one:
+# occupancy is a Binomial(n, p) process, so the standard error of a percentage
+# miss scales as sqrt(p*(1-p)/n). We score the miss in standard errors (z) so
+# size is accounted for. See vault/m5x2/reports/pnl-meta.md for the full spec.
+
+NOI_FLAG_P = 0.93      # stabilized occupancy baseline; sets the noise model
+NOI_FLAG_VOL_K = 1.0   # volatility multiplier on sigma (raise to widen bands)
+
+
+def noi_budget_flag(actual, budget, units):
+    """Classify NOI vs budget as green/yellow/red, size-adjusted by unit count.
+
+    Returns (emoji, z, var_frac). emoji is None when not computable (no budget,
+    non-positive budget, or unknown unit count). var_frac is the signed
+    fractional variance (actual - budget) / budget.
+    """
+    if budget is None or budget <= 0 or not units or units <= 0:
+        return None, None, None
+    var_frac = (actual - budget) / budget
+    sigma = NOI_FLAG_VOL_K * math.sqrt(NOI_FLAG_P * (1 - NOI_FLAG_P) / units)
+    if sigma == 0:
+        return None, None, None
+    z = var_frac / sigma
+    if z > -1.0:
+        emoji = "\U0001F7E2"   # green
+    elif z > -2.0:
+        emoji = "\U0001F7E1"   # yellow
+    else:
+        emoji = "\U0001F534"   # red
+    return emoji, z, var_frac
+
+
+def noi_flag_phrase(actual, budget, units):
+    """One-line plain-English flag, e.g.
+    '\U0001F534 -11% vs budget (z -4.3 over 100 units, ~1-in-86k by chance)'.
+    Returns None when not computable."""
+    emoji, z, var_frac = noi_budget_flag(actual, budget, units)
+    if emoji is None:
+        return None
+    pct = f"{var_frac * 100:+.0f}%"
+    if z < 0:
+        cdf = NormalDist().cdf(z)
+        if cdf <= 1e-7:
+            rarity = "astronomically unlikely by chance"
+        else:
+            odds = 1 / cdf
+            rarity = f"~1-in-{odds:,.0f} by chance"
+        return f"{emoji} {pct} vs budget (z {z:+.1f} over {units} units, {rarity})"
+    return f"{emoji} {pct} vs budget (z {z:+.1f} over {units} units, at/above budget)"
+
 
 # ---------------------------------------------------------------------------
 # AppFolio API config
@@ -750,21 +806,26 @@ def build_derived_metrics(summaries, months, labels, cap_rate, units, prior_mont
     return "\n".join(lines) + "\n", t12_vals
 
 
-def compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_principal):
+def compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow,
+                           t12_principal, t12_implied_value):
     """Equity and trailing-12-month return metrics (ROE / RORE).
 
-    sreo_value and sreo_value_1yr are in thousands; debt and flows in dollars.
+    sreo_value and sreo_value_1yr are in thousands; debt, flows, and
+    t12_implied_value (= T-12 NOI / cap rate) are in dollars.
 
-    Total Return (the shared numerator) = T-12 cashflow + T-12 debt paydown
-    + change in value, where change in value = current SREO value − value one
-    year ago (q1 sreo col C).
+    Change in value is computed two ways, both measured against the value one
+    year ago (q1 sreo col C):
+      - implied: T-12 implied value − value_1yr
+      - sreo:    current SREO value − value_1yr
+    Each yields its own Total Return (= T-12 cashflow + T-12 debt paydown +
+    change in value) and therefore its own ROE / RORE.
 
     Prior-year equity is reconstructed from the balance sheet rather than rolled
     back through owner equity payments (AppFolio posts no owner contributions at
     the property level): equity 1yr ago = value_1yr − debt_1yr, with
     debt_1yr = debt_today + T-12 principal paid down. ROE divides Total Return by
     equity 1yr ago; RORE divides it by net realizable equity 1yr ago
-    (equity 1yr ago − 9% sale cost on value_1yr). Ratios/numerator are None when
+    (equity 1yr ago − 9% sale cost on value_1yr). Ratios/numerators are None when
     an input is missing.
     """
     sreo = sreo_value * 1000 if sreo_value is not None else None
@@ -777,22 +838,35 @@ def compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_p
     equity_1yr = (sreo_1yr - debt_1yr) if (sreo_1yr is not None and debt_1yr is not None) else None
     realizable_1yr = (equity_1yr - sreo_1yr * 0.09) if equity_1yr is not None else None
 
-    change_in_value = (sreo - sreo_1yr) if (sreo is not None and sreo_1yr is not None) else None
-    numerator = (t12_cashflow + t12_principal + change_in_value) if change_in_value is not None else None
+    change_implied = (t12_implied_value - sreo_1yr) if (t12_implied_value is not None and sreo_1yr is not None) else None
+    change_sreo = (sreo - sreo_1yr) if (sreo is not None and sreo_1yr is not None) else None
 
-    roe = (numerator / equity_1yr) if (numerator is not None and equity_1yr not in (None, 0)) else None
-    rore = (numerator / realizable_1yr) if (numerator is not None and realizable_1yr not in (None, 0)) else None
+    def _num(change):
+        return (t12_cashflow + t12_principal + change) if change is not None else None
+
+    def _ratio(num, denom):
+        return (num / denom) if (num is not None and denom not in (None, 0)) else None
+
+    num_implied = _num(change_implied)
+    num_sreo = _num(change_sreo)
 
     return {
         "equity_today": equity_today, "realizable_today": realizable_today,
         "equity_1yr": equity_1yr, "realizable_1yr": realizable_1yr,
-        "debt_1yr": debt_1yr, "change_in_value": change_in_value,
+        "debt_1yr": debt_1yr,
         "t12_cashflow": t12_cashflow, "t12_principal": t12_principal,
-        "numerator": numerator, "roe": roe, "rore": rore,
+        "t12_implied_value": t12_implied_value,
+        "change_implied": change_implied, "change_sreo": change_sreo,
+        "numerator_implied": num_implied, "numerator_sreo": num_sreo,
+        "roe_implied": _ratio(num_implied, equity_1yr),
+        "roe_sreo": _ratio(num_sreo, equity_1yr),
+        "rore_implied": _ratio(num_implied, realizable_1yr),
+        "rore_sreo": _ratio(num_sreo, realizable_1yr),
     }
 
 
-def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_principal):
+def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow,
+                 t12_principal, t12_implied_value):
     """Build the Equity section: Equity = SREO Value - outstanding debt, plus the
     trailing-12-month ROE and RORE.
 
@@ -804,7 +878,8 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_princ
     lines.append("| Metric | Value |")
     lines.append("|:-------|------:|")
 
-    er = compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_principal)
+    er = compute_equity_returns(sreo_value, sreo_value_1yr, debt, t12_cashflow,
+                                t12_principal, t12_implied_value)
     sreo_dollars = sreo_value * 1000 if sreo_value is not None else None
     equity = er["equity_today"]
     sale_cost = sreo_dollars * 0.09 if sreo_dollars is not None else None
@@ -830,15 +905,22 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_princ
         lines.append(f"| LTV | {ltv:.1f}% |")
         lines.append(f"| Equity % | {eq_pct:.1f}% |")
 
-    # Trailing-12-month return on equity
+    # Trailing-12-month return on equity. Change in value (and hence Total Return,
+    # ROE, RORE) is shown two ways: implied (T-12 implied value vs value 1yr ago)
+    # and SREO (current SREO value vs value 1yr ago).
     lines.append(f"| T-12 Cashflow | {dollars(er['t12_cashflow'])} |")
     lines.append(f"| Debt Paydown | {dollars(er['t12_principal'])} |")
-    lines.append(f"| Change in Value (YoY) | {dollars(er['change_in_value'])} |")
-    lines.append(f"| **Total Return** | **{dollars(er['numerator'])}** |")
+    lines.append(f"| T-12 Implied Value | {dollars(er['t12_implied_value'])} |")
+    lines.append(f"| Δ Value (Implied) | {dollars(er['change_implied'])} |")
+    lines.append(f"| Δ Value (SREO) | {dollars(er['change_sreo'])} |")
+    lines.append(f"| **Total Return (Implied)** | **{dollars(er['numerator_implied'])}** |")
+    lines.append(f"| **Total Return (SREO)** | **{dollars(er['numerator_sreo'])}** |")
     lines.append(f"| Equity 1yr Ago | {dollars(er['equity_1yr'])} |")
     lines.append(f"| Realizable Equity 1yr Ago | {dollars(er['realizable_1yr'])} |")
-    lines.append(f"| **ROE** | **{pct(er['roe'])}** |")
-    lines.append(f"| **RORE** | **{pct(er['rore'])}** |")
+    lines.append(f"| **ROE (Implied)** | **{pct(er['roe_implied'])}** |")
+    lines.append(f"| **ROE (SREO)** | **{pct(er['roe_sreo'])}** |")
+    lines.append(f"| **RORE (Implied)** | **{pct(er['rore_implied'])}** |")
+    lines.append(f"| **RORE (SREO)** | **{pct(er['rore_sreo'])}** |")
 
     lines.append("")
     lines.append(
@@ -850,13 +932,15 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow, t12_princ
     )
     lines.append("")
     lines.append(
-        "Total Return = T-12 cashflow + T-12 debt paydown + change in value "
-        "(current SREO value − value one year ago, q1 sreo col C). ROE = Total "
-        "Return ÷ equity one year ago; RORE = Total Return ÷ realizable equity "
-        "one year ago. Equity one year ago is reconstructed from the balance "
-        "sheet: value_1yr − (debt_today + T-12 principal paid down), since "
-        "AppFolio carries no property-level owner equity payments to roll back. "
-        "ROE/RORE are blank when no prior-year value is on file for the property."
+        "Total Return = T-12 cashflow + T-12 debt paydown + change in value. "
+        "Change in value is shown two ways, both vs value one year ago (q1 sreo "
+        "col C): Implied uses T-12 implied value (T-12 NOI ÷ cap rate); SREO uses "
+        "the current SREO value. ROE = Total Return ÷ equity one year ago; "
+        "RORE = Total Return ÷ realizable equity one year ago. Equity one year "
+        "ago is reconstructed from the balance sheet: value_1yr − (debt_today + "
+        "T-12 principal paid down), since AppFolio carries no property-level "
+        "owner equity payments to roll back. Rows are blank when no prior-year "
+        "value is on file for the property."
     )
     if debt is None:
         lines.append("")
@@ -1096,8 +1180,9 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
         y_bud, y_act, y_var = by
         return (fmt(m_bud), fmt_signed(m_var), fmt(y_bud), fmt(y_act), fmt_signed(y_var))
 
-    def add_comp(label, cur, prv, yoy=None, bold=False, is_budget_row=True):
+    def add_comp(label, cur, prv, yoy=None, bold=False, is_budget_row=True, label_suffix=""):
         lbl = f"**{label}**" if bold else label
+        lbl += label_suffix
         bc = budget_cells(label, is_budget_row)
         row = f"| {lbl} | {fmt(cur, bold)} |"
         row += f" {bc[0]} | {bc[1]} |"
@@ -1142,7 +1227,11 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     c_noi = summaries[last]["NOI"]
     p_noi = summaries[prev]["NOI"]
     y_noi = prior_summaries[yoy_month]["NOI"] if has_yoy else None
-    add_comp("NOI", c_noi, p_noi, y_noi, bold=True)
+    noi_b = _budget_lookup(budget_month, "NOI") if has_budget else None
+    noi_budget_val = noi_b[0] if noi_b else None   # _budget_lookup -> (budget, actual, var)
+    noi_flag_emoji, _, _ = noi_budget_flag(c_noi, noi_budget_val, units)
+    add_comp("NOI", c_noi, p_noi, y_noi, bold=True,
+             label_suffix=f" {noi_flag_emoji}" if noi_flag_emoji else "")
 
     # Below-NOI lines
     for label in BELOW_NOI_ROWS:
@@ -1217,6 +1306,11 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     add_comp("NOI/Unit/Mo", c_nu, p_nu, y_nu, is_budget_row=False)
 
     lines.append("")
+    noi_phrase = noi_flag_phrase(c_noi, noi_budget_val, units)
+    if noi_phrase:
+        lines.append(f"**NOI vs budget flag:** {noi_phrase} "
+                     "(size-adjusted: \U0001F7E2 z>\u22121, \U0001F7E1 \u22122<z\u2264\u22121, \U0001F534 z\u2264\u22122).")
+        lines.append("")
     if has_budget:
         lines.append("\u0394 Bud / YTD Var are favorable variances (positive = better "
                      "than budget: more income or less expense), per AppFolio. "
@@ -1449,7 +1543,9 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
     # NOI
     noi_bud = budget_val("NOI")
     noi_yoy = s_yoy["NOI"] if s_yoy else None
-    lines.append(f"| NOI | {fmt_dollar(noi)} | {dollar_or_dash(noi_bud)} | {fmt_dollar(s_prior['NOI'])} | "
+    noi_flag_emoji, _, _ = noi_budget_flag(noi, noi_bud, units)
+    noi_lbl = f"NOI {noi_flag_emoji}" if noi_flag_emoji else "NOI"
+    lines.append(f"| {noi_lbl} | {fmt_dollar(noi)} | {dollar_or_dash(noi_bud)} | {fmt_dollar(s_prior['NOI'])} | "
                  f"{dollar_or_dash(noi_yoy)} | {pct_delta(noi, noi_bud)} | "
                  f"{pct_delta(noi, s_prior['NOI'])} | {pct_delta(noi, noi_yoy)} |")
 
@@ -1488,6 +1584,11 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
                      f"{pct_delta(implied, iv_prior)} | {pct_delta(implied, iv_yoy)} |")
 
     lines.append("")
+    noi_phrase = noi_flag_phrase(noi, noi_bud, units)
+    if noi_phrase:
+        lines.append(f"**NOI vs budget:** {noi_phrase} "
+                     "(size-adjusted: \U0001F7E2 z>\u22121, \U0001F7E1 \u22122<z\u2264\u22121, \U0001F534 z\u2264\u22122).")
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -1593,20 +1694,23 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     _aidx = anchor_idx if anchor_idx is not None else len(months) - 1
     _eq_window = range(_aidx - 11, _aidx + 1)
 
-    def _cf_at(j):
+    def _metric_at(j, key):
         if 0 <= j < len(months):
-            return summaries[months[j]]["Cashflow"]
+            return summaries[months[j]][key]
         pk = _prior_month_key(months[0], j)
         if prior_summaries and pk in prior_summaries:
-            return prior_summaries[pk]["Cashflow"]
+            return prior_summaries[pk][key]
         return 0.0
 
-    t12_cashflow = sum(_cf_at(j) for j in _eq_window)
+    t12_cashflow = sum(_metric_at(j, "Cashflow") for j in _eq_window)
+    t12_noi_window = sum(_metric_at(j, "NOI") for j in _eq_window)
+    t12_implied_value = (t12_noi_window / cap_rate) if cap_rate else None
     t12_principal = sum(monthly[months[j]].get("Mortgage Principal", 0.0)
                         for j in _eq_window if 0 <= j < len(months))
 
     equity_text, _ = build_equity(code, sreo_val, SREO_VALUES_1YR_AGO.get(code),
-                                  DEBT_BALANCES.get(code), t12_cashflow, t12_principal)
+                                  DEBT_BALANCES.get(code), t12_cashflow,
+                                  t12_principal, t12_implied_value)
     r.append(equity_text)
 
     # Lease Activity & Exposure (snapshot + CY-1/CY activity matrix)
@@ -1813,8 +1917,10 @@ def main():
     t12_cf = sum(_metric_at(j, "Cashflow") for j in window)
     t12_principal = sum(monthly[months[j]].get("Mortgage Principal", 0.0)
                         for j in window if 0 <= j < len(months))
+    t12_implied_value = (t12_noi / cap_rate) if cap_rate else None
     eq_ret = compute_equity_returns(SREO_VALUES.get(code), SREO_VALUES_1YR_AGO.get(code),
-                                    DEBT_BALANCES.get(code), t12_cf, t12_principal)
+                                    DEBT_BALANCES.get(code), t12_cf, t12_principal,
+                                    t12_implied_value)
     last_dscr = summaries[anchor_month]["DSCR"]
 
     # Compute ancillary metrics for JSON
@@ -1836,12 +1942,17 @@ def main():
                   if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
         "value_1yr_ago": SREO_VALUES_1YR_AGO.get(code) * 1000 if SREO_VALUES_1YR_AGO.get(code) else None,
         "debt_paydown_t12": round(t12_principal),
-        "change_in_value": round(eq_ret["change_in_value"]) if eq_ret["change_in_value"] is not None else None,
-        "total_return": round(eq_ret["numerator"]) if eq_ret["numerator"] is not None else None,
+        "t12_implied_value": round(t12_implied_value) if t12_implied_value is not None else None,
+        "change_in_value_implied": round(eq_ret["change_implied"]) if eq_ret["change_implied"] is not None else None,
+        "change_in_value_sreo": round(eq_ret["change_sreo"]) if eq_ret["change_sreo"] is not None else None,
+        "total_return_implied": round(eq_ret["numerator_implied"]) if eq_ret["numerator_implied"] is not None else None,
+        "total_return_sreo": round(eq_ret["numerator_sreo"]) if eq_ret["numerator_sreo"] is not None else None,
         "equity_1yr_ago": round(eq_ret["equity_1yr"]) if eq_ret["equity_1yr"] is not None else None,
         "realizable_equity_1yr_ago": round(eq_ret["realizable_1yr"]) if eq_ret["realizable_1yr"] is not None else None,
-        "ROE": round(eq_ret["roe"], 4) if eq_ret["roe"] is not None else None,
-        "RORE": round(eq_ret["rore"], 4) if eq_ret["rore"] is not None else None,
+        "ROE_implied": round(eq_ret["roe_implied"], 4) if eq_ret["roe_implied"] is not None else None,
+        "ROE_sreo": round(eq_ret["roe_sreo"], 4) if eq_ret["roe_sreo"] is not None else None,
+        "RORE_implied": round(eq_ret["rore_implied"], 4) if eq_ret["rore_implied"] is not None else None,
+        "RORE_sreo": round(eq_ret["rore_sreo"], 4) if eq_ret["rore_sreo"] is not None else None,
         "DSCR_last_month": round(last_dscr, 2) if last_dscr else None,
         "NOI_per_unit_mo": round(t12_noi / 12 / units),
         "ancillary_pct_gpr": round(ancillary_pct, 1),
