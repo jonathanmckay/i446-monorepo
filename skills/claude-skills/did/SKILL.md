@@ -98,6 +98,8 @@ This lets the user finish a task and immediately start the next one in a single 
 
 **Aliases:** `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`, `wake up`→`起`
 
+**Split habit:** `bigs <minutes>` — time with both big kids. `did-fast.py` expands it into two 0₦ writes, splitting the minutes between `xk20` (Theo) and `xk22` (Ren). Odd minute goes to xk20. e.g. `did bigs 26` → xk20 +13, xk22 +13; `did bigs 31` → xk20 +16, xk22 +15. Accepts a time range too (`bigs 1430-1501`).
+
 **Cumulative columns:** `问学` — add to existing value instead of overwriting.
 
 **Cumulative 1n+ habits:** `一起饭` — routes to Step 1n but adds +30 per occurrence (not the row 3 value). Uses the cumulative variant of the 1n+ write template.
@@ -257,6 +259,7 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | Input | Expected | Must NOT happen |
 |-------|----------|-----------------|
 | `/did 0g 2` — 0₦ match | Steps 1–4, writes to 0₦ | Must NOT search all Todoist tasks |
+| `/did bigs 26` — split habit | Two 0₦ writes: xk20 +13, xk22 +13 | Must NOT write 26 to a single column or route to variable/Todoist |
 | `/did 0l 2 4/1` — past date | Step 6b posthoc | Must NOT write to 0₦ |
 | `/did ibx - s897` — Todoist is "ibx s897 [6]" | Step 3 dash-norm matches | Must NOT skip Todoist close |
 | `/did ibx i9` — Todoist is "ibx - i9 [20]" | Step 3 dash-norm matches | Must NOT skip Todoist close |

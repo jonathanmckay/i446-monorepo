@@ -664,6 +664,28 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     all_tasks = tq.get("0neon", []) + tq.get("夜neon", []) + tq.get("1neon", [])
     results = []
 
+    # "bigs" = time with both big kids → split the minutes between xk20 (Theo)
+    # and xk22 (Ren), then let the normal 0₦ path handle each. Odd minute goes
+    # to xk20. e.g. `did bigs 26` → xk20 +13, xk22 +13.
+    expanded: list[ParsedItem] = []
+    for item in items:
+        if item.name.strip().lower() == "bigs":
+            if item.time_range:
+                total = time_range_minutes(item.time_range[0], item.time_range[1])
+            elif item.time_value is not None:
+                total = item.time_value
+            else:
+                total = 1
+            expanded.append(ParsedItem(raw=item.raw, name="xk20",
+                                       time_value=(total + 1) // 2,
+                                       target_date=item.target_date))
+            expanded.append(ParsedItem(raw=item.raw, name="xk22",
+                                       time_value=total // 2,
+                                       target_date=item.target_date))
+        else:
+            expanded.append(item)
+    items = expanded
+
     for item in items:
         name_lower = item.name.lower()
         name_norm = header_normalize(item.name)
