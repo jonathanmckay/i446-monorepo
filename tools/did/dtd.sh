@@ -188,6 +188,31 @@ fi
 ENTEREOF
 chmod +x "$DTD_ENTER"
 
+# --- Complete-now script used by fzf alt-enter binding (ctrl+enter via the
+# Ghostty keybind remap ctrl+enter -> ESC CR). Unlike enter, this never starts
+# a timer: it always completes the selected task via the /did worker. ---
+DTD_DONE="/tmp/dtd-$$.done.sh"
+cat > "$DTD_DONE" << DONEEOF
+#!/bin/zsh
+HDR="$DTD_HDR"
+FIFO="$DTD_FIFO"
+SESSION="$DTD_SESSION"
+PUSHED="$DTD_PUSHED"
+REMOVED="$DTD_REMOVED"
+TIMER="$DTD_TIMER"
+task="\$1"
+task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
+clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+echo "\$clean_for_filter" >> "\$SESSION"
+echo "\$clean_for_filter" >> "\$REMOVED"
+echo "x" >> "\$PUSHED"
+: > "\$TIMER"
+echo "⏳ completing: \$clean_for_filter" > "\$HDR"
+printf '%s\n' "\$clean" > "\$FIFO"
+DONEEOF
+chmod +x "$DTD_DONE"
+
 # --- Defer script used by fzf ctrl-d binding ---
 DTD_DEFER="/tmp/dtd-$$.defer.sh"
 cat > "$DTD_DEFER" << DEFEREOF
@@ -844,6 +869,7 @@ while true; do
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "alt-enter:execute-silent($DTD_DONE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-s:execute-silent($DTD_START {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
@@ -853,7 +879,7 @@ while true; do
       --bind "ctrl-k:execute-silent($DTD_SKIP {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [enter: start/complete | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
+      --header="$combined_hdr  [enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
 
   task="$fzf_output"
 
@@ -951,4 +977,4 @@ if [[ $session_count -gt 0 ]]; then
 fi
 
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
