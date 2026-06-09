@@ -750,6 +750,8 @@ def build_equity(code, sreo_value, debt):
 
     sreo_dollars = sreo_value * 1000 if sreo_value is not None else None
     equity = (sreo_dollars - debt) if (sreo_dollars is not None and debt is not None) else None
+    sale_cost = sreo_dollars * 0.09 if sreo_dollars is not None else None
+    realizable_equity = (equity - sale_cost) if (equity is not None and sale_cost is not None) else None
 
     def dollars(v):
         return f"${v:,.0f}" if v is not None else "—"
@@ -757,6 +759,8 @@ def build_equity(code, sreo_value, debt):
     lines.append(f"| SREO Value | {dollars(sreo_dollars)} |")
     lines.append(f"| Outstanding Debt | {dollars(debt)} |")
     lines.append(f"| **Equity** | **{dollars(equity)}** |")
+    lines.append(f"| Sale Cost (9%) | {dollars(sale_cost)} |")
+    lines.append(f"| **Net Realizable Equity** | **{dollars(realizable_equity)}** |")
 
     if sreo_dollars and debt is not None and sreo_dollars != 0:
         ltv = debt / sreo_dollars * 100
@@ -769,7 +773,8 @@ def build_equity(code, sreo_value, debt):
         "Equity = SREO Value − outstanding debt. SREO value from 2026 Q1 "
         "PFS + SREO (q1 sreo tab, col E). Debt = outstanding mortgage balance(s) "
         f"from M5x2 Outstanding Mortgages as of {DEBT_AS_OF} (includes "
-        "construction loans / LOC where applicable)."
+        "construction loans / LOC where applicable). Net Realizable Equity = "
+        "Equity − sale cost (9% of SREO Value), the net cash from a disposition."
     )
     if debt is None:
         lines.append("")
@@ -1718,6 +1723,8 @@ def main():
         "sreo_value": SREO_VALUES.get(code) * 1000 if SREO_VALUES.get(code) else None,
         "debt": DEBT_BALANCES.get(code),
         "equity": (SREO_VALUES.get(code) * 1000 - DEBT_BALANCES.get(code))
+                  if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
+        "realizable_equity": (SREO_VALUES.get(code) * 1000 * 0.91 - DEBT_BALANCES.get(code))
                   if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
         "DSCR_last_month": round(last_dscr, 2) if last_dscr else None,
         "NOI_per_unit_mo": round(t12_noi / 12 / units),
