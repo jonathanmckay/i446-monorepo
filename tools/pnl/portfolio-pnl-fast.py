@@ -103,14 +103,14 @@ def get_fund_properties(fund):
     return sorted([code for code, p in PROPERTIES.items() if p["fund"] == fund])
 
 
-def determine_quarter(end_month):
-    """Determine fiscal quarter folder from end month.
-    Matches pnl-fast.py convention: months <= 6 map to q1 (Q1 reports cover through April)."""
+def period_folder(end_month):
+    """Reporting-period folder, e.g. '2026/04-April'. end_month is 'YYYY-MM'
+    and already represents the month covered, so the summary lands in the same
+    <year>/<NN-Month>/ folder as its property reports. Mirrors pnl-fast.py."""
+    names = ["January", "February", "March", "April", "May", "June",
+             "July", "August", "September", "October", "November", "December"]
     y, m = int(end_month[:4]), int(end_month[5:7])
-    if m <= 6:
-        return f"{y}.q1"
-    q = (m - 1) // 3 + 1
-    return f"{y}.q{q}"
+    return f"{y}/{m:02d}-{names[m - 1]}"
 
 
 def compute_end_month(date_arg):
@@ -168,9 +168,9 @@ def parse_number(s):
 # Report generation for individual properties
 # ---------------------------------------------------------------------------
 
-def find_existing_report(code, fund, quarter, report_date_str):
+def find_existing_report(code, fund, period, report_date_str):
     """Check if a report for this property with today's date already exists."""
-    out_dir = REPORTS_BASE / quarter / fund
+    out_dir = REPORTS_BASE / period / fund
     pattern = f"{report_date_str}-{code}-trailing-12m-pnl.md"
     target = out_dir / pattern
     return target.exists(), target
@@ -192,9 +192,9 @@ def run_pnl_fast(code, date_arg=None):
 # Report parsing
 # ---------------------------------------------------------------------------
 
-def find_latest_report(code, fund, quarter):
+def find_latest_report(code, fund, period):
     """Find the most recent report file for a property."""
-    out_dir = REPORTS_BASE / quarter / fund
+    out_dir = REPORTS_BASE / period / fund
     if not out_dir.exists():
         return None
     # Look for files matching the pattern, get most recent by name sort
@@ -657,7 +657,7 @@ def main():
         sys.exit(1)
 
     end_month = compute_end_month(args.date)
-    quarter = determine_quarter(end_month)
+    period = period_folder(end_month)
     months, labels = compute_month_labels(end_month)
 
     today = date.today()
@@ -677,7 +677,7 @@ def main():
         prop = PROPERTIES[code]
 
         if args.skip_existing:
-            exists, path = find_existing_report(code, fund, quarter, report_date_file)
+            exists, path = find_existing_report(code, fund, period, report_date_file)
             if exists:
                 print(f"  [{i+1}/{len(fund_props)}] {code}: report exists, skipping", file=sys.stderr)
                 continue
@@ -707,7 +707,7 @@ def main():
     # Step 2: Parse all property reports
     prop_reports = {}
     for code in fund_props:
-        report_path = find_latest_report(code, fund, quarter)
+        report_path = find_latest_report(code, fund, period)
         gl_data, summary_data, dscr, t12_cf = parse_report_pnl(report_path)
         if gl_data is not None:
             prop_reports[code] = (gl_data, summary_data, dscr, t12_cf)
@@ -726,7 +726,7 @@ def main():
     report = build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, report_date_iso)
 
     # Step 5: Write
-    out_dir = REPORTS_BASE / quarter / fund
+    out_dir = REPORTS_BASE / period / fund
     out_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{report_date_file}-{fund}-summary.md"
     out_path = out_dir / filename

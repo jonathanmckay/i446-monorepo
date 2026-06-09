@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.request
 import urllib.error
 from collections import defaultdict
@@ -193,8 +194,14 @@ def _auth_header():
     return f"Basic {b64}"
 
 
-def appfolio_post(endpoint, payload):
-    """POST to AppFolio API, return parsed JSON."""
+def appfolio_post(endpoint, payload, max_retries=4):
+    """POST to AppFolio API, return parsed JSON.
+
+    Retries on 429 (rate limit) and 5xx with exponential backoff. Batching
+    several /pnl runs hammers the API and trips the limiter; without retry the
+    budget/occupancy fetches would silently drop and the report would degrade
+    (missing budget columns) even though the data exists.
+    """
     url = f"{BASE_URL}/{endpoint}"
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -206,8 +213,18 @@ def appfolio_post(endpoint, payload):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                backoff = 2 ** attempt  # 1s, 2s, 4s, 8s
+                print(f"  {endpoint}: {e.code}, retrying in {backoff}s "
+                      f"(attempt {attempt + 1}/{max_retries})", file=sys.stderr)
+                time.sleep(backoff)
+                continue
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -960,27 +977,25 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
 
     ytd_label = f"YTD {ly} (Jan\u2013{month_names[lm - 1]})"
 
+    # Budget columns are always rendered for a consistent layout; when budget
+    # data is unavailable the cells fall back to em-dashes (see budget_cells).
     # Header: actual | budget | \u0394bud | prev | \u0394MoM [| yoy | \u0394YoY] | budYTD | actYTD | YTD var
     hdr = f"| Account | {last_label} |"
     sep_line = "|:--------|-------:|"
-    if has_budget:
-        hdr += " Budget | \u0394 Bud |"
-        sep_line += "-------:|------:|"
+    hdr += " Budget | \u0394 Bud |"
+    sep_line += "-------:|------:|"
     hdr += f" {prev_label} | \u0394 MoM |"
     sep_line += "-------:|------:|"
     if has_yoy:
         hdr += f" {yoy_label} | \u0394 YoY |"
         sep_line += "-------:|------:|"
-    if has_budget:
-        hdr += f" Bud {ytd_label} | Act {ytd_label} | YTD Var |"
-        sep_line += "-------:|-------:|------:|"
+    hdr += f" Bud {ytd_label} | Act {ytd_label} | YTD Var |"
+    sep_line += "-------:|-------:|------:|"
     lines.extend([hdr, sep_line])
 
     def budget_cells(label, is_budget_row):
         """Return (month_budget_str, month_var_str, ytd_bud_str, ytd_act_str, ytd_var_str)."""
-        if not has_budget:
-            return None
-        if not is_budget_row:
+        if not has_budget or not is_budget_row:
             return ("\u2014", "\u2014", "\u2014", "\u2014", "\u2014")
         bm = _budget_lookup(budget_month, label)
         by = _budget_lookup(budget_ytd, label)
@@ -994,15 +1009,13 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
         lbl = f"**{label}**" if bold else label
         bc = budget_cells(label, is_budget_row)
         row = f"| {lbl} | {fmt(cur, bold)} |"
-        if has_budget:
-            row += f" {bc[0]} | {bc[1]} |"
+        row += f" {bc[0]} | {bc[1]} |"
         row += f" {fmt(prv, bold)} | {fmt_delta(cur, prv)} |"
         if has_yoy:
             yoy_fmt = fmt(yoy, bold) if yoy is not None else "\u2014"
             yoy_delta = fmt_delta(cur, yoy) if yoy is not None else "\u2014"
             row += f" {yoy_fmt} | {yoy_delta} |"
-        if has_budget:
-            row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
+        row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
         lines.append(row)
 
     last_m = monthly.get(last, {})
@@ -1075,8 +1088,7 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
             iv_delta = "\u2014"
         bc = budget_cells("Implied Value", is_budget_row=False)
         row = f"| Implied Value | {iv_last_s} |"
-        if has_budget:
-            row += f" {bc[0]} | {bc[1]} |"
+        row += f" {bc[0]} | {bc[1]} |"
         row += f" {iv_prev_s} | {iv_delta} |"
         if has_yoy:
             yoy_t12 = t12_vals.get(yoy_month)
@@ -1086,8 +1098,7 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
                 row += f" {fmt_k(iv_yoy)} | {iv_yoy_delta} |"
             else:
                 row += " \u2014 | \u2014 |"
-        if has_budget:
-            row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
+        row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
         lines.append(row)
 
     # DSCR (ratio, no budget concept)
@@ -1101,13 +1112,11 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
     dd_yoy = f"{dscr_last - dscr_y:+.2f}x" if (dscr_last and dscr_y) else "\u2014"
     bc = budget_cells("DSCR", is_budget_row=False)
     row = f"| DSCR | {dl} |"
-    if has_budget:
-        row += f" {bc[0]} | {bc[1]} |"
+    row += f" {bc[0]} | {bc[1]} |"
     row += f" {dp} | {dd_mom} |"
     if has_yoy:
         row += f" {dy} | {dd_yoy} |"
-    if has_budget:
-        row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
+    row += f" {bc[2]} | {bc[3]} | {bc[4]} |"
     lines.append(row)
 
     # NOI/Unit/Mo
@@ -1121,7 +1130,10 @@ def build_comparisons(monthly, summaries, months, labels, cap_rate, units, t12_v
         lines.append("\u0394 Bud / YTD Var are favorable variances (positive = better "
                      "than budget: more income or less expense), per AppFolio. "
                      f"YTD is calendar year {ly} through {month_names[lm - 1]}.")
-        lines.append("")
+    else:
+        lines.append("_Budget columns are empty: no budget on file for this property "
+                     "(or the budget fetch was unavailable)._")
+    lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -1268,8 +1280,14 @@ def build_validation(monthly, summaries, months, af_totals, units):
 
 
 def build_summary(summaries, months, cap_rate, units, t12_vals,
-                  prior_summaries, occupancy_data, anchor_idx=None):
-    """Build a compact Summary section: current values with MoM/YoY % deltas.
+                  prior_summaries, occupancy_data, anchor_idx=None,
+                  budget_month=None):
+    """Build a compact Summary section.
+
+    Layout per row: current month value, budget, T-1 (prior month), T-12
+    (same month a year ago), then the three deltas (Δ Bud, Δ MoM, Δ YoY).
+    Deltas are whole-percent (or whole-pp for occupancy). Budget applies only
+    to monthly NOI / Cashflow; trailing and occupancy rows show em-dashes.
 
     Anchors on the latest complete month (anchor_idx) so the headline never
     reflects a partial month with unposted expenses.
@@ -1296,12 +1314,12 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
         return f"{v:,.0f}"
 
     def pct_delta(curr, prev):
-        if prev is None:
+        if curr is None or prev is None:
             return "—"
         if prev == 0:
             return "n/m"
         pct = (curr - prev) / abs(prev) * 100
-        return f"{pct:+.1f}%"
+        return f"{pct:+.0f}%"
 
     def occ_pct(month_key):
         if not occupancy_data or month_key not in occupancy_data:
@@ -1312,7 +1330,20 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
     def occ_delta(curr_pct, prev_pct):
         if curr_pct is None or prev_pct is None:
             return "—"
-        return f"{curr_pct - prev_pct:+.1f}pp"
+        return f"{curr_pct - prev_pct:+.0f}pp"
+
+    def dollar_or_dash(v):
+        return fmt_dollar(v) if v is not None else "—"
+
+    def budget_val(key):
+        """Monthly budget for a total label (NOI / Cashflow), or None."""
+        if budget_month is None or key not in budget_month:
+            return None
+        return budget_month[key][1]  # (actual, budget, variance) -> budget
+
+    prev_y, prev_m = int(prior[:4]), int(prior[5:7])
+    prior_label = f"{month_names[prev_m - 1]} {str(prev_y)[2:]}"
+    yoy_label = f"{month_names[lm - 1]} {str(ly - 1)[2:]}"
 
     noi = s_latest["NOI"]
     cf = s_latest["Cashflow"]
@@ -1321,31 +1352,49 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
     implied = (t12_noi / cap_rate) if (t12_noi and cap_rate) else None
 
     lines = ["## Summary", ""]
-    lines.append(f"| Metric | {latest_label} | MoM | YoY |")
-    lines.append("|:-------|-------:|:------|:------|")
+    lines.append(f"| Metric | {latest_label} | Budget | {prior_label} | {yoy_label} | Δ Bud | Δ MoM | Δ YoY |")
+    lines.append("|:-------|-------:|-------:|-------:|-------:|------:|------:|------:|")
 
     # NOI
-    lines.append(f"| NOI | {fmt_dollar(noi)} | {pct_delta(noi, s_prior['NOI'])} | {pct_delta(noi, s_yoy['NOI'] if s_yoy else None)} |")
+    noi_bud = budget_val("NOI")
+    noi_yoy = s_yoy["NOI"] if s_yoy else None
+    lines.append(f"| NOI | {fmt_dollar(noi)} | {dollar_or_dash(noi_bud)} | {fmt_dollar(s_prior['NOI'])} | "
+                 f"{dollar_or_dash(noi_yoy)} | {pct_delta(noi, noi_bud)} | "
+                 f"{pct_delta(noi, s_prior['NOI'])} | {pct_delta(noi, noi_yoy)} |")
 
     # Cashflow
-    lines.append(f"| Cashflow | {fmt_dollar(cf)} | {pct_delta(cf, s_prior['Cashflow'])} | {pct_delta(cf, s_yoy['Cashflow'] if s_yoy else None)} |")
+    cf_bud = budget_val("Cashflow")
+    cf_yoy = s_yoy["Cashflow"] if s_yoy else None
+    lines.append(f"| Cashflow | {fmt_dollar(cf)} | {dollar_or_dash(cf_bud)} | {fmt_dollar(s_prior['Cashflow'])} | "
+                 f"{dollar_or_dash(cf_yoy)} | {pct_delta(cf, cf_bud)} | "
+                 f"{pct_delta(cf, s_prior['Cashflow'])} | {pct_delta(cf, cf_yoy)} |")
 
-    # Occupancy
+    # Occupancy (no budget; deltas in percentage points)
+    occ_prior = occ_pct(prior)
+    occ_yoy = occ_pct(yoy_key)
     occ_str = f"{occ:.1f}%" if occ is not None else "—"
-    lines.append(f"| Occupancy | {occ_str} | {occ_delta(occ, occ_pct(prior))} | {occ_delta(occ, occ_pct(yoy_key))} |")
+    occ_prior_str = f"{occ_prior:.1f}%" if occ_prior is not None else "—"
+    occ_yoy_str = f"{occ_yoy:.1f}%" if occ_yoy is not None else "—"
+    lines.append(f"| Occupancy | {occ_str} | — | {occ_prior_str} | {occ_yoy_str} | — | "
+                 f"{occ_delta(occ, occ_prior)} | {occ_delta(occ, occ_yoy)} |")
 
-    # T-12 NOI
+    # T-12 NOI (trailing; no budget)
     if t12_noi is not None:
         t12_prior = t12_vals.get(prior) if t12_vals else None
         t12_yoy = t12_vals.get(yoy_key) if t12_vals else None
-        lines.append(f"| T-12 NOI | {t12_noi:,.0f} | {pct_delta(t12_noi, t12_prior)} | {pct_delta(t12_noi, t12_yoy)} |")
+        lines.append(f"| T-12 NOI | {t12_noi:,.0f} | — | {dollar_or_dash(t12_prior)} | "
+                     f"{dollar_or_dash(t12_yoy)} | — | {pct_delta(t12_noi, t12_prior)} | "
+                     f"{pct_delta(t12_noi, t12_yoy)} |")
 
-    # Implied Value
+    # Implied Value (trailing; no budget)
     if implied is not None:
         iv_prior = (t12_vals.get(prior) / cap_rate) if t12_vals and t12_vals.get(prior) else None
         iv_yoy_val = t12_vals.get(yoy_key) if t12_vals else None
         iv_yoy = (iv_yoy_val / cap_rate) if iv_yoy_val else None
-        lines.append(f"| Implied Value | {implied / 1000:,.0f}K | {pct_delta(implied, iv_prior)} | {pct_delta(implied, iv_yoy)} |")
+        iv_prior_str = f"{iv_prior / 1000:,.0f}K" if iv_prior is not None else "—"
+        iv_yoy_str = f"{iv_yoy / 1000:,.0f}K" if iv_yoy is not None else "—"
+        lines.append(f"| Implied Value | {implied / 1000:,.0f}K | — | {iv_prior_str} | {iv_yoy_str} | — | "
+                     f"{pct_delta(implied, iv_prior)} | {pct_delta(implied, iv_yoy)} |")
 
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -1355,18 +1404,14 @@ def build_summary(summaries, months, cap_rate, units, t12_vals,
 # Report assembly
 # ---------------------------------------------------------------------------
 
-def determine_quarter(end_month):
-    """Determine fiscal quarter folder from end month."""
+def period_folder(end_month):
+    """Reporting-period folder, e.g. '2026/04-April'. end_month is 'YYYY-MM'
+    and already represents the month the report covers, so reports file under
+    <year>/<NN-Month>/ and sort chronologically by the period, not the run."""
+    names = ["January", "February", "March", "April", "May", "June",
+             "July", "August", "September", "October", "November", "December"]
     y, m = int(end_month[:4]), int(end_month[5:7])
-    if m <= 3:
-        return f"{y}.q1"
-    elif m <= 6:
-        return f"{y}.q1"  # Q1 reports cover through April
-    # Actually, let's use the calendar: Jan-Mar=q1, Apr-Jun=q2, Jul-Sep=q3, Oct-Dec=q4
-    # But the existing reports are in 2026.q1/ even though they cover through April.
-    # Follow convention: just use year.q{quarter}
-    q = (m - 1) // 3 + 1
-    return f"{y}.q{q}"
+    return f"{y}/{m:02d}-{names[m - 1]}"
 
 
 def generate_full_report(code, prop, monthly, summaries, af_totals, months, labels,
@@ -1423,7 +1468,7 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
 
     # Summary (top section)
     r.append(build_summary(summaries, months, cap_rate, units, t12_vals,
-                           prior_summaries, occupancy_data, anchor_idx))
+                           prior_summaries, occupancy_data, anchor_idx, budget_month))
 
     # Main P&L table
     r.append(build_pnl_table(monthly, summaries, months, labels))
@@ -1633,8 +1678,8 @@ def main():
         print(report)
     else:
         # Determine output path
-        quarter = determine_quarter(end_month)
-        out_dir = REPORTS_BASE / quarter / prop["fund"]
+        period = period_folder(end_month)
+        out_dir = REPORTS_BASE / period / prop["fund"]
         out_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{report_date}-{code}-trailing-12m-pnl.md"
         out_path = out_dir / filename
