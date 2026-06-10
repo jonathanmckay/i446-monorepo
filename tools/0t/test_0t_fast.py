@@ -15,6 +15,32 @@ sys.modules["zerot_fast"] = zerot_fast
 _SPEC.loader.exec_module(zerot_fast)
 
 
+def test_tag_columns_match_live_headers():
+    """0n headers are AU='1+', AV='-1', AW='-2', AX='-3', AS='其他人'. The -1 tag
+    must write to AV and -2 to AW. Regression: a '1+' column was inserted at AU,
+    so an old map of -1→AU duplicated -1 points into the 1+ column (AU + AV)."""
+    assert zerot_fast.TAG_COLUMNS["-1"] == "AV"
+    assert zerot_fast.TAG_COLUMNS["-2"] == "AW"
+    assert zerot_fast.TAG_COLUMNS["-3"] == "AX"
+    assert zerot_fast.TAG_COLUMNS["其他人"] == "AS"
+    assert zerot_fast.TAG_COLUMNS["xk87"] == "AZ"
+
+
+def test_tag_columns_agree_with_daemon():
+    """0t-fast and build-order-daemon both write 0n tag columns; they must not
+    drift (the original bug was 0t-fast lagging the daemon after a column shift)."""
+    daemon_path = Path(__file__).resolve().parents[2] / "scripts" / "build-order-daemon.py"
+    spec = importlib.util.spec_from_file_location("bod_daemon", daemon_path)
+    daemon = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(daemon)
+    shared = set(zerot_fast.TAG_COLUMNS) & set(daemon.TOGGL_TAG_COLS)
+    assert shared, "expected overlapping tag keys between the two maps"
+    for tag in shared:
+        assert zerot_fast.TAG_COLUMNS[tag] == daemon.TOGGL_TAG_COLS[tag], (
+            f"{tag}: 0t-fast={zerot_fast.TAG_COLUMNS[tag]} "
+            f"daemon={daemon.TOGGL_TAG_COLS[tag]}")
+
+
 def test_mark_night_hcmc_targets_yesterday_row():
     """night hcmc minutes must be logged to the date the entry occurred (yesterday),
     not today. Otherwise sleep-bridging hcmc points land one row too late."""

@@ -15,8 +15,9 @@ import os
 import subprocess
 import sys
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
 # Imports from project
@@ -82,7 +83,44 @@ def get_toggl_entries(d: date) -> list[dict]:
     return _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
 
 
-TAG_COLUMNS = {"-1": "AU", "-2": "AV", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
+# Toggl returns timestamps in UTC; all hour/date logic must be done in local time.
+LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+
+
+def entry_local_dt(e: dict) -> datetime | None:
+    """Parse a Toggl entry's start into a LOCAL_TZ-aware datetime (None if unparseable)."""
+    s = e.get("start", "")
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(LOCAL_TZ)
+
+
+def gather_entries_local(*days: date) -> list[dict]:
+    """Fetch entries across one or more UTC day-buckets and dedupe by id.
+
+    A PDT evening entry lands in the *next* UTC bucket, so the overnight window
+    must be reconstructed from both yesterday's and today's fetches.
+    """
+    seen: dict = {}
+    for d in days:
+        for e in get_toggl_entries(d):
+            eid = e.get("id")
+            if eid is not None:
+                seen[eid] = e
+    return list(seen.values())
+
+
+# 0n columns by Toggl tag. Must match the live headers (AU=1+, AV=-1, AW=-2,
+# AX=-3) and build-order-daemon.py's TOGGL_TAG_COLS. A "1+" column was inserted
+# at AU, shifting -1→AV and -2→AW; keep these in sync to avoid writing -1 into
+# the 1+ column (AU).
+TAG_COLUMNS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
 PROJECT_COLUMNS = {}  # project_id → (name, 0n column)
 
 
@@ -149,34 +187,33 @@ end tell'''
 
 
 def detect_night_hcmc(yesterday: date) -> int | None:
-    """If an hcmc entry ends right when sleep begins (yesterday >=20:00), return its minutes."""
-    entries = get_toggl_entries(yesterday)
-    # Sort by start time
+    """If an hcmc entry ends right when sleep begins (yesterday evening, local >=20:00),
+    return its minutes. Times are evaluated in LOCAL_TZ; bedtime (e.g. 23:xx PDT) lands in
+    the next UTC bucket, so both day-buckets are gathered."""
+    today = yesterday + timedelta(days=1)
     timed = []
-    for e in entries:
-        start_str = e.get("start", "")
-        if not start_str or len(start_str) < 14:
+    for e in gather_entries_local(yesterday, today):
+        if e.get("duration", 0) <= 0:
             continue
-        dur = e.get("duration", 0)
-        if dur <= 0:
+        ldt = entry_local_dt(e)
+        if ldt is None:
             continue
-        timed.append(e)
-    timed.sort(key=lambda e: e["start"])
+        timed.append((ldt, e))
+    timed.sort(key=lambda t: t[0])
 
-    # Find the first sleep entry starting >=20:00
+    # Find the first sleep entry that begins yesterday evening (local date == yesterday, >=20:00)
     first_sleep_idx = None
-    for i, e in enumerate(timed):
-        if e.get("project_id") == SLEEP_PROJECT_ID:
-            start_hour = int(e["start"][11:13])
-            if start_hour >= 20:
-                first_sleep_idx = i
-                break
+    for i, (ldt, e) in enumerate(timed):
+        if (e.get("project_id") == SLEEP_PROJECT_ID
+                and ldt.date() == yesterday and ldt.hour >= 20):
+            first_sleep_idx = i
+            break
 
     if first_sleep_idx is None or first_sleep_idx == 0:
         return None
 
     # Check if the immediately preceding entry is hcmc
-    prev = timed[first_sleep_idx - 1]
+    _, prev = timed[first_sleep_idx - 1]
     if prev.get("project_id") != HCMC_PROJECT_ID:
         return None
 
@@ -196,43 +233,29 @@ def mark_night_hcmc(minutes: int, target_date: date) -> dict:
 
 
 def compute_sleep(yesterday: date, today: date) -> int:
-    """Compute last night's sleep = pre-midnight (>=20:00) + post-midnight (<14:00)."""
-    yesterday_entries = get_toggl_entries(yesterday)
-    today_entries = get_toggl_entries(today)
+    """Last night's sleep, in LOCAL_TZ: 睡觉 minutes from yesterday >=20:00 through today <14:00.
 
-    pre_midnight = 0
-    for e in yesterday_entries:
+    Evaluated in local time so PDT bedtimes (which Toggl stores as next-day UTC) classify
+    correctly. Entries are deduped across both UTC day-buckets."""
+    now_local = datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    total = 0
+    for e in gather_entries_local(yesterday, today):
         if e.get("project_id") != SLEEP_PROJECT_ID:
             continue
-        start_str = e.get("start", "")
-        if not start_str or len(start_str) < 14:
+        ldt = entry_local_dt(e)
+        if ldt is None:
             continue
-        start_hour = int(start_str[11:13])
-        if start_hour >= 20:
-            dur = e.get("duration", 0)
-            if dur > 0:
-                pre_midnight += dur // 60
-
-    post_midnight = 0
-    for e in today_entries:
-        if e.get("project_id") != SLEEP_PROJECT_ID:
+        in_window = ((ldt.date() == yesterday and ldt.hour >= 20)
+                     or (ldt.date() == today and ldt.hour < 14))
+        if not in_window:
             continue
-        start_str = e.get("start", "")
-        if not start_str or len(start_str) < 14:
-            continue
-        start_hour = int(start_str[11:13])
-        if start_hour < 14:
-            dur = e.get("duration", 0)
-            if dur > 0:
-                post_midnight += dur // 60
-            elif dur < 0:
-                # Running timer
-                from datetime import timezone
-                start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-                now = datetime.now(timezone.utc)
-                post_midnight += int((now - start_dt).total_seconds()) // 60
-
-    return pre_midnight + post_midnight
+        dur = e.get("duration", 0)
+        if dur > 0:
+            total += dur // 60
+        elif dur < 0:
+            # Running timer
+            total += int((now_local - ldt).total_seconds()) // 60
+    return total
 
 
 def write_sleep(sleep_minutes: int, today: date) -> str:

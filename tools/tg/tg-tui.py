@@ -599,9 +599,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
         out.append((p["style"], pad(truncate(p["label"], space), space)))
         out.append(("class:dim", f" {dur}\n"))
     if not picks:
-        # Empty block → the remaining 3 half-hour gridlines (the :00 tick lives
-        # on the header). Faint, so untracked time reads as structure, not work.
-        for hh, mm in ((blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+        # Empty block → all four 30-min placeholders under the header rule, so
+        # untracked time reads as an explicit (faint) grid to fill in.
+        for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
             out.append(("class:time", f"  {hh:02d}:{mm:02d} "))
             out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 8) + "\n"))
     else:

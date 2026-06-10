@@ -864,6 +864,12 @@ chmod +x "$DTD_UNDO"
 # (fzf --height renders inline below whatever was already on the terminal).
 clear
 
+# Keybinding hints shown on the footer. Exported so the transform-footer
+# bindings (which run in fzf's child shell) can read it. The footer is a
+# single bottom line: "<tasks left>   <keybindings>", with the live match
+# count ($FZF_MATCH_COUNT) refreshed on load/result.
+export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh"
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
@@ -907,9 +913,12 @@ while true; do
   # terminal like Claude; --input-border draws lines around the prompt; the
   # keybindings live in a static --footer (the very last line) instead of the
   # header, which transform-header overwrites on each action.
-  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="did> " --layout=reverse-list --no-sort --ansi \
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
+      --info=hidden \
       --input-border=horizontal \
-      --footer="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh" \
+      --footer="$DTD_KEYS" \
+      --bind 'load:transform-footer(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
+      --bind 'result:transform-footer(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header(cat $DTD_HDR)" \
