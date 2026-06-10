@@ -48,6 +48,33 @@ def test_short_task_below_cap_returns_none_short():
     assert "x1" not in out
 
 
+def test_comment_cache_does_not_double_estimates(monkeypatch, tmp_path):
+    # Regression: a cached short name (from the Todoist comment / sidecar) already
+    # includes the estimates; resolve() must NOT re-append them.  Bug produced
+    # "First pass 90 days doc {30} {30}".
+    monkeypatch.setattr(shorten, "SIDECAR", tmp_path / "sc.json")
+    content = "First pass at a first 90 days doc {30}"
+    stored = "First pass 90 days doc {30}"  # full display, estimates included
+    # Simulate the durable comment returning the full display.
+    monkeypatch.setattr(shorten, "_comment_lookup", lambda tid, h: stored)
+    monkeypatch.setattr(shorten, "_haiku_shorten", lambda prose: "SHOULD-NOT-CALL")
+    out = shorten.shorten_tasks([{"id": "t1", "content": content}])
+    assert out["t1"] == stored          # used verbatim
+    assert out["t1"].count("{30}") == 1  # not doubled
+
+
+def test_no_prune_preserves_other_callers_entries(monkeypatch, tmp_path):
+    # Regression: pruning ids absent from `tasks` let did-fast and refresh-cache
+    # (different task sets) delete each other's sidecar entries. A task missing
+    # from this call's list must keep its sidecar entry.
+    sc = tmp_path / "sc.json"
+    monkeypatch.setattr(shorten, "SIDECAR", sc)
+    sc.write_text('{"other": {"h": "deadbeef", "short": "kept"}}')
+    shorten.shorten_tasks([{"id": "t1", "content": "0t (5) [10]"}])  # short task, no-op
+    import json
+    assert "other" in json.loads(sc.read_text())
+
+
 if __name__ == "__main__":
     import sys
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
