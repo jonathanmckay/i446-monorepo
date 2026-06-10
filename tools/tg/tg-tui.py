@@ -104,7 +104,7 @@ def next_block(h: int) -> tuple[str, int, int] | None:
         return BLOCKS[0]
     return None
 SLOT_MIN = 15
-BUILD_ORDER = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "⏰"]
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present

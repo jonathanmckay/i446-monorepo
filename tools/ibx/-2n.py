@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 console = Console()
 
 TERM_COLOR = Path(__file__).parent.parent.parent / "scripts" / "term-color.sh"
-BUILD_ORDER = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 MTG_BRIEFS = Path.home() / "vault/z_ibx/mtg-briefs.json"
 TZ = "America/Los_Angeles"
 

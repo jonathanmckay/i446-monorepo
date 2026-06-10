@@ -37,7 +37,7 @@ Times outside 04:00-21:59 default to 卯 (block 0).
 
 ## Files
 
-- **Build order**: `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md`
+- **Build order**: `~/vault/g245/build-order.md`
 - **Section**: `## -1₲` — goals go under the matching 地支 time heading
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
 - **Todoist labels**: `#-1g` on every task, plus an auto-inferred domain label

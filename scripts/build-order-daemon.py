@@ -41,7 +41,7 @@ from pathlib import Path
 # --- Paths ---
 
 VAULT = Path.home() / "vault"
-BUILD_ORDER = VAULT / "g245" / "-1₦ , 0₦ - Neon {Build Order}.md"
+BUILD_ORDER = VAULT / "g245" / "build-order.md"
 D357_DIR = VAULT / "d357"  # canonical flat location, filenames YYYY.MM.DD-<kebab>.md
 ARCHIVE_ROOT = VAULT / "g245" / "archive"
 RESET_SCRIPT = Path.home() / "i446-monorepo" / "scripts" / "-1g-cron.py"

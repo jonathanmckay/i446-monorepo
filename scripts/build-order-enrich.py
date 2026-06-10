@@ -19,7 +19,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Los_Angeles")
-BUILD_ORDER = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 COMPLETED_TODAY = Path.home() / "vault/z_ibx/completed-today.json"
 COMPLETED_ARCHIVE_DIR = Path.home() / "vault/z_ibx/completed-archive"
 D357_DIR = Path.home() / "vault/d357"

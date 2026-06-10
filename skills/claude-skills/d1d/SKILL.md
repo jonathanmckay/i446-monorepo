@@ -111,7 +111,7 @@ Task found in Step 0. Extract `[N]` points from the Todoist task. If `pointsOver
 
 Append `+N` to 0分 using "Append to 0分" template (where N = `pointsOverride` if set, else task's `[N]`). Close the Todoist task.
 
-**5b. Build order check-off:** If the closed task has label `关键路径` (or `#0g`/`#-1g`), flip the matching line in `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md` from `- [ ]` to `- [x]`:
+**5b. Build order check-off:** If the closed task has label `关键路径` (or `#0g`/`#-1g`), flip the matching line in `~/vault/g245/build-order.md` from `- [ ]` to `- [x]`:
 
 - Search `## 0₲` section (before `### 以后的目标`), 2-space indent: `  - [ ] <content>` → `  - [x] <content>`
 - Then search `## -1₲` section within any 地支 block (寅/卯/辰/…), 4-space indent: `    - [ ] <content>` → `    - [x] <content>`

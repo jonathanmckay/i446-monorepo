@@ -175,7 +175,7 @@ Task found in Step 0. **Build order is the points source of truth, not the Todoi
 **5a. Resolve points (do BEFORE writing to Excel) — priority order:**
 
 1. **User-typed annotations on the /did command** win over everything. If the user wrote `[N]` or `{N}` in the /did input, use those values. They override stale build-order or Todoist values.
-2. **Build order line.** If the task has label `关键径路` / `#0g` / `#-1g`, find the matching line in `~/vault/g245/-1₦ , 0₦ - Neon {Build Order}.md` (same matching algorithm as Step 5b below). If matched, extract `[N]` and `{N}` from that line for whichever annotation the user did NOT type explicitly.
+2. **Build order line.** If the task has label `关键径路` / `#0g` / `#-1g`, find the matching line in `~/vault/g245/build-order.md` (same matching algorithm as Step 5b below). If matched, extract `[N]` and `{N}` from that line for whichever annotation the user did NOT type explicitly.
 3. **Todoist task content.** If no build-order match, fall back to `[N]`/`{N}` in the Todoist task content.
 4. Empty/missing → 0 pts (per "Zero points default" memory).
 

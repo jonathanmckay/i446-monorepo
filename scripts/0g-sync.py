@@ -2,7 +2,7 @@
 """
 0g-sync.py - Sync daily 0g goals between markdown and Todoist.
 
-Source of truth: ~/vault/g245/-1N , 0N - Neon {Build Order}.md
+Source of truth: ~/vault/g245/build-order.md
 Todoist project: 0g (ID: 6XfvCQ3p8Gq6fhGR)
 
 Modes:
@@ -33,7 +33,7 @@ except ImportError:
 
 # --- Constants ---
 
-MD_FILE = Path.home() / "vault/g245/-1\u20a6 , 0\u20a6 - Neon {Build Order}.md"
+MD_FILE = Path.home() / "vault/g245/build-order.md"
 STATE_FILE = Path(__file__).resolve().parent / ".0g-sync-state.json"
 LOG_FILE = Path(__file__).resolve().parent / ".0g-sync.log"
 

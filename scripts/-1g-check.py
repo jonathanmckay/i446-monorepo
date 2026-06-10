@@ -21,7 +21,7 @@ import re
 import sys
 from pathlib import Path
 
-MD_FILE = Path.home() / "vault/g245/-1₦ , 0₦ - Neon {Build Order}.md"
+MD_FILE = Path.home() / "vault/g245/build-order.md"
 
 # (start_hour, end_hour, 地支, time_range_str)
 BLOCKS = [
