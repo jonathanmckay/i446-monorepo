@@ -65,6 +65,19 @@ def close_task(task_id: str) -> None:
     _request("POST", f"/tasks/{task_id}/close")
 
 
+def get_comments(task_id: str) -> list:
+    """Return the comments on a task (newest API shape: {'results': [...]})."""
+    page = _request("GET", f"/comments?task_id={urllib.parse.quote(str(task_id), safe='')}")
+    if isinstance(page, dict):
+        return page.get("results", [])
+    return page or []
+
+
+def add_comment(task_id: str, content: str) -> dict:
+    """Post a comment on a task. Returns the created comment dict."""
+    return _request("POST", "/comments", {"task_id": str(task_id), "content": content})
+
+
 def find_tasks(*, labels: Optional[list] = None, content_contains: Optional[str] = None,
                limit: int = 50) -> list:
     """Paginated search. Returns up to `limit` matching tasks."""
