@@ -555,117 +555,132 @@ def _read_block_emojis() -> dict[str, str]:
     return result
 
 
-def render_morning() -> list[tuple[str, str]]:
-    """Toggl-only collapsed view from 00:00 -> detail-band start.
+def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str, str]]:
+    """Render one non-focus block as exactly 4 lines (header + 3 body).
 
-    For each completed block: top 4 entries by duration (shown chronologically),
-    plus build-order emojis and block total duration.
+    The header rule carries the most important entry inline to conserve space:
+    ``─午:04 task ─────  12分``. Body rows carry the next entries by duration in
+    chronological order; an empty block shows dim half-hour gridlines instead.
+
+    picks: up to 4 normalized items, sorted chronologically, each a dict with
+    start_dt, time_str, label, style, dur_min. Past blocks fill these from
+    Toggl, future blocks from gcal — both render identically.
     """
+    out: list[tuple[str, str]] = []
+    dom = max(picks, key=lambda p: p["dur_min"]) if picks else None
+    blk_style = f"bold {dom['style']}".strip() if dom and dom["style"] else "class:dim"
+    pts_str = f" {pts}分" if pts else ""
+    emoji_str = f" {emojis}" if emojis else ""
+
+    # ── header line (carries picks[0] inline when present) ──
+    head = picks[0] if picks else None
+    if head:
+        left = f"─{blk_name}{emoji_str}:{head['start_dt'].minute:02d} "
+        task = truncate(head["label"], max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str) - 2))
+        trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(task) - 1 - dwidth(pts_str))
+        out.append((blk_style, left))
+        out.append((head["style"] or blk_style, task))
+        out.append((blk_style, " " + "─" * trail))
+    else:
+        left = f"─{blk_name}{emoji_str} "
+        trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
+        out.append((blk_style, left + "─" * trail))
+    if pts_str:
+        out.append(("bold #ffffff", pts_str))
+    out.append((blk_style, "\n"))
+
+    # ── body lines (always 3, to keep every block 4 lines tall) ──
+    body = picks[1:4]
+    for p in body:
+        dur = fmt_dur(p["dur_min"])
+        space = max(1, WIDTH_HINT - 8 - len(dur) - 1)
+        out.append(("class:time", f"  {p['time_str']} "))
+        out.append((p["style"], pad(truncate(p["label"], space), space)))
+        out.append(("class:dim", f" {dur}\n"))
+    if not picks:
+        # Empty block → the remaining 3 half-hour gridlines (the :00 tick lives
+        # on the header). Faint, so untracked time reads as structure, not work.
+        for hh, mm in ((blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+            out.append(("class:time", f"  {hh:02d}:{mm:02d} "))
+            out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 8) + "\n"))
+    else:
+        for _ in range(3 - len(body)):  # pad partially-filled blocks
+            out.append(("class:idle", "\n"))
+    return out
+
+
+def _past_block_picks(blk_name, merged) -> list[dict]:
+    """Top-4 Toggl entries (by duration) starting in this block, chronological."""
+    items = []
+    for m in merged:
+        blk = hour_to_block(m["start_dt"].hour)
+        if not blk or blk[0] != blk_name:
+            continue
+        mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
+        if mins < 1:
+            continue
+        is_sleep = (m["desc"] or "").strip() == "睡觉"
+        code = proj_code(m["project_id"])
+        label = (m["desc"] or "(blank)") + (f" · {code}" if code else "")
+        items.append({
+            "start_dt": m["start_dt"],
+            "time_str": f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}",
+            "label": label,
+            "style": project_style(m["project_id"]),
+            "dur_min": mins,
+        })
+    items.sort(key=lambda x: x["dur_min"], reverse=True)
+    items = items[:4]
+    items.sort(key=lambda x: x["start_dt"])
+    return items
+
+
+def _future_block_picks(blk_name, events) -> list[dict]:
+    """Top-4 gcal events (by duration) starting in this block, chronological."""
+    items = []
+    for ev in events:
+        blk = hour_to_block(ev["start_dt"].hour)
+        if not blk or blk[0] != blk_name:
+            continue
+        if ev.get("transparency") == "transparent" or ev.get("all_day"):
+            continue
+        mins = max(1, int((ev["end_dt"] - ev["start_dt"]).total_seconds() // 60))
+        items.append({
+            "start_dt": ev["start_dt"],
+            "time_str": f"{ev['start_dt']:%H:%M}",
+            "label": ev["title"],
+            "style": project_style(gcal_project_code(ev)),
+            "dur_min": mins,
+        })
+    items.sort(key=lambda x: x["dur_min"], reverse=True)
+    items = items[:4]
+    items.sort(key=lambda x: x["start_dt"])
+    return items
+
+
+def render_morning() -> list[tuple[str, str]]:
+    """Past blocks (00:00 → detail-band start), Toggl-filled, one row per
+    important allocation. Same compact format as the future (evening) view."""
     start, _ = detail_window()
     cutoff = start
     items = [e for e in STATE.entries if e["start_dt"] < cutoff]
-    if not items:
-        return []
-    merged = []
+    merged: list[dict] = []
     for e in items:
         end = min(e["end_dt"], cutoff)
         if merged and merged[-1]["desc"] == e["desc"]:
             merged[-1]["end_dt"] = end
         else:
-            merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"], "project_id": e["project_id"]})
-    block_durations: dict[str, dict[int | None, int]] = {}
-    for m in merged:
-        mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
-        if mins < 1:
-            continue
-        blk = hour_to_block(m["start_dt"].hour)
-        if blk:
-            block_durations.setdefault(blk[0], {})
-            block_durations[blk[0]][m["project_id"]] = block_durations[blk[0]].get(m["project_id"], 0) + mins
-    block_entries: dict[str, list] = {}
-    for m in merged:
-        mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
-        if mins < 5:
-            continue
-        blk = hour_to_block(m["start_dt"].hour)
-        blk_name = blk[0] if blk else "?"
-        block_entries.setdefault(blk_name, [])
-        block_entries[blk_name].append(m)
+            merged.append({"start_dt": e["start_dt"], "end_dt": end,
+                           "desc": e["desc"], "project_id": e["project_id"]})
 
     bo_emojis = _read_block_emojis()
-
     out: list[tuple[str, str]] = []
     for blk_name, blk_sh, blk_eh in BLOCKS:
         if blk_eh + 1 > cutoff.hour:
-            break  # rest handled by detail view
-        if blk_eh < 4:
-            continue  # skip before 卯
-        entries = block_entries.get(blk_name, [])
-        for ent in entries:
-            ent["_dur_min"] = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
-
-        bd = block_durations.get(blk_name, {})
-        dom_pid = max(bd, key=lambda p: bd[p], default=None) if bd else None
-        blk_style = f"bold {project_style(dom_pid)}".strip() if dom_pid else "class:dim"
-        emojis = bo_emojis.get(blk_name, "")
-        total_min = sum(bd.values())
-        blk_pts = STATE.block_points.get(blk_name, 0)
-
-        # 卯 (4-5am): single line — header rule with the activities inline.
-        if blk_name == "卯":
-            descs = list(dict.fromkeys(
-                (e["desc"] or "·") for e in sorted(entries, key=lambda e: e["start_dt"])))
-            blk_label = f" {blk_name}"
-            if emojis:
-                blk_label += f" {emojis}"
-            if descs:
-                blk_label += f"  {', '.join(descs[:3])}"
-            if total_min:
-                blk_label += f"  {fmt_dur(total_min)}"
-            blk_label += " "
-            pts_str = f" {blk_pts}分" if blk_pts else ""
-            trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label) - dwidth(pts_str))
-            out.append((blk_style, "─"))
-            out.append((blk_style, blk_label))
-            out.append((blk_style, "─" * trail))
-            if pts_str:
-                out.append(("bold #ffffff", pts_str))
-            out.append((blk_style, "\n"))
-            continue
-
-        # Every other past block: header + exactly 3 body rows (padded).
-        blk_label = f" {blk_name}"
-        if emojis:
-            blk_label += f" {emojis}"
-        if total_min:
-            blk_label += f"  {fmt_dur(total_min)}"
-        blk_label += " "
-        pts_str = f" {blk_pts}分" if blk_pts else ""
-        trail = max(0, WIDTH_HINT - 1 - dwidth(blk_label) - dwidth(pts_str))
-        out.append((blk_style, "─"))
-        out.append((blk_style, blk_label))
-        out.append((blk_style, "─" * trail))
-        if pts_str:
-            out.append(("bold #ffffff", pts_str))
-        out.append((blk_style, "\n"))
-
-        top3 = sorted(entries, key=lambda e: e["_dur_min"], reverse=True)[:3]
-        top3.sort(key=lambda e: e["start_dt"])
-        for m in top3:
-            is_sleep = (m["desc"] or "").strip() == "睡觉"
-            display_time = f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}"
-            code = proj_code(m["project_id"])
-            dur = fmt_dur(m["_dur_min"])
-            label = m["desc"] or "(blank)"
-            if code:
-                label = f"{label} · {code}"
-            style = project_style(m["project_id"])
-            space = max(1, WIDTH_HINT - 8 - len(dur) - 1)
-            out.append(("class:time", f"  {display_time} "))
-            out.append((style, f"{pad(truncate(label, space), space)}"))
-            out.append(("class:dim", f" {dur}\n"))
-        for _ in range(3 - len(top3)):  # pad to keep every block exactly 4 lines
-            out.append(("class:idle", "\n"))
+            break  # rest handled by the detail band
+        picks = _past_block_picks(blk_name, merged)
+        pts = STATE.block_points.get(blk_name, 0)
+        out += _compact_block_lines(blk_name, blk_sh, picks, pts, bo_emojis.get(blk_name, ""))
     return out
 
 
@@ -834,50 +849,21 @@ def _slot_label_gcal(slot_s, slot_e):
 
 
 def render_evening() -> list[tuple[str, str]]:
+    """Future blocks (detail-band end → 22:00), gcal-filled, in the same
+    compact format as the past (morning) view."""
     _, end = detail_window()
     cutoff = end
-    now = dt.datetime.now(TZ)
-    sleep_time = now.replace(hour=22, minute=0, second=0, microsecond=0)
-
-    # Collect gcal events keyed by block
-    gcal_by_block: dict[str, list] = {}
-    for ev in STATE.events:
-        if ev["end_dt"] <= cutoff or ev["start_dt"] >= sleep_time:
-            continue
-        if ev.get("transparency") == "transparent":
-            continue
-        blk = hour_to_block(ev["start_dt"].hour)
-        blk_name = blk[0] if blk else "?"
-        gcal_by_block.setdefault(blk_name, [])
-        gcal_by_block[blk_name].append(ev)
-
-    # Show every remaining block from cutoff through 22:00
+    bo_emojis = _read_block_emojis()
     out: list[tuple[str, str]] = []
     for name, sh, eh in BLOCKS:
-        block_end_h = eh + 1
-        if block_end_h <= cutoff.hour:
+        if eh + 1 <= cutoff.hour:
             continue
         if sh >= 22:
             break
-        # Header rule (block name, colored by dominant event) + 3 padded rows.
-        evs = gcal_by_block.get(name, [])[:3]
-        rule_sty = (project_style(gcal_project_code(evs[0])) or "class:dim") if evs else "class:dim"
-        rule_text = f" {name} "
-        trail = max(0, WIDTH_HINT - 1 - len(rule_text))
-        out.append(("class:rule", "─"))
-        out.append((rule_sty, rule_text))
-        out.append(("class:rule", "─" * trail + "\n"))
-        for ev in evs:
-            prefix = "all-day" if ev.get("all_day") else f"{ev['start_dt']:%H:%M}"
-            space = min(DESC_MAX, max(1, WIDTH_HINT - 2 - len(prefix) - 1))
-            title = truncate(ev["title"], space)
-            ev_sty = project_style(gcal_project_code(ev)) or "class:future"
-            out.append(("class:time", f"  {prefix}"))
-            out.append((ev_sty, f" {title}\n"))
-        for _ in range(3 - len(evs)):  # pad to keep every block exactly 4 lines
-            out.append(("class:idle", "\n"))
+        picks = _future_block_picks(name, STATE.events)
+        out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""))
     # Sleep marker
-    rule_text = f" 睡觉 "
+    rule_text = " 睡觉 "
     trail = max(0, WIDTH_HINT - 1 - len(rule_text))
     out.append(("class:rule", "─"))
     out.append((f"fg:{PROJECT_COLORS.get('睡觉', '#666666')}", rule_text))
@@ -917,12 +903,12 @@ def render_current_bottom() -> list[tuple[str, str]]:
 
 
 def render_footer() -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
+    # One line: the flash when active (auto-expires), otherwise the key hints.
+    # Collapsing to a single line keeps the input box pinned tight to the bottom.
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
-        out.append((sty, f" ▸ {STATE.flash}\n"))
-    out.append(("class:hint", " [c]hange [s]top [r]efresh [j/k]scroll [q]uit\n"))
-    return out
+        return [(sty, f" ▸ {STATE.flash}\n")]
+    return [("class:hint", " [c]hange [s]top [r]efresh [j/k]scroll [q]uit\n")]
 
 
 def render_all() -> list[tuple[str, str]]:
@@ -1066,18 +1052,20 @@ main_window = Window(
     width=Dimension(preferred=WIDTH_HINT),
 )
 
-# Pinned bottom bar: current timer + flash + hints (never scrolls)
+# Pinned bottom bar: current timer + flash/hint (never scrolls). Two lines so
+# the input row below sits flush at the very bottom of the screen.
 bottom_bar = Window(
     content=FormattedTextControl(render_bottom_bar),
-    height=3,  # timer line + flash/hint line + input line headroom
+    height=2,  # timer line + single flash/hint line
     wrap_lines=False,
 )
 
 
 def render_input_prompt():
-    if STATE.command_mode:
-        return [("class:prompt", " tg> ")]
-    return [("class:hint", "")]
+    # Always render the prompt so the input box is a permanent bottom anchor;
+    # bright cyan while typing (command mode), dim otherwise.
+    cls = "class:prompt" if STATE.command_mode else "class:hint"
+    return [(cls, " tg> ")]
 
 
 input_window = Window(

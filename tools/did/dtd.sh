@@ -903,7 +903,13 @@ while true; do
   # display (short name + estimates) and bindings get the hidden id via {2} to
   # resolve the real task. (fzf searches whatever is displayed; the short names
   # keep key codes/names so search stays usable.)
-  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse-list --no-sort --ansi \
+  # Full-screen (no --height) so the input block is bottom-justified to the
+  # terminal like Claude; --input-border draws lines around the prompt; the
+  # keybindings live in a static --footer (the very last line) instead of the
+  # header, which transform-header overwrites on each action.
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="did> " --layout=reverse-list --no-sort --ansi \
+      --input-border=horizontal \
+      --footer="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
@@ -917,7 +923,7 @@ while true; do
       --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr  [enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
+      --header="$combined_hdr")
 
   task="$fzf_output"
 

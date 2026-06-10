@@ -5,12 +5,16 @@ Finds a task by substring, defers it to a target date, and creates
 posthoc eval stubs. Handles both recurring and non-recurring tasks.
 
 Usage:
-    python3 defer-fast.py "<task_name>" [target_date] [claimed_points]
+    python3 defer-fast.py "<task_name>" [days|YYYY-MM-DD] [claimed_points]
 
     task_name      — substring to search for in Todoist (required)
-    target_date    — ISO date YYYY-MM-DD (default: next instance of the
-                     recurrence for recurring tasks, tomorrow otherwise)
-    claimed_points — points for today's stub (default: 2)
+    days|date      — bare integer N → today + N days; ISO date → that absolute
+                     date; omitted → today + 1 day (the default defer)
+    claimed_points — points for today's posthoc stub (default: 2)
+
+For a recurring task this defers only the current occurrence: a one-off copy
+is created on the target date and the recurring parent advances to its own next
+scheduled occurrence (recurrence preserved, cadence unchanged).
 """
 from __future__ import annotations
 
@@ -105,16 +109,25 @@ def next_instance(due_string: str, current_due: date) -> date:
     return current_due + timedelta(days=7)
 
 
-def default_target_date(task: dict) -> str:
-    """Default defer target: next recurrence instance for recurring tasks
-    (so the task simply skips ahead but stays recurring), tomorrow otherwise.
-    Overdue bases advance from today so the target is always in the future."""
-    due = task.get("due") or {}
-    if due.get("is_recurring") and due.get("date"):
-        current = date.fromisoformat(str(due["date"])[:10])
-        base = max(current, date.today())
-        return next_instance(due.get("string", ""), base).isoformat()
-    return (date.today() + timedelta(days=1)).isoformat()
+def resolve_target(arg: str | None) -> str:
+    """Resolve the defer target to an ISO date.
+
+    - missing/empty      → today + 1 day (the default defer)
+    - bare integer "N"   → today + N days
+    - ISO "YYYY-MM-DD"    → that absolute date (passed through)
+    - anything else       → passed through unchanged (caller already resolved
+                            natural language like "next Monday" to ISO)
+
+    Note: for a recurring task this is the due date of the deferred one-off
+    copy; the parent always advances to its own next occurrence regardless.
+    """
+    today = date.today()
+    a = (arg or "").strip()
+    if not a:
+        return (today + timedelta(days=1)).isoformat()
+    if re.fullmatch(r"\d{1,3}", a):
+        return (today + timedelta(days=int(a))).isoformat()
+    return a
 
 
 # ---------------------------------------------------------------------------
@@ -271,27 +284,64 @@ def handle_non_recurring(task: dict, target_date: str,
 # Recurring flow
 # ---------------------------------------------------------------------------
 
+_ANCHOR_RE = re.compile(r"\s+(starting|start|from|beginning|begins?|since)\b.*$", re.I)
+
+
+def _recurrence_pattern(due_string: str) -> str:
+    """Strip any 'starting <date>' / 'from <date>' anchor off a recurrence
+    string, leaving the bare cadence ('every day', 'every friday', ...).
+
+    Used so the parent can be re-anchored to a specific next date via due_date
+    without the old anchor fighting it.
+    """
+    return _ANCHOR_RE.sub("", due_string or "").strip()
+
+
 def handle_recurring(task: dict, target_date: str,
                      claimed_points: int) -> dict:
-    """Reschedule a recurring task and create a posthoc eval record.
+    """Defer the *current occurrence* of a recurring task without disturbing
+    the series.
 
-    Uses due_date update (not close+recreate) to preserve recurrence pattern.
+    - Creates a standalone (non-recurring) one-off copy of this occurrence due
+      on target_date — that's the deferred instance the user will actually do.
+    - Advances the recurring parent to its next scheduled occurrence, preserving
+      the recurrence pattern (passing due_string keeps is_recurring true; a bare
+      due_date write would silently strip the recurrence). The parent's cadence
+      is unchanged — it just sheds the occurrence the copy now carries.
+    - Logs a posthoc eval record for today.
     """
     task_id = task["id"]
     content = task["content"]
     labels = task.get("labels", [])
     project_id = task.get("project_id")
+    priority = task.get("priority")
+    due = task.get("due") or {}
 
-    # 1. Parse total points from [N]
+    # Parse total points from [N] (for reporting only)
     pts_match = POINTS_RE.search(content)
     total_points = int(pts_match.group(1)) if pts_match else 0
 
-    # 2. Reschedule the task (preserves recurrence pattern)
-    _api("POST", f"/tasks/{task_id}", {"due_date": target_date})
+    # Next natural occurrence of the series (from today or the current due,
+    # whichever is later, so an overdue parent still lands in the future).
+    pattern = _recurrence_pattern(due.get("string", "")) or due.get("string", "")
+    current_due = (date.fromisoformat(str(due["date"])[:10])
+                   if due.get("date") else date.today())
+    base = max(current_due, date.today())
+    next_date = next_instance(due.get("string", ""), base).isoformat()
 
-    # 3. Create posthoc eval record (due today, immediately closed)
+    # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
+    copy = create_task(content, labels, project_id, target_date, priority)
+
+    # 2. Advance the parent to its next occurrence, recurrence preserved.
+    body = {"due_date": next_date}
+    if pattern:
+        body["due_string"] = pattern
+    _api("POST", f"/tasks/{task_id}", body)
+
+    # 3. Posthoc eval record (due today, immediately closed).
     today_iso = date.today().isoformat()
-    posthoc_content = f"deferred: {content} → {target_date} ({claimed_points}) [0]"
+    posthoc_content = (f"deferred: {content} → {target_date} "
+                       f"(recurring; next {next_date}) [0]")
     posthoc_labels = list(set(["posthoc"] + labels))
     posthoc = create_task(posthoc_content, posthoc_labels, project_id, today_iso)
     close_task(posthoc["id"])
@@ -301,12 +351,14 @@ def handle_recurring(task: dict, target_date: str,
         "task_id": task_id,
         "recurring": True,
         "target_date": target_date,
-        "prev_due": (task.get("due") or {}).get("date", ""),
-        "prev_due_string": (task.get("due") or {}).get("string", "") or "",
+        "next_recurrence": next_date,
+        "prev_due": due.get("date", ""),
+        "prev_due_string": due.get("string", "") or "",
         "claimed_points": claimed_points,
         "remaining_points": total_points,
         "closed": False,
-        "stubs": {"today": posthoc["id"], "future": task_id},
+        "stubs": {"today": posthoc["id"], "deferred_copy": copy["id"],
+                  "future": task_id},
     }
 
 
@@ -316,7 +368,7 @@ def handle_recurring(task: dict, target_date: str,
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: defer-fast.py <task_name> [target_date] [claimed_points]",
+        print("usage: defer-fast.py <task_name> [days|YYYY-MM-DD] [claimed_points]",
               file=sys.stderr)
         sys.exit(1)
 
@@ -328,8 +380,8 @@ def main():
     # Find the task
     task = find_task(task_name)
 
-    # Default target: next recurrence instance (recurring) or tomorrow.
-    target_date = explicit_target or default_target_date(task)
+    # Target = today+1 (default), today+N (bare integer), or an absolute date.
+    target_date = resolve_target(explicit_target)
 
     # Route by recurrence
     due = task.get("due") or {}
