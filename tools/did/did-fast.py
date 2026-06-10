@@ -617,6 +617,14 @@ def _refresh_task_queue_inner() -> dict:
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": datetime.now().isoformat()}
     cache.update(results)
+    # Attach Haiku short names so a ctrl-r / startup refresh keeps the compact
+    # display instead of reverting to the long names (which overflow the border).
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import shorten
+        shorten.attach_to_cache(cache)
+    except Exception as e:
+        print(f"shorten skipped: {e}", file=sys.stderr)
     tmp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n")
     tmp_path.rename(TASK_QUEUE_PATH)
     return cache

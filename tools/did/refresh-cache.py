@@ -60,24 +60,11 @@ def main() -> int:
             pass
     # Attach short display names (Haiku, cached once per task) so the pickers can
     # show long m5x2-style tasks without fzf eating the (N)/[N] estimates.
-    # Best-effort: never let shortening break the refresh.
+    # Shared with did-fast.py's --refresh-cache so every refresh path agrees.
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import shorten  # noqa: E402
-        all_tasks, seen = [], set()
-        for v in data.values():
-            if isinstance(v, list):
-                for t in v:
-                    tid = t.get("id") if isinstance(t, dict) else None
-                    if tid and tid not in seen:
-                        seen.add(tid)
-                        all_tasks.append(t)
-        shorts = shorten.shorten_tasks(all_tasks)
-        for v in data.values():
-            if isinstance(v, list):
-                for t in v:
-                    if isinstance(t, dict) and t.get("id") in shorts:
-                        t["short"] = shorts[t["id"]]
+        shorten.attach_to_cache(data)
     except Exception as e:
         print(f"shorten skipped: {e}", file=sys.stderr)
 

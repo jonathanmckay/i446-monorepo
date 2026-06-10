@@ -142,7 +142,6 @@ def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
     sidecar = _load_sidecar()
     out: dict = {}
     dirty = False
-    seen_ids = set()
     candidates = []  # (tid, prose, est, hash) needing a network round trip
 
     for t in tasks:
@@ -150,7 +149,6 @@ def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
         content = t.get("content") or ""
         if not tid or not content:
             continue
-        seen_ids.add(tid)
         prose, est = split_estimates(content)
         if len(prose) <= PROSE_CAP:
             continue  # short enough already
@@ -165,15 +163,16 @@ def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
     def resolve(c):
         """Return (tid, hash, display, generated) or None. Runs in a thread."""
         tid, prose, est, h = c
-        short_prose = _comment_lookup(tid, h)  # durable cross-device copy
-        generated = False
-        if not short_prose:
-            short_prose = _haiku_shorten(prose)
-            generated = True
+        # The comment stores the FULL display (prose + estimates already joined).
+        # Use it verbatim — do NOT re-append `est` or the estimates double up.
+        cached_display = _comment_lookup(tid, h)
+        if cached_display:
+            return tid, h, cached_display, False
+        short_prose = _haiku_shorten(prose)
         if not short_prose:
             return None
         display = f"{short_prose} {est}".strip() if est else short_prose
-        return tid, h, display, generated
+        return tid, h, display, True
 
     # Bound generation per run so a big first batch never stalls a post-/did
     # refresh; the rest fill in on later cycles. Run the network work in parallel.
@@ -190,16 +189,43 @@ def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
                 if generated:
                     _comment_store(tid, h, display)
 
-    # Prune sidecar entries for tasks no longer present (keep it from growing
-    # unbounded). Only prune when we actually saw a task list.
-    if seen_ids:
-        for stale in [k for k in sidecar if k not in seen_ids]:
-            del sidecar[stale]
-            dirty = True
-
+    # NB: do NOT prune sidecar entries for ids absent from `tasks`. The cache is
+    # rebuilt by two callers with DIFFERENT task sets (did-fast's "today" bucket
+    # vs refresh-cache's neon buckets); pruning on a partial view makes them
+    # delete each other's entries, forcing constant regeneration. The sidecar is
+    # one tiny line per long task, so unbounded growth is a non-issue.
     if dirty:
         _save_sidecar(sidecar)
     return out
+
+
+def attach_to_cache(cache: dict) -> dict:
+    """Mutate a task-queue cache dict in place, adding a 'short' field to every
+    long task across all list buckets. Call this from EVERY path that rebuilds
+    the cache (refresh-cache.py and did-fast.py --refresh-cache) so a refresh
+    never drops the short names. Best-effort: never raises."""
+    try:
+        all_tasks, seen = [], set()
+        for v in cache.values():
+            if isinstance(v, list):
+                for t in v:
+                    tid = t.get("id") if isinstance(t, dict) else None
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        all_tasks.append(t)
+        shorts = shorten_tasks(all_tasks)
+        for v in cache.values():
+            if isinstance(v, list):
+                for t in v:
+                    if isinstance(t, dict):
+                        s = shorts.get(t.get("id"))
+                        if s:
+                            t["short"] = s
+                        else:
+                            t.pop("short", None)  # drop stale short if no longer long
+    except Exception as e:
+        print(f"shorten attach skipped: {e}", file=sys.stderr)
+    return cache
 
 
 if __name__ == "__main__":
