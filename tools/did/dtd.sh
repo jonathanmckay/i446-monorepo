@@ -912,8 +912,8 @@ while true; do
       --footer="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header(cat $DTD_HDR)" \
+      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-d:execute-silent($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \

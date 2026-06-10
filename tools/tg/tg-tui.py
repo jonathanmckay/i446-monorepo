@@ -575,12 +575,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
     # ── header line (carries picks[0] inline when present) ──
     head = picks[0] if picks else None
     if head:
-        left = f"─{blk_name}{emoji_str}:{head['start_dt'].minute:02d} "
-        task = truncate(head["label"], max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str) - 2))
-        trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(task) - 1 - dwidth(pts_str))
+        # Block rule doubles as the first entry: ─午:04-task──────  pts.
+        left = f"─{blk_name}{emoji_str}:{head['start_dt'].minute:02d}-"
+        task = truncate(head["label"], max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str) - 1))
+        trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(task) - dwidth(pts_str))
         out.append((blk_style, left))
         out.append((head["style"] or blk_style, task))
-        out.append((blk_style, " " + "─" * trail))
+        out.append((blk_style, "─" * trail))
     else:
         left = f"─{blk_name}{emoji_str} "
         trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(pts_str))

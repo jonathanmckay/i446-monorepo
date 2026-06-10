@@ -69,13 +69,15 @@ The script handles everything: finding the task, detecting recurring vs non-recu
 
 ### Step 4: Apply extra changes (if any)
 
-If the user specified additional changes beyond the date and points, apply them after defer-fast.py completes:
+If the user specified additional changes beyond the date and points, apply them after defer-fast.py completes, targeting the **deferred instance**:
 
-- `rename: <new name>` → use `update-tasks` to change the future stub's content
-- `p1`/`p2`/`p3`/`p4` → use `update-tasks` to change priority on the future stub
-- Additional notes → use `update-tasks` to append to description
+- Non-recurring: the task itself, ID at `.stubs.future`.
+- Recurring: the one-off copy, ID at `.stubs.deferred_copy` (do NOT edit the parent series at `.stubs.future`).
 
-The future stub's task ID is in the JSON output at `.stubs.future`.
+Then:
+- `rename: <new name>` → use `update-tasks` to change that task's content
+- `p1`/`p2`/`p3`/`p4` → use `update-tasks` to change its priority
+- Additional notes → use `update-tasks` to append to its description
 
 ### Step 5: Report
 
@@ -83,9 +85,9 @@ The future stub's task ID is in the JSON output at `.stubs.future`.
 deferred: <task name> → <new-date>
 ```
 
-If recurring:
+If recurring (note the series stays intact):
 ```
-deferred (recurring): <task name> → closed + [CLAIMED] today / [REMAINING] on <new-date>
+deferred (recurring): <task name> → one-off on <target>; series next <next_recurrence>
 ```
 
 If changes were applied:
@@ -96,19 +98,22 @@ deferred: <task name> → <new-date> [renamed / p2 / ...]
 ## Examples
 
 ```
+/defer water plants
+→ deferred: water plants → 2026-06-11   (default: 1 day)
+
+/defer water plants 3
+→ deferred: water plants (10) [5] → 2026-06-13   (today + 3 days)
+
 /defer get a birth certificate for aurora 5/15
 → deferred: get a birth certificate for aurora (30) [80] → 2026-05-15
 
-/defer aurora insurance 4/20 p2
-→ deferred: insurance for Aurora → 2026-04-20 [p2]
-
-/defer swim lessons next Monday rename: research swim lesson providers
-→ deferred: check in on summer swim lessons strategy → 2026-04-13 [renamed]
+/defer daily standup 2
+→ deferred (recurring): daily standup → one-off on 2026-06-12; series next 2026-06-11
 ```
 
 ## Notes
 
-- Non-recurring tasks use `due_date` reschedule. Recurring tasks use the close+split-stubs flow to preserve recurrence.
-- The posthoc record (non-recurring) uses `[0]` points since deferral itself has no output value.
-- For recurring tasks, stub A gets `[CLAIMED]` points (default 5) and stub B gets `[REMAINING]` points. Both inherit the original task's labels and project.
+- Non-recurring tasks reschedule in place via `due_date`.
+- Recurring tasks defer **only the current occurrence**: a non-recurring one-off copy is created on the target date (inherits the original's labels, project, priority, and `(N)`/`[N]` content), and the parent advances to its own next occurrence with the recurrence string preserved (passing `due_string` keeps it recurring; a bare `due_date` write would strip it). Nothing is marked complete.
+- The posthoc eval record is created for today with `[0]` points (deferral has no output value) and inherits the task's labels.
 - If the task has no project (inbox), use `"inbox"` as project_id.
