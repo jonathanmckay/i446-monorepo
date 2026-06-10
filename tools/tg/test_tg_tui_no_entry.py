@@ -53,6 +53,7 @@ def test_now_slot_shows_no_time_entry_when_idle():
     m = _load()
     now = dt.datetime.now(m.TZ)
     m.STATE.current = None
+    m.STATE.current_known = True  # confirmed idle (a successful fetch saw no timer)
     m.STATE.events = []
     m.STATE.block_points = {}
     m.STATE.scroll_min = 0
@@ -118,3 +119,52 @@ def test_flash_cursor_toggles_every_half_second():
     # source uses the 0.5s formula, not the old 4×/sec one
     src = (HERE / "tg-tui.py").read_text()
     assert "now.timestamp() * 2" in src, "cursor flash must be 0.5s (timestamp*2)"
+
+
+def test_no_flash_when_timer_state_unknown():
+    """Bug: starting a 2nd hci while Toggl was rate-limiting (402) left the TUI
+    flashing 'no timer' over a live entry. When current is unconfirmed
+    (current_known False), neither the whole-screen flash nor the red NO TIME
+    ENTRY alarm may fire."""
+    m = _load()
+    now = dt.datetime.now(m.TZ)
+    m.STATE.current = None
+    m.STATE.current_known = False  # fetch failed / rate-limited: state unknown
+    m.STATE.events = []
+    m.STATE.block_points = {}
+    m.STATE.scroll_min = 0
+    m.STATE.entries = [{
+        "start_dt": now - dt.timedelta(minutes=40),
+        "end_dt": now - dt.timedelta(minutes=7),
+        "desc": "push", "project_id": None, "running": False,
+    }]
+    assert m._no_timer_flash_on() is False, "must not whole-screen flash when unknown"
+    txt_all = "".join(t for _, t in m.render_detail())
+    assert "NO TIME ENTRY" not in txt_all, "must not nag when timer state is unconfirmed"
+
+
+def test_fetch_current_marks_unknown_on_rate_limit(monkeypatch):
+    """A 402 (or any error) from get_current must set current_known False and
+    leave the last-known current untouched, so the idle nag stays off."""
+    m = _load()
+    sentinel = {"description": "hci", "project_id": None, "start": "x"}
+    m.STATE.current = sentinel
+    m.STATE.current_known = True
+
+    def _boom():
+        raise RuntimeError("Toggl API GET /me/time_entries/current -> 402: hourly limit")
+
+    monkeypatch.setattr(m.toggl_api, "get_current", _boom)
+    m.fetch_current()
+    assert m.STATE.current_known is False
+    assert m.STATE.current is sentinel, "must keep last-known current on failure"
+
+
+def test_fetch_current_marks_known_on_success(monkeypatch):
+    m = _load()
+    m.STATE.current_known = False
+    entry = {"description": "hci", "project_id": None, "start": "x"}
+    monkeypatch.setattr(m.toggl_api, "get_current", lambda: entry)
+    m.fetch_current()
+    assert m.STATE.current_known is True
+    assert m.STATE.current is entry

@@ -914,7 +914,7 @@ while true; do
   # keybindings live in a static --footer (the very last line) instead of the
   # header, which transform-header overwrites on each action.
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
-      --info=hidden \
+      --info=inline-right \
       --input-border=horizontal \
       --footer="$DTD_KEYS" \
       --bind 'load:transform-footer(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \

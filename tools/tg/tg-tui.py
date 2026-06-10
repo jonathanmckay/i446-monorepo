@@ -185,6 +185,12 @@ def project_style(pid_or_code) -> str:
 class State:
     def __init__(self):
         self.current = None  # running entry
+        # Whether STATE.current reflects a CONFIRMED Toggl read. False until the
+        # first successful fetch, and reset whenever a fetch fails (e.g. the
+        # free-tier 402 rate limit). The idle nag (whole-screen flash + red NO
+        # TIME ENTRY) only fires when we've confirmed no timer — never when we
+        # simply couldn't reach Toggl, which used to flash over a live timer.
+        self.current_known = False
         self.entries: list[dict] = []  # today's entries
         self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
@@ -208,8 +214,12 @@ STATE = State()
 def fetch_current():
     try:
         STATE.current = toggl_api.get_current()
+        STATE.current_known = True
         STATE.last_current_fetch = time.monotonic()
     except Exception as e:
+        # Fetch failed → we no longer know the timer state. Leave STATE.current
+        # as-is (last known) but mark it unconfirmed so the idle nag stays off.
+        STATE.current_known = False
         if "402" in str(e):
             flash("toggl: rate limited (free tier)", 30.0)
         else:
@@ -743,7 +753,9 @@ def render_detail() -> list[tuple[str, str]]:
         time_str = f"{slot:%H:%M}"
         is_now_slot = bool(slot <= now < slot_end)
         is_running = bool(STATE.current) and is_now_slot
-        is_idle_now = is_now_slot and not STATE.current
+        # Only show the red NO TIME ENTRY alarm when we've CONFIRMED no timer.
+        # An unconfirmed state (rate-limited fetch) renders as a plain slot.
+        is_idle_now = is_now_slot and STATE.current_known and not STATE.current
         if is_running:
             cur_desc = STATE.current.get("description") or ""
             cur_code = proj_code(STATE.current.get("project_id"))
@@ -1099,8 +1111,10 @@ style = Style.from_dict({
 
 def _no_timer_flash_on() -> bool:
     """Whole-screen flash cue: true during the first half of each second
-    while no Toggl timer is running — a nag to go start one."""
-    if STATE.current:
+    while no Toggl timer is running — a nag to go start one. Only fires once
+    we've CONFIRMED no timer (current_known); a rate-limited / failed fetch is
+    'unknown', not 'idle', so it must not flash over a live timer."""
+    if STATE.current or not STATE.current_known:
         return False
     return dt.datetime.now(TZ).microsecond < 500_000
 
