@@ -21,6 +21,13 @@ CHANGED=$(git diff --cached --stat | tail -1)
 git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q
 echo "[$TS] committed: $CHANGED"
 
-git pull --rebase origin main -q 2>&1 || echo "[$TS] WARNING: pull failed"
-git push origin main -q 2>&1 || echo "[$TS] WARNING: push failed"
-echo "[$TS] pushed"
+# Push the CURRENT branch, not a hardcoded main. This lets a clone sit on a
+# `wip` branch so the every-10-min auto-snapshots accumulate there and keep
+# `main` clean for deliberate, tested commits. Release with release-to-main.sh.
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Only rebase if the remote branch already exists (first push creates it).
+if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+    git pull --rebase origin "$BRANCH" -q 2>&1 || echo "[$TS] WARNING: pull failed"
+fi
+git push -u origin "$BRANCH" -q 2>&1 || echo "[$TS] WARNING: push failed"
+echo "[$TS] pushed → $BRANCH"
