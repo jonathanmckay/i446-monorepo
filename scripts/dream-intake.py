@@ -165,7 +165,8 @@ def _google_service(service_name, version, creds):
 
 @source("completed_today", "Today's completed tasks from ibx queue")
 def _completed_today():
-    ct_path = Path.home() / "vault" / "z_ibx" / "completed-today.json"
+    import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+    ct_path = _sp.COMPLETED_TODAY
     if not ct_path.exists():
         return {"tasks": [], "note": "completed-today.json not found"}
 

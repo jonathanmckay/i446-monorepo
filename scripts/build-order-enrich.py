@@ -20,7 +20,8 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Los_Angeles")
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
-COMPLETED_TODAY = Path.home() / "vault/z_ibx/completed-today.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+COMPLETED_TODAY = _sp.COMPLETED_TODAY
 COMPLETED_ARCHIVE_DIR = Path.home() / "vault/z_ibx/completed-archive"
 D357_DIR = Path.home() / "vault/d357"
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"

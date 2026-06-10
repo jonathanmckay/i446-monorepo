@@ -14,12 +14,27 @@ Wraps `~/i446-monorepo/tools/meet/meet.py`:
 
 ## State
 
-Background metadata stored at `~/.claude/skills/d357/state.json`:
+Background metadata stored at `~/.local/state/jm/d357-state.json` (machine-local;
+NOT synced across machines, so a PID written on one box never leaks to another —
+see `vault/z_meta/architecture.md` hazard #1):
 ```json
 {"pid": 12345, "tmux": "d357", "name": "joe 1:1", "started": "2026-04-20T10:00:00", "log": "/tmp/d357-active.log", "toggl_id": 98765, "project": "m5x2", "calendar_minutes": 30, "mic_only": false}
 ```
 
 Absent or `pid: null` → no recording active. The `tmux` field tracks the tmux session name.
+
+**Liveness guard (check BEFORE trusting any active recording).** A state file
+claiming a recording is active is only valid if the process is actually alive and
+recent. Before acting on a non-null `pid`, verify all three:
+1. `kill -0 <pid>` succeeds (process exists), AND
+2. `tmux has-session -t <tmux>` succeeds, AND
+3. `started` is today (parse the date; a recording from a prior day is stale).
+
+If any check fails, the state is **stale** (crashed, killed, or a leftover from a
+prior session): clear it (`pid: null`), do NOT try to stop/transcribe it, and
+proceed as if no recording is active. This is what prevents the 43-hour zombie
+(2026-06-10): a stale pid was trusted and meet.py was left recording silence for
+two days.
 
 ## Commands
 

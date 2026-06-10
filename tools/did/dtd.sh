@@ -9,8 +9,11 @@ UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
-CACHE="$HOME/vault/z_ibx/task-queue.json"
-DONE="$HOME/vault/z_ibx/completed-today.json"
+# Machine-local runtime state (not synced). See lib/state_paths.py + architecture.md
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/jm"
+mkdir -p "$STATE_DIR"
+CACHE="$STATE_DIR/task-queue.json"
+DONE="$STATE_DIR/completed-today.json"
 DTD_FIFO="/tmp/dtd-$$.fifo"
 DTD_HDR="/tmp/dtd-$$.hdr"
 DTD_LOG="/tmp/dtd-$$.log"
@@ -104,7 +107,7 @@ DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
 DTD_REMOVED="/tmp/dtd-$$.removed"
 # Skips persist across dtd sessions for the duration of one day (stable
 # path + date guard), unlike the other per-session temp files
-DTD_SKIPPED="$HOME/vault/z_ibx/dtd-skipped-today.txt"
+DTD_SKIPPED="$STATE_DIR/dtd-skipped-today.txt"
 if [[ -f "$DTD_SKIPPED.date" && "$(cat "$DTD_SKIPPED.date" 2>/dev/null)" != "$LOCAL_TODAY" ]]; then
   rm -f "$DTD_SKIPPED"
 fi

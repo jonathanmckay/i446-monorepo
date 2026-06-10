@@ -8,7 +8,7 @@ the estimates always survive.
 
 The short name is generated ONCE per task by a cheap model (Haiku) and cached in
 two places:
-  - a local sidecar (~/vault/z_ibx/task-shortnames.json) — fast path, keyed by
+  - a local sidecar (~/.local/state/jm/task-shortnames.json) — fast path, keyed by
     task id + a hash of the original content (so edits regenerate)
   - a Todoist comment (`dtd-short:<hash8>:<short>`) — durable, portable across
     devices, and the thing the user asked to "store in a comment"
@@ -26,7 +26,8 @@ import sys
 from pathlib import Path
 
 PROSE_CAP = 32  # max chars of prose in the shortened name (estimates appended on top)
-SIDECAR = Path.home() / "vault" / "z_ibx" / "task-shortnames.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+SIDECAR = _sp.TASK_SHORTNAMES
 MODEL = "claude-haiku-4-5-20251001"
 COMMENT_PREFIX = "dtd-short:"
 

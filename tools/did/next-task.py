@@ -3,7 +3,7 @@
 
 Usage: python3 next-task.py <completed_habit> [extra_completed ...]
 
-Reads ~/vault/z_ibx/task-queue.json and completed-today.json,
+Reads ~/.local/state/jm/task-queue.json and completed-today.json,
 filters out completed tasks and tasks not due today/overdue,
 prints a compact "Next up" menu.
 """
@@ -14,9 +14,10 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-CACHE = Path.home() / "vault/z_ibx/task-queue.json"
-COMPLETED = Path.home() / "vault/z_ibx/completed-today.json"
-SKIPPED = Path.home() / "vault/z_ibx/skipped-today.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+CACHE = _sp.TASK_QUEUE
+COMPLETED = _sp.COMPLETED_TODAY
+SKIPPED = _sp.SKIPPED_TODAY
 
 # Suffixes to strip when matching completed names against task content
 STRIP_SUFFIXES = [

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append habit/task names to ~/vault/z_ibx/completed-today.json with guards.
+"""Append habit/task names to ~/.local/state/jm/completed-today.json with guards.
 
 Usage:
     python3 mark-completed.py <name> [<name2> ...]
@@ -31,7 +31,8 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-COMPLETED = Path.home() / "vault/z_ibx/completed-today.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+COMPLETED = _sp.COMPLETED_TODAY
 
 # Annotation + punctuation strip for duplicate-detection key (Step 6 posthoc guard).
 # Keep in sync with next-task.py::strip_task_name and the tokenize() rules in

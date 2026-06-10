@@ -25,7 +25,8 @@ CLI = str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py")
 CACHE = str(Path.home() / ".claude/skills/tg/cache.json")
 DO_SESSION = Path.home() / ".claude/skills/do/active.json"
 DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
-TASK_QUEUE = str(Path.home() / "vault/z_ibx/task-queue.json")
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+TASK_QUEUE = str(_sp.TASK_QUEUE)
 TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
 
 # ── Shortcode table ──────────────────────────────────────────────────────────

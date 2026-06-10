@@ -500,7 +500,8 @@ def pad(s: str, n: int) -> str:
 # Toggl description is the task content minus (N)/[N]/{N} annotations, so we map
 # normalized-cleaned content → cleaned short and look entries up by description.
 
-TASK_QUEUE = Path.home() / "vault/z_ibx/task-queue.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+TASK_QUEUE = _sp.TASK_QUEUE
 SHORT_NAMES: dict[str, str] = {}  # normalized cleaned content → cleaned short
 
 

@@ -7,8 +7,8 @@ set -e
 SCRIPT="$HOME/i446-monorepo/tools/did/dtd.sh"
 
 # 1. Stable path, not per-PID temp
-if grep -q 'DTD_SKIPPED="\$HOME/vault/z_ibx/dtd-skipped-today.txt"' "$SCRIPT"; then
-  echo "PASS: skipped file at stable per-day path"
+if grep -q 'DTD_SKIPPED="\$STATE_DIR/dtd-skipped-today.txt"' "$SCRIPT"; then
+  echo "PASS: skipped file at stable per-day path (machine-local state dir)"
 else
   echo "FAIL: DTD_SKIPPED must be a stable path, not /tmp/dtd-\$\$"
   exit 1

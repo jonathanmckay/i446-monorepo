@@ -7,8 +7,10 @@ from datetime import date
 from pathlib import Path
 
 SCRIPT = Path(__file__).parent / "next-task.py"
-CACHE = Path.home() / "vault/z_ibx/task-queue.json"
-COMPLETED = Path.home() / "vault/z_ibx/completed-today.json"
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import state_paths as _sp  # noqa: E402
+CACHE = _sp.TASK_QUEUE
+COMPLETED = _sp.COMPLETED_TODAY
 
 
 def _backup_and_restore(paths):

@@ -30,7 +30,8 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 HEADERS_PATH = Path.home() / ".claude/skills/did/headers.json"
-TASK_QUEUE_PATH = Path.home() / "vault/z_ibx/task-queue.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+TASK_QUEUE_PATH = _sp.TASK_QUEUE
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24

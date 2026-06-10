@@ -48,8 +48,9 @@ import registry  # noqa: E402
 import todoist  # noqa: E402
 
 VAULT = Path.home() / "vault"
-COMPLETED_TODAY = VAULT / "z_ibx" / "completed-today.json"
-TASK_QUEUE = VAULT / "z_ibx" / "task-queue.json"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+COMPLETED_TODAY = _sp.COMPLETED_TODAY
+TASK_QUEUE = _sp.TASK_QUEUE
 
 TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")

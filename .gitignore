@@ -83,3 +83,6 @@ quickbooks-online-mcp-server/
 tools/personal-dashboard/.env
 tools/personal-dashboard/ga4-tokens.json
 tools/personal-dashboard/ga4-oauth.keys.json
+
+# d357 recording state moved to ~/.local/state/jm/ (machine-local)
+skills/claude-skills/d357/state.json
