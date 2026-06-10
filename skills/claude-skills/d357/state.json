@@ -1,1 +1,11 @@
-{"pid": 61328, "tmux": "d357", "name": "Elliot Silvers", "started": "2026-06-08T21:41:39", "log": "/tmp/d357-active.log", "toggl_id": 4438346244, "project": "m5x2", "calendar_minutes": null, "mic_only": true}
+{
+  "pid": 52902,
+  "tmux": "d357",
+  "name": "JA 1:1",
+  "started": "2026-06-10T09:42:43",
+  "log": "/tmp/d357-active.log",
+  "toggl_id": 4441345808,
+  "project": "m5x2",
+  "calendar_minutes": null,
+  "mic_only": false
+}
