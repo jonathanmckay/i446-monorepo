@@ -6,6 +6,7 @@
 
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
+DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 CACHE="$HOME/vault/z_ibx/task-queue.json"
@@ -140,7 +141,7 @@ HDR="$DTD_HDR"
 TIMER="$DTD_TIMER"
 task="\$1"
 # Strip ANSI codes first
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
@@ -163,7 +164,7 @@ PUSHED="$DTD_PUSHED"
 REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
 task="\$1"
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
@@ -201,7 +202,7 @@ PUSHED="$DTD_PUSHED"
 REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
 task="\$1"
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "\$clean_for_filter" >> "\$SESSION"
@@ -222,7 +223,7 @@ HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
 task="\$1"
 # Strip ANSI codes and recurring indicator
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 # Query with the FULL row content (annotations intact) so duplicate names
 # differing only in (N)/[N] resolve to the exact selected task; fall back
@@ -270,7 +271,7 @@ POINTS_FAST="\$HOME/i446-monorepo/tools/did/points-fast.py"
 HDR="$DTD_HDR"
 CACHE="$CACHE"
 task="\$1"
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 query="\$task"
 if [[ "\$clean" == *"…"* ]]; then
@@ -398,8 +399,12 @@ for t in unique:
     # Recurring indicator
     recurring = t.get('recurring', False)
 
-    # Middle-truncate if needed
-    line = raw
+    # Display the cached short (Haiku) name when present so long m5x2-style
+    # tasks keep their (N)/[N] estimates visible; fall back to full content.
+    display = t.get('short') or raw
+
+    # Middle-truncate if needed (fallback; short names usually fit)
+    line = display
     if len(line) > cols - 2:
         # Find trailing annotations
         tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][ ]*[\(\[\{]\d*[\)\]\}].*$', line)
@@ -409,19 +414,24 @@ for t in unique:
         head_len = max(10, cols - len(tail) - 2)
         line = line[:head_len] + '…' + tail
 
+    # Hidden fields so bindings resolve the real task by id and search still
+    # matches the original words: field1=display, field2=id, field3=canonical.
+    # fzf shows field1 only (--with-nth=1) and searches fields 1,3 (--nth=1,3).
+    sfx = '\t' + str(t.get('id', '')) + '\t' + clean
+
     repeat = '↻ ' if recurring else ''
     if running_clean and clean == running_clean:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
-        running_lines.append(f'{color}▶ {elapsed}m · {line}{RESET}')
+        running_lines.append(f'{color}▶ {elapsed}m · {line}{RESET}{sfx}')
     elif is_skipped:
         # No dimming — skipped just means later-today; keep normal colors.
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
-        skipped_lines.append(f'{color}{repeat}{line}{RESET}')
+        skipped_lines.append(f'{color}{repeat}{line}{RESET}{sfx}')
     elif color:
-        normal_lines.append(f'{color}{repeat}{line}{RESET}')
+        normal_lines.append(f'{color}{repeat}{line}{RESET}{sfx}')
     else:
-        normal_lines.append(f'{repeat}{line}')
+        normal_lines.append(f'{repeat}{line}{sfx}')
 
 for l in running_lines:
     print(l)
@@ -440,7 +450,7 @@ cat > "$DTD_SKIP" << SKIPEOF
 SKIPPED="$DTD_SKIPPED"
 HDR="$DTD_HDR"
 task="\$1"
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "\$clean" | tr '[:upper:]' '[:lower:]' >> "\$SKIPPED"
 echo "⏭ \$clean" > "\$HDR"
@@ -456,7 +466,7 @@ CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
 task="\$1"
 # Strip ANSI codes and recurring indicator
-task=\$(echo "\$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "⏳ deleting: \$clean" > "\$HDR"
 tid=\$(python3 -c "
@@ -512,7 +522,7 @@ CACHE_FILE="PLACEHOLDER_CACHE"
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 
 task="$1"
-task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content
 
 # Extract [N] and (N) from task
 total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
@@ -678,7 +688,7 @@ HDR="PLACEHOLDER_HDR"
 CACHE_FILE="PLACEHOLDER_CACHE"
 
 task="$1"
-task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
 # Handle truncation
@@ -866,17 +876,22 @@ while true; do
   # --bind change:first: with --no-sort, fzf does not snap the cursor back to
   # the top as you type, so it can land on the last match. Force it to the
   # first (highest-priority) match on every query keystroke.
+  # --delimiter/--with-nth/--nth: each row is "display<TAB>id<TAB>canonical".
+  # fzf shows only the display (short name + estimates), searches the display
+  # and the canonical text (so original words still match), and bindings get
+  # the hidden id via {2} to resolve the real task.
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
+      --delimiter=$'\t' --with-nth=1 --nth=1,3 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "alt-enter:execute-silent($DTD_DONE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-s:execute-silent($DTD_START {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute-silent($DTD_DEFER {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-v:execute($DTD_POINTS {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-a:execute-silent($DTD_AGENT {})+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-d:execute-silent($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header(cat $DTD_HDR)" \
+      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
       --header="$combined_hdr  [enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh]")
@@ -887,8 +902,9 @@ while true; do
     break
   fi
 
-  # Strip ANSI color codes and recurring indicator from fzf selection
-  task=$(echo "$task" | sed $'s/\033\[[0-9;]*m//g' | sed -E 's/^↻ //; s/^▶ [^·]* · //')
+  # Selected row is "display<TAB>id<TAB>canonical" — resolve via the id field.
+  task=$(printf '%s' "$task" | cut -f2)
+  task=$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "$task")
 
   # Resolve truncated names: if fzf output contains "…", find the original
   # full name from the cache snapshot by matching the prefix before "…"

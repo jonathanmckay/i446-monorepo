@@ -58,6 +58,29 @@ def main() -> int:
                 data["today"] = old["today"]
         except (json.JSONDecodeError, OSError):
             pass
+    # Attach short display names (Haiku, cached once per task) so the pickers can
+    # show long m5x2-style tasks without fzf eating the (N)/[N] estimates.
+    # Best-effort: never let shortening break the refresh.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import shorten  # noqa: E402
+        all_tasks, seen = [], set()
+        for v in data.values():
+            if isinstance(v, list):
+                for t in v:
+                    tid = t.get("id") if isinstance(t, dict) else None
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        all_tasks.append(t)
+        shorts = shorten.shorten_tasks(all_tasks)
+        for v in data.values():
+            if isinstance(v, list):
+                for t in v:
+                    if isinstance(t, dict) and t.get("id") in shorts:
+                        t["short"] = shorts[t["id"]]
+    except Exception as e:
+        print(f"shorten skipped: {e}", file=sys.stderr)
+
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
     counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}

@@ -151,14 +151,18 @@ def main():
     if not filtered:
         return
 
-    # Display
+    # Display. Prefer the cached short name (long m5x2-style tasks) so the
+    # (N)/[N] estimates stay visible; resolution here is by index, so the short
+    # display never affects which task gets picked.
     print("\nNext up:")
-    max_content = max(len(t["content"]) for t in filtered)
+    disp = {id(t): (t.get("short") or t["content"]) for t in filtered}
+    max_content = max(len(disp[id(t)]) for t in filtered)
     for i, t in enumerate(filtered, 1):
-        pad = max_content - len(t["content"]) + 4
+        d = disp[id(t)]
+        pad = max_content - len(d) + 4
         tid = t.get("id", "")
         cat = t.get("cat") or _infer_cat(t)
-        print(f"  {i}. {t['content']}{' ' * pad}{cat}  #{tid}")
+        print(f"  {i}. {d}{' ' * pad}{cat}  #{tid}")
     print(f"  {len(filtered) + 1}. [skip]")
     print(f"\nPick [1-{len(filtered) + 1}], or s<N> to push to bottom:")
 

@@ -93,9 +93,12 @@ def _haiku_shorten(prose: str) -> str | None:
         short = re.sub(r"\s+", " ", short)
         if not short:
             return None
-        # Hard cap in case the model overshoots.
+        # Cap in case the model overshoots — prefer a word boundary so we never
+        # leave a chopped fragment like "scop".
         if len(short) > PROSE_CAP:
-            short = short[:PROSE_CAP].rstrip()
+            cut = short[:PROSE_CAP]
+            sp = cut.rfind(" ")
+            short = (cut[:sp] if sp >= PROSE_CAP - 12 else cut).rstrip(" -–—:,")
         return short
     except Exception:
         return None
@@ -128,14 +131,19 @@ def _comment_store(task_id: str, content_hash: str, short: str) -> None:
         pass
 
 
-def shorten_tasks(tasks: list[dict]) -> dict:
+def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
     """Given task dicts (need 'id' and 'content'), return {id: short_display} for
     every task whose prose exceeds PROSE_CAP. Reuses cached names; only calls
-    Haiku for genuinely new long tasks. Never raises."""
+    Haiku for genuinely new long tasks, at most `max_new` per run so a big first
+    batch never blocks a post-/did refresh (the rest fill in on later runs).
+    Never raises."""
+    from concurrent.futures import ThreadPoolExecutor
+
     sidecar = _load_sidecar()
     out: dict = {}
     dirty = False
     seen_ids = set()
+    candidates = []  # (tid, prose, est, hash) needing a network round trip
 
     for t in tasks:
         tid = str(t.get("id") or "")
@@ -150,24 +158,37 @@ def shorten_tasks(tasks: list[dict]) -> dict:
         h = _hash(content)
         cached = sidecar.get(tid)
         if cached and cached.get("h") == h and cached.get("short"):
-            out[tid] = cached["short"]
-            continue
+            out[tid] = cached["short"]  # fast path, no network
+        else:
+            candidates.append((tid, prose, est, h))
 
-        # Sidecar miss → check the durable comment (cross-device), else generate.
-        short_prose = _comment_lookup(tid, h)
+    def resolve(c):
+        """Return (tid, hash, display, generated) or None. Runs in a thread."""
+        tid, prose, est, h = c
+        short_prose = _comment_lookup(tid, h)  # durable cross-device copy
         generated = False
         if not short_prose:
             short_prose = _haiku_shorten(prose)
             generated = True
         if not short_prose:
-            continue  # give up quietly; caller falls back to full content
-
+            return None
         display = f"{short_prose} {est}".strip() if est else short_prose
-        out[tid] = display
-        sidecar[tid] = {"h": h, "short": display}
-        dirty = True
-        if generated:
-            _comment_store(tid, h, display)
+        return tid, h, display, generated
+
+    # Bound generation per run so a big first batch never stalls a post-/did
+    # refresh; the rest fill in on later cycles. Run the network work in parallel.
+    to_do = candidates[:max_new]
+    if to_do:
+        with ThreadPoolExecutor(max_workers=min(6, len(to_do))) as pool:
+            for res in pool.map(resolve, to_do):
+                if not res:
+                    continue
+                tid, h, display, generated = res
+                out[tid] = display
+                sidecar[tid] = {"h": h, "short": display}
+                dirty = True
+                if generated:
+                    _comment_store(tid, h, display)
 
     # Prune sidecar entries for tasks no longer present (keep it from growing
     # unbounded). Only prune when we actually saw a task list.
