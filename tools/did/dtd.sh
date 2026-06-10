@@ -350,6 +350,22 @@ def prank(p):
 def strip_ann(s):
     return re.sub(r'  +', ' ', re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', s)).strip()
 
+# Right-justify trailing (N)/[N]/{N} estimates to the window edge so they line
+# up in a column. target = cols - 3 leaves room for fzf's pointer/gutter (2) and
+# the scrollbar (1). If there is no room (long/truncated rows), leave inline.
+_EST_TOK = r'(?:\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\})'
+_EST_TAIL = re.compile(r'(\s*(?:' + _EST_TOK + r'\s*)+)$')
+def rjust_est(s, cols):
+    m = _EST_TAIL.search(s)
+    if not m:
+        return s
+    est = re.sub(r'\s+', ' ', m.group(1).strip())
+    head = s[:m.start()].rstrip()
+    pad = (cols - 3) - len(head) - len(est)
+    if pad < 2:
+        return (head + ' ' + est) if head else est
+    return head + ' ' * pad + est
+
 # Build task list in priority order
 sections = []
 for key in ['0neon', '1neon', '关键路径', '夜neon']:
@@ -414,24 +430,31 @@ for t in unique:
         head_len = max(10, cols - len(tail) - 2)
         line = line[:head_len] + '…' + tail
 
-    # Hidden fields so bindings resolve the real task by id and search still
-    # matches the original words: field1=display, field2=id, field3=canonical.
-    # fzf shows field1 only (--with-nth=1) and searches fields 1,3 (--nth=1,3).
-    sfx = '\t' + str(t.get('id', '')) + '\t' + clean
+    # Hidden field 2 carries the task id so bindings resolve the real task.
+    # fzf shows field 1 only (--with-nth=1); search therefore matches the
+    # visible short name (Haiku keeps key codes/names, so this stays usable).
+    sfx = '\t' + str(t.get('id', ''))
 
     repeat = '↻ ' if recurring else ''
-    if running_clean and clean == running_clean:
+    is_running = bool(running_clean and clean == running_clean)
+    if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
-        running_lines.append(f'{color}▶ {elapsed}m · {line}{RESET}{sfx}')
-    elif is_skipped:
-        # No dimming — skipped just means later-today; keep normal colors.
+        prefix = f'▶ {elapsed}m · '
+    else:
+        prefix = repeat
+    # Build the full visible row, then right-justify its trailing estimates so
+    # they align in a column regardless of the prefix. ANSI is added after.
+    body = rjust_est(prefix + line, cols)
+    if is_running:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
-        skipped_lines.append(f'{color}{repeat}{line}{RESET}{sfx}')
+        running_lines.append(f'{color}{body}{RESET}{sfx}')
+    elif is_skipped:
+        skipped_lines.append(f'{color}{body}{RESET}{sfx}')
     elif color:
-        normal_lines.append(f'{color}{repeat}{line}{RESET}{sfx}')
+        normal_lines.append(f'{color}{body}{RESET}{sfx}')
     else:
-        normal_lines.append(f'{repeat}{line}{sfx}')
+        normal_lines.append(f'{body}{sfx}')
 
 for l in running_lines:
     print(l)
@@ -876,12 +899,12 @@ while true; do
   # --bind change:first: with --no-sort, fzf does not snap the cursor back to
   # the top as you type, so it can land on the last match. Force it to the
   # first (highest-priority) match on every query keystroke.
-  # --delimiter/--with-nth/--nth: each row is "display<TAB>id<TAB>canonical".
-  # fzf shows only the display (short name + estimates), searches the display
-  # and the canonical text (so original words still match), and bindings get
-  # the hidden id via {2} to resolve the real task.
+  # --delimiter/--with-nth: each row is "display<TAB>id". fzf shows only the
+  # display (short name + estimates) and bindings get the hidden id via {2} to
+  # resolve the real task. (fzf searches whatever is displayed; the short names
+  # keep key codes/names so search stays usable.)
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
-      --delimiter=$'\t' --with-nth=1 --nth=1,3 \
+      --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
       --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \

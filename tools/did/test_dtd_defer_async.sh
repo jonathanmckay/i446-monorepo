@@ -23,6 +23,13 @@ for p in paths.values():
 body = body.replace("$DTD_HDR", paths["hdr"]).replace("$DTD_REMOVED", paths["removed"])
 body = body.replace("$DTD_PUSHED", paths["pushed"]).replace("$DTD_PROCESSED", paths["processed"])
 body = body.replace("$UNDO_FAST", "/usr/bin/true").replace("$DTD_JOURNAL", paths["journal"])
+# dtd now resolves the fzf-selected id -> canonical content via dtd_resolve.py.
+# The real outer shell expands these at heredoc-creation time; expand them here
+# too. The defer test passes a task NAME (has spaces) so the resolver takes its
+# legacy text fallback and returns the cleaned name.
+cache_stub = os.path.join(tmp, "cache.json"); open(cache_stub, "w").write("{}")
+body = body.replace("$DTD_RESOLVE", os.path.join(os.getcwd(), "dtd_resolve.py"))
+body = body.replace("$DTD_CACHE_FILE", cache_stub)
 body = body.replace("\\$", "$")
 
 stub = os.path.join(tmp, "defer_stub.py")
