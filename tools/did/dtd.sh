@@ -910,29 +910,32 @@ while true; do
   # resolve the real task. (fzf searches whatever is displayed; the short names
   # keep key codes/names so search stays usable.)
   # Full-screen (no --height) so the input block is bottom-justified to the
-  # terminal like Claude; --input-border draws lines around the prompt; the
-  # keybindings live in a static --footer (the very last line) instead of the
-  # header, which transform-header overwrites on each action.
+  # terminal like Claude. NB: under --layout=reverse-list fzf renders --footer
+  # at the TOP and --header at the BOTTOM (just above the prompt). So the live
+  # "<tasks left>   <keybindings>" line goes in --header (renders at the bottom,
+  # where we want it) and the timer/worker-status goes in --footer (renders at
+  # the top). transform-header refreshes the count on load/result; the action
+  # bindings push their status into the footer via transform-footer.
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --info=inline-right \
       --input-border=horizontal \
-      --footer="$DTD_KEYS" \
-      --bind 'load:transform-footer(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
-      --bind 'result:transform-footer(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
+      --header="$DTD_KEYS" \
+      --bind 'load:transform-header(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
+      --bind 'result:transform-header(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header(cat $DTD_HDR)" \
-      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute-silent($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-header(echo '🔄 refreshed')" \
-      --header="$combined_hdr")
+      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
+      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-d:execute-silent($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-footer(echo '🔄 refreshed')" \
+      --footer="$combined_hdr")
 
   task="$fzf_output"
 
