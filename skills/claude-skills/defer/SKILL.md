@@ -20,27 +20,37 @@ Do NOT explain what you're doing. Do NOT ask for confirmation unless multiple ta
 ## Usage
 
 ```
-/defer <task> <new-date> [changes]
+/defer <task> [when] [changes]
 ```
 
 - `<task>` — substring to search for in active Todoist tasks
-- `<new-date>` — when to defer to. Natural language (`"next Monday"`, `"4/15"`, `"tomorrow"`, `"May 1"`) or ISO date (`"2026-05-01"`)
+- `[when]` — how far to defer. **Defaults to 1 day** if omitted.
+  - A bare integer `N` → **today + N days** (`/defer water plants 3` → 3 days out)
+  - Natural language (`"next Monday"`, `"4/15"`, `"tomorrow"`, `"May 1"`) or ISO date (`"2026-05-01"`) → that absolute date
 - `[changes]` — optional inline edits to apply at the same time:
   - `rename: <new name>` — change the task content
   - `+<N>pts` or `[N]` — update the value in the task name
   - `p1`/`p2`/`p3`/`p4` — change priority
   - Any other text is appended to description notes
 
+## Recurring tasks
+
+Deferring a recurring task defers **only the current occurrence**. The script
+creates a standalone one-off copy on the target date, and the recurring parent
+advances to its **own next scheduled occurrence with the recurrence preserved**
+— the series cadence is never changed and nothing is marked complete. (The old
+behavior silently stripped the recurrence; that's fixed.)
+
 ## Steps
 
-### Step 1: Resolve the date
+### Step 1: Resolve `when`
 
-Convert `<new-date>` to ISO format (`YYYY-MM-DD`):
-- `"tomorrow"` → tomorrow's date
-- `"4/15"` → `2026-04-15` (current year)
-- `"next Monday"` → nearest upcoming Monday
-- `"05.19"` → `2026-05-19`
-- ISO passthrough: `"2026-05-01"` → `2026-05-01`
+Pass `when` straight through to the script when it's a **bare integer** (days)
+or already ISO. Only convert natural language to ISO yourself first:
+- `"tomorrow"` → tomorrow's date · `"4/15"` → `2026-04-15` · `"next Monday"` →
+  nearest upcoming Monday · `"05.19"` → `2026-05-19`
+- A bare number like `3` → pass `3` verbatim (script computes today + 3 days)
+- Omitted → pass nothing (script defaults to today + 1 day)
 
 ### Step 2: Parse claimed points
 
@@ -49,10 +59,10 @@ If the user included `[N]` in the args, that's the claimed points for today's st
 ### Step 3: Run defer-fast.py
 
 ```bash
-python3 ~/i446-monorepo/tools/did/defer-fast.py "<task_name>" "<YYYY-MM-DD>" <claimed_points>
+python3 ~/i446-monorepo/tools/did/defer-fast.py "<task_name>" "<days|YYYY-MM-DD>" <claimed_points>
 ```
 
-The script handles everything: finding the task, detecting recurring vs non-recurring, creating stubs, closing tasks. It outputs JSON with the result.
+The script handles everything: finding the task, detecting recurring vs non-recurring, creating the one-off copy / stubs, advancing the recurring parent. It outputs JSON with the result.
 
 - If it exits 1 with `"error": "multiple matches"`, list the matches and ask the user which one.
 - If it exits 1 with `"error": "task not found"`, report and stop.
