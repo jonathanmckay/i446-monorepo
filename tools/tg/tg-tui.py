@@ -14,6 +14,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -493,6 +494,66 @@ def pad(s: str, n: int) -> str:
     return s + " " * max(0, n - dwidth(s))
 
 
+# ─── Short (Haiku) task names, shared with dtd ──────────────────────────────
+# dtd displays AI-abbreviated task names from the `short` field of the task
+# cache; tg-tui shows the same labels so a timer reads identically in both. The
+# Toggl description is the task content minus (N)/[N]/{N} annotations, so we map
+# normalized-cleaned content → cleaned short and look entries up by description.
+
+TASK_QUEUE = Path.home() / "vault/z_ibx/task-queue.json"
+SHORT_NAMES: dict[str, str] = {}  # normalized cleaned content → cleaned short
+
+
+def _clean_annotations(s: str) -> str:
+    """Strip dtd/Todoist annotations: (30) time, [40] points, {60} estimate,
+    and any trailing @project tag — leaving the bare task name."""
+    s = re.sub(r"\s*\(\d+\)", "", s)
+    s = re.sub(r"\s*\[\d+\]", "", s)
+    s = re.sub(r"\s*\{\d+\}", "", s)
+    s = re.sub(r"\s*@\S+", "", s)
+    return s.strip()
+
+
+def _norm_key(s: str) -> str:
+    """Normalization key tolerant of dash/whitespace/case drift between the
+    Toggl timer name and the task content (mirrors did-fast's _norm)."""
+    return re.sub(r"[\s\-—–]+", " ", _clean_annotations(s)).strip().lower()
+
+
+def fetch_short_names():
+    """(Re)load dtd's short names from the task cache. Cheap local file read;
+    refreshed at startup and on SIGUSR1 (when /did rewrites the cache)."""
+    try:
+        data = json.loads(TASK_QUEUE.read_text())
+    except Exception:
+        return
+    out: dict[str, str] = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            c, sh = o.get("content"), o.get("short")
+            if c and sh:
+                out[_norm_key(c)] = _clean_annotations(sh)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(data)
+    if out:
+        SHORT_NAMES.clear()
+        SHORT_NAMES.update(out)
+
+
+def display_desc(desc: str) -> str:
+    """Map a Toggl description to dtd's short name when one exists, else the
+    description unchanged (habits and ad-hoc timers have no cached short)."""
+    if not desc:
+        return desc
+    return SHORT_NAMES.get(_norm_key(desc), desc)
+
+
 # ─── Renderers ─────────────────────────────────────────────────────────────
 
 def render_header() -> list[tuple[str, str]]:
@@ -631,7 +692,7 @@ def _past_block_picks(blk_name, merged) -> list[dict]:
             continue
         is_sleep = (m["desc"] or "").strip() == "睡觉"
         code = proj_code(m["project_id"])
-        label = (m["desc"] or "(blank)") + (f" · {code}" if code else "")
+        label = (display_desc(m["desc"]) or "(blank)") + (f" · {code}" if code else "")
         items.append({
             "start_dt": m["start_dt"],
             "time_str": f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}",
@@ -756,7 +817,7 @@ def render_detail() -> list[tuple[str, str]]:
         # An unconfirmed state (rate-limited fetch) renders as a plain slot.
         is_idle_now = is_now_slot and STATE.current_known and not STATE.current
         if is_running:
-            cur_desc = STATE.current.get("description") or ""
+            cur_desc = display_desc(STATE.current.get("description") or "")
             cur_code = proj_code(STATE.current.get("project_id"))
             pid = STATE.current.get("project_id")
             try:
@@ -834,8 +895,8 @@ def _slot_label_toggl(slot_s, slot_e):
     if len(overlapping) == 1:
         e = overlapping[0]
         code = proj_code(e["project_id"])
-        return (f"{e['desc'] or '(blank)'}" + (f"  · {code}" if code else ""), e["project_id"])
-    descs = ", ".join(dict.fromkeys(e["desc"] or "?" for e in overlapping))
+        return (f"{display_desc(e['desc']) or '(blank)'}" + (f"  · {code}" if code else ""), e["project_id"])
+    descs = ", ".join(dict.fromkeys(display_desc(e["desc"]) or "?" for e in overlapping))
     # Use the longest-overlap entry's project for color
     dominant = max(overlapping, key=lambda e: (min(e["end_dt"], slot_e) - max(e["start_dt"], slot_s)).total_seconds())
     return f"{len(overlapping)}× {descs}", dominant["project_id"]
@@ -891,7 +952,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     cur = STATE.current
     if not cur:
         return [("class:time", clock), ("class:idle", "  (no timer)\n")]
-    desc = cur.get("description") or "(no description)"
+    desc = display_desc(cur.get("description") or "") or "(no description)"
     pid = cur.get("project_id")
     code = proj_code(pid)
     try:
@@ -1160,6 +1221,7 @@ async def _sigusr1_refresh():
     fetch_current()
     fetch_today()
     fetch_points()
+    fetch_short_names()  # /did may have rewritten the cache with new short names
     # If entry count grew (task completed → new entry, or timer stopped),
     # flash purple as a prayer/mindfulness prompt
     if len(STATE.entries) != old_count or STATE.current is None:
@@ -1199,6 +1261,7 @@ async def main():
     # Fast fetches only (sub-second) — enough content for an instant first paint.
     fetch_current()
     fetch_today()
+    fetch_short_names()  # dtd's abbreviated labels (local file read)
 
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
     loop = asyncio.get_running_loop()
