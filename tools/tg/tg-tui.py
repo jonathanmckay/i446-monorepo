@@ -197,7 +197,6 @@ class State:
         self.flash = ""  # one-line status
         self.flash_until = 0.0
         self.flash_style = ""  # optional override style for flash
-        self.command_mode = False
         self.today_points = 0  # 分 earned today
         self.block_points: dict[str, int] = {}  # per-block 分
         self.last_toggl_fetch = 0.0
@@ -921,7 +920,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " [c]hange [s]top [r]efresh [j/k]scroll [q]uit\n")]
+    return [("class:hint", " type to run · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def render_all() -> list[tuple[str, str]]:
@@ -960,87 +959,16 @@ kb = KeyBindings()
 input_buffer = Buffer(multiline=False)
 
 
-@kb.add("q", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    event.app.exit()
+# The input is always focused (Claude/dtd style): you just type a tg command —
+# a timer shortcode, "stop", etc. — and press Enter. Controls live on Ctrl-keys
+# so plain letters always type into the box. prompt_toolkit runs the terminal in
+# raw mode, so Ctrl+S/Ctrl+Q are real key events here, not XOFF/XON flow control.
 
 
-@kb.add("c-c")
-def _(event):
-    if STATE.command_mode:
-        STATE.command_mode = False
-        input_buffer.reset()
-        event.app.layout.focus(main_window)
-    else:
-        event.app.exit()
-
-
-@kb.add("c", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    STATE.command_mode = True
-    input_buffer.reset()
-    event.app.layout.focus(input_window)
-
-
-@kb.add("s", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    flash("stopping…")
-
-    async def _stop():
-        res = await asyncio.to_thread(run_tg_fast, "stop")
-        flash(res)
-        event.app.invalidate()
-        for delay in (0.4, 0.8, 1.5):
-            await asyncio.sleep(delay)
-            await asyncio.to_thread(fetch_current)
-            await asyncio.to_thread(fetch_today)
-            event.app.invalidate()
-
-    event.app.create_background_task(_stop())
-
-
-@kb.add("r", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    flash("refreshing…")
-
-    async def _refresh():
-        await asyncio.to_thread(fetch_current)
-        await asyncio.to_thread(fetch_today)
-        await asyncio.to_thread(fetch_gcal, True)
-        flash("refreshed")
-        event.app.invalidate()
-
-    event.app.create_background_task(_refresh())
-
-
-@kb.add("j", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    STATE.scroll_min += 30
-
-
-@kb.add("k", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    STATE.scroll_min -= 30
-
-
-@kb.add("0", filter=~__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    STATE.scroll_min = 0
-
-
-@kb.add("escape", filter=__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
-def _(event):
-    STATE.command_mode = False
-    input_buffer.reset()
-    event.app.layout.focus(main_window)
-
-
-@kb.add("enter", filter=__import__("prompt_toolkit").filters.Condition(lambda: STATE.command_mode))
+@kb.add("enter")
 def _(event):
     text = input_buffer.text.strip()
-    STATE.command_mode = False
     input_buffer.reset()
-    event.app.layout.focus(main_window)
     if not text:
         return
     flash(f"$ tg {text}")
@@ -1059,14 +987,66 @@ def _(event):
     event.app.create_background_task(_run_and_refresh())
 
 
+@kb.add("c-q")
+@kb.add("c-c")
+def _(event):
+    event.app.exit()
+
+
+@kb.add("c-s")
+def _(event):
+    flash("stopping…")
+
+    async def _stop():
+        res = await asyncio.to_thread(run_tg_fast, "stop")
+        flash(res)
+        event.app.invalidate()
+        for delay in (0.4, 0.8, 1.5):
+            await asyncio.sleep(delay)
+            await asyncio.to_thread(fetch_current)
+            await asyncio.to_thread(fetch_today)
+            event.app.invalidate()
+
+    event.app.create_background_task(_stop())
+
+
+@kb.add("c-r")
+def _(event):
+    flash("refreshing…")
+
+    async def _refresh():
+        await asyncio.to_thread(fetch_current)
+        await asyncio.to_thread(fetch_today)
+        await asyncio.to_thread(fetch_gcal, True)
+        flash("refreshed")
+        event.app.invalidate()
+
+    event.app.create_background_task(_refresh())
+
+
+@kb.add("c-j")  # scroll the detail band forward (toward later blocks)
+def _(event):
+    STATE.scroll_min += 30
+
+
+@kb.add("c-k")  # scroll back (toward earlier blocks)
+def _(event):
+    STATE.scroll_min -= 30
+
+
+@kb.add("escape")  # snap the detail band back to now
+def _(event):
+    STATE.scroll_min = 0
+
+
 main_window = Window(
-    content=FormattedTextControl(render_all, focusable=True),
+    content=FormattedTextControl(render_all, focusable=False),
     wrap_lines=False,
     width=Dimension(preferred=WIDTH_HINT),
 )
 
 # Pinned bottom bar: current timer + flash/hint (never scrolls). Two lines so
-# the input row below sits flush at the very bottom of the screen.
+# the input box below sits flush at the very bottom of the screen.
 bottom_bar = Window(
     content=FormattedTextControl(render_bottom_bar),
     height=2,  # timer line + single flash/hint line
@@ -1074,23 +1054,29 @@ bottom_bar = Window(
 )
 
 
+def render_input_rule():
+    # Horizontal border above the input, mirroring dtd's --input-border and
+    # Claude's boxed prompt — separates the always-on command line from content.
+    return [("class:rule", "─" * WIDTH_HINT + "\n")]
+
+
 def render_input_prompt():
-    # Always render the prompt so the input box is a permanent bottom anchor;
-    # bright cyan while typing (command mode), dim otherwise.
-    cls = "class:prompt" if STATE.command_mode else "class:hint"
-    return [(cls, " tg> ")]
+    # Permanent "> " prompt; the input is always focused, so it reads as a
+    # live command box (type a tg shortcode / "stop" and press Enter).
+    return [("class:prompt", " > ")]
 
 
+rule_window = Window(content=FormattedTextControl(render_input_rule), height=1, wrap_lines=False)
 input_window = Window(
     content=BufferControl(buffer=input_buffer, focusable=True),
     height=1,
 )
-prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1, width=Dimension.exact(5))
+prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1, width=Dimension.exact(3))
 
 from prompt_toolkit.layout import VSplit  # noqa: E402
 
 input_row = VSplit([prompt_window, input_window])
-root = HSplit([main_window, bottom_bar, input_row])
+root = HSplit([main_window, bottom_bar, rule_window, input_row])
 
 style = Style.from_dict({
     "header": "bold cyan",
@@ -1134,7 +1120,7 @@ class _NoTimerFlash(StyleTransformation):
         return _no_timer_flash_on()
 
 
-app = Application(layout=Layout(root, focused_element=main_window),
+app = Application(layout=Layout(root, focused_element=input_window),
                   key_bindings=kb, full_screen=True, style=style,
                   style_transformation=_NoTimerFlash(),
                   refresh_interval=0.1)
