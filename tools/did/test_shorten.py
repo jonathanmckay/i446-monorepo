@@ -75,6 +75,45 @@ def test_no_prune_preserves_other_callers_entries(monkeypatch, tmp_path):
     assert "other" in json.loads(sc.read_text())
 
 
+def test_all_cache_writers_attach_short():
+    # Regression: short names "all disappeared" because a cache-rebuild path
+    # (did-fast --refresh-cache) wrote the cache without re-attaching short.
+    # EVERY full-rebuild writer must call shorten.attach_to_cache so a refresh
+    # never drops them.
+    from pathlib import Path
+    here = Path(__file__).resolve().parent
+    for fname in ("did-fast.py", "refresh-cache.py"):
+        src = (here / fname).read_text()
+        assert "attach_to_cache" in src, f"{fname} must call shorten.attach_to_cache"
+
+
+def test_drop_from_queue_preserves_short_on_other_tasks():
+    # Regression: completing a task must not wipe the short names of the tasks
+    # that remain in the cache.
+    import importlib.util, json, tempfile, os
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "run_mod", Path(__file__).resolve().parent / "run.py")
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+
+    tmp = tempfile.mkdtemp()
+    cache_path = Path(tmp) / "task-queue.json"
+    cache_path.write_text(json.dumps({
+        "0neon": [
+            {"id": "done1", "content": "finish the thing (10) [20]", "short": "finish thing (10) [20]"},
+            {"id": "keep1", "content": "a very long task that got shortened (30) [60]",
+             "short": "very long task (30) [60]"},
+        ]
+    }))
+    run.TASK_QUEUE = cache_path
+    run._drop_from_queue("done1")
+    after = json.loads(cache_path.read_text())
+    remaining = after["0neon"]
+    assert [t["id"] for t in remaining] == ["keep1"], "completed task should be removed"
+    assert remaining[0].get("short") == "very long task (30) [60]", "short must be preserved"
+
+
 if __name__ == "__main__":
     import sys
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

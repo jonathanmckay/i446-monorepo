@@ -903,7 +903,7 @@ while true; do
   # display (short name + estimates) and bindings get the hidden id via {2} to
   # resolve the real task. (fzf searches whatever is displayed; the short names
   # keep key codes/names so search stays usable.)
-  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse --no-sort --ansi \
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --height 40 --prompt="did> " --layout=reverse-list --no-sort --ansi \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+transform-header(cat $DTD_HDR)" \
