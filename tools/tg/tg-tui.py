@@ -1188,10 +1188,45 @@ app = Application(layout=Layout(root, focused_element=input_window),
                   refresh_interval=0.1)
 
 
+PID_FILE = Path.home() / ".cache" / "tg-tui.pid"
+
+
+def _owns_pid_file() -> bool:
+    try:
+        return PID_FILE.read_text().strip() == str(os.getpid())
+    except OSError:
+        return False
+
+
+def _assert_pid_file():
+    """(Re-)register this instance for SIGUSR1 notifications.
+
+    toggl_cli/tg-fast/did push instant refreshes via the pid in this file; if
+    it's missing or stale, every timer change degrades to the 30s poll and the
+    idle alarm flashes over a freshly started task. A second instance's exit
+    cleanup used to delete the live instance's registration — self-heal by
+    re-asserting ownership on every current tick."""
+    if _owns_pid_file():
+        return
+    try:
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PID_FILE.write_text(str(os.getpid()))
+    except OSError:
+        pass
+
+
+def _release_pid_file():
+    """Exit cleanup: unlink only if WE own the registration — never delete
+    another live instance's pid file."""
+    if _owns_pid_file():
+        PID_FILE.unlink(missing_ok=True)
+
+
 async def ticker_current(app):
     while True:
         await asyncio.sleep(30)
         fetch_current()
+        _assert_pid_file()
         app.invalidate()
 
 
@@ -1269,9 +1304,7 @@ async def main():
     loop.add_signal_handler(signal.SIGUSR1, lambda: loop.create_task(_sigusr1_refresh()))
 
     # Write PID so other tools can signal us
-    pid_file = Path.home() / ".cache" / "tg-tui.pid"
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(os.getpid()))
+    _assert_pid_file()
 
     app.create_background_task(_initial_slow_fetches(app))
     app.create_background_task(ticker_current(app))
@@ -1281,7 +1314,7 @@ async def main():
     try:
         await app.run_async()
     finally:
-        pid_file.unlink(missing_ok=True)
+        _release_pid_file()
 
 
 if __name__ == "__main__":
