@@ -62,6 +62,7 @@ two days.
       - Set the terminal tab orange: `~/i446-monorepo/scripts/term-color.sh orange` (non-fatal degradation)
       - Send a macOS notification so it's visible over a full-screen Teams window: `osascript -e 'display notification "Remote side will NOT be captured (AirPods in HFP). Fix: Teams Settings > Devices > Mic = MacBook Pro Microphone" with title "d357: mic-only recording"'`
       - Make `⚠ MIC-ONLY — remote side will NOT be captured` the FIRST line of the confirmation message, not a trailing note
+      - **Launch teamstap** (see Process Tap section) so the remote side is captured anyway: the mic-only fallback then loses nothing but channel separation.
    c. If not HFP, switch system output: `SwitchAudioSource -s "Meet Output"`
    d. If AirPods are BT-connected but missing from `SwitchAudioSource -a -t output`, reconnect: `blueutil --disconnect <MAC> && sleep 2 && blueutil --connect <MAC>` (MAC: `70-F9-4A-87-EC-D7`)
       **MID-CALL GUARD**: NEVER bounce Bluetooth if a call is likely in progress — it cuts the user's live call audio for several seconds (regression: 2026-06-04 Adam Habig call, user lost audio mid-conversation). Treat a call as likely in progress when the current calendar event window (step 4) covers now, or when the meeting name was given for a meeting that has already started. In that case skip the bounce entirely and fall back to mic-only. The bounce is also futile mid-call: the conferencing app re-grabs the AirPods mic immediately and forces HFP again.
@@ -169,6 +170,34 @@ If no recording is running, auto-detect from Google Calendar (both primary + Wor
 ### `/d357 status` — show current state
 
 Report `Recording: <name> since <HH:MM> (tmux:d357)` if active, else `No recording active.`
+
+## Process Tap (teamstap) — preferred call-audio capture
+
+`~/i446-monorepo/tools/meet/teamstap/teamstap` (Swift, ScreenCaptureKit) captures
+the audio OUTPUT of the Teams app directly from the process, regardless of which
+output device Teams uses or what BT profile the AirPods are in. Verified live
+2026-06-11: captured call audio while AirPods were in HFP, Teams pinned to its own
+devices, and BlackHole read zero. This obsoletes the Meet Output/BlackHole path
+for Teams meetings.
+
+- Launch alongside meet.py (own tmux session) whenever recording a Teams meeting:
+  ```bash
+  tmux new-session -d -s teamstap "~/i446-monorepo/tools/meet/teamstap/teamstap \
+      --out '<recordings>/YYYY.MM.DD-HHMM-<slug>-remote.wav' \
+      --max-seconds <calendar_minutes*60+300> 2> /tmp/teamstap.log"
+  ```
+- It tails liveness stats to /tmp/teamstap.log (`stat: frames=... rms=...`).
+- **Stop**: `tmux send-keys -t teamstap C-c` (finalizes the WAV), or it self-stops
+  at --max-seconds. Check the log for `stopped.`.
+- **At /d357 stop**: stop teamstap too, transcribe the remote wav with
+  faster-whisper (same model as meet.py), and merge both transcripts in the note —
+  mic transcript = JM's side, remote wav = everyone else (label accordingly).
+- TCC: needs "System Audio Recording" permission (granted to the terminal app;
+  if capture yields zeros, check System Settings > Privacy > Screen & System
+  Audio Recording).
+- Rebuild after edits: `cd ~/i446-monorepo/tools/meet/teamstap && swiftc -O teamstap.swift -o teamstap`
+- meet.py keeps recording the MacBook mic (`--no-teams --idle-timeout 0`) for JM's
+  side; teamstap replaces the BlackHole/system-audio leg.
 
 ## Audio Routing Reference
 

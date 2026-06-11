@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """d357-watchdog — fires macOS notifications when a /d357 recording overruns or crashes.
 
-Reads ~/.claude/skills/d357/state.json. Two failure modes covered:
+Reads ~/.local/state/jm/d357-state.json. Two failure modes covered:
   1. Recording process died (pid set, but pid not alive) — meet.py crashed.
   2. Recording overdue (pid alive, elapsed >= threshold).
 
@@ -18,7 +18,7 @@ import subprocess as sp
 from datetime import datetime, timezone
 from pathlib import Path
 
-STATE_FILE = Path.home() / ".claude" / "skills" / "d357" / "state.json"
+STATE_FILE = Path.home() / ".local" / "state" / "jm" / "d357-state.json"
 NOTIFY_INTERVAL_SEC = 30 * 60
 DEFAULT_THRESHOLD_MIN = 90
 
