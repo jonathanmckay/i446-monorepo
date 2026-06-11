@@ -62,10 +62,16 @@ two days.
    c. If not HFP, switch system output: `SwitchAudioSource -s "Meet Output"`
    d. If AirPods are BT-connected but missing from `SwitchAudioSource -a -t output`, reconnect: `blueutil --disconnect <MAC> && sleep 2 && blueutil --connect <MAC>` (MAC: `70-F9-4A-87-EC-D7`)
       **MID-CALL GUARD**: NEVER bounce Bluetooth if a call is likely in progress — it cuts the user's live call audio for several seconds (regression: 2026-06-04 Adam Habig call, user lost audio mid-conversation). Treat a call as likely in progress when the current calendar event window (step 4) covers now, or when the meeting name was given for a meeting that has already started. In that case skip the bounce entirely and fall back to mic-only. The bounce is also futile mid-call: the conferencing app re-grabs the AirPods mic immediately and forces HFP again.
-4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "9nclf1b3vjqohorjefro3lfchk@group.calendar.google.com"]` (the second is the "Work" calendar — Microsoft events). If a match exists, capture:
+4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"]` (the second is "MSFT (Slow Sync)" — the ICS import of the Microsoft/Outlook calendar; the old `9nclf1b3...@group.calendar.google.com` Work calendar no longer exists). Match by time overlap with now, ignoring all-day/`transparent` events (OOF banners). If a match exists, capture:
    - `calendar_minutes`: the event's scheduled duration
-   - `project`: `i9` if the event came from the Work calendar id; `m5x2` otherwise (default)
+   - `project`: `i9` if the event came from the MSFT calendar id; `m5x2` otherwise (default)
    - Prefer the calendar event title as the Toggl description if it differs from user input
+
+   **Fallback — tg-tui caches.** The MSFT import calendar is slow-sync and can lag or miss events. If the MCP query returns no current event, check the tg-tui caches (written by `~/i446-monorepo/tools/tg/{outlook_client,gcal_client}.py`):
+   - `~/.cache/tg-tui/outlook-YYYY-MM-DD.json` — Outlook via Agency MCP; events have `subject`, `start`, `end` (naive local-time strings with `start_tz`/`end_tz` Windows tz names)
+   - `~/.cache/tg-tui/gcal-YYYY-MM-DD.json` — all calendars visible to the m5c7 account; events from `"calendar": "Calendar"` are the MSFT mirror (treat as `i9`); timestamps may be UTC (`Z` suffix)
+
+   An event from either cache that overlaps now counts as a calendar match (same captures as above; Outlook-sourced events → `i9`). The caches only refresh while tg-tui is running (5-min TTL), so check the file mtime — if older than ~30 min, treat its absence of a match as inconclusive rather than authoritative. If no source matches but the meeting name implies Microsoft work (Xbox, GitHub, CoreAI, SLT, names of MSFT coworkers), default the project to `i9` instead of `m5x2`.
 5. **Start Toggl timer**: If `start_time` was provided, use `--at HH:MM` to backdate. Otherwise start at now. Record the returned entry ID.
 6. **Launch recording in tmux** (NOT nohup — nohup dies from SIGTERM when Claude's bash subprocess exits):
    ```bash
