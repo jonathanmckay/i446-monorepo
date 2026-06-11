@@ -58,7 +58,10 @@ two days.
       ```python
       python3 -c "import sounddevice as sd; [print(f'{d[\"name\"]} out={d[\"max_output_channels\"]} rate={d[\"default_samplerate\"]}') for d in sd.query_devices() if 'AirPods' in d['name'] and d['max_output_channels'] > 0]"
       ```
-      If output channels == 1 and rate == 24000: AirPods are in HFP mode. **Auto-switch to mic-only** and warn: `⚠ AirPods in HFP mode (Teams grabbed mic) — recording mic-only.`
+      If output channels == 1 and rate == 24000: AirPods are in HFP mode. **Auto-switch to mic-only** and warn LOUDLY (regression 2026-06-11: two meetings lost the remote side and the user missed the one-line warning):
+      - Set the terminal tab orange: `~/i446-monorepo/scripts/term-color.sh orange` (non-fatal degradation)
+      - Send a macOS notification so it's visible over a full-screen Teams window: `osascript -e 'display notification "Remote side will NOT be captured (AirPods in HFP). Fix: Teams Settings > Devices > Mic = MacBook Pro Microphone" with title "d357: mic-only recording"'`
+      - Make `⚠ MIC-ONLY — remote side will NOT be captured` the FIRST line of the confirmation message, not a trailing note
    c. If not HFP, switch system output: `SwitchAudioSource -s "Meet Output"`
    d. If AirPods are BT-connected but missing from `SwitchAudioSource -a -t output`, reconnect: `blueutil --disconnect <MAC> && sleep 2 && blueutil --connect <MAC>` (MAC: `70-F9-4A-87-EC-D7`)
       **MID-CALL GUARD**: NEVER bounce Bluetooth if a call is likely in progress — it cuts the user's live call audio for several seconds (regression: 2026-06-04 Adam Habig call, user lost audio mid-conversation). Treat a call as likely in progress when the current calendar event window (step 4) covers now, or when the meeting name was given for a meeting that has already started. In that case skip the bounce entirely and fall back to mic-only. The bounce is also futile mid-call: the conferencing app re-grabs the AirPods mic immediately and forces HFP again.
