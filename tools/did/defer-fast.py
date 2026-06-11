@@ -298,7 +298,7 @@ def _recurrence_pattern(due_string: str) -> str:
 
 
 def handle_recurring(task: dict, target_date: str,
-                     claimed_points: int) -> dict:
+                     claimed_points: int, skip_copy: bool = False) -> dict:
     """Defer the *current occurrence* of a recurring task without disturbing
     the series.
 
@@ -309,6 +309,10 @@ def handle_recurring(task: dict, target_date: str,
       due_date write would silently strip the recurrence). The parent's cadence
       is unchanged — it just sheds the occurrence the copy now carries.
     - Logs a posthoc eval record for today.
+
+    skip_copy=True ("0"/blank defer target): the occurrence is skipped, not
+    carried — no one-off copy is created; the parent just advances to its next
+    natural occurrence, which becomes the reported target_date.
     """
     task_id = task["id"]
     content = task["content"]
@@ -330,7 +334,12 @@ def handle_recurring(task: dict, target_date: str,
     next_date = next_instance(due.get("string", ""), base).isoformat()
 
     # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
-    copy = create_task(content, labels, project_id, target_date, priority)
+    #    Skip mode carries nothing — the occurrence is simply skipped.
+    copy = None
+    if skip_copy:
+        target_date = next_date
+    else:
+        copy = create_task(content, labels, project_id, target_date, priority)
 
     # 2. Advance the parent to its next occurrence, recurrence preserved.
     body = {"due_date": next_date}
@@ -340,8 +349,12 @@ def handle_recurring(task: dict, target_date: str,
 
     # 3. Posthoc eval record (due today, immediately closed).
     today_iso = date.today().isoformat()
-    posthoc_content = (f"deferred: {content} → {target_date} "
-                       f"(recurring; next {next_date}) [0]")
+    if skip_copy:
+        posthoc_content = (f"deferred: {content} → next occurrence "
+                           f"{next_date} [0]")
+    else:
+        posthoc_content = (f"deferred: {content} → {target_date} "
+                           f"(recurring; next {next_date}) [0]")
     posthoc_labels = list(set(["posthoc"] + labels))
     posthoc = create_task(posthoc_content, posthoc_labels, project_id, today_iso)
     close_task(posthoc["id"])
@@ -357,7 +370,8 @@ def handle_recurring(task: dict, target_date: str,
         "claimed_points": claimed_points,
         "remaining_points": total_points,
         "closed": False,
-        "stubs": {"today": posthoc["id"], "deferred_copy": copy["id"],
+        "stubs": {"today": posthoc["id"],
+                  "deferred_copy": copy["id"] if copy else None,
                   "future": task_id},
     }
 
@@ -377,6 +391,14 @@ def main():
     claimed_points = (int(sys.argv[3]) if len(sys.argv) > 3
                       else DEFAULT_CLAIMED_POINTS)
 
+    # "0" or "auto" (dtd's blank-prompt sentinel): a recurring task skips to
+    # its next natural occurrence (no one-off copy). For non-recurring tasks
+    # they fall back to the plain defaults: auto → +1 day, 0 → today.
+    raw = (explicit_target or "").strip().lower()
+    skip_to_next = raw in ("0", "auto")
+    if raw == "auto":
+        explicit_target = None  # never let the sentinel reach resolve_target
+
     # Find the task
     task = find_task(task_name)
 
@@ -389,7 +411,8 @@ def main():
 
     try:
         if is_recurring:
-            result = handle_recurring(task, target_date, claimed_points)
+            result = handle_recurring(task, target_date, claimed_points,
+                                      skip_copy=skip_to_next)
         else:
             result = handle_non_recurring(task, target_date, claimed_points)
     except Exception as e:

@@ -192,7 +192,11 @@ class State:
         # TIME ENTRY) only fires when we've confirmed no timer — never when we
         # simply couldn't reach Toggl, which used to flash over a live timer.
         self.current_known = False
+        self.boot_time = time.monotonic()  # refreshed in main(); gates the
+        # enter handler so tty text queued before startup (e.g. the command
+        # line cmux types when respawning the pane) can't start a junk timer
         self.entries: list[dict] = []  # today's entries
+        self.entries_yday: list[dict] = []  # yesterday's (for 卯 sleep total)
         self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
         self.flash = ""  # one-line status
@@ -233,20 +237,22 @@ def fetch_today():
             start_date=(today - dt.timedelta(days=1)).isoformat(),
             end_date=(today + dt.timedelta(days=2)).isoformat(),
         ) or []
+        yday = today - dt.timedelta(days=1)
         out = []
+        yout = []
         for e in raw:
             try:
                 st = dt.datetime.fromisoformat(e.get("start", "")).astimezone(TZ)
             except Exception:
                 continue
-            if st.date() != today:
+            if st.date() != today and st.date() != yday:
                 continue
             stop_raw = e.get("stop")
             if stop_raw:
                 en = dt.datetime.fromisoformat(stop_raw).astimezone(TZ)
             else:
                 en = dt.datetime.now(TZ)
-            out.append({
+            (out if st.date() == today else yout).append({
                 "start_dt": st,
                 "end_dt": en,
                 "desc": e.get("description") or "",
@@ -256,6 +262,7 @@ def fetch_today():
             })
         out.sort(key=lambda x: x["start_dt"])
         STATE.entries = out
+        STATE.entries_yday = yout
         STATE.last_toggl_fetch = time.monotonic()
     except Exception as e:
         if "402" in str(e):
@@ -730,6 +737,39 @@ def _future_block_picks(blk_name, events) -> list[dict]:
     return items
 
 
+def _mao_line(pts, emojis) -> list[tuple[str, str]]:
+    """卯 layout exception: one line instead of the standard four.
+
+    The 4:00-6:00 block is sleep; the only signal worth a row is the wake
+    time, rendered with the sleep end-time convention (睡觉 →HH:MM) plus any
+    分 logged in the block. Wake = latest 睡觉 entry ending before noon (the
+    day-barrier rule means overnight sleep starts at 00:00 today, so it's in
+    STATE.entries even though it starts outside any block)."""
+    wake = None
+    style = ""
+    for e in STATE.entries:
+        if (e["desc"] or "").strip() == "睡觉" and e["end_dt"].hour < 12:
+            if wake is None or e["end_dt"] > wake:
+                wake = e["end_dt"]
+                style = project_style(e["project_id"])
+    emoji_str = f" {emojis}" if emojis else ""
+    pts_str = f" {pts}分" if pts else ""
+    blk_style = f"bold {style}".strip() if style else "class:dim"
+    out: list[tuple[str, str]] = []
+    left = f"─卯{emoji_str} "
+    out.append((blk_style, left))
+    label = ""
+    if wake:
+        label = f"睡觉 →{wake:%H:%M} "
+        out.append((style or blk_style, label))
+    trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(label) - dwidth(pts_str))
+    out.append((blk_style, "─" * trail))
+    if pts_str:
+        out.append(("bold #ffffff", pts_str))
+    out.append((blk_style, "\n"))
+    return out
+
+
 def render_morning() -> list[tuple[str, str]]:
     """Past blocks (00:00 → detail-band start), Toggl-filled, one row per
     important allocation. Same compact format as the future (evening) view."""
@@ -750,8 +790,12 @@ def render_morning() -> list[tuple[str, str]]:
     for blk_name, blk_sh, blk_eh in BLOCKS:
         if blk_eh + 1 > cutoff.hour:
             break  # rest handled by the detail band
-        picks = _past_block_picks(blk_name, merged)
         pts = STATE.block_points.get(blk_name, 0)
+        if blk_name == "卯":
+            # Layout exception: sleep block collapses to a single wake-time line
+            out += _mao_line(pts, bo_emojis.get(blk_name, ""))
+            continue
+        picks = _past_block_picks(blk_name, merged)
         out += _compact_block_lines(blk_name, blk_sh, picks, pts, bo_emojis.get(blk_name, ""))
     return out
 

@@ -42,6 +42,11 @@ from pathlib import Path
 
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 TODOIST_BASE = "https://api.todoist.com/api/v1"
+
+# Strip "starting <date>"-style anchors off a recurrence string (same regex
+# as defer-fast.py's _ANCHOR_RE) so restoring a cadence doesn't re-anchor it.
+_ANCHOR_RE = re.compile(
+    r"\s+(starting|start|from|beginning|begins?|since)\b.*$", re.I)
 WORKBOOK = "Neon分v12.2.xlsx"
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
@@ -323,10 +328,17 @@ def reverse_record(record: dict, errors: list[str]) -> None:
     elif rtype == "defer":
         tid = record.get("task_id")
         if tid:
+            body = {"due_date": record.get("prev_due") or today_iso}
+            # Recurring parent: a bare due_date write silently strips the
+            # recurrence, so restore the cadence too (anchor stripped — the
+            # old "starting <date>" would fight the due_date).
+            if record.get("recurring") and record.get("prev_due_string"):
+                pattern = _ANCHOR_RE.sub(
+                    "", record["prev_due_string"]).strip()
+                if pattern:
+                    body["due_string"] = pattern
             try:
-                _api("POST", f"/tasks/{tid}", {
-                    "due_date": record.get("prev_due") or today_iso,
-                })
+                _api("POST", f"/tasks/{tid}", body)
             except Exception as e:
                 errors.append(f"reschedule {tid}: {e}")
         stub = record.get("stub_id")

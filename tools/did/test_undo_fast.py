@@ -183,6 +183,25 @@ def test_reverse_defer_record(monkeypatch):
     assert ("DELETE", "/tasks/s1", None) in api_calls
 
 
+def test_reverse_defer_restores_recurrence(monkeypatch):
+    """Bug: undoing a defer on a recurring task wrote a bare due_date, which
+    silently strips the recurrence. The undo must restore the cadence too,
+    with any 'starting <date>' anchor stripped."""
+    api_calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    errors = []
+    uf.reverse_record({
+        "type": "defer", "names": ["hcmr"], "task_id": "t8",
+        "prev_due": "2026-06-05", "prev_due_string": "every Friday starting 2026-01-02",
+        "recurring": True, "stub_id": "s2",
+        "date": date.today().isoformat(),
+    }, errors)
+    assert errors == []
+    assert ("POST", "/tasks/t8", {"due_date": "2026-06-05",
+                                  "due_string": "every Friday"}) in api_calls
+    assert ("DELETE", "/tasks/s2", None) in api_calls
+
+
 def test_reverse_split_record(monkeypatch, tmp_path):
     api_calls = []
     monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))

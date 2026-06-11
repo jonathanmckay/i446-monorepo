@@ -237,28 +237,31 @@ if [[ "\$clean" == *"…"* ]]; then
   clean="\${clean%%…*}"
   query="\$clean"
 fi
-# Prompt for the defer target — N days or an absolute date; empty = 1
-# (tomorrow, the old behavior). Gated on DTD_DEFER_PROMPT, which only dtd's
-# fzf session exports: the test harness and any scripted caller run the
-# script with the flag unset and get the non-interactive default.
+# Prompt for the defer target — N days or an absolute date; empty/0 = "auto":
+# recurring tasks skip to their next occurrence, non-recurring default to +1
+# day (0 = today). Gated on DTD_DEFER_PROMPT, which only dtd's fzf session
+# exports: the test harness and any scripted caller run the script with the
+# flag unset and get the non-interactive default.
 days=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
-  printf "\nDefer '%s' by N days (or YYYY-MM-DD) [1]> " "\$clean" > /dev/tty
+  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring)> " "\$clean" > /dev/tty
   read days < /dev/tty
 fi
 days=\${days// /}
-[[ -z "\$days" ]] && days=1
+[[ -z "\$days" ]] && days=auto
 case "\$days" in
-  <->|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+  auto|<->|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
   *) echo "✗ invalid defer target: \$days (cancelled)" > "\$HDR"; exit 0 ;;
 esac
+defer_label="+\$days"
+[[ "\$days" == "auto" || "\$days" == "0" ]] && defer_label="auto"
 # Optimistic UI: hide the task and show status IMMEDIATELY, then run the
 # Todoist round trips (paginated search, reschedule, posthoc create+close —
 # 3-10s) detached so fzf never blocks on the network. On failure the hide is
 # rolled back so the task reappears. The pushed/processed counters keep
 # ctrl-z honest while the defer is in flight.
 echo "\$clean" >> "\$REMOVED"
-echo "⏳ deferring (+\$days): \$clean" > "\$HDR"
+echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
 echo "x" >> "$DTD_PUSHED"
 (
   result=\$(python3 "\$DEFER_FAST" "\$query" "\$days" 2>/dev/null)

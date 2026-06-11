@@ -105,6 +105,50 @@ def test_overdue_recurring_advances_from_today(df, monkeypatch):
     assert advance["due_date"] == "2026-06-12"
 
 
+# ── skip-to-next-occurrence ("0"/blank on a recurring task) ────────────────
+
+def test_recurring_skip_mode_advances_without_copy(df, monkeypatch):
+    """Feature (2026-06-11): entering 0 (or leaving the dtd prompt blank) on a
+    recurring task skips to the next occurrence — parent advances, NO one-off
+    copy is created."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return FRI
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    advance = {}
+    monkeypatch.setattr(df, "_api",
+                        lambda method, path, body=None: advance.update(body or {}))
+    task = {"id": "t1", "content": "hcmr (15) [10]",
+            "due": {"is_recurring": True, "date": "2026-06-05",
+                    "string": "every Friday"}}
+    out = df.handle_recurring(task, "ignored", 2, skip_copy=True)
+    # Parent advanced with recurrence preserved
+    assert advance == {"due_date": "2026-06-12", "due_string": "every Friday"}
+    # Only the posthoc was created — no one-off copy of the task itself
+    assert len(created) == 1 and created[0].startswith("deferred:")
+    assert "next occurrence 2026-06-12" in created[0]
+    assert out["stubs"]["deferred_copy"] is None
+    # target_date reported as the next occurrence; dtd's ok-line keys intact
+    assert out["target_date"] == "2026-06-12"
+    assert "claimed_points" in out and "remaining_points" in out
+
+
+def test_auto_sentinel_never_reaches_resolve_target(df):
+    """main() must strip the dtd 'auto' sentinel before resolve_target, which
+    passes unknown strings through — Todoist would get due_date='auto'."""
+    src = (_HERE / "defer-fast.py").read_text()
+    main_src = src[src.index("def main()"):]
+    assert "auto" in main_src and "explicit_target = None" in main_src
+    # resolve_target itself still passes unknown strings through
+    assert df.resolve_target("auto") == "auto"
+
+
 # ── default claimed points ─────────────────────────────────────────────────
 
 def test_default_claimed_points_is_2(df):
