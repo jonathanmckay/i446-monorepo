@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""undo-fast.py — ctrl-z undo for dtd (done / split / defer).
+"""undo-fast.py — ctrl-z undo for dtd (done / split / defer / delete).
 
 Maintains a session-scoped undo journal (JSONL, LIFO) and reverses the most
 recent action:
@@ -11,6 +11,8 @@ recent action:
   split  — delete the posthoc, restore the original task's content + due,
            reverse the embedded did-fast points log.
   defer  — reschedule the task back, delete the posthoc stub.
+  delete — recreate the task from the pre-image journaled by dtd's ctrl-x
+           (content, project, section, labels, priority, due, duration).
 
 Formula appends are reversed by stripping the exact trailing "+N" term when
 it is still the tail of the formula, else appending the negation ("-N") —
@@ -354,6 +356,34 @@ def reverse_record(record: dict, errors: list[str]) -> None:
         if didfast:
             reverse_didfast_output(didfast, target_md, today_iso, errors)
         mc.remove_names(record.get("names", []))
+
+    elif rtype == "delete":
+        # Recreate from the pre-image captured before the hard DELETE. The
+        # new task gets a fresh id; later dtd actions resolve by content so
+        # only a repeat ctrl-x on the stale cached id would miss.
+        t = record.get("task") or {}
+        body = {"content": t.get("content")
+                or (record.get("names") or ["?"])[0]}
+        for k in ("description", "priority", "labels", "project_id",
+                  "section_id", "parent_id"):
+            v = t.get(k)
+            if v:
+                body[k] = v
+        due = t.get("due") or {}
+        if due.get("is_recurring") and due.get("string"):
+            body["due_string"] = due["string"]
+        elif due.get("datetime"):
+            body["due_datetime"] = due["datetime"]
+        elif due.get("date"):
+            body["due_date"] = str(due["date"])[:10]
+        dur = t.get("duration") or {}
+        if isinstance(dur, dict) and dur.get("amount"):
+            body["duration"] = dur["amount"]
+            body["duration_unit"] = dur.get("unit", "minute")
+        try:
+            _api("POST", "/tasks", body)
+        except Exception as e:
+            errors.append(f"recreate task: {e}")
 
     else:
         errors.append(f"unknown record type: {rtype}")

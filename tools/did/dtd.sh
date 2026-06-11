@@ -539,10 +539,31 @@ for s in d.values():
             print(re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', t.get('content','')).strip().lower())
             sys.exit(0)
 " "\$tid" "\$CACHE_FILE" 2>/dev/null)
-  curl -s -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
-    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" >/dev/null 2>&1
-  echo "\${fullname:-\$clean}" >> "\$REMOVED"
-  echo "🗑 Deleted: \$clean" > "\$HDR"
+  # Pre-image for ctrl-z undo — fetched before the DELETE, journaled only
+  # after a successful DELETE (a failed delete must not be undoable, or
+  # ctrl-z would recreate a task that still exists)
+  pre=\$(curl -s "https://api.todoist.com/api/v1/tasks/\$tid" \
+    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+  code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
+    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+  if [[ "\$code" == 2* ]]; then
+    echo "\${fullname:-\$clean}" >> "\$REMOVED"
+    printf '%s' "\$pre" | python3 -c "
+import json, sys
+name, fallback = sys.argv[1], sys.argv[2]
+try:
+    task = json.load(sys.stdin)
+except Exception:
+    task = {}
+if not isinstance(task, dict) or not task.get('content'):
+    task = {'content': fallback}
+print(json.dumps({'type': 'delete', 'names': [name], 'task': task},
+                 ensure_ascii=False))
+" "\${fullname:-\$clean}" "\$clean" | python3 "$UNDO_FAST" --append "$DTD_JOURNAL"
+    echo "🗑 Deleted: \$clean" > "\$HDR"
+  else
+    echo "? delete failed (HTTP \$code): \$clean" > "\$HDR"
+  fi
 else
   echo "? delete: task not found" > "\$HDR"
 fi

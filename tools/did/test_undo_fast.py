@@ -204,6 +204,90 @@ def test_reverse_split_record(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Delete undo (ctrl-x journaled, ctrl-z recreates)
+# ---------------------------------------------------------------------------
+
+def test_reverse_delete_recreates_task(monkeypatch):
+    """Bug: ctrl-x never journaled, so ctrl-z undid the previous done action
+    instead of the delete. A 'delete' record must recreate the task with its
+    full pre-image (project, labels, priority, recurring due string)."""
+    api_calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    errors = []
+    uf.reverse_record({
+        "type": "delete", "names": ["社+hcbp"],
+        "task": {
+            "id": "t77", "content": "社+hcbp (15) [10]",
+            "description": "", "priority": 3, "labels": ["hcbp"],
+            "project_id": "pj1", "section_id": None, "parent_id": None,
+            "due": {"date": "2026-06-11", "string": "every day",
+                    "is_recurring": True},
+        },
+        "date": date.today().isoformat(),
+    }, errors)
+    assert errors == []
+    assert len(api_calls) == 1
+    method, path, body = api_calls[0]
+    assert (method, path) == ("POST", "/tasks")
+    assert body["content"] == "社+hcbp (15) [10]"
+    assert body["project_id"] == "pj1"
+    assert body["labels"] == ["hcbp"]
+    assert body["priority"] == 3
+    # Recurring pre-image must restore the recurrence, not a flat date
+    assert body["due_string"] == "every day"
+    assert "due_date" not in body and "due_datetime" not in body
+    # Null section/parent must not be sent
+    assert "section_id" not in body and "parent_id" not in body
+
+
+def test_reverse_delete_prefers_datetime_over_date(monkeypatch):
+    api_calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    errors = []
+    uf.reverse_record({
+        "type": "delete", "names": ["standup"],
+        "task": {"content": "standup",
+                 "due": {"date": "2026-06-11",
+                         "datetime": "2026-06-11T09:30:00",
+                         "is_recurring": False}},
+        "date": date.today().isoformat(),
+    }, errors)
+    assert errors == []
+    _, _, body = api_calls[0]
+    assert body["due_datetime"] == "2026-06-11T09:30:00"
+    assert "due_date" not in body
+
+
+def test_reverse_delete_minimal_record_falls_back_to_name(monkeypatch):
+    """If the pre-image GET failed, the journal holds only the name; undo
+    must still recreate a bare task rather than erroring."""
+    api_calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    errors = []
+    uf.reverse_record({"type": "delete", "names": ["lost task"], "task": {},
+                       "date": date.today().isoformat()}, errors)
+    assert errors == []
+    assert api_calls[0][2]["content"] == "lost task"
+
+
+def test_dtd_delete_script_journals_after_successful_delete():
+    """Structural: dtd.sh's ctrl-x script must journal the delete for ctrl-z,
+    and only after the DELETE succeeded (HTTP 2xx) — journaling a failed
+    delete would make ctrl-z recreate a task that still exists."""
+    src = (HERE / "dtd.sh").read_text()
+    start = src.index("DTD_DELETE=")
+    end = src.index("DELETEEOF\nchmod", start)
+    section = src[start:end]
+    assert "--append" in section, "delete script never journals for ctrl-z"
+    assert section.index("-X DELETE") < section.index("--append"), \
+        "journal must happen after the DELETE, not before"
+    assert "http_code" in section and '== 2*' in section.replace('"', ''), \
+        "journal append must be guarded on DELETE success"
+    # Pre-image is fetched before the task is gone
+    assert section.index("pre=") < section.index("-X DELETE")
+
+
+# ---------------------------------------------------------------------------
 # Strip-or-negate AppleScript shape
 # ---------------------------------------------------------------------------
 
