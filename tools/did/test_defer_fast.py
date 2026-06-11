@@ -57,40 +57,52 @@ def test_next_instance(df, due_string, base, expected):
     assert df.next_instance(due_string, base) == expected
 
 
-# ── default_target_date ────────────────────────────────────────────────────
+# ── resolve_target ──────────────────────────────────────────────────────────
 
-def test_recurring_task_defaults_to_next_instance(df, monkeypatch):
-    """A recurring weekly task defers to its next occurrence, not tomorrow."""
+def test_resolve_target_defaults_to_tomorrow(df, monkeypatch):
     class _D(date):
         @classmethod
         def today(cls):
             return FRI
     monkeypatch.setattr(df, "date", _D)
-    task = {"due": {"is_recurring": True, "date": "2026-06-05",
-                    "string": "every Friday"}}
-    assert df.default_target_date(task) == "2026-06-12"
+    assert df.resolve_target(None) == "2026-06-06"
+    assert df.resolve_target("") == "2026-06-06"
+
+
+def test_resolve_target_bare_days(df, monkeypatch):
+    """dtd ctrl-d passes the prompted day count as a bare integer."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return FRI
+    monkeypatch.setattr(df, "date", _D)
+    assert df.resolve_target("3") == "2026-06-08"
+    assert df.resolve_target("1") == "2026-06-06"
+
+
+def test_resolve_target_iso_passthrough(df):
+    assert df.resolve_target("2026-07-01") == "2026-07-01"
 
 
 def test_overdue_recurring_advances_from_today(df, monkeypatch):
-    """An overdue recurring task lands strictly in the future."""
+    """An overdue recurring parent advances from today (base = max(due, today)),
+    landing strictly in the future."""
     class _D(date):
         @classmethod
         def today(cls):
             return FRI
     monkeypatch.setattr(df, "date", _D)
-    task = {"due": {"is_recurring": True, "date": "2026-05-29",
+    monkeypatch.setattr(df, "create_task", lambda *a, **k: {"id": "stub"})
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    advance = {}
+    monkeypatch.setattr(df, "_api",
+                        lambda method, path, body=None: advance.update(body or {}))
+    task = {"id": "1", "content": "t [10]",
+            "due": {"is_recurring": True, "date": "2026-05-29",
                     "string": "every Friday"}}
-    assert df.default_target_date(task) == "2026-06-12"
-
-
-def test_non_recurring_defaults_to_tomorrow(df, monkeypatch):
-    class _D(date):
-        @classmethod
-        def today(cls):
-            return FRI
-    monkeypatch.setattr(df, "date", _D)
-    task = {"due": {"is_recurring": False, "date": "2026-06-05"}}
-    assert df.default_target_date(task) == "2026-06-06"
+    out = df.handle_recurring(task, "2026-06-06", 2)
+    assert out["next_recurrence"] == "2026-06-12"
+    assert advance["due_date"] == "2026-06-12"
 
 
 # ── default claimed points ─────────────────────────────────────────────────

@@ -237,16 +237,31 @@ if [[ "\$clean" == *"…"* ]]; then
   clean="\${clean%%…*}"
   query="\$clean"
 fi
+# Prompt for the defer target — N days or an absolute date; empty = 1
+# (tomorrow, the old behavior). Gated on DTD_DEFER_PROMPT, which only dtd's
+# fzf session exports: the test harness and any scripted caller run the
+# script with the flag unset and get the non-interactive default.
+days=""
+if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
+  printf "\nDefer '%s' by N days (or YYYY-MM-DD) [1]> " "\$clean" > /dev/tty
+  read days < /dev/tty
+fi
+days=\${days// /}
+[[ -z "\$days" ]] && days=1
+case "\$days" in
+  <->|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+  *) echo "✗ invalid defer target: \$days (cancelled)" > "\$HDR"; exit 0 ;;
+esac
 # Optimistic UI: hide the task and show status IMMEDIATELY, then run the
 # Todoist round trips (paginated search, reschedule, posthoc create+close —
 # 3-10s) detached so fzf never blocks on the network. On failure the hide is
 # rolled back so the task reappears. The pushed/processed counters keep
 # ctrl-z honest while the defer is in flight.
 echo "\$clean" >> "\$REMOVED"
-echo "⏳ deferring: \$clean" > "\$HDR"
+echo "⏳ deferring (+\$days): \$clean" > "\$HDR"
 echo "x" >> "$DTD_PUSHED"
 (
-  result=\$(python3 "\$DEFER_FAST" "\$query" 2>/dev/null)
+  result=\$(python3 "\$DEFER_FAST" "\$query" "\$days" 2>/dev/null)
   ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
   if [[ -n "\$ok" ]]; then
     # Journal for ctrl-z undo
@@ -873,6 +888,10 @@ clear
 # count ($FZF_MATCH_COUNT) refreshed on load/result.
 export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh"
 
+# ctrl-d prompts for the defer target (N days / date) on the tty. Only set
+# here so the extracted script stays non-interactive for tests and scripts.
+export DTD_DEFER_PROMPT=1
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
@@ -930,7 +949,7 @@ while true; do
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute-silent($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
