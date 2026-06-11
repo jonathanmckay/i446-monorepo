@@ -737,23 +737,29 @@ def _future_block_picks(blk_name, events) -> list[dict]:
     return items
 
 
-def _mao_line(pts, emojis) -> list[tuple[str, str]]:
+def _mao_line(emojis) -> list[tuple[str, str]]:
     """卯 layout exception: one line instead of the standard four.
 
-    The 4:00-6:00 block is sleep; the only signal worth a row is the wake
-    time, rendered with the sleep end-time convention (睡觉 →HH:MM) plus any
-    分 logged in the block. Wake = latest 睡觉 entry ending before noon (the
-    day-barrier rule means overnight sleep starts at 00:00 today, so it's in
-    STATE.entries even though it starts outside any block)."""
+    The 4:00-6:00 block is sleep; the signals worth a row are the wake time,
+    rendered with the sleep end-time convention (睡觉 →HH:MM), and the total
+    minutes slept right-justified — including last night's pre-midnight
+    portion (the day-barrier rule splits overnight sleep at 00:00, so the
+    evening half lives in STATE.entries_yday). Wake = latest 睡觉 entry
+    ending before noon; naps don't count toward either number."""
     wake = None
     style = ""
+    sleep_min = 0
     for e in STATE.entries:
         if (e["desc"] or "").strip() == "睡觉" and e["end_dt"].hour < 12:
+            sleep_min += max(0, int((e["end_dt"] - e["start_dt"]).total_seconds() // 60))
             if wake is None or e["end_dt"] > wake:
                 wake = e["end_dt"]
                 style = project_style(e["project_id"])
+    for e in STATE.entries_yday:
+        if (e["desc"] or "").strip() == "睡觉" and e["start_dt"].hour >= 18:
+            sleep_min += max(0, int((e["end_dt"] - e["start_dt"]).total_seconds() // 60))
     emoji_str = f" {emojis}" if emojis else ""
-    pts_str = f" {pts}分" if pts else ""
+    pts_str = f" {sleep_min}m" if sleep_min else ""
     blk_style = f"bold {style}".strip() if style else "class:dim"
     out: list[tuple[str, str]] = []
     left = f"─卯{emoji_str} "
@@ -793,7 +799,7 @@ def render_morning() -> list[tuple[str, str]]:
         pts = STATE.block_points.get(blk_name, 0)
         if blk_name == "卯":
             # Layout exception: sleep block collapses to a single wake-time line
-            out += _mao_line(pts, bo_emojis.get(blk_name, ""))
+            out += _mao_line(bo_emojis.get(blk_name, ""))
             continue
         picks = _past_block_picks(blk_name, merged)
         out += _compact_block_lines(blk_name, blk_sh, picks, pts, bo_emojis.get(blk_name, ""))
@@ -1071,11 +1077,23 @@ input_buffer = Buffer(multiline=False)
 # raw mode, so Ctrl+S/Ctrl+Q are real key events here, not XOFF/XON flow control.
 
 
+def _boot_grace_active(window: float = 2.0) -> bool:
+    """True while tg-tui is still booting. The tty can hold queued text from
+    the spawning terminal (cmux respawn-pane types the launch command into the
+    pane); without this gate that text + newline reaches the enter handler and
+    starts a Toggl timer named after the command line (regression 2026-06-11:
+    timer 'python3 ~/i446-monorepo/tools/tg/tg-tui.py')."""
+    return time.monotonic() - STATE.boot_time < window
+
+
 @kb.add("enter")
 def _(event):
     text = input_buffer.text.strip()
     input_buffer.reset()
     if not text:
+        return
+    if _boot_grace_active():
+        flash(f"ignored startup input: {text[:30]}", 4.0)
         return
     flash(f"$ tg {text}")
 
@@ -1296,17 +1314,24 @@ async def ticker_points(app):
 
 
 async def _sigusr1_refresh():
-    """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer)."""
+    """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer).
+
+    Every fetch stays OFF the event loop: fetch_points is Excel-over-ssh
+    (4-15s) and the Toggl reads are network calls. Running them inline froze
+    repaints exactly when the idle nag was mid-flash — the screen stuck in
+    the inverted frame until the refresh finished. fetch_current goes first
+    with its own repaint so the nag clears the moment the timer is confirmed."""
     old_count = len(STATE.entries)
-    fetch_current()
-    fetch_today()
-    fetch_points()
-    fetch_short_names()  # /did may have rewritten the cache with new short names
+    await asyncio.to_thread(fetch_current)
+    app.invalidate()
+    await asyncio.to_thread(fetch_today)
+    await asyncio.to_thread(fetch_short_names)  # /did may have rewritten the cache
     # If entry count grew (task completed → new entry, or timer stopped),
     # flash purple as a prayer/mindfulness prompt
     if len(STATE.entries) != old_count or STATE.current is None:
         flash("☀️", 6.0, style="bold fg:#aa00ff")
     app.invalidate()
+    _bg_fetch(app, fetch_points)  # slowest, repaints itself when done
 
 
 def _bg_fetch(app, fn):
@@ -1349,6 +1374,9 @@ async def main():
 
     # Write PID so other tools can signal us
     _assert_pid_file()
+
+    # Arm the boot grace from the moment the app actually takes the tty
+    STATE.boot_time = time.monotonic()
 
     app.create_background_task(_initial_slow_fetches(app))
     app.create_background_task(ticker_current(app))

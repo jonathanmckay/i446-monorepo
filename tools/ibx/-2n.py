@@ -1296,12 +1296,14 @@ def main():
         # ── Card 2: -1g ───────────────────────────────────────────────
         # Re-check the current block in case it changed while earlier cards
         # were being displayed (user was slow to respond to salah/gaps).
-        new_idx, new_block, new_start, new_end = get_current_block()
+        # A block change means the new block's ritual cards (salah first)
+        # never ran — patching state in place here would skip the prayer
+        # card until the next block. Exit 0 instead so the wrapper reloads
+        # with a fresh card pass for the new block.
+        new_idx, new_block, _, _ = get_current_block()
         if new_idx != idx:
-            # Block changed; update state and re-check goals for new block.
-            console.print(f"[dim]  block → {new_block}[/dim]")
-            idx, block_name, block_start, block_end = new_idx, new_block, new_start, new_end
-            goals_set = bool(read_block_goals_with_status().get(block_name))
+            console.print(f"[dim]  block → {new_block} — reloading cards[/dim]")
+            return 0
         if not goals_set:
             card_num += 1
             # Synthesize 3 block-aware suggestions from cal/1g/0g/0n.

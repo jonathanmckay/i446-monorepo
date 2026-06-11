@@ -245,11 +245,14 @@ def test_prompt_card_preserves_case_when_requested():
 def test_1g_card_rechecks_block_before_showing():
     """Regression: if the user was slow to respond to earlier cards (salah,
     gaps), the block could change (e.g. 卯 → 辰) while cards were still
-    being displayed. The -1g card would then show goals for the old block.
+    being displayed. The -1g card would then show goals for the old block,
+    and the new block's salah card was silently skipped (the prayer check
+    only runs at startup), leaving the user in email cards with no prayer
+    prompt until the next block.
 
     Fix: re-check get_current_block() right before the -1g card. If the
-    block changed, update block state in place and re-read goals for the
-    new block."""
+    block changed, exit 0 so the wrapper reloads with a fresh ritual pass
+    for the new block (salah card first)."""
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
     next_section = card_section.index("# ── Card 3")
@@ -258,8 +261,8 @@ def test_1g_card_rechecks_block_before_showing():
         "Must re-check current block before showing -1g card"
     assert "new_idx != idx" in before_1g, \
         "Must compare new block index against launch block index"
-    assert "read_block_goals_with_status" in before_1g, \
-        "Must re-read goals for the new block when the block changed"
+    assert "return 0" in before_1g, \
+        "Must reload (exit 0) on block change so ritual cards re-run"
 
 
 def test_time_gap_audit_card_exists():
