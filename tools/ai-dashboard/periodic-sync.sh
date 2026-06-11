@@ -21,7 +21,7 @@ HOST=$(hostname -s | tr '[:upper:]' '[:lower:]')
 # Other hosts skip the rebuild AND skip the stats-cache.json git-add so they
 # don't clobber Straylight's union with their partial view.
 IS_AUTHORITATIVE=0
-if [[ "$HOST" == straylight* ]]; then
+if [[ "$HOST" == straylight* || "$HOST" == jonathans-mac-mini* ]]; then
   IS_AUTHORITATIVE=1
   bash "$SCRIPT_DIR/pull-from-ix.sh" >/dev/null 2>&1 || true
   python3 "$SCRIPT_DIR/build-stats-cache.py" >>"$SCRIPT_DIR/.build-stats-cache.log" 2>&1 || true
