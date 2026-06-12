@@ -36,17 +36,18 @@ MINUS1G_LABEL = "#-1g"
 
 MD_FILE = Path.home() / "vault/g245/build-order.md"
 
-# The 9 地支 (Earthly Branch) time-of-day headings (order matters)
+# The 9 地支 (Earthly Branch) time-of-day headings (order matters).
+# 卯 = 04-06: the build-order / 0分 / tg-tui convention.
 TIME_BLOCKS = [
-    "卯",  # 卯  06-07
-    "辰",  # 辰  08-09
-    "巳",  # 巳  10-11
-    "午",  # 午  12-13
-    "未",  # 未  14-15
-    "申",  # 申  16-17
-    "酉",  # 酉  18-19
-    "戌",  # 戌  20-21
-    "亥",  # 亥  22-23
+    "卯",  # 卯  04-06
+    "辰",  # 辰  06-08
+    "巳",  # 巳  08-10
+    "午",  # 午  10-12
+    "未",  # 未  12-14
+    "申",  # 申  14-16
+    "酉",  # 酉  16-18
+    "戌",  # 戌  18-20
+    "亥",  # 亥  20-22
 ]
 
 LOG_PREFIX = "-1g-cron"

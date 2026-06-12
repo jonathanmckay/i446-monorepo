@@ -15,24 +15,27 @@ spec.loader.exec_module(mod)
 # --- current_block ---
 
 @pytest.mark.parametrize("hour,expected", [
-    (6,  "卯"),
-    (7,  "卯"),
-    (8,  "辰"),
-    (9,  "辰"),
-    (14, "未"),
-    (15, "未"),
-    (16, "申"),
-    (17, "申"),
-    (22, "亥"),
-    (23, "亥"),
+    (4,  "卯"),
+    (5,  "卯"),
+    (6,  "辰"),
+    (7,  "辰"),
+    (8,  "巳"),
+    (9,  "巳"),
+    (12, "未"),
+    (13, "未"),
+    (14, "申"),
+    (15, "申"),
+    (20, "亥"),
+    (21, "亥"),
 ])
 def test_current_block_valid(hour, expected):
     branch, _ = mod.current_block(hour)
     assert branch == expected
 
 
-@pytest.mark.parametrize("hour", [0, 1, 3, 4, 5])
+@pytest.mark.parametrize("hour", [0, 1, 3, 22, 23])
 def test_current_block_outside_hours(hour):
+    """22-03 are sleep blocks (子/丑/寅) with no build-order section."""
     branch, time_str = mod.current_block(hour)
     assert branch is None
     assert time_str is None

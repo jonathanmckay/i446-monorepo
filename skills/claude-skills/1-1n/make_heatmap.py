@@ -11,8 +11,9 @@ from collections import defaultdict
 
 PT = dt.timezone(dt.timedelta(hours=-7))  # America/Los_Angeles (DST, summer)
 
-# 2-hour blocks by local start hour (06:00..00:00)
-BLOCKS = [(6,'卯'),(8,'辰'),(10,'巳'),(12,'午'),(14,'未'),(16,'申'),(18,'酉'),(20,'戌'),(22,'亥')]
+# 2-hour blocks by local start hour (04:00..22:00). 卯 = 04-06: the convention
+# the build order and 0分 sheet are written with (see build-order-daemon).
+BLOCKS = [(4,'卯'),(6,'辰'),(8,'巳'),(10,'午'),(12,'未'),(14,'申'),(16,'酉'),(18,'戌'),(20,'亥')]
 BRANCHES = [b for _,b in BLOCKS]
 BIDX = {b:i for i,b in enumerate(BRANCHES)}
 def block_of(hour):

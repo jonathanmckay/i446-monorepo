@@ -51,3 +51,31 @@ def test_lock_columns_follow_block_convention():
         fire_hour = hi + 1
         assert mod.HOUR_TO_BRANCH_BLOCK[fire_hour] == branch
         assert mod.LOCK_AT_FIRE_HOUR[fire_hour] == chr(ord("G") + i)
+
+
+def test_block_convention_consistent_across_tools():
+    """One convention, everywhere: 2026-06-12 found lib/neon/blocks.py, the
+    /1-1n heatmap, and -1g-check.py all one block off (卯=06-08) from what
+    the sheet writer actually records (卯=04-06), so every consumer of 0分's
+    G:O columns mislabelled blocks by two hours."""
+    daemon = _load()
+    daemon_blocks = [(lo, b) for b, lo, hi in daemon.BRANCH_HOURS]
+
+    sys.path.insert(0, str(pathlib.Path.home() / "i446-monorepo" / "lib"))
+    from neon import blocks as neon_blocks
+    assert neon_blocks.BLOCKS[:9] == daemon_blocks
+
+    heatmap_src = (pathlib.Path.home() / "i446-monorepo" / "skills"
+                   / "claude-skills" / "1-1n" / "make_heatmap.py").read_text()
+    hm_ns: dict = {}
+    for line in heatmap_src.splitlines():
+        if line.startswith("BLOCKS ="):
+            exec(line, hm_ns)
+            break
+    assert hm_ns.get("BLOCKS") == daemon_blocks
+
+    spec = importlib.util.spec_from_file_location(
+        "_1g_check_conv", pathlib.Path(__file__).parent / "-1g-check.py")
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+    assert [(lo, b) for lo, hi, b, _ in check.BLOCKS] == daemon_blocks

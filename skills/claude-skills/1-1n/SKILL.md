@@ -40,9 +40,9 @@ Optionally append a short Commentary section (phase shifts, weakest rituals, wee
 | ⏱️ | time logged | Toggl: `-1t` / `-1l` / `0t` / `0l` |
 | ✓ | task completed | Todoist completed tasks (`/api/v1/tasks/completed`) by completed_at |
 
-## Blocks (地支, −1h shift, 04:00 wake)
+## Blocks (地支, 04:00 wake)
 
-`卯` 06-08, `辰` 08-10, `巳` 10-12, `午` 12-14, `未` 14-16, `申` 16-18, `酉` 18-20, `戌` 20-22, `亥` 22-00. Sleep blocks (寅/子/丑) are omitted.
+`卯` 04-06, `辰` 06-08, `巳` 08-10, `午` 10-12, `未` 12-14, `申` 14-16, `酉` 16-18, `戌` 18-20, `亥` 20-22. Sleep blocks (子/丑/寅, 22:00-04:00) are omitted. This is the convention the build order and the 0分 sheet's G:O columns are written with (build-order-daemon, tg-tui, -2n all share it).
 
 ## Notes
 
