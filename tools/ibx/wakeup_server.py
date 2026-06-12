@@ -657,4 +657,4 @@ if __name__ == "__main__":
                        ("build-order", M.BUILD_ORDER.exists()),
                        ("toggl_cli", _TOGGL_CLI.exists())]:
         print(f"[wakeup] dep {label}: {'ok' if ok else 'MISSING'}", flush=True)
-    app.run(host="0.0.0.0", port=5559, threaded=True)
+    app.run(host="0.0.0.0", port=5570, threaded=True)
