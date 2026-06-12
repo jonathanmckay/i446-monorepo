@@ -1369,7 +1369,7 @@ def main():
 
     if not all_items:
         _mark_ibx0_habits_if_first_today()
-        set_term_color("blue")
+        set_term_color("black")
         _render_block_status()
         console.print(f"\n[dim]Inbox zero — watching for new items... (q to quit)[/dim]  {status_line}")
 
@@ -1476,7 +1476,7 @@ def main():
             else:
                 # Inbox zero — go blue immediately, let background polling find new items
                 _mark_ibx0_habits_if_first_today()
-                set_term_color("blue")
+                set_term_color("black")
                 _render_block_status()
                 console.print("[dim]Inbox zero — watching for new items... (q to quit)[/dim]")
 
@@ -1537,7 +1537,7 @@ def main():
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Bye.[/dim]")
             stop_poll.set()
-            set_term_color("blue")
+            set_term_color("black")
             sys.exit(2)
 
         # After user input: inject background arrivals and print poll messages
@@ -1569,7 +1569,7 @@ def main():
         if cmd == "q":
             console.print("[dim]Bye.[/dim]")
             stop_poll.set()
-            set_term_color("blue")
+            set_term_color("black")
             sys.exit(2)
 
         elif cmd == "r" and user_input == "R":  # capital R only (lowercase r = reply)

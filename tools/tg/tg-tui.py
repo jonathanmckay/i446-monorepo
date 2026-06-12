@@ -61,6 +61,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
 WIDTH_HINT = 50  # informs collapse logic, not strict
 DESC_MAX = 24  # max display width for task/event descriptions
+GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
 # Earthly branch blocks (name, start_hour, end_hour inclusive)
 BLOCKS = [
     ("卯", 4, 5),
@@ -645,13 +646,16 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
     Toggl, future blocks from gcal — both render identically.
     """
     out: list[tuple[str, str]] = []
-    dom = max(picks, key=lambda p: p["dur_min"]) if picks else None
+    non_gaps = [p for p in picks if not p.get("is_gap")]
+    dom = max(non_gaps, key=lambda p: p["dur_min"]) if non_gaps else None
     blk_style = f"bold {dom['style']}".strip() if dom and dom["style"] else "class:dim"
     pts_str = f" {pts}分" if pts else ""
     emoji_str = f" {emojis}" if emojis else ""
 
     # ── header line (carries picks[0] inline when present) ──
-    head = picks[0] if picks else None
+    # A gap never rides the header rule; an all-gap block gets a bare rule
+    # with every gap as a body row.
+    head = picks[0] if picks and not picks[0].get("is_gap") else None
     if head:
         # Block rule doubles as the first entry: ─午:04-task──────  pts.
         left = f"─{blk_name}{emoji_str}:{head['start_dt'].minute:02d}-"
@@ -669,13 +673,18 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
     out.append((blk_style, "\n"))
 
     # ── body lines (always 3, to keep every block 4 lines tall) ──
-    body = picks[1:4]
+    body = picks[1:4] if head else picks[:3]
     for p in body:
         dur = fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - 8 - len(dur) - 1)
         out.append(("class:time", f"  {p['time_str']} "))
-        out.append((p["style"], pad(truncate(p["label"], space), space)))
-        out.append(("class:dim", f" {dur}\n"))
+        if p.get("is_gap"):
+            # Untracked stretch: faint gridline fill, minutes in alarm red.
+            out.append(("class:idle", "┄" * space))
+            out.append(("class:no_entry", f" {dur}\n"))
+        else:
+            out.append((p["style"], pad(truncate(p["label"], space), space)))
+            out.append(("class:dim", f" {dur}\n"))
     if not picks:
         # Empty block → all four 30-min placeholders under the header rule, so
         # untracked time reads as an explicit (faint) grid to fill in.
@@ -711,6 +720,39 @@ def _past_block_picks(blk_name, merged) -> list[dict]:
     items.sort(key=lambda x: x["dur_min"], reverse=True)
     items = items[:4]
     items.sort(key=lambda x: x["start_dt"])
+    return items
+
+
+def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
+    """Untracked stretches >= GAP_MIN minutes inside a past block's window,
+    chronological. Sweeps raw STATE.entries (not the merged display spans,
+    which join same-desc neighbours and would hide stop/resume gaps). A gap
+    straddling a block boundary is split, each block reporting its share."""
+    blk_start = cutoff.replace(hour=blk_sh, minute=0, second=0, microsecond=0)
+    blk_end = blk_start + dt.timedelta(hours=blk_eh + 1 - blk_sh)
+
+    def gap_item(start, end):
+        mins = int((end - start).total_seconds() // 60)
+        if mins < GAP_MIN:
+            return None
+        return {"start_dt": start, "time_str": f"{start:%H:%M}", "label": "",
+                "style": "", "dur_min": mins, "is_gap": True}
+
+    items = []
+    pos = blk_start
+    for e in STATE.entries:  # sorted by start_dt
+        s, en = e["start_dt"], min(e["end_dt"], cutoff)
+        if en <= pos:
+            continue
+        if s >= blk_end:
+            break
+        if s > pos and (g := gap_item(pos, min(s, blk_end))):
+            items.append(g)
+        pos = max(pos, en)
+        if pos >= blk_end:
+            return items
+    if (g := gap_item(pos, blk_end)):
+        items.append(g)
     return items
 
 
@@ -771,7 +813,7 @@ def _mao_line(emojis) -> list[tuple[str, str]]:
     trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(label) - dwidth(pts_str))
     out.append((blk_style, "─" * trail))
     if pts_str:
-        out.append(("bold #ffffff", pts_str))
+        out.append(("class:dim", pts_str))
     out.append((blk_style, "\n"))
     return out
 
@@ -802,6 +844,24 @@ def render_morning() -> list[tuple[str, str]]:
             out += _mao_line(bo_emojis.get(blk_name, ""))
             continue
         picks = _past_block_picks(blk_name, merged)
+        gaps = _block_gaps(blk_sh, blk_eh, cutoff)
+        full_block = (blk_eh + 1 - blk_sh) * 60
+        if picks and gaps:
+            # Gaps compete with non-head entries for the 3 body rows; the
+            # header keeps its entry so the block rule stays meaningful.
+            rest = picks[1:] + gaps
+            rest.sort(key=lambda x: x["dur_min"], reverse=True)
+            rest = rest[:3]
+            rest.sort(key=lambda x: x["start_dt"])
+            picks = [picks[0]] + rest
+        elif gaps and not (len(gaps) == 1 and gaps[0]["dur_min"] >= full_block):
+            # No entry STARTS here but spillover from the prior block covers
+            # part of it: headerless rule + gap rows. A wholly untracked
+            # block keeps the existing faint placeholder grid instead.
+            gaps.sort(key=lambda x: x["dur_min"], reverse=True)
+            gaps = gaps[:3]
+            gaps.sort(key=lambda x: x["start_dt"])
+            picks = gaps
         out += _compact_block_lines(blk_name, blk_sh, picks, pts, bo_emojis.get(blk_name, ""))
     return out
 
