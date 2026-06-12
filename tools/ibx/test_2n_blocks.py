@@ -855,3 +855,38 @@ def test_gap_card_rechecks_gaps_at_display_time():
     # ...and an empty re-check must skip the card via continue
     has_continue = any(isinstance(n, ast.Continue) for n in ast.walk(gap_loop))
     assert has_continue, "gap card loop must skip (continue) when re-check finds no gaps"
+
+
+def test_completed_goals_still_count_as_goals_set(tmp_path):
+    """Regression: setting a goal then completing it must NOT re-show the -1g
+    'No goals set' card. The bug was computing goals_set from read_block_goals()
+    (open goals only), so a block with all goals done looked goal-less.
+
+    Data-level guard: a block whose only goal is `[x]` done has zero OPEN goals
+    but must still have status items (so existence-based goals_set is True)."""
+    m = _load_two_n()
+    fake_bo = tmp_path / "bo.md"
+    fake_bo.write_text("## -1₲\n\n- 申\n    - [x] ship the thing\n")
+    with patch.object(m, "BUILD_ORDER", fake_bo):
+        open_only = m.read_block_goals().get("申", [])
+        with_status = m.read_block_goals_with_status().get("申", [])
+    # The trap: open-only is empty even though a goal exists.
+    assert open_only == []
+    # Existence-based check (what goals_set must use) is truthy.
+    assert with_status == [("ship the thing", True)]
+    assert bool(with_status) is True
+
+
+def test_goals_set_is_existence_based_not_open_only():
+    """Structural: the -1g card gate must derive goals_set from the full goal
+    list (open OR done), not from read_block_goals() which drops done goals."""
+    src = SRC.read_text()
+    # The fixed form: existence-based.
+    assert "goals_set = bool(block_status_items)" in src, (
+        "goals_set must be computed from block_status_items (open + done), "
+        "otherwise completing every goal re-triggers the 'No goals set' card"
+    )
+    # The buggy form must be gone.
+    assert "goals_set = bool(current_goals) and any(g for g in current_goals)" not in src, (
+        "open-only goals_set reintroduced — completed goals will look unset"
+    )

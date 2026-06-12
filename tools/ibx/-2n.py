@@ -1196,9 +1196,13 @@ def main():
     # -1l doesn't have a dedicated 0₦ column, skip for now
 
     idx, block_name, block_start, block_end = get_current_block()
-    block_goals = read_block_goals()
-    current_goals = block_goals.get(block_name, [])
-    goals_set = bool(current_goals) and any(g for g in current_goals)
+    block_status_items = read_block_goals_with_status().get(block_name, [])
+    current_goals = [g for g, done in block_status_items if not done]
+    # A block counts as "goals set" if ANY goal exists for it — open OR already
+    # done. read_block_goals() returns open goals only, so completing every goal
+    # used to make this False and re-trigger the "No goals set" -1g card as if
+    # nothing had been set. Check existence, not just open goals.
+    goals_set = bool(block_status_items)
 
     # Check meeting briefs
     mtg_briefs = []
@@ -1244,7 +1248,8 @@ def main():
         # Only ibx0 — show block status and go straight to inbox
         salah_status = "✓" if salah_done else ("☀️" if prayer_marker_exists else "·")
         if goals_set:
-            console.print(f"[green]{salah_status}[/green] صلاة  [green]✓[/green] -1g ({block_name}): {', '.join(current_goals)}")
+            all_goal_texts = [g for g, _ in block_status_items]
+            console.print(f"[green]{salah_status}[/green] صلاة  [green]✓[/green] -1g ({block_name}): {', '.join(all_goal_texts)}")
         console.print()
     else:
         # ── Card 1: صلاة ──────────────────────────────────────────────
