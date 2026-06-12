@@ -973,12 +973,12 @@ while true; do
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-footer(echo '🔄 refreshed')" \
       --footer="$combined_hdr")
