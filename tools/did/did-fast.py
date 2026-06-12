@@ -538,7 +538,7 @@ def _refresh_task_queue_inner() -> dict:
         filt = "today | overdue"
         cursor = None
         for _ in range(5):  # max 5 pages
-            url = f"{TODOIST_BASE}/tasks?filter={quote(filt)}&limit=200"
+            url = f"{TODOIST_BASE}/tasks/filter?query={quote(filt)}&limit=200"
             if cursor:
                 url += f"&cursor={cursor}"
             req = urllib.request.Request(url, headers={
@@ -1337,7 +1337,7 @@ def _live_todoist_search(query: str) -> Optional[dict]:
         for filt in ("today | overdue", "7 days"):
             cursor = None
             for _ in range(3):  # max 3 pages per filter
-                url = f"{TODOIST_BASE}/tasks?filter={quote(filt)}&limit=100"
+                url = f"{TODOIST_BASE}/tasks/filter?query={quote(filt)}&limit=100"
                 if cursor:
                     url += f"&cursor={cursor}"
                 req = urllib.request.Request(url, headers={

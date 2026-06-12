@@ -158,7 +158,7 @@ def _fetch_tasks(filt: str) -> list[dict]:
     tasks: list[dict] = []
     cursor = None
     for _ in range(5):
-        url = f"{TODOIST_BASE}/tasks?filter={quote(filt)}&limit=200"
+        url = f"{TODOIST_BASE}/tasks/filter?query={quote(filt)}&limit=200"
         if cursor:
             url += f"&cursor={cursor}"
         req = urllib.request.Request(url, headers={

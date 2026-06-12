@@ -647,7 +647,7 @@ def api(method, path, body=None):
 tasks = []
 cursor = None
 for _ in range(3):
-    url = f'{BASE}/tasks?filter=today%20%7C%20overdue&limit=200'
+    url = f'{BASE}/tasks/filter?query=today%20%7C%20overdue&limit=200'
     if cursor: url += f'&cursor={cursor}'
     req = urllib.request.Request(url, headers=HDR)
     with urllib.request.urlopen(req, timeout=15) as resp:
