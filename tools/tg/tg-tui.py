@@ -950,10 +950,11 @@ def _future_block_picks(blk_name, events) -> list[dict]:
 def _block_gcal_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     """Half-hour marks of a block covered by a gcal event → project style.
 
-    _future_block_picks only sees events STARTING in the block, so an event
-    flowing through it (a 4h workshop started two blocks earlier, or one
-    spanning the whole block) used to leave the block looking empty. Covered
-    marks instead draw the focus band's ◇ │ continuation glyphs."""
+    Block picks only see what STARTS in the block, so an event flowing
+    through it (a 4h workshop started two blocks earlier, or one spanning the
+    whole block) used to leave the block looking empty. Covered marks instead
+    draw the focus band's ◇ │ continuation glyphs — in future blocks and,
+    through the event's end, in past blocks too."""
     out: dict[tuple[int, int], str] = {}
     for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
         t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -1054,7 +1055,11 @@ def render_morning() -> list[tuple[str, str]]:
             gaps = gaps[:3]
             gaps.sort(key=lambda x: x["start_dt"])
             picks = gaps
-        out += _compact_block_lines(blk_name, blk_sh, picks, pts, bo_emojis.get(blk_name, ""))
+        # Past blocks keep drawing a long meeting's ◇ │ continuation through
+        # the event's end; entries and red gap rows still take the rows first.
+        cont = _block_gcal_cont(blk_sh, cutoff)
+        out += _compact_block_lines(blk_name, blk_sh, picks, pts,
+                                    bo_emojis.get(blk_name, ""), cont=cont)
     return out
 
 

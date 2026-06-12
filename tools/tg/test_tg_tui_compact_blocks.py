@@ -87,6 +87,30 @@ def test_pads_after_header_event_continue_event():
     assert text.count("◇ │") == 3
 
 
+def test_past_block_continues_finished_event_to_its_end():
+    """A long meeting that already happened keeps its ◇ │ rows in the morning
+    view through the event's end; tracked toggl rows still come first."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [
+        {"start_dt": today.replace(hour=10, minute=1),
+         "end_dt": today.replace(hour=12), "desc": "blizz",
+         "project_id": None, "running": False, "id": 1},
+    ]
+    mod.STATE.entries_yday = []
+    mod.STATE.block_points = {}
+    mod.STATE.events = [{
+        "title": "XBOX Workshop", "start_dt": today.replace(hour=10),
+        "end_dt": today.replace(hour=14),
+    }]
+    mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
+    text = "".join(t for _, t in mod.render_morning())
+    wu = [ln for ln in text.split("\n")]
+    block = "\n".join(wu[wu.index(next(l for l in wu if l.startswith("─午"))):][:4])
+    assert "blizz" in block, "toggl entry keeps the header"
+    assert block.count("◇ │") == 3, "pads continue the event: 10:30/11:00/11:30"
+
+
 def test_transparent_and_allday_events_do_not_continue():
     mod = _load_tui()
     today = _midnight()
