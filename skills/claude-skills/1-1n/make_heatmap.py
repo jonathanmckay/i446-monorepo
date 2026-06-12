@@ -62,10 +62,32 @@ def add_toggl(grid, start, end):
             grid[day][b].add('⏱️')
 
 # ---------- Neon 0分 per-block points -> 🎯 ----------
+NEON_LOCAL = '/Users/mckay/OneDrive/vault-excel/Neon分v12.2.xlsx'
+
+def fresh_neon_path():
+    """The workbook lives open in Excel on Ix; OneDrive sync to this machine
+    can silently stall (frozen Jun 3-11, 2026, which blanked a week of 🎯).
+    Pull Ix's copy when it's newer; fall back to the local file."""
+    import subprocess, tempfile
+    tmp = os.path.join(tempfile.gettempdir(), 'neon-heatmap.xlsx')
+    try:
+        local_m = os.path.getmtime(NEON_LOCAL)
+        r = subprocess.run(['ssh', '-o', 'ConnectTimeout=5', 'ix',
+                            f'stat -f %m "{NEON_LOCAL}"'],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and float(r.stdout.strip()) > local_m:
+            c = subprocess.run(['scp', '-q', f'ix:{NEON_LOCAL}', tmp],
+                               capture_output=True, timeout=60)
+            if c.returncode == 0:
+                return tmp
+            print(f'<!-- warn: scp from ix failed; using local copy -->')
+    except Exception as e:
+        print(f'<!-- warn: ix freshness check failed ({e}); using local copy -->')
+    return NEON_LOCAL
+
 def add_neon(grid, start, end):
     import openpyxl
-    path = '/Users/mckay/OneDrive/vault-excel/Neon分v12.2.xlsx'
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    wb = openpyxl.load_workbook(fresh_neon_path(), data_only=True, read_only=True)
     ws = wb['0分']
     for r in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=15, values_only=True):
         b_, c_ = r[0], r[1]
@@ -84,7 +106,9 @@ def add_neon(grid, start, end):
         if day < start or day > end: continue
         blocks = r[5:14]  # G..O = 卯..亥
         for i, v in enumerate(blocks):
-            if isinstance(v, (int, float)) and v:
+            # Strictly positive: pre-posted habit penalties (e.g. -46 in 卯)
+            # are not goal activity and must not light 🎯
+            if isinstance(v, (int, float)) and v > 0:
                 grid[day][BRANCHES[i]].add('🎯')
     wb.close()
 
