@@ -453,13 +453,22 @@ def _date_str(d: dt.date) -> str:
 
 def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str:
     """Read computed value of `col` for target_date, write back as literal.
-    No-op if the cell is not currently a formula. Returns status string."""
+    No-op if the cell is not currently a formula. Returns status string.
+
+    Negative residuals clamp to 0: D includes live 0n penalty rollups that sit
+    negative until the morning habits are logged, so the 06:00 fire would
+    otherwise freeze that transient into 卯 and inflate every later block's
+    residual by the same amount (2026-06-12: 卯 locked at -46, 巳 showed
+    173分 of a 127分 day). Locking 0 leaves the negative in the unlocked
+    tail (=D-SUM(locked)), which self-corrects as the penalties clear."""
     body = (
         f'set theCell to cell ("{col}" & targetRow) of theSheet\n'
         '    set f to formula of theCell\n'
         '    if f is "" then return "EMPTY"\n'
         '    if (character 1 of f) is not "=" then return "ALREADY_LOCKED " & f\n'
         '    set v to value of theCell\n'
+        '    if v is missing value then set v to 0\n'
+        '    if (v as number) < 0 then set v to 0\n'
         '    set value of theCell to v\n'
         '    return "LOCKED " & v as text\n'
     )
