@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generate the -1n (-1₦) block-ritual heatmap: day x 2-hour Earthly-Branch block,
 showing which build-order ritual icons were hit. Multi-source:
-  Toggl   -> ☀️ prayer, 📧 inbox, ⏱️ time-log  (bucketed by entry start time)
-  Neon 0分 -> 🎯 goal/points (per-block columns G:O, nonzero => goal pursued)
-  Todoist -> ✓ task completed (completed_at bucketed by block)
+  Toggl       -> ☀️ prayer, 📧 inbox, ⏱️ time-log  (bucketed by entry start time)
+  Build order -> 🎯 goal set for the block (-1₲ checkbox; v_logs archives + live)
+  Todoist     -> ✓ task completed (completed_at bucketed by block)
 Usage: make_heatmap.py START END   (YYYY-MM-DD inclusive). Prints markdown.
 """
 import sys, os, json, datetime as dt, urllib.request, base64, re
@@ -61,56 +61,45 @@ def add_toggl(grid, start, end):
         if desc in GOALS_T:
             grid[day][b].add('⏱️')
 
-# ---------- Neon 0分 per-block points -> 🎯 ----------
-NEON_LOCAL = '/Users/mckay/OneDrive/vault-excel/Neon分v12.2.xlsx'
+# ---------- Build-order goals -> 🎯 ----------
+# 🎯 = a -1g goal was actually SET for the block: the day's build order has a
+# non-empty checkbox under that block's header in the ## -1₲ section. Past
+# days come from the daily archives (v_logs), today from the live file.
+# (Until 2026-06-12 this read per-block 分 from the Neon sheet, which lit 🎯
+# for any block where points landed, regardless of whether a goal was set.)
+V_LOGS = '/Users/mckay/vault/g245/v_logs'
+LIVE_BUILD_ORDER = '/Users/mckay/vault/g245/build-order.md'
 
-def fresh_neon_path():
-    """The workbook lives open in Excel on Ix; OneDrive sync to this machine
-    can silently stall (frozen Jun 3-11, 2026, which blanked a week of 🎯).
-    Pull Ix's copy when it's newer; fall back to the local file."""
-    import subprocess, tempfile
-    tmp = os.path.join(tempfile.gettempdir(), 'neon-heatmap.xlsx')
-    try:
-        local_m = os.path.getmtime(NEON_LOCAL)
-        r = subprocess.run(['ssh', '-o', 'ConnectTimeout=5', 'ix',
-                            f'stat -f %m "{NEON_LOCAL}"'],
-                           capture_output=True, text=True, timeout=15)
-        if r.returncode == 0 and float(r.stdout.strip()) > local_m:
-            c = subprocess.run(['scp', '-q', f'ix:{NEON_LOCAL}', tmp],
-                               capture_output=True, timeout=60)
-            if c.returncode == 0:
-                return tmp
-            print(f'<!-- warn: scp from ix failed; using local copy -->')
-    except Exception as e:
-        print(f'<!-- warn: ix freshness check failed ({e}); using local copy -->')
-    return NEON_LOCAL
+def _block_line_name(line):
+    """First token after the bullet — headers carry variable annotations
+    (`- 辰 (25min)   (32min) ⏰`), so only the leading token is stable."""
+    rest = line[2:].strip()
+    return rest.split()[0] if rest else ''
 
-def add_neon(grid, start, end):
-    import openpyxl
-    wb = openpyxl.load_workbook(fresh_neon_path(), data_only=True, read_only=True)
-    ws = wb['0分']
-    for r in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=15, values_only=True):
-        b_, c_ = r[0], r[1]
-        label = None
-        for cand in (c_, b_):
-            if isinstance(cand, str) and '/' in cand:
-                label = cand; break
-            if isinstance(cand, dt.datetime):
-                label = f'{cand.month}/{cand.day}'; break
-        if not label: continue
+def add_goals(grid, start, end):
+    today = dt.datetime.now(PT).date()
+    day = start
+    while day <= end:
+        path = f"{V_LOGS}/{day.strftime('%Y.%m.%d')}-build-order.md"
+        if day == today and not os.path.exists(path):
+            path = LIVE_BUILD_ORDER
         try:
-            mo, da = label.split('/')[:2]
-            day = dt.date(start.year, int(mo), int(da))
-        except Exception:
+            text = open(path, encoding='utf-8').read()
+        except OSError:
+            day += dt.timedelta(days=1)
             continue
-        if day < start or day > end: continue
-        blocks = r[5:14]  # G..O = 卯..亥
-        for i, v in enumerate(blocks):
-            # Strictly positive: pre-posted habit penalties (e.g. -46 in 卯)
-            # are not goal activity and must not light 🎯
-            if isinstance(v, (int, float)) and v > 0:
-                grid[day][BRANCHES[i]].add('🎯')
-    wb.close()
+        if '## -1₲' in text:
+            section = text[text.index('## -1₲'):]
+            block = None
+            for line in section.split('\n'):
+                if line.startswith('## ') and line.strip() != '## -1₲':
+                    break
+                if line.startswith('- ') and not line.startswith('    '):
+                    name = _block_line_name(line)
+                    block = name if name in BIDX else None
+                elif block and re.match(r'^\s*- \[[ xX]\]\s*\S', line):
+                    grid[day][block].add('🎯')
+        day += dt.timedelta(days=1)
 
 # ---------- Todoist completed -> ✓ ----------
 def add_todoist(grid, start, end):
@@ -144,7 +133,7 @@ def add_todoist(grid, start, end):
 
 # ---------- render ----------
 DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
-KEY = [('☀️','prayer (salah)'),('📧','inbox processed'),('🎯','goal set / points (-1g)'),
+KEY = [('☀️','prayer (salah)'),('📧','inbox processed'),('🎯','goal set for block (-1g)'),
        ('⏱️','time logged'),('✓','task completed (Todoist)')]
 
 def iso_week(d):
@@ -223,7 +212,7 @@ def main():
         start = end - dt.timedelta(days=6)
     grid = defaultdict(lambda: defaultdict(set))
     errs = []
-    for fn in (add_toggl, add_neon, add_todoist):
+    for fn in (add_toggl, add_goals, add_todoist):
         try:
             fn(grid, start, end)
         except Exception as e:

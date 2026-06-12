@@ -1,6 +1,6 @@
 """Regression tests for build-order-daemon.py.
 
-Bug: neon_add_12_to_y logged success (Y_ADD) even when Excel was not open,
+Bug: neon_add_score_to_p logged success (Y_ADD) even when Excel was not open,
 because osascript returned a cached/stale result. The write silently failed,
 leaving the -1₦ cell empty.
 
@@ -13,43 +13,43 @@ DAEMON = Path(__file__).parent / "build-order-daemon.py"
 
 
 def test_add_12_has_readback_verification():
-    """neon_add_12_to_y must verify the write by reading back the cell value."""
+    """neon_add_score_to_p must verify the write by reading back the cell value."""
     src = DAEMON.read_text(encoding="utf-8")
     # Find the function
-    idx = src.index("def neon_add_12_to_y")
+    idx = src.index("def neon_add_score_to_p")
     # Find the next function definition
     next_def = src.index("\ndef ", idx + 1)
     func_body = src[idx:next_def]
     assert "neon_read_y" in func_body, (
-        "neon_add_12_to_y must call neon_read_y to verify the write landed"
+        "neon_add_score_to_p must call neon_read_y to verify the write landed"
     )
     assert "VERIFY_FAILED" in func_body, (
-        "neon_add_12_to_y must return VERIFY_FAILED if read-back shows empty/zero"
+        "neon_add_score_to_p must return VERIFY_FAILED if read-back shows empty/zero"
     )
 
 
 def test_add_12_logs_verify_result():
     """The verification must be logged so failures are visible in the daemon log."""
     src = DAEMON.read_text(encoding="utf-8")
-    idx = src.index("def neon_add_12_to_y")
+    idx = src.index("def neon_add_score_to_p")
     next_def = src.index("\ndef ", idx + 1)
     func_body = src[idx:next_def]
     assert "verified=" in func_body, (
-        "neon_add_12_to_y must log the verified value on success"
+        "neon_add_score_to_p must log the verified value on success"
     )
 
 
 def test_osascript_error_returns_failed():
-    """When osascript returns non-zero, neon_add_12_to_y must return FAILED."""
+    """When osascript returns non-zero, neon_add_score_to_p must return FAILED."""
     src = DAEMON.read_text(encoding="utf-8")
-    idx = src.index("def neon_add_12_to_y")
+    idx = src.index("def neon_add_score_to_p")
     next_def = src.index("\ndef ", idx + 1)
     func_body = src[idx:next_def]
     assert "FAILED" in func_body, (
-        "neon_add_12_to_y must return FAILED on osascript error"
+        "neon_add_score_to_p must return FAILED on osascript error"
     )
     assert "returncode" in func_body, (
-        "neon_add_12_to_y must check osascript returncode"
+        "neon_add_score_to_p must check osascript returncode"
     )
 
 
@@ -171,3 +171,37 @@ def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
     assert mod.score_block_from_emojis("巳", live={"🎯": False, "⏱️": False, "✅": False}) == 0
     # With live confirming goals, the 🎯 earns its 3
     assert mod.score_block_from_emojis("巳", live={"🎯": True, "⏱️": False, "✅": False}) == 3
+
+
+def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
+    """Regression (2026-06-12): enrich writes mid-line annotations on block
+    headers (`- 辰 (25min)   (32min) ⏰`, `(15分, 163min)`). The old matcher
+    stripped only one trailing `(Nmin)`, so name comparison failed and blocks
+    scored 0/13 even with every ritual earned — -1₦ points never reached Neon."""
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    build.write_text(
+        "## -1₲\n\n"
+        "- 卯 🎯 ⏱️ ⏰\n"
+        "    - [ ] wake up well\n"
+        "- 辰 (25min)   (32min) ⏰ ⏱️\n"
+        "    - [ ] morning goal\n"
+        "- 巳     (15分, 119min)  (15分, 163min) ☀️ ✅ 📧 🎯\n"
+        "    - [x] grind list\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+
+    # Name extraction is the first token, annotations ignored
+    assert mod._block_line_name("- 辰 (25min)   (32min) ⏰") == "辰"
+    assert mod._block_line_name("- 巳     (15分, 119min)  (15分, 163min) ☀️") == "巳"
+
+    # Scoring matches annotated headers (was 0 before the fix)
+    assert mod.score_block_from_emojis("辰", live={"⏱️": True}) == 3
+    assert mod.score_block_from_emojis(
+        "巳", live={"🎯": True, "✅": True}) == 1 + 3 + 3 + 3  # ☀️+🎯+✅+📧
+
+    # Goal lookup and marker write also match annotated headers
+    assert mod._block_has_goals("辰") is True
+    assert mod._write_block_marker("辰", "🎯") is True
+    assert "- 辰 (25min)   (32min) ⏰ ⏱️ 🎯" in build.read_text(encoding="utf-8")

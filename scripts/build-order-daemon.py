@@ -579,6 +579,15 @@ def neon_read_y(target_date: dt.date) -> str:
 
 # --- Block scoring: emoji-based detection and marking ---
 
+def _block_line_name(line: str) -> str:
+    """Block name from a `- 卯 ...` header line: the first whitespace token
+    after the bullet. Headers accumulate annotations in the middle and at the
+    end (`- 辰 (25min)   (32min) ⏰`, `(15分, 163min)`), so any strip-suffixes
+    approach breaks; the leading token is the only stable part."""
+    rest = line[2:].strip()
+    return rest.split()[0] if rest else ""
+
+
 def _has_block_marker(block_name: str, marker: str) -> bool:
     """Check if a block header in -1₲ section has a specific emoji marker."""
     if not BUILD_ORDER.exists():
@@ -592,10 +601,7 @@ def _has_block_marker(block_name: str, marker: str) -> bool:
             break
         if line.startswith("- ") and not line.startswith("    "):
             # Extract block name (strip markers, duration suffix)
-            name = line.strip().lstrip("- ").strip()
-            for m in ("☀️", "📧", "⏰", GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER):
-                name = name.replace(m, "")
-            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            name = _block_line_name(line)
             if name == block_name and marker in line:
                 return True
     return False
@@ -621,10 +627,7 @@ def _write_block_marker(block_name: str, marker: str, dry_run: bool = False) -> 
         if not in_section:
             continue
         if line.startswith("- ") and not line.startswith("    "):
-            name = line.strip().lstrip("- ").strip()
-            for m in ("☀️", "📧", "⏰", GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER):
-                name = name.replace(m, "")
-            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            name = _block_line_name(line)
             if name == block_name:
                 if dry_run:
                     log(f"[DRY RUN] Would write {marker} to {block_name}")
@@ -649,10 +652,7 @@ def _block_has_goals(block_name: str) -> bool:
         if line.startswith("## ") and current_block is not None:
             break
         if line.startswith("- ") and not line.startswith("    "):
-            name = line.strip().lstrip("- ").strip()
-            for m in ("☀️", "📧", "⏰", GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER):
-                name = name.replace(m, "")
-            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            name = _block_line_name(line)
             current_block = name
         elif current_block == block_name:
             if re.match(r"^    - \[[ xX]\]\s*.+", line):
@@ -718,16 +718,20 @@ def block_name_for_hours(start_hour: int) -> str:
 
 def _todoist_has_completions(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
     """Check if any Todoist tasks were completed during the block time window."""
-    try:
-        token = subprocess.run(
-            ["security", "find-generic-password", "-s", TODOIST_KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        if not token:
-            log("todoist completions: no API token in keychain")
+    # Env first: launchd/cron contexts can't unlock the login keychain
+    # (the -1g-cron crontab entries pass TODOIST_API_KEY the same way)
+    token = os.environ.get("TODOIST_API_KEY", "").strip()
+    if not token:
+        try:
+            token = subprocess.run(
+                ["security", "find-generic-password", "-s", TODOIST_KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except Exception as e:
+            log(f"todoist completions: keychain error {e}")
             return False
-    except Exception as e:
-        log(f"todoist completions: keychain error {e}")
+    if not token:
+        log("todoist completions: no API token in env or keychain")
         return False
 
     # Build time window in UTC
@@ -818,10 +822,7 @@ def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
         if line.startswith("## ") and line != "## -1₲":
             break
         if line.startswith("- ") and not line.startswith("    "):
-            name = line.strip().lstrip("- ").strip()
-            for m in SCORE_EMOJI_MAP:
-                name = name.replace(m, "")
-            name = re.sub(r"\s*\(\d+min\)\s*$", "", name).strip()
+            name = _block_line_name(line)
             if name == block_name:
                 earned = [e for e, pts in SCORE_EMOJI_MAP.items()
                           if _marker_earned(e, line, live)]
