@@ -24,16 +24,18 @@ from pathlib import Path
 MD_FILE = Path.home() / "vault/g245/build-order.md"
 
 # (start_hour, end_hour, 地支, time_range_str)
+# 卯 = 04-06 (build-order / 0分 / tg-tui convention). Hours 22-03 are sleep
+# blocks with no build-order section.
 BLOCKS = [
-    (6,  7,  "卯", "06:00-07:59"),
-    (8,  9,  "辰", "08:00-09:59"),
-    (10, 11, "巳", "10:00-11:59"),
-    (12, 13, "午", "12:00-13:59"),
-    (14, 15, "未", "14:00-15:59"),
-    (16, 17, "申", "16:00-17:59"),
-    (18, 19, "酉", "18:00-19:59"),
-    (20, 21, "戌", "20:00-21:59"),
-    (22, 23, "亥", "22:00-23:59"),
+    (4,  5,  "卯", "04:00-05:59"),
+    (6,  7,  "辰", "06:00-07:59"),
+    (8,  9,  "巳", "08:00-09:59"),
+    (10, 11, "午", "10:00-11:59"),
+    (12, 13, "未", "12:00-13:59"),
+    (14, 15, "申", "14:00-15:59"),
+    (16, 17, "酉", "16:00-17:59"),
+    (18, 19, "戌", "18:00-19:59"),
+    (20, 21, "亥", "20:00-21:59"),
 ]
 
 SECTION_MARKER = "-1₲"  # "-1₲"
@@ -95,7 +97,7 @@ def main():
     branch, time_str = current_block(hour)
 
     if branch is None:
-        result = {"status": "inactive", "hour": hour, "reason": "outside 06-23"}
+        result = {"status": "inactive", "hour": hour, "reason": "outside 04-21"}
     else:
         items = read_block_goals(branch, args.file)
         if items is None:

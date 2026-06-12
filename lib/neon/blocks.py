@@ -13,10 +13,13 @@ from pathlib import Path
 VAULT = Path.home() / "vault"
 BUILD_ORDER = VAULT / "g245" / "-1₦ , 0₦ - Neon {Build Order}.md"
 
-# (start_hour, branch). The 2h block is [start, start+2). Hours 0-3 land in 亥 (sleep).
+# (start_hour, branch). The 2h block is [start, start+2). Hours 0-3 land in 子 (sleep).
+# 卯 = 04-06: the convention shared by the 0分 sheet writer (build-order-daemon
+# LOCK_AT_FIRE_HOUR), tg-tui, -2n, and did-fast. Do not shift to the
+# traditional 卯=05-07/06-08 readings — the sheet's historical data is 04-06.
 BLOCKS = [
-    (4, "寅"), (6, "卯"), (8, "辰"), (10, "巳"), (12, "午"),
-    (14, "未"), (16, "申"), (18, "酉"), (20, "戌"), (22, "亥"),
+    (4, "卯"), (6, "辰"), (8, "巳"), (10, "午"), (12, "未"),
+    (14, "申"), (16, "酉"), (18, "戌"), (20, "亥"), (22, "子"),
 ]
 
 
@@ -26,7 +29,7 @@ def current_block(now: datetime | None = None) -> tuple[int, str]:
     for start, label in reversed(BLOCKS):
         if h >= start:
             return start, label
-    return 22, "亥"  # 0-3 wrap into prior day's 亥
+    return 22, "子"  # 0-3 wrap into prior day's 子
 
 
 def block_label(now: datetime | None = None) -> str:
