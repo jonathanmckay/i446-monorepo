@@ -33,12 +33,13 @@ class _FakeProc:
 
 def test_block_points_read_from_neon_g_to_o_columns(monkeypatch):
     m = _load_tui()
-    # Σ=100, then 卯..亥: 卯 empty, 辰=3, 巳=247, 午=164.57…, 未=237, 申=250, rest empty
-    out = "100||3.0|247.0|164.571428571429|237.0|250.0|||"
+    # Σ=902 (= block sum: the live-residual invariant), then 卯..亥:
+    # 卯 empty, 辰=3, 巳=247, 午=164.57…, 未=237, 申=250, rest empty
+    out = "902||3.0|247.0|164.571428571429|237.0|250.0|||"
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(out))
     m.STATE.block_points = {}
     m.fetch_points()
-    assert m.STATE.today_points == 100
+    assert m.STATE.today_points == 902
     assert m.STATE.block_points == {
         "辰": 3, "巳": 247, "午": 165, "未": 237, "申": 250,
     }, "per-block points must come from 0分 G:O, not logging timestamps"

@@ -415,6 +415,7 @@ def fetch_points():
         # into whichever block they were *recorded* in, not earned in.
         bp_excel: dict[str, int] = {}
         read_ok = False
+        raw_out = ""
         try:
             import subprocess as _sp
             IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
@@ -445,7 +446,8 @@ end tell'''
                         capture_output=True, text=True, timeout=15)
             if r.returncode == 0 and r.stdout.strip() not in ("", "ERR"):
                 read_ok = True
-                parts = r.stdout.strip().split("|")
+                raw_out = r.stdout.strip()
+                parts = raw_out.split("|")
                 val = parts[0].strip()
                 # Handle formula strings like "70+12" defensively.
                 try:
@@ -475,10 +477,31 @@ end tell'''
         # which attribute batch-logged points to the block they were *logged*
         # in (the 313-in-酉 bug: 33 earned there, 280 logged there in a batch).
         if read_ok:
-            STATE.block_points = bp_excel
             STATE.last_points_fetch = time.monotonic()
+            if _blocks_consistent(STATE.today_points, bp_excel):
+                STATE.block_points = bp_excel
+            else:
+                # Mid-write snapshot (daemon lock / did-fast append in flight):
+                # keep last good values and leave evidence for diagnosis.
+                try:
+                    with open("/tmp/tg-tui-points-rejected.log", "a") as fh:
+                        fh.write(f"{dt.datetime.now(TZ):%F %T} D={STATE.today_points} "
+                                 f"bp={bp_excel} raw={raw_out!r}\n")
+                except OSError:
+                    pass
     except Exception:
         pass
+
+
+def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
+    """Reject 0分 block reads that claim more points than the day's Σ total.
+
+    While any residual formula (=D-SUM(locked)) is live in G:O, sum(blocks)
+    == Σ exactly, so sum > Σ means the row was sampled mid-write (2026-06-12:
+    未 read 975 of a 728分 day and stuck on screen). After the 22:00 lock all
+    blocks are literals and Σ may legitimately exceed their sum, so only the
+    sum > Σ direction is rejected."""
+    return sum(bp.values()) <= total + 2
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
@@ -731,7 +754,7 @@ def _read_block_emojis() -> dict[str, str]:
     return result
 
 
-def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str, str]]:
+def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> list[tuple[str, str]]:
     """Render one non-focus block as exactly 4 lines (header + 3 body).
 
     The header rule carries the most important entry inline to conserve space:
@@ -741,6 +764,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
     picks: up to 4 normalized items, sorted chronologically, each a dict with
     start_dt, time_str, label, style, dur_min. Past blocks fill these from
     Toggl, future blocks from gcal — both render identically.
+
+    cont: {(hour, minute): style} half-hour marks covered by a gcal event that
+    flows through the block (e.g. a 4h workshop started earlier). Covered marks
+    render as the focus band's ``◇ │`` continuation instead of blank/grid.
     """
     out: list[tuple[str, str]] = []
     non_gaps = [p for p in picks if not p.get("is_gap")]
@@ -754,8 +781,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
     # with every gap as a body row.
     head = picks[0] if picks and not picks[0].get("is_gap") else None
     if head:
-        # Block rule doubles as the first entry: ─午:04-task──────  pts.
-        left = f"─{blk_name}{emoji_str}:{head['start_dt'].minute:02d}-"
+        # Block rule doubles as the first entry: ─午:04 ☀️📧-task─────  pts.
+        # Emojis sit to the right of the block:mm stamp, never inside it.
+        left = f"─{blk_name}:{head['start_dt'].minute:02d}{emoji_str}-"
         task = truncate(head["label"], max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str) - 1))
         trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(task) - dwidth(pts_str))
         out.append((blk_style, left))
@@ -782,15 +810,35 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis) -> list[tuple[str
         else:
             out.append((p["style"], pad(truncate(p["label"], space), space)))
             out.append(("class:dim", f" {dur}\n"))
+    marks = ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30))
     if not picks:
         # Empty block → all four 30-min placeholders under the header rule, so
-        # untracked time reads as an explicit (faint) grid to fill in.
-        for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+        # untracked time reads as an explicit (faint) grid to fill in. Marks a
+        # through-running event covers show ◇ │ instead of the grid.
+        for hh, mm in marks:
             out.append(("class:time", f"  {hh:02d}:{mm:02d} "))
-            out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 8) + "\n"))
+            if cont and (hh, mm) in cont:
+                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
+            else:
+                out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 8) + "\n"))
     else:
-        for _ in range(3 - len(body)):  # pad partially-filled blocks
-            out.append(("class:idle", "\n"))
+        # Pad partially-filled blocks; covered marks after the last pick keep
+        # drawing the through-running event's ◇ │ continuation.
+        pad_marks = []
+        if cont:
+            last = max(p["start_dt"] for p in picks)
+            pad_marks = [
+                (hh, mm) for hh, mm in marks
+                if (hh, mm) in cont
+                and last.replace(hour=hh, minute=mm, second=0, microsecond=0) > last
+            ]
+        for i in range(3 - len(body)):
+            if i < len(pad_marks):
+                hh, mm = pad_marks[i]
+                out.append(("class:time", f"  {hh:02d}:{mm:02d} "))
+                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
+            else:
+                out.append(("class:idle", "\n"))
     return out
 
 
@@ -897,6 +945,25 @@ def _future_block_picks(blk_name, events) -> list[dict]:
     items = items[:4]
     items.sort(key=lambda x: x["start_dt"])
     return items
+
+
+def _block_gcal_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
+    """Half-hour marks of a block covered by a gcal event → project style.
+
+    _future_block_picks only sees events STARTING in the block, so an event
+    flowing through it (a 4h workshop started two blocks earlier, or one
+    spanning the whole block) used to leave the block looking empty. Covered
+    marks instead draw the focus band's ◇ │ continuation glyphs."""
+    out: dict[tuple[int, int], str] = {}
+    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+        t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        for ev in STATE.events:
+            if ev.get("transparency") == "transparent" or ev.get("all_day"):
+                continue
+            if ev["start_dt"] <= t < ev["end_dt"]:
+                out[(hh, mm)] = project_style(gcal_project_code(ev))
+                break
+    return out
 
 
 def _mao_line(emojis) -> list[tuple[str, str]]:
@@ -1176,7 +1243,8 @@ def render_evening() -> list[tuple[str, str]]:
         if sh >= 22:
             break
         picks = _future_block_picks(name, STATE.events)
-        out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""))
+        cont = _block_gcal_cont(sh, cutoff)
+        out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""), cont=cont)
     # Sleep marker
     rule_text = " 睡觉 "
     trail = max(0, WIDTH_HINT - 1 - len(rule_text))
@@ -1335,6 +1403,7 @@ def _(event):
         await asyncio.to_thread(fetch_gcal, True)
         flash("refreshed")
         event.app.invalidate()
+        _bg_fetch(event.app, fetch_points)  # slowest; repaints itself when done
 
     event.app.create_background_task(_refresh())
 
