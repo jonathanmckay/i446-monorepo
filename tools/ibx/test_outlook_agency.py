@@ -61,20 +61,23 @@ def test_fromisoformat_handles_z_suffix():
         )
 
 
-def test_archive_deletes_message():
+def test_archive_clears_message():
     """
-    Bug: archive() tried to mark as read via UpdateMessage, but that tool
-    doesn't support isRead. Emails stayed unread in Graph and kept reappearing.
-
-    Fix: archive() calls _delete_after_action to definitively remove from inbox.
+    History: (1) archive() originally marked read via UpdateMessage, but the
+    tool silently ignored isRead — emails stayed unread and kept reappearing.
+    (2) Fix was delete-from-inbox, which destroyed mail (Deleted Items).
+    (3) 2026-06-12 (JM): archive() must be non-destructive again — mark read
+    via _clear_after_action, which VERIFIES the flag via GetMessage and only
+    falls back to DeleteMessage if mark-read doesn't stick.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "archive":
             func_source = ast.get_source_segment(source, node)
-            assert "_delete_after_action" in func_source, (
-                "archive() must call _delete_after_action to remove email from inbox"
+            assert "_clear_after_action" in func_source, (
+                "archive() must call _clear_after_action (mark-read, verified, "
+                "delete fallback) to clear the email from the unread queue"
             )
             return
     raise AssertionError("archive function not found")
@@ -192,19 +195,19 @@ def test_reply_archives_email():
     Bug: reply() sent the reply via Graph API but did not remove the email
     from the inbox. The email stayed visible even after responding.
 
-    Fix: reply() must call _delete_after_action after a successful ReplyToMessage
-    so the email leaves the inbox reliably.
+    Fix: reply() must call _clear_after_action after a successful ReplyToMessage
+    so the email leaves the unread queue reliably (mark-read, delete fallback).
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "reply":
             func_source = ast.get_source_segment(source, node)
-            assert "_delete_after_action" in func_source, (
-                "reply() must call _delete_after_action to archive the email after replying"
+            assert "_clear_after_action" in func_source, (
+                "reply() must call _clear_after_action to clear the email after replying"
             )
             assert "Thread" in func_source, (
-                "reply() must run _delete_after_action in a background thread "
+                "reply() must run _clear_after_action in a background thread "
                 "to avoid blocking the UI after sending"
             )
             return
@@ -216,15 +219,15 @@ def test_reply_all_archives_email():
     Bug: reply_all() sent the reply via Graph API but did not remove the
     email from the inbox (same issue as reply()).
 
-    Fix: reply_all() must call _delete_after_action after successful ReplyAllToMessage.
+    Fix: reply_all() must call _clear_after_action after successful ReplyAllToMessage.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "reply_all":
             func_source = ast.get_source_segment(source, node)
-            assert "_delete_after_action" in func_source, (
-                "reply_all() must call _delete_after_action to archive the email after replying"
+            assert "_clear_after_action" in func_source, (
+                "reply_all() must call _clear_after_action to clear the email after replying"
             )
             return
     raise AssertionError("reply_all function not found")
@@ -252,55 +255,61 @@ def test_fetch_checks_legacy_workiq_ids():
     raise AssertionError("fetch_outlook_items function not found")
 
 
-def test_delete_after_action_is_synchronous_with_retry():
+def test_clear_after_action_verifies_and_falls_back():
     """
-    Bug: reply/archive fired DeleteMessage in a daemon thread that silently
-    swallowed errors. If the delete failed (timeout, auth issue), the email
-    stayed in Outlook Focused Inbox even though ibx0 marked it processed.
-
-    Fix: _delete_after_action runs DeleteMessage synchronously with one retry
-    on failure, and warns the user if both attempts fail.
+    Contract for _clear_after_action (2026-06-12, JM):
+    1. Try mark-read via UpdateMessage (non-destructive, message stays in inbox).
+    2. VERIFY via GetMessage that isRead actually flipped — a past regression
+       had UpdateMessage silently ignoring isRead (emails reappeared forever).
+    3. Fall back to DeleteMessage (old behavior) with one retry if mark-read
+       doesn't stick, and warn the user if everything fails.
+    4. Runs synchronously (callers wrap it in a thread).
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_delete_after_action":
+        if isinstance(node, ast.FunctionDef) and node.name == "_clear_after_action":
             func_source = ast.get_source_segment(source, node)
+            assert "UpdateMessage" in func_source, (
+                "_clear_after_action must try mark-read via UpdateMessage first"
+            )
+            assert "GetMessage" in func_source and "isRead" in func_source, (
+                "_clear_after_action must VERIFY the isRead flag via GetMessage "
+                "(UpdateMessage has silently ignored isRead before)"
+            )
             assert "DeleteMessage" in func_source, (
-                "_delete_after_action must call DeleteMessage"
+                "_clear_after_action must fall back to DeleteMessage when "
+                "mark-read does not stick"
             )
             assert "Thread" not in func_source, (
-                "_delete_after_action must not use daemon threads — deletion must be synchronous"
+                "_clear_after_action must be synchronous — callers thread it"
             )
-            assert func_source.count("_mail_call") >= 2, (
-                "_delete_after_action must retry DeleteMessage on failure"
-            )
-            assert "could not delete" in func_source.lower(), (
-                "_delete_after_action must warn user if deletion fails after retry"
+            assert "could not clear" in func_source.lower(), (
+                "_clear_after_action must warn user if all attempts fail"
             )
             return
-    raise AssertionError("_delete_after_action function not found")
+    raise AssertionError("_clear_after_action function not found")
 
 
-def test_archive_uses_delete_after_action_in_thread():
+def test_archive_uses_clear_after_action_in_thread():
     """
-    Bug: archive() called _delete_after_action synchronously, blocking the UI
-    for up to 31 seconds (0.5s sleep + two 15s timeout retries) on every
-    archive action. The user sees the card freeze while Graph API times out.
+    Bug: a synchronous clear blocks the UI for up to ~45s (sleeps + multiple
+    15s timeouts) on every archive action — the card freezes while Graph
+    times out.
 
-    Fix: archive() must call _delete_after_action in a daemon thread so the
-    UI returns immediately. _delete_after_action still retries internally.
+    Fix: archive() must call _clear_after_action in a daemon thread so the
+    UI returns immediately. _clear_after_action retries internally.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "archive":
             func_source = ast.get_source_segment(source, node)
-            assert "_delete_after_action" in func_source, (
-                "archive() must use _delete_after_action for reliable deletion"
+            assert "_clear_after_action" in func_source, (
+                "archive() must use _clear_after_action to clear reliably"
             )
             assert "Thread" in func_source, (
-                "archive() must run _delete_after_action in a background thread "
+                "archive() must run _clear_after_action in a background thread "
                 "to avoid blocking the UI"
             )
             return
@@ -314,22 +323,22 @@ def test_fetch_retries_delete_for_processed_items():
     them (already processed) so they stayed in Outlook inbox forever —
     'ghost unreads' visible in Outlook but invisible in ibx0.
 
-    Fix: fetch_outlook_items must retry _delete_after_action for processed
-    items still appearing in the inbox, with a persisted deleted set to
-    avoid redundant delete calls.
+    Fix: fetch_outlook_items must retry _clear_after_action for processed
+    items still appearing in the unread query, with a persisted cleared set
+    to avoid redundant calls.
     """
     source = OUTLOOK_AGENCY_PY.read_text()
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "fetch_outlook_items":
             func_source = ast.get_source_segment(source, node)
-            assert "_delete_after_action" in func_source, (
-                "fetch_outlook_items must call _delete_after_action for processed items "
-                "still appearing in the inbox"
+            assert "_clear_after_action" in func_source, (
+                "fetch_outlook_items must call _clear_after_action for processed items "
+                "still appearing in the unread query"
             )
             assert "already_deleted" in func_source, (
-                "fetch_outlook_items must track deleted IDs to avoid "
-                "redundant delete calls"
+                "fetch_outlook_items must track cleared IDs to avoid "
+                "redundant calls"
             )
             return
     raise AssertionError("fetch_outlook_items function not found")

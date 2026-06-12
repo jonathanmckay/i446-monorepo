@@ -283,8 +283,9 @@ chmod +x "$DTD_DEFER"
 
 # --- Change-points script used by fzf ctrl-v binding ---
 # Prompts for a new [N] value (needs a tty, so the binding uses execute(), not
-# execute-silent), updates the task in Todoist, and patches $CACHE so the new
-# value shows on reload.
+# execute-silent), updates the task in Todoist, and patches the snapshot cache
+# ($DTD_CACHE_FILE) so the new value shows on reload. Todoist is the source of
+# truth; the live cache catches up on the next refresh.
 DTD_POINTS="/tmp/dtd-$$.points.sh"
 cat > "$DTD_POINTS" << POINTSEOF
 #!/bin/zsh
@@ -301,7 +302,7 @@ if [[ "\$clean" == *"…"* ]]; then
 fi
 printf "\nNew points for: %s\n[N]> " "\$clean" > /dev/tty
 read newpts < /dev/tty
-out=\$(python3 "\$POINTS_FAST" "\$query" "\$newpts" "\$CACHE" 2>/dev/null)
+out=\$(python3 "\$POINTS_FAST" "\$query" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ points update failed}" > "\$HDR"
 POINTSEOF
 chmod +x "$DTD_POINTS"
@@ -942,10 +943,12 @@ while true; do
 
   # Generate task list via reloadable script (supports colors + removal)
   # Pass done file path instead of JSON string to avoid quoting issues
-  # Every reload copies the live cache so external changes (/todo, other terminals) appear
-  DTD_SYNC="cp '$CACHE' '$DTD_CACHE_FILE' 2>/dev/null;"
+  # INVARIANT (see top of file): reloads read the FROZEN startup snapshot, never
+  # the live cache. This prevents tasks vanishing mid-session when an external
+  # process (morning routine, /todo, other terminals) rewrites the live cache
+  # after startup. Use ctrl-r to explicitly pull external changes.
   DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER'"
-  DTD_RELOAD="${DTD_SYNC}${DTD_LIST_CMD}"
+  DTD_RELOAD="${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
   # --bind change:first: with --no-sort, fzf does not snap the cursor back to

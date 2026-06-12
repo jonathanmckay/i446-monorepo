@@ -1,6 +1,6 @@
 ---
 name: "1-1n"
-description: "Generate the weekly -1₦ block-ritual heatmap: a day-by-block table showing which build-order ritual icons (☀️ prayer, 📧 inbox, 🎯 goal/points, ⏱️ time-log, ✓ task done) were hit in each 2-hour Earthly-Branch block. Pulls from Toggl, the Neon 0分 spreadsheet, and Todoist, then writes a report to vault/g245 and opens it. Usage: /1-1n [START END]"
+description: "Generate the weekly -1₦ block-ritual heatmap: a day-by-block table showing which build-order ritual icons (☀️ prayer, 📧 inbox, 🎯 goal set, ⏱️ time-log, ✓ task done) were hit in each 2-hour Earthly-Branch block. Pulls from Toggl, the build-order archives, and Todoist, then writes a report to vault/g245 and opens it. Usage: /1-1n [START END]"
 ---
 
 # -1₦ Block Ritual Heatmap (/1-1n)
@@ -36,7 +36,7 @@ Optionally append a short Commentary section (phase shifts, weakest rituals, wee
 |--------|--------|--------|
 | ☀️ | prayer (salah) | Toggl: الفاتحة / الشمس (project hcm) by start time |
 | 📧 | inbox processed | Toggl: description starts with `ibx` |
-| 🎯 | goal set / points (-1g) | Neon `0分` per-block columns G:O (卯..亥), nonzero |
+| 🎯 | goal set for block (-1g) | Build order `## -1₲` section: non-empty checkbox under the block header. Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from the live `build-order.md` |
 | ⏱️ | time logged | Toggl: `-1t` / `-1l` / `0t` / `0l` |
 | ✓ | task completed | Todoist completed tasks (`/api/v1/tasks/completed`) by completed_at |
 

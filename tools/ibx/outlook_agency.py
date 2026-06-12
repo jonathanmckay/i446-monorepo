@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 outlook_agency — Outlook emails via Agency MCP mail server.
-Full bidirectional: read inbox, reply, reply-all, archive, delete.
+Full bidirectional: read inbox, reply, reply-all, archive (= mark read,
+non-destructive), delete.
 Falls back to outlook_workiq if Agency MCP is unavailable.
 """
 
@@ -253,10 +254,10 @@ def fetch_outlook_items():
         item_id = f"outlook:{msg_id}"
 
         if item_id in processed:
-            # Retry delete for processed emails still in inbox
-            # (handles cases where _delete_after_action failed)
+            # Retry mark-read for processed emails still unread in inbox
+            # (handles cases where _clear_after_action failed)
             if msg_id not in already_deleted:
-                _delete_after_action(msg_id)
+                _clear_after_action(msg_id)
                 already_deleted.add(msg_id)
                 _save_deleted(already_deleted)
             continue
@@ -303,24 +304,59 @@ def fetch_outlook_items():
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 
-def _delete_after_action(graph_id):
-    """Delete email synchronously after reply/archive, with one retry on failure."""
+def _call_failed(result):
+    """Tool-level failure heuristic: errors come back as a bare
+    'CorrelationId: ..., TimeStamp: ...' body (isError is swallowed by
+    _mail_call), or None when the MCP call itself raised."""
+    return result is None or result.strip().startswith("CorrelationId:")
+
+
+def _clear_after_action(graph_id):
+    """Clear an email from the unread queue after done/reply.
+
+    Preferred path (JM 2026-06-12): mark read via UpdateMessage so the message
+    stays in the Outlook inbox instead of moving to Deleted Items. The fetch
+    filter is `isRead eq false`, so read mail never reappears in ibx. A true
+    Archive-folder move is impossible: the Agency mail MCP exposes no
+    MoveMessage/ArchiveMessage tool.
+
+    A past regression (see test_outlook_agency.py) found UpdateMessage
+    silently ignoring isRead, leaving mail unread and reappearing forever —
+    so the result is VERIFIED via GetMessage. If mark-read doesn't stick,
+    falls back to DeleteMessage (the pre-2026-06-12 behavior), synchronously
+    with one retry, so a handled email never reappears in the queue.
+    """
+    import re
     import time
     time.sleep(0.5)  # let Graph API settle after the action
+    for args in ({"id": graph_id, "isRead": True},
+                 {"id": graph_id, "message": {"isRead": True}}):
+        result = _mail_call("UpdateMessage", args, timeout=15)
+        if _call_failed(result):
+            continue
+        # Verify the flag actually flipped — UpdateMessage has silently
+        # ignored isRead before. Response may be double-encoded JSON, so
+        # allow escaped quotes.
+        check = _mail_call("GetMessage", {"id": graph_id}, timeout=15) or ""
+        if re.search(r'\\?"isRead\\?"\s*:\s*true', check):
+            return
+    # Mark-read unavailable or didn't stick — fall back to delete so the
+    # email doesn't reappear (old behavior).
     result = _mail_call("DeleteMessage", {"id": graph_id}, timeout=15)
-    if result is None:
+    if _call_failed(result):
         time.sleep(1)
         result = _mail_call("DeleteMessage", {"id": graph_id}, timeout=15)
-        if result is None:
-            console.print("[yellow]⚠ Could not delete email from inbox — may still appear in Outlook[/yellow]")
+        if _call_failed(result):
+            console.print("[yellow]⚠ Could not clear email from inbox — may still appear in Outlook[/yellow]")
 
 
 def archive(item_id, subject="", sender=""):
-    """Archive email — delete from inbox via Graph API so it won't reappear."""
+    """Done/archive — mark read in Outlook (stays in inbox, verified), falling
+    back to delete only if mark-read doesn't stick. Use delete() to remove."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
         threading.Thread(
-            target=lambda: _delete_after_action(graph_id),
+            target=lambda: _clear_after_action(graph_id),
             daemon=True,
         ).start()
     record_action(item_id, "archive")
@@ -340,7 +376,7 @@ def delete(item_id, subject="", sender=""):
 
 
 def reply(item_id, subject, sender, reply_text):
-    """Reply to email via Graph API, then archive it from the inbox."""
+    """Reply to email via Graph API, then mark it read (stays in inbox)."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
         result = _mail_call("ReplyToMessage", {
@@ -352,7 +388,7 @@ def reply(item_id, subject, sender, reply_text):
             console.print("[red]Reply failed[/red]")
             return
         threading.Thread(
-            target=lambda: _delete_after_action(graph_id),
+            target=lambda: _clear_after_action(graph_id),
             daemon=True,
         ).start()
     record_action(item_id, "reply")
@@ -360,7 +396,7 @@ def reply(item_id, subject, sender, reply_text):
 
 
 def reply_all(item_id, subject, sender, reply_text):
-    """Reply-all to email via Graph API, then archive it from the inbox."""
+    """Reply-all to email via Graph API, then mark it read (stays in inbox)."""
     graph_id = item_id.replace("outlook:", "", 1)
     if graph_id:
         result = _mail_call("ReplyAllToMessage", {
@@ -371,7 +407,7 @@ def reply_all(item_id, subject, sender, reply_text):
         if result is None:
             console.print("[red]Reply-all failed[/red]")
             return
-        _delete_after_action(graph_id)
+        _clear_after_action(graph_id)
     record_action(item_id, "reply_all")
     _mark_processed(item_id)
 
