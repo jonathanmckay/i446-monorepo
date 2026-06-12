@@ -50,6 +50,7 @@ GLOBAL_VER=$((GLOBAL_VER + 1))
 VERSION="v${GLOBAL_VER}"
 VERSION_SHORT="v${GLOBAL_VER}"
 RUN_DIR="$DREAM_RUNS/${DATE_DOT}${DRY_RUN}-${VERSION}"
+RUN_START_UTC=$(date -u '+%Y-%m-%dT%H:%M:%S')  # for the post-run Todoist mutation audit
 
 # --- Prevent double-launch (acquire lock BEFORE creating run dir) ---
 LOCK="/tmp/dream-launch.lock"
@@ -249,6 +250,21 @@ date '+%Y-%m-%d %H:%M:%S' > "$RUN_DIR/READY"
 # --- Generate morning context ---
 if [[ -f "$HOME/i446-monorepo/scripts/dream-morning-context.py" ]]; then
   python3 "$HOME/i446-monorepo/scripts/dream-morning-context.py" "$RUN_DIR" >> "$LOG" 2>&1 || true
+fi
+
+# --- Todoist mutation audit (tripwire; see dream-prompt-base.md → mutation budget) ---
+# Runs BEFORE the email so a budget-exceeded alert lands at the top of the
+# emailed brief. Non-fatal on error; exit 2 = cap exceeded (alert prepended).
+AUDIT_SCRIPT="$HOME/i446-monorepo/scripts/dream-audit-todoist.py"
+if [[ -f "$AUDIT_SCRIPT" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running Todoist mutation audit..." >> "$LOG"
+  python3 "$AUDIT_SCRIPT" --run-dir "$RUN_DIR" --since "$RUN_START_UTC" >> "$LOG" 2>&1
+  AUDIT_RC=$?
+  if [[ $AUDIT_RC -eq 2 ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ MUTATION BUDGET EXCEEDED — alert prepended to brief" >> "$LOG"
+  elif [[ $AUDIT_RC -ne 0 ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Audit errored (rc=$AUDIT_RC, non-fatal)" >> "$LOG"
+  fi
 fi
 
 # --- Email the morning brief ---
