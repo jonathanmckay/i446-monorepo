@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -57,11 +59,23 @@ import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 import outlook_client  # noqa: E402
 
+# dtd's Haiku title shortener, reused for long calendar event titles. Optional:
+# tg-tui must still boot if the did tooling (or lib/state_paths) is broken.
+try:
+    sys.path.insert(0, str(Path("~/i446-monorepo/tools/did").expanduser()))
+    import shorten as _dtd_shorten  # noqa: E402
+except Exception:
+    _dtd_shorten = None
+
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
 WIDTH_HINT = 50  # informs collapse logic, not strict
 DESC_MAX = 24  # max display width for task/event descriptions
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
+# Event titles wider than this get a Haiku short name. 33 = what fits beside
+# "◇ HH:MM " in a 41-col detail row, so a shortened title is never truncated.
+EVENT_SHORT_COLS = 33
+EVENT_SHORTS = Path("~/.cache/tg-tui/event-shortnames.json").expanduser()
 # Earthly branch blocks (name, start_hour, end_hour inclusive)
 BLOCKS = [
     ("卯", 4, 5),
@@ -288,8 +302,91 @@ def fetch_gcal(force=False):
         combined.sort(key=lambda e: e["start_dt"])
         STATE.events = combined
         STATE.last_gcal_fetch = time.monotonic()
+        _shorten_events(combined)
     except Exception as e:
         flash(f"gcal err: {e}")
+
+
+# ── Event title shortening (dtd's Haiku shortener, sidecar-cached) ──────────
+
+_event_shorts_lock = threading.Lock()
+_event_shorts_failed: set[str] = set()  # titles Haiku failed on; skip until restart
+
+
+def event_title(ev: dict) -> str:
+    """Display title: the Haiku short name when one exists, else the raw title."""
+    return ev.get("short") or ev.get("title") or ""
+
+
+def _load_event_shorts() -> dict:
+    try:
+        return json.loads(EVENT_SHORTS.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _shorten_events(events: list[dict]) -> None:
+    """Attach 'short' to events whose title is too wide for a detail row.
+
+    Cached names (sidecar JSON, keyed by title hash so recurring events hit
+    forever) apply synchronously; misses go to a daemon thread because each is
+    a Haiku round-trip — both fetch_gcal entry points (refresh ticker thread,
+    ctrl-r to_thread) must return without waiting on the network."""
+    if _dtd_shorten is None:
+        return
+    by_hash: dict[str, list[dict]] = {}
+    for ev in events:
+        title = ev.get("title") or ""
+        if dwidth(title) > EVENT_SHORT_COLS and title not in _event_shorts_failed:
+            h = hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
+            by_hash.setdefault(h, []).append(ev)
+    if not by_hash:
+        return
+    cache = _load_event_shorts()
+    misses = {}
+    for h, evs in by_hash.items():
+        if h in cache:
+            for ev in evs:
+                ev["short"] = cache[h]
+        else:
+            misses[h] = evs
+    if misses:
+        threading.Thread(
+            target=_fill_event_shorts, args=(misses,), daemon=True
+        ).start()
+
+
+def _fill_event_shorts(by_hash: dict[str, list[dict]], max_new: int = 6) -> None:
+    """Haiku-shorten up to max_new uncached titles, persist, repaint. The lock
+    serializes the sidecar read-modify-write across concurrent refreshes."""
+    with _event_shorts_lock:
+        cache = _load_event_shorts()
+        dirty = False
+        for h, evs in list(by_hash.items())[:max_new]:
+            title = evs[0].get("title") or ""
+            short = cache.get(h)
+            if short is None:
+                short = _dtd_shorten._haiku_shorten(title)
+                if short:
+                    cache[h] = short
+                    dirty = True
+                else:
+                    _event_shorts_failed.add(title)
+                    continue
+            for ev in evs:
+                ev["short"] = short
+        if dirty:
+            try:
+                EVENT_SHORTS.parent.mkdir(parents=True, exist_ok=True)
+                tmp = EVENT_SHORTS.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2))
+                tmp.replace(EVENT_SHORTS)
+            except OSError:
+                pass
+    try:
+        app.invalidate()
+    except Exception:
+        pass
 
 
 def fetch_points():
@@ -723,6 +820,29 @@ def _past_block_picks(blk_name, merged) -> list[dict]:
     return items
 
 
+def _block_sleep_item(blk_sh, blk_eh, cutoff) -> dict | None:
+    """Sleep spillover into a past block, as a synthetic pick.
+
+    The overnight 睡觉 entry starts at 00:00 (day-barrier split), which is
+    outside every block, so on a late wake-up the 6:00→wake stretch of 辰 (and
+    any fully-slept later block) would silently vanish. Clip the entry to the
+    block window so those blocks read 睡觉 instead. Wake time rides the time
+    column via the sleep end-time convention."""
+    blk_start = cutoff.replace(hour=blk_sh, minute=0, second=0, microsecond=0)
+    blk_end = blk_start + dt.timedelta(hours=blk_eh + 1 - blk_sh)
+    for e in STATE.entries:
+        if (e["desc"] or "").strip() != "睡觉":
+            continue
+        if e["start_dt"] < blk_start < e["end_dt"]:
+            end = min(e["end_dt"], blk_end, cutoff)
+            mins = int((end - blk_start).total_seconds() // 60)
+            if mins >= 1:
+                return {"start_dt": blk_start, "time_str": f"{end:%H:%M}",
+                        "label": "睡觉", "style": project_style(e["project_id"]),
+                        "dur_min": mins}
+    return None
+
+
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
     """Untracked stretches >= GAP_MIN minutes inside a past block's window,
     chronological. Sweeps raw STATE.entries (not the merged display spans,
@@ -769,7 +889,7 @@ def _future_block_picks(blk_name, events) -> list[dict]:
         items.append({
             "start_dt": ev["start_dt"],
             "time_str": f"{ev['start_dt']:%H:%M}",
-            "label": ev["title"],
+            "label": event_title(ev),
             "style": project_style(gcal_project_code(ev)),
             "dur_min": mins,
         })
@@ -844,6 +964,11 @@ def render_morning() -> list[tuple[str, str]]:
             out += _mao_line(bo_emojis.get(blk_name, ""))
             continue
         picks = _past_block_picks(blk_name, merged)
+        sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
+        if sleep:
+            # Spillover sleep starts at the block boundary, so it is always
+            # chronologically first — it takes the header slot.
+            picks = ([sleep] + picks)[:4]
         gaps = _block_gaps(blk_sh, blk_eh, cutoff)
         full_block = (blk_eh + 1 - blk_sh) * 60
         if picks and gaps:
@@ -975,7 +1100,10 @@ def render_detail() -> list[tuple[str, str]]:
             else:
                 toggl_shown.add(label)
 
-        space = min(DESC_MAX, max(1, WIDTH_HINT - len(time_str) - 4))
+        # gcal rows carry "◇ HH:MM title" — give them the full row width so a
+        # Haiku-shortened title is never re-truncated; toggl rows keep DESC_MAX.
+        full = max(1, WIDTH_HINT - len(time_str) - 4)
+        space = full if label.startswith("◇ ") else min(DESC_MAX, full)
         content = f" {marker} {truncate(label or '·', space)}\n"
         if slot_end <= now:
             cls = project_style(pid) or "class:past"
@@ -1024,11 +1152,14 @@ def _slot_label_gcal(slot_s, slot_e):
     if not overlapping:
         return "", ""
     if len(overlapping) == 1:
-        sty = project_style(gcal_project_code(overlapping[0]))
-        return f"◇ {overlapping[0]['title']}", sty
+        ev = overlapping[0]
+        sty = project_style(gcal_project_code(ev))
+        # Exact start time: slots are 15-min, so a 09:05 start would otherwise
+        # read as 09:00 off the time column.
+        return f"◇ {ev['start_dt']:%H:%M} {event_title(ev)}", sty
     dominant = max(overlapping, key=lambda ev: (min(ev["end_dt"], slot_e) - max(ev["start_dt"], slot_s)).total_seconds())
     sty = project_style(gcal_project_code(dominant))
-    titles = ", ".join(ev["title"] for ev in overlapping)
+    titles = ", ".join(event_title(ev) for ev in overlapping)
     return f"◇ {len(overlapping)}× {titles}", sty
 
 
