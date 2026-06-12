@@ -18,6 +18,13 @@ import CoreMedia
 
 func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
 
+// Signal sources must live at global scope: when they were locals inside the
+// startup Task, they were deallocated after it finished, so a long-running
+// capture ignored SIGINT/SIGTERM and had to be SIGKILLed (losing the WAV
+// header finalize — regression 2026-06-12, Blizz ideation session).
+var gSignalSources: [DispatchSourceSignal] = []
+var gStatTimer: DispatchSourceTimer? = nil
+
 // ---- args ----
 var outPath: String? = nil
 var bundleSubstr = "com.microsoft.teams"
@@ -126,24 +133,25 @@ Task {
                 exit(0)
             }
         }
-        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigint.setEventHandler(handler: stop); sigint.resume()
-        let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        sigterm.setEventHandler(handler: stop); sigterm.resume()
+        for sig in [SIGINT, SIGTERM] {
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler(handler: stop)
+            src.resume()
+            gSignalSources.append(src)  // global: must outlive this Task
+        }
 
-        // liveness stats every 5s
+        // liveness stats every 5s (global ref for the same reason)
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler {
             log(String(format: "stat: frames=%lld rms=%.6f peak=%.6f", rec.frames, rec.lastRMS, rec.lastPeak))
         }
         timer.resume()
+        gStatTimer = timer
 
         if maxSeconds > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + maxSeconds) { stop() }
         }
-        // keep timer/signal sources alive
-        withExtendedLifetime((sigint, sigterm, timer)) {}
     } catch {
         log("fatal: \(error)")
         exit(70)
