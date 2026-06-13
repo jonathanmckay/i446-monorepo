@@ -79,8 +79,20 @@ def test_block_gaps_spillover_coverage_clips_at_boundary():
     assert gaps[0]["time_str"] == "09:15" and gaps[0]["dur_min"] == 30
 
 
-def test_gap_row_renders_red_minutes_on_own_line():
+def test_gap_alarm_on_toggles_each_half_second():
+    """The flash toggle flips every 0.5s and repeats every 1s, so past gaps
+    visibly pulse under the 0.1s repaint."""
     mod = _load_tui()
+    from datetime import datetime, timezone
+    on0 = mod._gap_alarm_on(datetime.fromtimestamp(0.0, timezone.utc))
+    off = mod._gap_alarm_on(datetime.fromtimestamp(0.5, timezone.utc))
+    on1 = mod._gap_alarm_on(datetime.fromtimestamp(1.0, timezone.utc))
+    assert on0 is True and off is False and on1 is True
+
+
+def test_gap_row_renders_red_minutes_on_own_line(monkeypatch):
+    mod = _load_tui()
+    monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: False)  # off phase
     today = _midnight()
     gap = {"start_dt": today.replace(hour=8, minute=40), "time_str": "08:40",
            "label": "", "style": "", "dur_min": 30, "is_gap": True}
@@ -90,8 +102,60 @@ def test_gap_row_renders_red_minutes_on_own_line():
     text = "".join(t for _, t in frags)
     assert text.count("\n") == 4, "block must stay exactly 4 lines"
     red = [t for s, t in frags if "no_entry" in s]
-    assert any("30" in t for t in red), "gap minutes must use the red alarm style"
+    assert any("30" in t for t in red), "gap minutes stay solid red"
+    # Off phase: the ┄ fill is muted grey (idle), not red.
     assert any("┄" in t for s, t in frags if "idle" in s)
+
+
+def test_gap_row_fill_pulses_red_when_alarm_on(monkeypatch):
+    mod = _load_tui()
+    monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)  # on phase
+    today = _midnight()
+    gap = {"start_dt": today.replace(hour=8, minute=40), "time_str": "08:40",
+           "label": "", "style": "", "dur_min": 30, "is_gap": True}
+    frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
+    # On phase: the ┄ fill reddens (no_entry), and no idle ┄ remains.
+    assert any("┄" in t for s, t in frags if "no_entry" in s)
+    assert not any("┄" in t for s, t in frags if "idle" in s)
+
+
+def test_detail_band_empty_past_slot_flashes_red(monkeypatch):
+    """In the detail band, a fully-past 15-min slot with no toggl entry pulses
+    a red ┄ fill (each slot is 15m > 5m of untracked time)."""
+    mod = _load_tui()
+    monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)  # on phase
+    today = _midnight()
+    # Window entirely before real 'now' → every slot is a fully-past slot.
+    monkeypatch.setattr(mod, "detail_window",
+                        lambda: (today.replace(hour=4), today.replace(hour=6)))
+    mod.STATE.current = None
+    mod.STATE.current_known = True
+    mod.STATE.events = []
+    mod.STATE.block_points = {}
+    mod.STATE.scroll_min = 0
+    mod.STATE.entries = []  # no toggl entries → every past slot is empty
+    frags = mod.render_detail()
+    flashing = [t for s, t in frags if s == "class:no_entry" and "┄" in t]
+    assert flashing, "empty past slots must render a flashing red ┄ fill"
+
+
+def test_detail_band_empty_past_slot_muted_when_alarm_off(monkeypatch):
+    """Off phase: the same slot renders muted grey, not red — proving it pulses
+    rather than sitting permanently red."""
+    mod = _load_tui()
+    monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: False)
+    today = _midnight()
+    monkeypatch.setattr(mod, "detail_window",
+                        lambda: (today.replace(hour=4), today.replace(hour=6)))
+    mod.STATE.current = None
+    mod.STATE.current_known = True
+    mod.STATE.events = []
+    mod.STATE.block_points = {}
+    mod.STATE.scroll_min = 0
+    mod.STATE.entries = []
+    frags = mod.render_detail()
+    assert not any(s == "class:no_entry" and "┄" in t for s, t in frags)
+    assert any(s == "class:idle" and "┄" in t for s, t in frags)
 
 
 def test_gap_never_rides_the_header_rule():

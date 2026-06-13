@@ -754,6 +754,14 @@ def _read_block_emojis() -> dict[str, str]:
     return result
 
 
+def _gap_alarm_on(now: dt.datetime | None = None) -> bool:
+    """Half-second on/off toggle for the past-untracked-time alarm. Animated by
+    the app's 0.1s refresh_interval — same cadence as the NO TIME ENTRY cursor.
+    Past empty stretches pulse red↔grey on this so untracked time nags."""
+    t = (now or dt.datetime.now(TZ)).timestamp()
+    return int(t * 2) % 2 == 0
+
+
 def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> list[tuple[str, str]]:
     """Render one non-focus block as exactly 4 lines (header + 3 body).
 
@@ -804,8 +812,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> lis
         space = max(1, WIDTH_HINT - 8 - len(dur) - 1)
         out.append(("class:time", f"  {p['time_str']} "))
         if p.get("is_gap"):
-            # Untracked stretch: faint gridline fill, minutes in alarm red.
-            out.append(("class:idle", "┄" * space))
+            # Untracked past stretch (≥ GAP_MIN): the ┄ fill pulses red↔grey
+            # ~every 0.5s to nag; the minutes stay solid red and readable.
+            fill_cls = "class:no_entry" if _gap_alarm_on() else "class:idle"
+            out.append((fill_cls, "┄" * space))
             out.append(("class:no_entry", f" {dur}\n"))
         else:
             out.append((p["style"], pad(truncate(p["label"], space), space)))
@@ -1171,6 +1181,16 @@ def render_detail() -> list[tuple[str, str]]:
                 label = "″"
             else:
                 toggl_shown.add(label)
+
+        # Empty PAST slot = untracked time today (each slot is 15m > 5m): pulse
+        # the row red↔grey to nag, matching the compact-block gap rows.
+        if slot_end <= now and not label:
+            fill_cls = "class:no_entry" if _gap_alarm_on(now) else "class:idle"
+            fill = "┄" * max(1, WIDTH_HINT - len(time_str) - 4)
+            out.append(("class:time", f" {time_str}"))
+            out.append((fill_cls, f" {marker} {fill}\n"))
+            slot = slot_end
+            continue
 
         # gcal rows carry "◇ HH:MM title" — give them the full row width so a
         # Haiku-shortened title is never re-truncated; toggl rows keep DESC_MAX.
