@@ -62,7 +62,7 @@ total_tracked: 14h 23m
 
 ## Output 2: Google Calendar Archive
 
-Create events on the primary calendar (m5c7 account) for each Toggl entry.
+Create events on the **jbm** archive calendar — `calendarId: jonathan.b.mckay@gmail.com` — for each Toggl entry. This is the past-time archive; keep it off the m5x2 Cal (m5c7 primary, which is RE-only). The m5c7 account has owner access to the jbm calendar, so pass the calendarId explicitly.
 - Summary: `{description} @{project}` (e.g. `soccer @xk87`)
 - One event per Toggl entry, matching original start/end times
 - Set `transparency: transparent` (don't block calendar as busy)
@@ -144,8 +144,8 @@ This runs after Output 3 so the archive includes the actuals.
 
 ## Notes
 
-- On Straylight, Outlook MCP calls go through the local Agency MCP (not Ix)
-- Google Calendar uses account "m5c7" (primary calendar). Switch to "jbm" (jonathan.b.mckay@gmail.com) once that account is connected.
+- **Runs nightly on Ix** via cron at 02:00 PT (`~/bin/run_0r_archive.sh` → `claude -p`). Ix has no Agency MCP, so skip the Outlook source there; Outlook is captured via the m5c7 "MSFT (Slow Sync)" calendar in the all-calendars read. On Straylight (manual runs), Outlook MCP calls go through the local Agency MCP.
+- Google Calendar is the "m5c7"-authed account (its primary is the m5x2 Cal). The archive (Output 2) writes to **jbm = `jonathan.b.mckay@gmail.com`**, which the m5c7 account owns — pass that calendarId explicitly; never write the archive to primary.
 - Toggl CLI works locally on both machines
 - Create `~/vault/i156/daily/YYYY/` directory if it doesn't exist
 - Build order is a single living document; actuals are written for the current day's -1₲a blocks
