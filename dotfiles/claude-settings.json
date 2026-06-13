@@ -140,6 +140,5 @@
   "forceLoginMethod": "console",
   "companyAnnouncements": [
     "Claude Code on Windows can now run PowerShell natively. No more wrapping commands through git bash — Claude writes and executes PowerShell directly, with proper syntax and fewer escaping headaches. See https://code.claude.com/docs/en/tools-reference#powershell-tool to enable this."
-  ],
-  "model": "claude-fable-5[1m]"
+  ]
 }
