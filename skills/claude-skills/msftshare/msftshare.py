@@ -91,6 +91,11 @@ def assemble(fm_lines, body):
 
 # --- resolution -----------------------------------------------------------
 
+def _norm(s: str) -> str:
+    """Lowercase, collapse separators (space/hyphen/underscore) to single space."""
+    return re.sub(r"[-_\s]+", " ", s.strip().lower())
+
+
 def resolve_doc(arg: str) -> Path:
     # explicit path forms first
     cands = []
@@ -104,27 +109,36 @@ def resolve_doc(arg: str) -> Path:
             return c
         except ValueError:
             die(f"{c} is not inside the vault ({VAULT})")
-    # bare-name search (exact stem, then unique substring) — never auto-pick
+    # bare-name search — never auto-pick. Tiers, narrowest first; a tier with
+    # exactly one hit wins, >1 lists candidates and stops, 0 falls through.
+    # Separators (space/hyphen/underscore) are normalized so a loose reference
+    # like "calendar preferences" matches "calendar-rules-and-preferences".
     target = arg[:-3] if arg.endswith(".md") else arg
-    exact, substr = [], []
+    nq = _norm(target)
+    nq_tokens = set(nq.split())
+    # exact = case-insensitive stem OR normalized-exact (unambiguous intent).
+    # fuzzy = normalized-substring OR all-query-tokens-present, POOLED so that
+    # ambiguity across match types is surfaced — never tier-priority auto-pick
+    # (e.g. "calendar preferences" must list both the 2023 doc and the current
+    # one, not silently grab whichever a narrower tier hits first).
+    exact, fuzzy = [], []
     for root, dirs, files in os.walk(VAULT):
         dirs[:] = [d for d in dirs if d not in PRUNE and not d.startswith(".")]
         for f in files:
             if not f.endswith(".md"):
                 continue
             stem = f[:-3]
-            if stem.lower() == target.lower():
-                exact.append(Path(root) / f)
-            elif target.lower() in stem.lower():
-                substr.append(Path(root) / f)
-    if len(exact) == 1:
-        return exact[0].resolve()
-    if len(exact) > 1:
-        _list_and_die(arg, exact)
-    if len(substr) == 1:
-        return substr[0].resolve()
-    if len(substr) > 1:
-        _list_and_die(arg, substr)
+            ns = _norm(stem)
+            p = Path(root) / f
+            if stem.lower() == target.lower() or ns == nq:
+                exact.append(p)
+            elif nq in ns or (nq_tokens and nq_tokens <= set(ns.split())):
+                fuzzy.append(p)
+    for tier in (exact, fuzzy):
+        if len(tier) == 1:
+            return tier[0].resolve()
+        if len(tier) > 1:
+            _list_and_die(arg, tier)
     die(f"no vault markdown doc matches '{arg}'")
 
 
