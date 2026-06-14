@@ -1,35 +1,50 @@
 ---
 name: "picturebook"
-description: "Generate an illustrated Chinese picture book for Theo: constrain to a vocabulary size, pick a subject and length, write the story, generate one OpenAI image per sentence, assemble it in Obsidian, and export a page-through PDF. Usage: /picturebook <vocab_count>, <subject>, <length> [low|medium|high]"
+description: "Generate an illustrated first-reader picture book for the McKay kids — Chinese for Theo or English phonics for Ren — write the story to a bounded vocabulary, generate one OpenAI image per page, assemble it in Obsidian, export a page-through PDF, and log it to the reader tracker. Usage: /picturebook <vocab_count>, <subject>, <length> [low|medium|high] [for Ren|for Theo]"
 user-invocable: true
 ---
 
 # Picture Book Generator (/picturebook)
 
-Create a Chinese first-reader for Theo: a short story written to a **bounded
-vocabulary**, with **one illustration per sentence**, assembled as an Obsidian
-doc he can read aloud. Images come from the OpenAI Images API.
+Create a first-reader for a McKay kid: a short story written to a **bounded
+vocabulary**, with **one illustration per page**, assembled as an Obsidian doc to
+read aloud, exported to PDF, and logged to a cumulative reader tracker. Images
+come from the OpenAI Images API.
 
 Companion to the agency/curriculum work in `xk23 学习 McKay Curriculum/`.
+
+## Two modes
+
+| | **Theo (default)** | **Ren** |
+|---|---|---|
+| Language | Simplified **Chinese** | **English phonics** |
+| Protagonist | **波波 = Lemmee**, the YooHoo ring-tailed lemur (silver-grey fur, white face, big green eyes, black-and-white ringed tail) | **Bobo = YooHoo** the bushbaby (white/grey fur, big blue eyes, **rainbow-striped tail**) |
+| Level | ~150 distinct characters (see envelope) | **Bob Books**: CVC words + a few pre-primer sight words; rhyming families (-un, -op, -at) |
+| Tracker / spine | `中文 reader tracker.md` | `English reader tracker (Ren).md` |
+| Folder | `Theo PK3 Curriculum →08 2025/<slug>/` | `Ren PK2 Curriculum →09 2025/<slug>/` |
+
+Pick the mode from the request ("for Ren" → English/Bobo; default → Chinese/Theo).
+The two Bobos are **different characters** — never mix the lemur and the bushbaby.
 
 ## Usage
 
 ```
-/picturebook <vocab_count>, <subject>, <length> [quality]
+/picturebook <vocab_count>, <subject>, <length> [quality] [for Ren|for Theo]
 ```
 
-- **vocab_count** — approximate number of distinct Chinese characters Theo knows
-  (the story must stay at or under this, reusing characters heavily). e.g. `120`.
-- **subject** — what the story is about. e.g. `X-Wings`, `a panda`, `going to the beach`.
-- **length** — number of sentences = number of pages/pictures. e.g. `14`.
+- **vocab_count** — Theo: approx distinct Chinese characters (stay ≤ this). Ren:
+  treat as a rough difficulty hint; the real constraint is "Bob Books level."
+- **subject** — what the story is about. e.g. `X-Wings`, `going to the moon`.
+- **length** — number of pages (= pictures). Theo: ~1–1.5 sentences/page. Ren:
+  one short sentence per page.
 - **quality** (optional) — `low` | `medium` (default) | `high`. Per-image price
-  1024×1024: low $0.011, medium $0.042, high $0.167. Tell the user the estimate
+  1024×1024: low $0.011, medium $0.042, high $0.167. State the estimate
   (`length × per-image`) before generating.
 
 Examples:
 ```
-/picturebook 120, X-Wings, 14
-/picturebook 80, a little panda who is lost, 10 low
+/picturebook 150, going to the moon, 30
+/picturebook 150, Bob Books CVC story with Vader, 10 for Ren
 /picturebook 200, 去海边, 16 high
 ```
 
@@ -88,6 +103,14 @@ are integers; if not, ask the user to reformat.
 - After drafting, **list the unique characters used and the count**, and confirm
   it is within `vocab_count` (excluding the glossary words, which are tracked
   separately).
+
+**Ren mode (English phonics):** instead of the above, write `length` very short
+sentences (3–6 words, one per page) at **Bob Books level**. Read
+`English reader tracker (Ren).md` first and keep words within its **Known-word
+spine** (Bob Books Set 1 corpus), adding only a few deliberate new words — ideally
+from the *next* CVC family she's working on (-un, -op, -et, etc.). No digraphs,
+blends, or CVCe yet. Non-decodable names (Bobo, Vader) go in a "Tricky words"
+glossary. After drafting, list the words used and flag any beyond the spine.
 
 ### 4. Create the book folder + markdown
 - Slug = ASCII-safe short name (e.g. `bobo-xwing`); title may be Chinese.
@@ -168,8 +191,13 @@ paths to the `.md` and `.pdf`, and total cost (`length × per-image price`).
 ## Notes / conventions
 - **Cost reporting:** tokens/images × sticker price, not wall-clock. State the
   dollar estimate up front and the actual at the end.
-- **No text in illustrations:** the Chinese lives in the markdown; always include
-  "no text, no letters" in the style-lock to avoid garbled characters in the art.
+- **No text in illustrations:** the story text lives in the markdown; always
+  include "no text, no letters" in the style-lock to avoid garbled characters.
+- **Trademark safety filter:** OpenAI rejects trademarked names (Darth Vader,
+  YooHoo, etc.) in *image* prompts. Keep such names in the *reading text* and the
+  glossary, but describe the *art generically* — e.g. "a friendly black-helmet
+  space knight", "a cartoon bushbaby with a rainbow tail". (Our characters are
+  framed as original look-alikes for this reason.)
 - **Consistency caveat:** gpt-image-1 keeps characters roughly (not pixel-)
   consistent across calls. The verbatim character description is the main lever;
   `high` quality helps a little. Offer to regenerate any off-model page.
