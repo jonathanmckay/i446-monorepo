@@ -126,6 +126,7 @@ def check_neon_column(col_name):
 PRAYER_MARKER = "☀️"
 INBOX_MARKER = "📧"
 TIME_MARKER = "⏰"
+GOAL_MARKER = "🎯"
 
 
 def _block_name_from_header(line: str) -> str:
@@ -443,6 +444,15 @@ def write_block_goals(block_name: str, goals: list[str]) -> bool:
         if lines[k].startswith("    ") and not re.match(r"^    - \[[ xX]\]", lines[k])
     ]
     new_block = [f"    - [ ] {g}" for g in goals] + preserved_other
+
+    # Stamp 🎯 on the block header the moment real goals are entered, so the
+    # goals-set marker shows up immediately rather than waiting for the
+    # block-boundary daemon (which only fires after the block ends). Idempotent;
+    # only when at least one goal has non-empty text. The daemon re-validates
+    # against live goal state at scoring time, so an early marker can't award
+    # phantom points if the goals are later cleared.
+    if any(g.strip() for g in goals) and GOAL_MARKER not in lines[target_idx]:
+        lines[target_idx] = lines[target_idx].rstrip() + f" {GOAL_MARKER}"
 
     new_lines = lines[: target_idx + 1] + new_block + lines[block_end:]
     BUILD_ORDER.write_text("\n".join(new_lines))

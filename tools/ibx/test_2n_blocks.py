@@ -146,6 +146,39 @@ def test_write_block_goals_replaces_existing_checkboxes(tmp_path):
         assert "    - [ ] new goal" in out
 
 
+def test_write_block_goals_stamps_goal_marker(tmp_path):
+    """Regression: setting goals via /inbound or the 卯 wakeup flow must stamp
+    🎯 on the block header immediately. Previously only the manual /-1g skill
+    and the block-boundary daemon wrote 🎯, so goals set via the card path
+    showed no marker until the block ended (or never, for the active block)."""
+    m = _load_two_n()
+    fake_bo = tmp_path / "build-order.md"
+    fake_bo.write_text("## -1₲\n\n- 卯\n- 辰\n- 巳\n\n## next\n")
+    with patch.object(m, "BUILD_ORDER", fake_bo):
+        m.write_block_goals("辰", ["draft the memo"])
+        out = fake_bo.read_text()
+    chen = [l for l in out.split("\n") if l.startswith("- 辰")][0]
+    assert "🎯" in chen, f"🎯 must be stamped on the block header, got: {chen!r}"
+    # Other blocks untouched
+    assert "🎯" not in [l for l in out.split("\n") if l.startswith("- 卯")][0]
+
+
+def test_write_block_goals_marker_idempotent_and_skips_empty(tmp_path):
+    """🎯 stamp must not double-apply, and empty goals must not earn a marker."""
+    m = _load_two_n()
+    fake_bo = tmp_path / "build-order.md"
+    fake_bo.write_text("## -1₲\n\n- 申 🎯\n- 酉\n")
+    with patch.object(m, "BUILD_ORDER", fake_bo):
+        m.write_block_goals("申", ["real goal"])
+        chen = [l for l in fake_bo.read_text().split("\n") if l.startswith("- 申")][0]
+        assert chen.count("🎯") == 1, f"must not double-stamp 🎯: {chen!r}"
+        # Empty goal text → no marker
+        fake_bo.write_text("## -1₲\n\n- 午\n- 未\n")
+        m.write_block_goals("午", ["   "])
+        chen = [l for l in fake_bo.read_text().split("\n") if l.startswith("- 午")][0]
+        assert "🎯" not in chen, f"empty goal must not stamp 🎯: {chen!r}"
+
+
 def test_run_1g_card_writes_locally_before_subprocess(tmp_path):
     """Card 2 must commit goals to the build order via Python BEFORE spawning
     the claude subprocess, so goals are durable even if claude is slow, fails,
