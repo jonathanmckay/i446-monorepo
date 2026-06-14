@@ -26,21 +26,25 @@ def env():
             k, v = ln.split("=", 1); e[k.strip()] = v.strip()
     return e
 E = env()
-BASE = E.get("APPFOLIO_BASE_URL", "https://mckay.appfolio.com").rstrip("/")
-if "@" in BASE:  # creds-in-url form → strip, use basic auth header instead
-    BASE = "https://" + BASE.split("@", 1)[1]
-AUTH = base64.b64encode(f"{E['APPFOLIO_CLIENT_ID']}:{E['APPFOLIO_CLIENT_SECRET']}".encode()).decode()
+VHOST = E.get("APPFOLIO_VHOST", "mckay")
+BASE = f"https://{VHOST}.appfolio.com"
+AUTH = base64.b64encode(
+    f"{E['APPFOLIO_USERNAME']}:{E['APPFOLIO_PASSWORD']}".encode()).decode()
 
-def report(name, params, ver="v1"):
-    """GET an AppFolio report, following next_page pagination. Returns all rows."""
-    url = f"{BASE}/api/{ver}/reports/{name}.json?" + urllib.parse.urlencode(
-        {**params, "paginate_results": "true"})
+def report(name, body):
+    """AppFolio reports are v2 POST with a JSON body; follow next_page if present."""
+    url = f"{BASE}/api/v2/reports/{name}.json"
+    data = json.dumps({"unit_visibility": "active", **body}).encode()
+    hdr = {"Authorization": f"Basic {AUTH}", "Content-Type": "application/json"}
     rows = []
     while url:
-        req = urllib.request.Request(url, headers={"Authorization": f"Basic {AUTH}"})
+        if data is not None:   # first call = POST with body
+            req = urllib.request.Request(url, data=data, method="POST", headers=hdr)
+        else:                  # subsequent next_page links are GETs
+            req = urllib.request.Request(url, headers={"Authorization": f"Basic {AUTH}"})
         d = json.load(urllib.request.urlopen(req, timeout=120))
         rows += d.get("results", [])
-        url = d.get("next_page_url") or d.get("next_page")
+        url = d.get("next_page_url") or d.get("next_page"); data = None
     return rows
 
 def n(x):
@@ -70,24 +74,42 @@ def upsert_history(snaps):
     path.write_text(json.dumps(hist, indent=2))
     return len(hist)
 
+def daterange(start, end, step):
+    d = start
+    while d <= end:
+        yield d; d += dt.timedelta(days=step)
+
 def main():
     today = dt.date.today()
-    snaps = [snapshot(today)]
-    if "--backfill" in sys.argv:
-        days = int(sys.argv[sys.argv.index("--backfill") + 1])
-        d = today - dt.timedelta(days=7)
-        while d > today - dt.timedelta(days=days + 1):
-            snaps.append(snapshot(d)); d -= dt.timedelta(days=14)
+    path = DATA / "occupancy-history.json"
+    have = {h["date"] for h in (json.loads(path.read_text()) if path.exists() else [])}
+    want = {today}
+    if "--daily" in sys.argv:                 # daily back N days (the 90-day view)
+        nd = int(sys.argv[sys.argv.index("--daily") + 1])
+        want |= set(daterange(today - dt.timedelta(days=nd), today, 1))
+    if "--weekly-since" in sys.argv:          # weekly back to a date (long-term view)
+        since = dt.date.fromisoformat(sys.argv[sys.argv.index("--weekly-since") + 1])
+        want |= set(daterange(since, today, 7))
+    if "--resume" in sys.argv:                # skip dates already captured
+        want -= have
+    targets = sorted(want)
+    snaps = []
+    for i, d in enumerate(targets):
+        try:
+            snaps.append(snapshot(d))
+        except Exception as e:
+            print(f"  {d}: ERR {e}")
+        if i and i % 20 == 0:
+            upsert_history(snaps); print(f"  ...{i+1}/{len(targets)} ({d})")
     total = upsert_history(snaps)
-    # vacancy detail
+    # current vacancy detail (unit-level move dates) — report id is 'unit_vacancy'
     keep = ["property_name", "unit", "unit_status", "last_move_in", "last_move_out",
             "next_move_in", "available_on", "days_vacant", "schd_rent",
             "advertised_rent", "rent_ready"]
-    vac = report("unit_vacancy_detail", {})
+    vac = report("unit_vacancy", {})
     (DATA / "vacancy.json").write_text(
         json.dumps([{k: r.get(k) for k in keep} for r in vac], indent=2))
-    print(f"history now {total} snapshots; today occ%={snaps[0]['occ']/snaps[0]['units']*100:.1f}; "
-          f"vacancy units {len(vac)}")
+    print(f"history now {total} snapshots; pulled {len(snaps)}; vacancy units {len(vac)}")
 
 if __name__ == "__main__":
     main()
