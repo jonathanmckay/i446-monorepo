@@ -68,6 +68,7 @@ Create events on the **jbm** archive calendar — `calendarId: jonathan.b.mckay@
 - Set `transparency: transparent` (don't block calendar as busy)
 - Skip 睡觉 entries
 - Use `create-events` bulk API with `sendUpdates: none`
+- **Carry full Toggl metadata** in `extendedProperties.private` so the calendar is a complete record independent of Toggl: `toggl_id`, `project`, `project_id`, `tags` (comma-joined tag names), `dur` (seconds), `src: "0r"`. Tags and project here are the standalone-record signal — without them the archive loses the `-1/-2/-3` magnitude tags. (The historical backfill uses `src: "0r-backfill"` and the same keys; `~/bin/backfill_jbm_archive.py` is the reference.)
 
 ## Output 3: Build Order Actuals
 
