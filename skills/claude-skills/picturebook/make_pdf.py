@@ -69,7 +69,8 @@ def title_page(book):
     gloss = book.get("glossary") or []
     if gloss:
         y += 90
-        y = text_block(d, MARGIN, y, "生词 — read these together first",
+        y = text_block(d, MARGIN, y,
+                       book.get("glossary_title", "生词 — read these together first"),
                        font(48), W - 2 * MARGIN, fill=(180, 90, 40))
         y += 24
         f = font(52)
