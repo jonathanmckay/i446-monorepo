@@ -977,6 +977,26 @@ def _block_gcal_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     return out
 
 
+def _block_sleep_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
+    """Half-hour marks of a past block covered by an overnight 睡觉 entry → style.
+
+    The sleep counterpart to _block_gcal_cont. _block_sleep_item only fills the
+    header row, so a late wake-up sleeping clean through a block (e.g. 辰) left
+    the rows below it blank. Marking the covered half-hours lets the compact
+    renderer draw the ◇ │ continuation after the spillover header, so the block
+    reads as 'still asleep' rather than empty."""
+    out: dict[tuple[int, int], str] = {}
+    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+        t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        for e in STATE.entries:
+            if (e["desc"] or "").strip() != "睡觉":
+                continue
+            if e["start_dt"] <= t < e["end_dt"]:
+                out[(hh, mm)] = project_style(e["project_id"])
+                break
+    return out
+
+
 def _mao_line(emojis) -> list[tuple[str, str]]:
     """卯 layout exception: one line instead of the standard four.
 
@@ -1067,7 +1087,9 @@ def render_morning() -> list[tuple[str, str]]:
             picks = gaps
         # Past blocks keep drawing a long meeting's ◇ │ continuation through
         # the event's end; entries and red gap rows still take the rows first.
-        cont = _block_gcal_cont(blk_sh, cutoff)
+        # Overnight sleep flowing through a block (e.g. 辰) draws the same
+        # continuation under its spillover header. gcal wins on any overlap.
+        cont = {**_block_sleep_cont(blk_sh, cutoff), **_block_gcal_cont(blk_sh, cutoff)}
         out += _compact_block_lines(blk_name, blk_sh, picks, pts,
                                     bo_emojis.get(blk_name, ""), cont=cont)
     return out

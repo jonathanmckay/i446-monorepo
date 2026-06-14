@@ -69,6 +69,43 @@ def test_non_sleep_spillover_ignored():
     assert mod._block_sleep_item(6, 7, today.replace(hour=10)) is None
 
 
+def test_sleep_cont_marks_fully_slept_block():
+    """Sleeping clean through 辰 (6-8) marks every half-hour as a continuation."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=10, minute=30))]
+    cont = mod._block_sleep_cont(6, today.replace(hour=12))
+    assert set(cont.keys()) == {(6, 0), (6, 30), (7, 0), (7, 30)}
+
+
+def test_sleep_cont_stops_at_wake():
+    """Wake 06:30 in 辰 → only the 06:00 mark is covered, not the rest."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=6, minute=30))]
+    cont = mod._block_sleep_cont(6, today.replace(hour=12))
+    assert set(cont.keys()) == {(6, 0)}
+
+
+def test_render_morning_draws_sleep_continuation():
+    """Integration: sleeping through 辰 renders ◇ │ continuation rows under the
+    睡觉 header instead of three blank lines."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=10, minute=30))]
+    mod.STATE.entries_yday = []
+    mod.STATE.block_points = {}
+    mod.STATE.events = []
+    mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
+    frags = mod.render_morning()
+    text = "".join(t for _, t in frags)
+    # 辰 block: header reads 睡觉, body rows carry the ◇ │ continuation glyphs.
+    chen_idx = text.index("─辰")
+    chen_block = text[chen_idx:text.index("─巳", chen_idx)]
+    assert "睡觉" in chen_block
+    assert "◇ │" in chen_block, f"expected sleep continuation, got:\n{chen_block}"
+
+
 def test_render_morning_headers_sleep_block():
     """Integration: wake 07:03 + 新闻 after → 辰 header carries 睡觉, body 新闻."""
     mod = _load_tui()

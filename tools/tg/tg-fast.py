@@ -102,6 +102,19 @@ def _get_toggl_projects():
 _ANNOTATION_RE = re.compile(r' *\(\d*\)| *\[\d*\]| *\{\d*\}')
 
 
+def _norm_time(t: str) -> str:
+    """Normalize a loose time token to HH:MM. Accepts HH:MM (passthrough),
+    HHMM (4-digit, e.g. '2200' -> '22:00'), or a bare 1-2 digit hour
+    ('9' -> '09:00')."""
+    if ":" in t:
+        return t
+    if len(t) == 4:
+        return t[:2] + ":" + t[2:]
+    if len(t) == 3:
+        return "0" + t[0] + ":" + t[1:]
+    return t.zfill(2) + ":00"
+
+
 def _strip_annotations(s: str) -> str:
     return re.sub(r'  +', ' ', _ANNOTATION_RE.sub('', s)).strip()
 
@@ -380,7 +393,7 @@ def main():
 
     # Check for time range: "desc HH:MM-HH:MM" or "HH:MM-HH:MM desc" or "desc H-H"
     # Try range at end first, then at start
-    range_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*-\s*(\d{1,2}(?::\d{2})?)\s*$', raw)
+    range_match = re.search(r'(\d{1,4}(?::\d{2})?)\s*-\s*(\d{1,4}(?::\d{2})?)\s*$', raw)
     if not range_match:
         range_match_start = re.match(r'^(\d{1,4}(?::\d{2})?)\s*-\s*(\d{1,4}(?::\d{2})?)\s+(.+)$', raw)
         if range_match_start:
@@ -396,13 +409,8 @@ def main():
                 print(cmd_create_range(desc or desc_part, project, tags, s, e))
                 return
     if range_match:
-        start_t = range_match.group(1)
-        end_t = range_match.group(2)
-        # Normalize to HH:MM
-        if ":" not in start_t:
-            start_t = start_t.zfill(2) + ":00"
-        if ":" not in end_t:
-            end_t = end_t.zfill(2) + ":00"
+        start_t = _norm_time(range_match.group(1))
+        end_t = _norm_time(range_match.group(2))
         desc_part = raw[:range_match.start()].strip()
         desc, project, tags = resolve(desc_part)
         print(cmd_create_range(desc or desc_part, project, tags, start_t, end_t))
