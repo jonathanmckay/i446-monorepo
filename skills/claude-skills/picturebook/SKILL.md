@@ -81,9 +81,10 @@ are integers; if not, ask the user to reformat.
   them with Theo before reading.
 - Keep sentences short (3–8 characters typical for low counts). Simple narrative
   arc: setup → adventure → friend/turn → resolution → warm ending.
-- If a canonical list of Theo's known characters exists (check
-  `xk23 学习 McKay Curriculum/中文*.md` for a character spine), prefer it over raw
-  frequency. Otherwise approximate with common-character frequency.
+- If a canonical list of Theo's known characters exists (read
+  `xk23 学习 McKay Curriculum/中文 reader tracker.md` — every character under "New
+  characters by book" is already introduced), prefer it over raw frequency: lean
+  on already-introduced characters and add only a modest set of new ones.
 - After drafting, **list the unique characters used and the count**, and confirm
   it is within `vocab_count` (excluding the glossary words, which are tracked
   separately).
@@ -150,9 +151,19 @@ open "<book folder>/<slug>.pdf"
 ```
 `make_pdf.py` is pure Pillow and uses a macOS CJK font, so the Chinese renders.
 
-### 9. Report
-Report: title, page count, glossary words, unique-character count vs `vocab_count`,
-quality, paths to the `.md` and `.pdf`, and total cost (`length × per-image price`).
+### 9. Update the tracker
+Append the book to `xk23 学习 McKay Curriculum/中文 reader tracker.md`:
+- Reading log row: book #, title, page count, **characters read** (count every
+  Chinese-character occurrence in the captions), and the new running total.
+- A "New characters by book" subsection listing the characters this book
+  introduces that weren't in any earlier book (字 / 拼音 / meaning) — this is the
+  review list and the spine for future books.
+- Bump the frontmatter `updated:` date.
+
+### 10. Report
+Report: title, page count, glossary words, new-character count, unique-character
+count vs `vocab_count`, **characters read this book + running total**, quality,
+paths to the `.md` and `.pdf`, and total cost (`length × per-image price`).
 
 ## Notes / conventions
 - **Cost reporting:** tokens/images × sticker price, not wall-clock. State the
