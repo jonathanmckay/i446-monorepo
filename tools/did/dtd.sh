@@ -14,15 +14,32 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/jm"
 mkdir -p "$STATE_DIR"
 CACHE="$STATE_DIR/task-queue.json"
 DONE="$STATE_DIR/completed-today.json"
-DTD_FIFO="/tmp/dtd-$$.fifo"
-DTD_HDR="/tmp/dtd-$$.hdr"
-DTD_LOG="/tmp/dtd-$$.log"
+
+# Per-launch id for all temp paths. dtd.sh is *sourced*, so $$ is the
+# (long-lived) shell PID and is identical on every re-run. A bare $$ made
+# re-entrant launches (suspend an open picker, re-source) collide on the same
+# FIFO/temp files, and one run's `exec 3>&-` + cleanup killed another run's
+# worker, after which completions written to the now-orphaned FIFO were
+# silently dropped. The unique suffix isolates each launch; the $$ prefix lets
+# the sweep below reclaim files left by dead shells.
+DTD_ID="$$-$(date +%s)-$RANDOM"
+# Reclaim temp files from dtd launches whose owning shell is gone. mtime >1h so
+# a detached did-fast/defer child of a just-exited run is never cut off.
+for _f in /tmp/dtd-<->-*(Nmh+1); do
+  _pid=${${_f:t}#dtd-}; _pid=${_pid%%-*}
+  [[ "$_pid" == <-> ]] && ! kill -0 "$_pid" 2>/dev/null && rm -f "$_f"
+done
+unset _f _pid
+
+DTD_FIFO="/tmp/dtd-$DTD_ID.fifo"
+DTD_HDR="/tmp/dtd-$DTD_ID.hdr"
+DTD_LOG="/tmp/dtd-$DTD_ID.log"
 # ctrl-z undo state: journal of reversible actions + in-flight counters
-DTD_JOURNAL="/tmp/dtd-$$.undo.jsonl"
-DTD_PUSHED="/tmp/dtd-$$.pushed"
-DTD_PROCESSED="/tmp/dtd-$$.processed"
-DTD_SESSION="/tmp/dtd-$$.session"
-DTD_TIMER="/tmp/dtd-$$.timer"
+DTD_JOURNAL="/tmp/dtd-$DTD_ID.undo.jsonl"
+DTD_PUSHED="/tmp/dtd-$DTD_ID.pushed"
+DTD_PROCESSED="/tmp/dtd-$DTD_ID.processed"
+DTD_SESSION="/tmp/dtd-$DTD_ID.session"
+DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 
 if [[ ! -f "$CACHE" ]]; then
   echo "No task cache found at $CACHE" >&2
@@ -71,7 +88,7 @@ if [[ $due_today -lt 30 ]]; then
 fi
 
 # --- Background worker ---
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$$.start.sh" \
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
       "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
@@ -103,8 +120,8 @@ exec 3>"$DTD_FIFO"
 
 # --- Temp files for list generation (defined before the binding scripts
 # below so their heredocs expand to real paths, not empty strings) ---
-DTD_CACHE_FILE="/tmp/dtd-$$.cache.json"
-DTD_REMOVED="/tmp/dtd-$$.removed"
+DTD_CACHE_FILE="/tmp/dtd-$DTD_ID.cache.json"
+DTD_REMOVED="/tmp/dtd-$DTD_ID.removed"
 # Skips persist across dtd sessions for the duration of one day (stable
 # path + date guard), unlike the other per-session temp files
 DTD_SKIPPED="$STATE_DIR/dtd-skipped-today.txt"
@@ -112,7 +129,7 @@ if [[ -f "$DTD_SKIPPED.date" && "$(cat "$DTD_SKIPPED.date" 2>/dev/null)" != "$LO
   rm -f "$DTD_SKIPPED"
 fi
 echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
-DTD_DONE_FILE="/tmp/dtd-$$.done.json"
+DTD_DONE_FILE="/tmp/dtd-$DTD_ID.done.json"
 echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
 touch "$DTD_REMOVED"
 touch "$DTD_SKIPPED"
@@ -135,7 +152,7 @@ TOGGL_CURRENT=$(python3 "$TOGGL_CLI" current 2>/dev/null)
 TIMER_HDR=$(_parse_toggl "$TOGGL_CURRENT")
 
 # --- Start script used by fzf enter/ctrl-s binding ---
-DTD_START="/tmp/dtd-$$.start.sh"
+DTD_START="/tmp/dtd-$DTD_ID.start.sh"
 cat > "$DTD_START" << STARTEOF
 #!/bin/zsh
 TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
@@ -155,7 +172,7 @@ STARTEOF
 chmod +x "$DTD_START"
 
 # --- Enter script: start selected task; if already timing, complete it ---
-DTD_ENTER="/tmp/dtd-$$.enter.sh"
+DTD_ENTER="/tmp/dtd-$DTD_ID.enter.sh"
 cat > "$DTD_ENTER" << ENTEREOF
 #!/bin/zsh
 TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
@@ -195,7 +212,7 @@ chmod +x "$DTD_ENTER"
 # --- Complete-now script used by fzf alt-enter binding (ctrl+enter via the
 # Ghostty keybind remap ctrl+enter -> ESC CR). Unlike enter, this never starts
 # a timer: it always completes the selected task via the /did worker. ---
-DTD_DONE="/tmp/dtd-$$.done.sh"
+DTD_DONE="/tmp/dtd-$DTD_ID.done.sh"
 cat > "$DTD_DONE" << DONEEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
@@ -218,7 +235,7 @@ DONEEOF
 chmod +x "$DTD_DONE"
 
 # --- Defer script used by fzf ctrl-d binding ---
-DTD_DEFER="/tmp/dtd-$$.defer.sh"
+DTD_DEFER="/tmp/dtd-$DTD_ID.defer.sh"
 cat > "$DTD_DEFER" << DEFEREOF
 #!/bin/zsh
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
@@ -286,7 +303,7 @@ chmod +x "$DTD_DEFER"
 # execute-silent), updates the task in Todoist, and patches the snapshot cache
 # ($DTD_CACHE_FILE) so the new value shows on reload. Todoist is the source of
 # truth; the live cache catches up on the next refresh.
-DTD_POINTS="/tmp/dtd-$$.points.sh"
+DTD_POINTS="/tmp/dtd-$DTD_ID.points.sh"
 cat > "$DTD_POINTS" << POINTSEOF
 #!/bin/zsh
 POINTS_FAST="\$HOME/i446-monorepo/tools/did/points-fast.py"
@@ -308,7 +325,7 @@ POINTSEOF
 chmod +x "$DTD_POINTS"
 
 # --- List generation script (reloadable by fzf) ---
-DTD_LIST="/tmp/dtd-$$.list.sh"
+DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
 # Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file
@@ -489,7 +506,7 @@ LISTEOF
 chmod +x "$DTD_LIST"
 
 # --- Skip script used by fzf ctrl-k binding ---
-DTD_SKIP="/tmp/dtd-$$.skip.sh"
+DTD_SKIP="/tmp/dtd-$DTD_ID.skip.sh"
 cat > "$DTD_SKIP" << SKIPEOF
 #!/bin/zsh
 SKIPPED="$DTD_SKIPPED"
@@ -503,7 +520,7 @@ SKIPEOF
 chmod +x "$DTD_SKIP"
 
 # --- Delete script used by fzf ctrl-x binding ---
-DTD_DELETE="/tmp/dtd-$$.delete.sh"
+DTD_DELETE="/tmp/dtd-$DTD_ID.delete.sh"
 cat > "$DTD_DELETE" << DELETEEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
@@ -575,7 +592,7 @@ DELETEEOF
 chmod +x "$DTD_DELETE"
 
 # --- Split script used by fzf ctrl-p binding ---
-DTD_SPLIT="/tmp/dtd-$$.split.sh"
+DTD_SPLIT="/tmp/dtd-$DTD_ID.split.sh"
 cat > "$DTD_SPLIT" << 'SPLITEOF'
 #!/bin/zsh
 # Split a task: claim partial points today, defer the rest to tomorrow.
@@ -742,7 +759,7 @@ sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s
 chmod +x "$DTD_SPLIT"
 
 # --- Agent script used by fzf ctrl-a binding ---
-DTD_AGENT="/tmp/dtd-$$.agent.sh"
+DTD_AGENT="/tmp/dtd-$DTD_ID.agent.sh"
 cat > "$DTD_AGENT" << 'AGENTEOF'
 #!/bin/zsh
 # Spawn a Claude agent in a new cmux tab to work on the selected task.
@@ -882,7 +899,7 @@ chmod +x "$DTD_AGENT"
 # Pops the last journaled action (done/split/defer) and reverses it via
 # undo-fast.py, which also removes the task from the session/removed/done
 # filter files so it reappears in the list on reload.
-DTD_UNDO="/tmp/dtd-$$.undo.sh"
+DTD_UNDO="/tmp/dtd-$DTD_ID.undo.sh"
 cat > "$DTD_UNDO" << UNDOEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
