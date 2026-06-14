@@ -35,13 +35,15 @@ Examples:
 
 ## Prerequisite: OpenAI key
 
-The generator reads `OPENAI_API_KEY` from the environment **only** (never stored
-on disk). Before running `gen_book.py`:
+The key is stored in the **macOS login Keychain** (account `$USER`, service
+`OPENAI_API_KEY`). `gen_book.py` reads it automatically — from `$OPENAI_API_KEY`
+if exported, otherwise from the Keychain. No pasting needed for normal runs.
 
-1. If `$OPENAI_API_KEY` is already exported, use it.
-2. Otherwise ask the user to paste a key (`ask_user`), export it inline for the
-   one `gen_book.py` call, then `unset` it. Do **not** write it to any file, the
-   doc, or memory.
+- Retrieve manually: `security find-generic-password -a "$USER" -s OPENAI_API_KEY -w`
+- (Re)store / rotate: `security add-generic-password -a "$USER" -s OPENAI_API_KEY -U -w '<key>'`
+- Never write the key into any file, the doc, or memory. If the Keychain item is
+  missing, ask the user to paste a key (`ask_user`) and offer to store it with the
+  command above.
 
 ## Steps
 

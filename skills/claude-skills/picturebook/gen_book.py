@@ -25,7 +25,16 @@ def main():
     quality = sys.argv[3] if len(sys.argv) > 3 else "medium"
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
-        print("ERR: OPENAI_API_KEY not set in environment")
+        # Fall back to the macOS login Keychain (account=$USER, service=OPENAI_API_KEY).
+        try:
+            import subprocess
+            key = subprocess.check_output(
+                ["security", "find-generic-password", "-a", os.environ.get("USER", ""),
+                 "-s", "OPENAI_API_KEY", "-w"], stderr=subprocess.DEVNULL).decode().strip()
+        except Exception:
+            key = None
+    if not key:
+        print("ERR: OPENAI_API_KEY not set (env or Keychain item 'OPENAI_API_KEY')")
         return 1
     os.makedirs(out_dir, exist_ok=True)
 
