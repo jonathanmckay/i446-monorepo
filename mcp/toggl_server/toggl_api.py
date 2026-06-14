@@ -1,11 +1,29 @@
 import base64
 import json
+import os
+import signal
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
 BASE_URL = "https://api.track.toggl.com/api/v9"
+
+# tg-tui polls the running timer only every 30s; signalling it after a
+# timer-state change makes it refresh immediately. This lives in toggl_api
+# (the shared HTTP layer) so EVERY caller benefits — the MCP server and
+# /d357, not just the toggl_cli path that previously had its own nudge.
+TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+
+
+def _notify_tui():
+    """SIGUSR1 the running tg-tui so it refreshes now instead of on its poll.
+    Best-effort: a missing/stale pid file or dead process is ignored."""
+    try:
+        os.kill(int(TG_TUI_PID.read_text().strip()), signal.SIGUSR1)
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
 
 
 def _auth_header():
@@ -22,7 +40,10 @@ def _request(method, path, body=None):
     try:
         with urllib.request.urlopen(req) as resp:
             if resp.status == 200:
-                return json.loads(resp.read())
+                result = json.loads(resp.read())
+                if method != "GET":  # a mutation succeeded → wake tg-tui now
+                    _notify_tui()
+                return result
             return None
     except urllib.error.HTTPError as e:
         error_body = e.read().decode() if e.fp else ""
