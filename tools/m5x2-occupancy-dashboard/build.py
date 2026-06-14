@@ -155,7 +155,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 :root{--bg:#0d0f12;--card:#161a1f;--text:#e7ecf0;--muted:#8b96a3;--border:#242a31;
- --vu:#e23b3b;--vr:#2faa4d;--nu:#ff8a3d;--nr:#7ed957;--occ:#2a3340;--blue:#2979ff;}
+ --vu:#e23b3b;--vr:#2faa4d;--nu:#ff8a3d;--nr:#ff5fa2;--occ:#2a3340;--blue:#2979ff;}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);
  font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px;max-width:1180px;margin:auto}
 h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weight:600;
@@ -174,7 +174,7 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 .feed .ti{flex:1}.feed .su{color:var(--muted);font-size:12px}
 .tag{font-size:10px;padding:1px 7px;border-radius:20px;text-transform:uppercase;letter-spacing:.03em;height:fit-content}
 .t-notice{background:#3a2a16;color:var(--nu)}.t-moveout{background:#3a1c1c;color:var(--vu)}
-.t-movein{background:#15321d;color:var(--vr)}.t-leased{background:#15321d;color:var(--nr)}
+.t-movein{background:#15321d;color:var(--vr)}.t-leased{background:#3a1f2e;color:var(--nr)}
 .note{color:var(--muted);font-size:12px;margin-top:6px}
 </style></head><body>
 <h1>m5x2 Occupancy</h1>
@@ -204,7 +204,7 @@ email-driven lease_signings capture is currently failing — wire that up to add
 
 <script>
 const D = __PAYLOAD__;
-const C={nr:'#7ed957',nu:'#ff8a3d',vr:'#2faa4d',vu:'#e23b3b'};
+const C={nr:'#ff5fa2',nu:'#ff8a3d',vr:'#2faa4d',vu:'#e23b3b'};
 // KPIs
 const c=D.current, kp=[['occ_pct','Occupied %','',c.occ_pct+'%'],
  ['vu','Vacant-Unrented','vu',c.vu],['vr','Vacant-Rented','vr',c.vr],

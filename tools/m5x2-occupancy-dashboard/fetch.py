@@ -12,9 +12,11 @@ Usage:
 Then: python3 build.py
 Creds: .env (APPFOLIO_CLIENT_ID / _SECRET / _BASE_URL).
 """
-import json, os, sys, datetime as dt
+import json, os, sys, time, datetime as dt
 from pathlib import Path
 import urllib.request, urllib.parse, base64
+
+THROTTLE = 1.2   # seconds between AppFolio calls (be a good citizen)
 
 DIR = Path(__file__).parent
 DATA = DIR / "data"; DATA.mkdir(exist_ok=True)
@@ -42,9 +44,18 @@ def report(name, body):
             req = urllib.request.Request(url, data=data, method="POST", headers=hdr)
         else:                  # subsequent next_page links are GETs
             req = urllib.request.Request(url, headers={"Authorization": f"Basic {AUTH}"})
-        d = json.load(urllib.request.urlopen(req, timeout=120))
+        for attempt in range(6):        # retry on 429 with exponential backoff
+            try:
+                d = json.load(urllib.request.urlopen(req, timeout=120))
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 5:
+                    time.sleep(2 ** attempt * 3)   # 3,6,12,24,48s
+                    continue
+                raise
         rows += d.get("results", [])
         url = d.get("next_page_url") or d.get("next_page"); data = None
+        time.sleep(THROTTLE)
     return rows
 
 def n(x):
