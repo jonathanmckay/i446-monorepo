@@ -52,15 +52,48 @@ def clamp(v, lo, hi): return max(lo, min(hi, v))
 
 hist = sorted(load("occupancy-history.json"), key=lambda h: h["date"])
 vac = load("vacancy.json")
-cur = hist[-1]                     # today's snapshot
+
+# ── Repair the historical breakdown ──────────────────────────────────────────
+# occupancy_summary's `as_of_to` snapshots give reliable `units` and `occupied`
+# (occupancy% tracks reality), but the status split is corrupt before ~2026:
+# vacant_unrented is forced to 0 (all vacancy dumped into vacant_rented) and
+# notice_rented is wildly inflated (e.g. 218 of 326 occupied in Jan 2024). So we
+# trust only the totals and reconstruct the four action states: vacant = units −
+# occupied (reliable), split into unrented/rented and a small notice tier using
+# the ratios observed in the trustworthy recent daily snapshots.
+def is_corrupt(s):
+    V = s["units"] - s["occ"]
+    return (s["vu"] == 0 and V > 3) or (s["nr"] > 0.08 * s["units"])
+
+def trusted_bands(hist):
+    clean = [s for s in hist if not is_corrupt(s)]
+    un_share = med([s["vu"] / ((s["units"] - s["occ"]) or 1) for s in clean
+                    if s["units"] - s["occ"] > 0], 0.8)       # vu as share of total vacant
+    nr_share = med([s["nr"] / s["units"] for s in clean], 0.0)  # notice-rented as share of units
+    out = {}
+    for s in hist:
+        U, O = s["units"], s["occ"]; V = max(0, U - O)
+        if is_corrupt(s):
+            vu = round(V * un_share); vr = V - vu
+            nu = s["nu"] if s["nu"] <= 0.15 * U else round(U * 0.05)  # raw nu is plausible
+            nr = round(U * nr_share)
+        else:
+            vu, vr, nu, nr = s["vu"], s["vr"], s["nu"], s["nr"]
+        out[s["date"]] = {"date": s["date"], "units": U, "occ": O,
+                          "nr": nr, "nu": nu, "vr": vr, "vu": vu,
+                          "occ_stable": O - nr - nu}
+    return out
+
+TB = trusted_bands(hist)
+hdates = sorted(TB)
+cur = TB[hdates[-1]]               # today's reconstructed snapshot (today is clean → raw)
 UNITS = cur["units"]
-by_date = {h["date"]: h for h in hist}
-hdates = sorted(by_date)
+cur["occ_pct"] = round(cur["occ"] / UNITS * 100, 1)
 
 def nearest(diso):
     """Latest snapshot on or before diso; else the earliest available (forward-fill)."""
     le = [x for x in hdates if x <= diso]
-    return by_date[le[-1]] if le else by_date[hdates[0]]
+    return TB[le[-1]] if le else TB[hdates[0]]
 
 # ── Backward daily series (one column per day, -90d → today) ─────────────────
 back = []
@@ -119,25 +152,29 @@ while d <= TODAY:
                      "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2)})
     d += dt.timedelta(days=7)
 
-# ── Newsfeed / daily tenant tickler (strict reverse chronological) ───────────
+# ── Newsfeed / tickler from the event log (known vs effective dates) ─────────
+# Sorted by `known` (when we learned) descending; each row also shows `effective`
+# (when it will/did happen). An NTV received today for a July move-out sorts to
+# the top today, displaying its future effective date.
+events = load("events.json")
+LABELS = {"ntv": ("📤", "Notice to vacate", "vacates"),
+          "leased": ("✅", "Lease signed", "move-in"),
+          "renewal": ("🔁", "Lease renewed", "term from"),
+          "moveout": ("🚪", "Moved out", "left"),
+          "movein": ("📥", "Moved in", "in"),
+          "vacant": ("🔻", "Vacant / unrented", "open since")}
 feed = []
-RECENT = TODAY - dt.timedelta(days=30)
-for u in vac:
-    p = u.get("property_name"); unit = u.get("unit"); st = u.get("unit_status") or ""
-    mo = pdate(u.get("last_move_out")); mi = pdate(u.get("next_move_in"))
-    where = f"{p} #{unit}"
-    if mo and mo > TODAY:
-        feed.append((mo, "notice", f"📤 Notice / scheduled move-out — {where}",
-                     f"vacates {mo.isoformat()}" +
-                     (" · backfill lined up" if st.endswith("Rented") else " · no backfill yet")))
-    if mo and RECENT <= mo <= TODAY:
-        feed.append((mo, "moveout", f"🚪 Moved out — {where}", f"left {mo.isoformat()}, now {st}"))
-    if st == "Vacant-Rented":
-        feed.append((mi or TODAY, "leased", f"✅ Leased, awaiting move-in — {where}",
-                     f"move-in {mi.isoformat() if mi else 'TBD'}"))
-    elif mi and mi > TODAY:
-        feed.append((mi, "movein", f"📥 Move-in scheduled — {where}", f"new tenant {mi.isoformat()}"))
-feed_sorted = sorted(feed, key=lambda x: x[0], reverse=True)
+for e in events:
+    emoji, label, verb = LABELS.get(e["kind"], ("•", e["kind"], "on"))
+    where = f"{e['prop']} #{e['unit']}"
+    sub = []
+    if e.get("tenant"): sub.append(e["tenant"])
+    if e.get("effective"): sub.append(f"{verb} {e['effective']}")
+    if e.get("baseline"): sub.append("baseline (pre-tracking)")
+    feed.append({"known": e["known"], "effective": e.get("effective") or "",
+                 "kind": e["kind"], "title": f"{emoji} {label} — {where}",
+                 "sub": " · ".join(sub)})
+feed.sort(key=lambda x: (x["known"], x["effective"]), reverse=True)
 
 payload = {
     "today": TODAY.isoformat(), "units": UNITS,
@@ -145,8 +182,7 @@ payload = {
                "movein_lag": round(MOVEIN_LAG, 1), "lambda": round(lam, 2)},
     "current": {"occ_stable": cur["occ_stable"], "nr": cur["nr"], "nu": cur["nu"],
                 "vr": cur["vr"], "vu": cur["vu"], "occ_pct": round(cur["occ"] / UNITS * 100, 1)},
-    "back": back, "forward": fwd, "longterm": longterm,
-    "feed": [{"date": d.isoformat(), "kind": k, "title": t, "sub": s} for d, k, t, s in feed_sorted],
+    "back": back, "forward": fwd, "longterm": longterm, "feed": feed,
 }
 
 # ── Render ──────────────────────────────────────────────────────────────────
@@ -170,11 +206,14 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 .legend span{display:inline-flex;align-items:center;gap:6px}.sw{width:12px;height:12px;border-radius:3px;display:inline-block}
 .feed{list-style:none;padding:0;margin:0}
 .feed li{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--border)}
-.feed .dt{color:var(--muted);font-variant-numeric:tabular-nums;min-width:90px}
+.feed .dt{color:var(--text);font-variant-numeric:tabular-nums;min-width:96px}
+.feed .dt .cap{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .feed .ti{flex:1}.feed .su{color:var(--muted);font-size:12px}
 .tag{font-size:10px;padding:1px 7px;border-radius:20px;text-transform:uppercase;letter-spacing:.03em;height:fit-content}
-.t-notice{background:#3a2a16;color:var(--nu)}.t-moveout{background:#3a1c1c;color:var(--vu)}
+.t-ntv{background:#3a2a16;color:var(--nu)}.t-moveout{background:#3a1c1c;color:var(--vu)}
+.t-vacant{background:#3a1c1c;color:var(--vu)}
 .t-movein{background:#15321d;color:var(--vr)}.t-leased{background:#3a1f2e;color:var(--nr)}
+.t-renewal{background:#14303a;color:#5bc8e8}
 .note{color:var(--muted);font-size:12px;margin-top:6px}
 </style></head><body>
 <h1>m5x2 Occupancy</h1>
@@ -199,8 +238,11 @@ pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = co
 
 <h2>Occupancy newsfeed — daily tenant tickler</h2>
 <div class="card"><ul class="feed" id="feed"></ul>
-<div class="note">Strict reverse-chronological (newest first), derived from unit move dates. The
-email-driven lease_signings capture is currently failing — wire that up to add live "lease signed" events.</div></div>
+<div class="note">Sorted by <b>when we learned</b> it (the date shown, newest first); the effective
+move date is in the sub-line. So a notice that comes in today for a July move-out appears at today.
+AppFolio exposes no NTV-received date, so the known date is detected by diffing daily unit snapshots:
+items marked <i>baseline (pre-tracking)</i> predate that diffing and are stamped today; from here forward,
+genuinely new notices/signings get their real detection date.</div></div>
 
 <script>
 const D = __PAYLOAD__;
@@ -243,9 +285,10 @@ new Chart(document.getElementById('pctChart'),{type:'line',
   plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}}},
   scales:{x:{stacked:true,ticks:{color:'#8b96a3',maxTicksLimit:18},grid:{display:false}},
    y:{stacked:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
-// ── feed ──
+// ── feed: date column = known (when learned); sub shows effective (when it happens) ──
 document.getElementById('feed').innerHTML=D.feed.map(f=>
- `<li><span class="dt">${f.date}</span><span class="ti">${f.title}<br><span class="su">${f.sub}</span></span>`+
+ `<li><span class="dt">${f.known}<span class="cap">learned</span></span>`+
+ `<span class="ti">${f.title}<br><span class="su">${f.sub}</span></span>`+
  `<span class="tag t-${f.kind}">${f.kind}</span></li>`).join('');
 </script></body></html>"""
 

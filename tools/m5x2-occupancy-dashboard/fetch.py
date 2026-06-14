@@ -85,6 +85,83 @@ def upsert_history(snaps):
     path.write_text(json.dumps(hist, indent=2))
     return len(hist)
 
+def pdate(s):
+    try: return dt.date.fromisoformat(s[:10]) if s else None
+    except Exception: return None
+
+# ── Per-unit archive + event log (the tenant-tickler engine) ─────────────────
+# AppFolio exposes no NTV-received date, so we detect changes ourselves: snapshot
+# each non-occupied unit daily, diff vs the prior snapshot, and stamp the change
+# date as `known` (when we learned) while `effective` stays the move date.
+ARCH = DATA / "unit-archive"
+
+def archive_units(vac, today):
+    ARCH.mkdir(exist_ok=True)
+    rec = {}
+    for r in vac:
+        uid = r.get("unit_id")
+        if uid is None: continue
+        rec[str(uid)] = {"status": r.get("unit_status"), "mo": r.get("last_move_out"),
+                         "mi": r.get("next_move_in"), "prop": r.get("property_name"),
+                         "unit": r.get("unit")}
+    (ARCH / f"{today.isoformat()}.json").write_text(json.dumps(rec))
+    return rec
+
+def prev_archive(today):
+    if not ARCH.exists(): return None
+    prior = sorted(p.stem for p in ARCH.glob("*.json") if p.stem < today.isoformat())
+    return json.loads((ARCH / f"{prior[-1]}.json").read_text()) if prior else None
+
+def update_events(vac, le, today):
+    cur = archive_units(vac, today)
+    prev = prev_archive(today)
+    ev_path = DATA / "events.json"
+    events = json.loads(ev_path.read_text()) if ev_path.exists() else []
+    seen = {(e["unit_id"], e["kind"], e.get("effective")) for e in events}
+    def add(kind, uid, eff, prop, unit, tenant=None, known=None):
+        key = (uid, kind, eff)
+        if key in seen: return
+        seen.add(key)
+        events.append({"known": known or today.isoformat(), "effective": eff, "kind": kind,
+                       "unit_id": uid, "prop": prop, "unit": unit, "tenant": tenant,
+                       "baseline": known is None and prev is None})
+    noticed = lambda s: (s or "").startswith("Notice")
+    rented = lambda s: (s or "").endswith("Rented")
+    vacant = lambda s: (s or "").startswith("Vacant")
+    if prev is None:                       # first run: seed baseline + real sign dates
+        cur_ids = set(cur)
+        for uid, r in cur.items():
+            s = r["status"]
+            if noticed(s): add("ntv", uid, r["mo"], r["prop"], r["unit"])
+            if rented(s):  add("leased", uid, r["mi"], r["prop"], r["unit"])
+            if vacant(s) and not rented(s): add("vacant", uid, r["mo"], r["prop"], r["unit"])
+        for r in le:                       # recent lease signings on now-occupied units
+            uid = str(r.get("unit_id")); lsd = pdate(r.get("lease_sign_date"))
+            if lsd and (today - lsd).days <= 150 and uid not in cur_ids:
+                mi = pdate(r.get("move_in"))
+                if mi and (lsd - mi).days > 45:        # signed long after move-in → renewal
+                    add("renewal", uid, r.get("renewal_start_date"), r.get("property_name"),
+                        r.get("unit"), r.get("tenant_name"), known=lsd.isoformat())
+                else:                                  # fresh lease / new move-in
+                    add("leased", uid, r.get("move_in"), r.get("property_name"),
+                        r.get("unit"), r.get("tenant_name"), known=lsd.isoformat())
+    else:                                  # diff: stamp change date as `known`
+        for uid in set(prev) | set(cur):
+            p = prev.get(uid); c = cur.get(uid)
+            ps = p["status"] if p else "Occupied"
+            cs = c["status"] if c else "Occupied"
+            ref = c or p; prop = ref["prop"]; unit = ref["unit"]
+            if not noticed(ps) and noticed(cs):
+                add("ntv", uid, c["mo"], prop, unit)
+            if not rented(ps) and rented(cs):
+                add("leased", uid, (c or {}).get("mi"), prop, unit)
+            if noticed(ps) and vacant(cs):
+                add("moveout", uid, (c["mo"] or today.isoformat()), prop, unit)
+            if p and not c:                # left the vacancy table → moved in / occupied
+                add("movein", uid, today.isoformat(), prop, unit)
+    ev_path.write_text(json.dumps(events, indent=2))
+    return events
+
 def daterange(start, end, step):
     d = start
     while d <= end:
@@ -120,7 +197,16 @@ def main():
     vac = report("unit_vacancy", {})
     (DATA / "vacancy.json").write_text(
         json.dumps([{k: r.get(k) for k in keep} for r in vac], indent=2))
-    print(f"history now {total} snapshots; pulled {len(snaps)}; vacancy units {len(vac)}")
+    # lease expiration detail → real lease_sign_date (known date for signings)
+    lkeep = ["unit_id", "property_name", "unit", "tenant_name", "status",
+             "lease_sign_date", "move_in", "renewal_start_date", "last_lease_renewal", "rent"]
+    le = report("lease_expiration_detail", {})
+    (DATA / "lease-expiration.json").write_text(
+        json.dumps([{k: r.get(k) for k in lkeep} for r in le], indent=2))
+    # diff per-unit state → events.json (known vs effective dates)
+    events = update_events(vac, le, today)
+    print(f"history now {total} snapshots; pulled {len(snaps)}; "
+          f"vacancy units {len(vac)}; events {len(events)}")
 
 if __name__ == "__main__":
     main()
