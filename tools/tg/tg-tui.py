@@ -809,8 +809,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> lis
     body = picks[1:4] if head else picks[:3]
     for p in body:
         dur = fmt_dur(p["dur_min"])
-        space = max(1, WIDTH_HINT - 8 - len(dur) - 1)
-        out.append(("class:time", f"  {p['time_str']} "))
+        # Time column uses a single leading space so it aligns with the detail
+        # band's " HH:MM │ " gutter (7-col prefix: 1 space + 5-char time + 1).
+        space = max(1, WIDTH_HINT - 7 - len(dur) - 1)
+        out.append(("class:time", f" {p['time_str']} "))
         if p.get("is_gap"):
             # Untracked past stretch (≥ GAP_MIN): the ┄ fill pulses red↔grey
             # ~every 0.5s to nag; the minutes stay solid red and readable.
@@ -826,11 +828,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> lis
         # untracked time reads as an explicit (faint) grid to fill in. Marks a
         # through-running event covers show ◇ │ instead of the grid.
         for hh, mm in marks:
-            out.append(("class:time", f"  {hh:02d}:{mm:02d} "))
+            out.append(("class:time", f" {hh:02d}:{mm:02d} "))
             if cont and (hh, mm) in cont:
                 out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
             else:
-                out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 8) + "\n"))
+                out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 7) + "\n"))
     else:
         # Pad partially-filled blocks; covered marks after the last pick keep
         # drawing the through-running event's ◇ │ continuation.
@@ -845,7 +847,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> lis
         for i in range(3 - len(body)):
             if i < len(pad_marks):
                 hh, mm = pad_marks[i]
-                out.append(("class:time", f"  {hh:02d}:{mm:02d} "))
+                out.append(("class:time", f" {hh:02d}:{mm:02d} "))
                 out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
             else:
                 out.append(("class:idle", "\n"))

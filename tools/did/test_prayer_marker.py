@@ -1,8 +1,11 @@
-"""Regression: prayer habits (冥想, o314, 其他人) should write ☀️ to the
-current block's header line in the build order file.
+"""Regression: only the actual prayer habit (ص) writes ☀️ to the current
+block's header line in the build order file.
 
-Previously, the ☀️ only flashed in tg-tui (6s) via SIGUSR1 but was never
-persisted to build order, so it disappeared immediately.
+The ☀️ glyph is the صلاة prayer marker. -2n/inbound, wakeup, and the 1-1n
+heatmap all read it as "prayer logged for this block" and suppress the salah
+card when present. Mindfulness habits (冥想/o314/其他人) used to stamp ☀️ too,
+so meditating during a block falsely suppressed the inbound prayer card even
+when you hadn't prayed. ☀️ must track ص only.
 """
 
 import ast
@@ -19,8 +22,10 @@ def test_prayer_marker_section_exists_in_did_fast():
     assert "## -1₲" in text, "build order section check missing"
 
 
-def test_prayer_habits_include_all_hcm_habits():
-    """The PRAYER_HABITS set should include 冥想, o314, 其他人."""
+def test_prayer_habits_is_salah_only():
+    """PRAYER_HABITS must be the actual prayer habit (ص) and must NOT include
+    mindfulness habits, which would falsely stamp the ☀️ صلاة marker and
+    suppress the inbound salah card for blocks where you only meditated."""
     src = Path(__file__).parent / "did-fast.py"
     tree = ast.parse(src.read_text())
     for node in ast.walk(tree):
@@ -29,9 +34,10 @@ def test_prayer_habits_include_all_hcm_habits():
                 if isinstance(target, ast.Name) and target.id == "PRAYER_HABITS":
                     if isinstance(node.value, ast.Set):
                         names = {elt.value for elt in node.value.elts if isinstance(elt, ast.Constant)}
-                        assert "冥想" in names
-                        assert "o314" in names
-                        assert "其他人" in names
+                        assert "ص" in names, "prayer habit ص missing from PRAYER_HABITS"
+                        assert "冥想" not in names, "meditation must not stamp the prayer marker"
+                        assert "o314" not in names, "journal must not stamp the prayer marker"
+                        assert "其他人" not in names, "其他人 must not stamp the prayer marker"
                         return
     raise AssertionError("PRAYER_HABITS set not found as AST assignment")
 

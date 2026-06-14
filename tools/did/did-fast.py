@@ -1605,8 +1605,13 @@ end tell'''
         if script:
             hcbi_result = ix_run(script, timeout=30.0)
 
-    # 5c. Prayer marker: write ☀️ to build order for current block
-    PRAYER_HABITS = {"冥想", "o314", "其他人"}
+    # 5c. Prayer marker: write ☀️ to build order for current block.
+    # ☀️ is the صلاة prayer marker: -2n/inbound, wakeup, and the 1-1n heatmap
+    # all read it as "prayer logged for this block" and suppress the salah card
+    # when present. Only the actual prayer habit (ص) may stamp it. Mindfulness
+    # habits (冥想/o314/其他人) used to stamp ☀️, which falsely suppressed the
+    # inbound prayer card for any block where you meditated but hadn't prayed.
+    PRAYER_HABITS = {"ص"}
     prayer_done = any(r.item.name.lower() in PRAYER_HABITS for r in fast if r.step == "0n")
     if prayer_done:
         try:
