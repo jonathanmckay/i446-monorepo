@@ -66,19 +66,26 @@ def is_corrupt(s):
     return (s["vu"] == 0 and V > 3) or (s["nr"] > 0.08 * s["units"])
 
 def trusted_bands(hist):
+    # Anchor each reconstructed band on a *reliable* total, using rates from the
+    # trustworthy recent snapshots:
+    #   vacant  vu+vr = units − occupied (reliable) → split by recent vu-share
+    #   notice  nu+nr ≈ recent (notice/occupied) rate × occupied → split by recent nr-share
+    # Vacancy spiked in 2025 (lease-up); notice tracks occupied, so anchoring it
+    # off occupied keeps it from ballooning with vacancy. Clean dates keep raw.
     clean = [s for s in hist if not is_corrupt(s)]
-    un_share = med([s["vu"] / ((s["units"] - s["occ"]) or 1) for s in clean
-                    if s["units"] - s["occ"] > 0], 0.8)       # vu as share of total vacant
-    nr_share = med([s["nr"] / s["units"] for s in clean], 0.0)  # notice-rented as share of units
+    vu_share = med([s["vu"] / ((s["vu"] + s["vr"]) or 1) for s in clean
+                    if s["vu"] + s["vr"] > 0], 0.8)
+    notice_rate = med([(s["nu"] + s["nr"]) / (s["occ"] or 1) for s in clean], 0.06)
+    nr_frac = med([s["nr"] / ((s["nu"] + s["nr"]) or 1) for s in clean
+                   if s["nu"] + s["nr"] > 0], 0.1)
     out = {}
     for s in hist:
         U, O = s["units"], s["occ"]; V = max(0, U - O)
         if is_corrupt(s):
-            vu = round(V * un_share); vr = V - vu
-            nu = s["nu"] if s["nu"] <= 0.15 * U else round(U * 0.05)  # raw nu is plausible
-            nr = round(U * nr_share)
+            vu = round(V * vu_share); vr = V - vu
+            N = round(O * notice_rate); nr = round(N * nr_frac); nu = N - nr
         else:
-            vu, vr, nu, nr = s["vu"], s["vr"], s["nu"], s["nr"]
+            vu, nu, vr, nr = s["vu"], s["nu"], s["vr"], s["nr"]
         out[s["date"]] = {"date": s["date"], "units": U, "occ": O,
                           "nr": nr, "nu": nu, "vr": vr, "vu": vu,
                           "occ_stable": O - nr - nu}
@@ -234,7 +241,11 @@ Backward is real daily AppFolio snapshots; forward is a compartment forecast cal
 pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = covered.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
-<div class="card"><canvas id="pctChart" height="90"></canvas></div>
+<div class="card"><canvas id="pctChart" height="90"></canvas>
+<div class="note">AppFolio's historical status breakdown is corrupt before ~2026 (it zeroes vacant-unrented
+and inflates notice-rented). Only units & occupied are reliable back then, so the four bands pre-2026 are
+<b>reconstructed</b>: vacancy = units − occupied (real), split by recent unrented-share; notice estimated at
+the recent notice/occupied rate. 2026 onward is the real reported breakdown.</div></div>
 
 <h2>Occupancy newsfeed — daily tenant tickler</h2>
 <div class="card"><ul class="feed" id="feed"></ul>

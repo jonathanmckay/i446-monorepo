@@ -128,13 +128,28 @@ def update_events(vac, le, today):
     noticed = lambda s: (s or "").startswith("Notice")
     rented = lambda s: (s or "").endswith("Rented")
     vacant = lambda s: (s or "").startswith("Vacant")
-    if prev is None:                       # first run: seed baseline + real sign dates
+    if prev is None:                       # first run: seed baseline with real anchor dates
         cur_ids = set(cur)
+        sign = {str(r.get("unit_id")): r.get("lease_sign_date")
+                for r in le if r.get("lease_sign_date")}
+        def cap_today(*cands):
+            # earliest real date among candidates, but never in the future (we can't
+            # have learned something before it exists); falls back to today.
+            for c in cands:
+                d = pdate(c)
+                if d: return min(d, today).isoformat()
+            return today.isoformat()
         for uid, r in cur.items():
             s = r["status"]
-            if noticed(s): add("ntv", uid, r["mo"], r["prop"], r["unit"])
-            if rented(s):  add("leased", uid, r["mi"], r["prop"], r["unit"])
-            if vacant(s) and not rented(s): add("vacant", uid, r["mo"], r["prop"], r["unit"])
+            # a vacated unit became vacant on its move-out; a signed lease on its
+            # sign date — real past dates, not today. Only genuinely-future events
+            # (a current notice's scheduled move-out) cap to today ("aware as of now").
+            if noticed(s): add("ntv", uid, r["mo"], r["prop"], r["unit"],
+                               known=cap_today(sign.get(uid), r["mo"]))
+            if rented(s):  add("leased", uid, r["mi"], r["prop"], r["unit"],
+                               known=cap_today(sign.get(uid), r["mi"]))
+            if vacant(s) and not rented(s): add("vacant", uid, r["mo"], r["prop"], r["unit"],
+                               known=cap_today(r["mo"]))
         for r in le:                       # recent lease signings on now-occupied units
             uid = str(r.get("unit_id")); lsd = pdate(r.get("lease_sign_date"))
             if lsd and (today - lsd).days <= 150 and uid not in cur_ids:
