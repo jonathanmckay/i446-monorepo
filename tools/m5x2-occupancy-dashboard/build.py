@@ -234,10 +234,15 @@ while d <= TODAY:
                      "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2)})
     d += dt.timedelta(days=7)
 
-# ── Newsfeed / tickler from the event log (known vs effective dates) ─────────
-# Sorted by `known` (when we learned) descending; each row also shows `effective`
-# (when it will/did happen). An NTV received today for a July move-out sorts to
-# the top today, displaying its future effective date.
+# ── Newsfeed / tickler from the event log ────────────────────────────────────
+# Each event carries `known` (when our daily diff first saw it) and `effective`
+# (when the move actually happens). On the first run every event is stamped
+# `known`=today as a one-time baseline backfill, so dating the feed by `known`
+# piles the entire back-catalogue (40 notices, 26 signed leases, …) onto today —
+# e.g. "17 leases signed June 14", which never happened. AppFolio exposes no true
+# signed/received timestamp, so for baseline rows we fall back to the only real
+# per-event date we have, `effective`, which spreads them across their actual
+# move dates. Genuinely new (non-baseline) rows keep their real detection date.
 events = load("events.json")
 LABELS = {"ntv": ("📤", "Notice to vacate", "vacates"),
           "leased": ("✅", "Lease signed", "move-in"),
@@ -252,16 +257,26 @@ for e in events:
     sub = []
     if e.get("tenant"): sub.append(e["tenant"])
     if e.get("effective"): sub.append(f"{verb} {e['effective']}")
-    if e.get("baseline"): sub.append("baseline (pre-tracking)")
-    feed.append({"known": e["known"], "effective": e.get("effective") or "",
+    base = bool(e.get("baseline"))
+    if base: sub.append("baseline (pre-tracking)")
+    # `known` is the daily-diff detection date, but on the first run every event is
+    # stamped today, which piles the whole back-catalogue onto one day. `effective`
+    # (move/vacate/since date) is the only real per-event date AppFolio gives, so we
+    # date every row by it when present and fall back to `known` only when it is
+    # missing. Caption reflects which date is shown.
+    eff = e.get("effective")
+    fdate = eff if eff else e["known"]
+    feed.append({"date": fdate, "cap": (verb if eff else "learned"),
+                 "known": e["known"], "effective": eff or "",
                  "kind": e["kind"], "title": f"{emoji} {label} — {where}",
                  "sub": " · ".join(sub)})
-feed.sort(key=lambda x: (x["known"], x["effective"]), reverse=True)
+feed.sort(key=lambda x: (x["date"], x["known"]), reverse=True)
 
 payload = {
     "today": TODAY.isoformat(), "units": UNITS,
     "params": {"notice_days": round(NOTICE_DAYS, 1), "lease_days": round(LEASE_DAYS, 1),
-               "movein_lag": round(MOVEIN_LAG, 1), "lambda": round(lam, 2)},
+               "movein_lag": round(MOVEIN_LAG, 1), "lambda": round(lam, 2),
+               "weekly_signings": round(WEEKLY_SIGNINGS, 1)},
     "current": {"occ_stable": cur["occ_stable"], "nr": cur["nr"], "nu": cur["nu"],
                 "vr": cur["vr"], "vu": cur["vu"], "occ_pct": round(cur["occ"] / UNITS * 100, 1)},
     "back": back, "forward": fwd, "longterm": longterm, "feed": feed,
@@ -322,26 +337,29 @@ pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = co
  <span><i class="sw" style="background:var(--blue)"></i>Predicted signings (model)</span>
  <span><i class="sw" style="background:var(--vr)"></i>Scheduled move-ins (signed)</span></div>
 <div class="note" id="leaseNote"></div>
-<div class="note">First-pass lease model. <b>Predicted</b> = the occupancy forecast's weekly lease-up
-run-rate (vacant/notice units crossing into rented). <b>Scheduled</b> = leases already signed in the
-pipeline, bucketed by their move-in week — committed, not modeled. Predicted is calibrated to current
-lease-up speed; on-notice units are assumed to lease only after going vacant (the observed m5x2 pattern),
-so they are not pre-leased in bulk.</div></div>
+<div class="note">First-pass lease model. <b>Predicted</b> = the forecast's weekly lease-up
+run-rate, anchored to trailing re-let demand (the rate units fall vacant-unrented and must be
+re-leased), not a stock-clearing rate. <b>Scheduled</b> = leases already signed in the pipeline,
+bucketed by their move-in week — committed, and fed into the forecast as real move-ins. On-notice
+units are assumed to lease only after going vacant (the observed m5x2 pattern), so they are not
+pre-leased in bulk.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
-<div class="note">AppFolio's historical status breakdown is corrupt before ~2026 (it zeroes vacant-unrented
-and inflates notice-rented). Only units & occupied are reliable back then, so the four bands pre-2026 are
-<b>reconstructed</b>: vacancy = units − occupied (real), split by recent unrented-share; notice estimated at
-the recent notice/occupied rate. 2026 onward is the real reported breakdown.</div></div>
+<div class="note">AppFolio's rented/unrented split is not a true as-of-then snapshot — it back-applies
+each unit's <b>current</b> rented flag to past dates, so historical vacant-unrented is undercounted
+(a unit vacant-unrented in April but leased since reads as vacant-rented in April). Only units &amp;
+occupied are reliable, so all four bands are <b>reconstructed</b>: vacancy = units − occupied (real),
+split by today's live unrented share from the unit-level report; notice is estimated off occupied when
+the raw figures are implausible.</div></div>
 
 <h2>Occupancy newsfeed — daily tenant tickler</h2>
 <div class="card"><ul class="feed" id="feed"></ul>
-<div class="note">Sorted by <b>when we learned</b> it (the date shown, newest first); the effective
-move date is in the sub-line. So a notice that comes in today for a July move-out appears at today.
-AppFolio exposes no NTV-received date, so the known date is detected by diffing daily unit snapshots:
-items marked <i>baseline (pre-tracking)</i> predate that diffing and are stamped today; from here forward,
-genuinely new notices/signings get their real detection date.</div></div>
+<div class="note">Each row is dated by the real event date, newest first. Genuinely new notices and
+signings show their <b>detection date</b> (when our daily snapshot diff first saw them); rows marked
+<i>baseline (pre-tracking)</i> predate that diffing and have no detection date, so they are dated by
+their <b>move date</b> (effective) instead of all being stamped today. AppFolio exposes no signed/
+received timestamp, so the effective date is the most truthful anchor for the backfill.</div></div>
 
 <script>
 const D = __PAYLOAD__;
@@ -361,7 +379,7 @@ document.getElementById('kpis').innerHTML=kp.map(k=>
 const P=D.params;
 document.getElementById('paramNote').textContent=
  `Forecast rates (calibrated): ${P.lambda} new notices/day · notice→vacant ~${P.notice_days}d · `+
- `lease-up ~${P.lease_days}d · move-in lag ~${P.movein_lag}d.`;
+ `lease-up velocity ~${P.weekly_signings}/wk · move-in lag ~${P.movein_lag}d.`;
 // ── units chart: daily back + daily forecast, 4 stacked bands ──
 const rows=[...D.back, ...D.forward.slice(1)];
 const labels=rows.map(r=>r.date);
@@ -406,9 +424,9 @@ new Chart(document.getElementById('pctChart'),{type:'line',
   scales:{x:{stacked:true,grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:26,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
    y:{stacked:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
-// ── feed: date column = known (when learned); sub shows effective (when it happens) ──
+// ── feed: date column = real event date (effective for baseline rows) ──
 document.getElementById('feed').innerHTML=D.feed.map(f=>
- `<li><span class="dt">${f.known}<span class="cap">learned</span></span>`+
+ `<li><span class="dt">${f.date}<span class="cap">${f.cap}</span></span>`+
  `<span class="ti">${f.title}<br><span class="su">${f.sub}</span></span>`+
  `<span class="tag t-${f.kind}">${f.kind}</span></li>`).join('');
 </script></body></html>"""
