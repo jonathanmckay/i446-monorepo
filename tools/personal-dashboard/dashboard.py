@@ -312,6 +312,217 @@ def load_toggl_data():
     return {k: dict(v) for k, v in result.items()}, {k: dict(v) for k, v in entry_counts.items()}
 
 
+# ── Weekly (1s) aggregation ─────────────────────────────────────────────────────
+
+def _week_start(d):
+    """Sunday on/before date d (Su-Sa weeks). weekday(): Mon=0..Sun=6."""
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+
+def load_points_all():
+    """Full points cache {date_str: {label: value}} with no day clipping."""
+    cache = Path(__file__).parent / ".points-cache.json"
+    if cache.exists():
+        try:
+            return json.loads(cache.read_text())
+        except Exception:
+            pass
+    try:
+        return load_points_data()
+    except Exception:
+        return {}
+
+
+def load_toggl_range(days):
+    """Toggl entries for the last `days` days → {date_str: {project: minutes}}."""
+    api_key = os.environ.get("TOGGL_API_KEY", "")
+    if not api_key:
+        return {}
+    today = date.today()
+    floor = today - timedelta(days=days)
+    start = floor.isoformat()
+    end = (today + timedelta(days=1)).isoformat()
+    url = f"https://api.track.toggl.com/api/v9/me/time_entries?start_date={start}&end_date={end}"
+    creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Basic {creds}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            entries = json.loads(resp.read())
+    except Exception:
+        return {}
+    result = defaultdict(lambda: defaultdict(int))
+    for e in entries:
+        dur = e.get("duration", 0)
+        if dur <= 0:
+            continue
+        start_str = e.get("start", "")
+        if not start_str:
+            continue
+        try:
+            start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
+        except (ValueError, TypeError):
+            continue
+        d = start_dt.date()
+        if d < floor or d > today:
+            continue
+        proj_id = e.get("project_id")
+        code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
+        result[d.isoformat()][code] += dur // 60
+    return {k: dict(v) for k, v in result.items()}
+
+
+def _build_weekly_data(n_weeks=8):
+    """Weekly time/points by category + cumulative this-week vs last-week shadow."""
+    today = date.today()
+    this_week_start = _week_start(today)
+    first_week_start = this_week_start - timedelta(weeks=n_weeks - 1)
+
+    points_all = load_points_all()
+    days_span = (today - first_week_start).days + 2
+    toggl_all = load_toggl_range(days_span)
+
+    week_starts = [first_week_start + timedelta(weeks=i) for i in range(n_weeks)]
+    week_labels = [ws.strftime("%-m/%-d") for ws in week_starts]
+
+    def week_index(d):
+        delta = (d - first_week_start).days
+        if delta < 0:
+            return None
+        wi = delta // 7
+        return wi if wi < n_weeks else None
+
+    pts_cats = [m["label"] for m in POINTS_COLS.values()]
+    pts_colors = {m["label"]: m["color"] for m in POINTS_COLS.values()}
+    pts_week = {cat: [0] * n_weeks for cat in pts_cats}
+    for dstr, day in points_all.items():
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        wi = week_index(d)
+        if wi is None:
+            continue
+        for cat, val in day.items():
+            if cat in pts_week and isinstance(val, (int, float)):
+                pts_week[cat][wi] += val
+
+    time_week = defaultdict(lambda: [0] * n_weeks)
+    for dstr, day in toggl_all.items():
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        wi = week_index(d)
+        if wi is None:
+            continue
+        for code, mins in day.items():
+            time_week[code][wi] += mins
+
+    POINTS_PRIORITY = ["i9", "xk", "m5"]
+    def pts_sort(label):
+        if label in POINTS_PRIORITY:
+            return (0, POINTS_PRIORITY.index(label))
+        return (1, pts_cats.index(label))
+    ordered_pts = sorted([c for c in pts_cats if any(pts_week[c])], key=pts_sort)
+    points_datasets = [{
+        "label": c, "data": pts_week[c],
+        "backgroundColor": pts_colors.get(c, "#9e9e9e"),
+    } for c in ordered_pts]
+
+    TIME_PRIORITY = ["i9", "xk87", "m5x2"]
+    def time_sort(code):
+        if code in TIME_PRIORITY:
+            return (0, TIME_PRIORITY.index(code))
+        if code == "睡觉":
+            return (2, 0)
+        return (1, -sum(time_week[code]))
+    time_codes = sorted([c for c in time_week if any(time_week[c])], key=time_sort)
+    time_datasets = [{
+        "label": c,
+        "data": [round(m / 60, 1) for m in time_week[c]],
+        "backgroundColor": PROJECT_COLORS.get(c, "#424242"),
+    } for c in time_codes]
+
+    # cumulative this week vs last week, by category, Su..Sa
+    last_week_start = this_week_start - timedelta(weeks=1)
+    dow_labels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+    today_dow = (today - this_week_start).days  # 0..6
+
+    def cumulative_by_cat(week_start, clip_to=None):
+        per = {cat: [0] * 7 for cat in pts_cats}
+        for off in range(7):
+            d = (week_start + timedelta(days=off)).isoformat()
+            day = points_all.get(d, {})
+            for cat in pts_cats:
+                prev = per[cat][off - 1] if off > 0 else 0
+                add = day.get(cat, 0)
+                add = add if isinstance(add, (int, float)) else 0
+                per[cat][off] = prev + add
+        if clip_to is not None:
+            for cat in pts_cats:
+                for off in range(7):
+                    if off > clip_to:
+                        per[cat][off] = None
+        return per
+
+    this_cum = cumulative_by_cat(this_week_start, clip_to=today_dow)
+    last_cum = cumulative_by_cat(last_week_start, clip_to=None)
+
+    cum_cats = [c for c in pts_cats
+                if any(v for v in (this_cum[c] + last_cum[c]) if v)]
+    cum_cats = sorted(cum_cats, key=pts_sort)
+
+    cum_datasets = []
+    for c in cum_cats:
+        cum_datasets.append({
+            "label": c, "stack": "this", "data": this_cum[c],
+            "backgroundColor": pts_colors.get(c, "#9e9e9e"),
+        })
+    for c in cum_cats:
+        cum_datasets.append({
+            "label": c + " ·last", "stack": "last", "data": last_cum[c],
+            "backgroundColor": pts_colors.get(c, "#9e9e9e") + "40",
+        })
+
+    this_total = sum((this_cum[c][today_dow] or 0) for c in cum_cats)
+    last_to_date = sum((last_cum[c][today_dow] or 0) for c in cum_cats)
+    last_full = sum((last_cum[c][6] or 0) for c in cum_cats)
+
+    return {
+        "weeks": week_labels,
+        "points_week": {"datasets": points_datasets},
+        "time_week": {"datasets": time_datasets},
+        "cumulative": {
+            "labels": dow_labels,
+            "today_index": today_dow,
+            "datasets": cum_datasets,
+            "this_total": int(this_total),
+            "last_to_date": int(last_to_date),
+            "last_full": int(last_full),
+        },
+        "this_week_start": this_week_start.strftime("%-m/%-d"),
+    }
+
+
+# 5-min TTL cache for /api/weekly
+_WEEKLY_CACHE: dict = {"payload": None, "ts": 0.0}
+_WEEKLY_LOCK = threading.Lock()
+
+
+def _weekly_cached():
+    now = time.time()
+    with _WEEKLY_LOCK:
+        if _WEEKLY_CACHE["payload"] is not None and (now - _WEEKLY_CACHE["ts"]) < 300.0:
+            return _WEEKLY_CACHE["payload"]
+    payload = _build_weekly_data()
+    with _WEEKLY_LOCK:
+        _WEEKLY_CACHE["payload"] = payload
+        _WEEKLY_CACHE["ts"] = time.time()
+    return payload
+
+
 _TASKS_CACHE_PATH = Path(__file__).parent / ".tasks-cache.json"
 # Always refetch today + yesterday (late-evening completions can shift buckets).
 # Days older than this are immutable — read from disk cache only.
@@ -639,6 +850,9 @@ def api_refresh():
     with _API_DATA_LOCK:
         _API_DATA_CACHE["payload"] = None
         _API_DATA_CACHE["ts"] = 0.0
+    with _WEEKLY_LOCK:
+        _WEEKLY_CACHE["payload"] = None
+        _WEEKLY_CACHE["ts"] = 0.0
     return jsonify({"status": "ok"})
 
 
@@ -1367,6 +1581,8 @@ fetch('/api/data').then(r => r.json()).then(data => {
 </script>
 
 <div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--h2);">
+  <a href="/1s" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ 1s weekly</a>
+  &nbsp;·&nbsp;
   <a href="http://ix:5555" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ jm-ai-dash</a>
   &nbsp;·&nbsp;
   <a href="http://ix:5556" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ AI Dashboard (m5x2)</a>
@@ -1408,6 +1624,8 @@ MORE_HTML = """<!DOCTYPE html>
 </div>
 
 <div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--muted);">
+  <a href="/1s" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ 1s weekly</a>
+  &nbsp;·&nbsp;
   <a href="http://ix:5555" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ jm-ai-dash</a>
   &nbsp;·&nbsp;
   <a href="http://ix:5556" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ AI Dashboard (m5x2)</a>
@@ -1522,6 +1740,96 @@ fetch('/api/data').then(r => r.json()).then(data => {
 </html>"""
 
 
+WEEKLY_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<title>1s · weekly</title>
+""" + _SHARED_STYLE + """
+</head>
+<body>
+<div class="topbar">
+  <h1>1s WEEKLY</h1>
+  <div style="display:flex;align-items:baseline;gap:16px;">
+    <div id="cumHead" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">…</div>
+    <a class="nav-link" href="/">← DASH</a>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>Points / Week</h2>
+    <div class="chart-wrap"><canvas id="pointsWeekChart"></canvas></div>
+    <div class="summary" id="pointsWeekSummary"></div>
+  </div>
+  <div class="card">
+    <h2>Time / Week (h)</h2>
+    <div class="chart-wrap"><canvas id="timeWeekChart"></canvas></div>
+    <div class="summary" id="timeWeekSummary"></div>
+  </div>
+  <div class="card" style="grid-column:1/-1;">
+    <h2>Cumulative Points · This Week vs Last (Su–Sa)</h2>
+    <div class="chart-wrap"><canvas id="cumChart"></canvas></div>
+    <div class="summary" id="cumSummary"></div>
+  </div>
+</div>
+
+<div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--h2);">
+  <a href="/" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">← jm dash</a>
+  &nbsp;·&nbsp;
+  <a href="http://ix:5555" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ jm-ai-dash</a>
+  &nbsp;·&nbsp;
+  <a href="http://ix:5556" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ AI Dashboard (m5x2)</a>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+""" + _SHARED_JS_HEAD + """
+function stackedOpts(unit) {
+  const o = JSON.parse(JSON.stringify(CHART_DEFAULTS));
+  o.plugins.tooltip = { mode: 'index', intersect: false };
+  return o;
+}
+
+fetch('/api/weekly').then(r => r.json()).then(d => {
+  // Points / Week
+  new Chart(document.getElementById('pointsWeekChart'), {
+    type: 'bar',
+    data: { labels: d.weeks, datasets: d.points_week.datasets },
+    options: stackedOpts('pts')
+  });
+  document.getElementById('pointsWeekSummary').textContent =
+    d.points_week.datasets.map(s => s.label).join(' · ');
+
+  // Time / Week
+  new Chart(document.getElementById('timeWeekChart'), {
+    type: 'bar',
+    data: { labels: d.weeks, datasets: d.time_week.datasets },
+    options: stackedOpts('h')
+  });
+  document.getElementById('timeWeekSummary').textContent =
+    d.time_week.datasets.map(s => s.label).join(' · ');
+
+  // Cumulative this vs last
+  const c = d.cumulative;
+  new Chart(document.getElementById('cumChart'), {
+    type: 'bar',
+    data: { labels: c.labels, datasets: c.datasets },
+    options: stackedOpts('pts')
+  });
+  const delta = c.this_total - c.last_to_date;
+  const sign = delta >= 0 ? '+' : '';
+  const word = delta >= 0 ? 'ahead' : 'behind';
+  document.getElementById('cumHead').innerHTML =
+    `<span style="color:var(--text);font-weight:600;">${c.this_total}</span> pts ` +
+    `<span style="color:${delta>=0?'#00e676':'#fd6c1d'};">${sign}${delta} ${word}</span>`;
+  document.getElementById('cumSummary').textContent =
+    `This week ${c.this_total} · last week to-date ${c.last_to_date} · last week full ${c.last_full}. ` +
+    `Faded bars = last week's cumulative shadow.`;
+});
+</script>
+</body>
+</html>"""
+
+
 @app.route("/auth/ga4")
 def auth_ga4():
     """Run GA4 OAuth flow. Visit this URL in a browser to authenticate."""
@@ -1538,6 +1846,16 @@ def auth_ga4():
 @app.route("/")
 def index():
     return render_template_string(HTML)
+
+
+@app.route("/api/weekly")
+def api_weekly():
+    return jsonify(_weekly_cached())
+
+
+@app.route("/1s")
+def weekly_page():
+    return render_template_string(WEEKLY_HTML)
 
 
 @app.route("/more")
