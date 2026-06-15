@@ -92,6 +92,19 @@ EOF'
 
 Replace `N` with the user's argument.
 
+## Build-order prayer marker (always run after the AP write)
+
+After the Neon write succeeds, stamp the ☀️ صلاة marker on the current 地支 block
+in the build order so the prayer shows up in tg-tui, -2n/inbound, wakeup, and the
+1-1n heatmap (all of which read ☀️ from the build order, not from Neon AP):
+
+```bash
+python3 ~/i446-monorepo/tools/did/prayer_marker.py
+```
+
+Run this **locally** (build-order.md lives in the local vault, not on Ix). It is
+idempotent — a second prayer in the same block won't duplicate the marker.
+
 ## Output
 
 One line: `ص: N` (the new value after write).
