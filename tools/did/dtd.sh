@@ -324,6 +324,36 @@ echo "\${out:-✗ points update failed}" > "\$HDR"
 POINTSEOF
 chmod +x "$DTD_POINTS"
 
+# --- Change-domain script used by fzf ctrl-g binding ---
+# Prompts for a new domain label (needs a tty, so the binding uses execute(),
+# not execute-silent), swaps the task's domain in Todoist, and patches the
+# snapshot cache ($DTD_CACHE_FILE) so the row recolors on reload. Mirrors the
+# ctrl-v points flow.
+DTD_PROJECT="/tmp/dtd-$DTD_ID.domain.sh"
+cat > "$DTD_PROJECT" << DOMAINEOF
+#!/bin/zsh
+DOMAIN_FAST="\$HOME/i446-monorepo/tools/did/domain-fast.py"
+HDR="$DTD_HDR"
+task="\$1"
+task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+query="\$task"
+if [[ "\$clean" == *"…"* ]]; then
+  clean="\${clean%%…*}"
+  query="\$clean"
+fi
+printf "\nNew domain for: %s\n(i9 m5x2 xk87 xk88 hcm hcb g245 …)> " "\$clean" > /dev/tty
+read newdom < /dev/tty
+newdom=\${newdom// /}
+if [[ -z "\$newdom" ]]; then
+  echo "domain change cancelled" > "\$HDR"
+  exit 0
+fi
+out=\$(python3 "\$DOMAIN_FAST" "\$query" "\$newdom" "$DTD_CACHE_FILE" 2>/dev/null)
+echo "\${out:-✗ domain update failed}" > "\$HDR"
+DOMAINEOF
+chmod +x "$DTD_PROJECT"
+
 # --- List generation script (reloadable by fzf) ---
 DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
@@ -928,7 +958,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. The footer is a
 # single bottom line: "<tasks left>   <keybindings>", with the live match
 # count ($FZF_MATCH_COUNT) refreshed on load/result.
-export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh"
+export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: domain | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh"
 
 # ctrl-d prompts for the defer target (N days / date) on the tty. Only set
 # here so the extracted script stays non-interactive for tests and scripts.
@@ -997,6 +1027,7 @@ while true; do
       --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
+      --bind "ctrl-g:execute($DTD_PROJECT {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
