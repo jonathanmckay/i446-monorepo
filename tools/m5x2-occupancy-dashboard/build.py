@@ -29,6 +29,7 @@ Total units are conserved each step. It is a forecast of the bands, not a replay
 of individual scheduled moves (those drive the tickler).
 """
 import json, datetime as dt
+from collections import Counter
 from pathlib import Path
 
 DIR = Path(__file__).parent
@@ -55,43 +56,46 @@ vac = load("vacancy.json")
 
 # ── Repair the historical breakdown ──────────────────────────────────────────
 # occupancy_summary's `as_of_to` snapshots give reliable `units` and `occupied`
-# (occupancy% tracks reality), but the status split is corrupt before ~2026:
-# vacant_unrented is forced to 0 (all vacancy dumped into vacant_rented) and
-# notice_rented is wildly inflated (e.g. 218 of 326 occupied in Jan 2024). So we
-# trust only the totals and reconstruct the four action states: vacant = units −
-# occupied (reliable), split into unrented/rented and a small notice tier using
-# the ratios observed in the trustworthy recent daily snapshots.
+# (occupancy% tracks reality), but the rented/unrented cross-cut is NOT a true
+# as-of-then split: AppFolio back-applies each unit's *current* rented flag to
+# past dates. A unit that sat vacant-unrented on Apr 1 but has since been leased
+# is reported as vacant-RENTED as of Apr 1, so historical unrented is badly
+# undercounted (Apr 1 reports vu=23; the real as-of-then figure was ~61). The
+# only reliable totals are units and occupied, so we reconstruct the four action
+# states from those: vacant = units − occupied (reliable), split by the *current*
+# unrented share measured from today's live unit-level vacancy report, which has
+# no retroactive bias. Notice is anchored off occupied (it tracks occupancy, not
+# vacancy) and only re-split when the raw notice numbers are implausible.
 def is_corrupt(s):
     V = s["units"] - s["occ"]
     return (s["vu"] == 0 and V > 3) or (s["nr"] > 0.08 * s["units"])
 
-def trusted_bands(hist):
-    # Anchor each reconstructed band on a *reliable* total, using rates from the
-    # trustworthy recent snapshots:
-    #   vacant  vu+vr = units − occupied (reliable) → split by recent vu-share
-    #   notice  nu+nr ≈ recent (notice/occupied) rate × occupied → split by recent nr-share
-    # Vacancy spiked in 2025 (lease-up); notice tracks occupied, so anchoring it
-    # off occupied keeps it from ballooning with vacancy. Clean dates keep raw.
+def trusted_bands(hist, vu_share):
     clean = [s for s in hist if not is_corrupt(s)]
-    vu_share = med([s["vu"] / ((s["vu"] + s["vr"]) or 1) for s in clean
-                    if s["vu"] + s["vr"] > 0], 0.8)
     notice_rate = med([(s["nu"] + s["nr"]) / (s["occ"] or 1) for s in clean], 0.06)
     nr_frac = med([s["nr"] / ((s["nu"] + s["nr"]) or 1) for s in clean
                    if s["nu"] + s["nr"] > 0], 0.1)
     out = {}
     for s in hist:
         U, O = s["units"], s["occ"]; V = max(0, U - O)
+        # vacant split: always reconstruct from the live (unbiased) unrented share
+        vu = round(V * vu_share); vr = V - vu
+        # notice split: trust the raw report unless it is implausible
         if is_corrupt(s):
-            vu = round(V * vu_share); vr = V - vu
             N = round(O * notice_rate); nr = round(N * nr_frac); nu = N - nr
         else:
-            vu, nu, vr, nr = s["vu"], s["nu"], s["vr"], s["nr"]
+            nu, nr = s["nu"], s["nr"]
         out[s["date"]] = {"date": s["date"], "units": U, "occ": O,
                           "nr": nr, "nu": nu, "vr": vr, "vu": vu,
                           "occ_stable": O - nr - nu}
     return out
 
-TB = trusted_bands(hist)
+# Live, unbiased unrented share from today's unit-level vacancy report.
+_vac_vu = sum(1 for u in vac if u.get("unit_status") == "Vacant-Unrented")
+_vac_vr = sum(1 for u in vac if u.get("unit_status") == "Vacant-Rented")
+VU_SHARE = (_vac_vu / (_vac_vu + _vac_vr)) if (_vac_vu + _vac_vr) else 0.8
+
+TB = trusted_bands(hist, VU_SHARE)
 hdates = sorted(TB)
 cur = TB[hdates[-1]]               # today's reconstructed snapshot (today is clean → raw)
 UNITS = cur["units"]
@@ -124,19 +128,41 @@ NOTICE_DAYS = clamp(med(notice_leads, 30), 10, 60)
 MOVEIN_LAG = clamp(med(movein_leads, 18), 5, 45)
 LEASE_DAYS = clamp(med(lease_obs, 35), 14, 90)
 lam = (cur["nr"] + cur["nu"]) / NOTICE_DAYS          # notice arrivals/day
-k_out, k_lease, k_in = 1 / NOTICE_DAYS, 1 / LEASE_DAYS, 1 / MOVEIN_LAG
+k_out, k_in = 1 / NOTICE_DAYS, 1 / MOVEIN_LAG
 
-# Share of on-notice units that already have a signed backfill (notice-rented).
-# Empirically ~0 at m5x2: AppFolio's unit_vacancy never reports Notice-Rented and
-# no Notice unit carries a next_move_in — backfills are signed only AFTER a unit
-# goes vacant, not during the notice period. The old model pre-leased on-notice
-# units at the full lease-up rate (nu·k_lease ≈ 3/day), which manufactured a
-# notice-rented band that rose 0→20 in the forecast even though the real series
-# sits at 0. Calibrate the pre-lease rate from the observed notice-rented share so
-# the forecast tracks reality; it rises automatically if backfills-on-notice ever
-# become common.
-# Use the recent regime (last 14 days) — notice-rented has decayed to 0 and the
-# forecast should hold there, not climb back toward an older, higher level.
+def week_start(d):  # Monday-anchored week
+    return d - dt.timedelta(days=d.weekday())
+
+events_all = load("events.json")
+
+# ── Lease-up velocity: trailing re-let demand, not a stock-clearing rate ──────
+# The old model leased the entire vacant-unrented stock at 1/LEASE_DAYS, where
+# LEASE_DAYS was the median days-vacant of *already-rented* units (≈14d, a
+# survivorship-biased sample of fast leasers). With ~80 vacant-unrented units that
+# implies ~40 signings/week — roughly 4× reality. Leasing at m5x2 is demand-
+# limited, not stock-limited: units lease at the rate the market absorbs them, so
+# we anchor the run-rate to trailing re-let demand (the weekly rate at which units
+# fall vacant-unrented and must be re-leased), measured from the event log. This
+# is a flat ~units/week velocity, applied flow-wise (not vu·k), so the forecast
+# does not assume the whole stock clears inside one mean-time.
+_vac_by_week = Counter(week_start(pdate(e["known"])) for e in events_all
+                       if e.get("kind") == "vacant" and pdate(e.get("known")))
+_recent_weeks = [week_start(TODAY) - dt.timedelta(weeks=i) for i in range(1, 9)]
+_vac_vals = sorted(_vac_by_week.get(w, 0) for w in _recent_weeks)
+# trimmed mean: drop the single largest week (lease-up/bulk-delivery spikes)
+_trim = _vac_vals[:-1] if len(_vac_vals) > 3 else _vac_vals
+WEEKLY_SIGNINGS = clamp(sum(_trim) / len(_trim) if _trim else 8.0, 3.0, 25.0)
+daily_signings = WEEKLY_SIGNINGS / 7.0
+
+# Committed move-ins: already-signed leases with a known move-in date. These are
+# real, not modeled — they drive vacant-rented → occupied on their actual dates.
+committed_movein = Counter(pdate(e["effective"]) for e in events_all
+                           if e.get("kind") == "leased" and pdate(e.get("effective"))
+                           and pdate(e["effective"]) >= TODAY)
+
+# Share of on-notice units that get pre-leased before going vacant. Empirically ~0
+# at m5x2 (backfills are signed only after a unit goes vacant), calibrated from the
+# recent notice-rented share so it rises automatically if that ever changes.
 recent = [TB[d] for d in hdates[-14:]]
 prelease_frac = med([s["nr"] / ((s["nu"] + s["nr"]) or 1) for s in recent
                      if s["nu"] + s["nr"] > 0], 0.0)
@@ -150,13 +176,19 @@ fwd = [{"date": TODAY.isoformat(), "projected": False, "nr": cur["nr"],
         "nu": cur["nu"], "vr": cur["vr"], "vu": cur["vu"]}]
 fwd_signings = []  # (date, predicted new leases signed that day) — drives the weekly lease model
 for i in range(1, FWD_DAYS + 1):
+    di = TODAY + dt.timedelta(days=i)
     occ, nr, nu, vr, vu = b["occ_stable"], b["nr"], b["nu"], b["vr"], b["vu"]
     f_new = lam                            # occ → notice-unrented (fresh notice)
-    f_nu_nr = nu * k_lease * prelease_frac  # noticed unit gets pre-leased (rare; data-calibrated)
-    f_vu_vr = vu * k_lease                 # vacant unit gets leased
     f_nu_vu = nu * k_out                   # notice period ends, still unrented
     f_nr_vr = nr * k_out                   # notice period ends, backfill lined up
-    f_vr_occ = vr * k_in                   # new tenant moves in
+    # Gross signings this day, demand-limited (flat velocity), drawn first from the
+    # vacant-unrented pool, with a small remainder pre-leasing on-notice units.
+    sign = min(daily_signings, vu + nu * prelease_frac)
+    f_vu_vr = min(vu, sign)                 # vacant-unrented unit gets leased
+    f_nu_nr = sign - f_vu_vr                # remainder pre-leases an on-notice unit
+    # Move-ins: honor the committed schedule when present, else the modeled lag,
+    # capped at the vacant-rented stock so units are conserved.
+    f_vr_occ = min(vr, max(committed_movein.get(di, 0), vr * k_in))
     b["occ_stable"] = occ - f_new + f_vr_occ
     b["nu"] = nu + f_new - f_nu_nr - f_nu_vu
     b["nr"] = nr + f_nu_nr - f_nr_vr
@@ -164,23 +196,19 @@ for i in range(1, FWD_DAYS + 1):
     b["vr"] = vr + f_nr_vr + f_vu_vr - f_vr_occ
     # A "lease" = a unit entering the rented/covered set (signed lease), whether
     # it was vacant or still on notice when signed.
-    fwd_signings.append((TODAY + dt.timedelta(days=i), f_vu_vr + f_nu_nr))
-    fwd.append(fsnap(TODAY + dt.timedelta(days=i)))
+    fwd_signings.append((di, f_vu_vr + f_nu_nr))
+    fwd.append(fsnap(di))
 
 # ── Weekly lease-count model: predicted signings vs. already-scheduled move-ins ─
 # predicted  = the forecast's weekly lease-up run-rate (Σ daily signings per week)
 # scheduled  = leases already signed in the pipeline, bucketed by move-in week
 #              (from the event log). The first is a model; the second is committed.
-def week_start(d):  # Monday-anchored week
-    return d - dt.timedelta(days=d.weekday())
-
 pred_by_week = {}
 for d, s in fwd_signings:
     pred_by_week[week_start(d)] = pred_by_week.get(week_start(d), 0.0) + s
 
-ev_for_leases = load("events.json")
 sched_by_week = {}
-for e in ev_for_leases:
+for e in events_all:
     if e.get("kind") == "leased" and e.get("effective"):
         ed = pdate(e["effective"])
         if ed and ed >= TODAY:
