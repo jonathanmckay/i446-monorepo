@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the -1n (-1₦) block-ritual heatmap: day x 2-hour Earthly-Branch block,
 showing which build-order ritual icons were hit. Multi-source:
-  Toggl       -> ☀️ prayer, 📧 inbox, ⏱️ time-log  (bucketed by entry start time)
-  Build order -> 🎯 goal set for the block (-1₲ checkbox; v_logs archives + live)
+  Toggl       -> 📧 inbox, ⏱️ time-log  (bucketed by entry start time)
+  Build order -> 🎯 goal set (-1₲ checkbox), ☀️ prayer (header stamp); v_logs + live
   Todoist     -> ✓ task completed (completed_at bucketed by block)
 Usage: make_heatmap.py START END   (YYYY-MM-DD inclusive). Prints markdown.
 """
@@ -55,8 +55,9 @@ def add_toggl(grid, start, end):
         b = block_of(loc.hour)
         if b is None: continue
         dl = desc.lower()
-        if desc in PRAYERS or (proj == 'hcm' and any('\u0600' <= c <= '\u06FF' for c in desc)):
-            grid[day][b].add('☀️')
+        # ☀️ prayer now comes from build-order header stamps (add_goals), not
+        # Toggl: the header stamp is the authoritative ritual marker, and a
+        # prayer can be marked without a timed Toggl entry.
         if dl.startswith('ibx'):
             grid[day][b].add('📧')
         if desc in GOALS_T:
@@ -98,6 +99,10 @@ def add_goals(grid, start, end):
                 if line.startswith('- ') and not line.startswith('    '):
                     name = _block_line_name(line)
                     block = name if name in BIDX else None
+                    # ☀️ prayer: stamp on the block header (written by /ص,
+                    # prayer_marker, did-fast). Authoritative ritual marker.
+                    if block and '☀️' in line:
+                        grid[day][block].add('☀️')
                 elif block and re.match(r'^\s*- \[[ xX]\]\s*\S', line):
                     grid[day][block].add('🎯')
         day += dt.timedelta(days=1)
