@@ -54,19 +54,27 @@ def test_short_name_not_falsely_matched_as_substring():
     assert "0g" in vdh.compute_missing(MANIFEST, present)
 
 
-def test_recreate_payload_carries_full_spec():
+def test_recreate_payload_carries_full_spec_and_auto_marks():
     body = vdh.recreate_payload(MANIFEST["habits"]["0g"])
-    assert body["content"] == "0g (4) [8]"
+    assert body["content"] == "😈 0g (4) [8]"        # 😈 marks auto-generated
     assert body["due_string"] == "every day"        # preserves recurrence
     assert body["labels"] == ["0neon", "g245"]
     assert body["priority"] == 4
     assert body["project_id"] == "P1"
 
 
-def test_bare_strips_all_estimate_tokens():
+def test_bare_strips_auto_marker_and_estimates():
     assert vdh.bare("ibx s897 [6] (15)") == "ibx s897"
     assert vdh.bare("charge [3] (15)") == "charge"
     assert vdh.bare("0g (4) [8]") == "0g"
+    assert vdh.bare("😈 0g (4) [8]") == "0g"          # auto-marker stripped
+
+
+def test_auto_recreated_habit_not_reflagged_as_missing():
+    # A habit we recreated last run carries 😈; this run must see it as present,
+    # not missing — otherwise it gets recreated again every day (duplicates).
+    present = ["😈 0g (4) [8]", "ibx s897 [6] (15)", "早餐 (15) [5]"]
+    assert vdh.compute_missing(MANIFEST, present) == []
 
 
 def test_2n_wires_daily_habits_card():

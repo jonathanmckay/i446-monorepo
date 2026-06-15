@@ -31,13 +31,17 @@ from pathlib import Path
 MANIFEST = Path(__file__).resolve().parent.parent / "config" / "daily-todoist-manifest.json"
 DEFAULT_CACHE = Path.home() / ".cache/jm/daily-habits-check.json"
 API = "https://api.todoist.com/api/v1"
+AUTO_MARK = "😈"  # prefixes every task created by automation (see stale-contacts.py)
 
 
 def bare(content: str) -> str:
-    """Normalize a task content to its bare habit name: strip (N)/[N]/{N}
-    estimate tokens and collapse whitespace, lowercased. Mirrors the manifest
-    builder so manifest `match` strings line up with live task contents."""
-    s = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", content)
+    """Normalize a task content to its bare habit name: strip the 😈 auto-marker
+    and (N)/[N]/{N} estimate tokens, collapse whitespace, lowercased. Mirrors the
+    manifest builder so manifest `match` strings line up with live task contents
+    — including habits we auto-recreated with the 😈 prefix (so we don't re-flag
+    and duplicate them)."""
+    s = content.lstrip(AUTO_MARK).strip()
+    s = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", s)
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
@@ -60,9 +64,12 @@ def compute_missing(manifest: dict, present_contents: list[str]) -> list[str]:
 
 
 def recreate_payload(habit: dict) -> dict:
-    """Pure: build the Todoist create-task body from a manifest entry."""
+    """Pure: build the Todoist create-task body from a manifest entry. The 😈
+    auto-marker is prefixed so a habit Dream/this job rebuilt is visibly distinct
+    from one Todoist regenerated on its own (bare() strips it back off for
+    matching, and /did's query-in-task overlap is unaffected)."""
     body = {
-        "content": habit["content"],
+        "content": f"{AUTO_MARK} {habit['content']}",
         "due_string": habit.get("due_string", "every day"),
         "labels": habit.get("labels", []),
         "priority": habit.get("priority", 1),
