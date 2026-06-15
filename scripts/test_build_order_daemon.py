@@ -205,3 +205,75 @@ def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     assert mod._block_has_goals("辰") is True
     assert mod._write_block_marker("辰", "🎯") is True
     assert "- 辰 (25min)   (32min) ⏰ ⏱️ 🎯" in build.read_text(encoding="utf-8")
+
+
+# ── Reconcile: P must self-heal late markers, not drift below the header ──────
+# Bug: the daemon scored each block once at its boundary and APPENDED +score to
+# column P. A marker landing on a block header after its boundary fired (a prayer
+# ☀️ logged at 08:20 when 卯 fired at 06:00) was never rescored, so P (53) drifted
+# permanently below the header-implied total (79). Fix: reconcile_p_for_day SETs P
+# to the validated score of all fired blocks each fire — idempotent + self-healing.
+
+def test_reconcile_sets_total_over_all_fired_blocks(tmp_path, monkeypatch):
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    build.write_text(
+        "## -1₲\n\n"
+        "- 卯 🎯\n"
+        "    - [ ] wake\n"
+        "- 辰 🎯 ⏱️\n"
+        "    - [ ] morning\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+    monkeypatch.setattr(mod, "_live_for_block", lambda b, h, d: None)  # trust headers
+    captured = {}
+    monkeypatch.setattr(mod, "neon_set_p",
+                        lambda date, formula, total, dry_run=False: captured.update(formula=formula, total=total) or "OK")
+    import datetime as dt
+    # upto_hour=8 → fire hours {4,6,8}; 4 has no block, 6→卯(3), 8→辰(🎯+⏱️=6)
+    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)
+    assert captured["total"] == 9, captured           # 3 + 6, not just one block
+    assert captured["formula"] == "=0+3+6"
+
+
+def test_reconcile_is_idempotent(tmp_path, monkeypatch):
+    """Re-firing the same hour must NOT double-count (the old append did)."""
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    build.write_text("## -1₲\n\n- 卯 🎯 ⏱️\n    - [ ] wake\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+    monkeypatch.setattr(mod, "_live_for_block", lambda b, h, d: None)
+    seen = []
+    monkeypatch.setattr(mod, "neon_set_p",
+                        lambda date, formula, total, dry_run=False: seen.append((formula, total)) or "OK")
+    import datetime as dt
+    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 6)
+    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 6)
+    assert seen[0] == seen[1] == ("=0+6", 6)          # identical, no accumulation
+
+
+def test_reconcile_picks_up_late_prayer(tmp_path, monkeypatch):
+    """The core bug: a ☀️ added to an already-fired block must raise P on the
+    next reconcile. The old per-block append could never revisit 卯."""
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    build.write_text(
+        "## -1₲\n\n"
+        "- 卯 🎯\n"             # fired at 06:00 with only 🎯 → 3
+        "    - [ ] wake\n"
+        "- 辰 🎯\n"
+        "    - [ ] morning\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+    monkeypatch.setattr(mod, "_live_for_block", lambda b, h, d: None)
+    totals = []
+    monkeypatch.setattr(mod, "neon_set_p",
+                        lambda date, formula, total, dry_run=False: totals.append(total) or "OK")
+    import datetime as dt
+    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)   # 卯=3, 辰=3 → 6
+    # Prayer logged late, stamped on the already-fired 卯 header
+    build.write_text(build.read_text().replace("- 卯 🎯\n", "- 卯 🎯 ☀️\n"), encoding="utf-8")
+    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)   # 卯=4 now → 7
+    assert totals == [6, 7], totals                    # late ☀️ picked up (+1)

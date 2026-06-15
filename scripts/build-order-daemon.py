@@ -564,6 +564,82 @@ def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False)
         return "ERROR"
 
 
+def _live_for_block(block_name: str, hour: int, target_date: dt.date):
+    """Read-only re-validation of a block's daemon-checkable markers (🎯/⏱️/✅),
+    with NO marker writes. Used to re-score already-fired blocks during a
+    reconcile. Returns None on any validation error so the block falls back to
+    trusting its header markers (legacy behavior) rather than losing points."""
+    start, end = hour - 2, hour
+    try:
+        return {
+            GOAL_MARKER: _block_has_goals(block_name),
+            TOGGL_MARKER: _toggl_covers_block(target_date, start, end),
+            TODOIST_MARKER: _todoist_has_completions(target_date, start, end),
+        }
+    except Exception as e:  # noqa: BLE001 — never drop points on a transient API error
+        log(f"_live_for_block {block_name}: validation error {e}; trusting header")
+        return None
+
+
+def neon_set_p(target_date: dt.date, formula: str, total: int, dry_run: bool = False) -> str:
+    """SET -1₦ (col P) to `formula` (e.g. '=0+4+3+13'), replacing the cell. Used
+    by the reconcile so the value is idempotent and self-healing (no double-count
+    on re-fire). Verifies the write by reading the cell back, mirroring
+    neon_add_score_to_p."""
+    body = (
+        f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
+        f'    set formula of yCell to "{formula}"\n'
+        f'    return "P_RECONCILE {formula}"\n'
+    )
+    script = NEON_FIND_ROW_TEMPLATE.format(
+        sheet=NEON_SHEET, date_str=_date_str(target_date),
+        date_col=NEON_DATE_COL, body=body,
+    )
+    if dry_run:
+        log(f"[DRY RUN] Would set P={formula} ({total}) for {_date_str(target_date)}")
+        return "DRY_RUN"
+    try:
+        r = _osascript(script)
+        out = (r.stdout or "").strip()
+        if r.returncode != 0 or out.startswith("ERROR"):
+            log(f"reconcile_p: FAILED {out or r.stderr.strip()}")
+            return "FAILED"
+        log(f"reconcile_p: {out}")
+        verify = neon_read_y(target_date)
+        if verify in ("ERROR", "", "0"):
+            log(f"reconcile_p: VERIFY FAILED — wrote but read back {verify}. Excel may not be open.")
+            return "VERIFY_FAILED"
+        log(f"reconcile_p: verified={verify}")
+        return out
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log(f"reconcile_p: ERROR {e}")
+        return "ERROR"
+
+
+def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
+                        current_live: dict | None = None, dry_run: bool = False) -> str:
+    """Recompute -1₦ (P) as the validated score of EVERY fired block today and
+    SET the cell, instead of appending one block's score at its boundary.
+
+    This self-heals late markers: a prayer (☀️) logged after its block's boundary,
+    or a toggl/todoist entry that lands after the fire, is picked up on the next
+    fire. Re-validating same-day past blocks is safe because -1g goals are only
+    cleared next-day. The current block reuses `current_live` (already computed by
+    evaluate_and_mark_block) to avoid a redundant re-query."""
+    parts = []
+    for fh in sorted(h for h in BLOCK_FIRE_HOURS if h <= upto_hour):
+        bn = HOUR_TO_BRANCH_BLOCK.get(fh)
+        if not bn:
+            continue  # 04 is the day start — no just-ended block
+        live = current_live if (fh == upto_hour and current_live is not None) \
+            else _live_for_block(bn, fh, target_date)
+        parts.append(score_block_from_emojis(bn, live=live))
+    total = sum(parts)
+    formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
+    log(f"reconcile_p: {target_date} parts={parts} total={total}")
+    return neon_set_p(target_date, formula, total, dry_run=dry_run)
+
+
 def neon_read_y(target_date: dt.date) -> str:
     """Read computed value of -1₦ (col Y) for target_date. Returns string or 'ERROR'."""
     body = (
@@ -907,8 +983,11 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
         score = score_block_from_emojis(block_name, live=live)
         log(f"lock-and-mark: {block_name} scored {score}/13")
 
-        # Phase 3: write score to neon
-        neon_add_score_to_p(today, score, dry_run=dry_run)
+        # Phase 3: reconcile -1₦ (P) to the validated total of ALL fired blocks.
+        # SET (not append) so it's idempotent and self-heals late markers (e.g. a
+        # prayer logged after its block's boundary) that the old per-block append
+        # dropped forever — the cause of P (53) drifting below the header (79).
+        reconcile_p_for_day(today, hour, current_live=live, dry_run=dry_run)
         annotate_block_fired(hour, dry_run=dry_run)
 
         # Phase 4: notify with score breakdown
