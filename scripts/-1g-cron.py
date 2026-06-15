@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 try:
@@ -250,6 +251,19 @@ def run_daily_reset(dry_run: bool):
         og_replacement = [new_lines[og_start], "- [ ] ", "- [ ] ", "- [ ] ", ""]
         new_lines = new_lines[:og_start] + og_replacement + new_lines[og_end:]
         print(f"[{LOG_PREFIX}] daily-reset: 0₲ section reset (3 empty checkboxes)")
+
+    # Stamp the frontmatter date so the perpetual build-order file reflects the
+    # current day instead of sticking at its creation date (it was stale at
+    # 2026-03-02). Only touch lines inside the leading --- frontmatter block.
+    today_iso = date.today().isoformat()
+    if new_lines and new_lines[0].strip() == "---":
+        for i in range(1, len(new_lines)):
+            if new_lines[i].strip() == "---":
+                break
+            if new_lines[i].startswith("date:"):
+                new_lines[i] = f"date: {today_iso}"
+            elif new_lines[i].startswith("updated:"):
+                new_lines[i] = f"updated: {today_iso}"
 
     # Atomic write
     tmp = MD_FILE.with_suffix(".md.tmp")

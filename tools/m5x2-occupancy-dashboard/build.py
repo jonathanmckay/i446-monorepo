@@ -126,6 +126,21 @@ LEASE_DAYS = clamp(med(lease_obs, 35), 14, 90)
 lam = (cur["nr"] + cur["nu"]) / NOTICE_DAYS          # notice arrivals/day
 k_out, k_lease, k_in = 1 / NOTICE_DAYS, 1 / LEASE_DAYS, 1 / MOVEIN_LAG
 
+# Share of on-notice units that already have a signed backfill (notice-rented).
+# Empirically ~0 at m5x2: AppFolio's unit_vacancy never reports Notice-Rented and
+# no Notice unit carries a next_move_in — backfills are signed only AFTER a unit
+# goes vacant, not during the notice period. The old model pre-leased on-notice
+# units at the full lease-up rate (nu·k_lease ≈ 3/day), which manufactured a
+# notice-rented band that rose 0→20 in the forecast even though the real series
+# sits at 0. Calibrate the pre-lease rate from the observed notice-rented share so
+# the forecast tracks reality; it rises automatically if backfills-on-notice ever
+# become common.
+# Use the recent regime (last 14 days) — notice-rented has decayed to 0 and the
+# forecast should hold there, not climb back toward an older, higher level.
+recent = [TB[d] for d in hdates[-14:]]
+prelease_frac = med([s["nr"] / ((s["nu"] + s["nr"]) or 1) for s in recent
+                     if s["nu"] + s["nr"] > 0], 0.0)
+
 b = {k: float(cur[k]) for k in ("occ_stable", "nr", "nu", "vr", "vu")}
 def fsnap(date):
     return {"date": date.isoformat(), "projected": True,
@@ -133,20 +148,52 @@ def fsnap(date):
             "vr": round(b["vr"], 1), "vu": round(b["vu"], 1)}
 fwd = [{"date": TODAY.isoformat(), "projected": False, "nr": cur["nr"],
         "nu": cur["nu"], "vr": cur["vr"], "vu": cur["vu"]}]
+fwd_signings = []  # (date, predicted new leases signed that day) — drives the weekly lease model
 for i in range(1, FWD_DAYS + 1):
     occ, nr, nu, vr, vu = b["occ_stable"], b["nr"], b["nu"], b["vr"], b["vu"]
-    f_new = lam              # occ → notice-unrented (fresh notice)
-    f_nu_nr = nu * k_lease   # noticed unit gets pre-leased
-    f_vu_vr = vu * k_lease   # vacant unit gets leased
-    f_nu_vu = nu * k_out     # notice period ends, still unrented
-    f_nr_vr = nr * k_out     # notice period ends, backfill lined up
-    f_vr_occ = vr * k_in     # new tenant moves in
+    f_new = lam                            # occ → notice-unrented (fresh notice)
+    f_nu_nr = nu * k_lease * prelease_frac  # noticed unit gets pre-leased (rare; data-calibrated)
+    f_vu_vr = vu * k_lease                 # vacant unit gets leased
+    f_nu_vu = nu * k_out                   # notice period ends, still unrented
+    f_nr_vr = nr * k_out                   # notice period ends, backfill lined up
+    f_vr_occ = vr * k_in                   # new tenant moves in
     b["occ_stable"] = occ - f_new + f_vr_occ
     b["nu"] = nu + f_new - f_nu_nr - f_nu_vu
     b["nr"] = nr + f_nu_nr - f_nr_vr
     b["vu"] = vu + f_nu_vu - f_vu_vr
     b["vr"] = vr + f_nr_vr + f_vu_vr - f_vr_occ
+    # A "lease" = a unit entering the rented/covered set (signed lease), whether
+    # it was vacant or still on notice when signed.
+    fwd_signings.append((TODAY + dt.timedelta(days=i), f_vu_vr + f_nu_nr))
     fwd.append(fsnap(TODAY + dt.timedelta(days=i)))
+
+# ── Weekly lease-count model: predicted signings vs. already-scheduled move-ins ─
+# predicted  = the forecast's weekly lease-up run-rate (Σ daily signings per week)
+# scheduled  = leases already signed in the pipeline, bucketed by move-in week
+#              (from the event log). The first is a model; the second is committed.
+def week_start(d):  # Monday-anchored week
+    return d - dt.timedelta(days=d.weekday())
+
+pred_by_week = {}
+for d, s in fwd_signings:
+    pred_by_week[week_start(d)] = pred_by_week.get(week_start(d), 0.0) + s
+
+ev_for_leases = load("events.json")
+sched_by_week = {}
+for e in ev_for_leases:
+    if e.get("kind") == "leased" and e.get("effective"):
+        ed = pdate(e["effective"])
+        if ed and ed >= TODAY:
+            sched_by_week[week_start(ed)] = sched_by_week.get(week_start(ed), 0) + 1
+
+leases_weekly = []
+w = week_start(TODAY)
+w_end = week_start(TODAY + dt.timedelta(days=FWD_DAYS))
+while w <= w_end:
+    leases_weekly.append({"week": w.isoformat(),
+                          "predicted": round(pred_by_week.get(w, 0.0), 1),
+                          "scheduled": sched_by_week.get(w, 0)})
+    w += dt.timedelta(days=7)
 
 # ── Long-term weekly % series (2024 → today, % of each snapshot's portfolio) ──
 longterm = []
@@ -190,6 +237,7 @@ payload = {
     "current": {"occ_stable": cur["occ_stable"], "nr": cur["nr"], "nu": cur["nu"],
                 "vr": cur["vr"], "vu": cur["vu"], "occ_pct": round(cur["occ"] / UNITS * 100, 1)},
     "back": back, "forward": fwd, "longterm": longterm, "feed": feed,
+    "leases_weekly": leases_weekly,
 }
 
 # ── Render ──────────────────────────────────────────────────────────────────
@@ -240,6 +288,18 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 Backward is real daily AppFolio snapshots; forward is a compartment forecast calibrated to the current
 pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = covered.</div></div>
 
+<h2>Leases per week — predicted signings vs. scheduled move-ins</h2>
+<div class="card"><canvas id="leasesChart" height="86"></canvas>
+<div class="legend">
+ <span><i class="sw" style="background:var(--blue)"></i>Predicted signings (model)</span>
+ <span><i class="sw" style="background:var(--vr)"></i>Scheduled move-ins (signed)</span></div>
+<div class="note" id="leaseNote"></div>
+<div class="note">First-pass lease model. <b>Predicted</b> = the occupancy forecast's weekly lease-up
+run-rate (vacant/notice units crossing into rented). <b>Scheduled</b> = leases already signed in the
+pipeline, bucketed by their move-in week — committed, not modeled. Predicted is calibrated to current
+lease-up speed; on-notice units are assumed to lease only after going vacant (the observed m5x2 pattern),
+so they are not pre-leased in bulk.</div></div>
+
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
 <div class="note">AppFolio's historical status breakdown is corrupt before ~2026 (it zeroes vacant-unrented
@@ -257,7 +317,13 @@ genuinely new notices/signings get their real detection date.</div></div>
 
 <script>
 const D = __PAYLOAD__;
-const C={nr:'#ff5fa2',nu:'#ff8a3d',vr:'#2faa4d',vu:'#e23b3b'};
+const C={nr:'#ff5fa2',nu:'#ff8a3d',vr:'#2faa4d',vu:'#e23b3b',blue:'#2979ff'};
+// Axis label formatters: drop the year for single-year spans (M/D), keep a compact
+// year for the multi-year long-term chart (M/YY). `this` is the Chart.js scale.
+function fmtMD(value){const s=this.getLabelForValue(value);const d=new Date(s+'T00:00');
+ return (d.getMonth()+1)+'/'+d.getDate();}
+function fmtMYY(value){const s=this.getLabelForValue(value);const d=new Date(s+'T00:00');
+ return (d.getMonth()+1)+'/'+String(d.getFullYear()).slice(2);}
 // KPIs
 const c=D.current, kp=[['occ_pct','Occupied %','',c.occ_pct+'%'],
  ['vu','Vacant-Unrented','vu',c.vu],['vr','Vacant-Rented','vr',c.vr],
@@ -283,8 +349,23 @@ new Chart(document.getElementById('unitsChart'),{type:'line',
  data:{labels,datasets:order.map(o=>ds(o[0],o[1],o[2]))},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>i[0].label+(i[0].dataIndex>splitIdx?'  (forecast)':'')}}},
-  scales:{x:{stacked:true,ticks:{color:'#8b96a3',maxTicksLimit:16},grid:{display:false}},
+  scales:{x:{stacked:true,grid:{display:false},
+    ticks:{color:'#8b96a3',maxTicksLimit:30,autoSkip:true,maxRotation:90,minRotation:90,callback:fmtMD}},
    y:{stacked:true,ticks:{color:'#8b96a3'},grid:{color:'#1e242b'}}}}});
+// ── leases-per-week chart: predicted signings vs scheduled move-ins ──
+document.getElementById('leaseNote').textContent=
+ `Next ${D.leases_weekly.length} weeks · predicted ~${D.leases_weekly.reduce((a,r)=>a+r.predicted,0).toFixed(0)} `+
+ `signings vs ${D.leases_weekly.reduce((a,r)=>a+r.scheduled,0)} already scheduled.`;
+const lw=D.leases_weekly, lwLabels=lw.map(r=>r.week);
+new Chart(document.getElementById('leasesChart'),{type:'bar',
+ data:{labels:lwLabels,datasets:[
+   {label:'Predicted signings',data:lw.map(r=>r.predicted),backgroundColor:C.blue,borderRadius:3},
+   {label:'Scheduled move-ins',data:lw.map(r=>r.scheduled),backgroundColor:C.vr,borderRadius:3}]},
+ options:{responsive:true,interaction:{mode:'index',intersect:false},
+  plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>'week of '+i[0].label}}},
+  scales:{x:{grid:{display:false},
+    ticks:{color:'#8b96a3',maxRotation:90,minRotation:60,callback:fmtMD}},
+   y:{beginAtZero:true,ticks:{color:'#8b96a3',precision:0},grid:{color:'#1e242b'}}}}});
 // ── long-term % chart: weekly since 2024 ──
 const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
@@ -294,7 +375,8 @@ new Chart(document.getElementById('pctChart'),{type:'line',
   pds('vr','Vacant-Rented %',C.vr),pds('nr','Notice-Rented %',C.nr)]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}}},
-  scales:{x:{stacked:true,ticks:{color:'#8b96a3',maxTicksLimit:18},grid:{display:false}},
+  scales:{x:{stacked:true,grid:{display:false},
+    ticks:{color:'#8b96a3',maxTicksLimit:26,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
    y:{stacked:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
 // ── feed: date column = known (when learned); sub shows effective (when it happens) ──
 document.getElementById('feed').innerHTML=D.feed.map(f=>

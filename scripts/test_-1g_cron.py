@@ -66,3 +66,30 @@ def test_archive_0g_goals_prepends_newest_first(tmp_path, monkeypatch):
     mod._archive_0g_goals(["  - [x] fresh {5}"])
     txt = log.read_text()
     assert txt.index("fresh {5}") < txt.index("ancient {1}"), "newest entry must come first"
+
+
+def test_daily_reset_stamps_frontmatter_date(tmp_path, monkeypatch):
+    """The perpetual build-order file's frontmatter date/updated must be stamped
+    to today on reset, so it never reads stale (was stuck at 2026-03-02)."""
+    from datetime import date
+    bo = tmp_path / "build-order.md"
+    bo.write_text(
+        "---\n"
+        'title: "x"\n'
+        "date: 2026-03-02\n"
+        "type: doc\n"
+        "updated: 2026-03-02\n"
+        "---\n\n"
+        "## 0₲\n- [ ] \n\n### 以后的目标\n- [ ] later\n\n"
+        "## -1₲\n\n- 卯\n    - [ ] morning goal\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "MD_FILE", bo)
+    monkeypatch.setattr(mod, "_archive_before_reset", lambda: None)
+    monkeypatch.setattr(mod, "_archive_0g_goals", lambda *a, **k: None)
+    mod.run_daily_reset(dry_run=False)
+    txt = bo.read_text()
+    today = date.today().isoformat()
+    assert f"date: {today}" in txt
+    assert f"updated: {today}" in txt
+    assert "2026-03-02" not in txt

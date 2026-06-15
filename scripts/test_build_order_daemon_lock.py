@@ -79,3 +79,14 @@ def test_block_convention_consistent_across_tools():
     check = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(check)
     assert [(lo, b) for lo, hi, b, _ in check.BLOCKS] == daemon_blocks
+
+
+def test_neon_blocks_build_order_path_matches_daemon():
+    """lib/neon/blocks.py must point at the live build-order.md, not the old
+    missing '-1₦ , 0₦ - Neon {Build Order}.md' — flip_checkbox/parse_block_goals
+    were silently reading a nonexistent file (2026-06-14)."""
+    daemon = _load()
+    sys.path.insert(0, str(pathlib.Path.home() / "i446-monorepo" / "lib"))
+    from neon import blocks as neon_blocks
+    assert neon_blocks.BUILD_ORDER.name == "build-order.md"
+    assert neon_blocks.BUILD_ORDER == daemon.BUILD_ORDER

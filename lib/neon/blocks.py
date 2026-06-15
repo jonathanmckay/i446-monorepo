@@ -11,7 +11,11 @@ from datetime import datetime
 from pathlib import Path
 
 VAULT = Path.home() / "vault"
-BUILD_ORDER = VAULT / "g245" / "-1₦ , 0₦ - Neon {Build Order}.md"
+# The live build order. Every other module (did, -2n, tg-tui, the daemon,
+# enrich) uses this filename; the old "-1₦ , 0₦ - Neon {Build Order}.md" path
+# no longer exists, so flip_checkbox / parse_block_goals here were silently
+# reading a missing file.
+BUILD_ORDER = VAULT / "g245" / "build-order.md"
 
 # (start_hour, branch). The 2h block is [start, start+2). Hours 0-3 land in 子 (sleep).
 # 卯 = 04-06: the convention shared by the 0分 sheet writer (build-order-daemon

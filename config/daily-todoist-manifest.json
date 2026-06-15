@@ -235,6 +235,17 @@
       ],
       "priority": 3,
       "project_id": "6Crfmq5PfP5VQ286"
+    },
+    "stats-i9": {
+      "match": "stats i9",
+      "content": "stats i9 (4) [8]",
+      "due_string": "every day",
+      "labels": [
+        "0neon",
+        "i9"
+      ],
+      "priority": 4,
+      "project_id": "6XQ3GMQRVmPgPM4W"
     }
   }
 }
