@@ -69,6 +69,17 @@ def test_bare_strips_all_estimate_tokens():
     assert vdh.bare("0g (4) [8]") == "0g"
 
 
+def test_2n_wires_daily_habits_card():
+    """The /inbound (-2n) flow must run the once-daily check and surface a card
+    only when something was recreated/errored. Guards against the wiring being
+    dropped in a future -2n refactor."""
+    src = (Path.home() / "i446-monorepo/tools/ibx/-2n.py").read_text()
+    assert "daily_habits_due_today" in src, "once-a-day guard missing from -2n"
+    assert "run_daily_habits_check" in src, "habits check call missing from -2n"
+    assert 'cards_needed.append("habits")' in src, "habits card not added to queue"
+    assert "validate-daily-habits.py" in src, "-2n must invoke the validator"
+
+
 def test_live_manifest_is_valid_and_nonempty():
     """The shipped manifest must parse and have habits with the fields the
     validator needs (guards against a corrupt/empty manifest silently disabling

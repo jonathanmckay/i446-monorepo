@@ -41,7 +41,34 @@ console = Console()
 TERM_COLOR = Path(__file__).parent.parent.parent / "scripts" / "term-color.sh"
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 MTG_BRIEFS = Path.home() / "vault/z_ibx/mtg-briefs.json"
+VALIDATE_HABITS = Path.home() / "i446-monorepo/scripts/validate-daily-habits.py"
+HABITS_CHECK_CACHE = Path.home() / ".cache/jm/daily-habits-check.json"
 TZ = "America/Los_Angeles"
+
+
+def daily_habits_due_today():
+    """True if the daily-habit Todoist check hasn't run yet today. The -2n loop
+    restarts every 2h block, so this guards the once-a-day check on the date the
+    validator stamped into its cache."""
+    try:
+        cached = json.loads(HABITS_CHECK_CACHE.read_text())
+        return cached.get("date") != datetime.now().strftime("%Y-%m-%d")
+    except Exception:
+        return True
+
+
+def run_daily_habits_check():
+    """Recreate any canonical daily habits missing from Todoist (validator does
+    the --fix) and return its result dict, or None on failure. Best-effort: a
+    failure here must never block the wakeup ritual."""
+    try:
+        r = subprocess.run(
+            [sys.executable, str(VALIDATE_HABITS), "--fix", "--cache"],
+            capture_output=True, text=True, timeout=60,
+        )
+        return json.loads(r.stdout) if r.stdout.strip() else None
+    except Exception:
+        return None
 
 BLOCKS = [
     ("卯", "04:00", "05:59"),
@@ -1283,7 +1310,15 @@ def main():
     # the current block can be a sleep block (e.g. 卯 at midnight); a -1g card
     # there is nonsensical.
     sleep_block = is_asleep_now()
+    # Daily-habit Todoist check (once a day): recreate any canonical daily habits
+    # that failed to regenerate for the new day, and surface a card iff something
+    # was recreated or errored — never nag when all present.
+    habits_result = run_daily_habits_check() if daily_habits_due_today() else None
+    habits_to_show = bool(habits_result and (habits_result.get("recreated_names")
+                                             or habits_result.get("errors")))
     cards_needed = []
+    if habits_to_show:
+        cards_needed.append("habits")
     # The ☀️ marker is per-2h-block; the Neon ص column is per-day. Don't let
     # the daily mark suppress the per-block prompt — only check the marker.
     if not prayer_marker_exists:
@@ -1305,6 +1340,34 @@ def main():
             console.print(f"[green]{salah_status}[/green] صلاة  [green]✓[/green] -1g ({block_name}): {', '.join(all_goal_texts)}")
         console.print()
     else:
+        # ── Card 0: daily-habit regen ─────────────────────────────────
+        if habits_to_show:
+            card_num += 1
+            rec = habits_result.get("recreated_names", [])
+            err = habits_result.get("errors", [])
+            lines = []
+            if rec:
+                lines.append(f"[green]recreated {len(rec)} missing daily habit(s):[/green] "
+                             + ", ".join(rec))
+            if err:
+                lines.append(f"[red]{len(err)} could not be recreated[/red] — do manually: "
+                             + ", ".join(e.get("habit", "?") for e in err))
+            set_term_color("red")
+            console.print(Panel(
+                "\n".join(lines),
+                title=f"[bold]Card {card_num}/{total_cards}: 🔁 daily habits[/bold]",
+                border_style="yellow",
+                padding=(1, 2),
+            ))
+            try:
+                console.input("[dim]any key to continue[/dim] ")
+            except KeyboardInterrupt:
+                set_term_color("black")
+                raise
+            except EOFError:
+                pass
+            set_term_color("black")
+
         # ── Card 1: صلاة ──────────────────────────────────────────────
         if not prayer_marker_exists:
             card_num += 1
