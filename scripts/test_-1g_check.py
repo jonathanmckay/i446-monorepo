@@ -88,6 +88,25 @@ def test_checked_items_still_counted(tmp_path):
     assert mod.read_block_goals("申", p) == ["Done thing", "Other thing"]
 
 
+def test_goals_found_under_enriched_header(tmp_path):
+    """Bug (2026-06-14): once enrich/daemon/-1g append emojis + time stats to a
+    block header, the bare-header regex stopped matching, so every block read as
+    empty — the 'build order completely blank for today' symptom. Headers carry
+    trailing decoration and must still parse."""
+    body = """## -1₲
+
+- 巳 ☀️ ✅ 🎯 📧 (158min) ⏱️ ⏰ (105min)
+    - [x] tasks down a bit {5}
+    **Time**
+    - 08:20-08:53 xk20 @xk87
+- 午 (129min) 🎯 ⏰
+    - [ ] enjoy the meetings {5}
+"""
+    p = _write_build_order(tmp_path, body)
+    assert mod.read_block_goals("巳", p) == ["tasks down a bit {5}"]
+    assert mod.read_block_goals("午", p) == ["enjoy the meetings {5}"]
+
+
 def test_whitespace_only_bullets_excluded(tmp_path):
     # Regression: the bug we just fixed — don't count `    - [ ] ` (no content) as "set".
     body = """## -1₲

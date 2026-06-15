@@ -923,3 +923,70 @@ def test_goals_set_is_existence_based_not_open_only():
     assert "goals_set = bool(current_goals) and any(g for g in current_goals)" not in src, (
         "open-only goals_set reintroduced — completed goals will look unset"
     )
+
+
+# ── Regression: -1g goal card must not fire for blocks the user slept through ──
+
+class _FakeResult:
+    def __init__(self, stdout):
+        self.stdout = stdout
+
+
+def _check_asleep(m, toggl_output, now_hh, now_mm):
+    """Run is_asleep_now() with a fixed Toggl output and clock."""
+    import datetime as _dt
+    fake_now = _dt.datetime(2026, 6, 14, now_hh, now_mm)
+    with patch.object(m, "subprocess") as msub, patch.object(m, "datetime") as mdt:
+        msub.run.return_value = _FakeResult(toggl_output)
+        mdt.now.return_value = fake_now
+        return m.is_asleep_now()
+
+
+def test_is_asleep_now_true_when_running_sleep_timer_covers_now():
+    """Overnight: a running 睡觉 timer started before midnight covers `now`."""
+    m = _load_two_n()
+    out = "00:00-running 睡觉 @睡觉 (180min) [id:1]"
+    assert _check_asleep(m, out, 3, 0) is True
+
+
+def test_is_asleep_now_true_when_stopped_sleep_entry_covers_now():
+    """A stopped 睡觉 entry spanning the current moment still counts as asleep."""
+    m = _load_two_n()
+    out = "00:00-07:22 睡觉 @睡觉 (442min) [id:1]"
+    assert _check_asleep(m, out, 5, 0) is True
+
+
+def test_is_asleep_now_false_when_awake():
+    """No 睡觉 entry covers `now` → awake; ritual cards may fire."""
+    m = _load_two_n()
+    out = (
+        "00:00-07:22 睡觉 @睡觉 (442min) [id:1]\n"
+        "09:15-09:47 tasks @i9 (32min) [id:2]"
+    )
+    assert _check_asleep(m, out, 10, 0) is False
+
+
+def test_is_asleep_now_false_for_non_sleep_entry_covering_now():
+    """A non-睡觉 entry covering now must not be mistaken for sleep."""
+    m = _load_two_n()
+    out = "14:00-15:30 work @i9 (90min) [id:1]"
+    assert _check_asleep(m, out, 15, 0) is False
+
+
+def test_1g_card_suppressed_when_asleep():
+    """Structural: the -1g card (count + guard) must be gated on `not sleep_block`
+    so a goal prompt never fires for a block the user slept through (overnight
+    block-watcher restarts make the current block a sleep block, e.g. 卯 at
+    midnight)."""
+    src = SRC.read_text()
+    assert "sleep_block = is_asleep_now()" in src, (
+        "main() must compute sleep_block from is_asleep_now()"
+    )
+    # Both the card-count and the card-guard conditions must include the gate.
+    assert src.count("if not goals_set and not sleep_block:") == 2, (
+        "both the -1g card count and the -1g card guard must check `not sleep_block`"
+    )
+    # The ungated form must be gone from those two sites.
+    assert "if not goals_set:\n            cards_needed.append" not in src, (
+        "ungated -1g card-count condition reintroduced"
+    )

@@ -616,6 +616,44 @@ def check_time_gaps(block_start, block_end, date_str=None):
     return gaps
 
 
+def is_asleep_now(date_str=None):
+    """True if a 睡觉 (sleep) Toggl entry covers the current moment.
+
+    /inbound's block watcher restarts at every 2h boundary, including overnight,
+    so the current block can become a sleep block (e.g. 卯 at midnight) and fire
+    a -1g goal card while the user is asleep. The overnight 睡觉 timer (split at
+    the day barrier per the day-barrier rule) runs across midnight, so a running
+    or just-stopped 睡觉 entry covers `now` and lets us detect sleep and suppress
+    the ritual prompt.
+    """
+    cli = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
+    cmd = ["python3", str(cli), "today"]
+    if date_str:
+        cmd = ["python3", str(cli), "date", date_str]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        lines = result.stdout.strip().split("\n")
+    except Exception:
+        return False
+
+    now = datetime.now()
+    now_m = now.hour * 60 + now.minute
+    for line in lines:
+        line = line.strip()
+        m = re.match(r'(\d{2}:\d{2})-(\d{2}:\d{2}|running)\s+(.*)', line)
+        if not m:
+            continue
+        start, end, rest = m.group(1), m.group(2), m.group(3)
+        # 睡觉 appears as the description and/or @睡觉 project tag.
+        if "睡觉" not in rest:
+            continue
+        s_m = int(start[:2]) * 60 + int(start[3:])
+        e_m = now_m if end == "running" else int(end[:2]) * 60 + int(end[3:])
+        if s_m <= now_m <= e_m:
+            return True
+    return False
+
+
 # ── /tg shortcode → project mapping (subset for gap fills) ───────────────
 _GAP_PROJECT_MAP = {
     "wake up": "infra", "get up": "infra", "bio": "infra", "shower": "hci",
@@ -1240,6 +1278,11 @@ def main():
 
     # Count cards needed
     prayer_marker_exists = has_prayer_marker(block_name)
+    # Don't prompt to set goals for a block the user slept through. The block
+    # watcher restarts /inbound at every 2h boundary, including overnight, so
+    # the current block can be a sleep block (e.g. 卯 at midnight); a -1g card
+    # there is nonsensical.
+    sleep_block = is_asleep_now()
     cards_needed = []
     # The ☀️ marker is per-2h-block; the Neon ص column is per-day. Don't let
     # the daily mark suppress the per-block prompt — only check the marker.
@@ -1247,7 +1290,7 @@ def main():
         cards_needed.append("salah")
     for _ in block_gaps:
         cards_needed.append("gaps")
-    if not goals_set:
+    if not goals_set and not sleep_block:
         cards_needed.append("-1g")
     for brief in mtg_briefs:
         cards_needed.append("mtg")
@@ -1319,7 +1362,7 @@ def main():
         if new_idx != idx:
             console.print(f"[dim]  block → {new_block} — reloading cards[/dim]")
             return 0
-        if not goals_set:
+        if not goals_set and not sleep_block:
             card_num += 1
             # Synthesize 3 block-aware suggestions from cal/1g/0g/0n.
             # Falls back to Todoist [N]/(N) ratio list when no signals available.
