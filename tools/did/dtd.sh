@@ -419,9 +419,11 @@ def prank(p):
 def strip_ann(s):
     return re.sub(r'  +', ' ', re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', s)).strip()
 
-# Right-justify trailing (N)/[N]/{N} estimates to the window edge so they line
-# up in a column. target = cols - 3 leaves room for fzf's pointer/gutter (2) and
-# the scrollbar (1). If there is no room (long/truncated rows), leave inline.
+# Right-justify trailing (N)/[N]/{N} estimates into a column. target = cols - 8
+# pulls the estimate column ~5 cols in from the edge (vs the old cols - 3): it
+# keeps fzf's pointer/gutter (2) + scrollbar (1) clear AND adds a 5-col right
+# margin so estimates stay visible in a narrow pane and the name→estimate gap
+# shrinks. If there is no room (long/truncated rows), leave inline.
 _EST_TOK = r'(?:\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\})'
 _EST_TAIL = re.compile(r'(\s*(?:' + _EST_TOK + r'\s*)+)$')
 def rjust_est(s, cols):
@@ -430,7 +432,7 @@ def rjust_est(s, cols):
         return s
     est = re.sub(r'\s+', ' ', m.group(1).strip())
     head = s[:m.start()].rstrip()
-    pad = (cols - 3) - len(head) - len(est)
+    pad = (cols - 8) - len(head) - len(est)
     if pad < 2:
         return (head + ' ' + est) if head else est
     return head + ' ' * pad + est
@@ -488,15 +490,16 @@ for t in unique:
     # tasks keep their (N)/[N] estimates visible; fall back to full content.
     display = t.get('short') or raw
 
-    # Middle-truncate if needed (fallback; short names usually fit)
+    # Middle-truncate if needed (fallback; short names usually fit). cols - 7
+    # keeps the whole row ~5 cols thinner, matching the estimate margin above.
     line = display
-    if len(line) > cols - 2:
+    if len(line) > cols - 7:
         # Find trailing annotations
         tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][ ]*[\(\[\{]\d*[\)\]\}].*$', line)
         if not tail_m:
             tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][^()\[\]{}]*$', line)
         tail = tail_m.group() if tail_m else line[-15:]
-        head_len = max(10, cols - len(tail) - 2)
+        head_len = max(10, cols - len(tail) - 7)
         line = line[:head_len] + '…' + tail
 
     # Hidden field 2 carries the task id so bindings resolve the real task.

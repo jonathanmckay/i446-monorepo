@@ -25,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-PROSE_CAP = 32  # max chars of prose in the shortened name (estimates appended on top)
+PROSE_CAP = 37  # max chars of prose in the shortened name (estimates appended on top)
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 SIDECAR = _sp.TASK_SHORTNAMES
 MODEL = "claude-haiku-4-5-20251001"
