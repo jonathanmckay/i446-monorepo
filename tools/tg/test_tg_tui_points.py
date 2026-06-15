@@ -72,3 +72,30 @@ def test_block_points_no_timestamp_reconstruction(monkeypatch):
     m.STATE.block_points = {"酉": 999}  # stale value must be cleared on a good read
     m.fetch_points()
     assert m.STATE.block_points == {}, "good read with no points must clear to {}"
+
+
+def test_residual_formula_blocks_are_skipped(monkeypatch):
+    """Block columns lock sequentially to literals; an unlocked block is the
+    residual `=D-SUM(locked)` which dumps the whole day into the first unlocked
+    block (the "everything piles into 巳 / 2392分" bug). G:O are read as
+    FORMULAS, so a cell still starting with '=' must be skipped — only locked
+    literal earnings count. Σ (col D, read as a value) is unaffected."""
+    m = _load_tui()
+    # Σ=353; 卯=60 and 辰=0 locked literals; 巳 onward still residual formulas.
+    out = (
+        "353.05|60|0"
+        "|=D164-SUM(G164,H164)"
+        "|=D164-SUM(G164,H164,I164,)"
+        "|=D164-SUM(G164,H164,I164,J164)"
+        "|=D164-SUM(G164,H164,I164,J164,K164)"
+        "|=D164-SUM(G164,H164,I164,J164,K164,L164)"
+        "|=D164-SUM(G164,H164,I164,J164,K164,L164,M164)"
+        "|=D164-SUM(G164,H164,I164,J164,K164,L164,M164,N164)"
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(out))
+    m.STATE.block_points = {"巳": 2392}  # the stale residual spike must be cleared
+    m.fetch_points()
+    assert m.STATE.today_points == 353
+    assert m.STATE.block_points == {"卯": 60}, (
+        "residual =D-SUM(...) cells must not be attributed as per-block earnings"
+    )

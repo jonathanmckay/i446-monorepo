@@ -399,10 +399,13 @@ def fetch_points():
     penalty in P, which is exactly why the numbers used to diverge.
 
     Per-block points come from columns G:O (headed 卯辰巳午未申酉戌亥) in the
-    same row — the authoritative distribution. The completed-today.json
-    timestamp reconstruction is a fallback only: it attributes points to the
-    block they were logged in, which piles batch-logged work into the current
-    block (the "everything shows in 申" bug).
+    same row, read as FORMULAS. Blocks lock sequentially to literals; an
+    unlocked block is the residual `=D-SUM(locked)`, which dumps the whole
+    unallocated day into the first unlocked block. Those `=…` cells are skipped
+    so only locked literal earnings show (the "everything piles into 巳" bug).
+    The completed-today.json timestamp reconstruction is a fallback only: it
+    attributes points to the block they were logged in, which piles batch-logged
+    work into the current block (the "everything shows in 申" bug).
     """
     try:
         now = dt.datetime.now(TZ)
@@ -436,7 +439,7 @@ def fetch_points():
     repeat with c from 7 to 15
         set v to ""
         try
-            set v to (value of cell c of row todayRow of ws) as text
+            set v to (get formula of cell c of row todayRow of ws) as text
         end try
         set out to out & "|" & v
     end repeat
@@ -461,6 +464,15 @@ end tell'''
                 for bname, raw in zip(branches, parts[1:10]):
                     raw = raw.strip()
                     if not raw:
+                        continue
+                    # G:O are read as FORMULAS. The blocks lock sequentially to
+                    # literals; every still-unlocked block is the running
+                    # residual `=D-SUM(locked)`, so the first unlocked block
+                    # holds the ENTIRE unallocated day (the "everything piles
+                    # into 巳" bug) and later ones compute to 0. _blocks_consistent
+                    # can't catch it — the residual makes sum==Σ by construction.
+                    # Only locked, literal cells are real per-block earnings.
+                    if raw.startswith("="):
                         continue
                     try:
                         v = int(round(float(raw)))
