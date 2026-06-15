@@ -34,7 +34,7 @@ Optionally append a short Commentary section (phase shifts, weakest rituals, wee
 
 | Symbol | Ritual | Source |
 |--------|--------|--------|
-| ☀️ | prayer (salah) | Toggl: الفاتحة / الشمس (project hcm) by start time |
+| ☀️ | prayer (salah) | Build order: ☀️ stamp on the block header (written by /ص, prayer_marker, did-fast). Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from live `build-order.md` |
 | 📧 | inbox processed | Toggl: description starts with `ibx` |
 | 🎯 | goal set for block (-1g) | Build order `## -1₲` section: non-empty checkbox under the block header. Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from the live `build-order.md` |
 | ⏱️ | time logged | Toggl: `-1t` / `-1l` / `0t` / `0l` |
