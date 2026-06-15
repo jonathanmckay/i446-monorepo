@@ -8,6 +8,21 @@ user-invocable: true
 
 Scan ~/vault/d359/ for contacts with overdue outreach cadence, then create Todoist reminder tasks.
 
+## Primary path (use this)
+
+```bash
+python3 ~/i446-monorepo/scripts/stale-contacts.py --apply   # omit --apply to dry-run
+```
+
+The script is the single implementation: it refreshes `last_contact` from Toggl/d358, scans every d359 file for overdue `cadence`+`last_contact`, dedupes against open `d359/<slug>`-labelled tasks, and creates the tasks. It also runs daily via launchd (`com.mckay.stale-contacts`). Echo its output.
+
+**Conventions the script enforces (keep manual edits consistent):**
+- Every auto-generated task is prefixed **😈** — the marker for "created by a daemon/process, not by hand." This applies to ALL automation that writes to Todoist, not only this sweep.
+- A d359 file may set `outreach_task: "call mom (20) [20]"` to override the default `Reach out to <Name> (overdue …)` body.
+- Tasks are labelled `["s897", "d359/<slug>"]` so time/points roll up to the contact.
+
+The steps below are reference for the logic the script implements.
+
 ## Response Style
 
 Terse. No preamble. Run the sweep, report results.
