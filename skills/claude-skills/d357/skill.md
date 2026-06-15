@@ -187,11 +187,35 @@ for Teams meetings.
       --max-seconds <calendar_minutes*60+300> 2> /tmp/teamstap.log"
   ```
 - It tails liveness stats to /tmp/teamstap.log (`stat: frames=... rms=...`).
+- **Capture-health check (do this ~30s after launch, during a live call).** teamstap
+  is routing-dependent: it sometimes attaches to the Teams process but reads pure
+  digital silence (`rms=0.000000 peak=0.000000`) while the call audio is actually
+  flowing through the system output device to BlackHole instead (observed live
+  2026-06-15: teamstap zero, BlackHole rms 0.068). Genuine silence still carries a
+  codec noise floor (~`rms=0.0003`), so **sustained exact `0.000000`** = teamstap is
+  NOT capturing this call. When you see that, probe BlackHole:
+  ```bash
+  python3 -c "import sounddevice as sd,numpy as np; i=next(k for k,d in enumerate(sd.query_devices()) if 'BlackHole' in d['name'] and d['max_input_channels']>0); r=sd.rec(int(2*48000),samplerate=48000,channels=2,device=i); sd.wait(); print('BlackHole rms=%.6f'%float(np.sqrt((r**2).mean())))"
+  ```
+  If BlackHole has signal (rms ≫ 0), **fall back to the BlackHole path**: kill teamstap
+  and the mic-only meet.py, and relaunch meet.py in *teams mode* (`mic + BlackHole`,
+  no `--no-teams`) which captures both sides in one stream. Set `mic_only: false` in
+  state and drop the `teamstap_wav` field. Only a few seconds of partial audio is lost.
 - **Stop**: `tmux send-keys -t teamstap C-c` (finalizes the WAV), or it self-stops
   at --max-seconds. Check the log for `stopped.`.
-- **At /d357 stop**: stop teamstap too, transcribe the remote wav with
-  faster-whisper (same model as meet.py), and merge both transcripts in the note —
-  mic transcript = JM's side, remote wav = everyone else (label accordingly).
+- **At /d357 stop**: stop teamstap too, then transcribe the remote wav with the
+  canonical helper — **do NOT hand-roll a faster-whisper call**:
+  ```bash
+  python3 ~/i446-monorepo/tools/meet/meet.py --transcribe '<remote.wav>'
+  ```
+  This writes `<remote>.txt` and prints the transcript. It passes the WAV *path* to
+  faster-whisper, which decodes + resamples 48kHz→16kHz via PyAV. (The teamstap WAV
+  is 48kHz mono; decoding it into a raw ndarray and passing THAT to `transcribe`
+  silently yields an empty transcript — faster-whisper does not resample ndarrays,
+  so 48kHz samples produce NaN mel features. The `--transcribe` path avoids that.)
+  Exit code is non-zero on an empty transcript, so a silently-lost remote side
+  surfaces instead of filing a one-sided note. Then merge both transcripts in the
+  note — mic transcript = JM's side, remote wav = everyone else (label accordingly).
 - TCC: needs "System Audio Recording" permission (granted to the terminal app;
   if capture yields zeros, check System Settings > Privacy > Screen & System
   Audio Recording).

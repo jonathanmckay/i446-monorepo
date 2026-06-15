@@ -178,3 +178,59 @@ def test_daemon_uses_tmux_and_valid_meet_flags():
     assert "send-keys" in source
     assert '"C-c"' in source
     assert "SIGTERM" not in source
+
+
+# ── Regression: teamstap remote-WAV transcription must be path-based (48kHz-safe) ──
+# The teamstap remote WAV is 48kHz mono. faster-whisper resamples to 16kHz only when
+# given a PATH (it decodes via PyAV); a raw ndarray is NOT resampled, so 48kHz samples
+# produce NaN mel features and an empty transcript. A filing agent hit exactly this
+# (2026-06-15) by hand-rolling an ndarray call. The fix: a `--transcribe` CLI that
+# routes through meet.transcribe(), which passes the path. These tests pin that design.
+
+import ast as _ast
+
+
+def _meet_ast():
+    src = (Path(__file__).parent / "meet.py").read_text()
+    return _ast.parse(src), src
+
+
+def test_transcribe_cli_arg_exists():
+    """meet.py must expose a --transcribe CLI so the /d357 stop flow has one
+    canonical, correct way to transcribe the teamstap remote WAV."""
+    _, src = _meet_ast()
+    assert '"--transcribe"' in src, "--transcribe argument missing from meet.py"
+    assert "args.transcribe" in src, "main() must handle args.transcribe"
+
+
+def test_transcribe_is_path_based_not_ndarray():
+    """transcribe() must call model.transcribe(str(<path>), ...). Passing a decoded
+    ndarray instead silently breaks on any non-16kHz WAV (no resample → empty text)."""
+    tree, _ = _meet_ast()
+    fn = next((n for n in _ast.walk(tree)
+               if isinstance(n, _ast.FunctionDef) and n.name == "transcribe"), None)
+    assert fn is not None, "transcribe() function not found"
+    calls = [n for n in _ast.walk(fn)
+             if isinstance(n, _ast.Call)
+             and isinstance(n.func, _ast.Attribute)
+             and n.func.attr == "transcribe"]
+    assert calls, "transcribe() must call model.transcribe(...)"
+    first = calls[0].args[0] if calls[0].args else None
+    # First positional arg must be str(...) — a path — not a bare ndarray Name.
+    assert isinstance(first, _ast.Call) and isinstance(first.func, _ast.Name) \
+        and first.func.id == "str", \
+        "model.transcribe() must receive str(<path>) so faster-whisper resamples; " \
+        "passing a raw ndarray skips resampling and empties non-16kHz transcripts"
+
+
+def test_mic_has_no_speech_warning_suppressed():
+    """The live 'MIC HAS NO SPEECH' warning is a false positive (it fires whenever
+    JM is listening while others talk — call audio is captured fine), so it must
+    not be emitted. The two genuine warnings (both channels silent, call-audio
+    silent) must remain."""
+    _, src = _meet_ast()
+    assert 'f"MIC HAS NO SPEECH' not in src, \
+        "MIC HAS NO SPEECH warning must stay suppressed (false positive when listening)"
+    # don't over-suppress: the real recording-problem warnings stay
+    assert 'f"NO SPEECH on either channel' in src
+    assert 'f"CALL AUDIO HAS NO SPEECH' in src

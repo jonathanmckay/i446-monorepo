@@ -380,12 +380,11 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     print("   Check: system output → 'Meet Output'? Is the other person talking?\n")
                     _notify("⚠ Recording Problem", msg)
                 elif not mic_has_speech and bh_has_speech:
-                    teams_warn_count += 1
-                    msg = f"MIC HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
-                    print(f"\n⚠  {msg}")
-                    print("   Call audio has speech, but your mic does not.")
-                    print("   Check your mic input device.\n")
-                    _notify("⚠ Recording Problem", msg)
+                    # MIC HAS NO SPEECH suppressed (2026-06-15): this is the normal
+                    # "you're listening while others talk" state — call audio is being
+                    # captured, so it's not a recording problem. The old warning was a
+                    # false positive any time JM wasn't the one speaking.
+                    pass
                 else:
                     if teams_warn_count > 0:
                         print(f"\n✓  Both channels now have speech ({int(elapsed)}s). Recording looks good.\n")
@@ -684,10 +683,36 @@ def main():
                         help="Mic device name fragment (e.g. 'AirPods'). Default: MacBook Pro Microphone")
     parser.add_argument("--devices", action="store_true",
                         help="List available audio input devices and exit")
+    parser.add_argument("--transcribe", metavar="WAV",
+                        help="Transcribe an existing WAV (any sample rate) and exit. "
+                             "Writes <wav>.txt and prints the transcript. Used by the "
+                             "/d357 stop flow for the teamstap remote-side WAV.")
     args = parser.parse_args()
 
     if args.devices:
         list_devices()
+        sys.exit(0)
+
+    # Standalone transcription of an existing WAV (e.g. the teamstap remote-side
+    # recording, which is 48kHz mono). transcribe() passes the PATH to
+    # faster-whisper, which decodes + resamples to 16kHz via PyAV — so any sample
+    # rate works. (Decoding the WAV into a raw ndarray and passing THAT silently
+    # fails: faster-whisper does not resample ndarrays, so a 48kHz array produces
+    # NaN mel features and an empty transcript. Always go through a path.)
+    if args.transcribe:
+        wav = Path(args.transcribe)
+        if not wav.exists():
+            print(f"⚠  WAV not found: {wav}", file=sys.stderr)
+            sys.exit(1)
+        text = transcribe(wav, args.model)
+        if not text.strip():
+            print(f"⚠  Empty transcript from {wav} — check the recording had audio.",
+                  file=sys.stderr)
+            sys.exit(1)
+        txt_path = wav.with_suffix(".txt")
+        txt_path.write_text(text)
+        print(f"TXT → {txt_path}")
+        print(text)
         sys.exit(0)
 
     meeting_name = args.name
