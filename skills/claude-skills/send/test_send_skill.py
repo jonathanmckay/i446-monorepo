@@ -97,3 +97,50 @@ def test_recipient_confirmation_on_ambiguous_match():
     assert "No d359 match" in text, (
         "Must require confirmation when falling back to Graph/search for unknown contacts"
     )
+
+
+# ── Regression: /send resolves the contacts registry (long-tail stubs) ────────
+# d359 profiles are canonical, but contacts without a full profile live as rows
+# in d359/contacts-registry.md. /send must parse that table after a profile miss.
+
+import re as _re
+import textwrap as _tw
+
+
+def _load_send_resolvers():
+    """Exec the python code block from SKILL.md that defines resolve_registry."""
+    text = SKILL_MD.read_text()
+    block = next(b for b in _re.findall(r'```python\n(.*?)```', text, _re.DOTALL)
+                 if 'def resolve_registry' in b)
+    ns = {}
+    exec(compile(block, 'send_skill_block', 'exec'), ns)
+    return ns
+
+
+def test_send_skill_defines_registry_resolver():
+    text = SKILL_MD.read_text()
+    assert 'def resolve_registry' in text, "registry fallback resolver missing"
+    assert 'contacts-registry.md' in text, "registry file path missing from SKILL.md"
+
+
+def test_resolve_registry_parses_table(tmp_path, monkeypatch):
+    d = tmp_path / 'vault' / 'd359'
+    d.mkdir(parents=True)
+    (d / 'contacts-registry.md').write_text(_tw.dedent('''\
+        ---
+        title: "Contacts Registry"
+        ---
+        ## Registry
+        | slug | name | preferred | email | work_email | phone | teams_upn | source | notes |
+        |------|------|-----------|-------|------------|-------|-----------|--------|-------|
+        | jane-doe | Jane Doe | gmail | jane@gmail.com |  | +14155551234 |  | gmail |  |
+    '''))
+    ns = _load_send_resolvers()
+    monkeypatch.setattr(ns['Path'], 'home', staticmethod(lambda: tmp_path))
+    res = ns['resolve_registry']('Jane Doe')
+    assert res, "exact name should match a registry row"
+    score, display, ch = res[0]
+    assert score == 3 and display == 'Jane Doe'
+    assert ch['email'] == 'jane@gmail.com' and ch['phone'] == '+14155551234'
+    assert 'work_email' not in ch, "blank cells must not become channel fields"
+    assert ns['resolve_registry']('Nobody Here') is None

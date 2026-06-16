@@ -133,9 +133,13 @@ Resolve recipients via **d359 lookup first**, then fall back to live lookups.
    Use the field matching the requested channel (e.g., `teams_upn` for teams, `phone` for imessage).
    If no channel was specified by the user, use `preferred:` to pick the channel.
 
-2. **MS Graph lookup** (teams/outlook only) — `GetMultipleUsersDetails` via agency mcp m365-user.
+2. **Contacts registry** — if no profile matched, parse the markdown table in
+   `~/vault/d359/contacts-registry.md` (the long tail of contacts without a full
+   profile). Same channel fields. Profiles always outrank registry rows.
 
-3. **Gmail search** (gmail only) — Search recent threads for the person's name to find their email.
+3. **MS Graph lookup** (teams/outlook only) — `GetMultipleUsersDetails` via agency mcp m365-user.
+
+4. **Gmail search** (gmail only) — Search recent threads for the person's name to find their email.
 
 ### d359 lookup implementation
 
@@ -184,6 +188,52 @@ def resolve_d359(name):
     # Sort by score descending; return best match
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates  # Return ALL candidates for ambiguity detection
+
+
+def resolve_registry(name):
+    """Fallback when resolve_d359() returns None: parse the markdown table in
+    d359/contacts-registry.md. Same return shape — list of (score, display,
+    channels) — so callers treat profile and registry hits uniformly. d359
+    profiles always outrank the registry, so only call this if resolve_d359 missed."""
+    reg = Path.home() / 'vault/d359/contacts-registry.md'
+    if not reg.exists():
+        return None
+    name_lower = name.lower().strip()
+    slug_q = re.sub(r'[^a-z0-9]+', '-', name_lower).strip('-')
+    cols, candidates = None, []
+    for line in reg.read_text().split('\n'):
+        line = line.strip()
+        if not line.startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip('|').split('|')]
+        if cols is None:
+            cols = [c.lower() for c in cells]          # header row
+            continue
+        if set(''.join(cells)) <= set('-: '):          # separator row
+            continue
+        r = dict(zip(cols, cells))
+        rname, rslug = (r.get('name') or '').lower(), (r.get('slug') or '').lower()
+        if name_lower == rname or (slug_q and slug_q == rslug):
+            score = 3
+        elif name_lower and name_lower in rname:
+            score = 2
+        elif slug_q and slug_q in re.sub(r'[^a-z0-9]+', '-', rname):
+            score = 1
+        else:
+            continue
+        ch = {k: r[k] for k in ('preferred', 'email', 'work_email', 'teams_upn', 'phone', 'slack')
+              if r.get(k)}
+        if ch:
+            candidates.append((score, r.get('name') or r.get('slug'), ch))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates
+
+
+def resolve_recipient(name):
+    """Profiles first, then the registry. Returns candidate list or None."""
+    return resolve_d359(name) or resolve_registry(name)
 ```
 
 ### Recipient confirmation
