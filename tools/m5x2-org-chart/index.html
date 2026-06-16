@@ -148,65 +148,68 @@ function useMixed(p) {
   const lk = leafKids(p), nlk = nonLeafKids(p);
   return nlk.length > 0 && lk.length >= COMPACT_N;
 }
-function compactPanelWidth(kids) {
+// ── HORIZONTAL (left-to-right) GEOMETRY ──
+// Depth drives x (few levels → narrow); headcount drives y (stacks → tall).
+const HLEVEL = 48, VSIB = 12, CCOLS = 2;
+function panelCols(n) { return Math.max(1, Math.min(CCOLS, n)); }
+function panelW(kids) {
   const depts = [...new Set(kids.map(k => k.d))];
-  let maxCols = 0;
-  depts.forEach(d => { const n = kids.filter(k => k.d === d).length; maxCols = Math.max(maxCols, Math.min(4, n)); });
-  return PP*2 + maxCols*(CCW+CCGAP) + 2;
+  let mc = 0;
+  depts.forEach(d => { const n = kids.filter(k => k.d === d).length; mc = Math.max(mc, panelCols(n)); });
+  return PP*2 + mc*(CCW+CCGAP);
 }
-function subtreeW(p) {
-  if (!p.kids.length) return CW + HGAP;
-  if (useCompact(p)) return Math.max(CW + HGAP, compactPanelWidth(p.kids) + HGAP);
-  if (useMixed(p)) {
-    const nlkW = nonLeafKids(p).reduce((s,k) => s + subtreeW(k), 0);
-    const pw = compactPanelWidth(leafKids(p));
-    return Math.max(CW + HGAP, nlkW + pw + HGAP);
-  }
-  return Math.max(CW + HGAP, p.kids.reduce((s,k) => s + subtreeW(k), 0));
-}
-function layout(p, startX, y) {
-  const sw = subtreeW(p);
-  p.x = startX + sw/2 - CW/2; p.y = y;
-  if (!p.kids.length) return;
-  if (useCompact(p)) {
-    const pw = compactPanelWidth(p.kids);
-    p.panelX = startX + sw/2 - pw/2; p.panelY = y + CH + VGAP; p.panelW = pw; return;
-  }
-  if (useMixed(p)) {
-    const nlk = nonLeafKids(p), lk = leafKids(p);
-    const nlkW = nlk.reduce((s,k) => s + subtreeW(k), 0);
-    const pw = compactPanelWidth(lk);
-    const totalW = nlkW + pw + HGAP;
-    let kx = startX + (sw - totalW) / 2;
-    nlk.forEach(k => { layout(k, kx, y + CH + VGAP); kx += subtreeW(k); });
-    p.panelX = kx; p.panelY = y + CH + VGAP; p.panelW = pw; p.mixedLeafKids = lk; return;
-  }
-  const totalKids = p.kids.reduce((s,k) => s + subtreeW(k), 0);
-  let kx = startX + (sw - totalKids)/2;
-  p.kids.forEach(k => { layout(k, kx, y + CH + VGAP); kx += subtreeW(k); });
-}
-let ox = 0;
-roots.forEach(r => { layout(r, ox, 0); ox += subtreeW(r); });
-
-let maxRight = 0, maxBottom = 0;
-function estimatePanelH(kids) {
+function panelH(kids) {
   const depts = [...new Set(kids.map(k => k.d))];
-  let h = PP*2 + 18;
+  let h = PP*2 + 18; // padding + header
   depts.forEach(d => {
     const n = kids.filter(k => k.d === d).length;
-    const cols = Math.min(4, n), rows = Math.ceil(n / cols);
-    h += 16 + rows*(CCH+CCGAP) - CCGAP + 10;
+    const cols = panelCols(n), rows = Math.ceil(n / cols);
+    h += 16 + rows*(CCH+CCGAP) - CCGAP + 8; // label + rows + section gap
   });
   return h;
 }
+function subtreeH(p) {
+  if (!p.kids.length) return CH + VSIB;
+  if (useCompact(p)) return Math.max(CH + VSIB, panelH(p.kids) + VSIB);
+  if (useMixed(p)) {
+    const nlkH = nonLeafKids(p).reduce((s,k) => s + subtreeH(k), 0);
+    return Math.max(CH + VSIB, nlkH + panelH(leafKids(p)) + VSIB);
+  }
+  return Math.max(CH + VSIB, p.kids.reduce((s,k) => s + subtreeH(k), 0));
+}
+function layout(p, x, startY) {
+  const sh = subtreeH(p);
+  p.x = x; p.y = startY + sh/2 - CH/2;
+  if (!p.kids.length) return;
+  const childX = x + CW + HLEVEL;
+  if (useCompact(p)) {
+    const ph = panelH(p.kids);
+    p.panelX = childX; p.panelY = startY + sh/2 - ph/2; p.panelW = panelW(p.kids); return;
+  }
+  if (useMixed(p)) {
+    const nlk = nonLeafKids(p), lk = leafKids(p);
+    const nlkH = nlk.reduce((s,k) => s + subtreeH(k), 0);
+    const ph = panelH(lk);
+    let cy = startY + (sh - (nlkH + ph)) / 2;
+    nlk.forEach(k => { layout(k, childX, cy); cy += subtreeH(k); });
+    p.panelX = childX; p.panelY = cy; p.panelW = panelW(lk); p.mixedLeafKids = lk; return;
+  }
+  const totalKids = p.kids.reduce((s,k) => s + subtreeH(k), 0);
+  let cy = startY + (sh - totalKids)/2;
+  p.kids.forEach(k => { layout(k, childX, cy); cy += subtreeH(k); });
+}
+let oy = 0;
+roots.forEach(r => { layout(r, 0, oy); oy += subtreeH(r); });
+
+let maxRight = 0, maxBottom = 0;
 function measure(p) {
   maxRight = Math.max(maxRight, p.x + CW); maxBottom = Math.max(maxBottom, p.y + CH);
   if (useCompact(p)) {
     maxRight = Math.max(maxRight, p.panelX + p.panelW);
-    maxBottom = Math.max(maxBottom, p.panelY + estimatePanelH(p.kids));
+    maxBottom = Math.max(maxBottom, p.panelY + panelH(p.kids));
   } else if (useMixed(p)) {
     maxRight = Math.max(maxRight, p.panelX + p.panelW);
-    maxBottom = Math.max(maxBottom, p.panelY + estimatePanelH(p.mixedLeafKids));
+    maxBottom = Math.max(maxBottom, p.panelY + panelH(p.mixedLeafKids));
     nonLeafKids(p).forEach(measure);
   } else { p.kids.forEach(measure); }
 }
@@ -224,9 +227,9 @@ function svgEl(tag, attrs) {
   svg.appendChild(el); return el;
 }
 function line(x1,y1,x2,y2) { svgEl('line',{x1,y1,x2,y2,stroke:'#cbd5e1','stroke-width':1.5}); }
-function curve(x1,y1,x2,y2) {
-  const my = (y1+y2)/2;
-  svgEl('path',{d:`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`, stroke:'#cbd5e1','stroke-width':1.5,fill:'none'});
+function curveH(x1,y1,x2,y2) {
+  const mx = (x1+x2)/2;
+  svgEl('path',{d:`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, stroke:'#cbd5e1','stroke-width':1.5,fill:'none'});
 }
 
 const STATUS_BADGE = {
@@ -303,21 +306,20 @@ function renderPanel(mgr, leafOverride) {
   });
   panel.innerHTML = html;
   inner.appendChild(panel);
-  const px = mgr.x + CW/2, py = mgr.y + CH;
-  const tx = mgr.panelX + mgr.panelW/2, ty = mgr.panelY;
-  if (Math.abs(px - tx) < 2) line(px, py, tx, ty); else curve(px, py, tx, ty);
+  const px = mgr.x + CW, py = mgr.y + CH/2;
+  const ty = mgr.panelY + panelH(kids)/2;
+  curveH(px, py, mgr.panelX, ty);
 }
 function drawConnectors(p) {
   if (!p.kids.length) return;
   if (useCompact(p)) { renderPanel(p); return; }
+  const px = p.x + CW, py = p.y + CH/2;
   if (useMixed(p)) {
     renderPanel(p, p.mixedLeafKids);
-    const px = p.x + CW/2, py = p.y + CH;
-    nonLeafKids(p).forEach(k => curve(px, py, k.x + CW/2, k.y));
+    nonLeafKids(p).forEach(k => curveH(px, py, k.x, k.y + CH/2));
     nonLeafKids(p).forEach(drawConnectors); return;
   }
-  const px = p.x + CW/2, py = p.y + CH;
-  p.kids.forEach(k => curve(px, py, k.x + CW/2, k.y));
+  p.kids.forEach(k => curveH(px, py, k.x, k.y + CH/2));
   p.kids.forEach(drawConnectors);
 }
 function renderAll(p) {
@@ -358,28 +360,24 @@ const sep = document.createElement('div'); sep.className = 'legend-sep'; leg.app
   leg.appendChild(item);
 });
 
-// ── FIT TO SCREEN ──
+// ── FIT TO WIDTH (portrait; scrolls vertically) ──
 const outer = document.getElementById('chart-outer');
 const fitbtn = document.getElementById('fitbtn');
 let fitted = true;
 function applyFit() {
+  const cw = outer.clientWidth - 96;   // outer has 48px L/R padding
   if (fitted) {
-    const cw = outer.clientWidth - 96;   // outer has 48px L/R padding
-    const ch = window.innerHeight - outer.getBoundingClientRect().top - 96 - 12;
-    const s = Math.min(1, cw / W, ch / H);
+    const s = Math.min(1, cw / W);
     inner.style.transformOrigin = '0 0';
     inner.style.transform = `scale(${s})`;
-    // collapse the layout box so the scaled chart reserves no extra space
     inner.style.marginRight = (-(W - W * s)) + 'px';
     inner.style.marginBottom = (-(H - H * s)) + 'px';
-    outer.style.overflow = 'hidden';
     fitbtn.textContent = 'Actual size';
   } else {
     inner.style.transform = 'none';
     inner.style.marginRight = '';
     inner.style.marginBottom = '';
-    outer.style.overflow = 'auto';
-    fitbtn.textContent = 'Fit to screen';
+    fitbtn.textContent = 'Fit width';
   }
 }
 fitbtn.addEventListener('click', () => { fitted = !fitted; applyFit(); });

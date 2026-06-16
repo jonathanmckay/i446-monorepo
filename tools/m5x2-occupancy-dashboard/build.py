@@ -145,13 +145,10 @@ events_all = load("events.json")
 # fall vacant-unrented and must be re-leased), measured from the event log. This
 # is a flat ~units/week velocity, applied flow-wise (not vu·k), so the forecast
 # does not assume the whole stock clears inside one mean-time.
-_vac_by_week = Counter(week_start(pdate(e["known"])) for e in events_all
-                       if e.get("kind") == "vacant" and pdate(e.get("known")))
-_recent_weeks = [week_start(TODAY) - dt.timedelta(weeks=i) for i in range(1, 9)]
-_vac_vals = sorted(_vac_by_week.get(w, 0) for w in _recent_weeks)
-# trimmed mean: drop the single largest week (lease-up/bulk-delivery spikes)
-_trim = _vac_vals[:-1] if len(_vac_vals) > 3 else _vac_vals
-WEEKLY_SIGNINGS = clamp(sum(_trim) / len(_trim) if _trim else 8.0, 3.0, 25.0)
+# Forward leasing velocity: a fixed planning assumption of 10 signed leases/week
+# (per JM). Drives both the action-state forecast and the occupancy-% projection
+# so the two charts share one forward model.
+WEEKLY_SIGNINGS = 10.0
 daily_signings = WEEKLY_SIGNINGS / 7.0
 
 # Committed move-ins: already-signed leases with a known move-in date. These are
@@ -234,52 +231,40 @@ while d <= TODAY:
                      "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2)})
     d += dt.timedelta(days=7)
 
-# ── Occupancy timeline: re-anchored tickler-delta daily occupied series ───────
-# AppFolio reports a reliable point-in-time `occupied`; the tenant tickler reports
-# the daily move events. Anchor on the reliable occupied snapshots and apply
-# Move-in (+1) / Move-out (−1) deltas to fill DAILY between them and to project
-# forward to the last scheduled move. Re-anchoring at EVERY snapshot (not just
-# today) cancels acquisition drift: an onboarded property's sitting tenants never
-# fire Move-in events, so a pure walk overcounts history ~100 units — but each
-# snapshot already includes them, so resetting the level there keeps it exact
-# (validated ±1–4 vs AppFolio occupied from 2026-03-28, the last acquisition, on).
+# ── Occupancy timeline: occupancy % + covered pipeline (vacant-/notice-rented) ─
+# History uses the reliable point-in-time `occupied` snapshots, linearly
+# interpolated between anchors (occ AND units). The earlier tickler-delta walk
+# spiked at acquisitions — onboarded tenants fire Move-in events that lift occ
+# while the units denominator only steps at the next snapshot (the 2025-03-29 →
+# 99% artifact). Interpolating between reliable anchors removes that and is exact
+# at every snapshot (the recent daily region is unchanged). The FORWARD half is
+# taken from the same compartment forecast as the first chart (10 leases/week), so
+# the two line up: occupied = units − vacant-unrented − vacant-rented.
 import bisect
-_tk = load("tickler.json")
-def pmdy(s):
-    try: return dt.datetime.strptime(s, "%m/%d/%Y").date()
-    except Exception: return None
-_delta = {}
-for r in _tk:
-    e = r.get("Event"); dd = pmdy(r.get("OccurredDate"))
-    if dd is None: continue
-    if e == "Move-in":  _delta[dd] = _delta.get(dd, 0) + 1
-    elif e == "Move-out": _delta[dd] = _delta.get(dd, 0) - 1
-_ev = sorted(_delta); _pref = {}; _run = 0
-for dd in _ev: _run += _delta[dd]; _pref[dd] = _run
-def cum(date):
-    i = bisect.bisect_right(_ev, date) - 1
-    return _pref[_ev[i]] if i >= 0 else 0
 _anc = sorted((dt.date.fromisoformat(h["date"]), h["occ"], h["units"]) for h in hist)
 _ad = [a[0] for a in _anc]; _aocc = {a[0]: a[1] for a in _anc}; _aun = {a[0]: a[2] for a in _anc}
-def _near_anchor(date):
+def interp_occ_units(date):
     i = bisect.bisect_right(_ad, date) - 1
-    return _ad[i] if i >= 0 else _ad[0]
-_today_occ = _aocc[_ad[-1]]
-def occ_at(date):
-    if date <= TODAY:
-        a = _near_anchor(date); return _aocc[a] + (cum(date) - cum(a))
-    return _today_occ + (cum(date) - cum(TODAY))
-def units_at(date):
-    return _aun[_near_anchor(min(date, TODAY))]
-tl_start = _ad[0]   # first reliable occupied anchor; don't extrapolate before it
-tl_end = max(_ev) if _ev else TODAY
+    d0 = _ad[i]; o0 = _aocc[d0]; u0 = _aun[d0]
+    if i + 1 < len(_ad):
+        d1 = _ad[i + 1]; seg = (d1 - d0).days; f = (date - d0).days / seg if seg else 0
+        return o0 + (_aocc[d1] - o0) * f, u0 + (_aun[d1] - u0) * f
+    return o0, u0
+
 occ_timeline = []
-d = tl_start
-while d <= tl_end:
-    o = occ_at(d); u = units_at(d) or UNITS
-    occ_timeline.append({"date": d.isoformat(), "occ": o, "units": u,
-                         "pct": round(o / u * 100, 2), "projected": d > TODAY})
-    d += dt.timedelta(days=1)
+d = _ad[0]                                   # first reliable anchor
+while d <= TODAY:
+    o, u = interp_occ_units(d); s = nearest(d.isoformat())
+    occ_timeline.append({"date": d.isoformat(), "occ": round(o), "units": round(u),
+                         "pct": round(o / u * 100, 2),
+                         "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2),
+                         "projected": False})
+for r in fwd[1:]:                            # forward from the shared compartment model
+    occ = UNITS - r["vu"] - r["vr"]
+    occ_timeline.append({"date": r["date"], "occ": round(occ), "units": UNITS,
+                         "pct": round(occ / UNITS * 100, 2),
+                         "vr": round(r["vr"] / UNITS * 100, 2),
+                         "nr": round(r["nr"] / UNITS * 100, 2), "projected": True})
 
 # ── Newsfeed / tickler from the event log ────────────────────────────────────
 # Each event carries `known` (when our daily diff first saw it) and `effective`
@@ -391,13 +376,13 @@ bucketed by their move-in week — committed, and fed into the forecast as real 
 units are assumed to lease only after going vacant (the observed m5x2 pattern), so they are not
 pre-leased in bulk.</div></div>
 
-<h2>Occupancy % — daily, full history → last scheduled move</h2>
+<h2>Occupancy % + covered pipeline — daily, 2024 → +60d forecast</h2>
 <div class="card"><canvas id="occChart" height="90"></canvas>
 <div class="note" id="occNote"></div>
-<div class="note">Built the way AppFolio actually supports it: today's reliable point-in-time occupied is the
-anchor, and the tenant tickler's Move-in (+1) / Move-out (−1) events fill every day forward and back.
-Re-anchored at each occupied snapshot so portfolio acquisitions (onboarded tenants never fire a Move-in)
-don't drift the line. Solid = actual, dashed = forward from scheduled moves.</div></div>
+<div class="note">Left axis = occupancy % (occupied ÷ units). Right axis = the covered pipeline: vacant-rented
+and notice-rented as % of portfolio, the units that lift occupancy next. History is the reliable
+point-in-time occupied, interpolated between snapshots (exact at each). Forward is the same compartment
+forecast as the first chart, so they line up. Solid = actual, dashed = forecast.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
@@ -467,26 +452,31 @@ new Chart(document.getElementById('leasesChart'),{type:'bar',
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxRotation:90,minRotation:60,callback:fmtMD}},
    y:{beginAtZero:true,ticks:{color:'#8b96a3',precision:0},grid:{color:'#1e242b'}}}}});
-// ── occupancy % timeline: daily, re-anchored tickler-delta ──
+// ── occupancy % timeline + covered pipeline (vacant-rented, notice-rented) ──
 const ot=D.occ_timeline, otLabels=ot.map(r=>r.date);
 const otSplit=ot.findIndex(r=>r.projected);
+const dash=key=>({borderDash:c=>otSplit>=0&&c.p0DataIndex>=otSplit-1?[5,4]:undefined});
+function ods(key,label,color,fill,axis){return {label,data:ot.map(r=>r[key]),yAxisID:axis,
+  borderColor:color,backgroundColor:fill,fill:!!fill,pointRadius:0,tension:.1,borderWidth:1.5,
+  segment:dash(key)};}
 new Chart(document.getElementById('occChart'),{type:'line',
- data:{labels:otLabels,datasets:[{label:'Occupancy %',data:ot.map(r=>r.pct),
-  borderColor:'#2faa4d',backgroundColor:'rgba(47,170,77,.10)',fill:true,pointRadius:0,
-  tension:.1,borderWidth:1.5,
-  segment:{borderDash:c=>otSplit>=0&&c.p0DataIndex>=otSplit-1?[5,4]:undefined}}]},
+ data:{labels:otLabels,datasets:[
+   ods('pct','Occupancy %','#2faa4d','rgba(47,170,77,.10)','y'),
+   ods('vr','Vacant-Rented %',C.vr,null,'y2'),
+   ods('nr','Notice-Rented %',C.nr,null,'y2')]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
-  plugins:{legend:{display:false},
+  plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}},
    tooltip:{callbacks:{label:i=>{const r=ot[i.dataIndex];
-     return `${r.pct}%  (${r.occ}/${r.units})`+(r.projected?'  · projected':'');}}}},
+     return i.datasetIndex===0?`Occupancy ${r.pct}% (${r.occ}/${r.units})`+(r.projected?' · proj':'')
+       :`${i.dataset.label} ${i.formattedValue}%`;}}}},
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:24,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
-   y:{ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
+   y:{position:'left',ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'},title:{display:true,text:'Occupancy',color:'#8b96a3'}},
+   y2:{position:'right',beginAtZero:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{display:false},title:{display:true,text:'Rented pipeline',color:'#8b96a3'}}}}});
 {const a=ot.find(r=>r.date===D.today)||ot[ot.length-1];
- const lo=ot.reduce((m,r)=>r.pct<m.pct?r:m), hi=ot.reduce((m,r)=>r.pct>m.pct?r:m);
  document.getElementById('occNote').innerHTML=
-  `Today: <b>${a.pct}%</b> (${a.occ}/${a.units}). Range ${ot[0].date}→${ot[ot.length-1].date}: `+
-  `low ${lo.pct}% (${lo.date}), high ${hi.pct}% (${hi.date}).`;}
+  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}) · ${a.vr}% vacant-rented · ${a.nr}% notice-rented. `+
+  `Forward = ${D.params.weekly_signings} leases/week (shared with the first chart).`;}
 // ── long-term % chart: weekly since 2024 ──
 const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
