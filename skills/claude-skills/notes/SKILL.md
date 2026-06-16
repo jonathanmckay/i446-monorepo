@@ -47,12 +47,20 @@ Each block has:
 Read the frontmatter templates from `h335/d358-d359-meta.md`.
 
 **For d359 blocks:**
-1. Search for an existing file: `find ~/vault/h335/d359 -maxdepth 2 -iname "*<name>*d359*"`
-2. **If file exists**: Read it, then prepend a new `## YYYY-MM-DD` section below the About/profile section (if present) or below the frontmatter, above existing date entries. Update the `updated:` frontmatter field.
-3. **If no file exists**: Create `h335/d359/<Name> d359.md` with:
+
+> ⚠️ **Avoid duplicates.** People live in TWO d359 trees with TWO naming styles: `~/vault/d359/` (kebab-case, e.g. `jesse-janasov-d359.md`) and `~/vault/h335/d359/` (Title Case, e.g. `Kelly Martine d359.md`). A narrow `find` in one folder, or a glob on the full name, will miss an existing file and create a dupe (e.g. note says "Jessie Janasov" but the file is `jesse-janasov-d359.md`). Always search BOTH folders, match on the most distinctive token (usually the **last name**), and ignore case/separators/spelling variants before concluding the person is new.
+
+1. **Search both trees for an existing file.** Glob on the last-name token, case-insensitively, across both folders:
+   ```bash
+   last=janasov   # most distinctive token from the block name; lowercase
+   find ~/vault/d359 ~/vault/h335/d359 -maxdepth 1 -iname "*${last}*d359*"
+   ```
+   If that returns nothing, retry with the first name. Only treat the person as new when **both** queries come up empty in **both** folders. If a name has an obvious spelling variant (Jessie/Jesse, Catherine/Kathy), search the variant too.
+2. **If a file exists (in EITHER folder)**: Read it, then prepend a new dated section **in that file's existing style** — reuse its date-header format (`## YYYY.MM.DD` vs `## YYYY-MM-DD`, whichever the file already uses) and its name spelling. Insert below the About/profile section if present, else below the frontmatter, above existing entries. Update `updated:` (and `last_contact:` if the field is present). **Never create a second file for a person who already has one.**
+3. **If no file exists in either folder**: Create `h335/d359/<Name> d359.md` with:
    - Frontmatter: title, date, type: meeting-note, tags: [d359], context (detect from content — xk87 for school/kids, i9 for MSFT/GitHub, m5x2 for real estate, default i9), source: manual, status: active, updated
    - A `## YYYY-MM-DD` section with the raw content
-4. **Update d359 index** (`h335/d359/d359.md`): Insert a row at the top of the table. If the person already has a row, remove the old one (so they appear once, at the top with the new date).
+4. **Update d359 index only if one exists** (`h335/d359/d359.md`): Insert a row at the top of the table; if the person already has a row, remove the old one (so they appear once, at top, with the new date). If no index file exists, skip this step — do not create one.
 
 **For d358 blocks:**
 1. Search for an existing file: `find ~/vault/h335/d358/YYYY -maxdepth 1 -iname "*<meeting name>*d358*"`
