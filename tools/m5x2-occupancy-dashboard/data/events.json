@@ -1508,5 +1508,45 @@
     "unit": "D1",
     "tenant": "Lima, Kristopher",
     "baseline": false
+  },
+  {
+    "known": "2026-06-15",
+    "effective": "2026-06-14",
+    "kind": "moveout",
+    "unit_id": "913",
+    "prop": "kn47 K1",
+    "unit": "G103",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-15",
+    "effective": "2026-06-15",
+    "kind": "ntv",
+    "unit_id": "1004",
+    "prop": "kn47 K2",
+    "unit": "A205",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-15",
+    "effective": "2026-06-15",
+    "kind": "movein",
+    "unit_id": "1176",
+    "prop": "tc68",
+    "unit": "A27",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-15",
+    "effective": "2026-06-15",
+    "kind": "movein",
+    "unit_id": "970",
+    "prop": "kn47 K1",
+    "unit": "L203",
+    "tenant": null,
+    "baseline": false
   }
 ]

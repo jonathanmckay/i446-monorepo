@@ -438,7 +438,7 @@
     "tenant_name": "Ruffner, Grace R.",
     "status": "Renewed",
     "lease_sign_date": "2026-05-24",
-    "move_in": "2026-07-31",
+    "move_in": "2026-07-15",
     "renewal_start_date": "2026-07-15",
     "last_lease_renewal": "2026-07-15",
     "rent": "1627.00"
@@ -1222,18 +1222,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "830.00"
-  },
-  {
-    "unit_id": 123,
-    "property_name": "a210",
-    "unit": "4",
-    "tenant_name": "Neelands, Sarah L.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-08-08",
-    "move_in": "2025-08-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "930.00"
   },
   {
     "unit_id": 122,

@@ -58,6 +58,26 @@ def report(name, body):
         time.sleep(THROTTLE)
     return rows
 
+def tickler(frm, to):
+    """tenant_tickler is a v1 GET report (not v2 POST). Returns move/notice
+    events with OccurredDate (MM/DD/YYYY). Used to build the daily occupancy
+    timeline as ±1 deltas off the reliable point-in-time occupied anchors."""
+    url = f"{BASE}/api/v1/reports/tenant_tickler.json?from_date={frm}&to_date={to}"
+    rows = []
+    while url:
+        req = urllib.request.Request(url, headers={"Authorization": f"Basic {AUTH}"})
+        for attempt in range(6):
+            try:
+                d = json.load(urllib.request.urlopen(req, timeout=120)); break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 5:
+                    time.sleep(2 ** attempt * 3); continue
+                raise
+        rows += d.get("results", [])
+        url = d.get("next_page_url") or d.get("next_page")
+        time.sleep(THROTTLE)
+    return rows
+
 def n(x):
     try: return int(float(str(x).replace(",", "")))
     except Exception: return 0
@@ -220,8 +240,15 @@ def main():
         json.dumps([{k: r.get(k) for k in lkeep} for r in le], indent=2))
     # diff per-unit state → events.json (known vs effective dates)
     events = update_events(vac, le, today)
+    # tenant tickler → move/notice events for the occupancy timeline + feed
+    tkeep = ["OccurredDate", "Event", "PropertyName", "Unit", "UnitId", "Tenant",
+             "MoveInDate", "MoveOutDate", "LeaseSignDate", "Rent", "MoveOutReason"]
+    tk = tickler("2023-01-01", "2027-12-31")
+    (DATA / "tickler.json").write_text(
+        json.dumps([{k: r.get(k) for k in tkeep} for r in tk]))
+    mv = sum(1 for r in tk if r.get("Event") in ("Move-in", "Move-out"))
     print(f"history now {total} snapshots; pulled {len(snaps)}; "
-          f"vacancy units {len(vac)}; events {len(events)}")
+          f"vacancy units {len(vac)}; events {len(events)}; tickler {len(tk)} ({mv} moves)")
 
 if __name__ == "__main__":
     main()
