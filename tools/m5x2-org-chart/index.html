@@ -9,8 +9,14 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
   background: #f1f5f9; padding: 32px; color: #0f172a;
 }
-h1 { font-size: 20px; font-weight: 700; color: #0f172a; }
+h1 { font-size: 20px; font-weight: 700; color: #0f172a; display: inline-block; }
 .sub { font-size: 13px; color: #64748b; margin-top: 3px; margin-bottom: 16px; }
+#fitbtn {
+  margin-left: 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+  background: #fff; border: 1px solid #cbd5e1; color: #334155;
+  border-radius: 6px; padding: 4px 10px; vertical-align: 3px;
+}
+#fitbtn:hover { background: #f8fafc; }
 
 .statbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .stat {
@@ -83,7 +89,7 @@ h1 { font-size: 20px; font-weight: 700; color: #0f172a; }
 </head>
 <body>
 
-<h1>m5x2 Org Chart</h1>
+<h1>m5x2 Org Chart</h1><button id="fitbtn">Actual size</button>
 <p class="sub">Live roster · 2026-06-15 · 51 people (2 GP, 17 W-2, 32 contractor) · 15 on MXN payroll</p>
 <div class="statbar" id="statbar"></div>
 <div class="legend" id="legend"></div>
@@ -128,8 +134,8 @@ const roots = [];
 P.forEach(p => { if (p.m && byId[p.m]) byId[p.m].kids.push(p); else if (!p.m) roots.push(p); });
 
 // ── LAYOUT CONSTANTS ──
-const CW = 158, CH = 78, HGAP = 14, VGAP = 65;
-const COMPACT_N = 1, CCW = 138, CCH = 58, CCGAP = 5, PP = 12;
+const CW = 150, CH = 78, HGAP = 10, VGAP = 52;
+const COMPACT_N = 1, CCW = 132, CCH = 58, CCGAP = 5, PP = 11;
 function dc(d) { return (DEPTS[d] || {color:'#94a3b8'}).color; }
 function initials(p) { return p.f[0].toUpperCase() + p.l[0].toUpperCase(); }
 
@@ -145,7 +151,7 @@ function useMixed(p) {
 function compactPanelWidth(kids) {
   const depts = [...new Set(kids.map(k => k.d))];
   let maxCols = 0;
-  depts.forEach(d => { const n = kids.filter(k => k.d === d).length; maxCols = Math.max(maxCols, Math.min(5, n)); });
+  depts.forEach(d => { const n = kids.filter(k => k.d === d).length; maxCols = Math.max(maxCols, Math.min(4, n)); });
   return PP*2 + maxCols*(CCW+CCGAP) + 2;
 }
 function subtreeW(p) {
@@ -188,7 +194,7 @@ function estimatePanelH(kids) {
   let h = PP*2 + 18;
   depts.forEach(d => {
     const n = kids.filter(k => k.d === d).length;
-    const cols = Math.min(5, n), rows = Math.ceil(n / cols);
+    const cols = Math.min(4, n), rows = Math.ceil(n / cols);
     h += 16 + rows*(CCH+CCGAP) - CCGAP + 10;
   });
   return h;
@@ -351,6 +357,35 @@ const sep = document.createElement('div'); sep.className = 'legend-sep'; leg.app
   item.innerHTML = `<span class="b ${cls}">${lab.split(' ')[0]}</span> ${lab}`;
   leg.appendChild(item);
 });
+
+// ── FIT TO SCREEN ──
+const outer = document.getElementById('chart-outer');
+const fitbtn = document.getElementById('fitbtn');
+let fitted = true;
+function applyFit() {
+  if (fitted) {
+    const cw = outer.clientWidth - 96;   // outer has 48px L/R padding
+    const ch = window.innerHeight - outer.getBoundingClientRect().top - 96 - 12;
+    const s = Math.min(1, cw / W, ch / H);
+    inner.style.transformOrigin = '0 0';
+    inner.style.transform = `scale(${s})`;
+    // collapse the layout box so the scaled chart reserves no extra space
+    inner.style.marginRight = (-(W - W * s)) + 'px';
+    inner.style.marginBottom = (-(H - H * s)) + 'px';
+    outer.style.overflow = 'hidden';
+    fitbtn.textContent = 'Actual size';
+  } else {
+    inner.style.transform = 'none';
+    inner.style.marginRight = '';
+    inner.style.marginBottom = '';
+    outer.style.overflow = 'auto';
+    fitbtn.textContent = 'Fit to screen';
+  }
+}
+fitbtn.addEventListener('click', () => { fitted = !fitted; applyFit(); });
+window.addEventListener('resize', () => { if (fitted) applyFit(); });
+applyFit();
+
 </script>
 </body>
 </html>
