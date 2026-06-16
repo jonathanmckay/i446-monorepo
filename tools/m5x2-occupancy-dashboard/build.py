@@ -33,7 +33,6 @@ from collections import Counter
 from pathlib import Path
 
 DIR = Path(__file__).parent
-TODAY = dt.date(2026, 6, 14)   # snapshot date; fetch.py stamps this
 BACK_DAYS, FWD_DAYS = 90, 60
 LT_START = dt.date(2024, 1, 1)  # long-term % view start
 
@@ -52,6 +51,7 @@ def med(xs, default):
 def clamp(v, lo, hi): return max(lo, min(hi, v))
 
 hist = sorted(load("occupancy-history.json"), key=lambda h: h["date"])
+TODAY = dt.date.fromisoformat(hist[-1]["date"])   # the latest real snapshot = "now"
 vac = load("vacancy.json")
 
 # ── Repair the historical breakdown ──────────────────────────────────────────
@@ -234,6 +234,53 @@ while d <= TODAY:
                      "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2)})
     d += dt.timedelta(days=7)
 
+# ── Occupancy timeline: re-anchored tickler-delta daily occupied series ───────
+# AppFolio reports a reliable point-in-time `occupied`; the tenant tickler reports
+# the daily move events. Anchor on the reliable occupied snapshots and apply
+# Move-in (+1) / Move-out (−1) deltas to fill DAILY between them and to project
+# forward to the last scheduled move. Re-anchoring at EVERY snapshot (not just
+# today) cancels acquisition drift: an onboarded property's sitting tenants never
+# fire Move-in events, so a pure walk overcounts history ~100 units — but each
+# snapshot already includes them, so resetting the level there keeps it exact
+# (validated ±1–4 vs AppFolio occupied from 2026-03-28, the last acquisition, on).
+import bisect
+_tk = load("tickler.json")
+def pmdy(s):
+    try: return dt.datetime.strptime(s, "%m/%d/%Y").date()
+    except Exception: return None
+_delta = {}
+for r in _tk:
+    e = r.get("Event"); dd = pmdy(r.get("OccurredDate"))
+    if dd is None: continue
+    if e == "Move-in":  _delta[dd] = _delta.get(dd, 0) + 1
+    elif e == "Move-out": _delta[dd] = _delta.get(dd, 0) - 1
+_ev = sorted(_delta); _pref = {}; _run = 0
+for dd in _ev: _run += _delta[dd]; _pref[dd] = _run
+def cum(date):
+    i = bisect.bisect_right(_ev, date) - 1
+    return _pref[_ev[i]] if i >= 0 else 0
+_anc = sorted((dt.date.fromisoformat(h["date"]), h["occ"], h["units"]) for h in hist)
+_ad = [a[0] for a in _anc]; _aocc = {a[0]: a[1] for a in _anc}; _aun = {a[0]: a[2] for a in _anc}
+def _near_anchor(date):
+    i = bisect.bisect_right(_ad, date) - 1
+    return _ad[i] if i >= 0 else _ad[0]
+_today_occ = _aocc[_ad[-1]]
+def occ_at(date):
+    if date <= TODAY:
+        a = _near_anchor(date); return _aocc[a] + (cum(date) - cum(a))
+    return _today_occ + (cum(date) - cum(TODAY))
+def units_at(date):
+    return _aun[_near_anchor(min(date, TODAY))]
+tl_start = _ad[0]   # first reliable occupied anchor; don't extrapolate before it
+tl_end = max(_ev) if _ev else TODAY
+occ_timeline = []
+d = tl_start
+while d <= tl_end:
+    o = occ_at(d); u = units_at(d) or UNITS
+    occ_timeline.append({"date": d.isoformat(), "occ": o, "units": u,
+                         "pct": round(o / u * 100, 2), "projected": d > TODAY})
+    d += dt.timedelta(days=1)
+
 # ── Newsfeed / tickler from the event log ────────────────────────────────────
 # Each event carries `known` (when our daily diff first saw it) and `effective`
 # (when the move actually happens). On the first run every event is stamped
@@ -280,7 +327,7 @@ payload = {
     "current": {"occ_stable": cur["occ_stable"], "nr": cur["nr"], "nu": cur["nu"],
                 "vr": cur["vr"], "vu": cur["vu"], "occ_pct": round(cur["occ"] / UNITS * 100, 1)},
     "back": back, "forward": fwd, "longterm": longterm, "feed": feed,
-    "leases_weekly": leases_weekly,
+    "leases_weekly": leases_weekly, "occ_timeline": occ_timeline,
 }
 
 # ── Render ──────────────────────────────────────────────────────────────────
@@ -343,6 +390,14 @@ re-leased), not a stock-clearing rate. <b>Scheduled</b> = leases already signed 
 bucketed by their move-in week — committed, and fed into the forecast as real move-ins. On-notice
 units are assumed to lease only after going vacant (the observed m5x2 pattern), so they are not
 pre-leased in bulk.</div></div>
+
+<h2>Occupancy % — daily, full history → last scheduled move</h2>
+<div class="card"><canvas id="occChart" height="90"></canvas>
+<div class="note" id="occNote"></div>
+<div class="note">Built the way AppFolio actually supports it: today's reliable point-in-time occupied is the
+anchor, and the tenant tickler's Move-in (+1) / Move-out (−1) events fill every day forward and back.
+Re-anchored at each occupied snapshot so portfolio acquisitions (onboarded tenants never fire a Move-in)
+don't drift the line. Solid = actual, dashed = forward from scheduled moves.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
@@ -412,6 +467,26 @@ new Chart(document.getElementById('leasesChart'),{type:'bar',
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxRotation:90,minRotation:60,callback:fmtMD}},
    y:{beginAtZero:true,ticks:{color:'#8b96a3',precision:0},grid:{color:'#1e242b'}}}}});
+// ── occupancy % timeline: daily, re-anchored tickler-delta ──
+const ot=D.occ_timeline, otLabels=ot.map(r=>r.date);
+const otSplit=ot.findIndex(r=>r.projected);
+new Chart(document.getElementById('occChart'),{type:'line',
+ data:{labels:otLabels,datasets:[{label:'Occupancy %',data:ot.map(r=>r.pct),
+  borderColor:'#2faa4d',backgroundColor:'rgba(47,170,77,.10)',fill:true,pointRadius:0,
+  tension:.1,borderWidth:1.5,
+  segment:{borderDash:c=>otSplit>=0&&c.p0DataIndex>=otSplit-1?[5,4]:undefined}}]},
+ options:{responsive:true,interaction:{mode:'index',intersect:false},
+  plugins:{legend:{display:false},
+   tooltip:{callbacks:{label:i=>{const r=ot[i.dataIndex];
+     return `${r.pct}%  (${r.occ}/${r.units})`+(r.projected?'  · projected':'');}}}},
+  scales:{x:{grid:{display:false},
+    ticks:{color:'#8b96a3',maxTicksLimit:24,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
+   y:{ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
+{const a=ot.find(r=>r.date===D.today)||ot[ot.length-1];
+ const lo=ot.reduce((m,r)=>r.pct<m.pct?r:m), hi=ot.reduce((m,r)=>r.pct>m.pct?r:m);
+ document.getElementById('occNote').innerHTML=
+  `Today: <b>${a.pct}%</b> (${a.occ}/${a.units}). Range ${ot[0].date}→${ot[ot.length-1].date}: `+
+  `low ${lo.pct}% (${lo.date}), high ${hi.pct}% (${hi.date}).`;}
 // ── long-term % chart: weekly since 2024 ──
 const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
