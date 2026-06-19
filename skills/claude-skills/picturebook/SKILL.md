@@ -104,6 +104,30 @@ are integers; if not, ask the user to reformat.
   it is within `vocab_count` (excluding the glossary words, which are tracked
   separately).
 
+**Naturalness pass (Chinese / Theo mode only — do this before locking text):**
+The vocabulary constraint tends to produce stiff, telegraphic, or
+translated-from-English sentences. Before writing the `.md` or building scenes,
+re-read the whole draft once **as a native Mandarin-speaking parent reading aloud
+to a 3–6 year old**, and revise for naturalness (儿向语, child-directed speech).
+Check every sentence for:
+- **Does a native speaker actually say it this way?** Prefer natural spoken
+  phrasing over textbook/literal word order; kill English calques.
+- **Particles, measure words, aspect** (了 着 过, 的/得/地, 把/被, 量词): present,
+  correct, and not over- or under-used.
+- **Flow across pages:** subject/pronoun continuity (它/他), connectives (就 也 还
+  然后), and read-aloud rhythm. A two-sentence page should land like one breath.
+- **Tone:** warm, concrete, a little playful; onomatopoeia (咔 呼 汪) where it helps.
+- **Still in-bounds:** any rewrite must keep the distinct-character count within
+  `vocab_count` and must not silently add new words. If a more natural phrasing
+  needs a new character, either add it deliberately to the 生词 glossary or pick an
+  in-spine alternative.
+
+After revising, **re-list the unique characters and re-confirm the count**, then
+lock the text. If a sentence cannot be made natural within the budget, prefer
+loosening it (add one deliberate glossary word) over shipping stilted Chinese.
+This pass does **not** apply to Ren/English mode — Bob Books phrasing is
+intentionally minimal and decodable, not "natural."
+
 **Ren mode (English phonics):** instead of the above, write `length` very short
 sentences (3–6 words, one per page) at **Bob Books level**. Read
 `English reader tracker (Ren).md` first and keep words within its **Known-word
