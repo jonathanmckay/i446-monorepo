@@ -25,7 +25,10 @@ import re
 import sys
 from pathlib import Path
 
-PROSE_CAP = 37  # max chars of prose in the shortened name (estimates appended on top)
+PROSE_CAP = 64  # max chars of prose in the shortened name (estimates appended on top).
+# Sized to fill a ~1/8-XDR dtd pane: titles at or under this show in full and the
+# dtd renderer middle-truncates to the live pane width (dtd.sh, `cols - 7`), so the
+# cache is never the bottleneck; only genuinely huge titles get Haiku-compressed.
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 SIDECAR = _sp.TASK_SHORTNAMES
 MODEL = "claude-haiku-4-5-20251001"
@@ -47,7 +50,11 @@ def split_estimates(content: str) -> tuple[str, str]:
 
 
 def _hash(content: str) -> str:
-    return hashlib.sha1(content.encode("utf-8")).hexdigest()[:8]
+    # Fold PROSE_CAP into the key so changing the cap invalidates every cached
+    # short (sidecar + Todoist comment) and names regenerate at the new width.
+    # Without this, tasks keep their old shorter names forever (cache is keyed by
+    # content, which did not change).
+    return hashlib.sha1(f"{PROSE_CAP}:{content}".encode("utf-8")).hexdigest()[:8]
 
 
 def _load_sidecar() -> dict:
