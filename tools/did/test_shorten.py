@@ -55,7 +55,7 @@ def test_comment_cache_does_not_double_estimates(monkeypatch, tmp_path):
     monkeypatch.setattr(shorten, "SIDECAR", tmp_path / "sc.json")
     # Prose must exceed PROSE_CAP so the task actually gets shortened (short
     # names <= the cap are shown verbatim and never reach the cache path).
-    content = "First pass at a first complete draft of the 90 days doc {30}"
+    content = "First pass at a first complete draft of the comprehensive 90 days strategy doc {30}"
     stored = "First pass 90 days doc {30}"  # full display, estimates included
     # Simulate the durable comment returning the full display.
     monkeypatch.setattr(shorten, "_comment_lookup", lambda tid, h: stored)

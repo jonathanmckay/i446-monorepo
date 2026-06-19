@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -69,12 +70,29 @@ except Exception:
 
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
-WIDTH_HINT = 50  # informs collapse logic, not strict
-DESC_MAX = 24  # max display width for task/event descriptions
+# Layout widths track the actual pane. tg-tui is the narrow companion to dtd:
+# on a tty we measure the real column count so a wider 1/8-XDR pane shows fuller
+# descriptions (and a narrower one never overflows the pane — the old fixed 50
+# could), capped so it stays narrow. Off-tty (pytest, pipes) we keep the legacy
+# fixed values so the layout-snapshot tests stay deterministic.
+def _pane_cols() -> int:
+    try:
+        if sys.stdout.isatty():
+            return shutil.get_terminal_size().columns
+    except Exception:
+        pass
+    return 0
+
+_cols = _pane_cols()
+if _cols >= 40:
+    WIDTH_HINT = min(_cols - 1, 64)      # fill the pane; cap keeps it narrow
+    DESC_MAX = max(24, WIDTH_HINT - 16)  # descriptions scale with available width
+    EVENT_SHORT_COLS = max(33, WIDTH_HINT - 8)  # Haiku-shorten only titles wider than this
+else:
+    WIDTH_HINT = 50  # informs collapse logic, not strict
+    DESC_MAX = 24    # max display width for task/event descriptions
+    EVENT_SHORT_COLS = 33  # event titles wider than this get a Haiku short name
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
-# Event titles wider than this get a Haiku short name. 33 = what fits beside
-# "◇ HH:MM " in a 41-col detail row, so a shortened title is never truncated.
-EVENT_SHORT_COLS = 33
 EVENT_SHORTS = Path("~/.cache/tg-tui/event-shortnames.json").expanduser()
 # Earthly branch blocks (name, start_hour, end_hour inclusive)
 BLOCKS = [
