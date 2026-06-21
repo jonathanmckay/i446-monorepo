@@ -16,7 +16,6 @@ Every invocation follows this sequence:
 1. صلاة الشمس (salah check)
 2. -1l (daily ritual check)
 3. -1g (set 2h block goals, if not already set)
-3.5. meeting prep (if any staged briefs from mtg.py)
 4. ibx0 (inbox cards)
 5. → start working on goals
 ```
@@ -45,7 +44,7 @@ Then confirm: `-2n opened in a new cmux tab`
 ## TUI Implementation
 
 The TUI is at `~/i446-monorepo/tools/ibx/-2n.py`. It:
-1. Runs pre-inbox cards (salah, -1g, meeting prep) with Rich panels
+1. Runs pre-inbox cards (salah, -1g) with Rich panels
 2. Delegates to `ibx0.main()` for the full inbox flow (polling, cards, hotkeys)
 3. After ibx0 exits, offers to start a Toggl timer for the current block's goals
 
@@ -109,37 +108,6 @@ If goals ARE already set, show them briefly and move on:
   - goal 2
 ```
 
-### Step 3.5: Meeting prep cards
-
-Read `~/vault/z_ibx/mtg-briefs.json`. If the file exists and contains entries, show each as a card:
-
-```
-Card 3.5/5: 📅 Meeting Prep
-[MTG PREP] 1:1 with Ashish (10:00am)
-
-## 1:1 with Ashish
-**Time:** 10:00am (30min) | **Type:** teams
-
-### Ashish
-PM, CoreAI Growth. Son applying to colleges.
-
-**Recent:**
-## 2026-04-07
-Discussed Q2 OKRs, agreed on MAU target
-
-**Open tasks:**
-- Review growth dashboard mockup
-
-(ack/skip)
-```
-
-- `ack` → remove this brief from the staging file, move on
-- `skip` → leave it (will show again next -2n)
-
-After processing, rewrite `mtg-briefs.json` with remaining briefs. If all acknowledged, delete the file.
-
-If the file doesn't exist or is empty, skip silently (no card shown).
-
 ### Step 4: Run ibx0
 
 Execute `/ibx0` — this marks all inbox habits done (ibx s897, ibx i9, slack github, slack m5x2, ibx m5x2, teams).
@@ -189,7 +157,7 @@ Set color via `~/i446-monorepo/scripts/term-color.sh <color>`.
 - -1g remains independently callable via `/-1g`
 - -2n just orchestrates them in the correct order
 - The card interface uses the same hotkey pattern as ibx0 (a=archive/done, skip, etc.)
-- Future card sources can be added (meeting prep/BCL, stale contacts, etc.)
+- Future card sources can be added (stale contacts, etc.)
 
 ## Build Order Snapshot
 

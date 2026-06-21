@@ -88,12 +88,6 @@ Same as -2n Steps 1-3:
 
 Delegates to `ibx0.main()` for the full inbox flow (polling, cards, hotkeys).
 
-## "Meeting Over" Signal
-
-The user can signal a meeting ended from anywhere in the TUI. This:
-1. Stops the current Toggl timer
-2. Surfaces the post-meeting summary card as the next card
-
 ## Terminal Colors
 
 - **blue** — idle, all cards processed
@@ -105,4 +99,3 @@ The user can signal a meeting ended from anywhere in the TUI. This:
 - `/inbound` replaces `-2n` as the top-level entry point
 - `-2n` and `ibx0` remain independently callable
 - `inbound.py` orchestrates; it imports from `-2n.py` and calls `ibx0.main()`
-- Meeting cards are a new card source alongside ritual and comms
