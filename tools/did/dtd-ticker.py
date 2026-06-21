@@ -109,7 +109,11 @@ def main() -> None:
         if api and now - last_poll >= POLL:
             last_poll = now
             try:
-                cur = api.get_current()
+                # Shared cache: ride tg-tui's (or any other poller's) fetch
+                # instead of hitting Toggl every POLL. The elapsed clock is
+                # extrapolated locally, so a cache up to TTL old still renders an
+                # exact footer; a started/stopped timer invalidates it at once.
+                cur = api.get_current_cached()
             except Exception:
                 cur = None
             if cur and cur.get("start"):

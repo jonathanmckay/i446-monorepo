@@ -17,6 +17,15 @@ BASE_URL = "https://api.track.toggl.com/api/v9"
 # /d357, not just the toggl_cli path that previously had its own nudge.
 TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
 
+# Shared running-timer cache. Toggl is a ~1 req/sec leaky bucket, and several
+# processes poll /current independently (tg-tui every 30s, every open dtd picker
+# via dtd-ticker, …). Each live get_current() write-throughs here; pollers read
+# this file within CURRENT_CACHE_TTL instead of each hitting the API — collapsing
+# N independent pollers into ~one network read per window. Load scales with UI
+# activity (idle → zero), which a standalone 24/7 daemon would not give.
+CURRENT_CACHE = Path.home() / ".cache" / "toggl-current.json"
+CURRENT_CACHE_TTL = 30.0  # seconds; matches tg-tui's steady-state poll cadence
+
 
 def _notify_tui():
     """SIGUSR1 the running tg-tui so it refreshes now instead of on its poll.
@@ -24,6 +33,28 @@ def _notify_tui():
     try:
         os.kill(int(TG_TUI_PID.read_text().strip()), signal.SIGUSR1)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+
+def _write_current_cache(entry):
+    """Persist the last-known running entry (or None when idle) so concurrent
+    pollers can share one fetch. Atomic tmp+replace so a reader never sees a
+    torn file. Best-effort: a write failure just means no sharing this round."""
+    try:
+        CURRENT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CURRENT_CACHE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"ts": time.time(), "entry": entry}))
+        tmp.replace(CURRENT_CACHE)
+    except OSError:
+        pass
+
+
+def _invalidate_current_cache():
+    """Drop the cache so the next read fetches fresh. Called after any mutation
+    (start/stop/create/delete) since those can change what's running."""
+    try:
+        CURRENT_CACHE.unlink(missing_ok=True)
+    except OSError:
         pass
 
 
@@ -51,6 +82,7 @@ def _request(method, path, body=None):
                 if resp.status == 200:
                     result = json.loads(resp.read())
                     if method != "GET":  # a mutation succeeded → wake tg-tui now
+                        _invalidate_current_cache()  # running state may have changed
                         _notify_tui()
                     return result
                 return None
@@ -105,7 +137,28 @@ def stop_timer(entry_id):
 
 
 def get_current():
-    return _request("GET", "/me/time_entries/current")
+    """Live fetch of the running entry (None when idle). Write-throughs to the
+    shared cache so concurrent pollers can ride this fetch via get_current_cached."""
+    entry = _request("GET", "/me/time_entries/current")
+    _write_current_cache(entry)
+    return entry
+
+
+def get_current_cached(max_age=CURRENT_CACHE_TTL):
+    """Running entry from the shared cache when it's younger than max_age, else a
+    live get_current() (which refreshes the cache). Lets many pollers share ~one
+    network read per max_age window. The footer/elapsed clock is computed from the
+    entry's start time, so a slightly stale entry still renders an exact clock;
+    only detection of an externally-changed timer lags by up to max_age, and any
+    mutation invalidates the cache immediately. Falls back to live on any cache
+    problem (missing, torn, malformed)."""
+    try:
+        raw = json.loads(CURRENT_CACHE.read_text())
+        if time.time() - float(raw["ts"]) <= max_age:
+            return raw["entry"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return get_current()
 
 
 def get_entries(start_date=None, end_date=None):
@@ -136,6 +189,10 @@ def delete_entry(entry_id):
     req.add_header("Authorization", _auth_header())
     try:
         with urllib.request.urlopen(req) as resp:
-            return resp.status in (200, 204)
+            ok = resp.status in (200, 204)
+            if ok:  # deleting the running entry changes current → drop the cache
+                _invalidate_current_cache()
+                _notify_tui()
+            return ok
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Toggl API DELETE -> {e.code}: {e.read().decode()}")

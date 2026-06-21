@@ -248,9 +248,14 @@ STATE = State()
 
 # ─── Data fetchers ─────────────────────────────────────────────────────────
 
-def fetch_current():
+def fetch_current(cached=False):
+    """Refresh the running timer. cached=True rides the shared current cache
+    (used by the steady 30s ticker, so tg-tui and every open dtd picker share
+    ~one fetch per window); the post-command bursts pass cached=False to force a
+    live read that beats Toggl's /current propagation lag."""
     try:
-        STATE.current = toggl_api.get_current()
+        STATE.current = (toggl_api.get_current_cached() if cached
+                         else toggl_api.get_current())
         STATE.current_known = True
         STATE.last_current_fetch = time.monotonic()
     except Exception as e:
@@ -1626,7 +1631,7 @@ def _release_pid_file():
 async def ticker_current(app):
     while True:
         await asyncio.sleep(30)
-        fetch_current()
+        fetch_current(cached=True)  # ride the shared cache; bursts stay live
         _assert_pid_file()
         app.invalidate()
 
