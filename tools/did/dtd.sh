@@ -40,6 +40,11 @@ DTD_PUSHED="/tmp/dtd-$DTD_ID.pushed"
 DTD_PROCESSED="/tmp/dtd-$DTD_ID.processed"
 DTD_SESSION="/tmp/dtd-$DTD_ID.session"
 DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
+# fzf --listen port (written by the start binding) + the live-timer ticker that
+# POSTs change-footer to it ~10x/s. See dtd-ticker.py.
+DTD_PORT="/tmp/dtd-$DTD_ID.port"
+DTD_HDRGEN="/tmp/dtd-$DTD_ID.hdrgen"
+DTD_TICKER="$HOME/i446-monorepo/tools/did/dtd-ticker.py"
 
 if [[ ! -f "$CACHE" ]]; then
   echo "No task cache found at $CACHE" >&2
@@ -135,21 +140,9 @@ touch "$DTD_REMOVED"
 touch "$DTD_SKIPPED"
 
 # --- Helper: format toggl current output into 1-line string ---
-_parse_toggl() {
-  local cur="$1"
-  if [[ "$cur" == Running:* ]]; then
-    local body="${cur#Running: }"
-    body=$(echo "$body" | sed -E 's/^[0-9]{2}:[0-9]{2}-running //')
-    body=$(echo "$body" | sed -E 's/ *\(running\)//; s/ *\[id:[0-9]*\]//')
-    echo "▶ $body"
-  else
-    echo "▶ (idle)"
-  fi
-}
-
-# Fetch timer ONCE at startup (not every loop iteration)
-TOGGL_CURRENT=$(python3 "$TOGGL_CLI" current 2>/dev/null)
-TIMER_HDR=$(_parse_toggl "$TOGGL_CURRENT")
+# The running-timer line is rendered by the background ticker (dtd-ticker.py),
+# which polls Toggl itself and POSTs change-footer to fzf. No startup fetch or
+# footer string is needed here anymore.
 
 # --- Start script used by fzf enter/ctrl-s binding ---
 DTD_START="/tmp/dtd-$DTD_ID.start.sh"
@@ -956,15 +949,33 @@ chmod +x "$DTD_UNDO"
 # (fzf --height renders inline below whatever was already on the terminal).
 clear
 
-# Keybinding hints shown on the footer. Exported so the transform-footer
-# bindings (which run in fzf's child shell) can read it. The footer is a
-# single bottom line: "<tasks left>   <keybindings>", with the live match
-# count ($FZF_MATCH_COUNT) refreshed on load/result.
+# Keybinding hints shown on the status line. Exported so the transform-header
+# bindings (which run in fzf's child shell) can read it. With --header-first the
+# header renders BELOW the prompt (Claude-style status line): the live match
+# count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
 export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh"
+
+# Status-line generator (the header, below the prompt): "<N left>   <worker
+# status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
+# exported above; the worker-status file path is baked in here. Used by the
+# load/result binds and after every action so worker confirmations persist.
+cat > "$DTD_HDRGEN" <<HDRGENEOF
+#!/bin/zsh
+ws=\$(cat "$DTD_HDR" 2>/dev/null | tr '\n' ' ')
+printf '%s left   %s   %s' "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
+HDRGENEOF
+chmod +x "$DTD_HDRGEN"
 
 # ctrl-d prompts for the defer target (N days / date) on the tty. Only set
 # here so the extracted script stays non-interactive for tests and scripts.
 export DTD_DEFER_PROMPT=1
+
+# Live-timer ticker: owns the footer (top line), POSTing change-footer ~10x/s to
+# the fzf --listen port the start binding writes to $DTD_PORT. Best-effort and
+# self-terminating (exits when $DTD_PORT vanishes at cleanup).
+rm -f "$DTD_PORT"
+python3 "$DTD_TICKER" "$DTD_PORT" &>/dev/null &
+TICKER_PID=$!
 
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
@@ -978,12 +989,8 @@ while true; do
   DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
     'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
 
-  TOGGL_CURRENT=$(python3 "$TOGGL_CLI" current 2>/dev/null)
-  TIMER_HDR=$(_parse_toggl "$TOGGL_CURRENT")
-  worker_hdr=$(cat "$DTD_HDR" 2>/dev/null || echo "")
-  combined_hdr="$TIMER_HDR
-  $worker_hdr"
-
+  # The running-timer line is owned by the background ticker (footer, top line);
+  # worker status now lives in the header. No footer string is built here.
   session_exclude=$(jq -c -R -s 'split("\n") | map(select(. != ""))' < "$DTD_SESSION")
   all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
@@ -1008,33 +1015,37 @@ while true; do
   # resolve the real task. (fzf searches whatever is displayed; the short names
   # keep key codes/names so search stays usable.)
   # Full-screen (no --height) so the input block is bottom-justified to the
-  # terminal like Claude. NB: under --layout=reverse-list fzf renders --footer
-  # at the TOP and --header at the BOTTOM (just above the prompt). So the live
-  # "<tasks left>   <keybindings>" line goes in --header (renders at the bottom,
-  # where we want it) and the timer/worker-status goes in --footer (renders at
-  # the top). transform-header refreshes the count on load/result; the action
-  # bindings push their status into the footer via transform-footer.
+  # terminal like Claude. Under --layout=reverse-list, --footer renders at the
+  # TOP and --header at the BOTTOM; with --header-first the header renders just
+  # BELOW the prompt (Claude-style status line). So:
+  #   footer (top)         = live running timer, owned by the background ticker
+  #                          via --listen/change-footer (not built here).
+  #   header (below input) = "<N left>   <worker status>   <keys>", produced by
+  #                          $DTD_HDRGEN on load/result and after every action so
+  #                          worker confirmations persist alongside the count.
+  # The start binding publishes fzf's --listen port for the ticker to POST to.
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --info=inline-right \
       --input-border=horizontal \
+      --listen --header-first \
       --header="$DTD_KEYS" \
-      --bind 'load:transform-header(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
-      --bind 'result:transform-header(printf "%s left   %s" "$FZF_MATCH_COUNT" "$DTD_KEYS")' \
+      --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
+      --bind "load:transform-header($DTD_HDRGEN)" \
+      --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
-      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-footer(cat $DTD_HDR)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE)+reload($DTD_RELOAD)+transform-footer(echo '🔄 refreshed')" \
-      --footer="$combined_hdr")
+      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
   task="$fzf_output"
 
@@ -1132,5 +1143,7 @@ if [[ $session_count -gt 0 ]]; then
   fi
 fi
 
+# Stop the live-timer ticker (also self-exits once $DTD_PORT is gone, below).
+kill "$TICKER_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN"
