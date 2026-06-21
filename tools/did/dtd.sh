@@ -51,6 +51,26 @@ if [[ ! -f "$CACHE" ]]; then
   return 1 2>/dev/null || exit 1
 fi
 
+# Time-based freshness guard. The count-based guards below only fire when the
+# cache is grossly wrong (<5 today / <30 due). They miss SINGLE-task staleness:
+# a daily habit whose occurrence rolled to today stays hidden behind a cache
+# built before the rollover, because the total count barely changes (regression
+# 2026-06-21: 早餐 missing from dtd; cache was stale and no daemon refreshed it).
+# Refresh whenever the cache 'updated' stamp is older than DTD_CACHE_MAX_AGE.
+DTD_CACHE_MAX_AGE=${DTD_CACHE_MAX_AGE:-600}  # seconds
+cache_age=$(python3 -c "
+import json, sys, datetime as dt
+try:
+    u = json.load(open(sys.argv[1])).get('updated')
+    print(int((dt.datetime.now() - dt.datetime.fromisoformat(u)).total_seconds()) if u else 10**9)
+except Exception:
+    print(10**9)
+" "$CACHE" 2>/dev/null || echo 1000000000)
+if [[ "$cache_age" -gt "$DTD_CACHE_MAX_AGE" ]]; then
+  echo "Task cache is ${cache_age}s old (>${DTD_CACHE_MAX_AGE}s). Refreshing..."
+  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+fi
+
 if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   echo "Refreshing task cache..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
