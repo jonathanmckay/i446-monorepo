@@ -41,7 +41,11 @@ if not os.environ.get("TOGGL_API_KEY"):
         pass
 
 TICK = 0.1   # seconds between footer repaints
-POLL = 3.0   # seconds between Toggl API reads (to catch a changed timer)
+# The footer clock is extrapolated locally every TICK, so a Toggl read is only
+# needed to NOTICE an externally-changed timer. 3s meant 20 req/min per open
+# picker — the single biggest contributor to Toggl 429s. 12s detection lag is
+# imperceptible for a footer and cuts this source ~75%.
+POLL = 12.0  # seconds between Toggl API reads (to catch a changed timer)
 
 
 def _toggl_api():

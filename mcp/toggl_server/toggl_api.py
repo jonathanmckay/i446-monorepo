@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import signal
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -31,23 +32,36 @@ def _auth_header():
     return f"Basic {creds}"
 
 
+_MAX_429_RETRIES = 3  # Toggl is a ~1 req/sec leaky bucket; bursts get 429.
+
+
 def _request(method, path, body=None):
     url = f"{BASE_URL}{path}"
     data = json.dumps(body).encode() if body else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", _auth_header())
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            if resp.status == 200:
-                result = json.loads(resp.read())
-                if method != "GET":  # a mutation succeeded → wake tg-tui now
-                    _notify_tui()
-                return result
-            return None
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode() if e.fp else ""
-        raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")
+    # On 429, honour Retry-After (Toggl doesn't always send it, so fall back to
+    # capped exponential backoff). Without this a tripped limit raises straight
+    # to the UI and the next poll re-trips it — the same pattern ibx/slack.py
+    # and ibx/sync_external_replies.py already use for their APIs.
+    for attempt in range(_MAX_429_RETRIES):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", _auth_header())
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                if resp.status == 200:
+                    result = json.loads(resp.read())
+                    if method != "GET":  # a mutation succeeded → wake tg-tui now
+                        _notify_tui()
+                    return result
+                return None
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < _MAX_429_RETRIES - 1:
+                retry_after = e.headers.get("Retry-After")
+                delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
+                time.sleep(min(delay, 30))
+                continue
+            error_body = e.read().decode() if e.fp else ""
+            raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")
 
 
 def create_entry(description, start_iso, stop_iso, duration_sec, project_id=None, tags=None):
