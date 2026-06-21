@@ -88,17 +88,55 @@ two days.
    - If teams mode with BlackHole: use default idle timeout (5 min).
 
 7. **Post-launch health check** (THE CRITICAL STEP — do not skip):
-   Wait 15 seconds, then verify recording is healthy:
+
+   There are TWO things to verify, and they are separate: **liveness** (the process
+   is recording) and **audio health** (the call audio is actually being captured).
+   The audio verdict is what caused the 2026-06-21 inconsistency: the old check
+   reported success on the `Recording...` banner at 15s, but meet.py's audio verdict
+   is time-delayed (it lands at ~15s and 60s), so a green report fired while the
+   remote side was silently dead. **Do not declare audio health from the `Recording...`
+   banner.** meet.py is the single source of truth: it now emits one machine-readable
+   line, `AUDIO_VERDICT <state> ...`, and the report must relay THAT, not a guess.
+
+   **7a. Liveness (immediate).**
    ```bash
    sleep 15
    tmux has-session -t d357 2>/dev/null && echo "session alive" || echo "SESSION DEAD"
    tail -5 /tmp/d357-active.log
    ```
-   Check the log for:
-   - `Recording... press Ctrl+C to stop` → good, recording is running
-   - `Done!` or `Stopped` → **BAD**: recording already exited. Diagnose and restart immediately.
-   - `⚠  Call audio device has zero signal` → expected if in HFP mode; should have been caught in pre-flight
-   - No output at all → process crashed, check stderr in log
+   - `Recording... press Ctrl+C to stop` → process is alive (liveness only, NOT audio).
+   - `Done!` or `Stopped` → **BAD**: recording already exited. Diagnose and restart.
+   - No output at all → process crashed, check stderr in log.
+
+   **7b. Audio verdict (wait for it — do not skip to the report).** Poll the log for
+   the `AUDIO_VERDICT` line meet.py emits (mic-only → at startup; teams mode → at the
+   15s early check). Wait up to ~25s for a teams-mode verdict:
+   ```bash
+   for i in $(seq 1 13); do
+       v=$(grep -m1 '^AUDIO_VERDICT' /tmp/d357-active.log 2>/dev/null) && break
+       tmux has-session -t d357 2>/dev/null || break
+       sleep 2
+   done
+   echo "verdict: ${v:-<none yet>}"
+   ```
+   Interpret and **report exactly what the verdict says** (one judge, no parallel heuristic):
+   - `AUDIO_VERDICT ok channels=both` → both sides captured. Report "Audio: teams mode (both sides)".
+   - `AUDIO_VERDICT mic-only reason=no-teams` → expected for `--no-teams`. Report "Audio: mic-only".
+   - `AUDIO_VERDICT degraded reason=call-zero-signal` → **the remote side is NOT being
+     captured.** Do NOT report success. Cross-check by probing BlackHole directly
+     (genuine silence carries a ~0.0003 noise floor; sustained exact `0.000000` = not captured):
+     ```bash
+     python3 -c "import sounddevice as sd,numpy as np; i=next(k for k,d in enumerate(sd.query_devices()) if 'BlackHole' in d['name'] and d['max_input_channels']>0); r=sd.rec(int(3*48000),samplerate=48000,channels=2,device=i); sd.wait(); print('BlackHole rms=%.6f'%float(np.sqrt((r**2).mean())))"
+     ```
+     If zero, remediate before handing back: for a **Teams-app** meeting launch teamstap
+     (see Process Tap section); if teamstap also reads exact `0.000000`, the call audio
+     is on a device neither path taps — surface the one-line fix to the user
+     (**Teams → Settings → Devices → Speaker → "Meet Output"**, which feeds the
+     already-running BlackHole stream) and report the remote side as **not yet captured**.
+   - No verdict after ~25s but session alive → report audio as **unconfirmed**, not green.
+
+   **The rule: the success line you give the user must match meet.py's `AUDIO_VERDICT`.**
+   Never report "both sides" on a `degraded` verdict or a zero BlackHole probe.
 
    **If the session died or the recording exited early**: diagnose from the log, fix the issue (usually: switch to mic-only, or reconnect AirPods), and restart. Do NOT report success to the user if the recording is dead. The user cannot babysit this.
 

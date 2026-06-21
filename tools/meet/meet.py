@@ -301,6 +301,11 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     if idle_timeout:
         print(f"   Auto-stop after {idle_timeout // 60}min of silence (post-conversation)")
     print("\nRecording... press Ctrl+C to stop\n")
+    # Machine-readable audio verdict for the /d357 health check to relay.
+    # mic-only mode has no system-audio leg, so its verdict is known at startup;
+    # teams mode emits its verdict at the 15s early check below.
+    if not teams_mode:
+        print("AUDIO_VERDICT mic-only reason=no-teams", flush=True)
     for s in streams:
         s.start()
     with GracefulStop() as stop:
@@ -314,8 +319,11 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                 early_check_done = True
                 bh_peak = int(np.max(np.abs(np.concatenate(bh_frames, axis=0))))
                 if bh_peak == 0:
+                    print("AUDIO_VERDICT degraded reason=call-zero-signal", flush=True)
                     print("⚠  Call audio device has zero signal at 15s.")
                     print("   Will auto-fallback to mic-only if still silent at 3min.")
+                else:
+                    print("AUDIO_VERDICT ok channels=both", flush=True)
 
             # Auto-stop: max duration reached
             if max_duration and elapsed >= max_duration:
@@ -353,6 +361,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     teams_warn_count += 1
                     if teams_warn_count >= 2:
                         msg = "Call audio silent — falling back to mic-only recording."
+                        print("AUDIO_VERDICT degraded reason=fell-back-to-mic-only", flush=True)
                         print(f"\n⚠  {msg}")
                         _notify("⚠ Recording: mic-only fallback", msg)
                         # Stop and discard the system audio stream
@@ -387,6 +396,7 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     pass
                 else:
                     if teams_warn_count > 0:
+                        print("AUDIO_VERDICT ok channels=both", flush=True)
                         print(f"\n✓  Both channels now have speech ({int(elapsed)}s). Recording looks good.\n")
                         teams_warn_count = 0
 
