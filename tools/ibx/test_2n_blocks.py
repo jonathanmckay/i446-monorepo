@@ -189,7 +189,7 @@ def test_run_1g_card_writes_locally_before_subprocess(tmp_path):
     so the user is no longer blocked by it."""
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
-    next_card = card_section.index("# ── Card 3")
+    next_card = card_section.index("# ── Card 4")
     card_section = card_section[:next_card]
     assert "write_block_goals(" in card_section, \
         "Card 2 must call write_block_goals() so goals land even if claude fails"
@@ -209,7 +209,7 @@ def test_card2_does_not_call_run_1g_blocking():
     instead."""
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
-    card_section = card_section[:card_section.index("# ── Card 3")]
+    card_section = card_section[:card_section.index("# ── Card 4")]
     assert "run_1g(" not in card_section, \
         "Card 2 should not call the blocking run_1g(); use spawn_1g_background()"
 
@@ -269,7 +269,7 @@ def test_prompt_card_preserves_case_when_requested():
     # Confirm the -1g card prompt passes preserve_case=True.
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
-    next_card = card_section.index("# ── Card 3")
+    next_card = card_section.index("# ── Card 4")
     card_section = card_section[:next_card]
     assert "preserve_case=True" in card_section, \
         "-1g card must pass preserve_case=True to prompt_card"
@@ -288,7 +288,7 @@ def test_1g_card_rechecks_block_before_showing():
     for the new block (salah card first)."""
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
-    next_section = card_section.index("# ── Card 3")
+    next_section = card_section.index("# ── Card 4")
     before_1g = card_section[:next_section]
     assert "get_current_block()" in before_1g, \
         "Must re-check current block before showing -1g card"
@@ -513,7 +513,7 @@ def test_1g_card_uses_single_line_input():
     assert found
     src_text = SRC.read_text()
     card_section = src_text[src_text.index("# ── Card 2: -1g"):]
-    next_card = card_section.index("# ── Card 3")
+    next_card = card_section.index("# ── Card 4")
     card_section = card_section[:next_card]
     assert "multiline=True" not in card_section, \
         "-1g card must use single-line input so one Enter submits"
@@ -612,66 +612,7 @@ def test_pray_then_set_goals_preserves_marker(tmp_path):
         "prayer marker must come before goals in build order"
 
 
-def test_prune_stale_briefs_drops_yesterday(tmp_path):
-    """Regression: meeting briefs from yesterday were persisting forever
-    because mtg.py only filters when STAGING new briefs. -2n.py must prune
-    at read time."""
-    m = _load_two_n()
-    fake_briefs = tmp_path / "mtg-briefs.json"
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    tomorrow = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
-    briefs = [
-        {"event_id": "stale", "title": "Yesterday's meeting", "start": yesterday},
-        {"event_id": "fresh", "title": "Tomorrow's meeting", "start": tomorrow},
-    ]
-    fake_briefs.write_text(json.dumps(briefs))
-    with patch.object(m, "MTG_BRIEFS", fake_briefs):
-        kept = m._prune_stale_briefs(briefs)
-    assert len(kept) == 1
-    assert kept[0]["event_id"] == "fresh"
-    # File was rewritten without the stale entry.
-    on_disk = json.loads(fake_briefs.read_text())
-    assert len(on_disk) == 1
-    assert on_disk[0]["event_id"] == "fresh"
-
-
-def test_prune_stale_briefs_keeps_within_grace(tmp_path):
-    """Briefs whose meeting started within the last 4h must still be kept."""
-    import datetime as _dt
-    m = _load_two_n()
-    fake_briefs = tmp_path / "mtg-briefs.json"
-    just_started = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    briefs = [{"event_id": "active", "title": "In progress", "start": just_started}]
-    fake_briefs.write_text(json.dumps(briefs))
-    with patch.object(m, "MTG_BRIEFS", fake_briefs):
-        kept = m._prune_stale_briefs(briefs)
-    assert len(kept) == 1
-
-
-def test_prune_stale_briefs_deletes_file_when_empty(tmp_path):
-    m = _load_two_n()
-    fake_briefs = tmp_path / "mtg-briefs.json"
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    briefs = [{"event_id": "stale", "title": "old", "start": yesterday}]
-    fake_briefs.write_text(json.dumps(briefs))
-    with patch.object(m, "MTG_BRIEFS", fake_briefs):
-        kept = m._prune_stale_briefs(briefs)
-    assert kept == []
-    assert not fake_briefs.exists()
-
-
-def test_main_prunes_stale_briefs_before_card_count():
-    """AST: main() must call _prune_stale_briefs before building cards_needed,
-    otherwise stale briefs still inflate the card count."""
-    src = SRC.read_text()
-    main_section = src[src.index("def main("):src.index("\nif __name__")]
-    assert "_prune_stale_briefs(" in main_section
-    prune_idx = main_section.index("_prune_stale_briefs(")
-    cards_idx = main_section.index("cards_needed = []")
-    assert prune_idx < cards_idx, "Stale briefs must be pruned BEFORE cards_needed is built"
-
-
-# Module-level imports needed by the prune tests above
+# Module-level imports used by tests below
 from datetime import datetime, timedelta, timezone
 import json
 

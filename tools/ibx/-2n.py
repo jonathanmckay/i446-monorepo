@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
 -2n — Unified interrupt queue.
-Runs pre-inbox cards (salah, -1l, -1g, meeting prep), then hands off to ibx0.
+Runs pre-inbox cards (salah, -1l, -1g), then hands off to ibx0.
 
 Card order:
   1. صلاة الشمس (salah check)
   2. -1l (daily ritual check)
   3. -1g (set 2h block goals)
-  3.5. meeting prep (staged briefs)
   4. ibx0 (inbox cards — delegates to ibx0.main())
   5. suggest starting on goals
 """
@@ -40,7 +39,6 @@ console = Console()
 
 TERM_COLOR = Path(__file__).parent.parent.parent / "scripts" / "term-color.sh"
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
-MTG_BRIEFS = Path.home() / "vault/z_ibx/mtg-briefs.json"
 VALIDATE_HABITS = Path.home() / "i446-monorepo/scripts/validate-daily-habits.py"
 HABITS_CHECK_CACHE = Path.home() / ".cache/jm/daily-habits-check.json"
 TZ = "America/Los_Angeles"
@@ -522,39 +520,6 @@ def spawn_1g_background(goals_text):
         start_new_session=True,
         close_fds=True,
     )
-
-
-def _prune_stale_briefs(briefs, now=None, grace_hours=4):
-    """Drop briefs whose meeting started more than `grace_hours` ago and
-    persist the trimmed list. Returns the kept briefs."""
-    if not briefs:
-        return briefs
-    if now is None:
-        now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(hours=grace_hours)).isoformat()
-    kept = []
-    for b in briefs:
-        start = b.get("start", "")
-        # ISO-8601 with timezone sorts lexicographically when normalized;
-        # keep brief if its start is on/after the cutoff.
-        try:
-            start_dt = datetime.fromisoformat(start)
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
-            if start_dt >= now - timedelta(hours=grace_hours):
-                kept.append(b)
-        except (ValueError, TypeError):
-            # Malformed start — keep so we don't silently lose data.
-            kept.append(b)
-    if len(kept) != len(briefs):
-        try:
-            if kept:
-                MTG_BRIEFS.write_text(json.dumps(kept, indent=2, ensure_ascii=False))
-            else:
-                MTG_BRIEFS.unlink(missing_ok=True)
-        except Exception:
-            pass
-    return kept
 
 
 def get_previous_block():
@@ -1279,21 +1244,6 @@ def main():
     # nothing had been set. Check existence, not just open goals.
     goals_set = bool(block_status_items)
 
-    # Check meeting briefs
-    mtg_briefs = []
-    if MTG_BRIEFS.exists():
-        try:
-            mtg_briefs = json.loads(MTG_BRIEFS.read_text())
-            if not isinstance(mtg_briefs, list):
-                mtg_briefs = []
-        except Exception:
-            mtg_briefs = []
-
-    # Prune stale briefs (meeting started >4h ago). Without this, mtg.py only
-    # filters when staging *new* briefs, so old ones persist forever and
-    # /inbound keeps prompting until the user manually acks each expired card.
-    mtg_briefs = _prune_stale_briefs(mtg_briefs)
-
     # Check time gaps in all past blocks (separate card per block)
     block_gaps = []  # list of (block_name, block_start, block_end, gaps)
     if idx > 0:
@@ -1327,8 +1277,6 @@ def main():
         cards_needed.append("gaps")
     if not goals_set and not sleep_block:
         cards_needed.append("-1g")
-    for brief in mtg_briefs:
-        cards_needed.append("mtg")
     cards_needed.append("ibx0")
     total_cards = len(cards_needed)
 
@@ -1475,22 +1423,6 @@ def main():
                     current_goals = list(parsed_goals)
                 else:
                     console.print(f"[red]  ⚠ failed to write goals to build order[/red]")
-
-        # ── Card 3.5: Meeting prep ────────────────────────────────────
-        remaining_briefs = []
-        for brief in mtg_briefs:
-            card_num += 1
-            title = brief.get("title", "Meeting")
-            body = brief.get("body", "(no brief)")
-            resp = prompt_card(card_num, total_cards, f"📅 {title}", body, options="ack/skip")
-            if resp != "ack":
-                remaining_briefs.append(brief)
-        # Update briefs file
-        if mtg_briefs:
-            if remaining_briefs:
-                MTG_BRIEFS.write_text(json.dumps(remaining_briefs, indent=2))
-            else:
-                MTG_BRIEFS.unlink(missing_ok=True)
 
     # ── Card 4: ibx0 ─────────────────────────────────────────────────
     # Import and run ibx0's main loop directly — this handles all inbox
