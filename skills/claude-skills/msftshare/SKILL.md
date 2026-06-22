@@ -23,7 +23,8 @@ The helper does everything (resolve, convert, place, stub, index). Report its st
 **`/msftshare <doc>`** — default. Vault stays source of truth.
 - Resolves `<doc>` (vault-relative path, or unambiguous filename).
 - Converts the markdown to `.docx` via pandoc.
-- Writes it to `~/Library/CloudStorage/OneDrive-Microsoft/vault-shared/<vault-dir>/<name>.docx` (mirrors the vault folder path).
+- Writes it to `~/Library/CloudStorage/OneDrive-Microsoft/vault-shared/<vault-dir>/<name>.docx` (mirrors the vault folder path by default).
+- **Work-friendly destination:** set `msft_dest:` in the doc's frontmatter to a clean relative path under `vault-shared/` so personal vault codes (e.g. `h335/i9`) don't leak into the shared OneDrive tree. The last path segment becomes the Word doc name, the rest are folders. Example: `msft_dest: "Xbox Analytics/Analytics Deep Dives"` → `vault-shared/Xbox Analytics/Analytics Deep Dives.docx`. Must be relative (no leading `/` or `..`).
 - Records `msft_shadow:` in the vault doc's frontmatter.
 - Re-running refreshes the shadow.
 - To actually share: in OneDrive, right-click the `.docx` → **Copy link** (wait for the sync badge to clear first). No Graph/enterprise access needed.

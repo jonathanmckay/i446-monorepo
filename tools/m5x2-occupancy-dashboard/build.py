@@ -196,28 +196,30 @@ for i in range(1, FWD_DAYS + 1):
     fwd_signings.append((di, f_vu_vr + f_nu_nr))
     fwd.append(fsnap(di))
 
-# ── Weekly lease-count model: predicted signings vs. already-scheduled move-ins ─
-# predicted  = the forecast's weekly lease-up run-rate (Σ daily signings per week)
-# scheduled  = leases already signed in the pipeline, bucketed by move-in week
-#              (from the event log). The first is a model; the second is committed.
-pred_by_week = {}
-for d, s in fwd_signings:
-    pred_by_week[week_start(d)] = pred_by_week.get(week_start(d), 0.0) + s
+# ── Leases signed per week — trailing 12 weeks, ACTUALS from the tickler log ──
+# "Actual" = a real signed lease, dated by AppFolio's LeaseSignDate. The tickler
+# (data/tickler.json) is the full historical move log (Move-in/out + Notice rows,
+# each carrying LeaseSignDate in M/D/YYYY). We bucket signings into the last 12
+# Monday-anchored ISO weeks. This replaces the old forward forecast (predicted
+# run-rate vs. scheduled move-ins) — the chart now shows what actually happened.
+def _tickler_date(s):
+    s = (s or "").strip()
+    for f in ("%m/%d/%Y", "%Y-%m-%d"):
+        try: return dt.datetime.strptime(s[:10], f).date()
+        except Exception: pass
+    return None
 
-sched_by_week = {}
-for e in events_all:
-    if e.get("kind") == "leased" and e.get("effective"):
-        ed = pdate(e["effective"])
-        if ed and ed >= TODAY:
-            sched_by_week[week_start(ed)] = sched_by_week.get(week_start(ed), 0) + 1
+signs_by_week = {}
+for r in load("tickler.json"):
+    sd = _tickler_date(r.get("LeaseSignDate"))
+    if sd:
+        wk = week_start(sd)
+        signs_by_week[wk] = signs_by_week.get(wk, 0) + 1
 
 leases_weekly = []
-w = week_start(TODAY)
-w_end = week_start(TODAY + dt.timedelta(days=FWD_DAYS))
-while w <= w_end:
-    leases_weekly.append({"week": w.isoformat(),
-                          "predicted": round(pred_by_week.get(w, 0.0), 1),
-                          "scheduled": sched_by_week.get(w, 0)})
+w = week_start(TODAY) - dt.timedelta(weeks=11)   # 12 weeks incl. the current one
+while w <= week_start(TODAY):
+    leases_weekly.append({"week": w.isoformat(), "signed": signs_by_week.get(w, 0)})
     w += dt.timedelta(days=7)
 
 # ── Long-term weekly % series (2024 → today, % of each snapshot's portfolio) ──
@@ -259,6 +261,7 @@ while d <= TODAY:
                          "pct": round(o / u * 100, 2),
                          "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2),
                          "projected": False})
+    d += dt.timedelta(days=1)
 for r in fwd[1:]:                            # forward from the shared compartment model
     occ = UNITS - r["vu"] - r["vr"]
     occ_timeline.append({"date": r["date"], "occ": round(occ), "units": UNITS,
@@ -363,11 +366,10 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 Backward is real daily AppFolio snapshots; forward is a compartment forecast calibrated to the current
 pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = covered.</div></div>
 
-<h2>Leases per week — predicted signings vs. scheduled move-ins</h2>
+<h2>Leases signed per week — last 12 weeks (actuals)</h2>
 <div class="card"><canvas id="leasesChart" height="86"></canvas>
 <div class="legend">
- <span><i class="sw" style="background:var(--blue)"></i>Predicted signings (model)</span>
- <span><i class="sw" style="background:var(--vr)"></i>Scheduled move-ins (signed)</span></div>
+ <span><i class="sw" style="background:var(--blue)"></i>Leases signed (actual, by LeaseSignDate)</span></div>
 <div class="note" id="leaseNote"></div>
 <div class="note">First-pass lease model. <b>Predicted</b> = the forecast's weekly lease-up
 run-rate, anchored to trailing re-let demand (the rate units fall vacant-unrented and must be
@@ -438,15 +440,15 @@ new Chart(document.getElementById('unitsChart'),{type:'line',
   scales:{x:{stacked:true,grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:30,autoSkip:true,maxRotation:90,minRotation:90,callback:fmtMD}},
    y:{stacked:true,ticks:{color:'#8b96a3'},grid:{color:'#1e242b'}}}}});
-// ── leases-per-week chart: predicted signings vs scheduled move-ins ──
+// ── leases-per-week chart: actual signed leases, last 12 weeks ──
+const lwTotal=D.leases_weekly.reduce((a,r)=>a+r.signed,0);
 document.getElementById('leaseNote').textContent=
- `Next ${D.leases_weekly.length} weeks · predicted ~${D.leases_weekly.reduce((a,r)=>a+r.predicted,0).toFixed(0)} `+
- `signings vs ${D.leases_weekly.reduce((a,r)=>a+r.scheduled,0)} already scheduled.`;
+ `Last ${D.leases_weekly.length} weeks · ${lwTotal} leases signed `+
+ `(avg ${(lwTotal/D.leases_weekly.length).toFixed(1)}/wk, by LeaseSignDate). Current week is partial.`;
 const lw=D.leases_weekly, lwLabels=lw.map(r=>r.week);
 new Chart(document.getElementById('leasesChart'),{type:'bar',
  data:{labels:lwLabels,datasets:[
-   {label:'Predicted signings',data:lw.map(r=>r.predicted),backgroundColor:C.blue,borderRadius:3},
-   {label:'Scheduled move-ins',data:lw.map(r=>r.scheduled),backgroundColor:C.vr,borderRadius:3}]},
+   {label:'Leases signed',data:lw.map(r=>r.signed),backgroundColor:C.blue,borderRadius:3}]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>'week of '+i[0].label}}},
   scales:{x:{grid:{display:false},
