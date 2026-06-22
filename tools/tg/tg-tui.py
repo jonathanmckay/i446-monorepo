@@ -441,6 +441,7 @@ def fetch_points():
         # into whichever block they were *recorded* in, not earned in.
         bp_excel: dict[str, int] = {}
         read_ok = False
+        total_ok = False
         raw_out = ""
         try:
             import subprocess as _sp
@@ -476,13 +477,24 @@ end tell'''
                 parts = raw_out.split("|")
                 val = parts[0].strip()
                 # Handle formula strings like "70+12" defensively.
+                candidate = None
                 try:
-                    STATE.today_points = int(round(float(val)))
+                    candidate = int(round(float(val)))
                 except ValueError:
                     try:
-                        STATE.today_points = int(round(float(eval(val))))  # safe: digits and +
+                        candidate = int(round(float(eval(val))))  # safe: digits and +
                     except Exception:
-                        pass
+                        candidate = None
+                # Commit the Σ total only when it's plausible. Col D (=SUM(P:Y)) is
+                # read mid-recalc during did/daemon writes and transiently returns
+                # garbage — the rejection log has shown D=-46 for ~26min and high
+                # spikes. That was a cosmetic topline glitch before, but the
+                # current-block 分 reconstruction (Σ − locked) now depends on the
+                # total, so a torn read corrupted the live block (the "4351分" bug).
+                # Keep the last good total on an implausible read.
+                total_ok = candidate is not None and 0 <= candidate <= _MAX_PLAUSIBLE_TOTAL
+                if total_ok:
+                    STATE.today_points = candidate
                 branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
                 for bname, raw in zip(branches, parts[1:10]):
                     raw = raw.strip()
@@ -513,19 +525,28 @@ end tell'''
         # in (the 313-in-酉 bug: 33 earned there, 280 logged there in a batch).
         if read_ok:
             STATE.last_points_fetch = time.monotonic()
-            if _blocks_consistent(STATE.today_points, bp_excel):
+            # Only adopt fresh blocks alongside a freshly-accepted total — never
+            # pair new blocks with a stale total kept from a torn read.
+            if total_ok and _blocks_consistent(STATE.today_points, bp_excel):
                 STATE.block_points = bp_excel
             else:
-                # Mid-write snapshot (daemon lock / did-fast append in flight):
-                # keep last good values and leave evidence for diagnosis.
+                # Torn read (implausible total, or daemon lock / did-fast append
+                # in flight): keep last good values and leave evidence for diagnosis.
                 try:
                     with open("/tmp/tg-tui-points-rejected.log", "a") as fh:
-                        fh.write(f"{dt.datetime.now(TZ):%F %T} D={STATE.today_points} "
+                        fh.write(f"{dt.datetime.now(TZ):%F %T} total_ok={total_ok} "
+                                 f"cand={candidate} D={STATE.today_points} "
                                  f"bp={bp_excel} raw={raw_out!r}\n")
                 except OSError:
                     pass
     except Exception:
         pass
+
+
+# Heaviest realistic 分 day is well under 1000 (test fixtures top out ~900); a
+# col-D read above this is a torn mid-recalc snapshot (=SUM(P:Y) sampled while a
+# did/daemon write is in flight), not a real total. Negative is likewise torn.
+_MAX_PLAUSIBLE_TOTAL = 2000
 
 
 def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:

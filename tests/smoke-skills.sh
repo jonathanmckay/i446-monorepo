@@ -33,9 +33,8 @@ echo "did:"
 [ -x ~/i446-monorepo/skills/claude-skills/_lib/ix-osa.sh ] && pass "ix-osa.sh executable" || fail "ix-osa.sh not executable"
 echo ""
 
-# ── next ─────────────────────────────────────────────────────────────────
-echo "next:"
-[ -f ~/i446-monorepo/skills/claude-skills/next/SKILL.md ] && pass "SKILL.md exists" || fail "SKILL.md missing"
+# ── todoist ──────────────────────────────────────────────────────────────
+echo "todoist:"
 curl -s -o /dev/null -w "%{http_code}" "https://api.todoist.com/rest/v2/tasks?limit=1" -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null | grep -q 200 && pass "Todoist API reachable" || warn "Todoist API unreachable"
 echo ""
 
