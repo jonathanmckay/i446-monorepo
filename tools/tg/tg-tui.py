@@ -467,6 +467,13 @@ def fetch_points():
         end try
         set out to out & "|" & v
     end repeat
+    repeat with c from 16 to 25
+        set pv to ""
+        try
+            set pv to (value of cell c of row todayRow of ws) as text
+        end try
+        set out to out & "|" & pv
+    end repeat
     return out
 end tell'''
             r = _sp.run([IX_OSA], input=script,
@@ -485,14 +492,24 @@ end tell'''
                         candidate = int(round(float(eval(val))))  # safe: digits and +
                     except Exception:
                         candidate = None
-                # Commit the Σ total only when it's plausible. Col D (=SUM(P:Y)) is
-                # read mid-recalc during did/daemon writes and transiently returns
-                # garbage — the rejection log has shown D=-46 for ~26min and high
-                # spikes. That was a cosmetic topline glitch before, but the
-                # current-block 分 reconstruction (Σ − locked) now depends on the
-                # total, so a torn read corrupted the live block (the "4351分" bug).
-                # Keep the last good total on an implausible read.
-                total_ok = candidate is not None and 0 <= candidate <= _MAX_PLAUSIBLE_TOTAL
+                # Commit the Σ total only when the read is trustworthy. Col D
+                # (=SUM(P:Y)) is read mid-recalc during did/daemon writes and
+                # transiently returns garbage — the rejection log has shown D=-46
+                # and high spikes (4351, 1523) on a settled ~750分 day. A fixed cap
+                # can't catch a spike that lands under it (1523 < cap), so cross-
+                # check D against its own input range P:Y (read as values in the
+                # same pass, parts[10:20]): a torn snapshot has the formula cache
+                # disagreeing with the freshly-read cells. This poisoned the
+                # current-block 分 reconstruction (Σ − locked); keep the last good
+                # total on an untrustworthy read.
+                sum_py = None
+                py_parts = parts[10:20]
+                if len(py_parts) == 10:
+                    try:
+                        sum_py = int(round(sum(float(p) for p in py_parts if p.strip())))
+                    except ValueError:
+                        sum_py = None  # non-numeric cell → torn; fall back to cap
+                total_ok = _total_trustworthy(candidate, sum_py)
                 if total_ok:
                     STATE.today_points = candidate
                 branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -543,10 +560,25 @@ end tell'''
         pass
 
 
-# Heaviest realistic 分 day is well under 1000 (test fixtures top out ~900); a
-# col-D read above this is a torn mid-recalc snapshot (=SUM(P:Y) sampled while a
-# did/daemon write is in flight), not a real total. Negative is likewise torn.
+# Backstop only — used when P:Y can't be read for the cross-check below. Heaviest
+# realistic 分 day is well under 1000 (test fixtures top out ~900). Negative is torn.
 _MAX_PLAUSIBLE_TOTAL = 2000
+
+
+def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
+    """Whether a col-D read may be committed as today's Σ total.
+
+    D is defined as =SUM(P:Y). A trustworthy read is non-negative AND equals its
+    own input range (sum_py, the P:Y cells read in the same pass). A torn mid-
+    recalc snapshot has the formula cache disagreeing with the freshly-read cells
+    — that catches spikes a fixed cap can't (1523 on a 758分 day). When P:Y is
+    unreadable (sum_py is None) fall back to the loose cap so obvious garbage
+    (D=-46, D=4351) is still rejected."""
+    if candidate is None or candidate < 0:
+        return False
+    if sum_py is not None:
+        return abs(candidate - sum_py) <= 1  # ±1 for float rounding
+    return candidate <= _MAX_PLAUSIBLE_TOTAL
 
 
 def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:

@@ -65,6 +65,37 @@ def test_plausible_total_and_blocks_are_adopted(monkeypatch):
     assert m.STATE.block_points == {"巳": 3, "午": 215}
 
 
+def test_spike_under_cap_caught_by_py_crosscheck(monkeypatch):
+    """The 1523-on-a-758分-day bug: a torn total below the 2000 cap that a fixed
+    bound can't catch. D must equal its own =SUM(P:Y); here it doesn't, so reject.
+    Layout: D | 9×G:O | 10×P:Y (P:Y sums to 758, D claims 1523)."""
+    m = _load_tui()
+    m.STATE.today_points = 758
+    m.STATE.block_points = {"午": 200}
+    raw = "1523|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|377|33|195|34|13|6|50|0"
+    _run(monkeypatch, m, raw)
+    assert m.STATE.today_points == 758, "D≠SUM(P:Y) is a torn read; keep last good"
+
+
+def test_consistent_total_with_py_is_adopted(monkeypatch):
+    """D == SUM(P:Y) → trustworthy, committed."""
+    m = _load_tui()
+    m.STATE.today_points = 0
+    raw = "758|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|377|33|195|34|13|6|50|0"
+    _run(monkeypatch, m, raw)
+    assert m.STATE.today_points == 758
+
+
+def test_total_trustworthy_unit():
+    m = _load_tui()
+    assert m._total_trustworthy(758, 758) is True
+    assert m._total_trustworthy(1523, 758) is False  # disagrees with P:Y
+    assert m._total_trustworthy(-46, None) is False   # negative, no P:Y
+    assert m._total_trustworthy(4351, None) is False  # over cap, no P:Y
+    assert m._total_trustworthy(606, None) is True    # under cap, no P:Y
+    assert m._total_trustworthy(759, 758) is True     # ±1 rounding tolerance
+
+
 def test_reconstruction_uses_clean_total_after_torn_read(monkeypatch):
     """End-to-end: after a spike read is rejected, the current-block reconstruction
     reflects the last good total, not the garbage."""

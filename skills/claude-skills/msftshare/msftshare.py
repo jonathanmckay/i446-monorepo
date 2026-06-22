@@ -217,14 +217,30 @@ def main():
     doc = resolve_doc(doc_arg)
     rel = doc.relative_to(VAULT.resolve())
     name = doc.stem
-    docx_path = SHARED_ROOT / rel.parent / (name + ".docx")
-    sidecar = SHARED_ROOT / rel.parent / (name + ".md")
-    shadow_rel = str((Path("vault-shared") / rel.parent / (name + ".docx")))
-    sidecar_rel = str((Path("vault-shared") / rel.parent / (name + ".md")))
 
     text = doc.read_text(encoding="utf-8")
     fm, body, had_fm = split_frontmatter(text)
     stubbed = fm_get(fm, "source_of_truth") == STUB_MARKER
+
+    # Destination under vault-shared. By default it mirrors the vault folder
+    # path (which can leak personal vault codes like h335/i9). A doc may set
+    # `msft_dest:` in frontmatter to a clean, work-friendly relative path; the
+    # last path component becomes the Word doc name, the rest are folders.
+    dest = fm_get(fm, "msft_dest")
+    if dest:
+        dp = Path(dest)
+        if dp.suffix.lower() in (".docx", ".md"):
+            dp = dp.with_suffix("")
+        if dp.is_absolute() or ".." in dp.parts or not dp.name:
+            die("msft_dest must be a relative path under vault-shared "
+                "(no leading '/' or '..')")
+        rel_dir, stem = dp.parent, dp.name
+    else:
+        rel_dir, stem = rel.parent, name
+    docx_path = SHARED_ROOT / rel_dir / (stem + ".docx")
+    sidecar = SHARED_ROOT / rel_dir / (stem + ".md")
+    shadow_rel = str(Path("vault-shared") / rel_dir / (stem + ".docx"))
+    sidecar_rel = str(Path("vault-shared") / rel_dir / (stem + ".md"))
 
     # ── Already flipped: OneDrive .docx is the LIVE source of truth ──────────
     # The user edits it in Word. Never regenerate it — that would clobber those
@@ -281,7 +297,7 @@ def main():
     stub_body = (
         f"> [!info] Source of truth: **Microsoft OneDrive** — shared with coworkers\n"
         f"> This doc is canonical in Work OneDrive. The vault keeps only this pointer.\n\n"
-        f"- **Open (local Word doc):** [{name}.docx]({file_uri(docx_path)})\n"
+        f"- **Open (local Word doc):** [{stem}.docx]({file_uri(docx_path)})\n"
         f"- **Markdown source (preserved):** `{sidecar_rel}`\n"
         f"- **Share link:** "
         + (share if share else "_not set — in OneDrive, right-click → Copy link, "
