@@ -51,27 +51,11 @@ The runner:
 
 **Slow path (one-off Todoist tasks, variable tasks):** when `run.py` exits with code 2, dispatch the background agent for Step 5 (Todoist word-overlap match) or Step 6 (variable). The agent is needed here because matching a free-form input against the full Todoist tree requires the LLM.
 
-A **UserPromptSubmit hook** (`did-next-hook.sh`) runs BEFORE Claude processes the prompt. If the prompt starts with `/did`, the hook outputs a "Next up" task list from the local cache. This output appears in a system-reminder tag.
+To process a `/did` with arguments:
 
-When you see hook output containing "Next up:" and "Pick [1-N]:", do this:
-
-1. **Display the hook output verbatim** to the user. Do not re-run the script.
-2. **Wait for user's pick.** If they pick 1–5, run `/tg` for that task (strip `[N]`, `(N)`, suffixes like `- Daily 分`). If they pick the last number (skip), do nothing. If they pick `s<N>` (e.g. `s3`), push that task to the bottom of the list by running `python3 ~/i446-monorepo/tools/did/next-task.py --skip <task_id>` (extract the `#<id>` from the hook output), then re-display the updated list.
-3. **After the pick** (or if no hook output), invoke `run.py` directly (fast path). If it exits 2, fall back to launching the background agent.
-4. **Background agent** (only when run.py defers): handle Step 5 (Todoist match) or Step 6 (variable task), then refresh cache + update completed-today. Report results when done.
-
-### Next-up suppression (anti-wallpaper rule)
-
-The Next-up panel is wallpaper after the first /did of a session — the same 9 tasks repeat until the user picks one. To save scroll:
-
-- The **background agent** still refreshes the cache every time (`completed-today.json` and `task-queue.json` must stay current).
-- In your **user-facing reply**, only render the Next-up list when:
-  - It's the first `/did` since you last sent the user a Next-up panel in this conversation, OR
-  - The list materially changed (a task that was on it dropped off, or a higher-priority task surfaced), OR
-  - The user explicitly asks (`/next`, "what's next", etc.).
-- Otherwise, just confirm the write in one line (e.g. `hiit → 1 (today) ✓ verify=1.0 + todoist closed`).
-
-Track suppression mentally per-session: after you've shown a Next-up panel once, don't repeat it until the list changes or the user asks. The user knows what's there; they'll ask if they want it again.
+1. Invoke `run.py` directly (fast path). If it exits 2, fall back to launching the background agent.
+2. **Background agent** (only when run.py defers): handle Step 5 (Todoist match) or Step 6 (variable task), then refresh cache + update completed-today. Report results when done.
+3. Confirm the write in one line (e.g. `hiit → 1 (today) ✓ verify=1.0 + todoist closed`).
 
 ## No-args Mode
 
