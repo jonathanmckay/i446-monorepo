@@ -53,7 +53,7 @@ When `/did` is called with **no arguments**:
    - After success, delete `active.json` to clear the session.
    - Skip to step 4 (do NOT use the raw timer description as input).
 4. **Standard path (no /do session).** Use the timer description as the /did input. Strip Toggl-specific prefixes/noise, then run `python3 $DID_FAST "<description>"`. Handle results + agent_needed as in the standard flow.
-5. **Surface next tasks.** Read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
+5. **Surface next tasks.** Read `~/.local/state/jm/task-queue.json` (the cache `next-task.py` actually reads, filtered against `completed-today.json`) and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache. NOTE: `~/.claude/skills/next/cache.json` is a stale decoy — do not read it.
 
 This lets the user finish a task and immediately start the next one in a single flow: `/did` → stop timer → mark done → pick next → start timer.
 
@@ -146,9 +146,9 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
 ## Cache & Tracking
 
-**Task queue:** `~/vault/z_ibx/task-queue.json` — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键路径).
+**Task queue:** `~/.local/state/jm/task-queue.json` (canonical path from `i446-monorepo/lib/state_paths.py:TASK_QUEUE`) — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键路径). NOTE: the old `~/vault/z_ibx/task-queue.json` is deprecated/deleted — do not read or write it.
 
-**Completed-today:** `~/vault/z_ibx/completed-today.json` — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day.
+**Completed-today:** `~/.local/state/jm/completed-today.json` (canonical path from `state_paths.py:COMPLETED_TODAY`) — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day. NOTE: the old `~/vault/z_ibx/completed-today.json` is deprecated/deleted.
 
 **Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键路径 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
 

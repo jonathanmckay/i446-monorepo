@@ -86,7 +86,7 @@ When `/did` is called with **no arguments**:
    - After success, delete `active.json` to clear the session.
    - Skip to step 5 (do NOT use the raw timer description as input).
 4. **Standard path (no /do session).** Use the timer description as the /did input. Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 to 6) as if the user had typed `/did <description>`.
-5. **Surface next tasks.** After launching the /did background agent, read `~/.claude/skills/next/cache.json` and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache.
+5. **Surface next tasks.** After launching the /did background agent, read `~/.local/state/jm/task-queue.json` (the cache `next-task.py` actually reads, filtered against `completed-today.json`) and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache. NOTE: `~/.claude/skills/next/cache.json` is a stale decoy — do not read it.
 
 This lets the user finish a task and immediately start the next one in a single flow: `/did` → stop timer → mark done → pick next → start timer.
 

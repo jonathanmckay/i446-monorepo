@@ -35,8 +35,8 @@ import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib
 COMPLETED = _sp.COMPLETED_TODAY
 
 # Annotation + punctuation strip for duplicate-detection key (Step 6 posthoc guard).
-# Keep in sync with next-task.py::strip_task_name and the tokenize() rules in
-# test_did_routing.py so all three use the same normalization.
+# Keep in sync with the tokenize() rules in test_did_routing.py so both use the
+# same normalization.
 _ANNOT_RE = re.compile(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]")
 
 
@@ -48,9 +48,9 @@ def _dup_key(name: str) -> str:
     """Normalization used for same-day posthoc duplicate detection.
 
     Lowercase, strip [N]/(N)/{N} annotations, collapse internal whitespace.
-    Matches the stripping done by next-task.py::strip_task_name so posthoc
-    content like `talk with richard [20]` normalizes to `talk with richard`
-    and compares equal regardless of surrounding annotation churn.
+    Posthoc content like `talk with richard [20]` normalizes to
+    `talk with richard` and compares equal regardless of surrounding
+    annotation churn.
     """
     s = name.lower().strip()
     s = _ANNOT_RE.sub("", s)
