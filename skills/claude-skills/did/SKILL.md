@@ -240,9 +240,9 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
 ## Cache & Tracking
 
-**Task queue:** `~/vault/z_ibx/task-queue.json` — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键径路).
+**Task queue:** `~/.local/state/jm/task-queue.json` (canonical path from `i446-monorepo/lib/state_paths.py:TASK_QUEUE`) — `{refreshed, tasks: [{id, content, cat, dueDate}]}`. Categories: `0n` (0neon), `1n` (1neon), `0g` (关键径路). NOTE: the old `~/vault/z_ibx/task-queue.json` is deprecated/deleted — do not read or write it.
 
-**Completed-today:** `~/vault/z_ibx/completed-today.json` — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day.
+**Completed-today:** `~/.local/state/jm/completed-today.json` (canonical path from `state_paths.py:COMPLETED_TODAY`) — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day. NOTE: the old `~/vault/z_ibx/completed-today.json` is deprecated/deleted.
 
 **Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键径路 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
 
