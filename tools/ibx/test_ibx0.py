@@ -47,15 +47,17 @@ def test_parse_received_at_exists():
 
 
 def test_print_response_stats_exists():
-    """_print_response_stats must be defined and track running average."""
+    """_print_response_stats must be defined and show the running day average.
+    (Refactored: the running average now comes from the SQLite archive_log via
+    _day_avg_response, not the old in-memory _response_times list.)"""
     tree = ast.parse(IBX_ALL_PY.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_print_response_stats":
             source = ast.get_source_segment(IBX_ALL_PY.read_text(), node)
-            assert "_response_times" in source, \
-                "_print_response_stats must use _response_times list"
-            assert "append" in source, \
-                "_print_response_stats must append to _response_times"
+            assert "_compute_response_min" in source, \
+                "_print_response_stats must compute the response time via _compute_response_min"
+            assert "_day_avg_response" in source, \
+                "_print_response_stats must show the running day average via _day_avg_response"
             return
     raise AssertionError("_print_response_stats function not found")
 
@@ -101,31 +103,35 @@ def test_normalize_sets_received_at():
 
 
 def test_response_times_tracker_exists():
-    """Module must have _response_times list for tracking."""
+    """Response times must be tracked. (Refactored from an in-memory
+    _response_times list to the SQLite archive_log, whose response_min column
+    records each reply's response time and persists across restarts.)"""
     source = IBX_ALL_PY.read_text()
-    assert "_response_times" in source, "Module must define _response_times list"
-    # Verify it's initialized as a list
-    assert "_response_times:" in source or "_response_times =" in source, \
-        "_response_times must be initialized"
+    assert "archive_log" in source, "Module must track responses in the archive_log table"
+    assert "response_min" in source, "archive_log must record response_min for replies"
+    assert "_day_avg_response" in source, \
+        "Must expose a running day-average over the tracked responses"
 
 
 def test_response_times_persisted_to_disk():
-    """_response_times must be persisted to disk so day average survives restarts."""
+    """Response stats must persist across restarts. (Refactored: now the on-disk
+    SQLite archive_log, replacing the old _load_/_save_response_times JSON.)"""
     source = IBX_ALL_PY.read_text()
-    # Must have load and save functions
-    assert "_load_response_times" in source, \
-        "Must have _load_response_times to restore day average across restarts"
-    assert "_save_response_times" in source, \
-        "Must have _save_response_times to persist day average across restarts"
-    # _save must be called inside _print_response_stats
+    assert "_ARCHIVE_DB_PATH" in source, \
+        "archive_log must live at an on-disk path (_ARCHIVE_DB_PATH) to survive restarts"
+    assert "sqlite3" in source, "persistence must use sqlite3"
+    assert "_day_avg_response" in source, \
+        "day average must be read back from the persisted archive_log"
+    # Persistence happens when a reply/archive is logged: _log_archive writes the
+    # response_min row into the on-disk archive_log.
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_print_response_stats":
+        if isinstance(node, ast.FunctionDef) and node.name == "_log_archive":
             func_source = ast.get_source_segment(source, node)
-            assert "_save_response_times" in func_source, \
-                "_print_response_stats must call _save_response_times after appending"
+            assert "response_min" in func_source or "archive_log" in func_source, \
+                "_log_archive must persist the response time into archive_log"
             return
-    raise AssertionError("_print_response_stats function not found")
+    raise AssertionError("_log_archive function not found")
 
 
 def test_pipe_through_tracks_response_stats():
@@ -238,9 +244,11 @@ def test_final_fetch_includes_teams():
     Fix: include fetch_teams in the final fetch list.
     """
     source = IBX_ALL_PY.read_text()
-    # Find the final fetch block
-    assert "fetch_teams" in source.split("One final parallel fetch")[1].split("Inbox zero")[0], (
-        "Final parallel fetch before inbox zero must include fetch_teams"
+    # The final parallel fetch builds a `fetchers` list and appends the teams
+    # fetcher when Teams is active. (Refactored from the old "One final parallel
+    # fetch" inline block.)
+    assert '("teams", fetch_teams)' in source, (
+        'Final parallel fetch must register the teams fetcher: ("teams", fetch_teams)'
     )
 
 
@@ -357,7 +365,7 @@ def test_background_injection_after_input_not_before_card():
             input_line = None
             arrived_line = None
             for i, line in enumerate(lines):
-                if ('input("> ")' in line or 'input(\"> \")' in line) and input_line is None:
+                if ('read_command("> ")' in line or 'input("> ")' in line) and input_line is None:
                     input_line = i
                 if "arrived in background" in line:
                     arrived_line = i
@@ -383,16 +391,18 @@ def test_response_stats_uses_dashboard_clamp():
     """
     source = IBX_ALL_PY.read_text()
     tree = ast.parse(source)
+    # The clamp now lives in _compute_response_min (called by _print_response_stats),
+    # so the displayed minutes use the same clamp as the dashboard.
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_print_response_stats":
+        if isinstance(node, ast.FunctionDef) and node.name == "_compute_response_min":
             func_source = ast.get_source_segment(source, node)
             assert "clamp_response_hours_unix" in func_source, (
-                "_print_response_stats must call clamp_response_hours_unix "
+                "_compute_response_min must apply clamp_response_hours_unix "
                 "from comms_response_clamp so /ibx numbers match the "
                 "project blocking dashboard"
             )
             return
-    raise AssertionError("_print_response_stats function not found")
+    raise AssertionError("_compute_response_min function not found")
 
 
 def test_clamp_imported_from_dashboard():

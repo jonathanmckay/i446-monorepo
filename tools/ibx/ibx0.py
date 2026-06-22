@@ -12,6 +12,7 @@ import readline  # enables line editing (backspace, arrows) in input()
 import select
 import subprocess
 import sys
+import termios  # single-keypress reader for instant action keys
 import threading
 import time
 import warnings
@@ -535,21 +536,68 @@ def display_card(item, idx, total):
 def print_help():
     console.print(
         "\n[dim]Commands:[/dim]  "
-        "[bold]a[/bold] archive/done  "
+        "[bold]e[/bold] archive/done  "
         "[bold]d[/bold] delete  "
         "[bold]r <text>[/bold] reply  "
         "[bold]R <text>[/bold] reply-all  "
         "[bold]p <instruction>[/bold] pipe (AI draft)  "
         "[bold]s[/bold] skip  "
         "[bold]t <text>[/bold] todo  "
-        "[bold]e[/bold] expand  "
+        "[bold]x[/bold] expand  "
         "[bold]o[/bold] open  "
         "[bold]c[/bold] check now  "
         "[bold]f[/bold] fetch new  "
         "[bold]q[/bold] quit  "
         "[bold]R[/bold] reload  "
-        "[dim]or type anything → Claude[/dim]\n"
+        "[dim]single-key actions (no Enter); <text> cmds & free-text → Claude still need Enter[/dim]\n"
     )
+
+# ── Single-keypress reader ───────────────────────────────────────────────────
+
+# Instant action keys fire on ONE keypress (no Enter). Everything else (compose
+# commands r/R/p/P/t <text> and free-text → Claude) falls into line mode so the
+# user keeps typing. NOTE: a Claude free-text message can no longer START with an
+# instant key char (e/x/d/s/o/c/f/q/a); use `p <instruction>` for those.
+INSTANT_KEYS = set("aexdsocfq?")
+
+
+def read_command(prompt: str) -> str:
+    """Read a command. Instant keys (INSTANT_KEYS) return on a single keypress;
+    any other key enters line mode (echo the char, then read the rest of the line
+    with input()) so compose commands and free-text still work. Falls back to a
+    plain readline when stdin is not a TTY (tests, pipes)."""
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\n")
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    new = termios.tcgetattr(fd)
+    # Disable canonical mode + echo; KEEP ISIG so Ctrl-C still raises KeyboardInterrupt.
+    new[3] = new[3] & ~(termios.ICANON | termios.ECHO)
+    new[6][termios.VMIN] = 1
+    new[6][termios.VTIME] = 0
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, new)
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    if ch == "":          # EOF (Ctrl-D)
+        raise EOFError
+    if ch in ("\r", "\n"):
+        sys.stdout.write("\n"); sys.stdout.flush()
+        return ""
+    if ch in INSTANT_KEYS:
+        sys.stdout.write(ch + "\n"); sys.stdout.flush()
+        return ch
+    # Line mode: echo the first char, then read the remainder cooked.
+    sys.stdout.write(ch); sys.stdout.flush()
+    try:
+        rest = input("")
+    except EOFError:
+        rest = ""
+    return ch + rest
+
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 
@@ -1533,7 +1581,7 @@ def main():
         print_help()
 
         try:
-            user_input = input("> ").strip()
+            user_input = read_command("> ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Bye.[/dim]")
             stop_poll.set()
@@ -1584,13 +1632,16 @@ def main():
             except Exception as e:
                 console.print(f"[red]Error: {e}[/red]")
 
-        elif cmd == "a":
+        elif cmd == "e":
             try:
                 do_archive(item)
                 console.print("[green]Done.[/green]")
             except Exception as e:
                 console.print(f"[red]Error: {e}[/red]")
             index += 1
+
+        elif cmd == "a":
+            console.print("[dim]archive moved to 'e' (a is unbound)[/dim]")
 
         elif cmd == "d":
             try:
@@ -1600,7 +1651,7 @@ def main():
                 console.print(f"[red]Error: {e}[/red]")
             index += 1
 
-        elif cmd == "e":
+        elif cmd == "x":
             full = item.get("_full_body", item.get("body", ""))
             console.print(Panel(full, box=box.SIMPLE, border_style="dim", padding=(0, 1)))
 
