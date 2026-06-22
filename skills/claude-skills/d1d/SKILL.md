@@ -18,13 +18,12 @@ DID_FAST=~/i446-monorepo/tools/did/did-fast.py
 
 ### Standard flow (has arguments)
 
-1. **Hook output:** A UserPromptSubmit hook (`did-next-hook.sh`) may output "Next up:" task list. If present, display it verbatim and wait for user's pick (1-N for `/tg`, last number = skip).
-2. **Run did-fast.py** (after pick or if no hook output):
+1. **Run did-fast.py:**
    ```bash
    python3 $DID_FAST "<all args verbatim>"
    ```
-3. **Parse the JSON output.** Report results from `results[]` to the user. For any items in `agent_needed[]`, fall back to the **agent path** (Steps described below).
-4. **Refresh cache** (background, after reporting):
+2. **Parse the JSON output.** Report results from `results[]` to the user. For any items in `agent_needed[]`, fall back to the **agent path** (Steps described below).
+3. **Refresh cache** (background, after reporting):
    ```bash
    python3 $DID_FAST --refresh-cache
    ```

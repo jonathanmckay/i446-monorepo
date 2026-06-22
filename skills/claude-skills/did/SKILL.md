@@ -68,11 +68,10 @@ When `/did` is called with **no arguments**:
    - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks; 5 for xk20s/xk22s, 15 for 一起饭).
    - Route as `/did <points_task> <points>` where `points_task` comes from `active.json` (fall back to `task` for old sessions without the field).
    - After success, delete `active.json` to clear the session.
-   - Skip to step 5 (do NOT use the raw timer description as input).
+   - Done (do NOT use the raw timer description as input).
 4. **Standard path (no /do session).** Use the timer description as the /did input. Strip Toggl-specific prefixes/noise, then route through the normal /did pipeline (Steps -2 to 6) as if the user had typed `/did <description>`.
-5. **Surface next tasks.** After launching the /did background agent, read `~/.local/state/jm/task-queue.json` (the cache `next-task.py` actually reads, filtered against `completed-today.json`) and display the top 9 tasks (same format as `/next`). Ask user to pick one (1-9) or skip. If they pick, start a Toggl timer via the CLI and update the tg cache. NOTE: `~/.claude/skills/next/cache.json` is a stale decoy — do not read it.
 
-This lets the user finish a task and immediately start the next one in a single flow: `/did` → stop timer → mark done → pick next → start timer.
+This lets the user finish a task in a single flow: `/did` → stop timer → mark done.
 
 ## Parsing (Steps -2 to 0.5)
 
@@ -229,8 +228,6 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 **Completed-today:** `~/.local/state/jm/completed-today.json` (canonical path from `state_paths.py:COMPLETED_TODAY`) — `{date, names: [...]}`. Background agent appends completed habit name (lowercase). Date gate: reset on new day. NOTE: the old `~/vault/z_ibx/completed-today.json` is deprecated/deleted.
 
 **Cache refresh** (background agent, after /did work): Query Todoist for 0neon + 1neon + 关键径路 tasks (3 parallel calls, limit 50 each). Build `{id, content, cat, dueDate}` list sorted 0n→1n→0g. Write cache. Update completed-today.
-
-**Next-task script:** `~/i446-monorepo/tools/did/next-task.py <habit>` — reads cache + completed-today, filters to today/overdue, excludes completed, shows top 5. Hook runs this automatically.
 
 ## Notes
 

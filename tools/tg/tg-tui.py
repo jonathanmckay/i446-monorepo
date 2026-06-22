@@ -1132,6 +1132,28 @@ def render_morning() -> list[tuple[str, str]]:
     return out
 
 
+def _current_block_running_pts() -> int:
+    """Running 分 for the in-progress block. Its 0分 G:O cell is the live residual
+    formula =D-SUM(locked), which fetch_points skips, so block_points never holds
+    the current block. Reconstruct it as Σ_today minus the locked literal blocks:
+    under sequential block-locking the residual is exactly the current block's
+    earnings (future blocks are 0). Bounded to [0, Σ] so a lagging earlier lock
+    can lump its points here but never spike past the day's total (no 2392 bug)."""
+    return max(0, STATE.today_points - sum(STATE.block_points.values()))
+
+
+def _block_display_pts(name: str) -> int:
+    """Locked literal 分 for a block, or the reconstructed running total for the
+    in-progress block (whose 0分 cell is still a residual formula). Returns 0 for
+    a future block (e.g. the bottom 'next' header) — it has earned nothing yet."""
+    if name in STATE.block_points:
+        return STATE.block_points[name]
+    cur_now = hour_to_block(dt.datetime.now(TZ).hour)
+    if cur_now and name == cur_now[0]:
+        return _current_block_running_pts()
+    return 0
+
+
 def render_detail() -> list[tuple[str, str]]:
     start, end = detail_window()
     now = dt.datetime.now(TZ)
@@ -1151,7 +1173,7 @@ def render_detail() -> list[tuple[str, str]]:
         top_name = prv[0] if prv else "?"
 
     top_emojis = bo_emojis.get(top_name, "")
-    top_pts = STATE.block_points.get(top_name, 0)
+    top_pts = _block_display_pts(top_name)
     top_label = f"{top_name}{' ' + top_emojis if top_emojis else ''}"
     top_label += scroll_suffix
     out: list[tuple[str, str]] = section_rule(top_label, focus=True, pts=top_pts)
@@ -1272,7 +1294,7 @@ def render_detail() -> list[tuple[str, str]]:
         bot_name = None
     if bot_name:
         bot_emojis = bo_emojis.get(bot_name, "")
-        bot_pts = STATE.block_points.get(bot_name, 0)
+        bot_pts = _block_display_pts(bot_name)
         bot_label = f"{bot_name}{' ' + bot_emojis if bot_emojis else ''}"
         out += section_rule(bot_label, focus=True, pts=bot_pts)
     return out
