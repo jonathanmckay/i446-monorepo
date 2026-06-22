@@ -114,8 +114,12 @@ For each **new** goal (no existing match), create a Todoist task:
 Run `did-fast.py` directly (do NOT spawn an agent or invoke `/did`):
 ```bash
 python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
+# Refresh the dtd task cache so the new 0g goals show up in dtd. The #0g goals
+# ride in the cache's 'today' bucket; without this refresh they won't appear in
+# dtd until something else rebuilds the cache (no refresh daemon runs locally).
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &
 ```
-This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer.
+This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The background `--refresh-cache` rebuilds `task-queue.json` so dtd surfaces the goals immediately.
 
 **Step 5: Confirm**
 
@@ -142,8 +146,12 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 Run `did-fast.py` directly (do NOT spawn an agent or invoke `/did`):
 ```bash
 python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
+# Refresh the dtd task cache so the new 0g goals show up in dtd. The #0g goals
+# ride in the cache's 'today' bucket; without this refresh they won't appear in
+# dtd until something else rebuilds the cache (no refresh daemon runs locally).
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &
 ```
-This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer.
+This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The background `--refresh-cache` rebuilds `task-queue.json` so dtd surfaces the goals immediately.
 
 **Step 4: Confirm**
 
