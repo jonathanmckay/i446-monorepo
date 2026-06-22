@@ -70,8 +70,10 @@ def main() -> int:
     until = args.until or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     counts: dict[str, int] = {}
-    restorable, no_prior = [], []
-    for etype in ("updated", "deleted", "completed"):
+    restorable, no_prior, created = [], [], []
+    # "added" is monitored because creation is PROHIBITED entirely (not budgeted):
+    # any task Dream created is a policy violation to flag, not a mutation to count.
+    for etype in ("added", "updated", "deleted", "completed"):
         try:
             evs = [e for e in fetch_events(etype, args.since) if e.get("event_date", "") <= until]
         except Exception as exc:  # network/API failure must not kill the dream pipeline
@@ -79,6 +81,12 @@ def main() -> int:
             counts[etype] = -1
             continue
         counts[etype] = len(evs)
+        if etype == "added":
+            for e in evs:
+                x = e.get("extra_data", {})
+                created.append({"id": str(e.get("object_id", "")),
+                                "content": (x.get("content", "") or "")[:100],
+                                "event_date": e.get("event_date", "")})
         if etype == "updated":
             for e in evs:
                 x = e.get("extra_data", {})
@@ -92,30 +100,45 @@ def main() -> int:
     mapping_path = run_dir / "revert-mapping.json"
     mapping_path.write_text(json.dumps(
         {"window": {"since": args.since, "until": until}, "counts": counts,
-         "restorable": restorable, "no_prior": no_prior},
+         "created": created, "restorable": restorable, "no_prior": no_prior},
         indent=1, ensure_ascii=False))
 
     mutations = max(counts.get("updated", 0), 0) + max(counts.get("deleted", 0), 0)
-    print(f"audit: {counts} | due-date changes: {len(restorable) + len(no_prior)} "
+    print(f"audit: {counts} | created: {len(created)} "
+          f"| due-date changes: {len(restorable) + len(no_prior)} "
           f"| mutations vs cap: {mutations}/{args.cap}")
 
-    if mutations <= args.cap:
+    alerts = []
+    # Creation is an absolute violation — ANY created task gets flagged + listed to reap.
+    if created:
+        rows = "\n".join(f"- `{c['id']}` — {c['content']}" for c in created[:50])
+        alerts.append(
+            f"# ⛔ DREAM CREATED {len(created)} TODOIST TASK(S) — POLICY VIOLATION\n\n"
+            f"Dream must NEVER create Todoist tasks (dream-prompt-base.md §No autonomous "
+            f"Todoist task creation; JM 2026-06-22: the morning brief is the ONLY channel "
+            f"to ask JM to do something). These were created this run and must be reaped:\n\n"
+            f"{rows}\n\n"
+            f"Reap each id (todoist delete-object) or re-propose as `[APPROVAL]` cards.\n\n---\n\n"
+        )
+    if mutations > args.cap:
+        alerts.append(
+            f"# ⚠ DREAM MUTATION BUDGET EXCEEDED\n\n"
+            f"This run made **{mutations} Todoist mutations** "
+            f"(updated: {counts.get('updated')}, deleted: {counts.get('deleted')}, "
+            f"completed: {counts.get('completed')}) against a cap of {args.cap}.\n"
+            f"Per policy (dream-prompt-base.md → Todoist mutation budget) bulk changes "
+            f"must be staged for approval, not executed.\n\n"
+            f"**Auto-generated revert mapping:** `{mapping_path}` "
+            f"({len(restorable)} restorable due-date changes, {len(no_prior)} without prior date).\n"
+            f"To revert: feed `restorable` to reschedule-tasks / the revert recipe in "
+            f"session 0a4c0b46 (2026-06-12).\n\n---\n\n"
+        )
+
+    if not alerts:
         return 0
 
-    alert = (
-        f"# ⚠ DREAM MUTATION BUDGET EXCEEDED\n\n"
-        f"This run made **{mutations} Todoist mutations** "
-        f"(updated: {counts.get('updated')}, deleted: {counts.get('deleted')}, "
-        f"completed: {counts.get('completed')}) against a cap of {args.cap}.\n"
-        f"Per policy (dream-prompt-base.md → Todoist mutation budget) bulk changes "
-        f"must be staged for approval, not executed.\n\n"
-        f"**Auto-generated revert mapping:** `{mapping_path}` "
-        f"({len(restorable)} restorable due-date changes, {len(no_prior)} without prior date).\n"
-        f"To revert: feed `restorable` to reschedule-tasks / the revert recipe in "
-        f"session 0a4c0b46 (2026-06-12).\n\n---\n\n"
-    )
     brief = run_dir / "morning-brief.md"
-    brief.write_text(alert + (brief.read_text() if brief.exists() else ""))
+    brief.write_text("".join(alerts) + (brief.read_text() if brief.exists() else ""))
     print(f"ALERT prepended to {brief}", file=sys.stderr)
     return 2
 

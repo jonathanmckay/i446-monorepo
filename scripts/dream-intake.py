@@ -934,6 +934,48 @@ def _slack():
     return {"status": "not_configured"}
 
 
+@source("annual_goals_4g", "4g annual strategic goals + progress (JM's yearly bets) — the leverage frame for cards")
+def _annual_goals_4g():
+    """Read the current-year sheet of `4g s.xlsx` (annual goals). Read-only so it
+    is safe even while Excel has the file open. Each goal row is: domain | goal |
+    target_fen | pct | earned_fen | q1..q4. Dream should bias cards toward
+    advancing/unblocking these (especially goals behind pace) over loose-thread
+    nits — see dream-ai-context.md 'Goal-leverage orientation'."""
+    import openpyxl  # available in the intake env
+    path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
+    if not path.exists():
+        return {"error": f"{path} not found", "goals": []}
+    yy = datetime.date.today().strftime("%y")
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
+                     wb.sheetnames[0])
+        ws = wb[sheet]
+        goals, tldr = [], None
+        for row in ws.iter_rows(values_only=True):
+            cells = list(row)
+            c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
+            c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
+            blob = (c0 + " " + c1).lower()
+            if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
+                tldr = (c1 or c0)
+                continue
+            # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
+            if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
+                pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
+                earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
+                goals.append({
+                    "domain": c0,
+                    "goal": c1,
+                    "target_fen": cells[2],
+                    "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
+                    "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
+                })
+        return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
+    finally:
+        wb.close()
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
