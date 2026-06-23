@@ -63,7 +63,12 @@ def _auth_header():
     return f"Basic {creds}"
 
 
-_MAX_429_RETRIES = 3  # Toggl is a ~1 req/sec leaky bucket; bursts get 429.
+# Toggl is a ~1 req/sec leaky bucket; bursts get 429. Defaults ride the backoff
+# out (good for background/MCP callers). Interactive callers that must never
+# freeze the UI (dtd's execute-silent action scripts) lower these via env so a
+# 429 fails fast instead of sleeping up to ~60s mid-keystroke.
+_MAX_429_RETRIES = int(os.environ.get("TOGGL_MAX_429_RETRIES", "3"))
+_MAX_429_DELAY = float(os.environ.get("TOGGL_MAX_429_DELAY", "30"))
 
 
 def _request(method, path, body=None):
@@ -90,7 +95,7 @@ def _request(method, path, body=None):
             if e.code == 429 and attempt < _MAX_429_RETRIES - 1:
                 retry_after = e.headers.get("Retry-After")
                 delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
-                time.sleep(min(delay, 30))
+                time.sleep(min(delay, _MAX_429_DELAY))
                 continue
             error_body = e.read().decode() if e.fp else ""
             raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")

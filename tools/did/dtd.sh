@@ -1008,6 +1008,14 @@ chmod +x "$DTD_HDRGEN"
 # here so the extracted script stays non-interactive for tests and scripts.
 export DTD_DEFER_PROMPT=1
 
+# Toggl 429 fast-fail for everything dtd launches (the execute-silent action
+# scripts AND the ticker, which inherit this env). The action scripts call Toggl
+# synchronously, so the default backoff (~60s) freezes the whole picker on a
+# rate-limit. Cap it at one quick retry / 1s so a 429 degrades gracefully (timer
+# read/switch is skipped) instead of hanging the UI mid-keystroke.
+export TOGGL_MAX_429_RETRIES=2
+export TOGGL_MAX_429_DELAY=1
+
 # Live-timer ticker: owns the footer (top line), POSTing change-footer ~10x/s to
 # the fzf --listen port the start binding writes to $DTD_PORT. Best-effort and
 # self-terminating (exits when $DTD_PORT vanishes at cleanup).
