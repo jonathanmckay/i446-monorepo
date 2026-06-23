@@ -96,11 +96,21 @@ def test_total_trustworthy_unit():
     assert m._total_trustworthy(759, 758) is True     # ±1 rounding tolerance
 
 
-def test_reconstruction_uses_clean_total_after_torn_read(monkeypatch):
-    """End-to-end: after a spike read is rejected, the current-block reconstruction
-    reflects the last good total, not the garbage."""
+def test_current_block_running_rounds_once(monkeypatch):
+    """The 287-vs-288 bug: a 217.5分 locked block. Rounding each term then
+    subtracting (511 − 6 − 218 = 287) is wrong; the residual must round once
+    (round(511.357 − 223.5) = 288), matching the sheet's own 午 cell. No P:Y →
+    cap backstop accepts the total. Layout: D | 卯=resid | 辰=6 | 巳=217.5 | …resid."""
     m = _load_tui()
-    m.STATE.today_points = 606
-    m.STATE.block_points = {"巳": 3, "午": 215}  # locked = 218
-    _run(monkeypatch, m, "4351||3|215|=D|=D|=D|=D|=D|=D")
-    assert m._current_block_running_pts() == 606 - 218, "must reconstruct from the clean total"
+    m.STATE.block_running_pts = 0
+    _run(monkeypatch, m, "511.357142857143|=D|6|217.5|=D|=D|=D|=D|=D|=D")
+    assert m.STATE.today_points == 511
+    assert m.STATE.block_running_pts == 288, "current-block residual must round once"
+
+
+def test_torn_read_does_not_update_running_pts(monkeypatch):
+    """A rejected torn read must leave the last-good current-block 分 untouched."""
+    m = _load_tui()
+    m.STATE.block_running_pts = 388  # last good
+    _run(monkeypatch, m, "4351||3|215|=D|=D|=D|=D|=D|=D")  # spike, rejected
+    assert m.STATE.block_running_pts == 388, "torn read must not poison running 分"

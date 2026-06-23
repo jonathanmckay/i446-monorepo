@@ -20,18 +20,10 @@ def _load_tui():
     return mod
 
 
-def test_running_pts_is_total_minus_locked():
+def test_running_pts_accessor_returns_precomputed():
     m = _load_tui()
-    m.STATE.today_points = 300
-    m.STATE.block_points = {"卯": 60, "辰": 40}  # 100 locked
-    assert m._current_block_running_pts() == 200, "residual = Σ − locked literals"
-
-
-def test_running_pts_clamped_to_zero():
-    m = _load_tui()
-    m.STATE.today_points = 50
-    m.STATE.block_points = {"卯": 60}  # locked > Σ (torn/early read)
-    assert m._current_block_running_pts() == 0, "must never render a negative 分"
+    m.STATE.block_running_pts = 200  # fetch_points computes Σ − locked once
+    assert m._current_block_running_pts() == 200
 
 
 def test_locked_block_uses_literal_not_residual():
@@ -46,6 +38,7 @@ def test_current_block_gets_running_total(monkeypatch):
     m = _load_tui()
     m.STATE.today_points = 300
     m.STATE.block_points = {"卯": 60, "辰": 40}
+    m.STATE.block_running_pts = 200  # precomputed residual for the current block
     # Pin "now" into a block (午 = hours 10-11 per BLOCKS) that is NOT locked.
     fixed = dtm.datetime(2026, 6, 22, 10, 30, tzinfo=m.TZ)
 

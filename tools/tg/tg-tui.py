@@ -237,6 +237,11 @@ class State:
         self.flash_style = ""  # optional override style for flash
         self.today_points = 0  # 分 earned today
         self.block_points: dict[str, int] = {}  # per-block 分
+        # Current (in-progress) block's running 分, computed in fetch_points from
+        # the UNROUNDED Σ and locked-block values and rounded once — so it matches
+        # the sheet's own residual cell instead of compounding per-term rounding
+        # (the 287-vs-288 bug from a 217.5分 locked block).
+        self.block_running_pts = 0
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -442,6 +447,8 @@ def fetch_points():
         bp_excel: dict[str, int] = {}
         read_ok = False
         total_ok = False
+        cand_f = None        # unrounded Σ total, for round-once residual
+        locked_raw = 0.0     # unrounded sum of locked literal blocks
         raw_out = ""
         try:
             import subprocess as _sp
@@ -483,15 +490,19 @@ end tell'''
                 raw_out = r.stdout.strip()
                 parts = raw_out.split("|")
                 val = parts[0].strip()
-                # Handle formula strings like "70+12" defensively.
+                # Handle formula strings like "70+12" defensively. Keep the
+                # unrounded float (cand_f) so the current-block residual rounds
+                # exactly once (see the adoption gate below).
                 candidate = None
                 try:
-                    candidate = int(round(float(val)))
+                    cand_f = float(val)
                 except ValueError:
                     try:
-                        candidate = int(round(float(eval(val))))  # safe: digits and +
+                        cand_f = float(eval(val))  # safe: digits and +
                     except Exception:
-                        candidate = None
+                        cand_f = None
+                if cand_f is not None:
+                    candidate = int(round(cand_f))
                 # Commit the Σ total only when the read is trustworthy. Col D
                 # (=SUM(P:Y)) is read mid-recalc during did/daemon writes and
                 # transiently returns garbage — the rejection log has shown D=-46
@@ -527,9 +538,11 @@ end tell'''
                     if raw.startswith("="):
                         continue
                     try:
-                        v = int(round(float(raw)))
+                        rv = float(raw)
                     except ValueError:
                         continue
+                    locked_raw += rv  # unrounded, for the round-once residual
+                    v = int(round(rv))
                     if v:
                         bp_excel[bname] = v
         except Exception:
@@ -546,6 +559,12 @@ end tell'''
             # pair new blocks with a stale total kept from a torn read.
             if total_ok and _blocks_consistent(STATE.today_points, bp_excel):
                 STATE.block_points = bp_excel
+                # Current-block running 分 = Σ − locked, rounded ONCE in full
+                # precision so it equals the sheet's own residual cell (a 217.5分
+                # locked block made the round-each-then-subtract path read 287
+                # where the sheet shows 288).
+                if cand_f is not None:
+                    STATE.block_running_pts = max(0, int(round(cand_f - locked_raw)))
             else:
                 # Torn read (implausible total, or daemon lock / did-fast append
                 # in flight): keep last good values and leave evidence for diagnosis.
@@ -850,6 +869,26 @@ def _gap_alarm_on(now: dt.datetime | None = None) -> bool:
     return int(t * 2) % 2 == 0
 
 
+# Placeholder timer labels — tracked time the user hasn't actually categorized.
+# These nag (pulse red↔grey, exactly like empty/gap time) until relabelled.
+_PLACEHOLDER_LABELS = {"generic placeholder"}
+
+
+def _is_placeholder(label: str) -> bool:
+    """Whether a timer label is an uncategorized placeholder. Tolerates the
+    trailing ' · code' suffix and (N)/[N] annotations so it matches however the
+    label was formatted for display."""
+    if not label:
+        return False
+    base = label.split(" · ")[0].strip()
+    return _clean_annotations(base).lower() in _PLACEHOLDER_LABELS
+
+
+def _placeholder_style(now: dt.datetime | None = None) -> str:
+    """The same red↔grey pulse empty time uses, for placeholder rows."""
+    return "class:no_entry" if _gap_alarm_on(now) else "class:idle"
+
+
 def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> list[tuple[str, str]]:
     """Render one non-focus block as exactly 4 lines (header + 3 body).
 
@@ -882,8 +921,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> lis
         left = f"─{blk_name}:{head['start_dt'].minute:02d}{emoji_str}-"
         task = truncate(head["label"], max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str) - 1))
         trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(task) - dwidth(pts_str))
+        head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or blk_style)
         out.append((blk_style, left))
-        out.append((head["style"] or blk_style, task))
+        out.append((head_sty, task))
         out.append((blk_style, "─" * trail))
     else:
         left = f"─{blk_name}{emoji_str} "
@@ -908,7 +948,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> lis
             out.append((fill_cls, "┄" * space))
             out.append(("class:no_entry", f" {dur}\n"))
         else:
-            out.append((p["style"], pad(truncate(p["label"], space), space)))
+            # Placeholder entries pulse red↔grey like gaps until relabelled.
+            sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
+            out.append((sty, pad(truncate(p["label"], space), space)))
             out.append(("class:dim", f" {dur}\n"))
     marks = ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30))
     if not picks:
@@ -1188,11 +1230,11 @@ def render_morning() -> list[tuple[str, str]]:
 def _current_block_running_pts() -> int:
     """Running 分 for the in-progress block. Its 0分 G:O cell is the live residual
     formula =D-SUM(locked), which fetch_points skips, so block_points never holds
-    the current block. Reconstruct it as Σ_today minus the locked literal blocks:
-    under sequential block-locking the residual is exactly the current block's
-    earnings (future blocks are 0). Bounded to [0, Σ] so a lagging earlier lock
-    can lump its points here but never spike past the day's total (no 2392 bug)."""
-    return max(0, STATE.today_points - sum(STATE.block_points.values()))
+    the current block. fetch_points reconstructs it as Σ_today minus the locked
+    literal blocks — rounded ONCE in full precision (STATE.block_running_pts) so it
+    matches the sheet's residual cell — and under sequential block-locking that
+    residual is exactly the current block's earnings (future blocks are 0)."""
+    return STATE.block_running_pts
 
 
 def _block_display_pts(name: str) -> int:
@@ -1298,16 +1340,25 @@ def render_detail() -> list[tuple[str, str]]:
             pid = None
 
         # The now-row (running task or idle alarm) draws a rule across the
-        # width so "you are here" stands out from the plain slots.
+        # width so "you are here" stands out from the plain slots. A running
+        # placeholder timer pulses red↔grey like empty time until relabelled.
         if is_running or is_idle_now:
-            cls = ("class:no_entry" if is_idle_now
-                   else (f"bold {project_style(pid)}".strip() or "class:running"))
+            if is_idle_now:
+                cls = "class:no_entry"
+            elif _is_placeholder(cur_desc):
+                cls = f"bold {_placeholder_style(now)}"
+            else:
+                cls = f"bold {project_style(pid)}".strip() or "class:running"
             prefix = f" {time_str} "
             trail = max(0, WIDTH_HINT - dwidth(prefix) - dwidth(label) - 1)
             out.append(("class:time", prefix))
             out.append((cls, f"{label} " + "─" * trail + "\n"))
             slot = slot_end
             continue
+
+        # Detect placeholder BEFORE dedup rewrites the label to "″", so every
+        # slot of a placeholder run keeps pulsing (not just the first).
+        is_ph = bool(label) and not label.startswith("◇ ") and _is_placeholder(label)
 
         # Deduplicate Toggl labels: show description only on first slot
         if label and not label.startswith("◇ "):
@@ -1331,7 +1382,9 @@ def render_detail() -> list[tuple[str, str]]:
         full = max(1, WIDTH_HINT - len(time_str) - 4)
         space = full if label.startswith("◇ ") else min(DESC_MAX, full)
         content = f" {marker} {truncate(label or '·', space)}\n"
-        if slot_end <= now:
+        if is_ph:
+            cls = _placeholder_style(now)  # pulse red↔grey like empty time
+        elif slot_end <= now:
             cls = project_style(pid) or "class:past"
         else:
             cls = gcal_sty or "class:future"
@@ -1415,12 +1468,14 @@ def render_evening() -> list[tuple[str, str]]:
 
 def render_current_bottom() -> list[tuple[str, str]]:
     """Mirror of the running timer, pinned above the footer so it's always visible.
-    Clock on left, timer desc on right, sub-second decimals as a heartbeat."""
+    The ticking elapsed timer (tenths heartbeat) leads on the LEFT — where the eye
+    looks for it — then the desc; the wall clock is right-justified."""
     now = dt.datetime.now(TZ)
-    clock = f" {now:%H:%M:%S}"  # wall clock: no sub-second; heartbeat lives on the task timer
+    clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
     if not cur:
-        return [("class:time", clock), ("class:idle", "  (no timer)\n")]
+        return [("class:idle", " (no timer)"),
+                ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
     desc = display_desc(cur.get("description") or "") or "(no description)"
     pid = cur.get("project_id")
     code = proj_code(pid)
@@ -1432,15 +1487,14 @@ def render_current_bottom() -> list[tuple[str, str]]:
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
     dur = f"{m}m{s:02d}.{frac}s"
-    right = f" ▶ {desc}"
+    left = f" ▶ {dur}  {desc}"
     if code:
-        right += f" · {code}"
-    right += f"  {dur}"
-    pad = max(0, WIDTH_HINT - len(clock) - len(right))
+        left += f" · {code}"
+    pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))
     style = project_style(pid) or "class:running"
     return [
-        ("class:time", clock),
-        (f"bold {style}".strip(), f"{'':>{pad}}{right}\n"),
+        (f"bold {style}".strip(), left),
+        ("class:time", f"{'':>{pad}}{clock}\n"),
     ]
 
 
