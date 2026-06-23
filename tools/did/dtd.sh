@@ -383,7 +383,17 @@ with open(cache_file) as f:
     d = json.load(f)
 try:
     with open(done_file) as f:
-        completed = json.load(f)
+        _done_raw = json.load(f)
+    # completed-today.json is {date, names, points} — the completed habit names
+    # live in .names, NOT the top-level keys. The old code kept the whole dict, so
+    # 'clean in completed' tested membership against {date,names,points} and never
+    # matched, leaving DONE habits (0t, etc.) in the list. Extract the names list,
+    # lowercased, gated to today's date so a stale file can't hide live tasks.
+    if isinstance(_done_raw, dict):
+        completed = ([n.lower() for n in _done_raw.get('names', [])]
+                     if _done_raw.get('date') == today else [])
+    else:
+        completed = [str(n).lower() for n in _done_raw]
 except: completed = []
 
 # Load removed items
