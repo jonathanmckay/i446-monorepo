@@ -552,6 +552,18 @@
     "rent": "1035.00"
   },
   {
+    "unit_id": 509,
+    "property_name": "h731",
+    "unit": "737 B",
+    "tenant_name": "Inglis, Briauna M.",
+    "status": "Pending",
+    "lease_sign_date": "2025-06-19",
+    "move_in": "2025-06-28",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "1275.00"
+  },
+  {
     "unit_id": 836,
     "property_name": "kn47 K1",
     "unit": "B102",
@@ -850,6 +862,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1195.00"
+  },
+  {
+    "unit_id": 1195,
+    "property_name": "tc68",
+    "unit": "B46",
+    "tenant_name": "Fanoway, Michael J.",
+    "status": "Pending",
+    "lease_sign_date": null,
+    "move_in": "2025-08-01",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "1525.00"
   },
   {
     "unit_id": 434,
@@ -4222,18 +4246,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "936.00"
-  },
-  {
-    "unit_id": 1022,
-    "property_name": "kn47 K2",
-    "unit": "B207",
-    "tenant_name": "Mendoza, Maria L.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-12-10",
-    "move_in": "2025-12-10",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
   },
   {
     "unit_id": 996,

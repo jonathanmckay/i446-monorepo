@@ -1968,5 +1968,55 @@
     "unit": "A4",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-06-23",
+    "effective": "2026-06-23",
+    "kind": "movein",
+    "unit_id": "509",
+    "prop": "h731",
+    "unit": "737 B",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-23",
+    "effective": "2026-06-23",
+    "kind": "movein",
+    "unit_id": "1195",
+    "prop": "tc68",
+    "unit": "B46",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-23",
+    "effective": "2026-06-23",
+    "kind": "movein",
+    "unit_id": "362",
+    "prop": "ps25",
+    "unit": "A4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-23",
+    "effective": "2026-06-28",
+    "kind": "ntv",
+    "unit_id": "1022",
+    "prop": "kn47 K2",
+    "unit": "B207",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-23",
+    "effective": "2026-06-23",
+    "kind": "movein",
+    "unit_id": "574",
+    "prop": "rl16",
+    "unit": "C13",
+    "tenant": null,
+    "baseline": false
   }
 ]
