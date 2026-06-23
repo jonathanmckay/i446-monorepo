@@ -453,6 +453,14 @@ def rjust_est(s, cols):
     if not m:
         return s
     est = re.sub(r'\s+', ' ', m.group(1).strip())
+    # Canonicalize estimate order so the column reads the same regardless of how
+    # the source task wrote them: (time) then [value] then {bonus}. Some tasks are
+    # stored '[20] (30)', others '(30) [20]' — both render as '(30) [20]'.
+    _toks = re.findall(_EST_TOK, est)
+    if len(_toks) > 1:
+        _rank = {'(': 0, '[': 1, '{': 2}
+        _toks.sort(key=lambda tk: _rank.get(tk[0], 9))
+        est = ' '.join(_toks)
     head = s[:m.start()].rstrip()
     pad = (cols - 8) - len(head) - len(est)
     if pad < 2:

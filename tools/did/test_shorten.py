@@ -123,3 +123,20 @@ if __name__ == "__main__":
         fn()
         print(f"PASS: {fn.__name__}")
     print(f"{len(fns)} passed")
+
+
+def test_prose_cap_fits_narrow_dtd_pane():
+    """Regression (2026-06-23): PROSE_CAP was bumped to 64, so titles in the
+    38-64 char band stopped getting Haiku-shortened and fell back to dtd's dumb
+    middle-truncation (ragged estimates column). The cap must stay near the
+    ~1/8-XDR pane's visible width so medium titles get an intelligent short form."""
+    assert shorten.PROSE_CAP <= 40, (
+        f"PROSE_CAP={shorten.PROSE_CAP} too high for the narrow dtd pane; "
+        "medium titles will dumb-truncate instead of shortening"
+    )
+    # And the gate must actually use it: a > cap prose shortens, a <= cap one doesn't.
+    long_prose = "x" * (shorten.PROSE_CAP + 5)
+    short_prose = "y" * (shorten.PROSE_CAP - 5)
+    p_long, _ = shorten.split_estimates(long_prose + " (10) [20]")
+    p_short, _ = shorten.split_estimates(short_prose + " (10) [20]")
+    assert len(p_long) > shorten.PROSE_CAP and len(p_short) <= shorten.PROSE_CAP

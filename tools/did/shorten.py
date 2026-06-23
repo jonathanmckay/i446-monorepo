@@ -25,10 +25,12 @@ import re
 import sys
 from pathlib import Path
 
-PROSE_CAP = 64  # max chars of prose in the shortened name (estimates appended on top).
-# Sized to fill a ~1/8-XDR dtd pane: titles at or under this show in full and the
-# dtd renderer middle-truncates to the live pane width (dtd.sh, `cols - 7`), so the
-# cache is never the bottleneck; only genuinely huge titles get Haiku-compressed.
+PROSE_CAP = 37  # max chars of prose in the shortened name (estimates appended on top).
+# Sized to fit the ~1/8-XDR dtd pane (~33 visible cols after `cols - 7`). 64 was
+# too high (regressed 2026-06-23): titles in the 38-64 char band stopped getting
+# Haiku-compressed and fell back to dtd's dumb middle-truncation, eating prose and
+# leaving the estimates column ragged. Keep this near the pane's visible width so
+# medium titles get an intelligent short form, not a `…` chop.
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 SIDECAR = _sp.TASK_SHORTNAMES
 MODEL = "claude-haiku-4-5-20251001"
