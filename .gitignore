@@ -31,6 +31,9 @@ token.pickle
 *-credentials.json
 *-secrets.json
 config.local.json
+client.env
+client_secret*.json
+oauth-client*.json
 
 # API Keys (patterns)
 *api-key*
