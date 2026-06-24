@@ -835,12 +835,20 @@ def section_rule(label: str, focus: bool = False, pts: int = 0) -> list[tuple[st
     return out
 
 
-def _read_block_emojis() -> dict[str, str]:
-    """Read build order file, return {branch_char: emoji_string} for today's blocks."""
+def _read_block_emojis(now: dt.datetime | None = None) -> dict[str, str]:
+    """Read build order file, return {branch_char: emoji_string} for today's blocks.
+
+    The build order pre-stamps future block headers (☀️ prayer, 🎯 goal, ✅ done,
+    etc.) for the whole day, so a ritual cannot legitimately be "done" in a block
+    that hasn't started yet. Drop any block whose start hour is still in the
+    future, keeping the in-progress block (start_hour <= now). Without this,
+    render_evening() shows prayer/tasks completed for obviously-future blocks."""
     try:
         text = BUILD_ORDER.read_text()
     except Exception:
         return {}
+    now = now or dt.datetime.now(TZ)
+    block_start = {name: sh for name, sh, _eh in BLOCKS}
     result = {}
     in_section = False
     for line in text.splitlines():
@@ -855,6 +863,9 @@ def _read_block_emojis() -> dict[str, str]:
             tail = line[2:].strip()
             if tail:
                 branch = tail[0]
+                sh = block_start.get(branch)
+                if sh is not None and sh > now.hour:
+                    continue  # block hasn't started yet
                 emojis = "".join(ch for ch in BLOCK_EMOJIS if ch in tail)
                 if emojis:
                     result[branch] = emojis
