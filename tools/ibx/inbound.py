@@ -33,6 +33,10 @@ def main() -> int:
     if not _TWO_N_PATH.exists():
         print(f"inbound: missing dependency {_TWO_N_PATH}", file=sys.stderr)
         return 1
+    # For now, /inbound shows the -1n ritual cards (salah, gaps, -1g, eat) but
+    # does NOT dive into the ibx0 comms/email stream. /-2n is unaffected.
+    import os
+    os.environ["INBOUND_SKIP_COMMS"] = "1"
     two_n = _load_two_n()
     if not hasattr(two_n, "main"):
         print("inbound: -2n.py has no main()", file=sys.stderr)

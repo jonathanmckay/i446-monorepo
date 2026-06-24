@@ -388,6 +388,29 @@ def run_did(habit):
     )
 
 
+def spawn_ate_background(food_text):
+    """Fire-and-forget: spawn `claude -p /ate <food_text>` as a detached
+    subprocess. /ate is a Claude skill (parses food/kcal/protein, writes the
+    hcbi row via `ssh ix`), so it can't run inline in the TUI. The user's raw
+    answer to the eat card is passed straight through as the /ate input.
+
+    stdout/stderr go to ~/.cache/inbound/ate-<unix-ts>.log. Returns the Popen
+    handle (caller may ignore)."""
+    log_dir = Path.home() / ".cache" / "inbound"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"ate-{int(time.time())}.log"
+    log_fh = open(log_path, "wb")
+    return subprocess.Popen(
+        ["claude", "-p", f"/ate {food_text}", "--allowedTools",
+         "Skill,Bash,Read,Edit,Write"],
+        stdin=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
 def parse_goals_text(goals_text: str) -> list[str]:
     """Split user-typed goals into a list. Accepts comma-separated, newline-
     separated, or bullet-prefixed input. Strips checkbox syntax."""
@@ -1220,7 +1243,13 @@ def snapshot_build_order():
         clear_prayer_markers()
 
 
-def main():
+def main(skip_comms=None):
+    # skip_comms: when True, run the ritual/-1n cards (salah, gaps, -1g) but do
+    # NOT dive into the ibx0 comms stream (Gmail/Slack/iMessage). /inbound sets
+    # INBOUND_SKIP_COMMS=1 to opt in; /-2n (which calls main() directly) is
+    # unaffected. Temporary: surfaces the block rituals without the inbox jump.
+    if skip_comms is None:
+        skip_comms = os.environ.get("INBOUND_SKIP_COMMS") == "1"
     console.print(Rule("[bold]-2n Interrupt Queue[/bold]", style="dim"))
     set_term_color("black")
 
@@ -1277,7 +1306,12 @@ def main():
         cards_needed.append("gaps")
     if not goals_set and not sleep_block:
         cards_needed.append("-1g")
-    cards_needed.append("ibx0")
+    # Eat card: only in rituals-only (/inbound) mode. Asks what was eaten this
+    # block and logs the answer via /ate.
+    if skip_comms:
+        cards_needed.append("eat")
+    else:
+        cards_needed.append("ibx0")
     total_cards = len(cards_needed)
 
     if not cards_needed or (len(cards_needed) == 1 and cards_needed[0] == "ibx0"):
@@ -1424,23 +1458,34 @@ def main():
                 else:
                     console.print(f"[red]  ⚠ failed to write goals to build order[/red]")
 
-    # ── Card 4: ibx0 ─────────────────────────────────────────────────
-    # Import and run ibx0's main loop directly — this handles all inbox
-    # cards, polling, and the persistent idle state.
-    # A background thread watches for 2h block changes and forces ibx0
-    # to exit so -2n restarts with fresh ritual cards.
+        # ── Card 3: eat (rituals-only / inbound) ──────────────────────
+        # Ask what was eaten this block; pass the raw answer to /ate.
+        if skip_comms:
+            card_num += 1
+            resp = prompt_card(
+                card_num, total_cards, "🍽 eat",
+                f"What did you eat during [bold]{block_name}[/bold] "
+                f"({block_start}-{block_end})?",
+                options="food, kcal, protein (group n) / skip",
+                preserve_case=True,
+            )
+            if resp and resp.lower() != "skip":
+                spawn_ate_background(resp)
+                console.print(
+                    f"[green]  ✓ /ate logged[/green] "
+                    f"[dim](writing to hcbi in background)[/dim]"
+                )
+
+    # ── Card 4: ibx0 (comms) ─────────────────────────────────────────
+    # A background thread watches for 2h block changes and forces the
+    # process to exit so the wrapper restarts with fresh ritual cards.
     console.print()
-    console.print(Rule("[dim]Inbox[/dim]", style="dim"))
-
-    # Mark that we reached inbox processing for this block
-    write_inbox_marker(block_name)
-
-    import ibx0
 
     launch_block_idx = idx  # block index when we started
 
     def _watch_block_change():
-        """Poll every 30s; when the 地支 block changes, force ibx0 to exit."""
+        """Poll every 30s; when the 地支 block changes, exit so the wrapper
+        restarts with fresh ritual cards."""
         while True:
             time.sleep(30)
             new_idx, new_name, _, _ = get_current_block()
@@ -1451,7 +1496,19 @@ def main():
     watcher = threading.Thread(target=_watch_block_change, daemon=True)
     watcher.start()
 
-    ibx0.main()
+    if skip_comms:
+        # Rituals only — skip the Gmail/Slack/iMessage card stream. Don't write
+        # the 📧 inbox marker (we never processed the inbox). Fall through to
+        # the idle goal panel below.
+        console.print(Rule("[dim]rituals done · comms skipped[/dim]", style="dim"))
+    else:
+        # Import and run ibx0's main loop directly — handles all inbox cards,
+        # polling, and the persistent idle state.
+        console.print(Rule("[dim]Inbox[/dim]", style="dim"))
+        # Mark that we reached inbox processing for this block
+        write_inbox_marker(block_name)
+        import ibx0
+        ibx0.main()
 
     # ── Persistent idle: show goals, wait for block change ────────────
     # The watcher thread (above) will os._exit(0) on block change, which

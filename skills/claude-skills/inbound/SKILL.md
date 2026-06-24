@@ -6,10 +6,19 @@ user-invocable: true
 
 # Inbound (/inbound)
 
-Unified interrupt queue that orchestrates all inbound cards in one TUI. Two card sources:
+Unified interrupt queue that orchestrates inbound cards in one TUI.
 
-1. **Ritual cards** — صلاة, -1g goals, streak alerts (from -2n)
-2. **Comms cards** — Gmail, iMessage, Slack, Outlook, Teams (from ibx0)
+**Current mode (rituals-only):** `/inbound` runs the -1n ritual cards only and
+does **not** dive into the comms/email stream. It sets `INBOUND_SKIP_COMMS=1`
+before handing to `-2n.py`; `/-2n` (which calls `main()` directly) still runs
+the full flow including ibx0. Card sources:
+
+1. **Ritual cards** — صلاة, time-gap audit, -1g goals (from -2n)
+2. **Eat card** — "What did you eat during \<block\>?" → answer logged via `/ate`
+3. ~~**Comms cards** — Gmail, iMessage, Slack, Outlook, Teams (from ibx0)~~ — skipped for now
+
+To restore the comms dive, drop the `INBOUND_SKIP_COMMS` env set in
+`tools/ibx/inbound.py` (or pass `skip_comms=False` to `-2n.main()`).
 
 ## Usage
 
@@ -70,11 +79,12 @@ fi
 ## Card Ordering
 
 Initial pass (on launch):
-1. Ritual cards — صلاة, -1g (instant, file reads)
-2. Comms cards — ibx0 full flow (fetch, triage, card stream)
+1. Ritual cards — صلاة, time-gap audit, -1g (instant, file reads)
+2. Eat card — "What did you eat during \<block\>?" → `/ate`
 
-During idle/comms processing:
-- **Streak alerts** — surface after 4pm during idle
+After cards: idle on the -1₲ goal panel until the 2h block changes (the wrapper
+then restarts with a fresh ritual pass). The ibx0 comms stream is skipped in the
+current rituals-only mode.
 
 ## Ritual Cards
 
@@ -84,9 +94,19 @@ Same as -2n Steps 1-3:
 2. **-1g** — check build order for current 2h block goals. If empty: show 3 block-aware suggestions synthesized from calendar (in-block meetings), open weekly 1g goals for the block's domain, open daily 0₲ items, and unfinished 0n habits. Source-tagged `[cal]/[1g]/[0g]/[0n]`. Multiline goal input; pick 1,2,3 from suggestions or type custom.
 3. **Streak alerts** — after 4pm, habits with 7+ day streaks at risk
 
-## Comms Cards
+## Eat Card
 
-Delegates to `ibx0.main()` for the full inbox flow (polling, cards, hotkeys).
+After the ritual cards (rituals-only mode), `/inbound` asks **"What did you eat
+during \<block\>?"**. The raw answer is passed straight through to `/ate` via a
+detached `claude -p` subprocess (`spawn_ate_background`), which logs it to the
+`hcbi` row. Skip with `skip`. Use the `/ate` input shape: `food, kcal, protein
+(group n)`.
+
+## Comms Cards (currently skipped)
+
+When `INBOUND_SKIP_COMMS` is unset, delegates to `ibx0.main()` for the full
+inbox flow (polling, cards, hotkeys). `/inbound` sets the flag, so this is
+skipped for now; `/-2n` still runs it.
 
 ## Terminal Colors
 
