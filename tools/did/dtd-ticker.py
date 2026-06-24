@@ -7,13 +7,19 @@ and fights j/k navigation. Instead we own the footer. fzf 0.65+ accepts actions
 over an HTTP server (`--listen`); we POST `change-footer(...)` with a locally
 computed elapsed time so nothing in the list is touched.
 
-The Toggl API is polled only every few seconds to notice a timer change
-(ctrl-s starts a new entry); the 10 Hz loop just re-renders from the cached
-start timestamp. Best-effort: every error is swallowed — the timer is
-non-critical eye-candy and must never wedge the picker.
+dtd's own start/complete bindings write the running entry to a local timer file
+(`desc<TAB>start_epoch`, emptied on stop) the instant they fire. The ticker
+watches that file every tick (a cheap stat, no network) so a dtd-initiated
+start/switch/stop shows in the footer within ~0.1s. The Toggl API poll is kept
+only to RECONCILE externally-started timers (e.g. /tg, /do, tg-tui) when the
+local file is idle; on its own it lagged dtd-initiated changes by up to POLL.
 
-Usage: dtd-ticker.py <port_file>
+Best-effort: every error is swallowed — the timer is non-critical eye-candy and
+must never wedge the picker.
+
+Usage: dtd-ticker.py <port_file> [timer_file]
   <port_file> is written by fzf's `start` binding (echo $FZF_PORT > file).
+  [timer_file] is dtd's $DTD_TIMER (desc<TAB>start_epoch); optional for back-compat.
 Exits when the port file disappears (picker gone) or POSTs fail persistently.
 """
 from __future__ import annotations
@@ -70,6 +76,33 @@ def _read_port(port_file: Path):
         return None
 
 
+def _read_timer_file(timer_file: Path):
+    """Read dtd's $DTD_TIMER. Returns (start_epoch|None, desc, mtime|None).
+
+    Format is `desc<TAB>start_epoch`; an empty file means dtd is idle (stopped).
+    mtime lets the caller detect a change cheaply without re-parsing every tick.
+    """
+    if timer_file is None:
+        return None, "", None
+    try:
+        mtime = timer_file.stat().st_mtime
+    except Exception:
+        return None, "", None
+    try:
+        raw = timer_file.read_text().strip()
+    except Exception:
+        return None, "", mtime
+    if not raw:
+        return None, "", mtime
+    parts = raw.split("\t")
+    desc = parts[0].replace("(", "").replace(")", "")
+    try:
+        start = float(parts[1]) if len(parts) > 1 else None
+    except Exception:
+        start = None
+    return start, desc, mtime
+
+
 def _post(port: int, action: str) -> bool:
     try:
         req = urllib.request.Request(
@@ -87,6 +120,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         return
     port_file = Path(sys.argv[1])
+    timer_file = Path(sys.argv[2]) if len(sys.argv) > 2 else None
     api = _toggl_api()
 
     # Wait up to 5s for fzf to publish its port.
@@ -98,6 +132,7 @@ def main() -> None:
     start = None      # epoch seconds of the running entry, or None when idle
     desc = ""
     last_poll = 0.0
+    last_timer_mtime = None
     fails = 0
 
     while True:
@@ -105,6 +140,14 @@ def main() -> None:
             return
         port = _read_port(port_file)
         now = time.time()
+
+        # Fast local signal: dtd's start/complete bindings write $DTD_TIMER the
+        # instant they fire, so a dtd-initiated change shows within one TICK
+        # instead of waiting on the Toggl poll below.
+        fstart, fdesc, fmtime = _read_timer_file(timer_file)
+        if fmtime is not None and fmtime != last_timer_mtime:
+            last_timer_mtime = fmtime
+            start, desc = fstart, fdesc   # fstart None => dtd is idle
 
         if api and now - last_poll >= POLL:
             last_poll = now
@@ -124,7 +167,11 @@ def main() -> None:
                     start = None
                 # Strip parens so they can't terminate the change-footer() action.
                 desc = (cur.get("description") or "").replace("(", "").replace(")", "")
-            else:
+            elif start is None or now - start > POLL:
+                # Toggl says idle. Only clear if there's no FRESH local timer:
+                # right after a dtd start the shared cache can still be stale
+                # (up to its TTL), and we must not clobber the just-applied
+                # local start. A timer older than POLL is safe to reconcile.
                 start, desc = None, ""
 
         if start is not None:

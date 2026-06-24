@@ -1020,7 +1020,7 @@ export TOGGL_MAX_429_DELAY=1
 # the fzf --listen port the start binding writes to $DTD_PORT. Best-effort and
 # self-terminating (exits when $DTD_PORT vanishes at cleanup).
 rm -f "$DTD_PORT"
-python3 "$DTD_TICKER" "$DTD_PORT" &>/dev/null &
+python3 "$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER" &>/dev/null &
 TICKER_PID=$!
 
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---

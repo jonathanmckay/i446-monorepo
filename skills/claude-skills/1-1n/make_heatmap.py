@@ -210,6 +210,21 @@ def render(grid, start, end):
     L.append(f'Generated {dt.date.today().strftime("%Y.%m.%d")}.')
     return '\n'.join(L)
 
+def prune_future(grid):
+    """A ritual cannot be completed in a block that hasn't started. The live
+    build order pre-stamps future block headers (☀️/🎯) and pre-writes goal
+    text for the whole day, so add_goals would light future blocks. Clear, for
+    today, any block whose start hour is still in the future (keep the in-
+    progress block, start <= now < start+2). Without this, today's row reads as
+    'complete' for blocks that haven't happened and over-counts vs Neon col P."""
+    now = dt.datetime.now(PT)
+    today = now.date()
+    if today not in grid:
+        return
+    for start_h, b in BLOCKS:
+        if start_h > now.hour:  # block hasn't started yet
+            grid[today].pop(b, None)
+
 def main():
     if len(sys.argv) >= 3:
         start = dt.date.fromisoformat(sys.argv[1]); end = dt.date.fromisoformat(sys.argv[2])
@@ -223,6 +238,7 @@ def main():
             fn(grid, start, end)
         except Exception as e:
             errs.append(f'{fn.__name__}: {e}')
+    prune_future(grid)
     out = render(grid, start, end)
     if errs:
         out += '\n\n<!-- source warnings: ' + '; '.join(errs) + ' -->'
