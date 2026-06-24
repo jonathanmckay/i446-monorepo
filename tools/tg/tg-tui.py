@@ -484,6 +484,13 @@ def fetch_points():
         end try
         set out to out & "|" & pv
     end repeat
+    repeat with c from 7 to 15
+        set gv to ""
+        try
+            set gv to (value of cell c of row todayRow of ws) as text
+        end try
+        set out to out & "|" & gv
+    end repeat
     return out
 end tell'''
             r = _sp.run([IX_OSA], input=script,
@@ -527,24 +534,36 @@ end tell'''
                 if total_ok:
                     STATE.today_points = candidate
                 branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
-                for bname, raw in zip(branches, parts[1:10]):
+                # G:O are read as FORMULAS so a locked literal can be told apart
+                # from the live residual `=D-SUM(locked)`; the cells' computed
+                # VALUES are read in the same pass (parts[20:29]) so the residual
+                # block can be mirrored straight from Neon.
+                gio_vals = parts[20:29]
+                for idx, (bname, raw) in enumerate(zip(branches, parts[1:10])):
                     raw = raw.strip()
                     if not raw:
                         continue
-                    # G:O are read as FORMULAS. The blocks lock sequentially to
-                    # literals; every still-unlocked block is the running
-                    # residual `=D-SUM(locked)`, so the first unlocked block
-                    # holds the ENTIRE unallocated day (the "everything piles
-                    # into 巳" bug) and later ones compute to 0. _blocks_consistent
-                    # can't catch it — the residual makes sum==Σ by construction.
-                    # Only locked, literal cells are real per-block earnings.
                     if raw.startswith("="):
+                        # Residual cell: not a locked literal, but its VALUE is
+                        # exactly what Neon shows for this block. Blocks lock
+                        # sequentially, so the first unlocked block carries the
+                        # running unallocated total and later residuals resolve to
+                        # 0. Read it straight from the sheet instead of pinning
+                        # Σ−locked to the *clock* block — that left 申 at 0 while
+                        # Neon showed 90 because 未 locked ahead of the clock.
+                        try:
+                            rvv = float(gio_vals[idx].strip())
+                        except (ValueError, IndexError, AttributeError):
+                            continue
+                        vv = int(round(rvv))
+                        if vv > 0:
+                            bp_excel[bname] = vv
                         continue
                     try:
                         rv = float(raw)
                     except ValueError:
                         continue
-                    locked_raw += rv  # unrounded, for the round-once residual
+                    locked_raw += rv  # unrounded, for the cold-start residual
                     v = int(round(rv))
                     if v:
                         bp_excel[bname] = v
@@ -1252,11 +1271,18 @@ def _current_block_running_pts() -> int:
 
 
 def _block_display_pts(name: str) -> int:
-    """Locked literal 分 for a block, or the reconstructed running total for the
-    in-progress block (whose 0分 cell is still a residual formula). Returns 0 for
-    a future block (e.g. the bottom 'next' header) — it has earned nothing yet."""
-    if name in STATE.block_points:
-        return STATE.block_points[name]
+    """Per-block 分 mirrored from Neon's 0分 G:O cells. fetch_points now reads the
+    live residual block's VALUE straight from the sheet, so block_points holds
+    every nonzero block — locked literals and the in-progress block alike — and
+    the displayed number always matches what Neon shows. No Σ−locked re-
+    attribution to the clock block (which left 申 at 0 while Neon showed 90 when
+    未 locked ahead of the clock). A block the sheet shows empty returns 0.
+
+    The reconstruction survives only as a cold-start fallback: before the first
+    successful Neon read block_points is empty, so show the current clock block's
+    running total rather than a blank header."""
+    if STATE.block_points:
+        return STATE.block_points.get(name, 0)
     cur_now = hour_to_block(dt.datetime.now(TZ).hour)
     if cur_now and name == cur_now[0]:
         return _current_block_running_pts()

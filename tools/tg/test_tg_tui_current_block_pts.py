@@ -34,13 +34,16 @@ def test_locked_block_uses_literal_not_residual():
     assert m._block_display_pts("辰") == 40
 
 
-def test_current_block_gets_running_total(monkeypatch):
+def test_cold_start_current_block_gets_running_total(monkeypatch):
+    # Before the first successful Neon read block_points is EMPTY; the current
+    # clock block then falls back to the reconstructed running total so its
+    # header isn't blank. (Once a read succeeds, block_points holds the block's
+    # real value and the fallback no longer fires — see test_tg_tui_block_pts_from_neon.)
     m = _load_tui()
     m.STATE.today_points = 300
-    m.STATE.block_points = {"卯": 60, "辰": 40}
-    m.STATE.block_running_pts = 200  # precomputed residual for the current block
-    # Pin "now" into a block (午 = hours 10-11 per BLOCKS) that is NOT locked.
-    fixed = dtm.datetime(2026, 6, 22, 10, 30, tzinfo=m.TZ)
+    m.STATE.block_points = {}            # no successful read yet
+    m.STATE.block_running_pts = 200      # precomputed Σ − locked
+    fixed = dtm.datetime(2026, 6, 22, 10, 30, tzinfo=m.TZ)  # now = 午
 
     class _DT(dtm.datetime):
         @classmethod
@@ -48,7 +51,7 @@ def test_current_block_gets_running_total(monkeypatch):
             return fixed
 
     monkeypatch.setattr(m.dt, "datetime", _DT)
-    assert m._block_display_pts("午") == 200, "current block shows reconstructed running 分"
+    assert m._block_display_pts("午") == 200, "cold start: current block shows running 分"
 
 
 def test_future_block_shows_zero(monkeypatch):
