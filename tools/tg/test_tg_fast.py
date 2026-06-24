@@ -144,3 +144,30 @@ def test_resolve_no_project_when_label_not_in_toggl():
     with patch.object(Path, "read_text", return_value=json.dumps(fake_cache)):
         desc, project, tags = mod.resolve("1 f694")
         assert project == "", f"Expected empty, got '{project}'"
+
+
+def test_main_splits_multiple_entries_incl_fullwidth_comma(monkeypatch, capsys):
+    """Regression (2026-06-24): /tg with multiple comma-separated entries (incl.
+    the fullwidth CJK comma ，) used to create ONE bogus entry. main() must split
+    and process each, joining their outputs."""
+    mod = _import_tg_fast()
+    seen = []
+    monkeypatch.setattr(mod, "resolve_do_session", lambda: None)
+    monkeypatch.setattr(mod, "_process_entry", lambda e: seen.append(e) or f"ok:{e}")
+    monkeypatch.setattr(mod.sys, "argv",
+                        ["tg-fast.py", "0000-0930 睡觉， 0930-1000 一起饭, 1000-1034 ian 1:1"])
+    mod.main()
+    out = capsys.readouterr().out
+    assert seen == ["0000-0930 睡觉", "0930-1000 一起饭", "1000-1034 ian 1:1"], seen
+    assert out.count("ok:") == 3, "each entry must produce its own output line"
+
+
+def test_single_entry_still_works(monkeypatch):
+    """A lone entry (no comma) must still be processed exactly once."""
+    mod = _import_tg_fast()
+    seen = []
+    monkeypatch.setattr(mod, "resolve_do_session", lambda: None)
+    monkeypatch.setattr(mod, "_process_entry", lambda e: seen.append(e) or "ok")
+    monkeypatch.setattr(mod.sys, "argv", ["tg-fast.py", "work 9-10"])
+    mod.main()
+    assert seen == ["work 9-10"]
