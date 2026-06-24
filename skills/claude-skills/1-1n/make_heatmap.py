@@ -15,7 +15,9 @@ from blocks import is_future_block  # shared future-block gate (single source of
 PT = dt.timezone(dt.timedelta(hours=-7))  # America/Los_Angeles (DST, summer)
 
 # 2-hour blocks by local start hour (04:00..22:00). 卯 = 04-06: the convention
-# the build order and 0分 sheet are written with (see build-order-daemon).
+# the build order and 0分 sheet are written with (see build-order-daemon). Local
+# table (waking blocks only, no sleep); canonical schedule + the future-block
+# gate live in lib/blocks.py (is_future_block).
 BLOCKS = [(4,'卯'),(6,'辰'),(8,'巳'),(10,'午'),(12,'未'),(14,'申'),(16,'酉'),(18,'戌'),(20,'亥')]
 BRANCHES = [b for _,b in BLOCKS]
 BIDX = {b:i for i,b in enumerate(BRANCHES)}
@@ -225,7 +227,7 @@ def prune_future(grid):
     if today not in grid:
         return
     for start_h, b in BLOCKS:
-        if start_h > now.hour:  # block hasn't started yet
+        if is_future_block(start_h, now):  # block hasn't started yet
             grid[today].pop(b, None)
 
 def main():

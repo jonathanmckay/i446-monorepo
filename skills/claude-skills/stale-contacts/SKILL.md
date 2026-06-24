@@ -35,13 +35,15 @@ Run `date +%Y-%m-%d` to get today's date. Do not rely on context variables.
 
 ### Step 0.5: Auto-refresh last_contact
 
-Before scanning, run the passive-signal refresher so `last_contact` reflects recent Toggl entries and d358 meeting notes (manual values are preserved as a floor):
+Before scanning, run the passive-signal refresher so `last_contact` reflects recent Toggl entries, d358 meeting notes, and Google Calendar meetings (manual values are preserved as a floor):
 
 ```bash
 python3 ~/i446-monorepo/tools/d359/refresh_last_contact.py --days 90 --apply
 ```
 
-This cuts false-positive overdues from stale manual `last_contact` fields. Run with `--days 30` for a quick daily refresh; `--days 90` for a weekly catch-up. Without `--apply`, it dry-runs.
+This cuts false-positive overdues from stale manual `last_contact` fields. Run with `--days 30` for a quick daily refresh; `--days 90` for a weekly catch-up. Without `--apply`, it dry-runs. Pass `--no-calendar` to skip the Google Calendar pull (offline runs).
+
+**Calendar signal (high-precision by design):** the MSFT (Slow Sync) ICS import strips attendees, so work 1:1s are matched by the `<INITIALS>:JM` title convention (e.g. `JA:JM 1:1` → Jessica Allen) via an unambiguous-initials map; shared-initials contacts match nobody. Primary-calendar events also match by `work_email`/`teams_upn` attendance. Personal `email:` fields and generic title tokens are deliberately ignored to avoid bumping contacts from family events and org-wide OOF/standup noise. Uses the google-calendar-mcp OAuth token (`~/.config/google-calendar-mcp/tokens.json`); degrades to no-op if unavailable.
 
 ### Step 1: Scan d359 files
 

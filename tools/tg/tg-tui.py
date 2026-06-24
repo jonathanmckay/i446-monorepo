@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
 import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 import outlook_client  # noqa: E402
+from blocks import is_future_block  # noqa: E402  shared future-block gate
 
 # dtd's Haiku title shortener, reused for long calendar event titles. Optional:
 # tg-tui must still boot if the did tooling (or lib/state_paths) is broken.
@@ -94,7 +95,9 @@ else:
     EVENT_SHORT_COLS = 33  # event titles wider than this get a Haiku short name
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
 EVENT_SHORTS = Path("~/.cache/tg-tui/event-shortnames.json").expanduser()
-# Earthly branch blocks (name, start_hour, end_hour inclusive)
+# Earthly branch blocks (name, start_hour, end_hour inclusive). Local table:
+# carries end-hours and the 子 sleep block for layout. Canonical start schedule
+# + the future-block gate live in lib/blocks.py (is_future_block).
 BLOCKS = [
     ("卯", 4, 5),
     ("辰", 6, 7),
@@ -864,7 +867,7 @@ def _read_block_emojis(now: dt.datetime | None = None) -> dict[str, str]:
             if tail:
                 branch = tail[0]
                 sh = block_start.get(branch)
-                if sh is not None and sh > now.hour:
+                if sh is not None and is_future_block(sh, now):
                     continue  # block hasn't started yet
                 emojis = "".join(ch for ch in BLOCK_EMOJIS if ch in tail)
                 if emojis:
