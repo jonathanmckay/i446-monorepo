@@ -507,6 +507,77 @@ def write_block_goals(block_name: str, goals: list[str]) -> bool:
     return True
 
 
+def append_block_goals(block_name: str, new_goals: list[str]) -> bool:
+    """Append new goal checkbox lines to a block WITHOUT rewriting existing
+    ones. Unlike write_block_goals (which replaces every checkbox line as
+    `- [ ]`, wiping completion state), this inserts new `- [ ]` lines after the
+    last existing checkbox and leaves prior goals — including `- [x]` done ones
+    — untouched. Used by /inbound's goal card when the block already has goals,
+    so adding one can never clobber or un-complete the others. Stamps 🎯 on the
+    header. Returns True on success."""
+    new_goals = [g for g in new_goals if g.strip()]
+    if not new_goals or not BUILD_ORDER.exists():
+        return False
+    text = BUILD_ORDER.read_text()
+    if "## -1₲" not in text:
+        return False
+    lines = text.split("\n")
+    section_start = None
+    for i, line in enumerate(lines):
+        if line.strip() == "## -1₲":
+            section_start = i
+            break
+    if section_start is None:
+        return False
+
+    # Locate the target block header and the end of the -1₲ section.
+    target_idx = None
+    section_end = len(lines)
+    for i in range(section_start + 1, len(lines)):
+        line = lines[i]
+        if line.startswith("## ") and i > section_start:
+            section_end = i
+            break
+        if line.startswith("- ") and not line.startswith("    "):
+            if _block_name_from_header(line) == block_name:
+                target_idx = i
+                break
+
+    if target_idx is None:
+        return False
+
+    # End of this block's children: next non-indented non-empty line or the
+    # next block header, within the section.
+    block_end = section_end
+    for j in range(target_idx + 1, section_end):
+        if not lines[j].startswith("    ") and lines[j].strip() != "":
+            block_end = j
+            break
+        if lines[j].startswith("- ") and not lines[j].startswith("    "):
+            block_end = j
+            break
+
+    # Insert new goals right after the last existing checkbox line (so they
+    # sit above any `actual:` log), or as the first child if none exist.
+    children = lines[target_idx + 1:block_end]
+    last_cb = -1
+    for k, c in enumerate(children):
+        if re.match(r"^    - \[[ xX]\]", c):
+            last_cb = k
+    new_cb = [f"    - [ ] {g}" for g in new_goals]
+    if last_cb >= 0:
+        new_children = children[:last_cb + 1] + new_cb + children[last_cb + 1:]
+    else:
+        new_children = new_cb + children
+
+    if GOAL_MARKER not in lines[target_idx]:
+        lines[target_idx] = lines[target_idx].rstrip() + f" {GOAL_MARKER}"
+
+    new_lines = lines[:target_idx + 1] + new_children + lines[block_end:]
+    BUILD_ORDER.write_text("\n".join(new_lines))
+    return True
+
+
 def run_1g(goals_text):
     """Run /-1g via claude CLI synchronously (legacy; kept for callers/tests).
 
@@ -1304,7 +1375,9 @@ def main(skip_comms=None):
         cards_needed.append("salah")
     for _ in block_gaps:
         cards_needed.append("gaps")
-    if not goals_set and not sleep_block:
+    # Goal card. /-2n: only when the block has no goals. /inbound (skip_comms):
+    # always surface it so existing goals show and can be appended to.
+    if not sleep_block and (not goals_set or skip_comms):
         cards_needed.append("-1g")
     # Eat card: only in rituals-only (/inbound) mode. Asks what was eaten this
     # block and logs the answer via /ate.
@@ -1407,23 +1480,32 @@ def main(skip_comms=None):
         if new_idx != idx:
             console.print(f"[dim]  block → {new_block} — reloading cards[/dim]")
             return 0
-        if not goals_set and not sleep_block:
+        # /-2n shows this only when the block has no goals; /inbound always
+        # shows it (existing goals are displayed and appended to, never wiped).
+        existing_goals = [g for g, _ in block_status_items]
+        if not sleep_block and (not goals_set or skip_comms):
             card_num += 1
             # Synthesize 3 block-aware suggestions from cal/1g/0g/0n.
             # Falls back to Todoist [N]/(N) ratio list when no signals available.
             suggestions = fetch_block_suggestions(block_name, block_start, block_end)
             if not suggestions:
                 suggestions = fetch_suggested_goals(max_results=3)
-            body = f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end})."
+            if existing_goals:
+                shown = "\n".join(f"  • {g}" for g in existing_goals)
+                body = (f"Goals for [bold]{block_name}[/bold] ({block_start}-{block_end}):\n"
+                        f"{shown}")
+                tail = "\n\n[dim]Add more (comma-separated) — existing goals are kept. Enter/skip to keep as-is.[/dim]"
+            else:
+                body = f"No goals set for [bold]{block_name}[/bold] ({block_start}-{block_end})."
+                tail = "\n\n[dim]Pick numbers (e.g. 1,3), type custom goals (comma-separated), or skip.[/dim]"
             if suggestions:
                 body += f"\n\n[cyan]Suggested for this block:[/cyan]\n{format_suggestions(suggestions)}"
-                body += "\n\n[dim]Pick numbers (e.g. 1,3), type custom goals (comma-separated), or skip.[/dim]"
-            else:
-                body += "\n[dim]Type goals (comma-separated), or skip.[/dim]"
+            body += tail
             resp = prompt_card(
                 card_num, total_cards, "-1g",
                 body,
-                options="pick/goals/skip", preserve_case=True,
+                options="add/pick/skip" if existing_goals else "pick/goals/skip",
+                preserve_case=True,
             )
             if resp and resp.lower() != "skip":
                 # Check if response is number picks from suggestions
@@ -1440,23 +1522,33 @@ def main(skip_comms=None):
                         goals_text = "\n".join(picks)
 
                 # Local build-order write is fast and authoritative. Do it
-                # synchronously so subsequent cards see the updated goals.
+                # synchronously so subsequent cards see the updated goals. When
+                # the block already has goals, APPEND (preserve done-state of
+                # existing goals); otherwise write fresh.
                 parsed_goals = parse_goals_text(goals_text)
-                wrote_locally = write_block_goals(block_name, parsed_goals)
-                # Spawn claude in a detached subprocess for Todoist sync. The
-                # user proceeds to the next card immediately — claude's only
-                # remaining job (Todoist task creation) finishes asynchronously
-                # in the background and may outlive this TUI process.
+                if existing_goals:
+                    wrote_locally = append_block_goals(block_name, parsed_goals)
+                else:
+                    wrote_locally = write_block_goals(block_name, parsed_goals)
+                # Spawn claude in a detached subprocess for Todoist sync — only
+                # the newly-typed goals (goals_text) get Todoist tasks; existing
+                # goals already have theirs. The user proceeds immediately.
                 spawn_1g_background(goals_text)
                 if wrote_locally:
+                    verb = "appended to" if existing_goals else "→"
                     console.print(
-                        f"[green]  ✓ -1g → {block_name}[/green] "
+                        f"[green]  ✓ -1g {verb} {block_name}[/green] "
                         f"[dim](todoist syncing in background)[/dim]"
                     )
-                    # Refresh in-memory goals so the post-ibx0 summary prints them.
-                    current_goals = list(parsed_goals)
+                    # Refresh in-memory goals so the post-cards summary prints them.
+                    current_goals = existing_goals + [
+                        g for g in parsed_goals if g not in existing_goals
+                    ]
                 else:
                     console.print(f"[red]  ⚠ failed to write goals to build order[/red]")
+            elif existing_goals:
+                # Kept existing goals; make sure the idle panel shows them.
+                current_goals = list(existing_goals)
 
         # ── Card 3: eat (rituals-only / inbound) ──────────────────────
         # Ask what was eaten this block; pass the raw answer to /ate.

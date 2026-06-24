@@ -91,7 +91,7 @@ current rituals-only mode.
 Same as -2n Steps 1-3:
 
 1. **صلاة** — check 0₦ `ص` column. If not done: `(y/skip)`
-2. **-1g** — check build order for current 2h block goals. If empty: show 3 block-aware suggestions synthesized from calendar (in-block meetings), open weekly 1g goals for the block's domain, open daily 0₲ items, and unfinished 0n habits. Source-tagged `[cal]/[1g]/[0g]/[0n]`. Multiline goal input; pick 1,2,3 from suggestions or type custom.
+2. **-1g** — block-goal card. In `/inbound` it **always** fires: if the block has no goals, shows 3 block-aware suggestions synthesized from calendar (in-block meetings), open weekly 1g goals for the block's domain, open daily 0₲ items, and unfinished 0n habits (source-tagged `[cal]/[1g]/[0g]/[0n]`; pick 1,2,3 or type custom). If the block **already has goals**, it lists them and lets you **append** more (enter/skip keeps them as-is) — existing goals and their done-state are never overwritten (`append_block_goals`). In `/-2n` it stays silent when goals already exist (old behavior).
 3. **Streak alerts** — after 4pm, habits with 7+ day streaks at risk
 
 ## Eat Card
