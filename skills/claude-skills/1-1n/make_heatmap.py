@@ -9,6 +9,9 @@ Usage: make_heatmap.py START END   (YYYY-MM-DD inclusive). Prints markdown.
 import sys, os, json, datetime as dt, urllib.request, base64, re
 from collections import defaultdict
 
+sys.path.insert(0, str(os.path.expanduser('~/i446-monorepo/lib')))
+from blocks import is_future_block  # shared future-block gate (single source of truth)
+
 PT = dt.timezone(dt.timedelta(hours=-7))  # America/Los_Angeles (DST, summer)
 
 # 2-hour blocks by local start hour (04:00..22:00). 卯 = 04-06: the convention
