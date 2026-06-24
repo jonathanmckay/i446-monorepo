@@ -1023,6 +1023,36 @@ rm -f "$DTD_PORT"
 python3 "$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER" &>/dev/null &
 TICKER_PID=$!
 
+# Auto-reload watcher: when the LIVE task cache ($CACHE) changes on its own —
+# e.g. a /-1g or /0g add elsewhere runs `did-fast --refresh-cache` — pull it
+# into the frozen snapshot and POST a reload to fzf, so the open picker shows
+# the new task without a manual ctrl-r. The optimistic hide/done overlays
+# (DTD_REMOVED/DTD_DONE_FILE) are passed to the list cmd, so refreshing the
+# snapshot never un-hides a just-completed task. Mirrors the ticker: best-
+# effort, self-exits when $DTD_PORT vanishes at cleanup. Fires only on an
+# actual mtime advance (cache changes ~once per add/refresh), so it stays quiet
+# during normal navigation. The reload cmd matches DTD_RELOAD built in the UI
+# loop (same constant args).
+DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER'"
+(
+  last_m=$(stat -f %m "$CACHE" 2>/dev/null)
+  while [[ -f "$DTD_PORT" ]]; do
+    sleep 2
+    cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
+    [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
+    last_m="$cur_m"
+    cp "$CACHE" "$DTD_CACHE_FILE" 2>/dev/null
+    port=$(cat "$DTD_PORT" 2>/dev/null)
+    [[ -z "$port" ]] && continue
+    if [[ -n "$FZF_API_KEY" ]]; then
+      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($DTD_WATCH_RELOAD)" >/dev/null 2>&1
+    else
+      curl -s -XPOST "localhost:$port" --data "reload($DTD_WATCH_RELOAD)" >/dev/null 2>&1
+    fi
+  done
+) &>/dev/null &
+WATCHER_PID=$!
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
@@ -1189,7 +1219,9 @@ if [[ $session_count -gt 0 ]]; then
   fi
 fi
 
-# Stop the live-timer ticker (also self-exits once $DTD_PORT is gone, below).
+# Stop the live-timer ticker + cache watcher (both also self-exit once
+# $DTD_PORT is gone, below).
 kill "$TICKER_PID" 2>/dev/null
+kill "$WATCHER_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN"

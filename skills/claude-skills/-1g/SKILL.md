@@ -99,7 +99,17 @@ For each **new** goal (no existing match), create a Todoist task using the Todoi
 - **Due**: `today`
 - **Duration**: from `(N)` annotation if present (e.g., `(30)` → `"30m"`). If no `(N)`, omit.
 
-### Step 5: Confirm
+### Step 5: Refresh the dtd task cache
+
+After creating the Todoist task(s), refresh the dtd/did task cache so the new goal shows up in dtd (it sorts into the high `#-1g` goals tier). Run in the background — never block the confirm on it:
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1 &
+```
+
+This updates `~/.local/state/jm/task-queue.json`; an open dtd auto-reloads off that cache (its watcher copies the change into the snapshot and POSTs a reload to fzf), so the goal appears without a manual ctrl-r. Skip this step only when no task was created (all goals were dedup'd away).
+
+### Step 6: Confirm
 
 Output one line:
 ```
