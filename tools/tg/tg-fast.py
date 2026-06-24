@@ -391,6 +391,16 @@ def main():
     # Resolve orphaned /do session before starting any new timer
     resolve_do_session()
 
+    # Multiple entries separated by , ; or their fullwidth CJK forms ，；  →
+    # create each independently. Time ranges (9-10, 9:30-10:15) and backdates
+    # never contain these, so the split is safe. A fullwidth comma from CJK
+    # input used to leave the whole string as one bogus entry.
+    entries = [e.strip() for e in re.split(r"[,;，；]", raw) if e.strip()]
+    print("\n".join(_process_entry(e) for e in entries))
+
+
+def _process_entry(raw: str) -> str:
+    """Resolve and create/start a single timer entry; return the CLI output line."""
     # Check for time range: "desc HH:MM-HH:MM" or "HH:MM-HH:MM desc" or "desc H-H"
     # Try range at end first, then at start
     range_match = re.search(r'(\d{1,4}(?::\d{2})?)\s*-\s*(\d{1,4}(?::\d{2})?)\s*$', raw)
@@ -406,15 +416,13 @@ def main():
             if ":" in s and ":" in e:
                 desc_part = range_match_start.group(3).strip()
                 desc, project, tags = resolve(desc_part)
-                print(cmd_create_range(desc or desc_part, project, tags, s, e))
-                return
+                return cmd_create_range(desc or desc_part, project, tags, s, e)
     if range_match:
         start_t = _norm_time(range_match.group(1))
         end_t = _norm_time(range_match.group(2))
         desc_part = raw[:range_match.start()].strip()
         desc, project, tags = resolve(desc_part)
-        print(cmd_create_range(desc or desc_part, project, tags, start_t, end_t))
-        return
+        return cmd_create_range(desc or desc_part, project, tags, start_t, end_t)
 
     # Check for backdated start: "HHMM desc" or "desc HHMM"
     backdate_match = re.match(r'^(\d{4})\s+(.+)$', raw)
@@ -424,8 +432,7 @@ def main():
         if 0 <= h <= 23 and 0 <= m <= 59:
             rest = backdate_match.group(2)
             desc, project, tags = resolve(rest)
-            print(cmd_backdated(backtime, desc, project, tags))
-            return
+            return cmd_backdated(backtime, desc, project, tags)
 
     # Check for backdated start: "desc HHMM" (time at end)
     backdate_end_match = re.search(r'\s(\d{4})$', raw)
@@ -435,12 +442,11 @@ def main():
         if 0 <= h <= 23 and 0 <= m <= 59:
             rest = raw[:backdate_end_match.start()].strip()
             desc, project, tags = resolve(rest)
-            print(cmd_backdated(backtime, desc, project, tags))
-            return
+            return cmd_backdated(backtime, desc, project, tags)
 
     # Default: start timer
     desc, project, tags = resolve(raw)
-    print(cmd_start(desc, project, tags))
+    return cmd_start(desc, project, tags)
 
 
 def notify_tui():

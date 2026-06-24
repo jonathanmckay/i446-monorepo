@@ -251,7 +251,9 @@ def parse_input(raw: str) -> list[ParsedItem]:
         raw = " ".join(parts[:-1])
 
     items = []
-    for chunk in re.split(r"[,;]", raw):
+    # Split on ASCII , ; AND their fullwidth forms ，； — a fullwidth comma from
+    # CJK input used to leave two items lumped into one (e.g. "睡觉，0744 xk22").
+    for chunk in re.split(r"[,;，；]", raw):
         chunk = chunk.strip()
         if not chunk:
             continue
