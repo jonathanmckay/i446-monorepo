@@ -18,6 +18,8 @@ pre-wake small hours. Individual tools keep their own block tables when they
 need end-hours or a sleep-block subset for layout; the START schedule and the
 future gate are the parts that must agree, so they live here.
 """
+from __future__ import annotations  # PEP 604 `X | None` annotations on py3.9
+
 import datetime as dt
 
 # (branch, start_hour) for the full 12-branch day. start_hour is the local
