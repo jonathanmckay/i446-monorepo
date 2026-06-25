@@ -108,10 +108,14 @@ Same as -2n Steps 1-3:
 ## Eat Card
 
 After the ritual cards (rituals-only mode), `/inbound` asks **"What did you eat
-during \<block\>?"**. The raw answer is passed straight through to `/ate` via a
-detached `claude -p` subprocess (`spawn_ate_background`), which logs it to the
-`hcbi` row. Skip with `skip`. Use the `/ate` input shape: `food, kcal, protein
-(group n)`.
+during \<block\>?"**. For context it also shows the **last meal logged today** —
+`last_meal_today()` reads the most-recent populated Earthly-Branch band from the
+Neon `hcbi` row via ix and renders `last eaten: <food> · <band>` (e.g.
+`last eaten: mocha + tacos · 午`). Best-effort: if ix is unreachable or nothing's
+logged yet, the line is just omitted. The raw answer is passed straight through
+to `/ate` via a detached `claude -p` subprocess (`spawn_ate_background`), which
+logs it to the `hcbi` row. Skip with `skip`. Use the `/ate` input shape:
+`food, kcal, protein (group n)`.
 
 ## Comms Cards (currently skipped)
 

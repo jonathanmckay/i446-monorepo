@@ -703,7 +703,7 @@ def run_1g(goals_text):
     not blocked while claude syncs Todoist."""
     subprocess.run(
         ["claude", "-p", f"/-1g {goals_text}", "--allowedTools",
-         "Skill,Bash,Read,Edit,Write,mcp__todoist__add-tasks"],
+         "Skill,Bash,Read,Edit,Write,mcp__todoist__find-tasks,mcp__todoist__add-tasks"],
         capture_output=True, timeout=120
     )
 
@@ -725,7 +725,7 @@ def spawn_1g_background(goals_text):
     log_fh = open(log_path, "wb")
     return subprocess.Popen(
         ["claude", "-p", f"/-1g {goals_text}", "--allowedTools",
-         "Skill,Bash,Read,Edit,Write,mcp__todoist__add-tasks"],
+         "Skill,Bash,Read,Edit,Write,mcp__todoist__find-tasks,mcp__todoist__add-tasks"],
         stdin=subprocess.DEVNULL,
         stdout=log_fh,
         stderr=log_fh,

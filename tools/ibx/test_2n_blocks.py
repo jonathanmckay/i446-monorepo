@@ -2,6 +2,8 @@
 import ast
 import pathlib
 
+import pytest
+
 SRC = pathlib.Path(__file__).parent / "-2n.py"
 
 
@@ -83,6 +85,22 @@ def test_run_did_allows_skill_tool():
     """run_did must include Skill in allowedTools so /did skill can load."""
     tools = _extract_allowed_tools("run_did")
     assert "Skill" in tools.split(","), f"Skill missing from run_did allowedTools: {tools}"
+
+
+@pytest.mark.parametrize("func_name", ["run_1g", "spawn_1g_background"])
+def test_1g_spawn_allows_find_tasks(func_name):
+    """Regression: the background /-1g must be allowed to run BOTH find-tasks and
+    add-tasks. /-1g Step 4 starts by calling mcp__todoist__find-tasks to dedup,
+    THEN mcp__todoist__add-tasks to create. When find-tasks was omitted from
+    --allowedTools, the headless model hit a denied tool mid-skill and sometimes
+    derailed — bailing to a partial finish (just a cache refresh) so the goal
+    never reached Todoist and never showed up in dtd goals (2026-06-25)."""
+    tools = _extract_allowed_tools(func_name).split(",")
+    assert "mcp__todoist__find-tasks" in tools, (
+        f"find-tasks missing from {func_name} allowedTools — /-1g dedup step "
+        f"will be denied and the goal may never sync: {tools}")
+    assert "mcp__todoist__add-tasks" in tools, (
+        f"add-tasks missing from {func_name} allowedTools: {tools}")
 
 
 # ── Regression: -1g goals must land in build order even if claude subprocess fails ──
