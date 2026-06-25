@@ -302,6 +302,45 @@ def clear_prayer_markers():
     BUILD_ORDER.write_text("\n".join(new_lines))
 
 
+def clear_block_goals():
+    """Daily reset: wipe each -1₲ block back to a single empty `- [ ]`
+    placeholder, dropping yesterday's goals AND logged `actual:` entries so
+    /inbound starts each day focused on today (yesterday's goal cards don't
+    linger). Block headers are preserved as-is (clear_prayer_markers has
+    already stripped their emoji). Only run AFTER snapshot_build_order has
+    archived the day to v_logs, so yesterday's full content is recoverable."""
+    if not BUILD_ORDER.exists():
+        return
+    text = BUILD_ORDER.read_text()
+    if "## -1₲" not in text:
+        return
+    lines = text.split("\n")
+    start = next((i for i, l in enumerate(lines) if l.strip() == "## -1₲"), None)
+    if start is None:
+        return
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    out = lines[: start + 1]
+    i = start + 1
+    while i < end:
+        line = lines[i]
+        if line.startswith("- ") and not line.startswith("    "):
+            # Block header — keep it, emit one empty placeholder, drop the
+            # block's existing children (goals + `actual:` log).
+            out.append(line)
+            out.append("    - [ ] ")
+            i += 1
+            while i < end and lines[i].startswith("    "):
+                i += 1
+        else:
+            out.append(line)
+            i += 1
+    BUILD_ORDER.write_text("\n".join(out + lines[end:]))
+
+
 def render_block_status_panel(block_name=None, stats_line=None):
     """Build a Rich Panel summarizing the current 2h block's -1g status.
 
@@ -1310,8 +1349,13 @@ def snapshot_build_order():
     if BUILD_ORDER.exists():
         v_logs.mkdir(parents=True, exist_ok=True)
         snapshot.write_text(BUILD_ORDER.read_text())
-        # After archiving yesterday, clear stale emojis for the new day
+        # After archiving yesterday, reset the new day: strip stale emoji
+        # markers AND wipe yesterday's -1₲ goals/actuals so /inbound focuses on
+        # today (yesterday's cards don't carry over). Runs once per day — gated
+        # by the snapshot existence check above — so goals set later today are
+        # never wiped by a subsequent /inbound run.
         clear_prayer_markers()
+        clear_block_goals()
 
 
 def main(skip_comms=None):

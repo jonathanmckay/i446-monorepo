@@ -76,6 +76,17 @@ else
 fi
 ```
 
+## Daily reset (today-only focus)
+
+On the first `/inbound` (or `/-2n`) of a new day, `snapshot_build_order()`
+archives yesterday's build order to `g245/v_logs/` and then resets the `## -1₲`
+section: `clear_prayer_markers()` strips the emoji markers and
+`clear_block_goals()` wipes every block's goals + `actual:` log back to an empty
+`- [ ]` placeholder. So yesterday's goal cards never carry over — `/inbound`
+starts focused on today. This runs **once per day** (gated by the v_logs
+snapshot), so goals set later the same day are never re-wiped by a subsequent
+run. Yesterday's full content stays recoverable in the v_logs snapshot.
+
 ## Card Ordering
 
 Initial pass (on launch):
