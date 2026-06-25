@@ -52,7 +52,18 @@ two days.
 2. **Parse the input.** Split on comma: `<name>[, <start_time>]`. If a trailing HHMM or HH:MM is present after a comma, use it as the Toggl start time (backdated). Also parse `--no-teams` flag from the name for mic-only mode.
    - Examples: `/d357 Francois 1:1, 1000` → name="Francois 1:1", start_time=10:00
    - `/d357 SLT metrics` → name="SLT metrics", start_time=now (default)
-3. **Audio pre-flight check** (skip for `--no-teams`; also skip if `prev_mic_only` is true, and auto-set mic-only instead):
+3. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"]` (the second is "MSFT (Slow Sync)" — the ICS import of the Microsoft/Outlook calendar; the old `9nclf1b3...@group.calendar.google.com` Work calendar no longer exists). Match by time overlap with now, ignoring all-day/`transparent` events (OOF banners). If a match exists, capture:
+   - `calendar_minutes`: the event's scheduled duration
+   - `project`: `i9` if the event came from the MSFT calendar id; `m5x2` otherwise (default)
+   - Prefer the calendar event title as the Toggl description if it differs from user input
+
+   **Fallback — tg-tui caches.** The MSFT import calendar is slow-sync and can lag or miss events. If the MCP query returns no current event, check the tg-tui caches (written by `~/i446-monorepo/tools/tg/{outlook_client,gcal_client}.py`):
+   - `~/.cache/tg-tui/outlook-YYYY-MM-DD.json` — Outlook via Agency MCP; events have `subject`, `start`, `end` (naive local-time strings with `start_tz`/`end_tz` Windows tz names)
+   - `~/.cache/tg-tui/gcal-YYYY-MM-DD.json` — all calendars visible to the m5c7 account; events from `"calendar": "Calendar"` are the MSFT mirror (treat as `i9`); timestamps may be UTC (`Z` suffix)
+
+   An event from either cache that overlaps now counts as a calendar match (same captures as above; Outlook-sourced events → `i9`). The caches only refresh while tg-tui is running (5-min TTL), so check the file mtime — if older than ~30 min, treat its absence of a match as inconclusive rather than authoritative. If no source matches but the meeting name implies Microsoft work (Xbox, GitHub, CoreAI, SLT, names of MSFT coworkers), default the project to `i9` instead of `m5x2`.
+4. **Start Toggl timer FIRST** — before the audio pre-flight. Calling the Toggl CLI is the first *write* of the start flow so the time entry is pinned at invocation and the slow, failure-prone audio device juggling (step 5) can't delay or skew it. (Project, description, and `calendar_minutes` are resolved by the calendar check in step 3; the CLI has no `edit` subcommand, so the project must be known before the entry is created.) If `start_time` was provided, use `--at HH:MM` to backdate. Otherwise start at now. Record the returned entry ID.
+5. **Audio pre-flight check** (skip for `--no-teams`; also skip if `prev_mic_only` is true, and auto-set mic-only instead):
    a. Kill stale osascript dialogs: `killall osascript 2>/dev/null`
    b. **Detect AirPods HFP mode** — if AirPods are connected but in HFP mode (1ch output, 24kHz sample rate), the Meet Output multi-output device will silently fail to route to BlackHole. Check with:
       ```python
@@ -65,18 +76,7 @@ two days.
       - **Launch teamstap** (see Process Tap section) so the remote side is captured anyway: the mic-only fallback then loses nothing but channel separation.
    c. If not HFP, switch system output: `SwitchAudioSource -s "Meet Output"`
    d. If AirPods are BT-connected but missing from `SwitchAudioSource -a -t output`, reconnect: `blueutil --disconnect <MAC> && sleep 2 && blueutil --connect <MAC>` (MAC: `70-F9-4A-87-EC-D7`)
-      **MID-CALL GUARD**: NEVER bounce Bluetooth if a call is likely in progress — it cuts the user's live call audio for several seconds (regression: 2026-06-04 Adam Habig call, user lost audio mid-conversation). Treat a call as likely in progress when the current calendar event window (step 4) covers now, or when the meeting name was given for a meeting that has already started. In that case skip the bounce entirely and fall back to mic-only. The bounce is also futile mid-call: the conferencing app re-grabs the AirPods mic immediately and forces HFP again.
-4. **Check Google Calendar** for a current event (now ± 5 min) using `mcp__google-calendar-mcp__list-events`. **Query both calendars in one call** by passing `calendarId: ["primary", "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"]` (the second is "MSFT (Slow Sync)" — the ICS import of the Microsoft/Outlook calendar; the old `9nclf1b3...@group.calendar.google.com` Work calendar no longer exists). Match by time overlap with now, ignoring all-day/`transparent` events (OOF banners). If a match exists, capture:
-   - `calendar_minutes`: the event's scheduled duration
-   - `project`: `i9` if the event came from the MSFT calendar id; `m5x2` otherwise (default)
-   - Prefer the calendar event title as the Toggl description if it differs from user input
-
-   **Fallback — tg-tui caches.** The MSFT import calendar is slow-sync and can lag or miss events. If the MCP query returns no current event, check the tg-tui caches (written by `~/i446-monorepo/tools/tg/{outlook_client,gcal_client}.py`):
-   - `~/.cache/tg-tui/outlook-YYYY-MM-DD.json` — Outlook via Agency MCP; events have `subject`, `start`, `end` (naive local-time strings with `start_tz`/`end_tz` Windows tz names)
-   - `~/.cache/tg-tui/gcal-YYYY-MM-DD.json` — all calendars visible to the m5c7 account; events from `"calendar": "Calendar"` are the MSFT mirror (treat as `i9`); timestamps may be UTC (`Z` suffix)
-
-   An event from either cache that overlaps now counts as a calendar match (same captures as above; Outlook-sourced events → `i9`). The caches only refresh while tg-tui is running (5-min TTL), so check the file mtime — if older than ~30 min, treat its absence of a match as inconclusive rather than authoritative. If no source matches but the meeting name implies Microsoft work (Xbox, GitHub, CoreAI, SLT, names of MSFT coworkers), default the project to `i9` instead of `m5x2`.
-5. **Start Toggl timer**: If `start_time` was provided, use `--at HH:MM` to backdate. Otherwise start at now. Record the returned entry ID.
+      **MID-CALL GUARD**: NEVER bounce Bluetooth if a call is likely in progress — it cuts the user's live call audio for several seconds (regression: 2026-06-04 Adam Habig call, user lost audio mid-conversation). Treat a call as likely in progress when the current calendar event window (step 3) covers now, or when the meeting name was given for a meeting that has already started. In that case skip the bounce entirely and fall back to mic-only. The bounce is also futile mid-call: the conferencing app re-grabs the AirPods mic immediately and forces HFP again.
 6. **Launch recording in tmux** (NOT nohup — nohup dies from SIGTERM when Claude's bash subprocess exits):
    ```bash
    tmux new-session -d -s d357 "cd ~/i446-monorepo/tools/meet && PYTHONUNBUFFERED=1 python3 -u meet.py '<name>' --domain d357 [--no-teams] [--mic '<mic_name>'] [--max-duration <calendar_minutes>] [--idle-timeout 0] > /tmp/d357-active.log 2>&1"
