@@ -148,6 +148,85 @@ def check_neon_column(col_name):
         return None
 
 
+_IX_OSA = None
+
+
+def _ix_osa_run(script, timeout=8.0):
+    """Run AppleScript on ix via the shared `_lib/ix-osa.py` helper. The canonical
+    Neon workbook lives on ix, so reads must route there (the TUI may run on a
+    box without Neon open). Best-effort: returns stdout on success, else None.
+    Never raises — a slow/unreachable ix must not wedge the card."""
+    global _IX_OSA
+    if _IX_OSA is None:
+        try:
+            import importlib.util
+            p = Path.home() / ".claude/skills/_lib/ix-osa.py"
+            spec = importlib.util.spec_from_file_location("_ix_osa", p)
+            mod = importlib.util.module_from_spec(spec)
+            # Register BEFORE exec: ix-osa.py defines a @dataclass, whose
+            # field-type resolution looks the module up in sys.modules (Python
+            # 3.9). Without this it raises during import.
+            sys.modules["_ix_osa"] = mod
+            spec.loader.exec_module(mod)
+            _IX_OSA = mod
+        except Exception:
+            _IX_OSA = False
+    if not _IX_OSA:
+        return None
+    try:
+        res = _IX_OSA.run(script, timeout=timeout)
+        return res.stdout.strip() if res.returncode == 0 else None
+    except Exception:
+        return None
+
+
+# hcbi food-name cell (first of each triad) per Earthly-Branch time band — see
+# the /ate skill. Ordered earliest→latest so the last populated one is "most
+# recent meal."
+_HCBI_BANDS = [("卯", "AK"), ("辰", "AN"), ("巳", "AQ"), ("午", "AT"),
+               ("未", "AW"), ("申", "AZ"), ("戌", "BC")]
+
+
+def last_meal_today():
+    """Return (food_text, band_glyph) for today's most-recent hcbi food entry —
+    the latest populated time band — or None. Read from Neon via ix; best-effort
+    so the eat card still renders if ix is unreachable or nothing's logged yet."""
+    bands_al = "{" + ", ".join(f'{{"{g}", "{c}"}}' for g, c in _HCBI_BANDS) + "}"
+    script = f'''
+    tell application "Microsoft Excel"
+        set sh to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set m to ((month of (current date)) * 1) as text
+        set d to ((day of (current date)) * 1) as text
+        set today to m & "/" & d
+        set rowNum to 0
+        repeat with r from 2 to 400
+            if (string value of range ("B" & r) of sh) = today then
+                set rowNum to r
+                exit repeat
+            end if
+        end repeat
+        if rowNum = 0 then return ""
+        set lastG to ""
+        set lastV to ""
+        repeat with b in {bands_al}
+            set v to string value of range ((item 2 of b) & rowNum) of sh
+            if v is not "" and v is not missing value then
+                set lastG to (item 1 of b)
+                set lastV to v
+            end if
+        end repeat
+        if lastV is "" then return ""
+        return lastG & "|||" & lastV
+    end tell
+    '''
+    out = _ix_osa_run(script, timeout=8.0)
+    if not out or "|||" not in out:
+        return None
+    glyph, _, food = out.partition("|||")
+    food = food.strip()
+    return (food, glyph.strip()) if food else None
+
+
 PRAYER_MARKER = "☀️"
 INBOX_MARKER = "📧"
 TIME_MARKER = "⏰"
@@ -1598,10 +1677,15 @@ def main(skip_comms=None):
         # Ask what was eaten this block; pass the raw answer to /ate.
         if skip_comms:
             card_num += 1
+            body = (f"What did you eat during [bold]{block_name}[/bold] "
+                    f"({block_start}-{block_end})?")
+            last = last_meal_today()
+            if last:
+                food, glyph = last
+                body += f"\n\n[dim]last eaten: {food} · {glyph}[/dim]"
             resp = prompt_card(
                 card_num, total_cards, "🍽 eat",
-                f"What did you eat during [bold]{block_name}[/bold] "
-                f"({block_start}-{block_end})?",
+                body,
                 options="food, kcal, protein (group n) / skip",
                 preserve_case=True,
             )
