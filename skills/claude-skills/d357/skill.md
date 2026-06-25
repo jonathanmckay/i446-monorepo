@@ -44,10 +44,10 @@ two days.
    a. Save `prev_mic_only = state.mic_only` (carry forward audio config).
    b. Stop Toggl timer for the previous recording.
    c. Send one `tmux send-keys -t d357 C-c` to stop meet.py.
-   d. Poll for transcript completion (same as `/d357 stop` step 5): wait for `TXT →` or `Done!` in the log, up to 120s (shorter than normal stop; we want to get the new recording going).
+   d. Poll for transcript completion (same as `/d357 stop` step 4): wait for `TXT →` or `Done!` in the log, up to 120s (shorter than normal stop; we want to get the new recording going).
    e. Read the transcript path from the log.
    f. Clear state.json (`pid: null`).
-   g. **File the old meeting in the background** using an Agent: pass it the old meeting's name, transcript path, project, mic_only, and Toggl duration. The agent runs the full filing flow (steps 9-12 from `/d357 stop`) while the new recording starts. Do NOT block on this.
+   g. **File the old meeting in the background** using an Agent: pass it the old meeting's name, transcript path, project, mic_only, and Toggl duration. The agent runs the full filing flow (steps 8-11 from `/d357 stop`) while the new recording starts. Do NOT block on this.
    h. Report: `⏹ Stopped: <old name>. Filing in background.`
 2. **Parse the input.** Split on comma: `<name>[, <start_time>]`. If a trailing HHMM or HH:MM is present after a comma, use it as the Toggl start time (backdated). Also parse `--no-teams` flag from the name for mic-only mode.
    - Examples: `/d357 Francois 1:1, 1000` → name="Francois 1:1", start_time=10:00
@@ -154,14 +154,13 @@ two days.
 ### `/d357 stop [HHMM]` — finalize
 
 1. Read state.json. If no active recording, report `No recording active.` and exit.
-2. **Parse optional end time.** If `HHMM` or `HH:MM` is provided after `stop`, use it as the Toggl end time.
-3. **Stop Toggl timer**.
-4. **Stop recording via tmux**: Send SIGINT (not SIGTERM) to the tmux session so meet.py handles it gracefully:
+2. **Stop the Toggl timer FIRST.** This is the first action after the active-recording guard — ahead of stopping the recording and the transcription wait — so the logged duration is pinned to when you invoked stop, not when Whisper finishes. Parse an optional end time (`HHMM` or `HH:MM` after `stop`) and stop the Toggl timer with that end time if provided; otherwise stop at now.
+3. **Stop recording via tmux**: Send SIGINT (not SIGTERM) to the tmux session so meet.py handles it gracefully:
    ```bash
    tmux send-keys -t d357 C-c
    ```
    Send this **once**. Do not spam `C-c`, `kill -INT`, or `kill -TERM`; repeated interrupts can land while Whisper is saving artifacts. `meet.py` now protects WAV/TXT writes, but the correct operator behavior is one stop request, then wait.
-5. **Wait for transcription** — poll the log for `TXT →` or `Done!` every 2s, up to 300s. meet.py needs time to save the wav and run Whisper.
+4. **Wait for transcription** — poll the log for `TXT →` or `Done!` every 2s, up to 300s. meet.py needs time to save the wav and run Whisper.
    ```bash
    for i in $(seq 1 150); do
        sleep 2
@@ -169,8 +168,8 @@ two days.
        if ! tmux has-session -t d357 2>/dev/null; then break; fi
    done
    ```
-6. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
-7. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh. **CRITICAL: use `formula` not `value`** to preserve existing formula chains. Pattern:
+5. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
+6. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh. **CRITICAL: use `formula` not `value`** to preserve existing formula chains. Pattern:
     ```applescript
     set theCell to range (targetCol & todayRow) of theSheet
     set oldFormula to formula of theCell
@@ -183,21 +182,21 @@ two days.
     end if
     ```
     Never use `set value of range ... to oldVal & "+N"` as this destroys existing formulas.
-8. Clear state.json (set `pid: null`).
-8b. **Emit prof stop event** (for professionalism daemon scoring):
+7. Clear state.json (set `pid: null`).
+7b. **Emit prof stop event** (for professionalism daemon scoring):
     ```bash
     python3 ~/i446-monorepo/tools/prof/log_arrival.py stop --name "<name>"
     ```
-9. **Read the transcript** from the `.txt` file.
-10. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for hand-written notes matching the meeting name.
-11. **Extract and file** — generate the structured meeting note and write to `vault/d357/<M.W>/YYYY.MM.DD-<slug>.md`. If `mic_only` is true, prefix title and H1 with `1S `.
-12. **Link raw transcript**:
+8. **Read the transcript** from the `.txt` file.
+9. **Check new-notes** (`~/vault/z_ibx/new-notes.md`) for hand-written notes matching the meeting name.
+10. **Extract and file** — generate the structured meeting note and write to `vault/d357/<M.W>/YYYY.MM.DD-<slug>.md`. If `mic_only` is true, prefix title and H1 with `1S `.
+11. **Link raw transcript**:
     ```markdown
     ## Raw Transcript
 
     *(N words; see [transcript](../../h335/i9/recordings/YYYY.MM.DD-HHMM-slug.txt))*
     ```
-13. Report: `Stopped. Filed -> <path>. Logged N 分 to <project>.`
+12. Report: `Stopped. Filed -> <path>. Logged N 分 to <project>.`
 
 ### `/d357` (no args) — start recording with auto-detected name
 
