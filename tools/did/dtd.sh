@@ -147,6 +147,10 @@ exec 3>"$DTD_FIFO"
 # below so their heredocs expand to real paths, not empty strings) ---
 DTD_CACHE_FILE="/tmp/dtd-$DTD_ID.cache.json"
 DTD_REMOVED="/tmp/dtd-$DTD_ID.removed"
+# View mode (ctrl-t toggles): empty = default priority order, 'project' = grouped
+# by domain label. Per-session; the list generator reads it as its 8th arg.
+DTD_VIEW="/tmp/dtd-$DTD_ID.view"
+DTD_VIEWTOGGLE="/tmp/dtd-$DTD_ID.view-toggle.sh"
 # Skips persist across dtd sessions for the duration of one day (stable
 # path + date guard), unlike the other per-session temp files
 DTD_SKIPPED="$STATE_DIR/dtd-skipped-today.txt"
@@ -488,6 +492,22 @@ for t in all_tasks:
         seen.add(t['id'])
         unique.append(t)
 
+# View mode (8th arg, written by the ctrl-t toggle). 'project' groups the list
+# by domain label instead of the default priority tiers.
+view = ''
+try:
+    view = open(sys.argv[8]).read().strip() if len(sys.argv) > 8 else ''
+except: view = ''
+
+def domain_of(t):
+    for lbl in t.get('labels', []):
+        if lbl in COLORS:
+            return lbl
+    return 'zzz'   # unlabelled tasks sort to the end
+
+if view == 'project':
+    unique.sort(key=lambda t: (domain_of(t), prank(t.get('priority'))))
+
 DIM = '\033[2m'
 running_lines = []
 normal_lines = []
@@ -538,12 +558,19 @@ for t in unique:
     sfx = '\t' + str(t.get('id', ''))
 
     repeat = '↻ ' if recurring else ''
+    # In project view, tag each row with its domain so groups are unmistakable
+    # (color already encodes it, but adjacent palettes can blur).
+    dom_tag = ''
+    if view == 'project':
+        _dd = domain_of(t)
+        if _dd != 'zzz':
+            dom_tag = _dd + ' '
     is_running = bool(running_clean and clean == running_clean)
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
-        prefix = f'▶ {elapsed}m · '
+        prefix = f'▶ {elapsed}m · {dom_tag}'
     else:
-        prefix = repeat
+        prefix = repeat + dom_tag
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)
@@ -564,9 +591,35 @@ for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
-" "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
 LISTEOF
 chmod +x "$DTD_LIST"
+
+# View-cycle script (ctrl-t): advance the view-state file to the next view,
+# wrapping around. Add a view by appending to `views` here and handling its
+# name in the list generator. The subsequent reload re-runs the generator.
+cat > "$DTD_VIEWTOGGLE" << 'VTEOF'
+#!/bin/zsh
+VIEW="PLACEHOLDER_VIEW"
+HDR="PLACEHOLDER_HDR"
+views=(default project)          # cycle order; append new views here
+typeset -A labels
+labels=(default "default" project "by project")
+cur="$(cat "$VIEW" 2>/dev/null)"
+[[ -z "$cur" ]] && cur=default
+next="${views[1]}"               # default wrap target
+for i in {1..$#views}; do
+  if [[ "${views[$i]}" == "$cur" ]]; then
+    next="${views[$(( i % $#views + 1 ))]}"
+    break
+  fi
+done
+echo "$next" > "$VIEW"
+echo "↹ view: ${labels[$next]:-$next}" > "$HDR"
+VTEOF
+sed -i '' "s|PLACEHOLDER_VIEW|$DTD_VIEW|g; s|PLACEHOLDER_HDR|$DTD_HDR|g" "$DTD_VIEWTOGGLE"
+chmod +x "$DTD_VIEWTOGGLE"
+echo default > "$DTD_VIEW"   # start in default view each session
 
 # --- Skip script used by fzf ctrl-k binding ---
 DTD_SKIP="/tmp/dtd-$DTD_ID.skip.sh"
@@ -984,7 +1037,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh"
+export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -1026,7 +1079,7 @@ TICKER_PID=$!
 # actual mtime advance (cache changes ~once per add/refresh), so it stays quiet
 # during normal navigation. The reload cmd matches DTD_RELOAD built in the UI
 # loop (same constant args).
-DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER'"
+DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
 (
   last_m=$(stat -f %m "$CACHE" 2>/dev/null)
   while [[ -f "$DTD_PORT" ]]; do
@@ -1072,7 +1125,7 @@ while true; do
   # the live cache. This prevents tasks vanishing mid-session when an external
   # process (morning routine, /todo, other terminals) rewrites the live cache
   # after startup. Use ctrl-r to explicitly pull external changes.
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER'"
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
   DTD_RELOAD="${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
@@ -1114,7 +1167,8 @@ while true; do
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
   task="$fzf_output"
 
@@ -1217,4 +1271,4 @@ fi
 kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
