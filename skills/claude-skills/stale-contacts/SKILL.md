@@ -79,7 +79,7 @@ For each overdue contact, create a Todoist task using the `add-tasks` MCP tool:
 
 Batch up to 25 tasks per `add-tasks` call.
 
-**Dedup**: Before creating tasks, search Todoist for existing open tasks containing "Reach out to [Name]" with label `s897`. Skip any contact that already has an open reminder task.
+**Dedup**: Before creating tasks, search Todoist across every rollup domain in play (`@s897 | @家 | …`) for open tasks carrying the contact's `d359/<slug>` label. Skip any contact that already has an open reminder task.
 
 ### Step 4: Report
 
