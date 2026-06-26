@@ -394,11 +394,23 @@ try:
     # matched, leaving DONE habits (0t, etc.) in the list. Extract the names list,
     # lowercased, gated to today's date so a stale file can't hide live tasks.
     if isinstance(_done_raw, dict):
-        completed = ([n.lower() for n in _done_raw.get('names', [])]
-                     if _done_raw.get('date') == today else [])
+        _gated = _done_raw.get('date') == today
+        completed = ([n.lower() for n in _done_raw.get('names', [])] if _gated else [])
+        _ids_map = (_done_raw.get('ids') or {}) if _gated else {}
     else:
         completed = [str(n).lower() for n in _done_raw]
-except: completed = []
+        _ids_map = {}
+except:
+    completed = []; _ids_map = {}
+# Tasks closed today, keyed by id. A cache task whose id is here is definitively
+# done and hidden regardless of its name. Names that are id-backed must hide by
+# id ONLY: hiding them by name too would suppress a different open task sharing
+# the same annotation-stripped name (regression 2026-06-26: 'stats').
+completed_ids = {str(v) for v in _ids_map.values()}
+id_backed_names = {str(k).lower() for k in _ids_map.keys()}
+# Name-only completions (habits, legacy records, in-session completions) have no
+# id, so they still hide by name as before.
+name_only_completed = [n for n in completed if n not in id_backed_names]
 
 # Load removed items
 try:
@@ -517,10 +529,15 @@ for t in unique:
     raw = t['content']
     clean = strip_ann(raw).lower()
     prefix = clean.split(' - ')[0]
+    # Hide by id first: definitive, and immune to same-name collisions.
+    if t.get('id') is not None and str(t['id']) in completed_ids:
+        continue
     # removed entries may be truncated prefixes (fzf middle-truncates long
     # names in the defer/split bindings) — match by startswith, not equality
-    # (regression 2026-06-06: split task stayed in the list)
-    if (clean in completed or prefix in completed
+    # (regression 2026-06-06: split task stayed in the list). Name hide uses
+    # name_only_completed so an id-backed completion can't suppress a different
+    # open task with the same name (regression 2026-06-26: 'stats').
+    if (clean in name_only_completed or prefix in name_only_completed
             or any(clean == r or (r and clean.startswith(r)) for r in removed)):
         continue
 
@@ -830,8 +847,10 @@ for l in labels:
         break
 # did-fast splits its input on commas/semicolons — a task name containing
 # one would be parsed as multiple items, detaching [pts]/@label from the
-# name and scattering the points (regression 2026-06-06: "Rev on ground
-# transit. Buy nightshade, 2" logged its 10 points as a task named "2")
+# name and scattering the points (regression 2026-06-06: a name like
+# 'Rev on ground transit. Buy nightshade, 2' logged its 10 points as '2').
+# NB: NO bare double quotes in this comment — they terminate the enclosing
+# python -c string and silently break the whole split (see line ~551).
 safe_name = re.sub(r'[,;]+', ' ', clean)
 df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
                 '--points-only', f'{safe_name} [{pts_today}] {label_arg}'],
@@ -1110,14 +1129,21 @@ while true; do
   fi
   DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
     'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
+  # name -> Todoist id map for tasks closed today. Lets the list builder hide a
+  # completed task by its id (collision-proof) instead of only by name, so one
+  # task's completion never suppresses a different open task with the same name.
+  DONE_IDS=$(jq -c --arg today "$LOCAL_TODAY" \
+    'if .date == $today then (.ids // {}) else {} end' "$DONE" 2>/dev/null || echo '{}')
 
   # The running-timer line is owned by the background ticker (footer, top line);
   # worker status now lives in the header. No footer string is built here.
   session_exclude=$(jq -c -R -s 'split("\n") | map(select(. != ""))' < "$DTD_SESSION")
   all_completed=$(echo "[$DONE_NAMES, $session_exclude]" | jq -c 'add | map(ascii_downcase)')
 
-  # Write completed list to file to avoid shell quoting issues (apostrophes in task names)
-  echo "$all_completed" > "$DTD_DONE_FILE"
+  # Write {date,names,ids} so the list builder can hide by id AND name. Session
+  # completions contribute names only (no id); those still hide by name.
+  jq -cn --arg today "$LOCAL_TODAY" --argjson names "$all_completed" --argjson ids "$DONE_IDS" \
+    '{date: $today, names: $names, ids: $ids}' > "$DTD_DONE_FILE"
 
   # Generate task list via reloadable script (supports colors + removal)
   # Pass done file path instead of JSON string to avoid quoting issues

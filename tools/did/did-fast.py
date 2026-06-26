@@ -1839,8 +1839,15 @@ end tell'''
     for r in fast:
         if r.fen_points:
             completed_points[r.item.name] = r.fen_points
+    # Record the Todoist id of every task we actually closed, so dtd hides by id
+    # (collision-proof) and a completed task can't suppress a different open task
+    # sharing its annotation-stripped name.
+    completed_ids = {id_to_name[tid]: tid
+                     for tid, (ok, _err) in close_results.items()
+                     if ok and tid in id_to_name}
     if completed_names:
-        mc.append_names(completed_names, points=completed_points)
+        mc.append_names(completed_names, points=completed_points,
+                        ids=completed_ids or None)
 
     # 8. Build output
     output = {"results": [], "agent_needed": []}

@@ -98,7 +98,8 @@ def _atomic_write(path: Path, data: dict) -> None:
 
 
 def append_names(new_names: list[str], *, today: str | None = None,
-                 path: Path | None = None, points: dict | None = None) -> dict:
+                 path: Path | None = None, points: dict | None = None,
+                 ids: dict | None = None) -> dict:
     """Append names to completed-today.json with dedup + date gate.
 
     Returns the resulting dict (unwritten if path is a stub, written if path is real).
@@ -106,6 +107,12 @@ def append_names(new_names: list[str], *, today: str | None = None,
 
     `points` is an optional dict mapping name -> int (分 value). Merged into
     the "points" key in the JSON so enrichment scripts can sum per-block 分.
+
+    `ids` is an optional dict mapping name -> Todoist task id. Merged into the
+    "ids" key so dtd can hide a completed task by its id, not just its name — a
+    completed task then never suppresses a *different* still-open task that
+    shares the same annotation-stripped name (regression 2026-06-26: completing
+    `stats [10]` hid an unrelated open `stats`).
 
     `path` resolves to the module-level `COMPLETED` constant at call time when
     omitted. Re-reading it via the module means tests can monkey-patch
@@ -124,13 +131,15 @@ def append_names(new_names: list[str], *, today: str | None = None,
 
         # Date gate: different date → reset names.
         if data.get("date") != today:
-            data = {"date": today, "names": [], "points": {}}
+            data = {"date": today, "names": [], "points": {}, "ids": {}}
 
-        # Ensure points/timestamps dicts exist (backwards compat)
+        # Ensure points/timestamps/ids dicts exist (backwards compat)
         if "points" not in data:
             data["points"] = {}
         if "timestamps" not in data:
             data["timestamps"] = {}
+        if "ids" not in data:
+            data["ids"] = {}
 
         # Dedup existing names first (self-heal any pre-existing dupes).
         data["names"] = _dedup_preserve_order(data["names"])
@@ -152,6 +161,13 @@ def append_names(new_names: list[str], *, today: str | None = None,
                 if k and pts:
                     data["points"][k] = pts
 
+        # Merge name -> Todoist id map (id-based dtd hide)
+        if ids:
+            for name, tid in ids.items():
+                k = _normalize(name)
+                if k and tid:
+                    data["ids"][k] = str(tid)
+
         _atomic_write(path, data)
         return data
     finally:
@@ -166,7 +182,7 @@ def remove_names(names: list[str], *, path: Path | None = None) -> dict:
 
     Removal is keyed on `_dup_key` (lowercase + annotation-strip) so an undo
     of `buy plants [20]` clears the stored `buy plants` entry. Also clears the
-    matching `points` and `timestamps` keys. Locked with flock like
+    matching `points`, `timestamps`, and `ids` keys. Locked with flock like
     append_names. Returns the resulting dict.
     """
     if path is None:
@@ -182,7 +198,7 @@ def remove_names(names: list[str], *, path: Path | None = None) -> dict:
         data = _load(path)
         kept = [n for n in data["names"] if _dup_key(n) not in remove_keys]
         data["names"] = kept
-        for bucket in ("points", "timestamps"):
+        for bucket in ("points", "timestamps", "ids"):
             if isinstance(data.get(bucket), dict):
                 data[bucket] = {k: v for k, v in data[bucket].items()
                                 if _dup_key(k) not in remove_keys}

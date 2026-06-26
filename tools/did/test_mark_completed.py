@@ -65,3 +65,33 @@ def test_atomic_write_no_tmp_leftover(tmp_path: Path) -> None:
     mc.append_names(["x"], path=f)
     tmp = f.with_suffix(f.suffix + ".tmp")
     assert not tmp.exists()
+
+
+def test_ids_recorded_for_id_based_hide(tmp_path: Path) -> None:
+    """Completed task ids are stored under .ids keyed by normalized name, so dtd
+    can hide by id (collision-proof) instead of only by name."""
+    f = tmp_path / "completed-today.json"
+    mc.append_names(["stats"], path=f, ids={"stats": "AAA"})
+    data = json.loads(f.read_text())
+    assert data["ids"] == {"stats": "AAA"}
+
+
+def test_ids_reset_on_day_change(tmp_path: Path) -> None:
+    """A stale-date file drops yesterday's ids on the next append."""
+    f = tmp_path / "completed-today.json"
+    f.write_text(json.dumps({"date": "1999-01-01", "names": ["old"],
+                             "ids": {"old": "OLD"}}))
+    result = mc.append_names(["fresh"], path=f, ids={"fresh": "NEW"})
+    assert result["ids"] == {"fresh": "NEW"}
+    assert "old" not in result["ids"]
+
+
+def test_remove_names_clears_id(tmp_path: Path) -> None:
+    """Undo (remove_names) also clears the task's recorded id so it can't keep
+    hiding a re-opened task."""
+    f = tmp_path / "completed-today.json"
+    mc.append_names(["buy plants"], path=f, ids={"buy plants": "PID"})
+    mc.remove_names(["buy plants [20]"], path=f)  # undo passes annotated form
+    data = json.loads(f.read_text())
+    assert data["ids"] == {}
+    assert "buy plants" not in data["names"]
