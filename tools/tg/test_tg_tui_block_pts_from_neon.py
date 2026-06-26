@@ -46,6 +46,30 @@ def test_residual_block_mirrors_neon_value(monkeypatch):
     assert m._block_display_pts("酉") == 0, "a block Neon shows empty is 0"
 
 
+def test_residual_block_before_clock_mirrors_neon(monkeypatch):
+    """Regression (2026-06-26): 午 was the first unlocked block (residual value
+    215.5 ≈ 216) while the clock had moved PAST it into 未. The stale pre-fix
+    process skipped 午 (residual) and pinned the running total to the clock
+    block, so 午 displayed 0 against Neon's 216. With the fix, 午 mirrors its
+    Neon cell value regardless of where the clock sits."""
+    m = _load_tui()
+    # Today's real shape: 卯/辰/巳 locked literals, 午 = residual (216), rest 0.
+    m.STATE.block_points = {"卯": 75, "辰": 256, "巳": 225, "午": 216}
+    m.STATE.block_running_pts = 216  # stale reconstruction must not leak elsewhere
+    fixed = dtm.datetime(2026, 6, 26, 12, 30, tzinfo=m.TZ)  # clock in 未, PAST 午
+
+    class _DT(dtm.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(m.dt, "datetime", _DT)
+
+    assert m._block_display_pts("午") == 216, "午 mirrors Neon's residual value, not 0"
+    assert m._block_display_pts("巳") == 225, "locked literal still shown"
+    assert m._block_display_pts("未") == 0, "clock block not re-attributed the residual"
+
+
 def test_no_reattribution_to_clock_block_when_data_present(monkeypatch):
     """With block_points populated, the clock block must NOT inherit the running
     residual via Σ−locked. Guards the double-display edge: residual in 申, clock
