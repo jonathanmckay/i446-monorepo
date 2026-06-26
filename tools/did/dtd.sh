@@ -667,8 +667,8 @@ REMOVED="PLACEHOLDER_REMOVED"
 CACHE_FILE="PLACEHOLDER_CACHE"
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 
-task="$1"
-task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content
+task_id="$1"
+task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content (display/clean only)
 
 # Extract [N] and (N) from task
 total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
@@ -712,10 +712,10 @@ remaining_desc = sys.argv[5]
 duration = sys.argv[6]
 hdr_file = sys.argv[7]
 removed_file = sys.argv[8]
+task_id = sys.argv[9]
 
 remaining_pts = max(0, total - pts_today) if total > 0 else 0
 
-# Search for the task
 def api(method, path, body=None):
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(f'{BASE}{path}', data=data, method=method, headers=HDR)
@@ -723,26 +723,19 @@ def api(method, path, body=None):
         raw = resp.read()
         return json.loads(raw) if raw else None
 
-# Find task by substring in today|overdue
-tasks = []
-cursor = None
-for _ in range(3):
-    url = f'{BASE}/tasks/filter?query=today%20%7C%20overdue&limit=200'
-    if cursor: url += f'&cursor={cursor}'
-    req = urllib.request.Request(url, headers=HDR)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read())
-    batch = data if isinstance(data, list) else data.get('results', [])
-    tasks.extend(batch)
-    cursor = data.get('next_cursor') if isinstance(data, dict) else None
-    if not cursor: break
-
-clean_lower = clean.lower()
-matches = [t for t in tasks if clean_lower in t.get('content','').lower()]
-if not matches:
-    with open(hdr_file, 'w') as f: f.write(f'? split: task not found')
+# Fetch the EXACT task by the id dtd passed us. The old path re-searched
+# 'today | overdue' and substring-matched on the (possibly munged) display
+# name, which silently failed after all three dialogs for any dtd task outside
+# that window (weekly/1neon habits, future-due goals) or whose name didn't
+# substring-match — the user answered every prompt and got nothing (regression
+# 2026-06-26). Fetching by id is scope-independent and unambiguous.
+try:
+    task = api('GET', f'/tasks/{task_id}')
+except Exception:
+    task = None
+if not task or not task.get('id'):
+    with open(hdr_file, 'w') as f: f.write('? split: task not found')
     sys.exit(1)
-task = matches[0]
 tid = task['id']
 labels = task.get('labels', [])
 project_id = task.get('project_id')
@@ -814,7 +807,7 @@ subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
 with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
 msg = f'✂ +{pts_today} today / [{remaining_pts}] deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id"
 
 SPLITEOF
 # Substitute placeholder paths
