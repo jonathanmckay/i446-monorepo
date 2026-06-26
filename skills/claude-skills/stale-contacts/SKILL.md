@@ -19,7 +19,7 @@ The script is the single implementation: it refreshes `last_contact` from Toggl/
 **Conventions the script enforces (keep manual edits consistent):**
 - Every auto-generated task is prefixed **😈** — the marker for "created by a daemon/process, not by hand." This applies to ALL automation that writes to Todoist, not only this sweep.
 - A d359 file may set `outreach_task: "call mom (20) [20]"` to override the default `Reach out to <Name> (overdue …)` body.
-- Tasks are labelled `["s897", "d359/<slug>"]` so time/points roll up to the contact.
+- Tasks are labelled `["<rollup>", "d359/<slug>"]` so time/points roll up to the contact. `<rollup>` is the contact's domain: a whitelisted tag (家 for family, xk87/xk88 social) from the d359 file's `tags:`, else `s897` (the default for all work/career contacts). See `ROLLUP_DOMAINS` in the script to divert more domains.
 
 The steps below are reference for the logic the script implements.
 
@@ -73,7 +73,7 @@ For each overdue contact, create a Todoist task using the `add-tasks` MCP tool:
   - `[Name]` = the `title` from frontmatter (or filename if no title)
   - `[cadence]` = the cadence value (e.g., "monthly")
   - `[date]` = the `last_contact` date
-- **labels**: `["s897"]`
+- **labels**: `["<rollup>", "d359/<slug>"]` where `<rollup>` is the contact's domain (家 for family, else s897 — see whitelist above)
 - **priority**: `"p3"`
 - **dueString**: `"today"`
 
