@@ -55,6 +55,24 @@ def slug_of(path: Path) -> str:
     return re.sub(r"[ -]d359$", "", path.stem).strip().rstrip("-")
 
 
+# Tags that are real outreach-time rollup domains. A d359 file carrying one of
+# these in `tags:` routes its outreach task/points there instead of the s897
+# default. Everything else (h335 work contacts, junk tags) stays on s897, which
+# is where person-outreach has always rolled up. Extend this set to divert more
+# domains (e.g. add "i9"/"m5x2" to bucket work-contact outreach as work time).
+ROLLUP_DOMAINS = {"家", "xk87", "xk88"}
+
+
+def rollup_label(fm: dict) -> str:
+    """The domain label a contact's outreach time/points roll up to. A whitelisted
+    domain tag (e.g. 家 for family) wins; otherwise s897 (social), the historical
+    catch-all for reaching out to people."""
+    raw = fm.get("tags", "")
+    tags = {t.strip() for t in raw.strip("[]").split(",") if t.strip()}
+    hits = tags & ROLLUP_DOMAINS
+    return next(iter(hits)) if hits else "s897"
+
+
 def overdue_contacts(today: date, d359_dir: Path = D359) -> list[dict]:
     """Pure-ish: scan d359 files, return overdue contacts as dicts with the
     fields needed to build a task. Skips files missing cadence/last_contact."""
@@ -80,6 +98,7 @@ def overdue_contacts(today: date, d359_dir: Path = D359) -> list[dict]:
             "slug": slug, "name": name, "cadence": cadence,
             "last_contact": lc, "days": days,
             "outreach_task": fm.get("outreach_task"),
+            "rollup": rollup_label(fm),
         })
     return out
 
@@ -104,11 +123,14 @@ def _token() -> str:
     return cfg["mcpServers"]["todoist"]["headers"]["Authorization"].split(None, 1)[1].strip()
 
 
-def _open_label_set(token: str) -> set[str]:
+def _open_label_set(token: str, rollups: set[str]) -> set[str]:
     """Return the set of d359/<slug> labels that already have an open task, so
-    we never create a second outreach task for a contact already queued."""
+    we never create a second outreach task for a contact already queued. Scans
+    across every rollup domain in play (e.g. s897, 家) so contacts that roll up
+    to 家 still dedupe correctly."""
     labels = set()
-    q = urllib.parse.quote("@s897")
+    query = " | ".join(f"@{r}" for r in sorted(rollups)) or "@s897"
+    q = urllib.parse.quote(query)
     url = f"{API}/tasks/filter?query={q}&limit=200"
     while url:
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
@@ -122,8 +144,8 @@ def _open_label_set(token: str) -> set[str]:
     return labels
 
 
-def _create(token: str, content: str, slug: str) -> None:
-    body = {"content": content, "labels": ["s897", f"d359/{slug}"],
+def _create(token: str, content: str, slug: str, rollup: str) -> None:
+    body = {"content": content, "labels": [rollup, f"d359/{slug}"],
             "priority": 2, "due_string": "today"}
     req = urllib.request.Request(
         f"{API}/tasks", data=json.dumps(body).encode(), method="POST",
@@ -148,7 +170,8 @@ def main() -> int:
     today = date.today()
     overdue = overdue_contacts(today)
     token = _token()
-    already = _open_label_set(token)
+    rollups = {c["rollup"] for c in overdue} | {"s897"}
+    already = _open_label_set(token, rollups)
 
     created, skipped = [], []
     for c in overdue:
@@ -157,7 +180,7 @@ def main() -> int:
             continue
         content = task_content(c)
         if args.apply:
-            _create(token, content, c["slug"])
+            _create(token, content, c["slug"], c["rollup"])
         created.append({"name": c["name"], "content": content, "days": c["days"]})
 
     print(f"{'CREATED' if args.apply else 'WOULD CREATE'} {len(created)} | skipped {len(skipped)} (already queued)")
