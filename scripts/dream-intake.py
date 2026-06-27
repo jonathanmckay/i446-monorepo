@@ -379,7 +379,16 @@ def _appfolio_work_orders():
     results = data.get("results", [])
 
     today = datetime.date.today()
+    # AppFolio work_order statuses (per workOrderReport.ts schema):
+    #   New, Assigned, Scheduled, In Progress, On Hold, Completed, Cancelled.
+    # An order is "open" iff it is not terminal (Completed / Cancelled).
+    # We compare on a normalized form to be resilient to casing or spacing
+    # drift, and we keep a status_counts dict so a future regression shows
+    # up as a clear distribution instead of silently zeroing out.
+    TERMINAL = {"completed", "cancelled", "canceled", "closed"}
+
     by_property: dict[str, dict] = {}
+    status_counts: dict[str, int] = {}
     for row in results:
         prop = row.get("property_name", row.get("property", "Unknown"))
         if prop not in by_property:
@@ -387,14 +396,24 @@ def _appfolio_work_orders():
         p = by_property[prop]
         p["total"] += 1
 
-        status = (row.get("status", "") or "").lower()
-        if "open" in status or "in progress" in status or "pending" in status:
+        status_raw = row.get("status") or ""
+        status_norm = " ".join(str(status_raw).strip().lower().split())
+        status_counts[status_norm] = status_counts.get(status_norm, 0) + 1
+
+        # Treat anything not terminal (and non-empty) as open.
+        if status_norm and status_norm not in TERMINAL:
             p["open"] += 1
-            # Check overdue
-            due = row.get("due_date", "")
+            # Check overdue. Field name varies across AppFolio report variants;
+            # try the most common candidates.
+            due = (
+                row.get("due_date")
+                or row.get("scheduled_end")
+                or row.get("scheduled_start")
+                or ""
+            )
             if due:
                 try:
-                    due_date = datetime.date.fromisoformat(due[:10])
+                    due_date = datetime.date.fromisoformat(str(due)[:10])
                     if due_date < today:
                         p["overdue"] += 1
                 except ValueError:
@@ -407,6 +426,7 @@ def _appfolio_work_orders():
         "total_work_orders": len(results),
         "total_open": total_open,
         "total_overdue": total_overdue,
+        "status_counts": status_counts,
         "by_property": by_property,
     }
 
