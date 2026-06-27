@@ -1820,10 +1820,32 @@ end tell'''
     # 0neon recurring tasks that may be completed in advance
     ADVANCE_ALLOWED = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
     today_str = date.today().isoformat()
+    # Idempotency source of truth: a recurring habit already in today's
+    # completed-today.json must NOT be closed again. Each close advances an
+    # "every day" recurrence by a day, so a same-day double-tap drifts the due
+    # date past today and the habit silently vanishes from dtd (regression
+    # 2026-06-27: 0t drifted to due-tomorrow). completed-today is authoritative
+    # regardless of cache/Todoist due-date lag, which the due-date guard below
+    # can miss. Date-gated so a stale file can't suppress a fresh day.
+    _ct = mc._load(mc.COMPLETED)
+    done_today = ({mc._normalize(n) for n in _ct.get("names", [])}
+                  if _ct.get("date") == today_str else set())
     for r in fast:
         if r.todoist_task:
             tid = r.todoist_task["id"]
             id_to_name[tid] = r.item.name
+            # Already completed today + recurring → skip the re-close so the
+            # recurrence doesn't advance a second time.
+            if (r.todoist_task.get("recurring")
+                    and mc._normalize(r.item.name) in done_today):
+                future_skipped.append({
+                    "id": tid,
+                    "name": r.item.name,
+                    "content": r.todoist_task.get("content", ""),
+                    "due": r.todoist_task.get("due", ""),
+                    "warning": "already done today (skipped re-close to avoid recurrence drift)",
+                })
+                continue
             # Guard: don't close tasks due in the future (prevents double-tap on recurring)
             task_due = r.todoist_task.get("due", "")
             if task_due and task_due > today_str:
