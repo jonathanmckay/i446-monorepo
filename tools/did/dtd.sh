@@ -484,10 +484,20 @@ def rjust_est(s, cols):
     return head + ' ' * pad + est
 
 # Build task list in priority order
+import datetime as _dt
+_tomorrow = (_dt.date.fromisoformat(today) + _dt.timedelta(days=1)).isoformat()
 sections = []
+# Daily habits (0neon/夜neon) recur every day; if one over-advances (e.g. it
+# got completed twice in a day, drifting its Todoist due +1) a strict due<=today
+# bound silently hides it from today's list (regression 2026-06-27: 0t due
+# tomorrow vanished). Show daily habits through tomorrow and rely on the
+# completed-today filter below to hide ones actually done today. Weekly (1neon)
+# and critical-path (关键路径) tasks keep the strict today bound.
+_daily = ('0neon', '夜neon')
 for key in ['0neon', '1neon', '关键路径', '夜neon']:
+    bound = _tomorrow if key in _daily else today
     sections.extend([t for t in d.get(key, []) if isinstance(t, dict)
-                     and t.get('due') and t['due'] <= today])
+                     and t.get('due') and t['due'] <= bound])
 # #0g tasks from today
 today_tasks = [t for t in d.get('today', []) if isinstance(t, dict)
                and t.get('due') and t['due'] <= today]
