@@ -52,11 +52,13 @@ def _stub(monkeypatch, seen_titles):
     # No goals yet for the current block, so the goal card must fire.
     monkeypatch.setattr(m, "read_block_goals_with_status", lambda: {})
     monkeypatch.setattr(m.threading, "Thread", _DummyThread)
-    monkeypatch.setattr(m.time, "sleep", lambda _: None)
 
     def _interrupt(*a, **k):
-        raise KeyboardInterrupt   # break the idle "Start timer?" / idle loop
+        # Breaks the post-cards idle loop (its time.sleep) and the "Start timer?"
+        # prompt, so main() returns instead of spinning forever.
+        raise KeyboardInterrupt
 
+    monkeypatch.setattr(m.time, "sleep", _interrupt)
     monkeypatch.setattr(m.console, "input", _interrupt)
 
     def fake_prompt(card_num, total, title, body, **k):

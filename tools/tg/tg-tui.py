@@ -1556,11 +1556,10 @@ def render_all() -> list[tuple[str, str]]:
     return parts
 
 
-def render_bottom_bar() -> list[tuple[str, str]]:
-    """Pinned bar: current timer + flash + hints. Lives outside the scroll area."""
-    parts = render_current_bottom()
-    parts += render_footer()
-    return parts
+# NB: the current-timer mirror (render_current_bottom) is pinned ABOVE the input
+# box; the key-hint/flash line (render_footer) is pinned BELOW it — mirroring
+# Claude Code, where the shortcut hints sit under the prompt. See the root
+# HSplit for the ordering.
 
 
 # ─── Command execution ─────────────────────────────────────────────────────
@@ -1682,11 +1681,10 @@ main_window = Window(
     width=Dimension(preferred=WIDTH_HINT),
 )
 
-# Pinned bottom bar: current timer + flash/hint (never scrolls). Two lines so
-# the input box below sits flush at the very bottom of the screen.
+# Pinned current-timer mirror, just above the input box (never scrolls).
 bottom_bar = Window(
-    content=FormattedTextControl(render_bottom_bar),
-    height=2,  # timer line + single flash/hint line
+    content=FormattedTextControl(render_current_bottom),
+    height=1,  # timer line only; key hints render below the input
     wrap_lines=False,
 )
 
@@ -1710,10 +1708,13 @@ input_window = Window(
 )
 prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1, width=Dimension.exact(3))
 
+# Key-hint / flash line pinned BELOW the input box (Claude Code style).
+footer_window = Window(content=FormattedTextControl(render_footer), height=1, wrap_lines=False)
+
 from prompt_toolkit.layout import VSplit  # noqa: E402
 
 input_row = VSplit([prompt_window, input_window])
-root = HSplit([main_window, bottom_bar, rule_window, input_row])
+root = HSplit([main_window, bottom_bar, rule_window, input_row, footer_window])
 
 style = Style.from_dict({
     "header": "bold cyan",

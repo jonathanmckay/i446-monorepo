@@ -90,8 +90,13 @@ run. Yesterday's full content stays recoverable in the v_logs snapshot.
 ## Card Ordering
 
 Initial pass (on launch):
-1. Ritual cards — صلاة, time-gap audit, -1g (instant, file reads)
+1. Ritual cards — صلاة, then **-1g** (the goal card leads the queue)
 2. Eat card — "What did you eat during \<block\>?" → `/ate`
+
+The previous-block **time-gap audit** ("你HHMM做了什么?") is **swallowed in
+`/inbound`** (skip_comms) so it can't bury the current block's goal card. `/-2n`
+still runs the gap audit. The gap-gathering is gated on `not skip_comms` in
+`-2n.py`.
 
 After cards: idle on the -1₲ goal panel until the 2h block changes (the wrapper
 then restarts with a fresh ritual pass). The ibx0 comms stream is skipped in the
