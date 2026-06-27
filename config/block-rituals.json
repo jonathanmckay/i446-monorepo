@@ -1,0 +1,45 @@
+{
+  "_note": "Block-ritual (-1neon) definitions. Read by scripts/build-order-daemon.py (per-block card creation + -1t/-1l retrospective eval) and tools/did/did-fast.py (--ritual completion). All points go to 0分!P (the -1₦ column) and NOWHERE else. P is always written via an idempotent SET-from-block-headers recompute, never appended. NOT managed by register-habit.py.",
+  "label": "-1neon",
+  "auto_marker": "😈",
+  "blocks": ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"],
+  "rituals": [
+    {
+      "tag": "سمش",
+      "emoji": "☀️",
+      "points": 1,
+      "mode": "manual",
+      "desc": "salah / prayer for this block"
+    },
+    {
+      "tag": "-1g",
+      "emoji": "🎯",
+      "points": 3,
+      "mode": "manual",
+      "desc": "set goals for this block"
+    },
+    {
+      "tag": "-1ibx",
+      "emoji": "📧",
+      "points": 3,
+      "mode": "manual",
+      "desc": "process inbox for this block"
+    },
+    {
+      "tag": "-1t",
+      "emoji": "⏱️",
+      "points": 3,
+      "mode": "auto",
+      "criterion": "toggl_categorized_min>=115",
+      "desc": "previous block only: >=115 of 120 min categorized (Toggl entry with a project) in the block window"
+    },
+    {
+      "tag": "-1l",
+      "emoji": "✅",
+      "points": 3,
+      "mode": "auto",
+      "criterion": "all_block_completions_pointed",
+      "desc": "previous block only: every Todoist task completed in the block window carried points (>0); empty block = not satisfied"
+    }
+  ]
+}
