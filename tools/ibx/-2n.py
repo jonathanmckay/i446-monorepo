@@ -506,6 +506,40 @@ def run_did(habit):
     )
 
 
+def complete_ritual(tag: str) -> dict:
+    """Complete one block ritual (-1neon card): closes the demon-created Todoist
+    task, stamps the ritual emoji on the current block, and SETs 0分!P from the
+    block headers (instant -1₦ credit). Delegates to `did-fast --ritual` so
+    points land in P only and the write is idempotent. Non-fatal: on any error
+    the daemon's turnover reconcile still scores the emoji, so we just return {}.
+
+    Returns the helper's JSON dict (keys: p_total, p_write, todoist, ...)."""
+    did_fast = Path(__file__).resolve().parent.parent / "did" / "did-fast.py"
+    try:
+        r = subprocess.run(
+            ["python3", str(did_fast), "--ritual", tag],
+            capture_output=True, text=True, timeout=45,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout)
+    except Exception:
+        pass
+    return {}
+
+
+def _ritual_credit_line(tag: str, res: dict) -> None:
+    """Print a one-line confirmation after a ritual card. P (-1₦) is credited by
+    the daemon at the block boundary, so we confirm the card close + emoji here,
+    not a point total."""
+    if not res:
+        return
+    td = res.get("todoist", {})
+    if td.get("closed"):
+        console.print(f"[green]  ✓ {tag} card done · +{res.get('points','?')} -1₦ at block close[/green]")
+    elif res.get("stamped"):
+        console.print(f"[dim]  · {tag} {res.get('emoji','')} stamped · +{res.get('points','?')} -1₦ at block close[/dim]")
+
+
 def spawn_ate_background(food_text):
     """Fire-and-forget: spawn `claude -p /ate <food_text>` as a detached
     subprocess. /ate is a Claude skill (parses food/kcal/protein, writes the
@@ -1569,6 +1603,8 @@ def main(skip_comms=None):
                 pass
             set_term_color("black")
             write_prayer_marker(block_name)
+            # Close the -1neon سمش card + instant -1₦ credit (daemon backstops).
+            _ritual_credit_line("سمش", complete_ritual("سمش"))
 
         # ── Card 1.5: Time gap audit (one card per block) ─────────────
         for bg_name, bg_start, bg_end, bg_gaps in block_gaps:
@@ -1670,11 +1706,15 @@ def main(skip_comms=None):
                     current_goals = existing_goals + [
                         g for g in parsed_goals if g not in existing_goals
                     ]
+                    # Goals are set → close the -1neon -1g card + instant credit.
+                    _ritual_credit_line("-1g", complete_ritual("-1g"))
                 else:
                     console.print(f"[red]  ⚠ failed to write goals to build order[/red]")
             elif existing_goals:
                 # Kept existing goals; make sure the idle panel shows them.
                 current_goals = list(existing_goals)
+                # Goals already exist this block → close the -1g card + credit.
+                _ritual_credit_line("-1g", complete_ritual("-1g"))
 
         # ── Card 3: eat (rituals-only / inbound) ──────────────────────
         # Ask what was eaten this block; pass the raw answer to /ate.
@@ -1730,6 +1770,8 @@ def main(skip_comms=None):
         console.print(Rule("[dim]Inbox[/dim]", style="dim"))
         # Mark that we reached inbox processing for this block
         write_inbox_marker(block_name)
+        # Close the -1neon -1ibx card + instant -1₦ credit (📧).
+        _ritual_credit_line("-1ibx", complete_ritual("-1ibx"))
         import ibx0
         ibx0.main()
 

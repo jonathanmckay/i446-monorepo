@@ -1003,26 +1003,6 @@ end tell'''
     return script
 
 
-def build_p_set_script(formula: str, target_date: str) -> str:
-    """Build AppleScript that SETs 0分!P (the -1₦ column) for today's row to
-    `formula` (e.g. '=0+4+10'). SET, not append — idempotent, mirrors the
-    daemon's neon_set_p so the completion-time preview and the turnover
-    reconcile never double-count."""
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
-    set todayRow to 0
-    repeat with i from 2 to 200
-        if (string value of range ("B" & i) of ws) = "{target_date}" then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_date} not found in 0分"
-    set formula of range ("P" & todayRow) of ws to "{formula}"
-    return "OK:P row=" & todayRow
-end tell'''
-
-
 def build_hcbi_script(appends: list[tuple[str, int]], target_date: str) -> Optional[str]:
     """Build AppleScript for batch hcbi appends. appends = [(col_letter, minutes), ...]
     Uses column B for date lookup (M/D format), appends +N to formula."""
@@ -1471,13 +1451,14 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
 
 
 def run_ritual(tag: str) -> dict:
-    """Complete one block ritual (-1neon card): close its open Todoist task,
-    stamp the ritual emoji on the current 地支 block in build-order.md, and SET
-    0分!P from the freshly-stamped block headers. Points land ONLY in P.
+    """Complete one block ritual (-1neon card): close its open Todoist task and
+    stamp the ritual emoji on the current 地支 block in build-order.md.
 
-    P is SET (not appended) from a full re-score of the day's block headers, so
-    this completion-time write is idempotent and agrees with the daemon's
-    turnover reconcile (the daemon is authoritative — it also validates ⏱️/✅).
+    Points (-1₦, 0分!P) are NOT written here — see the note in the body. The
+    daemon's turnover reconcile is the single authoritative P writer; it scores
+    only fired blocks and validates 🎯/⏱️/✅, which a completion-time write
+    cannot. This keeps P idempotent and free of the future/unvalidated-block
+    overcount that a naive header sum would produce.
     """
     import sys as _s
     _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
@@ -1536,31 +1517,14 @@ def run_ritual(tag: str) -> dict:
         bo.write_text(new_text, encoding="utf-8")
     out["stamped"] = changed
 
-    # 3. Re-score ALL block headers and SET 0分!P (idempotent preview).
-    parts, total, formula = nb.score_day(new_text)
-    out["p_total"] = total
-    out["p_formula"] = formula
-    td = date.today()
-    target_date = f"{td.month}/{td.day}"
-    res = ix_run(build_p_set_script(formula, target_date), timeout=30.0)
-    out["p_write"] = {"ok": res.returncode == 0, "output": (res.stdout or "").strip()}
-    if res.returncode != 0:
-        out["p_write"]["error"] = (res.stderr or "").strip() or f"ix-osa exit {res.returncode}"
-    elif "ERROR" in (res.stdout or ""):
-        out["p_write"]["ok"] = False
-        out["p_write"]["error"] = res.stdout.strip()
-
-    # 4. Fire-and-forget dashboard cache refresh (P feeds the -1₦ card).
-    if out["p_write"]["ok"]:
-        try:
-            subprocess.Popen(
-                ["curl", "-fsS", "-X", "POST", "--max-time", "2",
-                 "http://ix:5558/api/refresh"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except Exception:
-            pass
+    # NOTE: we deliberately do NOT write 0分!P here. P is owned solely by the
+    # daemon's reconcile_p_for_day at the 2h block boundary, which scores only
+    # FIRED blocks and validates 🎯/⏱️/✅ against live Toggl/Todoist. A
+    # completion-time write can't do either: the build order carries stamps on
+    # not-yet-fired and unvalidated blocks, so a naive header sum overcounts
+    # (measured 63 vs the daemon's correct 18). Closing the card + stamping the
+    # emoji is enough — the daemon credits P for this block when it closes.
+    out["p_note"] = "credited at block turnover by daemon reconcile"
     return out
 
 
