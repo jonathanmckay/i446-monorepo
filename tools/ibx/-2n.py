@@ -1467,9 +1467,12 @@ def main(skip_comms=None):
     # nothing had been set. Check existence, not just open goals.
     goals_set = bool(block_status_items)
 
-    # Check time gaps in all past blocks (separate card per block)
+    # Check time gaps in all past blocks (separate card per block). These are
+    # "prompts from previous blocks" — in /inbound (skip_comms) they bury the
+    # current block's goal card, so swallow them entirely there; the goal card
+    # should lead the queue. /-2n keeps the gap audit.
     block_gaps = []  # list of (block_name, block_start, block_end, gaps)
-    if idx > 0:
+    if idx > 0 and not skip_comms:
         for bi in range(idx):
             bname, bstart, bend = BLOCKS[bi]
             gaps = check_time_gaps(bstart, bend)

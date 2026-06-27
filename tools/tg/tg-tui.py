@@ -1757,9 +1757,16 @@ class _NoTimerFlash(StyleTransformation):
         return _no_timer_flash_on()
 
 
+# mouse_support=True so prompt_toolkit OWNS the terminal mouse mode (enables
+# 1000/1006 on start, parses + consumes wheel/click events, disables on exit).
+# Without it, the mouse-tracking mode left enabled by the spawning app (Claude
+# Code / cmux) leaks raw SGR wheel packets straight into the input buffer on
+# scroll — a stream of junk characters (regression 2026-06-27). fzf and Claude
+# Code avoid this the same way: by claiming the mouse rather than ignoring it.
 app = Application(layout=Layout(root, focused_element=input_window),
                   key_bindings=kb, full_screen=True, style=style,
                   style_transformation=_NoTimerFlash(),
+                  mouse_support=True,
                   refresh_interval=0.1)
 
 
