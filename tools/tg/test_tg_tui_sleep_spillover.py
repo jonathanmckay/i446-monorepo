@@ -88,8 +88,8 @@ def test_sleep_cont_stops_at_wake():
 
 
 def test_render_morning_draws_sleep_continuation():
-    """Integration: sleeping through 辰 renders ◇ │ continuation rows under the
-    睡觉 header instead of three blank lines."""
+    """Integration: sleeping through 辰 puts a 睡觉 body row plus ◇ │ continuation
+    on the covered marks, under the bare 辰:00 header."""
     mod = _load_tui()
     today = _midnight()
     mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=10, minute=30))]
@@ -99,15 +99,15 @@ def test_render_morning_draws_sleep_continuation():
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
     frags = mod.render_morning()
     text = "".join(t for _, t in frags)
-    # 辰 block: header reads 睡觉, body rows carry the ◇ │ continuation glyphs.
-    chen_idx = text.index("─辰")
-    chen_block = text[chen_idx:text.index("─巳", chen_idx)]
+    chen_idx = text.index("辰:00")
+    chen_block = text[chen_idx:text.index("巳:00", chen_idx)]
     assert "睡觉" in chen_block
     assert "◇ │" in chen_block, f"expected sleep continuation, got:\n{chen_block}"
 
 
-def test_render_morning_headers_sleep_block():
-    """Integration: wake 07:03 + 新闻 after → 辰 header carries 睡觉, body 新闻."""
+def test_render_morning_sleep_and_entry_in_body():
+    """Integration: wake 07:03 + 新闻 after → 辰 header is the bare 辰:00 stamp;
+    both 睡觉 and 新闻 sit in the body."""
     mod = _load_tui()
     today = _midnight()
     mod.STATE.entries = [
@@ -119,6 +119,6 @@ def test_render_morning_headers_sleep_block():
     mod.detail_window = lambda: (today.replace(hour=8), today.replace(hour=12))
     frags = mod.render_morning()
     text = "".join(t for _, t in frags)
-    chen = [ln for ln in text.split("\n") if ln.startswith("─辰")]
-    assert chen and "睡觉" in chen[0], f"辰 header must read 睡觉, got: {chen}"
-    assert "新闻" in text
+    chen = [ln for ln in text.split("\n") if ln.startswith("辰:00")]
+    assert chen, f"expected a bare 辰:00 header, got lines: {[l for l in text.split(chr(10)) if '辰' in l]}"
+    assert "睡觉" in text and "新闻" in text

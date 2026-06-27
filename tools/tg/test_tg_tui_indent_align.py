@@ -1,10 +1,9 @@
-"""Regression: compact block body rows (render_morning/render_evening) must use
-the SAME leading indent as the detail band (render_detail). A past compact entry
-once carried two leading spaces while the detail band used one, so past time
-entries sat one space right of the future calendar (◇) rows."""
+"""Compact-block time-column layout (after the 2026-06-27 redesign): full-time
+rows have NO leading space (start at column 0); minutes-only continuation rows
+are indented two so the colon aligns under the full-time colon. The old
+single-leading-space alignment with the detail band was dropped on purpose."""
 import datetime as dt
 import importlib.util
-import re
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -26,30 +25,13 @@ def _entry(desc, start, end, pid=None):
             "project_id": pid, "running": False, "id": 1}
 
 
-def _time_col(line):
-    """Index of the first digit (start of the HH:MM time column) in a body row."""
-    m = re.search(r"\d", line)
-    return m.start() if m else None
-
-
-def _body_indices(text):
-    out = set()
-    for ln in text.split("\n"):
-        if ln.startswith("─") or not ln.strip():
-            continue
-        if any(c.isdigit() for c in ln[:8]):
-            i = _time_col(ln)
-            if i is not None:
-                out.add(i)
-    return out
-
-
-def test_compact_body_uses_single_leading_space():
-    """A compact past block's entry rows start with exactly one leading space."""
+def test_compact_full_time_rows_have_no_leading_space():
+    """A full-time body row (hour rolled over) starts at column 0 — the 1-space
+    left pad was removed."""
     mod = _load_tui()
     today = dt.datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    # Two entries in 辰: the longer becomes the inline header, the shorter a body
-    # row (header rides the rule, so we assert indent on the body row).
+    # 辰 (06-08): deep work 06:00, quick task 07:30. The 07:30 row rolls the hour
+    # over, so it renders as a full `07:30` at column 0.
     mod.STATE.entries = [
         _entry("deep work", today.replace(hour=6), today.replace(hour=7, minute=30)),
         _entry("quick task", today.replace(hour=7, minute=30), today.replace(hour=7, minute=50)),
@@ -61,35 +43,30 @@ def test_compact_body_uses_single_leading_space():
     text = "".join(t for _, t in mod.render_morning())
     rows = [ln for ln in text.split("\n") if "quick task" in ln]
     assert rows, "expected a body row with the entry"
-    assert rows[0].startswith(" 0"), f"row must have ONE leading space, got {rows[0]!r}"
-    assert not rows[0].startswith("  "), f"row must not be double-indented: {rows[0]!r}"
+    assert rows[0].startswith("07:30"), f"full-time row at col 0, got {rows[0]!r}"
+    assert not rows[0].startswith(" "), f"no leading space, got {rows[0]!r}"
 
 
-def test_compact_and_detail_time_columns_align():
-    """Compact (past/future) and detail-band rows share one time-column index."""
+def test_minutes_only_rows_align_colon_under_full_time():
+    """A same-hour continuation row is `  :MM` (two-space indent) so its colon
+    sits under the colon of a full `HH:MM` row above."""
     mod = _load_tui()
     today = dt.datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    # Past compact entries + future gcal events, detail window mid-day.
+    # 辰: deep work 06:00 then nothing — body fills 06:30 / 07:00 marks. 06:30 is
+    # same hour as the header's 06, so it abbreviates to `  :30`.
     mod.STATE.entries = [
-        _entry("deep work", today.replace(hour=6, minute=10), today.replace(hour=7)),
-        _entry("now task", today.replace(hour=12, minute=5), today.replace(hour=12, minute=20)),
+        _entry("deep work", today.replace(hour=6), today.replace(hour=6, minute=20)),
     ]
     mod.STATE.entries_yday = []
     mod.STATE.block_points = {}
-    mod.STATE.events = [
-        {"start_dt": today.replace(hour=18, minute=10),
-         "end_dt": today.replace(hour=19), "summary": "standup", "project_id": None},
-    ]
-    mod.STATE.current = None
-    mod.STATE.current_known = True
+    mod.STATE.events = []
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
-
-    morning = _body_indices("".join(t for _, t in mod.render_morning()))
-    evening = _body_indices("".join(t for _, t in mod.render_evening()))
-    detail = _body_indices("".join(t for _, t in mod.render_detail()))
-
-    cols = morning | evening | detail
-    assert cols == {1}, (
-        f"all body rows must align at time-col index 1; got morning={morning}, "
-        f"evening={evening}, detail={detail}"
-    )
+    text = "".join(t for _, t in mod.render_morning())
+    min_rows = [ln for ln in text.split("\n") if ln.startswith("  :")]
+    assert min_rows, "expected at least one minutes-only continuation row"
+    for ln in min_rows:
+        assert ln[2] == ":", f"colon must sit at column 2, got {ln!r}"
+        full = [l for l in text.split("\n") if len(l) > 2 and l[:2].isdigit() and l[2] == ":"]
+        # Any full HH:MM row also carries its colon at column 2 → aligned.
+        for f in full:
+            assert f[2] == ":"

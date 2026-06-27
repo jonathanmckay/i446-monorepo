@@ -29,18 +29,35 @@ def _pick(mod, label, start, dur=30):
             "style": "", "dur_min": dur}
 
 
-def test_emojis_right_of_block_minute_stamp():
+def test_header_is_bare_block_stamp_entry_in_body():
+    """Non-focus PAST block: header is the bare `午:00 ☀️📧` :00 slot; the entry
+    sits in the body (no longer riding the header rule)."""
     mod = _load_tui()
     start = _midnight().replace(hour=12, minute=1)
     frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "☀️📧")
+    text = "".join(t for _, t in frags)
+    header = text.split("\n")[0]
+    assert header.startswith("午:00 ☀️📧"), f"header is block:00 + emojis, got: {header!r}"
+    assert "Blizz" not in header, "entry must not ride the header"
+    assert "Blizz" in text, "entry shows in the body"
+    assert not header.startswith("─"), "no dashed rule header anymore"
+
+
+def test_future_block_header_carries_event_with_minute_duration():
+    """Non-focus FUTURE block: the dominant upcoming event rides the header with
+    its duration as (N) minutes."""
+    mod = _load_tui()
+    start = _midnight().replace(hour=14, minute=0)
+    frags = mod._compact_block_lines(
+        "申", 14, [_pick(mod, "Strategy", start, dur=60)], 0, "☀️", is_future=True)
     header = "".join(t for _, t in frags).split("\n")[0]
-    assert "午:01 ☀️📧" in header, f"emojis must follow 午:01, got: {header!r}"
-    assert "午 ☀️📧:01" not in header
+    assert header.startswith("申:00 ☀️"), f"header is block:00 + emojis, got: {header!r}"
+    assert "Strategy" in header and "(60)" in header, f"event + (N) on header: {header!r}"
 
 
 def test_through_event_draws_continuation_in_empty_block():
-    """An event spanning the whole block (started earlier) → four ◇ │ rows,
-    not the untracked ┄ grid."""
+    """An event spanning the whole block (started earlier) → its 3 body marks
+    (the :00 slot is the bare header) draw ◇ │, not the untracked ┄ grid."""
     mod = _load_tui()
     today = _midnight()
     mod.STATE.events = [{
@@ -51,7 +68,7 @@ def test_through_event_draws_continuation_in_empty_block():
     assert set(cont) == {(12, 0), (12, 30), (13, 0), (13, 30)}
     frags = mod._compact_block_lines("未", 12, [], 0, "", cont=cont)
     text = "".join(t for _, t in frags)
-    assert text.count("◇ │") == 4
+    assert text.count("◇ │") == 3  # 12:30 / 13:00 / 13:30; 12:00 is the header
     assert "┄" not in text
 
 
@@ -66,13 +83,13 @@ def test_partial_coverage_mixes_grid_and_continuation():
     assert set(cont) == {(12, 0), (12, 30)}
     frags = mod._compact_block_lines("未", 12, [], 0, "", cont=cont)
     text = "".join(t for _, t in frags)
-    assert text.count("◇ │") == 2
-    assert text.count("┄" * 42) == 2  # 13:00 / 13:30 stay untracked grid
+    assert text.count("◇ │") == 1  # only 12:30 covered (12:00 is the header slot)
+    assert "┄" not in text          # empty marks render as just the time now
+    assert "13:00" in text          # uncovered marks: just the time
 
 
-def test_pads_after_header_event_continue_event():
-    """First (header) event runs the entire block → the 3 pad rows show the
-    half-hour marks after its start as ◇ │."""
+def test_future_header_event_spans_block_marks_continue():
+    """A 2h future event rides the header; its 3 body marks draw ◇ │."""
     mod = _load_tui()
     today = _midnight()
     start = today.replace(hour=14, minute=0)
@@ -81,15 +98,16 @@ def test_pads_after_header_event_continue_event():
     }]
     cont = mod._block_gcal_cont(14, today)
     frags = mod._compact_block_lines(
-        "申", 14, [_pick(mod, "Strategy", start, dur=120)], 0, "", cont=cont)
+        "申", 14, [_pick(mod, "Strategy", start, dur=120)], 0, "",
+        cont=cont, is_future=True)
     text = "".join(t for _, t in frags)
-    assert "14:30 " in text and "15:00 " in text and "15:30 " in text
-    assert text.count("◇ │") == 3
+    assert "Strategy (120)" in text.split("\n")[0]
+    assert text.count("◇ │") == 3  # 14:30 / 15:00 / 15:30
 
 
 def test_past_block_continues_finished_event_to_its_end():
-    """A long meeting that already happened keeps its ◇ │ rows in the morning
-    view through the event's end; tracked toggl rows still come first."""
+    """A long meeting that already happened keeps ◇ │ on the body marks it
+    covers; the tracked toggl entry takes a body row first."""
     mod = _load_tui()
     today = _midnight()
     mod.STATE.entries = [
@@ -106,9 +124,10 @@ def test_past_block_continues_finished_event_to_its_end():
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
     text = "".join(t for _, t in mod.render_morning())
     wu = [ln for ln in text.split("\n")]
-    block = "\n".join(wu[wu.index(next(l for l in wu if l.startswith("─午"))):][:4])
-    assert "blizz" in block, "toggl entry keeps the header"
-    assert block.count("◇ │") == 3, "pads continue the event: 10:30/11:00/11:30"
+    block = "\n".join(wu[wu.index(next(l for l in wu if l.startswith("午:00"))):][:4])
+    assert "blizz" in block, "toggl entry takes a body row"
+    # blizz@10:01 + the two fill marks 10:30/11:00 (both covered) → 2 ◇ │.
+    assert block.count("◇ │") == 2
 
 
 def test_transparent_and_allday_events_do_not_continue():

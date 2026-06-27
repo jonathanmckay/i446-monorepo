@@ -922,98 +922,113 @@ def _placeholder_style(now: dt.datetime | None = None) -> str:
     return "class:no_entry" if _gap_alarm_on(now) else "class:idle"
 
 
-def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None) -> list[tuple[str, str]]:
-    """Render one non-focus block as exactly 4 lines (header + 3 body).
+def _abbrev_tcol(hh: int, mm: int, prev_hour: int | None) -> tuple[str, int]:
+    """Time column for a body row, abbreviated. Full ``HH:MM`` when the hour
+    differs from the row above; otherwise minutes-only ``  :MM`` indented two so
+    the colon aligns under the hour column. No leading pad (col 0). Returns
+    (text, hour-to-carry-forward)."""
+    if prev_hour is not None and hh == prev_hour:
+        return f"  :{mm:02d}", prev_hour
+    return f"{hh:02d}:{mm:02d}", hh
 
-    The header rule carries the most important entry inline to conserve space:
-    ``─午:04 task ─────  12分``. Body rows carry the next entries by duration in
-    chronological order; an empty block shows dim half-hour gridlines instead.
 
-    picks: up to 4 normalized items, sorted chronologically, each a dict with
-    start_dt, time_str, label, style, dur_min. Past blocks fill these from
-    Toggl, future blocks from gcal — both render identically.
+def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
+                         is_future=False) -> list[tuple[str, str]]:
+    """Render one non-focus block as 4 lines: a ``午:00 ☀️📧`` header + 3 body.
 
-    cont: {(hour, minute): style} half-hour marks covered by a gcal event that
-    flows through the block (e.g. a 4h workshop started earlier). Covered marks
-    render as the focus band's ``◇ │`` continuation instead of blank/grid.
+    Header is the block's :00 slot. A FUTURE block carries its dominant upcoming
+    event inline with the duration as ``(N)`` minutes (``午:00 ☀️ standup (60)``);
+    a PAST block shows points right-aligned and keeps the header bare. Body rows
+    are the block's three later half-hour marks: each shows an entry (label +
+    duration) when one starts in that half-hour, else just the faint time. The
+    hour prints only when it rolls over (``13:00`` then ``  :30``). Future
+    durations read ``(N)``, past ones ``Nm``. Labels arrive Haiku-shortened
+    (event_title / dtd short names); truncate is only the width fallback.
+
+    picks: normalized items {start_dt, time_str, label, style, dur_min[, is_gap]},
+    chronological. cont is accepted for signature compatibility but no longer
+    drawn — empty marks render as just the time (per the block redesign).
     """
     out: list[tuple[str, str]] = []
-    non_gaps = [p for p in picks if not p.get("is_gap")]
-    dom = max(non_gaps, key=lambda p: p["dur_min"]) if non_gaps else None
-    blk_style = f"bold {dom['style']}".strip() if dom and dom["style"] else "class:dim"
-    pts_str = f" {pts}分" if pts else ""
     emoji_str = f" {emojis}" if emojis else ""
 
-    # ── header line (carries picks[0] inline when present) ──
-    # A gap never rides the header rule; an all-gap block gets a bare rule
-    # with every gap as a body row.
-    head = picks[0] if picks and not picks[0].get("is_gap") else None
-    if head:
-        # Block rule doubles as the first entry: ─午:04 ☀️📧-task─────  pts.
-        # Emojis sit to the right of the block:mm stamp, never inside it.
-        left = f"─{blk_name}:{head['start_dt'].minute:02d}{emoji_str}-"
-        task = truncate(head["label"], max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str) - 1))
-        trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(task) - dwidth(pts_str))
-        head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or blk_style)
-        out.append((blk_style, left))
-        out.append((head_sty, task))
-        out.append((blk_style, "─" * trail))
+    # ── header: the block's :00 slot ──
+    if is_future and picks:
+        head = picks[0]
+        body_picks = picks[1:]
+        left = f"{blk_name}:00{emoji_str} "
+        dur = f"({head['dur_min']})"
+        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(dur) - 1)
+        label = truncate(head["label"], avail)
+        head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or "class:future")
+        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(label) - dwidth(dur))
+        out.append(("class:dim", left))
+        out.append((head_sty, label))
+        out.append(("class:dim", " " * trail + dur + "\n"))
     else:
-        left = f"─{blk_name}{emoji_str} "
-        trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
-        out.append((blk_style, left + "─" * trail))
-    if pts_str:
-        out.append(("bold #ffffff", pts_str))
-    out.append((blk_style, "\n"))
+        body_picks = picks
+        left = f"{blk_name}:00{emoji_str}"
+        pts_str = f"{pts}分" if pts else ""
+        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
+        out.append(("class:dim", left + " " * trail))
+        if pts_str:
+            out.append(("bold #ffffff", pts_str))
+        out.append(("class:dim", "\n"))
 
-    # ── body lines (always 3, to keep every block 4 lines tall) ──
-    body = picks[1:4] if head else picks[:3]
-    for p in body:
-        dur = fmt_dur(p["dur_min"])
-        # Time column uses a single leading space so it aligns with the detail
-        # band's " HH:MM │ " gutter (7-col prefix: 1 space + 5-char time + 1).
-        space = max(1, WIDTH_HINT - 7 - len(dur) - 1)
-        out.append(("class:time", f" {p['time_str']} "))
+    # ── body: 3 half-hour marks after :00, entries on their slots ──
+    # Empty marks always render (this is what fixes a future block like 午
+    # dropping its 10:30 / 11:00 rows: the old code blank-padded partially-filled
+    # blocks instead of showing the remaining grid).
+    def _slot(p):
+        return (p["start_dt"].hour, 0 if p["start_dt"].minute < 30 else 30)
+    # Entries (and gaps) win the 3 rows; empty half-hour marks only fill what's
+    # left, so a real entry is never crowded out by a gridline.
+    entry_rows = sorted(
+        ((p["start_dt"].hour * 60 + p["start_dt"].minute,
+          p["start_dt"].hour, p["start_dt"].minute, p) for p in body_picks),
+        key=lambda r: r[0])
+    rows = entry_rows[:3]
+    if len(rows) < 3:
+        occupied = {_slot(p) for p in body_picks}
+        marks = [(hh * 60 + mm, hh, mm, None)
+                 for hh, mm in ((blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30))
+                 if (hh, mm) not in occupied]
+        rows = rows + marks[:3 - len(rows)]
+        rows.sort(key=lambda r: r[0])
+
+    prev_hour = blk_sh  # the header established this hour at its :00 slot
+    for _, hh, mm, p in rows:
+        tcol, prev_hour = _abbrev_tcol(hh, mm, prev_hour)
+        if p is None:
+            if cont and (hh, mm) in cont:
+                # A meeting started earlier flows through this slot: keep the
+                # ◇ │ continuation rather than a bare time.
+                out.append(("class:time", tcol + " "))
+                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
+            else:
+                # Genuinely empty: just the time, no fill.
+                out.append(("class:time", tcol))
+                out.append(("class:idle", "\n"))
+            continue
         if p.get("is_gap"):
-            # Untracked past stretch (≥ GAP_MIN): the ┄ fill pulses red↔grey
-            # ~every 0.5s to nag; the minutes stay solid red and readable.
+            # Untracked past stretch (≥ GAP_MIN): ┄ fill pulses red↔grey to nag.
+            dur = fmt_dur(p["dur_min"])
+            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - len(dur) - 1)
             fill_cls = "class:no_entry" if _gap_alarm_on() else "class:idle"
+            out.append(("class:time", tcol + " "))
             out.append((fill_cls, "┄" * space))
             out.append(("class:no_entry", f" {dur}\n"))
-        else:
-            # Placeholder entries pulse red↔grey like gaps until relabelled.
-            sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
-            out.append((sty, pad(truncate(p["label"], space), space)))
-            out.append(("class:dim", f" {dur}\n"))
-    marks = ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30))
-    if not picks:
-        # Empty block → all four 30-min placeholders under the header rule, so
-        # untracked time reads as an explicit (faint) grid to fill in. Marks a
-        # through-running event covers show ◇ │ instead of the grid.
-        for hh, mm in marks:
-            out.append(("class:time", f" {hh:02d}:{mm:02d} "))
-            if cont and (hh, mm) in cont:
-                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
-            else:
-                out.append(("class:idle", "┄" * max(0, WIDTH_HINT - 7) + "\n"))
-    else:
-        # Pad partially-filled blocks; covered marks after the last pick keep
-        # drawing the through-running event's ◇ │ continuation.
-        pad_marks = []
-        if cont:
-            last = max(p["start_dt"] for p in picks)
-            pad_marks = [
-                (hh, mm) for hh, mm in marks
-                if (hh, mm) in cont
-                and last.replace(hour=hh, minute=mm, second=0, microsecond=0) > last
-            ]
-        for i in range(3 - len(body)):
-            if i < len(pad_marks):
-                hh, mm = pad_marks[i]
-                out.append(("class:time", f" {hh:02d}:{mm:02d} "))
-                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
-            else:
-                out.append(("class:idle", "\n"))
+            continue
+        dur = f"({p['dur_min']})" if is_future else fmt_dur(p["dur_min"])
+        space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
+        sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
+        out.append(("class:time", tcol + " "))
+        out.append((sty, pad(truncate(p["label"], space), space)))
+        out.append(("class:dim", f" {dur}\n"))
+
+    # Pad to exactly 3 body rows so every block stays 4 lines tall.
+    for _ in range(3 - len(rows)):
+        out.append(("class:idle", "\n"))
     return out
 
 
@@ -1229,34 +1244,22 @@ def render_morning() -> list[tuple[str, str]]:
         picks = _past_block_picks(blk_name, merged)
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
         if sleep:
-            # Spillover sleep starts at the block boundary, so it is always
-            # chronologically first — it takes the header slot.
             picks = ([sleep] + picks)[:4]
         gaps = _block_gaps(blk_sh, blk_eh, cutoff)
         full_block = (blk_eh + 1 - blk_sh) * 60
-        if picks and gaps:
-            # Gaps compete with non-head entries for the 3 body rows; the
-            # header keeps its entry so the block rule stays meaningful.
-            rest = picks[1:] + gaps
-            rest.sort(key=lambda x: x["dur_min"], reverse=True)
-            rest = rest[:3]
-            rest.sort(key=lambda x: x["start_dt"])
-            picks = [picks[0]] + rest
-        elif gaps and not (len(gaps) == 1 and gaps[0]["dur_min"] >= full_block):
-            # No entry STARTS here but spillover from the prior block covers
-            # part of it: headerless rule + gap rows. A wholly untracked
-            # block keeps the existing faint placeholder grid instead.
-            gaps.sort(key=lambda x: x["dur_min"], reverse=True)
-            gaps = gaps[:3]
-            gaps.sort(key=lambda x: x["start_dt"])
-            picks = gaps
-        # Past blocks keep drawing a long meeting's ◇ │ continuation through
-        # the event's end; entries and red gap rows still take the rows first.
-        # Overnight sleep flowing through a block (e.g. 辰) draws the same
-        # continuation under its spillover header. gcal wins on any overlap.
+        # Drop a single gap that spans the whole (untracked) block — it would
+        # just restate the empty grid the body already draws.
+        if len(gaps) == 1 and gaps[0]["dur_min"] >= full_block:
+            gaps = []
+        # The header is now the bare :00 slot, so every entry and gap is a body
+        # row. _compact_block_lines merges them with the empty half-hour marks
+        # and caps at 3 rows.
+        body = picks + gaps
+        body.sort(key=lambda x: x["start_dt"])
         cont = {**_block_sleep_cont(blk_sh, cutoff), **_block_gcal_cont(blk_sh, cutoff)}
-        out += _compact_block_lines(blk_name, blk_sh, picks, pts,
-                                    bo_emojis.get(blk_name, ""), cont=cont)
+        out += _compact_block_lines(blk_name, blk_sh, body, pts,
+                                    bo_emojis.get(blk_name, ""), cont=cont,
+                                    is_future=False)
     return out
 
 
@@ -1496,7 +1499,8 @@ def render_evening() -> list[tuple[str, str]]:
             break
         picks = _future_block_picks(name, STATE.events)
         cont = _block_gcal_cont(sh, cutoff)
-        out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""), cont=cont)
+        out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
+                                    cont=cont, is_future=True)
     # Sleep marker
     rule_text = " 睡觉 "
     trail = max(0, WIDTH_HINT - 1 - len(rule_text))
