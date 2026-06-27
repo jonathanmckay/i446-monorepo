@@ -2755,17 +2755,33 @@ def dashboard():
     )
 
 
+# Endpoint-level TTL cache for /api/stats. The per-function _cached() layer
+# correctly invalidates on JSONL fingerprint changes, but live session writes
+# happen on nearly every request — so the fingerprint changes every call and we
+# pay the full ~8s recompute. A 30s blanket cache trades trivial staleness
+# (well under the human-eyeball threshold) for a 200x+ latency drop on repeat
+# polls (dashboard auto-refreshes, sibling tabs, etc.).
+_API_STATS_TTL_S = 30.0
+_api_stats_cache = {"ts": 0.0, "payload": None}
+
+
 @app.route('/api/stats')
 def api_stats():
     """API endpoint for raw stats"""
-    return jsonify({
+    now = time.time()
+    if _api_stats_cache["payload"] is not None and (now - _api_stats_cache["ts"]) < _API_STATS_TTL_S:
+        return jsonify(_api_stats_cache["payload"])
+    payload = {
         "claude": get_claude_stats(),
         "copilot": get_copilot_stats(),
         "github": get_github_commits(),
         "mcp": get_mcp_stats(),
         "skills": get_skill_stats(),
         "latency": get_latency_stats(),
-    })
+    }
+    _api_stats_cache["payload"] = payload
+    _api_stats_cache["ts"] = now
+    return jsonify(payload)
 
 
 @app.route('/api/turns')
