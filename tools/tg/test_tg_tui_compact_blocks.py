@@ -55,6 +55,46 @@ def test_future_block_header_carries_event_with_minute_duration():
     assert "Strategy" in header and "(60)" in header, f"event + (N) on header: {header!r}"
 
 
+def test_future_partial_block_shows_remaining_marks_not_blank():
+    """Regression (2026-06-27): a future block with one event on the header used
+    to blank-pad its remaining rows (午 dropped its 10:30 / 11:00). Now those
+    half-hour marks render as just the time."""
+    mod = _load_tui()
+    start = _midnight().replace(hour=10, minute=0)
+    frags = mod._compact_block_lines(
+        "午", 10, [_pick(mod, "sync", start, dur=30)], 0, "", is_future=True)
+    lines = [ln for ln in "".join(t for _, t in frags).split("\n")]
+    body = [ln for ln in lines[1:] if ln != ""]
+    assert len(body) == 3, f"expected 3 non-blank body rows, got {body}"
+    assert any("11:00" in ln for ln in body), f"11:00 mark missing: {body}"
+    assert sum(1 for ln in body if ln.startswith("  :30")) == 2  # 10:30 & 11:30
+
+
+def test_abbreviated_time_column_rolls_hour_over():
+    """Body time column prints the full HH:MM only when the hour changes; the
+    same-hour mark abbreviates to `  :30`."""
+    mod = _load_tui()
+    start = _midnight().replace(hour=10, minute=0)
+    frags = mod._compact_block_lines(
+        "午", 10, [_pick(mod, "sync", start, dur=30)], 0, "", is_future=True)
+    body = [ln for ln in "".join(t for _, t in frags).split("\n")[1:] if ln]
+    assert body[0].startswith("  :30"), f"10:30 abbreviates, got {body[0]!r}"
+    assert body[1].startswith("11:00"), f"hour roll-over is full, got {body[1]!r}"
+    assert body[2].startswith("  :30"), f"11:30 abbreviates, got {body[2]!r}"
+
+
+def test_future_body_entry_duration_in_minutes():
+    """A future body entry (not on the header) shows its duration as (N)."""
+    mod = _load_tui()
+    e1 = _midnight().replace(hour=10, minute=0)
+    e2 = _midnight().replace(hour=10, minute=30)
+    picks = [_pick(mod, "first", e1, dur=30), _pick(mod, "second", e2, dur=45)]
+    frags = mod._compact_block_lines("午", 10, picks, 0, "", is_future=True)
+    text = "".join(t for _, t in frags)
+    assert "first (30)" in text.split("\n")[0], "first rides header with (30)"
+    assert "second" in text and "(45)" in text, "second is a body row with (45)"
+
+
 def test_through_event_draws_continuation_in_empty_block():
     """An event spanning the whole block (started earlier) → its 3 body marks
     (the :00 slot is the bare header) draw ◇ │, not the untracked ┄ grid."""

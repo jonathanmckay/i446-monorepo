@@ -961,10 +961,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(dur) - 1)
         label = truncate(head["label"], avail)
         head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or "class:future")
-        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(label) - dwidth(dur))
+        # Duration sits right after the label: `午:00 ☀️ GamePass sync (60)`.
         out.append(("class:dim", left))
         out.append((head_sty, label))
-        out.append(("class:dim", " " * trail + dur + "\n"))
+        out.append(("class:dim", f" {dur}\n"))
     else:
         body_picks = picks
         left = f"{blk_name}:00{emoji_str}"
