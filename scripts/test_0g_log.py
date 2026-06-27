@@ -58,10 +58,10 @@ def test_checkbox_prefix_and_blank_handling(tmp_path: Path) -> None:
     f = tmp_path / "0g-log.md"
     # Accept lines that already carry a checkbox, and ignore blanks/placeholders.
     res = m.log_goals(["- [x] already checked {10}", "  ", "- [ ] "], day="2026.06.26", path=f)
-    assert res["added"] == 1
+    assert res["added"] == 1  # blank + bare placeholder dropped
     text = f.read_text()
     assert "- [ ] already checked {10}" in text  # normalized to a fresh unchecked line
-    assert "- [ ] \n" not in text or text.count("- [ ] ") == 0 or "already checked" in text
+    assert "[ ] [ ]" not in text  # bare placeholder must not become a goal
 
 
 def test_day_accepts_dotted_or_dashed(tmp_path: Path) -> None:

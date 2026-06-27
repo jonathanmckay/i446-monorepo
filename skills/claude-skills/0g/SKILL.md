@@ -97,6 +97,16 @@ Read the build order file. Find `## 0₲`. Replace the existing goal items (line
 ```
 Preserve the `### 以后的目标` subsection and everything below it. Only replace the items between `## 0₲` and the next subsection/heading.
 
+**Step 2.5: Durably log goals (set-time archive)**
+
+Immediately record the goals to `~/vault/g245/0g-log.md` so they survive the daily reset, the `0₲ → 以后的目标` move, and vault-sync conflicts. The end-of-day reset only logs goals still sitting in `## 0₲` at 04:00, so goals set and later moved were silently lost (fixed 2026-06-27). Pass each goal's content verbatim (keep `(N)`/`[N]`/`{N}`; `@code` may be left in or stripped — the logger normalizes):
+
+```bash
+python3 ~/i446-monorepo/scripts/0g_log.py "<goal 1 content>" "<goal 2 content>" ...
+```
+
+The logger is idempotent and merges into today's section, so running `/0g` several times a day accumulates rather than duplicates.
+
 **Step 3: Add to Todoist (with dedup)**
 
 First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists in the project (compare after stripping whitespace; substring match is sufficient).
@@ -136,6 +146,14 @@ This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, an
 Read the build order file. Extract all unchecked items (`- [ ]`) under `## 0₲` (before any `###` subsection).
 
 If none found, report "No 0g goals in build order" and stop.
+
+**Step 1.5: Durably log goals (set-time archive)**
+
+Record the goals to `~/vault/g245/0g-log.md` so they survive the daily reset / `0₲ → 以后的目标` move / sync conflicts (see the with-arguments path for why):
+
+```bash
+python3 ~/i446-monorepo/scripts/0g_log.py "<goal 1 content>" "<goal 2 content>" ...
+```
 
 **Step 2: Add to Todoist (with dedup)**
 
