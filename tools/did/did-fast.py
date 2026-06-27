@@ -1003,6 +1003,26 @@ end tell'''
     return script
 
 
+def build_p_set_script(formula: str, target_date: str) -> str:
+    """Build AppleScript that SETs 0分!P (the -1₦ column) for today's row to
+    `formula` (e.g. '=0+4+10'). SET, not append — idempotent, mirrors the
+    daemon's neon_set_p so the completion-time preview and the turnover
+    reconcile never double-count."""
+    return f'''tell application "Microsoft Excel"
+    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
+    set todayRow to 0
+    repeat with i from 2 to 200
+        if (string value of range ("B" & i) of ws) = "{target_date}" then
+            set todayRow to i
+            exit repeat
+        end if
+    end repeat
+    if todayRow = 0 then return "ERROR: date {target_date} not found in 0分"
+    set formula of range ("P" & todayRow) of ws to "{formula}"
+    return "OK:P row=" & todayRow
+end tell'''
+
+
 def build_hcbi_script(appends: list[tuple[str, int]], target_date: str) -> Optional[str]:
     """Build AppleScript for batch hcbi appends. appends = [(col_letter, minutes), ...]
     Uses column B for date lookup (M/D format), appends +N to formula."""
@@ -1450,6 +1470,100 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
     return results
 
 
+def run_ritual(tag: str) -> dict:
+    """Complete one block ritual (-1neon card): close its open Todoist task,
+    stamp the ritual emoji on the current 地支 block in build-order.md, and SET
+    0分!P from the freshly-stamped block headers. Points land ONLY in P.
+
+    P is SET (not appended) from a full re-score of the day's block headers, so
+    this completion-time write is idempotent and agrees with the daemon's
+    turnover reconcile (the daemon is authoritative — it also validates ⏱️/✅).
+    """
+    import sys as _s
+    _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+    import neon_blocks as nb
+
+    cfg = nb.load_config()
+    rituals = nb.ritual_by_tag()
+    if tag not in rituals:
+        return {"error": f"unknown ritual tag {tag!r}", "known": list(rituals)}
+    r = rituals[tag]
+    emoji = r["emoji"]
+    label = cfg["label"]
+    marker = cfg.get("auto_marker", "")
+    out: dict = {"ritual": tag, "emoji": emoji, "points": r["points"]}
+
+    # 1. Close the matching open -1neon Todoist task (content minus 😈 == tag).
+    from urllib.parse import quote
+    closed_id = None
+    try:
+        url = f"{TODOIST_BASE}/tasks?label={quote(label)}&limit=200"
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        tasks = data.get("results", data) if isinstance(data, dict) else data
+        match = None
+        for t in tasks:
+            bare = (t.get("content") or "").replace(marker, "").strip()
+            if bare == tag or tag in bare.split():
+                match = t
+                break
+        if match:
+            tid = match["id"]
+            _id, ok, err = close_todoist_task(tid)
+            out["todoist"] = {"id": tid, "content": match.get("content", ""),
+                              "closed": ok}
+            if ok:
+                closed_id = tid
+            if err:
+                out["todoist"]["error"] = err
+        else:
+            out["todoist"] = {"closed": False, "note": "no open -1neon task matched"}
+    except Exception as e:  # noqa: BLE001
+        out["todoist"] = {"closed": False, "error": str(e)}
+
+    # 2. Stamp the emoji on the current block header (local build-order.md).
+    bo = Path.home() / "vault/g245/build-order.md"
+    block = nb.current_block(datetime.now().hour)
+    out["block"] = block
+    if not bo.exists():
+        out["error"] = "build-order.md not found"
+        return out
+    text = bo.read_text(encoding="utf-8")
+    new_text, changed = nb.stamp_emoji(text, block, emoji)
+    if changed:
+        bo.write_text(new_text, encoding="utf-8")
+    out["stamped"] = changed
+
+    # 3. Re-score ALL block headers and SET 0分!P (idempotent preview).
+    parts, total, formula = nb.score_day(new_text)
+    out["p_total"] = total
+    out["p_formula"] = formula
+    td = date.today()
+    target_date = f"{td.month}/{td.day}"
+    res = ix_run(build_p_set_script(formula, target_date), timeout=30.0)
+    out["p_write"] = {"ok": res.returncode == 0, "output": (res.stdout or "").strip()}
+    if res.returncode != 0:
+        out["p_write"]["error"] = (res.stderr or "").strip() or f"ix-osa exit {res.returncode}"
+    elif "ERROR" in (res.stdout or ""):
+        out["p_write"]["ok"] = False
+        out["p_write"]["error"] = res.stdout.strip()
+
+    # 4. Fire-and-forget dashboard cache refresh (P feeds the -1₦ card).
+    if out["p_write"]["ok"]:
+        try:
+            subprocess.Popen(
+                ["curl", "-fsS", "-X", "POST", "--max-time", "2",
+                 "http://ix:5558/api/refresh"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
@@ -1470,6 +1584,13 @@ def main():
         data = refresh_task_queue()
         counts = {k: len(v) for k, v in data.items() if isinstance(v, list)}
         print(json.dumps({"status": "ok", "counts": counts}, indent=2))
+        return
+
+    if sys.argv[1] == "--ritual":
+        if len(sys.argv) < 3:
+            print("usage: did-fast.py --ritual <tag>", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(run_ritual(sys.argv[2]), ensure_ascii=False, indent=2))
         return
 
     argv = sys.argv[1:]
