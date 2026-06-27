@@ -77,8 +77,18 @@ GOAL_MARKER = "🎯"
 TOGGL_MARKER = "⏱️"
 TODOIST_MARKER = "✅"
 TODOIST_KEYCHAIN_SERVICE = "todoist-api-key"
-# Toggl coverage threshold: fraction of block minutes that must be tracked
-TOGGL_COVERAGE_THRESHOLD = 0.8  # 96 of 120 min
+# -1t: minutes of the 120-min block that must be *categorized* (a Toggl entry
+# with a project assigned). Stricter than the old 0.8 coverage of any tracked
+# time — bare/uncategorized time no longer counts.
+TOGGL_MIN_MINUTES = 115
+# -1neon block-ritual config (tag/emoji/points/mode) — single source of truth
+# shared with tools/did/did-fast.py via lib/neon_blocks.py.
+BLOCK_RITUALS_CONFIG = Path.home() / "i446-monorepo" / "config" / "block-rituals.json"
+# Labels that mark a completed item as NOT a real one-off task, for -1l. Recurring
+# habits (0neon/1neon/夜neon) don't even appear in the completed API (completion
+# advances the due date), so the live noise to strip is the -1neon rituals
+# themselves and @posthoc defer-eval records.
+NON_TASK_LABELS = {"0neon", "1neon", "夜neon", "-1neon", "posthoc"}
 
 # Map fire-hour → 地支 block (just-ended) in the build order. Used to drop a
 # "fired" emoji on the block header so the user can see at a glance which
@@ -574,7 +584,7 @@ def _live_for_block(block_name: str, hour: int, target_date: dt.date):
         return {
             GOAL_MARKER: _block_has_goals(block_name),
             TOGGL_MARKER: _toggl_covers_block(target_date, start, end),
-            TODOIST_MARKER: _todoist_has_completions(target_date, start, end),
+            TODOIST_MARKER: _todoist_l_satisfied(target_date, start, end),
         }
     except Exception as e:  # noqa: BLE001 — never drop points on a transient API error
         log(f"_live_for_block {block_name}: validation error {e}; trusting header")
@@ -746,7 +756,9 @@ def _block_has_goals(block_name: str) -> bool:
 
 
 def _toggl_covers_block(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
-    """Check if Toggl entries cover >= TOGGL_COVERAGE_THRESHOLD of the block window."""
+    """-1t: at least TOGGL_MIN_MINUTES of the block window are *categorized* —
+    covered by a Toggl entry that has a project assigned. Uncategorized
+    (project-less) time does not count."""
     try:
         start = target_date.isoformat()
         end = (target_date + dt.timedelta(days=1)).isoformat()
@@ -762,6 +774,9 @@ def _toggl_covers_block(target_date: dt.date, start_hour: int, end_hour: int) ->
     # Collect covered minutes within the block window
     covered = [False] * block_duration
     for entry in entries:
+        # -1t requires *categorized* time: skip entries with no project.
+        if not entry.get("project_id"):
+            continue
         dur = entry.get("duration", 0)
         start_str = entry.get("start", "")
         if not start_str:
@@ -788,9 +803,9 @@ def _toggl_covers_block(target_date: dt.date, start_hour: int, end_hour: int) ->
         for m in range(cs, ce):
             covered[m] = True
 
-    coverage = sum(covered) / block_duration
-    log(f"toggl coverage: {block_name_for_hours(start_hour)} = {sum(covered)}/{block_duration} min ({coverage:.0%})")
-    return coverage >= TOGGL_COVERAGE_THRESHOLD
+    categorized_min = sum(covered)
+    log(f"toggl coverage: {block_name_for_hours(start_hour)} = {categorized_min}/{block_duration} min categorized (need {TOGGL_MIN_MINUTES})")
+    return categorized_min >= TOGGL_MIN_MINUTES
 
 
 def block_name_for_hours(start_hour: int) -> str:
@@ -801,10 +816,8 @@ def block_name_for_hours(start_hour: int) -> str:
     return "?"
 
 
-def _todoist_has_completions(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
-    """Check if any Todoist tasks were completed during the block time window."""
-    # Env first: launchd/cron contexts can't unlock the login keychain
-    # (the -1g-cron crontab entries pass TODOIST_API_KEY the same way)
+def _todoist_token() -> str:
+    """Todoist API token from env (launchd/cron pass TODOIST_API_KEY) or keychain."""
     token = os.environ.get("TODOIST_API_KEY", "").strip()
     if not token:
         try:
@@ -813,13 +826,32 @@ def _todoist_has_completions(target_date: dt.date, start_hour: int, end_hour: in
                 capture_output=True, text=True, timeout=5,
             ).stdout.strip()
         except Exception as e:
-            log(f"todoist completions: keychain error {e}")
-            return False
+            log(f"todoist token: keychain error {e}")
+            return ""
+    return token
+
+
+def _at_labels(content: str) -> set:
+    """Labels rendered inline as @tokens in a completed item's content (the
+    completed API returns labels=None but appends '@label' to content)."""
+    return set(re.findall(r"@(\S+)", content or ""))
+
+
+def _has_points(content: str) -> bool:
+    """True if the content carries a [N] value with N > 0 (the points convention)."""
+    return any(int(n) > 0 for n in re.findall(r"\[(\d+)\]", content or ""))
+
+
+def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
+    """-1l: every real (non-habit) Todoist task completed in the block window
+    carries [N] points. Empty (no real completions) = not satisfied. Recurring
+    habits don't surface in the completed API; the only noise to strip is the
+    -1neon rituals and @posthoc eval records (NON_TASK_LABELS)."""
+    token = _todoist_token()
     if not token:
-        log("todoist completions: no API token in env or keychain")
+        log("-1l: no API token in env or keychain")
         return False
 
-    # Build time window in UTC
     tz = zoneinfo.ZoneInfo("America/Los_Angeles")
     block_start = dt.datetime(target_date.year, target_date.month, target_date.day,
                               start_hour, 0, tzinfo=tz)
@@ -828,18 +860,28 @@ def _todoist_has_completions(target_date: dt.date, start_hour: int, end_hour: in
     since = block_start.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     until = block_end.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-    url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=1"
+    url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=100"
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            items = data.get("items", [])
-            log(f"todoist completions: {len(items)} task(s) in {start_hour:02d}-{end_hour:02d}")
-            return len(items) > 0
+            items = json.loads(resp.read()).get("items", [])
     except Exception as e:
-        log(f"todoist completions: API error {e}")
+        log(f"-1l: API error {e}")
         return False
+
+    real = [it for it in items
+            if not (_at_labels(it.get("content", "")) & NON_TASK_LABELS)]
+    if not real:
+        log(f"-1l: {start_hour:02d}-{end_hour:02d} no real task completions → fail")
+        return False
+    unpointed = [it.get("content", "") for it in real
+                 if not _has_points(it.get("content", ""))]
+    if unpointed:
+        log(f"-1l: {len(unpointed)}/{len(real)} unpointed → fail: {unpointed}")
+        return False
+    log(f"-1l: {len(real)} real task(s) all pointed → pass")
+    return True
 
 
 def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
@@ -869,7 +911,7 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
         log(f"score: {block_name} toggl coverage below threshold")
 
     # -1l: todoist completions during the block
-    live[TODOIST_MARKER] = _todoist_has_completions(target_date, block_start, block_end)
+    live[TODOIST_MARKER] = _todoist_l_satisfied(target_date, block_start, block_end)
     if live[TODOIST_MARKER]:
         _write_block_marker(block_name, TODOIST_MARKER, dry_run=dry_run)
     else:
@@ -957,6 +999,95 @@ def annotate_block_fired(hour: int, dry_run: bool = False) -> None:
     log(f"annotate: {branch} block header not found in build order")
 
 
+def _load_block_rituals() -> dict:
+    return json.loads(BLOCK_RITUALS_CONFIG.read_text(encoding="utf-8"))
+
+
+def _todoist_open_rituals(token: str) -> list:
+    """All currently-open tasks carrying the -1neon label."""
+    from urllib.parse import quote
+    url = f"https://api.todoist.com/api/v1/tasks?label={quote('-1neon')}&limit=200"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        return data.get("results", data) if isinstance(data, dict) else data
+    except Exception as e:
+        log(f"rituals: fetch open ERROR {e}")
+        return []
+
+
+def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> int:
+    """POST/DELETE against the Todoist v1 API. Returns HTTP status."""
+    url = f"https://api.todoist.com/api/v1{path}"
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status
+
+
+def create_block_rituals(dry_run: bool = False) -> None:
+    """At a block start, create the 3 manual -1neon cards (😈-marked) for the
+    current block. Skips any already open so a catch-up/duplicate fire can't
+    create doubles. -1t/-1l are NOT tasks — the daemon computes them."""
+    token = _todoist_token()
+    if not token:
+        log("rituals: no token — cannot create cards")
+        return
+    cfg = _load_block_rituals()
+    marker, label = cfg.get("auto_marker", "😈"), cfg["label"]
+    open_bare = {(t.get("content") or "").replace(marker, "").strip()
+                 for t in _todoist_open_rituals(token)}
+    for r in cfg["rituals"]:
+        if r.get("mode") != "manual":
+            continue
+        tag = r["tag"]
+        if tag in open_bare:
+            log(f"rituals: {tag} already open — skip")
+            continue
+        content = f"{marker} {tag}"
+        if dry_run:
+            log(f"[DRY RUN] create card {content!r} @{label}")
+            continue
+        try:
+            _todoist_write("/tasks", {"content": content, "labels": [label],
+                                      "due_string": "today"}, token)
+            log(f"rituals: + {content}")
+        except Exception as e:
+            log(f"rituals: create {content!r} ERROR {e}")
+
+
+def delete_block_rituals(dry_run: bool = False) -> None:
+    """At a block turnover, delete still-open manual -1neon cards from the
+    just-ended block (skipped = no points, no list pollution)."""
+    token = _todoist_token()
+    if not token:
+        return
+    for t in _todoist_open_rituals(token):
+        tid, content = t.get("id"), t.get("content", "")
+        if dry_run:
+            log(f"[DRY RUN] delete leftover card {content!r}")
+            continue
+        try:
+            _todoist_write(f"/tasks/{tid}", None, token, method="DELETE")
+            log(f"rituals: − {content}")
+        except Exception as e:
+            log(f"rituals: delete {content!r} ERROR {e}")
+
+
+def run_block_ritual_cards(hour: int, dry_run: bool = False) -> None:
+    """-1neon card lifecycle at a 2h fire. Delete the just-ended block's leftover
+    manual cards, then create the starting block's set. Order matters."""
+    if HOUR_TO_BRANCH_BLOCK.get(hour):   # 06..22: a block just ended
+        delete_block_rituals(dry_run=dry_run)
+    if 4 <= hour <= 20:                   # 04..20: a waking block (卯..亥) starts
+        create_block_rituals(dry_run=dry_run)
+
+
 def run_lock_and_mark(dry_run=False, force_hour=None):
     """Score the just-ended block based on sub-habit emojis, write to -1₦ (P)."""
     now = dt.datetime.now()
@@ -997,6 +1128,11 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
 
     # Toggl tag/project aggregation (same 2h cadence)
     run_toggl_sync(dry_run=dry_run)
+
+    # -1neon card lifecycle: retire the just-ended block's leftover manual cards
+    # and spawn the new block's set (😈-marked). Done after scoring so the
+    # just-ended block's reconcile reads its emojis before its cards are deleted.
+    run_block_ritual_cards(hour, dry_run=dry_run)
 
 
 # Countdown: notify for next N fires then disable

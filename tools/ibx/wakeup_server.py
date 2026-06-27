@@ -165,6 +165,23 @@ def _spawn_did(task):
     )
 
 
+def _complete_ritual(tag):
+    """Fire-and-forget `did-fast --ritual <tag>` (detached): closes the
+    demon-created -1neon card and stamps its emoji. Best-effort, mirrors the
+    inbound TUI; the daemon's turnover reconcile remains the P writer."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    did_fast = Path(__file__).resolve().parent.parent / "did" / "did-fast.py"
+    log_fh = open(STATE_DIR / f"ritual-{int(time.time())}.log", "wb")
+    try:
+        return subprocess.Popen(
+            ["python3", str(did_fast), "--ritual", tag],
+            stdin=subprocess.DEVNULL, stdout=log_fh, stderr=log_fh,
+            start_new_session=True, close_fds=True,
+        )
+    except Exception:
+        return None
+
+
 # ── Ritual instance (frozen block + idempotency + crash-resume) ────────────
 
 
@@ -314,6 +331,7 @@ def api_prayer():
         return jsonify({"error": "stale", "state": _state(r)}), 409
     if "prayer" not in r["done"]:
         M.write_prayer_marker(r["block"])
+        _complete_ritual("سمش")
         r["done"].append("prayer")
         _save_ritual(r)
     return jsonify(_state(r))
@@ -341,6 +359,7 @@ def api_goal():
             return jsonify({"error": "empty", "state": _state(r)}), 400
         M.write_block_goals(r["block"], goals)
         M.spawn_1g_background("\n".join(goals))
+        _complete_ritual("-1g")
         r["goal"] = goals
         r["done"].append("goal")
         _save_ritual(r)
@@ -399,6 +418,7 @@ def api_inbox():
         return jsonify({"error": "stale", "state": _state(r)}), 409
     if "inbox" not in r["done"]:
         M.write_inbox_marker(r["block"])
+        _complete_ritual("-1ibx")
         r["done"].append("inbox")
     if _next(r) is None and not r.get("completed_at"):
         r["completed_at"] = time.time()
