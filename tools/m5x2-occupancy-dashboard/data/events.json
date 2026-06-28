@@ -2158,5 +2158,85 @@
     "unit": "737 B",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-06-28",
+    "kind": "movein",
+    "unit_id": "1230",
+    "prop": "tc68",
+    "unit": "D081",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-07-24",
+    "kind": "ntv",
+    "unit_id": "1155",
+    "prop": "tc68",
+    "unit": "A06",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-06-28",
+    "kind": "movein",
+    "unit_id": "1181",
+    "prop": "tc68",
+    "unit": "B32",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-07-27",
+    "kind": "leased",
+    "unit_id": "1143",
+    "prop": "o155-Elm",
+    "unit": "P",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-06-28",
+    "kind": "movein",
+    "unit_id": "559",
+    "prop": "rl16",
+    "unit": "B22",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-07-20",
+    "kind": "leased",
+    "unit_id": "679",
+    "prop": "j312",
+    "unit": "3104",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-06-27",
+    "kind": "moveout",
+    "unit_id": "778",
+    "prop": "a511",
+    "unit": "102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-28",
+    "effective": "2026-07-18",
+    "kind": "leased",
+    "unit_id": "1137",
+    "prop": "o155-Elm",
+    "unit": "J",
+    "tenant": null,
+    "baseline": false
   }
 ]

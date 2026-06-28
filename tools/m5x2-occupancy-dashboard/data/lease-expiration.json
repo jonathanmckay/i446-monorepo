@@ -744,18 +744,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 1044,
-    "property_name": "kn47 K2",
-    "unit": "D105",
-    "tenant_name": "Metro, Ronald J.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2019-05-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 1062,
     "property_name": "kn47 K2",
     "unit": "E107",
@@ -804,18 +792,6 @@
     "rent": "925.00"
   },
   {
-    "unit_id": 361,
-    "property_name": "ps25",
-    "unit": "A3",
-    "tenant_name": "Readi Cossio, Nicolas A.",
-    "status": "Pending",
-    "lease_sign_date": "2025-08-20",
-    "move_in": "2025-08-23",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1128.00"
-  },
-  {
     "unit_id": 591,
     "property_name": "rl16",
     "unit": "D06",
@@ -850,30 +826,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1195.00"
-  },
-  {
-    "unit_id": 1195,
-    "property_name": "tc68",
-    "unit": "B46",
-    "tenant_name": "Fanoway, Michael J.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-08-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1525.00"
-  },
-  {
-    "unit_id": 434,
-    "property_name": "w226",
-    "unit": "1",
-    "tenant_name": "James, Hurricane L.",
-    "status": "Pending",
-    "lease_sign_date": "2025-07-22",
-    "move_in": "2025-08-16",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "830.00"
   },
   {
     "unit_id": 122,
@@ -1318,18 +1270,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-09-01",
     "rent": "1595.00"
-  },
-  {
-    "unit_id": 549,
-    "property_name": "rl16",
-    "unit": "B12",
-    "tenant_name": "Rodriguez , Brandon  M.",
-    "status": "Pending",
-    "lease_sign_date": "2024-10-24",
-    "move_in": "2024-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-09-01",
-    "rent": "1275.00"
   },
   {
     "unit_id": 593,
