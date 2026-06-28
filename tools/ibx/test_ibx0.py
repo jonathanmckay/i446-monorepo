@@ -745,3 +745,70 @@ def test_skipped_cycle_respects_day_skips():
     assert "skipped = _drop_day_skipped(skipped)" in window, (
         "the skipped-cycle must drop day-skipped items before re-showing"
     )
+
+
+# ── Block-window message filter ───────────────────────────────────────────────
+
+class _FakeTwoN:
+    """Stand-in for the -2n module exposing the block API ibx0 relies on."""
+    BLOCKS = [
+        ("卯", "04:00", "05:59"), ("辰", "06:00", "07:59"),
+        ("巳", "08:00", "09:59"), ("午", "10:00", "11:59"),
+        ("未", "12:00", "13:59"), ("申", "14:00", "15:59"),
+        ("酉", "16:00", "17:59"), ("戌", "18:00", "19:59"),
+        ("亥", "20:00", "21:59"),
+    ]
+    def __init__(self, now):
+        self._now = now
+    def get_current_block(self):
+        idx = max(0, min(8, (self._now.hour - 4) // 2))
+        n, s, e = self.BLOCKS[idx]
+        return idx, n, s, e
+    def get_previous_block(self):
+        idx, _, _, _ = self.get_current_block()
+        pi = max(0, idx - 1)
+        n, s, e = self.BLOCKS[pi]
+        return pi, n, s, e
+
+
+def _window(now):
+    import ibx0
+    ibx0._two_n = _FakeTwoN(now)
+    return datetime.fromtimestamp(ibx0._block_window_start(now))
+
+
+def test_block_window_uses_previous_block_start():
+    """Outside 卯/辰, the window anchors to the *previous* block's start."""
+    assert _window(datetime(2026, 6, 28, 14, 30)) == datetime(2026, 6, 28, 12, 0)  # 申 → 未
+    assert _window(datetime(2026, 6, 28, 9, 15)) == datetime(2026, 6, 28, 6, 0)    # 巳 → 辰
+    assert _window(datetime(2026, 6, 28, 23, 0)) == datetime(2026, 6, 28, 18, 0)   # 亥 → 戌
+
+
+def test_block_window_morning_extends_to_yesterday_8pm():
+    """In 卯/辰 (and the overnight clamp to 卯) the window reaches back to
+    yesterday 20:00 to sweep the overnight backlog."""
+    assert _window(datetime(2026, 6, 28, 6, 30)) == datetime(2026, 6, 27, 20, 0)   # 辰
+    assert _window(datetime(2026, 6, 28, 5, 10)) == datetime(2026, 6, 27, 20, 0)   # 卯
+    assert _window(datetime(2026, 6, 28, 2, 0)) == datetime(2026, 6, 27, 20, 0)    # clamp→卯
+
+
+def test_drop_outside_block_keeps_in_window_and_unknown():
+    """Items at/after window_start are kept; unparseable timestamps (0.0) are
+    kept on purpose; older items are dropped."""
+    import ibx0
+    ws = datetime(2026, 6, 28, 12, 0).timestamp()
+    items = [
+        {"received_at": datetime(2026, 6, 28, 13, 0).timestamp()},  # in window
+        {"received_at": datetime(2026, 6, 28, 11, 0).timestamp()},  # too old
+        {"received_at": 0.0},                                        # unknown → keep
+    ]
+    kept = ibx0._drop_outside_block(items, ws)
+    assert len(kept) == 2
+    assert {"received_at": datetime(2026, 6, 28, 11, 0).timestamp()} not in kept
+
+
+def test_drop_outside_block_no_window_is_noop():
+    """A 0.0 window_start (block info unavailable) disables filtering."""
+    import ibx0
+    items = [{"received_at": 1.0}, {"received_at": 0.0}]
+    assert ibx0._drop_outside_block(items, 0.0) == items

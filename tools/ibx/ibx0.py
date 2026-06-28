@@ -17,7 +17,7 @@ import threading
 import time
 import warnings
 warnings.filterwarnings("ignore")
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # ── Import source modules ─────────────────────────────────────────────────────
@@ -1096,6 +1096,49 @@ def _drop_suppressed(items):
     return _drop_day_skipped(_drop_stale_imsg(items))
 
 
+def _block_window_start(now=None):
+    """Epoch start of the inbound message window.
+
+    Default: the start of the *previous* 地支 block, so the queue always covers
+    a full block's worth of backlog. In the first morning blocks (卯/辰) the
+    previous block sits in the overnight sleep gap, so we extend back to
+    yesterday 20:00 to sweep everything since the prior evening.
+
+    Returns 0.0 when block info is unavailable, which disables filtering.
+    """
+    if now is None:
+        now = datetime.now()
+    if not _two_n or not hasattr(_two_n, "get_current_block"):
+        return 0.0
+    try:
+        _, name, _, _ = _two_n.get_current_block()
+        if name in ("卯", "辰"):
+            y = (now - timedelta(days=1)).replace(
+                hour=20, minute=0, second=0, microsecond=0)
+            return y.timestamp()
+        _, _, start, _ = _two_n.get_previous_block()
+        sh, sm = map(int, start.split(":"))
+        return now.replace(
+            hour=sh, minute=sm, second=0, microsecond=0).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _drop_outside_block(items, window_start=None):
+    """Keep only items received at/after the current block window's start.
+
+    Items with an unknown timestamp (received_at == 0.0) are kept on purpose:
+    better to surface a message than hide it because of an unparseable date.
+    """
+    if window_start is None:
+        window_start = _block_window_start()
+    if not window_start:
+        return items
+    return [it for it in items
+            if (it.get("received_at", 0.0) or 0.0) == 0.0
+            or (it.get("received_at", 0.0) or 0.0) >= window_start]
+
+
 def _poll_resolved(items_snapshot, resolved, stop_event, msg_queue, interval=60):
     """
     Background thread: every `interval` seconds, re-check each email item.
@@ -1233,7 +1276,7 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
                         pass
 
             with bg_lock:
-                for it in new_items:
+                for it in _drop_outside_block(new_items):
                     uid = _item_uid(it)
                     if uid and uid not in resolved:
                         bg_injected.append(it)
@@ -1280,6 +1323,7 @@ def main():
                 _per_account.update(acct_counts)
             else:
                 items = result
+            items = _drop_outside_block(items)
             _source_counts[name] = len(items)
             for it in items:
                 _incoming.put(it)
