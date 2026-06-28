@@ -109,6 +109,16 @@ python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1 &
 
 This updates `~/.local/state/jm/task-queue.json`; an open dtd auto-reloads off that cache (its watcher copies the change into the snapshot and POSTs a reload to fzf), so the goal appears without a manual ctrl-r. Skip this step only when no task was created (all goals were dedup'd away).
 
+### Step 5.5: Close the `-1g` ritual card (current block only)
+
+Setting goals **is** the `-1g` block ritual, so close its `😈 -1g` `-1neon` card. Run **only when setting goals for the CURRENT block** (i.e. the `next` argument was NOT used) — `--ritual` always acts on the current 地支 block, so calling it for a `next`-block plan would close/stamp the wrong block:
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py --ritual -1g >/dev/null 2>&1
+```
+
+This closes the open `😈 -1g` card and stamps `🎯` on the current block header (idempotent — the Step 3 stamp is not duplicated). It does NOT write `0分!P`; the daemon credits the ritual's points at the block turnover. If the card is already closed, it's a harmless no-op. **Skip entirely when the `next` argument was used.**
+
 ### Step 6: Confirm
 
 Output one line:

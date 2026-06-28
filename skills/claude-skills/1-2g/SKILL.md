@@ -1,12 +1,12 @@
 ---
 name: "1-2g"
-description: "Audit Todoist tasks: add missing time estimates (N), point values [N], and domain labels. Skips #-1g and #0g tasks. Usage: /1-2g"
+description: "Audit Todoist tasks: add missing time estimates (N), point values [N], and domain labels. Skips #-1g, #0g, and -1neon tasks. Usage: /1-2g"
 user-invocable: true
 ---
 
 # Todoist Task Hygiene (/1-2g)
 
-Scan all Todoist tasks (excluding `#-1g` and `#0g` labeled) and fix two things:
+Scan all Todoist tasks (excluding `#-1g`, `#0g`, and `-1neon` labeled) and fix two things:
 1. Missing time estimate `(N)` or point value `[N]` in the task content
 2. Missing domain label
 
@@ -73,7 +73,7 @@ Value should generally be ≥ time estimate. If time > value, it's a signal the 
 
 ### Step 1: Fetch all tasks
 
-Use Todoist MCP `find-tasks` to get all uncompleted tasks. Paginate with `next_cursor` to get ALL tasks. Exclude tasks that have label `#-1g` or `#0g`.
+Use Todoist MCP `find-tasks` to get all uncompleted tasks. Paginate with `next_cursor` to get ALL tasks. Exclude tasks that have label `#-1g`, `#0g`, or `-1neon`. (`-1neon` block-ritual cards — `سمش`/`-1g`/`-1ibx` — score 0分!P from the block-header emoji, never from `[N]`, so stamping a `(N) [N]` estimate on them is wrong and shows bogus points in `/inbound`.)
 
 ### Step 2: Audit each task
 

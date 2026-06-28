@@ -122,7 +122,7 @@ Match the line whose bullet content equals the Todoist task content (preserve `(
 
 No 0₦ or Todoist match. Number = **points** not minutes.
 
-1. Infer domain (or use `projectOverride`): social→s897(AH), family→xk87(AG), health→hcb(AF), work→m5x2(AB), tech→i9(AA), media→hcmc(AD), goals→g245(AC). Ambiguous → ask.
+1. Infer domain (or use `projectOverride`), then map to the 0分 column (SAME columns as Step 5 — the AA–AH columns were removed 2026-04-28 and are dead; never write there): tech→i9 **R**, work→m5x2 **S**, goals→g245 **T**, media→hcmc **U**, health→hcb **W**, family→xk87 **X**, social→s897 **Y**. Ambiguous → ask.
 2. Append points to 0分.
 3. Create posthoc Todoist task: `content + " @posthoc @YYYY-MM-DD"`, labels `["posthoc", "<domain>"]`, due `targetDate`. Immediately close it.
 
