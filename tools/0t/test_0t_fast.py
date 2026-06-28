@@ -41,6 +41,30 @@ def test_tag_columns_agree_with_daemon():
             f"daemon={daemon.TOGGL_TAG_COLS[tag]}")
 
 
+def test_compute_tag_minutes_excludes_sleep_from_minus3():
+    """睡觉 (sleep) carries the -3 tag but is tracked in column D. It must NOT be
+    summed into the -3/AX tag column, or AX reads as a full night of sleep
+    (regression 2026-06-28: AX=439)."""
+    sleep = {"duration": 400 * 60, "tags": ["-3"], "project_id": zerot_fast.SLEEP_PROJECT_ID}
+    media = {"duration": 30 * 60, "tags": ["-3"], "project_id": 109932707}  # 新闻/hcmc
+    with patch.object(zerot_fast, "get_toggl_entries", return_value=[sleep, media]):
+        tag_totals, _ = zerot_fast.compute_tag_minutes(date(2026, 6, 27), date(2026, 6, 28))
+    assert tag_totals.get("-3") == 30, f"AX must exclude sleep; got {tag_totals.get('-3')}"
+
+
+def test_daemon_compute_toggl_totals_excludes_sleep_from_AX():
+    """The daemon writes today's AX; it must also exclude sleep from -3."""
+    daemon_path = Path(__file__).resolve().parents[2] / "scripts" / "build-order-daemon.py"
+    spec = importlib.util.spec_from_file_location("bod_daemon2", daemon_path)
+    daemon = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(daemon)
+    sleep = {"duration": 400 * 60, "tags": ["-3"], "project_id": daemon.SLEEP_PROJECT_ID}
+    media = {"duration": 25 * 60, "tags": ["-3"], "project_id": 109932707}
+    with patch.object(daemon, "_toggl_get", return_value=[sleep, media]):
+        totals = daemon.compute_toggl_totals(date(2026, 6, 28))
+    assert totals.get("AX") == 25, f"daemon AX must exclude sleep; got {totals.get('AX')}"
+
+
 def test_mark_night_hcmc_targets_yesterday_row():
     """night hcmc minutes must be logged to the date the entry occurred (yesterday),
     not today. Otherwise sleep-bridging hcmc points land one row too late."""

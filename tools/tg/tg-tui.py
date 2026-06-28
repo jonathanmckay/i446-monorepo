@@ -831,9 +831,15 @@ def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(TZ)
     pts = STATE.today_points
     pts_str = f" · {pts}分" if pts else ""
-    title = f" tg · {now:%a %H:%M:%S}{pts_str} "
+    if STATE.day_offset == 0:
+        title = f" tg · {now:%a %H:%M:%S}{pts_str} "
+        line = title + "─" * max(0, WIDTH_HINT - len(title))
+        return [("class:header", line + "\n")]
+    # Viewing a past day: badge the date so it's never mistaken for today.
+    viewed = view_now()
+    title = f" tg · ◀ {viewed:%a %-m/%-d}{pts_str} · ⎋ today "
     line = title + "─" * max(0, WIDTH_HINT - len(title))
-    return [("class:header", line + "\n")]
+    return [("class:no_entry", line + "\n")]
 
 
 def render_current() -> list[tuple[str, str]]:
@@ -882,7 +888,7 @@ def _read_block_emojis(now: dt.datetime | None = None) -> dict[str, str]:
         text = BUILD_ORDER.read_text()
     except Exception:
         return {}
-    now = now or dt.datetime.now(TZ)
+    now = now or view_now()
     block_start = {name: sh for name, sh, _eh in BLOCKS}
     result = {}
     in_section = False
@@ -1690,9 +1696,43 @@ def _(event):
     STATE.scroll_min -= 30
 
 
-@kb.add("escape")  # snap the detail band back to now
+def _reload_day(app):
+    """Re-fetch the viewed day's Toggl entries, calendar, and points after a day
+    change, then repaint. Mirrors the c-r refresh but for the new day."""
+    async def _r():
+        await asyncio.to_thread(fetch_today)
+        await asyncio.to_thread(fetch_gcal, True)
+        app.invalidate()
+        _bg_fetch(app, fetch_points)  # slowest; repaints itself when done
+    app.create_background_task(_r())
+
+
+@kb.add("c-left")  # view the previous day (to fill in missed time entries)
+def _(event):
+    STATE.day_offset -= 1
+    STATE.scroll_min = 0
+    flash(f"◀ {view_now():%a %-m/%-d}")
+    _reload_day(event.app)
+
+
+@kb.add("c-right")  # view the next day, capped at today
+def _(event):
+    if STATE.day_offset >= 0:
+        flash("already on today")
+        return
+    STATE.day_offset += 1
+    STATE.scroll_min = 0
+    flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
+    _reload_day(event.app)
+
+
+@kb.add("escape")  # snap the detail band back to now; reset to today if browsing
 def _(event):
     STATE.scroll_min = 0
+    if STATE.day_offset != 0:
+        STATE.day_offset = 0
+        flash("today")
+        _reload_day(event.app)
 
 
 main_window = Window(

@@ -1499,6 +1499,11 @@ def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
         else:
             continue
 
+        # Sleep is column D, not a tag column — exclude it so its -3 tag never
+        # inflates AX (regression 2026-06-28).
+        if e.get("project_id") == SLEEP_PROJECT_ID:
+            continue
+
         for tag in (e.get("tags") or []):
             if tag in TOGGL_TAG_COLS:
                 col = TOGGL_TAG_COLS[tag]
