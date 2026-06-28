@@ -133,6 +133,11 @@ def compute_tag_minutes(yesterday: date, today: date) -> tuple[dict[str, int], d
         dur = e.get("duration", 0)
         if dur <= 0:
             continue
+        # Sleep (睡觉) carries the "-3" tag but is tracked separately in column D.
+        # Without this skip its minutes pollute the -3/AX tag column, which then
+        # reads as ~a full night of sleep (regression 2026-06-28: AX=439).
+        if e.get("project_id") == SLEEP_PROJECT_ID:
+            continue
         minutes = dur // 60
         for tag in (e.get("tags") or []):
             if tag in TAG_COLUMNS:

@@ -235,6 +235,7 @@ class State:
         self.entries_yday: list[dict] = []  # yesterday's (for 卯 sleep total)
         self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
+        self.day_offset = 0  # 0=today, -1=yesterday, … (≤0; for filling gaps)
         self.flash = ""  # one-line status
         self.flash_until = 0.0
         self.flash_style = ""  # optional override style for flash
@@ -278,7 +279,7 @@ def fetch_current(cached=False):
 
 def fetch_today():
     try:
-        today = dt.datetime.now(TZ).date()
+        today = view_now().date()  # the viewed day (today, or a past day)
         raw = toggl_api.get_entries(
             start_date=(today - dt.timedelta(days=1)).isoformat(),
             end_date=(today + dt.timedelta(days=2)).isoformat(),
@@ -319,7 +320,7 @@ def fetch_today():
 
 def fetch_gcal(force=False):
     try:
-        now = dt.datetime.now(TZ)
+        now = view_now()  # viewed day's calendar
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + dt.timedelta(days=1)
         gcal_events = gcal_client.list_events(day_start, day_end, force=force)
@@ -439,7 +440,7 @@ def fetch_points():
     work into the current block (the "everything shows in 申" bug).
     """
     try:
-        now = dt.datetime.now(TZ)
+        now = view_now()  # viewed day's 0分 row
         today_md = f"{now.month}/{now.day}"
 
         # Read the Σ total (column D) AND the per-block columns (G:O, headed
@@ -691,9 +692,21 @@ def fmt_dur_live(total_seconds: int) -> str:
     return f"{m}m{s:02d}s"
 
 
+def view_now() -> dt.datetime:
+    """Reference 'now' for the day currently being viewed. day_offset 0 = today
+    (live now); a negative offset views a past day, anchored to its end (23:59)
+    so the whole day reads as elapsed — every block past, gaps visible — which is
+    the layout for filling in missed time entries. Only the day-view fetch +
+    render use this; the live clock and running-timer mirror keep real now."""
+    if STATE.day_offset == 0:
+        return dt.datetime.now(TZ)
+    base = dt.datetime.now(TZ) + dt.timedelta(days=STATE.day_offset)
+    return base.replace(hour=23, minute=59, second=59, microsecond=0)
+
+
 def detail_window():
     """Return (start, end) for detail band: current+next block, or prev+current if no next."""
-    now = dt.datetime.now(TZ) + dt.timedelta(minutes=STATE.scroll_min)
+    now = view_now() + dt.timedelta(minutes=STATE.scroll_min)
     cur = hour_to_block(now.hour)
     nxt = next_block(now.hour)
     prv = prev_block(now.hour)
@@ -1286,7 +1299,7 @@ def _block_display_pts(name: str) -> int:
     running total rather than a blank header."""
     if STATE.block_points:
         return STATE.block_points.get(name, 0)
-    cur_now = hour_to_block(dt.datetime.now(TZ).hour)
+    cur_now = hour_to_block(view_now().hour)
     if cur_now and name == cur_now[0]:
         return _current_block_running_pts()
     return 0
@@ -1294,7 +1307,8 @@ def _block_display_pts(name: str) -> int:
 
 def render_detail() -> list[tuple[str, str]]:
     start, end = detail_window()
-    now = dt.datetime.now(TZ)
+    now = view_now()
+    viewing_today = STATE.day_offset == 0
     effective_hour = now.hour + STATE.scroll_min // 60
     cur = hour_to_block(effective_hour)
     nxt = next_block(effective_hour)
@@ -1348,7 +1362,9 @@ def render_detail() -> list[tuple[str, str]]:
         # (no separate inserted now-line, so each block stays exactly 8 slots;
         # the live wall clock lives on the pinned bottom bar).
         time_str = f"{slot:%H:%M}"
-        is_now_slot = bool(slot <= now < slot_end)
+        # Only the real current day has a "now" slot — a past day is fully
+        # elapsed, so nothing highlights as now (no false NO-TIME-ENTRY alarm).
+        is_now_slot = viewing_today and bool(slot <= now < slot_end)
         is_running = bool(STATE.current) and is_now_slot
         # Only show the red NO TIME ENTRY alarm when we've CONFIRMED no timer.
         # An unconfirmed state (rate-limited fetch) renders as a plain slot.

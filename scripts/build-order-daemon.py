@@ -1445,6 +1445,10 @@ TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 
 # Tag → 0n column letter
 TOGGL_TAG_COLS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
+# Sleep (睡觉) carries the "-3" tag but is tracked separately in column D, so it
+# must be excluded from the -3/AX tag total — otherwise AX reads as ~a whole
+# night of sleep (regression 2026-06-28: AX=439). Mirrors 0t-fast.SLEEP_PROJECT_ID.
+SLEEP_PROJECT_ID = 108358083
 # Project ID → 0n column letter
 TOGGL_PROJ_COLS = {}
 
