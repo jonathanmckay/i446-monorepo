@@ -501,10 +501,14 @@ for key in ['0neon', '1neon', '关键路径', '夜neon']:
 # #0g tasks from today
 today_tasks = [t for t in d.get('today', []) if isinstance(t, dict)
                and t.get('due') and t['due'] <= today]
-goals = [t for t in today_tasks if any(l in ('#0g', '#-1g') for l in t.get('labels', []))]
-rest = sorted([t for t in today_tasks if not any(l in ('#0g', '#-1g') for l in t.get('labels', []))],
+# -1neon block-ritual cards (سمش / -1g / -1ibx) lead the list: they're the
+# current 2h block's quick rituals and should be the first thing seen/cleared.
+rituals = [t for t in today_tasks if '-1neon' in t.get('labels', [])]
+_nonritual = [t for t in today_tasks if '-1neon' not in t.get('labels', [])]
+goals = [t for t in _nonritual if any(l in ('#0g', '#-1g') for l in t.get('labels', []))]
+rest = sorted([t for t in _nonritual if not any(l in ('#0g', '#-1g') for l in t.get('labels', []))],
               key=lambda t: prank(t.get('priority')))
-all_tasks = sections + goals + rest
+all_tasks = rituals + sections + goals + rest
 
 # Deduplicate by id
 seen = set()
