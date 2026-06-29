@@ -78,6 +78,15 @@ def main() -> int:
                 data["today"] = old["today"]
         except (json.JSONDecodeError, OSError):
             pass
+    # Refresh the -1neon ritual subset of "today" so a new block's rituals appear
+    # (the rest of "today" is left as did-fast --refresh-cache last wrote it).
+    # Drop stale -1neon entries, splice in the freshly-fetched current-block cards.
+    fresh_rituals = [{
+        "id": t.get("id"), "content": t.get("content"), "labels": t.get("labels", []),
+        "due": (t.get("due") or {}).get("date") if isinstance(t.get("due"), dict) else t.get("due"),
+    } for t in todoist.find_tasks(labels=[RITUAL_LABEL], limit=200)]
+    today_rest = [t for t in data.get("today", []) if RITUAL_LABEL not in t.get("labels", [])]
+    data["today"] = fresh_rituals + today_rest
     # Attach short display names (Haiku, cached once per task) so the pickers can
     # show long m5x2-style tasks without fzf eating the (N)/[N] estimates.
     # Shared with did-fast.py's --refresh-cache so every refresh path agrees.
@@ -90,7 +99,9 @@ def main() -> int:
 
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    _nudge_tg_tui()  # so a running tg-tui re-reads the freshened cache
     counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}
+    counts["-1neon"] = len(fresh_rituals)
     print(f"refreshed {CACHE}: {counts}")
     return 0
 
