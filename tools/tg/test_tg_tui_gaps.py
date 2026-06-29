@@ -119,13 +119,15 @@ def test_gap_row_fill_pulses_red_when_alarm_on(monkeypatch):
     assert not any("┄" in t for s, t in frags if "idle" in s)
 
 
-def test_detail_band_empty_past_slot_flashes_red(monkeypatch):
-    """In the detail band, a fully-past 15-min slot with no toggl entry pulses
-    a red ┄ fill (each slot is 15m > 5m of untracked time)."""
+def test_detail_band_past_gap_flashes_red(monkeypatch):
+    """In the focus band, an untracked past stretch renders a real HH:MM-HH:MM
+    gap row pulsing a red ┄ fill (no 15-min rounding)."""
     mod = _load_tui()
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)  # on phase
     today = _midnight()
-    # Window entirely before real 'now' → every slot is a fully-past slot.
+    # Window entirely before 'now' → fully elapsed, so the gap is a past row
+    # (not the live idle now-row).
+    monkeypatch.setattr(mod, "view_now", lambda: today.replace(hour=6, minute=30))
     monkeypatch.setattr(mod, "detail_window",
                         lambda: (today.replace(hour=4), today.replace(hour=6)))
     mod.STATE.current = None
@@ -133,18 +135,20 @@ def test_detail_band_empty_past_slot_flashes_red(monkeypatch):
     mod.STATE.events = []
     mod.STATE.block_points = {}
     mod.STATE.scroll_min = 0
-    mod.STATE.entries = []  # no toggl entries → every past slot is empty
+    mod.STATE.entries = []  # no toggl entries → the whole window is one gap
     frags = mod.render_detail()
     flashing = [t for s, t in frags if s == "class:no_entry" and "┄" in t]
-    assert flashing, "empty past slots must render a flashing red ┄ fill"
+    assert flashing, "an untracked past stretch must render a flashing red ┄ row"
+    assert any("04:00-06:00" in t for s, t in frags), "gap shows its real span"
 
 
-def test_detail_band_empty_past_slot_muted_when_alarm_off(monkeypatch):
-    """Off phase: the same slot renders muted grey, not red — proving it pulses
-    rather than sitting permanently red."""
+def test_detail_band_past_gap_muted_when_alarm_off(monkeypatch):
+    """Off phase: the same gap row renders muted grey, not red — proving it
+    pulses rather than sitting permanently red."""
     mod = _load_tui()
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: False)
     today = _midnight()
+    monkeypatch.setattr(mod, "view_now", lambda: today.replace(hour=6, minute=30))
     monkeypatch.setattr(mod, "detail_window",
                         lambda: (today.replace(hour=4), today.replace(hour=6)))
     mod.STATE.current = None

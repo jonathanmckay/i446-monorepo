@@ -1311,6 +1311,104 @@ def _block_display_pts(name: str) -> int:
     return 0
 
 
+def _detail_merge_past(win_start, win_end) -> list[dict]:
+    """Toggl entries overlapping [win_start, win_end), clipped to the window and
+    with consecutive same-desc fragments (stop/resume splits ≤60s apart) merged
+    into one span. Chronological."""
+    segs: list[dict] = []
+    for e in STATE.entries:
+        if e.get("running"):
+            continue  # the live timer is the now-row's tail, not a past span
+        s = max(e["start_dt"], win_start)
+        en = min(e["end_dt"], win_end)
+        if en <= s:
+            continue
+        desc = display_desc(e["desc"]) or "(blank)"
+        if (segs and segs[-1]["desc"] == desc
+                and (s - segs[-1]["end"]).total_seconds() <= 60):
+            segs[-1]["end"] = en
+        else:
+            segs.append({"start": s, "end": en, "desc": desc, "pid": e["project_id"]})
+    return segs
+
+
+def _detail_span_row(s, e, body_cls, body_text) -> list[tuple[str, str]]:
+    """One focus-band row keyed by an actual HH:MM-HH:MM span (not a 15-min
+    grid slot), so completed entries and gaps read at their real boundaries."""
+    span = f" {s:%H:%M}-{e:%H:%M} │ "
+    space = max(1, WIDTH_HINT - dwidth(span) - 1)
+    return [("class:time", span), (body_cls, truncate(body_text, space) + "\n")]
+
+
+def _detail_gap_row(s, e) -> list[tuple[str, str]]:
+    """A flashing untracked-time row keyed by its real HH:MM-HH:MM span."""
+    fill_cls = "class:no_entry" if _gap_alarm_on() else "class:idle"
+    span = f" {s:%H:%M}-{e:%H:%M} │ "
+    fill = "┄" * max(1, WIDTH_HINT - dwidth(span) - 1)
+    return [("class:time", span), (fill_cls, fill + "\n")]
+
+
+def _detail_rule_row(s, label, cls) -> list[tuple[str, str]]:
+    """The 'you are here' now-row, anchored to its real start time (ongoing),
+    drawn as a full-width rule so it stands out from the spans above."""
+    prefix = f" {s:%H:%M}- "
+    trail = max(0, WIDTH_HINT - dwidth(prefix) - dwidth(label) - 1)
+    return [("class:time", prefix), (cls, f"{label} " + "─" * trail + "\n")]
+
+
+def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
+    """The focus band's elapsed region as REAL entry spans + flashing gap rows
+    (no 15-min rounding). Each tracked entry shows its actual start-end; every
+    untracked stretch ≥ GAP_MIN is its own ``HH:MM-HH:MM`` row pulsing red↔grey.
+    When ``live``, the tail is the now-row: the running timer anchored to its
+    real start with ticking elapsed, or the idle NO-TIME-ENTRY alarm. Otherwise
+    (a past day) the trailing untracked stretch is drawn as a gap row."""
+    out: list[tuple[str, str]] = []
+    cursor = win_start
+    for seg in _detail_merge_past(win_start, win_end):
+        if (seg["start"] - cursor).total_seconds() >= GAP_MIN * 60:
+            out += _detail_gap_row(cursor, seg["start"])
+        code = proj_code(seg["pid"])
+        label = seg["desc"] + (f"  · {code}" if code else "")
+        sty = (_placeholder_style() if _is_placeholder(seg["desc"])
+               else (project_style(seg["pid"]) or "class:past"))
+        out += _detail_span_row(seg["start"], seg["end"], sty, label)
+        cursor = max(cursor, seg["end"])
+
+    if not live:
+        if (win_end - cursor).total_seconds() >= GAP_MIN * 60:
+            out += _detail_gap_row(cursor, win_end)
+        return out
+
+    # Live tail (today, now inside the window).
+    if STATE.current:
+        try:
+            rs = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
+        except Exception:
+            rs = cursor
+        rs = max(rs, win_start)
+        if (rs - cursor).total_seconds() >= GAP_MIN * 60:
+            out += _detail_gap_row(cursor, rs)
+        desc = display_desc(STATE.current.get("description") or "")
+        code = proj_code(STATE.current.get("project_id"))
+        el = max(0.0, (now - rs).total_seconds())
+        m, s = divmod(int(el), 60)
+        label = f"▶ {desc}" + (f" · {code}" if code else "") + f"  {m}m{s:02d}.{int((el % 1) * 10)}s"
+        cls = (f"bold {_placeholder_style(now)}" if _is_placeholder(desc)
+               else (f"bold {project_style(STATE.current.get('project_id'))}".strip() or "class:running"))
+        out += _detail_rule_row(rs, label, cls)
+    elif STATE.current_known:
+        # No timer: flashing NO-TIME-ENTRY alarm anchored at the last entry's end.
+        since = _idle_since(now) or cursor
+        el = max(0.0, (now - since).total_seconds())
+        m, s = divmod(int(el), 60)
+        curblk = "█" if int(now.timestamp() * 2) % 2 == 0 else " "
+        label = f"{curblk} NO TIME ENTRY  {m}m{s:02d}.{int((el % 1) * 10)}s"
+        out += _detail_rule_row(since, label, "class:no_entry")
+    # else: timer state unconfirmed (rate-limited fetch) → no alarm row.
+    return out
+
+
 def render_detail() -> list[tuple[str, str]]:
     start, end = detail_window()
     now = view_now()
@@ -1336,126 +1434,38 @@ def render_detail() -> list[tuple[str, str]]:
     top_label += scroll_suffix
     out: list[tuple[str, str]] = section_rule(top_label, focus=True, pts=top_pts)
 
-    slot = start
-    gcal_shown: set[str] = set()  # track gcal event titles already labelled
-    toggl_shown: set[str] = set()  # track toggl descriptions already labelled
-    while slot < end:
-        slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
+    # Elapsed region: real entry spans + flashing gap rows (+ the live now-row
+    # tail). Today renders [start, now]; a past day renders the whole window.
+    now_in = start <= now <= end
+    past_win_end = min(now, end) if viewing_today else end
+    out += _detail_past_rows(start, past_win_end, now, live=(viewing_today and now_in))
 
-        pid = None
-        gcal_sty = ""
-        if slot_end <= now:
-            label, pid = _slot_label_toggl(slot, slot_end)
-            marker = "│"
-        elif slot >= now:
+    # Future region keeps the 15-min gcal preview grid, from the next slot
+    # boundary at/after now (skipped entirely on a past-day view).
+    gcal_shown: set[str] = set()
+    if viewing_today:
+        fut = max(now, start)
+        slot = fut.replace(minute=(fut.minute // SLOT_MIN) * SLOT_MIN,
+                           second=0, microsecond=0)
+        if slot < fut:
+            slot += dt.timedelta(minutes=SLOT_MIN)
+        while slot < end:
+            slot_end = slot + dt.timedelta(minutes=SLOT_MIN)
             label, gcal_sty = _slot_label_gcal(slot, slot_end)
-            marker = "│"
-        else:
-            label, pid = _slot_label_toggl(slot, slot_end)
-            if not label:
-                label, gcal_sty = _slot_label_gcal(slot, slot_end)
-            marker = "│"
-
-        # Deduplicate gcal labels: show title only on first slot, then just color bar
-        if label and label.startswith("◇ "):
-            raw_title = label[2:].strip()
-            if raw_title in gcal_shown:
-                label = "◇ │"
-            else:
-                gcal_shown.add(raw_title)
-
-        # The slot containing "now" is the live row: ▶ + task + ticking elapsed
-        # (no separate inserted now-line, so each block stays exactly 8 slots;
-        # the live wall clock lives on the pinned bottom bar).
-        time_str = f"{slot:%H:%M}"
-        # Only the real current day has a "now" slot — a past day is fully
-        # elapsed, so nothing highlights as now (no false NO-TIME-ENTRY alarm).
-        is_now_slot = viewing_today and bool(slot <= now < slot_end)
-        is_running = bool(STATE.current) and is_now_slot
-        # Only show the red NO TIME ENTRY alarm when we've CONFIRMED no timer.
-        # An unconfirmed state (rate-limited fetch) renders as a plain slot.
-        is_idle_now = is_now_slot and STATE.current_known and not STATE.current
-        if is_running:
-            cur_desc = display_desc(STATE.current.get("description") or "")
-            cur_code = proj_code(STATE.current.get("project_id"))
-            pid = STATE.current.get("project_id")
-            try:
-                cst = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
-                _el = (now - cst).total_seconds()
-                _m, _s = divmod(max(0, int(_el)), 60)
-                _fr = int((_el % 1) * 10)  # tenths heartbeat on the task clock
-                elapsed = f"{_m}m{_s:02d}.{_fr}s"
-            except Exception:
-                elapsed = ""
-            label = f"▶ {cur_desc}" + (f" · {cur_code}" if cur_code else "")
-            if elapsed:
-                label += f"  {elapsed}"
-        elif is_idle_now:
-            # No timer running: flashing alarm in the spot the task would be.
-            since = _idle_since(now)
-            gap = ""
-            if since is not None:
-                _gt = max(0.0, (now - since).total_seconds())
-                _gm, _gs = divmod(int(_gt), 60)
-                _gfr = int((_gt % 1) * 10)  # tenths, matching the running clock
-                gap = f"  {_gm}m{_gs:02d}.{_gfr}s"
-            # Flash the cursor every 0.5s (toggle each half-second).
-            cursor = "█" if int(now.timestamp() * 2) % 2 == 0 else " "
-            label = f"{cursor} NO TIME ENTRY{gap}"
-            pid = None
-
-        # The now-row (running task or idle alarm) draws a rule across the
-        # width so "you are here" stands out from the plain slots. A running
-        # placeholder timer pulses red↔grey like empty time until relabelled.
-        if is_running or is_idle_now:
-            if is_idle_now:
-                cls = "class:no_entry"
-            elif _is_placeholder(cur_desc):
-                cls = f"bold {_placeholder_style(now)}"
-            else:
-                cls = f"bold {project_style(pid)}".strip() or "class:running"
-            prefix = f" {time_str} "
-            trail = max(0, WIDTH_HINT - dwidth(prefix) - dwidth(label) - 1)
-            out.append(("class:time", prefix))
-            out.append((cls, f"{label} " + "─" * trail + "\n"))
-            slot = slot_end
-            continue
-
-        # Detect placeholder BEFORE dedup rewrites the label to "″", so every
-        # slot of a placeholder run keeps pulsing (not just the first).
-        is_ph = bool(label) and not label.startswith("◇ ") and _is_placeholder(label)
-
-        # Deduplicate Toggl labels: show description only on first slot
-        if label and not label.startswith("◇ "):
-            if label in toggl_shown:
-                label = "″"
-            else:
-                toggl_shown.add(label)
-
-        # Empty PAST slot = untracked time today (each slot is 15m > 5m): pulse
-        # the row red↔grey to nag, matching the compact-block gap rows.
-        if slot_end <= now and not label:
-            fill_cls = "class:no_entry" if _gap_alarm_on(now) else "class:idle"
-            fill = "┄" * max(1, WIDTH_HINT - len(time_str) - 4)
+            # Show a gcal title only on its first slot, then just the color bar.
+            if label and label.startswith("◇ "):
+                raw_title = label[2:].strip()
+                if raw_title in gcal_shown:
+                    label = "◇ │"
+                else:
+                    gcal_shown.add(raw_title)
+            time_str = f"{slot:%H:%M}"
+            full = max(1, WIDTH_HINT - len(time_str) - 4)
+            space = full if label.startswith("◇ ") else min(DESC_MAX, full)
+            content = f" │ {truncate(label or '·', space)}\n"
             out.append(("class:time", f" {time_str}"))
-            out.append((fill_cls, f" {marker} {fill}\n"))
+            out.append((gcal_sty or "class:future", content))
             slot = slot_end
-            continue
-
-        # gcal rows carry "◇ HH:MM title" — give them the full row width so a
-        # Haiku-shortened title is never re-truncated; toggl rows keep DESC_MAX.
-        full = max(1, WIDTH_HINT - len(time_str) - 4)
-        space = full if label.startswith("◇ ") else min(DESC_MAX, full)
-        content = f" {marker} {truncate(label or '·', space)}\n"
-        if is_ph:
-            cls = _placeholder_style(now)  # pulse red↔grey like empty time
-        elif slot_end <= now:
-            cls = project_style(pid) or "class:past"
-        else:
-            cls = gcal_sty or "class:future"
-        out.append(("class:time", f" {time_str}"))
-        out.append((cls, content))
-        slot = slot_end
     # Bottom block header
     if nxt:
         bot_name, bot_sh, bot_eh = nxt
