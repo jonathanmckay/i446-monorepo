@@ -71,6 +71,27 @@ if [[ "$cache_age" -gt "$DTD_CACHE_MAX_AGE" ]]; then
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
 fi
 
+# Block-aware freshness. -1neon ritual cards roll over every 2h 地支 block (the
+# daemon deletes the old block's cards and creates the new block's). A cache
+# built in an EARLIER block is missing the current block's rituals even when it's
+# younger than DTD_CACHE_MAX_AGE — e.g. a refresh at 13:58 then dtd opened at
+# 14:05 is only 7min old but predates 未's rituals. Time-based staleness can't
+# catch this; compare the cache's block to now's and refresh on a mismatch, so a
+# new block always surfaces its -1n cards at the top (regression 2026-06-29).
+stale_block=$(python3 -c "
+import json, sys, datetime as dt
+def blk(t): return (t.date().isoformat(), max(0, min(8, (t.hour - 4) // 2)))
+try:
+    u = json.load(open(sys.argv[1])).get('updated')
+    print('1' if (not u or blk(dt.datetime.fromisoformat(u)) != blk(dt.datetime.now())) else '0')
+except Exception:
+    print('1')
+" "$CACHE" 2>/dev/null || echo 1)
+if [[ "$stale_block" == "1" ]]; then
+  echo "Cache built in a previous block. Refreshing for new-block rituals..."
+  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+fi
+
 if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   echo "Refreshing task cache..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
@@ -1120,8 +1141,19 @@ TICKER_PID=$!
 DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
 (
   last_m=$(stat -f %m "$CACHE" 2>/dev/null)
+  last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
   while [[ -f "$DTD_PORT" ]]; do
     sleep 2
+    # New 2h 地支 block: the daemon rolls the -1neon ritual cards at the boundary.
+    # Refresh the local cache so an idle-open dtd surfaces the new block's -1n
+    # cards without a relaunch (regression 2026-06-29). Delay 15s so the daemon
+    # has created them first, and background it so mtime polling keeps running;
+    # the refresh's cache-mtime bump trips the reload below.
+    cur_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
+    if [[ "$cur_blk" != "$last_blk" ]]; then
+      last_blk="$cur_blk"
+      ( sleep 15; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 ) &
+    fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
     last_m="$cur_m"
