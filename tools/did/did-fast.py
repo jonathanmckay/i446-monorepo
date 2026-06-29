@@ -1517,6 +1517,19 @@ def run_ritual(tag: str) -> dict:
         bo.write_text(new_text, encoding="utf-8")
     out["stamped"] = changed
 
+    # 3. Record the completion in completed-today so dtd hides the card at once.
+    #    dtd hides a cached task when its id is in completed-today's id map; the
+    #    ritual card lives in dtd's 'today' cache bucket, so without this record
+    #    a ritual completed in /inbound lingers in dtd until a full cache refresh
+    #    (regression 2026-06-29). Keyed by id → collision-proof.
+    if closed_id:
+        try:
+            name = (out.get("todoist", {}).get("content") or f"{marker} {tag}").strip()
+            mc.append_names([name], ids={name: closed_id})
+            out["completed_today"] = True
+        except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
+            out["completed_today_error"] = str(e)
+
     # NOTE: we deliberately do NOT write 0分!P here. P is owned solely by the
     # daemon's reconcile_p_for_day at the 2h block boundary, which scores only
     # FIRED blocks and validates 🎯/⏱️/✅ against live Toggl/Todoist. A

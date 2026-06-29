@@ -139,7 +139,7 @@ def test_detail_band_past_gap_flashes_red(monkeypatch):
     frags = mod.render_detail()
     flashing = [t for s, t in frags if s == "class:no_entry" and "┄" in t]
     assert flashing, "an untracked past stretch must render a flashing red ┄ row"
-    assert any("04:00-06:00" in t for s, t in frags), "gap shows its real span"
+    assert any("04:00 │" in t for s, t in frags), "gap is keyed by its start time"
 
 
 def test_detail_band_past_gap_muted_when_alarm_off(monkeypatch):

@@ -2238,5 +2238,25 @@
     "unit": "J",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-06-29",
+    "effective": "2026-06-28",
+    "kind": "moveout",
+    "unit_id": "1240",
+    "prop": "tc68",
+    "unit": "D091",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-06-29",
+    "effective": "2026-06-28",
+    "kind": "moveout",
+    "unit_id": "1022",
+    "prop": "kn47 K2",
+    "unit": "B207",
+    "tenant": null,
+    "baseline": false
   }
 ]

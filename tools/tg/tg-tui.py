@@ -140,6 +140,8 @@ def next_block(h: int) -> tuple[str, int, int] | None:
         return BLOCKS[0]
     return None
 SLOT_MIN = 15
+DETAIL_MIN = 5      # focus band: entries shorter than this are absorbed (no row)
+DETAIL_ROWS = 8     # focus band: target rows per block (keep the longest entries)
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "⏰"]
 
@@ -1316,7 +1318,7 @@ def _detail_merge_past(win_start, win_end) -> list[dict]:
     with consecutive same-desc fragments (stop/resume splits ≤60s apart) merged
     into one span. Chronological."""
     segs: list[dict] = []
-    for e in STATE.entries:
+    for e in sorted(STATE.entries, key=lambda x: x["start_dt"]):
         if e.get("running"):
             continue  # the live timer is the now-row's tail, not a past span
         s = max(e["start_dt"], win_start)
@@ -1332,52 +1334,93 @@ def _detail_merge_past(win_start, win_end) -> list[dict]:
     return segs
 
 
-def _detail_span_row(s, e, body_cls, body_text) -> list[tuple[str, str]]:
-    """One focus-band row keyed by an actual HH:MM-HH:MM span (not a 15-min
-    grid slot), so completed entries and gaps read at their real boundaries."""
-    span = f" {s:%H:%M}-{e:%H:%M} │ "
-    space = max(1, WIDTH_HINT - dwidth(span) - 1)
-    return [("class:time", span), (body_cls, truncate(body_text, space) + "\n")]
+def _detail_entry_row(s, body_cls, body_text) -> list[tuple[str, str]]:
+    """A focus-band row keyed by its real START time only — the end is implied by
+    the next row's start (entries are tracked MECE / back-to-back), so we don't
+    print a redundant end time."""
+    prefix = f" {s:%H:%M} │ "
+    space = max(1, WIDTH_HINT - dwidth(prefix) - 1)
+    return [("class:time", prefix), (body_cls, truncate(body_text, space) + "\n")]
 
 
-def _detail_gap_row(s, e) -> list[tuple[str, str]]:
-    """A flashing untracked-time row keyed by its real HH:MM-HH:MM span."""
+def _detail_gap_row(s) -> list[tuple[str, str]]:
+    """A flashing untracked-time row, keyed by the gap's start (its end is the
+    next row's start)."""
     fill_cls = "class:no_entry" if _gap_alarm_on() else "class:idle"
-    span = f" {s:%H:%M}-{e:%H:%M} │ "
-    fill = "┄" * max(1, WIDTH_HINT - dwidth(span) - 1)
-    return [("class:time", span), (fill_cls, fill + "\n")]
+    prefix = f" {s:%H:%M} │ "
+    fill = "┄" * max(1, WIDTH_HINT - dwidth(prefix) - 1)
+    return [("class:time", prefix), (fill_cls, fill + "\n")]
 
 
 def _detail_rule_row(s, label, cls) -> list[tuple[str, str]]:
-    """The 'you are here' now-row, anchored to its real start time (ongoing),
-    drawn as a full-width rule so it stands out from the spans above."""
-    prefix = f" {s:%H:%M}- "
+    """The 'you are here' now-row, anchored to its real start time, drawn as a
+    full-width rule so it stands out from the rows above."""
+    prefix = f" {s:%H:%M} │ "
     trail = max(0, WIDTH_HINT - dwidth(prefix) - dwidth(label) - 1)
     return [("class:time", prefix), (cls, f"{label} " + "─" * trail + "\n")]
 
 
+def _detail_cap_per_block(shown, gap_starts) -> list[dict]:
+    """Keep the focus band near DETAIL_ROWS lines per 地支 block: within each
+    block keep the longest entries (gaps in the block count against the budget),
+    absorbing the rest into their neighbours' implied spans."""
+    gaps_in: dict = {}
+    for gs in gap_starts:
+        b = hour_to_block(gs.hour)
+        key = b[0] if b else None
+        gaps_in[key] = gaps_in.get(key, 0) + 1
+    by_block: dict = {}
+    for seg in shown:
+        b = hour_to_block(seg["start"].hour)
+        by_block.setdefault(b[0] if b else None, []).append(seg)
+    keep: list[dict] = []
+    for key, segs in by_block.items():
+        budget = max(1, DETAIL_ROWS - gaps_in.get(key, 0))
+        segs.sort(key=lambda s: (s["end"] - s["start"]).total_seconds(), reverse=True)
+        keep.extend(segs[:budget])
+    return keep
+
+
 def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
-    """The focus band's elapsed region as REAL entry spans + flashing gap rows
-    (no 15-min rounding). Each tracked entry shows its actual start-end; every
-    untracked stretch ≥ GAP_MIN is its own ``HH:MM-HH:MM`` row pulsing red↔grey.
-    When ``live``, the tail is the now-row: the running timer anchored to its
-    real start with ticking elapsed, or the idle NO-TIME-ENTRY alarm. Otherwise
-    (a past day) the trailing untracked stretch is drawn as a gap row."""
-    out: list[tuple[str, str]] = []
+    """The focus band's elapsed region, keyed by real START times (end implied by
+    the next row). Tiny entries (< DETAIL_MIN) are absorbed rather than given a
+    line; each block is held near DETAIL_ROWS lines by keeping its longest
+    entries. Untracked stretches ≥ GAP_MIN flash red↔grey. When ``live`` the tail
+    is the now-row (running timer at its real start, or the idle alarm)."""
+    full = _detail_merge_past(win_start, win_end)  # all entries = coverage
+
+    # Gaps come from FULL coverage, so an absorbed tiny entry never reads as a
+    # gap. Trailing gap (after the last entry) is the live/past-day tail's job.
+    gap_starts: list = []
     cursor = win_start
-    for seg in _detail_merge_past(win_start, win_end):
+    for seg in full:
         if (seg["start"] - cursor).total_seconds() >= GAP_MIN * 60:
-            out += _detail_gap_row(cursor, seg["start"])
+            gap_starts.append(cursor)
+        cursor = max(cursor, seg["end"])
+    tail_cursor = cursor
+
+    shown = [s for s in full
+             if (s["end"] - s["start"]).total_seconds() >= DETAIL_MIN * 60]
+    shown = _detail_cap_per_block(shown, gap_starts)
+
+    rows = ([(s["start"], "e", s) for s in shown]
+            + [(g, "g", None) for g in gap_starts])
+    rows.sort(key=lambda r: r[0])
+
+    out: list[tuple[str, str]] = []
+    for tstart, kind, seg in rows:
+        if kind == "g":
+            out += _detail_gap_row(tstart)
+            continue
         code = proj_code(seg["pid"])
         label = seg["desc"] + (f"  · {code}" if code else "")
         sty = (_placeholder_style() if _is_placeholder(seg["desc"])
                else (project_style(seg["pid"]) or "class:past"))
-        out += _detail_span_row(seg["start"], seg["end"], sty, label)
-        cursor = max(cursor, seg["end"])
+        out += _detail_entry_row(seg["start"], sty, label)
 
     if not live:
-        if (win_end - cursor).total_seconds() >= GAP_MIN * 60:
-            out += _detail_gap_row(cursor, win_end)
+        if (win_end - tail_cursor).total_seconds() >= GAP_MIN * 60:
+            out += _detail_gap_row(tail_cursor)
         return out
 
     # Live tail (today, now inside the window).
@@ -1385,10 +1428,10 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
         try:
             rs = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
         except Exception:
-            rs = cursor
+            rs = tail_cursor
         rs = max(rs, win_start)
-        if (rs - cursor).total_seconds() >= GAP_MIN * 60:
-            out += _detail_gap_row(cursor, rs)
+        if (rs - tail_cursor).total_seconds() >= GAP_MIN * 60:
+            out += _detail_gap_row(tail_cursor)
         desc = display_desc(STATE.current.get("description") or "")
         code = proj_code(STATE.current.get("project_id"))
         el = max(0.0, (now - rs).total_seconds())
@@ -1398,8 +1441,7 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
                else (f"bold {project_style(STATE.current.get('project_id'))}".strip() or "class:running"))
         out += _detail_rule_row(rs, label, cls)
     elif STATE.current_known:
-        # No timer: flashing NO-TIME-ENTRY alarm anchored at the last entry's end.
-        since = _idle_since(now) or cursor
+        since = _idle_since(now) or tail_cursor
         el = max(0.0, (now - since).total_seconds())
         m, s = divmod(int(el), 60)
         curblk = "█" if int(now.timestamp() * 2) % 2 == 0 else " "

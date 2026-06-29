@@ -45,21 +45,23 @@ def _setup(mod, monkeypatch, entries, now_h, now_m, win=(4, 8), current=None):
     return today
 
 
-def test_completed_entry_shows_real_span(monkeypatch):
-    """'review elliot paper' 05:18-05:31 reads as 05:18-05:31, not a 05:15 slot."""
+def test_completed_entry_shows_start_time_only(monkeypatch):
+    """'review elliot paper' 05:18-05:31 reads as a 05:18 start row (the end is
+    implied by the next row), not a rounded 05:15 slot and not a start-end span."""
     mod = _load_tui()
-    today = _setup(mod, monkeypatch,
-                   [_entry("review elliot paper", _midnight().replace(hour=5, minute=18),
-                           _midnight().replace(hour=5, minute=31))],
-                   now_h=6, now_m=30)
+    _setup(mod, monkeypatch,
+           [_entry("review elliot paper", _midnight().replace(hour=5, minute=18),
+                   _midnight().replace(hour=5, minute=31))],
+           now_h=6, now_m=30)
     text = "".join(t for _, t in mod.render_detail())
-    assert "05:18-05:31" in text, f"entry must show its real span:\n{text}"
+    assert "05:18 │" in text, f"entry must show its real start:\n{text}"
     assert "review elliot paper" in text
-    assert "05:15-05:30" not in text and "05:15-05:48" not in text
+    assert "05:18-05:31" not in text, "no redundant end time"
+    assert "05:15-05:30" not in text
 
 
-def test_gap_after_entry_flashes_with_real_span(monkeypatch):
-    """The 05:31-05:48 untracked stretch is its own flashing gap row."""
+def test_gap_after_entry_flashes(monkeypatch):
+    """The 05:31 untracked stretch is its own flashing gap row (start-keyed)."""
     mod = _load_tui()
     base = _midnight()
     _setup(mod, monkeypatch,
@@ -71,8 +73,26 @@ def test_gap_after_entry_flashes_with_real_span(monkeypatch):
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)
     frags = mod.render_detail()
     text = "".join(t for _, t in frags)
-    assert "05:31-05:48" in text, f"interior gap must show its real span:\n{text}"
+    assert "05:31 │" in text, f"interior gap must show its start:\n{text}"
     assert any(s == "class:no_entry" and "┄" in t for s, t in frags), "gap flashes"
+
+
+def test_tiny_entry_is_absorbed_no_row(monkeypatch):
+    """A sub-DETAIL_MIN entry (e.g. a 4-min 'ibx s897') gets no line; it's
+    absorbed into the timeline rather than cluttering the focus band."""
+    mod = _load_tui()
+    base = _midnight()
+    _setup(mod, monkeypatch,
+           [_entry("deep work", base.replace(hour=5, minute=0),
+                   base.replace(hour=5, minute=40)),
+            _entry("ibx s897", base.replace(hour=5, minute=40),
+                   base.replace(hour=5, minute=44)),  # 4 min < DETAIL_MIN
+            _entry("more work", base.replace(hour=5, minute=44),
+                   base.replace(hour=6, minute=0))],
+           now_h=6, now_m=30)
+    text = "".join(t for _, t in mod.render_detail())
+    assert "deep work" in text and "more work" in text
+    assert "ibx s897" not in text, "tiny entry must be absorbed, not given a row"
 
 
 def test_running_now_row_anchored_to_real_start(monkeypatch):
@@ -83,7 +103,7 @@ def test_running_now_row_anchored_to_real_start(monkeypatch):
     _setup(mod, monkeypatch, [], now_h=6, now_m=30,
            current={"start": start_iso, "description": "vibing", "project_id": None})
     text = "".join(t for _, t in mod.render_detail())
-    assert "06:03-" in text, f"now-row anchors to the timer's real start:\n{text}"
+    assert "06:03 │" in text, f"now-row anchors to the timer's real start:\n{text}"
     assert "▶ vibing" in text
 
 
