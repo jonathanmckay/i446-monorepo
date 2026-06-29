@@ -14,6 +14,8 @@ Idempotent. Safe to run concurrently (last writer wins; both write same data).
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -27,6 +29,23 @@ import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib
 CACHE = _sp.TASK_QUEUE
 LABELS = ["关键径路", "夜neon", "0neon", "1neon"]
 CACHE_KEY = {"关键径路": "关键路径", "夜neon": "夜neon", "0neon": "0neon", "1neon": "1neon"}
+# -1neon block-ritual cards (سمش/-1g/-1ibx) roll over every 2h block and ride in
+# the cache's "today" bucket — which this lightweight refresh otherwise preserves
+# verbatim. Without refetching them, the periodic daemon never surfaces a new
+# block's rituals in dtd/tg-tui (regression 2026-06-29). Refetched + spliced into
+# "today" in main().
+RITUAL_LABEL = "-1neon"
+TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+
+
+def _nudge_tg_tui() -> None:
+    """SIGUSR1 a running tg-tui so it re-reads the freshened cache — it only
+    re-reads on startup + SIGUSR1, so a silent file rewrite wouldn't show."""
+    try:
+        pid = int(TG_TUI_PID.read_text().strip())
+        os.kill(pid, signal.SIGUSR1)
+    except (OSError, ValueError):
+        pass
 
 
 def fetch(label: str) -> tuple[str, list]:
