@@ -1567,7 +1567,17 @@ def main():
         if len(sys.argv) < 3:
             print("usage: did-fast.py --ritual <tag>", file=sys.stderr)
             sys.exit(1)
-        print(json.dumps(run_ritual(sys.argv[2]), ensure_ascii=False, indent=2))
+        result = run_ritual(sys.argv[2])
+        # Rebuild the task cache so the just-closed ritual drops from the 'today'
+        # bucket AND the cache mtime advances — that mtime bump is the only thing
+        # dtd's auto-reload watcher polls, so an open dtd updates live instead of
+        # showing the completed ritual until a manual ctrl-r (regression 2026-06-29).
+        try:
+            refresh_task_queue()
+            result["cache_refreshed"] = True
+        except Exception as e:  # noqa: BLE001 — never fail the ritual on a refresh
+            result["cache_refresh_error"] = str(e)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
     argv = sys.argv[1:]

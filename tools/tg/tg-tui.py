@@ -142,6 +142,8 @@ def next_block(h: int) -> tuple[str, int, int] | None:
 SLOT_MIN = 15
 DETAIL_MIN = 5      # focus band: entries shorter than this are absorbed (no row)
 DETAIL_ROWS = 8     # focus band: target rows per block (keep the longest entries)
+TOGGL_MIN_INTERVAL = 20   # s — coalesce bursty non-forced fetch_today calls
+RATE_LIMIT_COOLDOWN = 60  # s — back off all Toggl reads after a 402
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "⏰"]
 
@@ -252,6 +254,11 @@ class State:
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
         self.last_points_fetch = 0.0
+        # When Toggl returns a 402 (free-tier rate limit), back off until this
+        # monotonic time instead of hammering every tick/keypress — continuing to
+        # call during the limit only prolongs it.
+        self.toggl_blocked_until = 0.0
+        self.day_reload_token = 0  # debounce guard for Ctrl+←/→ day scrubbing
 
 
 STATE = State()
@@ -259,11 +266,27 @@ STATE = State()
 
 # ─── Data fetchers ─────────────────────────────────────────────────────────
 
+def _toggl_blocked() -> bool:
+    """True while inside a post-402 cooldown — skip Toggl reads entirely."""
+    return time.monotonic() < STATE.toggl_blocked_until
+
+
+def _note_rate_limit():
+    """Enter the back-off window and tell the user how long we're holding off."""
+    STATE.toggl_blocked_until = time.monotonic() + RATE_LIMIT_COOLDOWN
+    flash(f"toggl: rate limited — backing off {RATE_LIMIT_COOLDOWN}s", RATE_LIMIT_COOLDOWN)
+
+
 def fetch_current(cached=False):
     """Refresh the running timer. cached=True rides the shared current cache
     (used by the steady 30s ticker, so tg-tui and every open dtd picker share
     ~one fetch per window); the post-command bursts pass cached=False to force a
-    live read that beats Toggl's /current propagation lag."""
+    live read that beats Toggl's /current propagation lag.
+
+    Skipped entirely during a rate-limit cooldown so a 402 isn't made worse by
+    the 30s ticker continuing to poll."""
+    if _toggl_blocked():
+        return
     try:
         STATE.current = (toggl_api.get_current_cached() if cached
                          else toggl_api.get_current())
@@ -274,12 +297,26 @@ def fetch_current(cached=False):
         # as-is (last known) but mark it unconfirmed so the idle nag stays off.
         STATE.current_known = False
         if "402" in str(e):
-            flash("toggl: rate limited (free tier)", 30.0)
+            _note_rate_limit()
         else:
             flash(f"toggl current err: {e}")
 
 
-def fetch_today():
+def fetch_today(force=False):
+    """Reload the viewed day's Toggl entries.
+
+    force=True is a deliberate single action (just ran a command, ctrl-r, SIGUSR1)
+    and bypasses the burst throttle. force=False (the 5-min ticker, day-nav keys)
+    coalesces: it's skipped if another fetch landed within TOGGL_MIN_INTERVAL, so
+    rapid Ctrl+←/→ scrubbing or back-to-back commands don't each hit the API. All
+    fetches are skipped during a post-402 cooldown."""
+    if _toggl_blocked():
+        return
+    # Coalesce bursts — but a 0 sentinel means "never fetched", so the first
+    # (startup) read always runs even when monotonic() is still small.
+    if (not force and STATE.last_toggl_fetch
+            and (time.monotonic() - STATE.last_toggl_fetch) < TOGGL_MIN_INTERVAL):
+        return
     try:
         today = view_now().date()  # the viewed day (today, or a past day)
         raw = toggl_api.get_entries(
@@ -315,7 +352,7 @@ def fetch_today():
         STATE.last_toggl_fetch = time.monotonic()
     except Exception as e:
         if "402" in str(e):
-            flash("toggl: rate limited (free tier)", 30.0)
+            _note_rate_limit()
         else:
             flash(f"toggl today err: {e}")
 
@@ -1690,11 +1727,15 @@ def _(event):
         res = await asyncio.to_thread(run_tg_fast, text)
         flash(res, 6.0)
         event.app.invalidate()
-        # Toggl /current has propagation lag; poll a few times
-        for delay in (0.4, 0.8, 1.5):
+        # Toggl /current has propagation lag; poll it a few times. The entries
+        # list only needs ONE (forced) read — fetch it on the last poll so a
+        # rapid run of commands doesn't trip the rate limit with 3× get_entries.
+        polls = (0.4, 0.8, 1.5)
+        for i, delay in enumerate(polls):
             await asyncio.sleep(delay)
             await asyncio.to_thread(fetch_current)
-            await asyncio.to_thread(fetch_today)
+            if i == len(polls) - 1:
+                await asyncio.to_thread(fetch_today, True)
             event.app.invalidate()
 
     event.app.create_background_task(_run_and_refresh())
@@ -1714,10 +1755,12 @@ def _(event):
         res = await asyncio.to_thread(run_tg_fast, "stop")
         flash(res)
         event.app.invalidate()
-        for delay in (0.4, 0.8, 1.5):
+        polls = (0.4, 0.8, 1.5)
+        for i, delay in enumerate(polls):
             await asyncio.sleep(delay)
             await asyncio.to_thread(fetch_current)
-            await asyncio.to_thread(fetch_today)
+            if i == len(polls) - 1:
+                await asyncio.to_thread(fetch_today, True)
             event.app.invalidate()
 
     event.app.create_background_task(_stop())
@@ -1728,8 +1771,9 @@ def _(event):
     flash("refreshing…")
 
     async def _refresh():
+        STATE.toggl_blocked_until = 0.0  # manual refresh clears any back-off
         await asyncio.to_thread(fetch_current)
-        await asyncio.to_thread(fetch_today)
+        await asyncio.to_thread(fetch_today, True)
         await asyncio.to_thread(fetch_gcal, True)
         flash("refreshed")
         event.app.invalidate()
@@ -1750,9 +1794,17 @@ def _(event):
 
 def _reload_day(app):
     """Re-fetch the viewed day's Toggl entries, calendar, and points after a day
-    change, then repaint. Mirrors the c-r refresh but for the new day."""
+    change, then repaint. Debounced: rapid Ctrl+←/→ scrubbing issues just ONE
+    fetch once the keys settle (~0.35s), so holding the key doesn't hammer Toggl.
+    The fetch is forced (the day changed, so its data must load)."""
+    STATE.day_reload_token += 1
+    token = STATE.day_reload_token
+
     async def _r():
-        await asyncio.to_thread(fetch_today)
+        await asyncio.sleep(0.35)
+        if STATE.day_reload_token != token:
+            return  # a newer day-nav superseded this one
+        await asyncio.to_thread(fetch_today, True)
         await asyncio.to_thread(fetch_gcal, True)
         app.invalidate()
         _bg_fetch(app, fetch_points)  # slowest; repaints itself when done
@@ -1957,7 +2009,7 @@ async def _sigusr1_refresh():
     old_count = len(STATE.entries)
     await asyncio.to_thread(fetch_current)
     app.invalidate()
-    await asyncio.to_thread(fetch_today)
+    await asyncio.to_thread(fetch_today, True)
     await asyncio.to_thread(fetch_short_names)  # /did may have rewritten the cache
     # If entry count grew (task completed → new entry, or timer stopped),
     # flash purple as a prayer/mindfulness prompt
@@ -1998,7 +2050,7 @@ async def _initial_slow_fetches(app):
 async def main():
     # Fast fetches only (sub-second) — enough content for an instant first paint.
     fetch_current()
-    fetch_today()
+    fetch_today(True)  # forced: the startup load must not be throttled/coalesced
     fetch_short_names()  # dtd's abbreviated labels (local file read)
 
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)

@@ -486,29 +486,34 @@ def rjust_est(s, cols):
 # Build task list in priority order
 import datetime as _dt
 _tomorrow = (_dt.date.fromisoformat(today) + _dt.timedelta(days=1)).isoformat()
-sections = []
-# Daily habits (0neon/夜neon) recur every day; if one over-advances (e.g. it
-# got completed twice in a day, drifting its Todoist due +1) a strict due<=today
-# bound silently hides it from today's list (regression 2026-06-27: 0t due
-# tomorrow vanished). Show daily habits through tomorrow and rely on the
-# completed-today filter below to hide ones actually done today. Weekly (1neon)
-# and critical-path (关键路径) tasks keep the strict today bound.
-_daily = ('0neon', '夜neon')
-for key in ['0neon', '1neon', '关键路径', '夜neon']:
-    bound = _tomorrow if key in _daily else today
-    sections.extend([t for t in d.get(key, []) if isinstance(t, dict)
-                     and t.get('due') and t['due'] <= bound])
-# #0g tasks from today
+# Fixed list order (user spec 2026-06-29): -1n → -1g → 0n → 1n → 0g, then any
+# critical-path / uncategorized tasks. Daily habits (0neon/夜neon) recur every
+# day; if one over-advances (completed twice, due drifts +1) a strict due<=today
+# bound hides it (regression 2026-06-27: 0t due tomorrow vanished), so daily
+# sections bound to tomorrow; weekly (1neon) / critical-path keep the today bound.
+def _sec(key, bound):
+    return [t for t in d.get(key, []) if isinstance(t, dict)
+            and t.get('due') and t['due'] <= bound]
+
 today_tasks = [t for t in d.get('today', []) if isinstance(t, dict)
                and t.get('due') and t['due'] <= today]
-# -1neon block-ritual cards (سمش / -1g / -1ibx) lead the list: they're the
-# current 2h block's quick rituals and should be the first thing seen/cleared.
-rituals = [t for t in today_tasks if '-1neon' in t.get('labels', [])]
-_nonritual = [t for t in today_tasks if '-1neon' not in t.get('labels', [])]
-goals = [t for t in _nonritual if any(l in ('#0g', '#-1g') for l in t.get('labels', []))]
-rest = sorted([t for t in _nonritual if not any(l in ('#0g', '#-1g') for l in t.get('labels', []))],
+def _has(t, lab): return lab in t.get('labels', [])
+
+# -1n: block-ritual cards (سمش / -1g / -1ibx) — the current 2h block's quick rituals.
+rituals = [t for t in today_tasks if _has(t, '-1neon')]
+# -1g: this block's goals.
+neg1g = [t for t in today_tasks if _has(t, '#-1g') and not _has(t, '-1neon')]
+# 0n: daily habits (0neon + evening 夜neon). 1n: weekly habits.
+zeroneon = _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
+oneneon = _sec('1neon', today)
+# 0g: today's daily goals.
+zerog = [t for t in today_tasks if _has(t, '#0g') and not _has(t, '-1neon') and not _has(t, '#-1g')]
+# critical-path + any other uncategorized today task, by priority, at the end.
+_placed = lambda t: _has(t, '-1neon') or _has(t, '#-1g') or _has(t, '#0g')
+critical = _sec('关键路径', today)
+rest = sorted([t for t in today_tasks if not _placed(t)],
               key=lambda t: prank(t.get('priority')))
-all_tasks = rituals + sections + goals + rest
+all_tasks = rituals + neg1g + zeroneon + oneneon + zerog + critical + rest
 
 # Deduplicate by id
 seen = set()

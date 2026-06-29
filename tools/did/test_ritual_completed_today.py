@@ -35,6 +35,22 @@ def test_run_ritual_records_completed_today_by_id():
     assert "if closed_id:" in body, "completed-today write must be gated on a successful close"
 
 
+def test_ritual_dispatch_refreshes_cache():
+    """The --ritual CLI path must refresh the task cache after completing, so the
+    closed card drops from the 'today' bucket and the cache mtime bump trips
+    dtd's auto-reload watcher (the only thing it polls)."""
+    tree = ast.parse(SRC)
+    main = next((n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+    assert main is not None, "main() not found"
+    body = ast.get_source_segment(SRC, main)
+    i = body.find('"--ritual"')
+    assert i != -1, "--ritual branch not found"
+    # within the --ritual branch region, refresh_task_queue must be called
+    assert "refresh_task_queue()" in body[i:i + 600], \
+        "--ritual must call refresh_task_queue() so dtd auto-reloads"
+
+
 def test_append_names_id_makes_ritual_hideable(tmp_path):
     """End-to-end at the data layer: an id recorded by append_names lands in the
     id map that dtd reads to hide a cached card."""
