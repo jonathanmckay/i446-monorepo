@@ -839,9 +839,12 @@ def _outlook_inbox():
         f"&$select=id,subject,from,receivedDateTime,bodyPreview"
         f"&$orderby=receivedDateTime desc"
     )
+    # 5s timeout (was 30s). The outlook MCP has been timing out reliably for
+    # weeks; burning 30s per call costs ~60s of every intake. If the MCP is
+    # responsive, 5s is plenty for a single SearchMessages. v51 self-improvement.
     raw = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
         "queryParameters": query
-    }, timeout=30)
+    }, timeout=5)
     unread = []
     if raw and raw.get("content"):
         for item in raw["content"]:
@@ -869,7 +872,7 @@ def _outlook_inbox():
     )
     raw_sent = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
         "queryParameters": f"/me/mailFolders/SentItems/messages{sent_query}"
-    }, timeout=30)
+    }, timeout=5)
     sent = []
     if raw_sent and raw_sent.get("content"):
         for item in raw_sent["content"]:
@@ -904,7 +907,7 @@ def _outlook_calendar():
         "startDateTime": yesterday,
         "endDateTime": day_after,
         "top": "50",
-    }, timeout=30)
+    }, timeout=5)
     events = []
     if raw and raw.get("content"):
         for item in raw["content"]:
