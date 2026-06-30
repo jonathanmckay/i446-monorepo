@@ -6,14 +6,18 @@ import textwrap
 import pytest
 
 
-def _load_do_append_source() -> str:
-    """Extract the do_append function source from server.py."""
-    with open("server.py") as f:
-        tree = ast.parse(f.read())
+def _load_func_source(name: str) -> str:
+    """Extract a top-level function's source from server.py."""
+    text = open("server.py").read()
+    tree = ast.parse(text)
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "do_append":
-            return ast.get_source_segment(open("server.py").read(), node)
-    raise AssertionError("do_append not found in server.py")
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(text, node)
+    raise AssertionError(f"{name} not found in server.py")
+
+
+def _load_do_append_source() -> str:
+    return _load_func_source("do_append")
 
 
 class TestAppendStringValues:
@@ -41,4 +45,33 @@ class TestAppendStringValues:
         src = _load_do_append_source()
         assert 'lstrip(", ")' in src, (
             "do_append must strip leading ', ' from string values for empty cells"
+        )
+
+
+class TestLookupRowDateMatching:
+    """Regression: 0n's date column (C) holds real Excel DATE values, which
+    AppleScript renders as 'Tuesday, June 30, 2026 …' — an exact '= "6/30"'
+    string match misses every row, so /salat and any date= write to 0n failed.
+    lookup_row must compare a real date cell by month/day and keep the text path
+    for the M/D-text sheets (0分, hcbi, 1n+)."""
+
+    def test_lookup_row_handles_real_date_cells(self):
+        src = _load_func_source("lookup_row")
+        assert "(class of cv) is date" in src, (
+            "lookup_row must detect real Excel date cells, not only M/D text"
+        )
+        assert "month of cv" in src and "day of cv" in src, (
+            "a real date cell must be matched by its month/day"
+        )
+
+    def test_lookup_row_keeps_text_match_path(self):
+        src = _load_func_source("lookup_row")
+        assert "cv as text" in src, (
+            "lookup_row must still match M/D-text date columns (0分, hcbi)"
+        )
+
+    def test_lookup_row_skips_empty_cells(self):
+        src = _load_func_source("lookup_row")
+        assert "missing value" in src, (
+            "lookup_row must skip empty date cells (cv is missing value)"
         )
