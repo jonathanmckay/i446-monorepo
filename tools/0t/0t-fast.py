@@ -423,6 +423,17 @@ def main():
     if "error" in did_result:
         failed = True
 
+    # 5b. Refresh the dtd task cache so 0t drops off the list. mark_done() records
+    # 0t in completed-today, but dtd's auto-reload watcher only fires on a cache
+    # mtime change — without this, an open dtd keeps showing 0t until the user
+    # interacts (regression 2026-06-30). Foreground so it actually completes.
+    try:
+        subprocess.run(["python3", str(DID_FAST), "--refresh-cache"],
+                       capture_output=True, text=True, timeout=45)
+        output["dtd_cache"] = "refreshed"
+    except Exception as e:
+        output["dtd_cache"] = f"ERROR: {e}"
+
     # 6. Refresh dashboard points cache
     try:
         days = refresh_points_cache()

@@ -137,3 +137,18 @@ def test_write_tag_minutes_uses_absolute_overwrite():
             )
             return
     raise AssertionError("write_tag_minutes function not found")
+
+
+def test_marks_done_then_refreshes_dtd_cache():
+    """/0t records 0t in completed-today via mark_done(), but dtd only reloads on a
+    cache mtime change — so 0t-fast must run did-fast --refresh-cache after marking
+    done, else 0t lingers on the dtd list (regression 2026-06-30)."""
+    import ast
+    src = (Path(__file__).parent / "0t-fast.py").read_text()
+    main = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    body = ast.get_source_segment(src, main)
+    assert '"--refresh-cache"' in body, "0t-fast main() must refresh the dtd cache"
+    # and it must come AFTER mark_done() so completed-today is already written
+    assert body.index("mark_done()") < body.index('"--refresh-cache"'), \
+        "refresh must follow mark_done()"

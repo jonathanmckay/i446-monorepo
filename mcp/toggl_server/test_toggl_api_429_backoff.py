@@ -9,9 +9,21 @@ import sys
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 MCP_DIR = Path(__file__).resolve().parents[1]  # .../i446-monorepo/mcp
 sys.path.insert(0, str(MCP_DIR))
 from toggl_server import toggl_api  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_throttle(monkeypatch):
+    """These tests exercise _request's 429 retry/backoff in isolation. The
+    client-side throttle is tested separately (test_throttle.py); stub it here so
+    its cross-process state file and internal time.sleep() (which shares the same
+    `time` module the tests monkeypatch) don't perturb the backoff assertions."""
+    monkeypatch.setattr(toggl_api.throttle, "acquire", lambda *a, **k: 0.0)
+    monkeypatch.setattr(toggl_api.throttle, "note_rate_limit", lambda *a, **k: None)
 
 
 class _FakeResp:
