@@ -101,13 +101,13 @@ For each **new** goal (no existing match), create a Todoist task using the Todoi
 
 ### Step 5: Refresh the dtd task cache
 
-After creating the Todoist task(s), refresh the dtd/did task cache so the new goal shows up in dtd (it sorts into the high `#-1g` goals tier). Run in the background — never block the confirm on it:
+After creating the Todoist task(s), refresh the dtd/did task cache so the new goal shows up in dtd (it sorts into the high `#-1g` goals tier). Run it **foreground** (NOT backgrounded with `&`): a backgrounded job is torn down when the shell/tool call returns before the ~2s refresh finishes, so the goal never reaches the cache and dtd never updates (regression 2026-06-30):
 
 ```bash
-python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1 &
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
 ```
 
-This updates `~/.local/state/jm/task-queue.json`; an open dtd auto-reloads off that cache (its watcher copies the change into the snapshot and POSTs a reload to fzf), so the goal appears without a manual ctrl-r. Skip this step only when no task was created (all goals were dedup'd away).
+This updates `~/.local/state/jm/task-queue.json`; an open dtd auto-reloads off that cache (its watcher copies the change into the snapshot and POSTs a reload to fzf), so the goal appears without a manual ctrl-r. The did-refresh-cache daemon also picks up `#-1g` within ~3min as a fallback. Skip this step only when no task was created (all goals were dedup'd away).
 
 ### Step 5.5: Close the `-1g` ritual card (current block only)
 
