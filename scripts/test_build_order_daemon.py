@@ -173,6 +173,56 @@ def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
     assert mod.score_block_from_emojis("巳", live={"🎯": True, "⏱️": False, "✅": False}) == 3
 
 
+def test_block_has_goals_rejects_whitespace_only_bullet(tmp_path, monkeypatch):
+    """Regression: an empty goal bullet '- [ ] ' (trailing space) must NOT count
+    as a goal. The old regex `\\s*.+` matched the trailing whitespace, so a
+    goal-less block earned a phantom 🎯 at its fire."""
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    build.write_text(
+        "## -1₲\n\n"
+        "- 卯 ☀️\n"
+        "    - [ ] \n"             # empty (trailing space) → no goal
+        "- 辰 🎯\n"
+        "    - [ ] real goal\n",   # has text → goal
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+    assert mod._block_has_goals("卯") is False
+    assert mod._block_has_goals("辰") is True
+
+
+def test_strip_unearned_markers_removes_phantom_but_guards_none(tmp_path, monkeypatch):
+    """_strip_unearned_markers drops a daemon-owned marker the live data says
+    wasn't earned (e.g. a phantom ✅), never touches ☀️/📧, and is a no-op when
+    live is None (an API failure must not destroy a genuinely-earned mark)."""
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    original = (
+        "## -1₲\n\n"
+        "- 辰 ✅ ☀️ 🎯\n"
+        "    - [ ] real goal\n"
+    )
+    build.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+
+    # live=None → no-op (guard against transient API failure)
+    mod._strip_unearned_markers("辰", None)
+    assert build.read_text(encoding="utf-8") == original
+
+    # ✅ not earned, 🎯 earned → strip ✅ only; keep ☀️ (no validator) + 🎯
+    mod._strip_unearned_markers("辰", {"🎯": True, "⏱️": False, "✅": False})
+    line = next(l for l in build.read_text(encoding="utf-8").split("\n")
+                if l.startswith("- 辰"))
+    assert "✅" not in line and "☀️" in line and "🎯" in line
+
+    # dry_run leaves the file untouched
+    build.write_text(original, encoding="utf-8")
+    mod._strip_unearned_markers("辰", {"🎯": True, "⏱️": False, "✅": False},
+                                dry_run=True)
+    assert build.read_text(encoding="utf-8") == original
+
+
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     """Regression (2026-06-12): enrich writes mid-line annotations on block
     headers (`- 辰 (25min)   (32min) ⏰`, `(15分, 163min)`). The old matcher

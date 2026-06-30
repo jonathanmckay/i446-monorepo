@@ -26,21 +26,22 @@ def test_detects_newer_file_on_disk():
     mod = _load_tui()
     # Simulate the file being rewritten after this process loaded.
     mod._SRC_MTIME = mod._SRC.stat().st_mtime - 100  # we "loaded" 100s before the file
-    mod._stale_state["checked"] = 0.0                # bust the 5s cache
-    assert mod._code_is_stale() is True
+    mod._stale_state["checked"] = 0.0
+    # now=100 forces a re-check (100 - 0 > 5) regardless of sandbox monotonic.
+    assert mod._code_is_stale(now=100.0) is True
 
 
 def test_header_shows_restart_banner_when_stale():
     mod = _load_tui()
     mod.STATE.today_points = 0
     mod.STATE.day_offset = 0
-    # Not stale → normal header, no banner.
-    mod._SRC_MTIME = mod._SRC.stat().st_mtime + 100
-    mod._stale_state["checked"] = 0.0
+    # Pin the cached verdict so render_header's _code_is_stale() (called with no
+    # `now`) returns it without re-statting: a far-future `checked` keeps elapsed
+    # negative, so the cache is never refreshed.
+    mod._stale_state.update({"checked": 1e12, "stale": False})
     assert "RESTART" not in "".join(t for _, t in mod.render_header())
-    # Stale → red RESTART banner.
-    mod._SRC_MTIME = mod._SRC.stat().st_mtime - 100
-    mod._stale_state["checked"] = 0.0
+
+    mod._stale_state.update({"checked": 1e12, "stale": True})
     frags = mod.render_header()
     text = "".join(t for _, t in frags)
     assert "RESTART" in text
