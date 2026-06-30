@@ -1461,7 +1461,14 @@ def snapshot_build_order():
         return  # already archived
     if BUILD_ORDER.exists():
         v_logs.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(BUILD_ORDER.read_text())
+        # Prepend a wikilink to the previous day's archive so the dailies are
+        # navigable backward in Obsidian.
+        try:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import build_order_links as _bol
+            snapshot.write_text(_bol.with_prev_day_link(BUILD_ORDER.read_text(), yesterday.date()))
+        except Exception:
+            snapshot.write_text(BUILD_ORDER.read_text())
         # After archiving yesterday, reset the new day: strip stale emoji
         # markers AND wipe yesterday's -1₲ goals/actuals so /inbound focuses on
         # today (yesterday's cards don't carry over). Runs once per day — gated

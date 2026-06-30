@@ -31,7 +31,17 @@ sys.modules["ix_osa"] = _ix_mod
 _IX_SPEC.loader.exec_module(_ix_mod)
 ix_run = _ix_mod.run
 
+# toggl client-side throttle — shared (fcntl-locked) state file across every
+# process that hits Toggl, so this standalone script can't burst past the others
+# and trip the free-tier limit. Loaded by path (it has no relative imports).
+_TH_PATH = Path.home() / "i446-monorepo/mcp/toggl_server/throttle.py"
+_TH_SPEC = importlib.util.spec_from_file_location("toggl_throttle", _TH_PATH)
+_throttle = importlib.util.module_from_spec(_TH_SPEC)
+sys.modules["toggl_throttle"] = _throttle
+_TH_SPEC.loader.exec_module(_throttle)
+
 # toggl — direct API calls (can't import toggl_api due to relative imports)
+import urllib.error  # noqa: E402
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 SLEEP_PROJECT_ID = 108358083
 HCMC_PROJECT_ID = 109932707
@@ -61,8 +71,14 @@ def _toggl_get(path: str) -> list | dict:
     creds = base64.b64encode(f"{TOGGL_API_KEY}:api_token".encode()).decode()
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Basic {creds}")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    _throttle.acquire()  # share the cross-process pacing + post-402 cooldown
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code in (402, 429):
+            _throttle.note_rate_limit()
+        raise
 
 # did-fast
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"

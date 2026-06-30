@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+from . import throttle
 from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
 BASE_URL = "https://api.track.toggl.com/api/v9"
@@ -79,6 +80,7 @@ def _request(method, path, body=None):
     # to the UI and the next poll re-trips it — the same pattern ibx/slack.py
     # and ibx/sync_external_replies.py already use for their APIs.
     for attempt in range(_MAX_429_RETRIES):
+        throttle.acquire()  # client-side pacing, shared across all processes
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", _auth_header())
         req.add_header("Content-Type", "application/json")
@@ -92,6 +94,10 @@ def _request(method, path, body=None):
                     return result
                 return None
         except urllib.error.HTTPError as e:
+            # 402 (free-tier cap) and 429 both mean "slow down": arm the shared
+            # cooldown so every process — not just this one — backs off.
+            if e.code in (402, 429):
+                throttle.note_rate_limit()
             if e.code == 429 and attempt < _MAX_429_RETRIES - 1:
                 retry_after = e.headers.get("Retry-After")
                 delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
@@ -190,6 +196,7 @@ def update_entry(entry_id, **fields):
 
 def delete_entry(entry_id):
     url = f"{BASE_URL}/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
+    throttle.acquire()  # same client-side pacing as _request()
     req = urllib.request.Request(url, method="DELETE")
     req.add_header("Authorization", _auth_header())
     try:
@@ -200,4 +207,6 @@ def delete_entry(entry_id):
                 _notify_tui()
             return ok
     except urllib.error.HTTPError as e:
+        if e.code in (402, 429):
+            throttle.note_rate_limit()
         raise RuntimeError(f"Toggl API DELETE -> {e.code}: {e.read().decode()}")
