@@ -1744,28 +1744,14 @@ end tell'''
         except Exception:
             pass  # non-critical
 
-    # 5d. Task marker: write ✅ to build order when a Todoist task is completed
-    task_done = any(r.step == "todoist" for r in fast)
-    if task_done:
-        try:
-            _bo = Path.home() / "vault/g245/build-order.md"
-            if _bo.exists():
-                _now_h = datetime.now().hour
-                _bidx = max(0, min(8, (_now_h - 4) // 2))
-                _branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
-                _bname = _branches[_bidx]
-                _bo_text = _bo.read_text()
-                if "## -1₲" in _bo_text:
-                    _lines = _bo_text.split("\n")
-                    _new = []
-                    for _l in _lines:
-                        if (_l.startswith(f"- {_bname}") and "✅" not in _l):
-                            _new.append(f"{_l.rstrip()} ✅")
-                        else:
-                            _new.append(_l)
-                    _bo.write_text("\n".join(_new))
-        except Exception:
-            pass  # non-critical
+    # 5d. (removed) The -1l task marker (✅) is daemon-owned. It used to be
+    # stamped here on the *current* in-progress block on every task completion,
+    # but -1t/-1l are retrospective rituals: they belong to the most-recently-
+    # completed block and are evaluated at its closing fire by the build-order
+    # daemon's evaluate_and_mark_block (which validates that the block's in-window
+    # completions were all pointed). Eager-stamping the live block both mis-
+    # attributed the marker (current block, not the completed one) and over-
+    # stamped it (any completion, pointed or not), so it was removed.
 
     # 5e. Flip build order checkboxes for completed tasks
     # Matches closed Todoist tasks and build_order items against -1₲ goals
