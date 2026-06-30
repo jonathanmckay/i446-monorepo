@@ -144,6 +144,32 @@ DETAIL_MIN = 5      # focus band: entries shorter than this are absorbed (no row
 DETAIL_ROWS = 8     # focus band: target rows per block (keep the longest entries)
 TOGGL_MIN_INTERVAL = 20   # s — coalesce bursty non-forced fetch_today calls
 RATE_LIMIT_COOLDOWN = 60  # s — back off all Toggl reads after a 402
+
+# Staleness self-check: a long-lived tg-tui keeps running the code it loaded at
+# launch, so a shipped fix is invisible until restart — which has repeatedly
+# masked fixes (stuck 4227 block points, old residual reconstruction, …). Capture
+# the source mtime at import; render_header warns when the file on disk is newer.
+try:
+    _SRC = Path(__file__).resolve()
+    _SRC_MTIME = _SRC.stat().st_mtime
+except (OSError, NameError):
+    _SRC, _SRC_MTIME = None, 0.0
+_stale_state = {"checked": 0.0, "stale": False}
+
+
+def _code_is_stale(now=None) -> bool:
+    """True when tg-tui.py on disk is newer than this running process loaded.
+    Cached ~5s so the 0.1s repaint doesn't stat the file every frame."""
+    if _SRC is None:
+        return False
+    t = now if now is not None else time.monotonic()
+    if t - _stale_state["checked"] > 5.0:
+        _stale_state["checked"] = t
+        try:
+            _stale_state["stale"] = _SRC.stat().st_mtime > _SRC_MTIME + 1.0
+        except OSError:
+            _stale_state["stale"] = False
+    return _stale_state["stale"]
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "⏰"]
 
@@ -619,7 +645,8 @@ end tell'''
             STATE.last_points_fetch = time.monotonic()
             # Only adopt fresh blocks alongside a freshly-accepted total — never
             # pair new blocks with a stale total kept from a torn read.
-            if total_ok and _blocks_consistent(STATE.today_points, bp_excel):
+            if (total_ok and _blocks_consistent(STATE.today_points, bp_excel)
+                    and _blocks_plausible(bp_excel)):
                 STATE.block_points = bp_excel
                 # Current-block running 分 = Σ − locked, rounded ONCE in full
                 # precision so it equals the sheet's own residual cell (a 217.5分
@@ -671,6 +698,18 @@ def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
     blocks are literals and Σ may legitimately exceed their sum, so only the
     sum > Σ direction is rejected."""
     return sum(bp.values()) <= total + 2
+
+
+def _blocks_plausible(bp: dict[str, int]) -> bool:
+    """No single block may exceed the heaviest realistic DAY total.
+
+    The first-unlocked block's G:O cell is the residual =D-SUM(locked); when D is
+    read mid-recalc and spikes, that residual spikes with it (辰 read 4227 on a
+    429分 day, 2026-06-30). _blocks_consistent can't catch it — the residual makes
+    sum==Σ by construction — and if the torn Σ slipped past _total_trustworthy too,
+    the spike stuck on screen. A single block topping _MAX_PLAUSIBLE_TOTAL is
+    impossible on a real day, so reject the whole read and keep the last good."""
+    return all(v <= _MAX_PLAUSIBLE_TOTAL for v in bp.values())
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
@@ -870,6 +909,12 @@ def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(TZ)
     pts = STATE.today_points
     pts_str = f" · {pts}分" if pts else ""
+    # The running process is behind the file on disk → tell the user to restart;
+    # the whole header goes red so it can't be missed.
+    if _code_is_stale():
+        title = f" tg · ⚠ RESTART — code updated{pts_str} "
+        line = title + "─" * max(0, WIDTH_HINT - len(title))
+        return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
         title = f" tg · {now:%a %H:%M:%S}{pts_str} "
         line = title + "─" * max(0, WIDTH_HINT - len(title))

@@ -46,3 +46,25 @@ def test_fetch_points_guards_block_assignment():
     guard_i = src.index("_blocks_consistent")
     assign_i = src.index("STATE.block_points = bp_excel")
     assert guard_i < assign_i, "consistency guard must gate the assignment"
+
+
+def test_rejects_implausible_block_spike():
+    """2026-06-30 bug: a torn read spiked the residual block 辰 to 4227 on a
+    429分 day; _blocks_consistent passed (the residual makes sum==Σ), so the
+    spike stuck on screen. A single block above _MAX_PLAUSIBLE_TOTAL is
+    impossible — reject the whole read."""
+    mod = _load_tui()
+    assert not mod._blocks_plausible({"卯": 33, "辰": 4227})
+    assert mod._blocks_plausible({"卯": 33, "辰": 396})  # the real residual
+    assert mod._blocks_plausible({}), "an empty read is plausible"
+
+
+def test_fetch_points_guards_against_block_spike():
+    """Structural: the plausibility cap must also gate the block assignment, so a
+    torn residual can't sit in block_points even when sum==Σ slips past."""
+    mod = _load_tui()
+    src = inspect.getsource(mod.fetch_points)
+    assert "_blocks_plausible" in src, "fetch_points must apply the per-block cap"
+    guard_i = src.index("_blocks_plausible")
+    assign_i = src.index("STATE.block_points = bp_excel")
+    assert guard_i < assign_i, "plausibility cap must gate the assignment"

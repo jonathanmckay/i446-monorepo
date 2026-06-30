@@ -641,8 +641,22 @@ def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
         bn = HOUR_TO_BRANCH_BLOCK.get(fh)
         if not bn:
             continue  # 04 is the day start — no just-ended block
-        live = current_live if (fh == upto_hour and current_live is not None) \
-            else _live_for_block(bn, fh, target_date)
+        if fh == upto_hour and current_live is not None:
+            live = current_live  # just-ended block: already evaluated + stamped
+        else:
+            # An already-closed block: re-validate against fresh live data and
+            # back-fill ONLY the retrospective auto markers (-1t ⏱️, -1l ✅) when
+            # Toggl/Todoist data that landed after the block's own boundary fire
+            # now satisfies them. This keeps each completed block's -1t/-1l
+            # accurate, not only the one that closed with its data already
+            # settled. -1g (🎯) is deliberately excluded: goals are a manual,
+            # current-block ritual, never back-filled onto a past block.
+            live = _live_for_block(bn, fh, target_date)
+            if live:
+                if live.get(TOGGL_MARKER):
+                    _write_block_marker(bn, TOGGL_MARKER, dry_run=dry_run)
+                if live.get(TODOIST_MARKER):
+                    _write_block_marker(bn, TODOIST_MARKER, dry_run=dry_run)
         parts.append(score_block_from_emojis(bn, live=live))
     total = sum(parts)
     formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
