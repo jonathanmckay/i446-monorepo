@@ -44,16 +44,29 @@ def osascript(script: str) -> tuple[int, str, str]:
 
 
 def lookup_row(sheet: str, date_str: str) -> int | None:
-    """Find the row in `sheet` where the date column equals `date_str` (M/D)."""
+    """Find the row in `sheet` whose date column matches `date_str` (M/D).
+
+    The date column may hold EITHER an `M/D` text string (0分, hcbi, 1n+) OR a
+    real Excel date value (0n col C), which AppleScript's `string value` renders
+    as a long locale string like "Tuesday, June 30, 2026 …" — a plain `=`
+    against "6/30" misses it. So compare a real date by its month/day and fall
+    back to a text compare otherwise; empty cells are skipped."""
     dc = DATE_COL.get(sheet)
     if not dc:
         return None
+    target = safe_str(date_str)
     script = f'''
 tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of active workbook
     repeat with i from 2 to 800
-        if (string value of cell ("{dc}" & i) of theSheet) = "{date_str}" then
-            return i
+        set cv to value of cell ("{dc}" & i) of theSheet
+        if cv is not missing value then
+            if (class of cv) is date then
+                set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
+                if md = "{target}" then return i
+            else
+                if (cv as text) = "{target}" then return i
+            end if
         end if
     end repeat
     return 0

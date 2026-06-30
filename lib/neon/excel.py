@@ -109,11 +109,24 @@ def _ssh_fallback(op: str, sheet: str, col: str,
     """If the daemon is unreachable, fall back to one-shot ssh+osascript."""
     if row is None and date is not None:
         dc = _DATE_COL.get(sheet, "B")
+        # Match an M/D text cell OR a real Excel date cell (0n col C) by month/day
+        # — see lookup_row() in services/excel-http/server.py for the rationale.
         lookup_script = (
-            f'tell application "Microsoft Excel" to '
-            f'(repeat with i from 2 to 800\n'
-            f'  if (string value of cell ("{dc}" & i) of sheet "{sheet}" of active workbook) = "{date}" then return i\n'
-            f'end repeat\nreturn 0)'
+            f'tell application "Microsoft Excel"\n'
+            f'  set ws to sheet "{sheet}" of active workbook\n'
+            f'  repeat with i from 2 to 800\n'
+            f'    set cv to value of cell ("{dc}" & i) of ws\n'
+            f'    if cv is not missing value then\n'
+            f'      if (class of cv) is date then\n'
+            f'        set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)\n'
+            f'        if md = "{date}" then return i\n'
+            f'      else\n'
+            f'        if (cv as text) = "{date}" then return i\n'
+            f'      end if\n'
+            f'    end if\n'
+            f'  end repeat\n'
+            f'  return 0\n'
+            f'end tell'
         )
         r = subprocess.run(
             ["ssh", DAEMON_HOST, "osascript", "-e", lookup_script],
