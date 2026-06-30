@@ -657,6 +657,9 @@ def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
                     _write_block_marker(bn, TOGGL_MARKER, dry_run=dry_run)
                 if live.get(TODOIST_MARKER):
                     _write_block_marker(bn, TODOIST_MARKER, dry_run=dry_run)
+        # Drop any daemon-owned marker that fresh live data says wasn't earned,
+        # so phantoms (stale ✅/⏱️/🎯) don't linger on the header.
+        _strip_unearned_markers(bn, live, dry_run=dry_run)
         parts.append(score_block_from_emojis(bn, live=live))
     total = sum(parts)
     formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
@@ -764,7 +767,7 @@ def _block_has_goals(block_name: str) -> bool:
             name = _block_line_name(line)
             current_block = name
         elif current_block == block_name:
-            if re.match(r"^    - \[[ xX]\]\s*.+", line):
+            if re.match(r"^    - \[[ xX]\]\s*\S", line):  # require real goal text, not just trailing whitespace
                 return True
     return False
 
@@ -950,9 +953,15 @@ def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     return True
 
 
+DAEMON_OWNED_MARKERS = {GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER}
+
+
 def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
     """Sum points from emojis on the block header, validated against `live`
-    results so stale markers don't score. See `_marker_earned`."""
+    results so stale markers don't score. See `_marker_earned`. Pure read — the
+    header is NOT mutated here (stripping stale markers is a separate concern;
+    see `_strip_unearned_markers`), so a later re-score with different `live`
+    still sees every marker."""
     if not BUILD_ORDER.exists():
         return 0
     text = BUILD_ORDER.read_text(encoding="utf-8")
@@ -976,6 +985,48 @@ def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
                 log(msg)
                 return score
     return 0
+
+
+def _strip_unearned_markers(block_name: str, live: dict | None,
+                            dry_run: bool = False) -> None:
+    """Remove daemon-owned markers (🎯/⏱️/✅) from a block header when a
+    successful live re-validation proves they weren't earned, so phantom marks
+    (e.g. a stale ✅ from a prior day, or an old eager task-completion stamp)
+    don't linger visually. No-op when `live is None` (a Toggl/Todoist API
+    failure must never destroy a genuinely-earned mark) and never touches
+    ☀️/📧 (no daemon-side validator)."""
+    if not live or not BUILD_ORDER.exists():
+        return
+    unearned = [m for m in DAEMON_OWNED_MARKERS if m in live and not live[m]]
+    if not unearned:
+        return
+    text = BUILD_ORDER.read_text(encoding="utf-8")
+    if "## -1₲" not in text:
+        return
+    lines = text.split("\n")
+    in_section = False
+    for i, line in enumerate(lines):
+        if line.startswith("## -1₲"):
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if not in_section:
+            continue
+        if (line.startswith("- ") and not line.startswith("    ")
+                and _block_line_name(line) == block_name):
+            present = [m for m in unearned if m in line]
+            if present:
+                new_line = line
+                for m in present:
+                    new_line = new_line.replace(m, "")
+                new_line = re.sub(r"\s{2,}", " ", new_line).rstrip()
+                if new_line != line and not dry_run:
+                    lines[i] = new_line
+                    BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
+                log(f"strip: {block_name} removed stale {present}"
+                    + (" [DRY RUN]" if dry_run else ""))
+            return
 
 
 # --- Mode: lock-and-mark ---
