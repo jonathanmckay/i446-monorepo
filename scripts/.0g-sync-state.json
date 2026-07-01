@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-01T06:00:08.014110-07:00"
+  "tasks": {
+    "go for another run": {
+      "todoist_id": "6h2XgGg9Wvh3j9W2",
+      "minutes": 40
+    },
+    "5 info tasks": {
+      "todoist_id": "6h2XgGh48GWG4r42",
+      "minutes": 40
+    },
+    "do something unique and fun with tr": {
+      "todoist_id": "6h2XgGpc5hMCr2xR",
+      "minutes": 40
+    },
+    "30m 冥想": {
+      "todoist_id": "6h2XgGrhpQ3776XR",
+      "minutes": 25
+    }
+  },
+  "last_sync": "2026-07-01T10:00:05.648780-07:00"
 }
