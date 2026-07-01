@@ -23,6 +23,25 @@ loop_line=$(grep -n '^while true; do' "$DTD" | head -1 | cut -d: -f1)
 [[ -n "$watch_line" && -n "$loop_line" && "$watch_line" -lt "$loop_line" ]] \
   || fail "watcher ($watch_line) must launch before the UI loop ($loop_line)"
 
+# ── 1b. The watcher must rebuild the completed-today overlay from the LIVE $DONE
+#        before reloading. While dtd sits idle the UI loop is blocked on fzf, so
+#        $DTD_DONE_FILE goes stale; a task completed in /inbound (which writes the
+#        live $DONE AND refreshes the cache, tripping this watcher) would then
+#        reload against a stale overlay and stay visible if the refreshed cache
+#        still carries it (Todoist propagation lag) — the "-1g completed in
+#        inbound didn't come off dtd" bug (2026-07-01).
+grep -q 'mv "\$DTD_DONE_FILE.tmp" "\$DTD_DONE_FILE"' "$DTD" \
+  || fail "watcher does not rebuild the completed-today overlay before reload"
+rebuild_line=$(grep -n 'mv "\$DTD_DONE_FILE.tmp" "\$DTD_DONE_FILE"' "$DTD" | head -1 | cut -d: -f1)
+watch_start=$(grep -n 'Auto-reload watcher' "$DTD" | head -1 | cut -d: -f1)
+post_line=$(grep -n 'reload(\$DTD_WATCH_RELOAD)' "$DTD" | head -1 | cut -d: -f1)
+[[ -n "$rebuild_line" && -n "$watch_start" && -n "$post_line" \
+   && "$rebuild_line" -gt "$watch_start" && "$rebuild_line" -lt "$post_line" ]] \
+  || fail "overlay rebuild ($rebuild_line) must sit inside the watcher, before the reload POST ($post_line)"
+# The rebuild must read the LIVE done file ($DONE), not the frozen overlay.
+awk "NR>=$watch_start && NR<=$post_line" "$DTD" | grep -q '"\$DONE"' \
+  || fail "watcher overlay rebuild must read the LIVE \$DONE, not the frozen \$DTD_DONE_FILE"
+
 # ── 2. Functional: prove the watcher mechanism — on a cache mtime advance it
 #       copies live->snapshot and POSTs reload(...) to the fzf port; it stays
 #       silent when the cache is unchanged. Uses the SAME constructs as dtd.sh.

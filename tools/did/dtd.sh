@@ -1158,6 +1158,23 @@ DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
     last_m="$cur_m"
     cp "$CACHE" "$DTD_CACHE_FILE" 2>/dev/null
+    # Rebuild the completed-today overlay from the LIVE $DONE before reloading.
+    # The UI loop only regenerates $DTD_DONE_FILE when it cycles (on user
+    # interaction); while dtd sits idle that overlay goes stale. Without this, a
+    # task just completed in /inbound (which writes the live $DONE AND refreshes
+    # the cache, tripping this watcher) reloads against a stale overlay and stays
+    # visible if the refreshed cache still carries it (Todoist "today | overdue"
+    # propagation lag) — e.g. a -1g ritual completed in inbound not coming off
+    # dtd. Mirrors the UI-loop build (see below); atomic write so a concurrent
+    # reload never reads a torn file.
+    _dn=$(jq -c --arg t "$LOCAL_TODAY" 'if .date == $t then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
+    _di=$(jq -c --arg t "$LOCAL_TODAY" 'if .date == $t then (.ids // {}) else {} end' "$DONE" 2>/dev/null || echo '{}')
+    _se=$(jq -c -R -s 'split("\n") | map(select(. != ""))' < "$DTD_SESSION" 2>/dev/null || echo '[]')
+    _ac=$(echo "[$_dn, $_se]" | jq -c 'add | map(ascii_downcase)' 2>/dev/null || echo '[]')
+    if jq -cn --arg t "$LOCAL_TODAY" --argjson names "$_ac" --argjson ids "$_di" \
+         '{date: $t, names: $names, ids: $ids}' > "$DTD_DONE_FILE.tmp" 2>/dev/null; then
+      mv "$DTD_DONE_FILE.tmp" "$DTD_DONE_FILE"
+    fi
     port=$(cat "$DTD_PORT" 2>/dev/null)
     [[ -z "$port" ]] && continue
     if [[ -n "$FZF_API_KEY" ]]; then
