@@ -15,6 +15,7 @@ import json
 import os
 import re
 import readline  # enables line editing (backspace, arrows) in input()
+import shlex
 import subprocess
 import sys
 import threading
@@ -757,9 +758,23 @@ def spawn_1g_background(goals_text):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"1g-{int(time.time())}.log"
     log_fh = open(log_path, "wb")
+    # Create the Todoist goals via /-1g, THEN deterministically refresh the dtd
+    # cache so the new #-1g goal surfaces in an open dtd (its watcher reloads on
+    # the cache-mtime bump). We must run the refresh ourselves, NOT rely on the
+    # skill's own Step-5 refresh: this `claude -p` runs headless in an untrusted
+    # workspace, which suppresses its Bash tool calls ("Ignoring permissions.allow
+    # … not been trusted"), so the skill's refresh never ran and a goal set via
+    # inbound never reached dtd (bug 2026-07-01). `;` (not `&&`) so the refresh
+    # runs even if claude exits non-zero.
+    did_fast = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+    tools = "Skill,Bash,Read,Edit,Write,mcp__todoist__find-tasks,mcp__todoist__add-tasks"
+    cmd = (
+        f"claude -p {shlex.quote(f'/-1g {goals_text}')} "
+        f"--allowedTools {shlex.quote(tools)} ; "
+        f"python3 {shlex.quote(str(did_fast))} --refresh-cache"
+    )
     return subprocess.Popen(
-        ["claude", "-p", f"/-1g {goals_text}", "--allowedTools",
-         "Skill,Bash,Read,Edit,Write,mcp__todoist__find-tasks,mcp__todoist__add-tasks"],
+        ["bash", "-c", cmd],
         stdin=subprocess.DEVNULL,
         stdout=log_fh,
         stderr=log_fh,

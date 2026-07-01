@@ -58,10 +58,14 @@ def test_block_index_formula_uses_offset_4():
 
 
 def _extract_allowed_tools(func_name):
-    """Extract the --allowedTools string from a subprocess.run call in a function."""
+    """Extract the --allowedTools CSV from a function. Handles both the list-arg
+    form (["--allowedTools", "<tools>"], run_1g/run_did) and the shell-command
+    form where the tools are assigned to a variable and interpolated into a
+    `bash -c` string (spawn_1g_background, which chains claude → refresh-cache)."""
     tree = ast.parse(SRC.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            # Form 1: "--allowedTools" as a list element; value is the next elt.
             for child in ast.walk(node):
                 if isinstance(child, ast.List):
                     elts = [
@@ -72,6 +76,12 @@ def _extract_allowed_tools(func_name):
                         idx = elts.index("--allowedTools")
                         if idx + 1 < len(elts):
                             return elts[idx + 1]
+            # Form 2: the tools CSV assigned to a variable / interpolated into a
+            # shell string — return the string literal that holds the tool list.
+            for child in ast.walk(node):
+                if (isinstance(child, ast.Constant) and isinstance(child.value, str)
+                        and "mcp__todoist__add-tasks" in child.value):
+                    return child.value
     raise AssertionError(f"--allowedTools not found in {func_name}")
 
 
