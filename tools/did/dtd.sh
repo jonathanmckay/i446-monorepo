@@ -1146,13 +1146,19 @@ DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$
     sleep 2
     # New 2h 地支 block: the daemon rolls the -1neon ritual cards at the boundary.
     # Refresh the local cache so an idle-open dtd surfaces the new block's -1n
-    # cards without a relaunch (regression 2026-06-29). Delay 15s so the daemon
-    # has created them first, and background it so mtime polling keeps running;
-    # the refresh's cache-mtime bump trips the reload below.
+    # cards without a relaunch (regression 2026-06-29). The daemon does its
+    # scoring/reconcile FIRST and only then deletes+creates the cards, so they
+    # don't exist until ~boundary+25-30s (later still on a Todoist 503 retry). A
+    # single +15s refresh raced ahead of that and never retried, so the new
+    # block's -1n cards never appeared until a manual ctrl-r (bug 2026-07-01).
+    # Fire STAGGERED refreshes across the first ~90s instead (cumulative +20/+45/
+    # +90s); each bumps the cache mtime and trips the reload below, so whichever
+    # lands after the daemon finishes surfaces the cards. Backgrounded so the
+    # mtime poll keeps running.
     cur_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
     if [[ "$cur_blk" != "$last_blk" ]]; then
       last_blk="$cur_blk"
-      ( sleep 15; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 ) &
+      ( for _s in 20 25 45; do sleep "$_s"; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; done ) &
     fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
