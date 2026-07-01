@@ -26,8 +26,21 @@ ALERTS="$HOME/vault/z_ibx/alerts.jsonl"
 mkdir -p "$(dirname "$ALERTS")"
 
 # 1. Durable JSONL sink — picked up by personal dashboard alert rail.
-printf '{"ts":"%s","host":"%s","tool":"dream-launch","severity":"critical","reason":"%s","detail":"%s"}\n' \
-  "$NOW" "$HOST" "$REASON" "$DETAIL" >> "$ALERTS"
+# Use python3 for JSON encoding so quotes/backslashes/newlines in DETAIL can't
+# corrupt the JSONL file (a malformed line breaks the dashboard's line-by-line
+# parser for every alert after it).
+python3 -c '
+import json, sys
+line = json.dumps({
+    "ts":       sys.argv[1],
+    "host":     sys.argv[2],
+    "tool":     "dream-launch",
+    "severity": "critical",
+    "reason":   sys.argv[3],
+    "detail":   sys.argv[4],
+}, ensure_ascii=False)
+print(line)
+' "$NOW" "$HOST" "$REASON" "$DETAIL" >> "$ALERTS"
 
 # 2. FAILED marker in the current run dir, if we can find one.
 DREAM_RUNS="$HOME/vault/i447/i446/dream-runs"
@@ -41,7 +54,12 @@ EOF
 fi
 
 # 3. Best-effort macOS notification (silent when no GUI session).
-osascript -e "display notification \"$DETAIL\" with title \"Dream failed: $REASON\" sound name \"Basso\"" 2>/dev/null || true
+# Escape backslashes and double-quotes so a detail like `use "security find..."`
+# doesn't syntax-error the osascript literal (which would swallow the alert).
+_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+_DETAIL_ESC="$(_esc "$DETAIL")"
+_REASON_ESC="$(_esc "$REASON")"
+osascript -e "display notification \"$_DETAIL_ESC\" with title \"Dream failed: $_REASON_ESC\" sound name \"Basso\"" 2>/dev/null || true
 
 # 4. Stub the morning brief so JM at least sees the failure in his usual surface
 #    instead of opening yesterday's brief by reflex.
