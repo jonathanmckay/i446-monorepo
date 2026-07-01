@@ -487,17 +487,28 @@ def load_task_queue() -> dict:
     return json.loads(TASK_QUEUE_PATH.read_text())
 
 
-def refresh_task_queue() -> dict:
+def refresh_task_queue(block: bool = False) -> dict:
     """Fetch 0neon + 1neon + 夜neon + 関键路径 from Todoist, rebuild cache.
-    Uses a file lock to prevent concurrent refreshes from clobbering each other."""
+    Uses a file lock to prevent concurrent refreshes from clobbering each other.
+
+    block=False (opportunistic callers): if another refresh holds the lock, skip
+    and return the existing cache — piling up redundant refreshes is pointless.
+
+    block=True (an EXPLICIT 'refresh now' — the --refresh-cache CLI that /0g,
+    /-1g etc. rely on to surface a just-created goal): WAIT for the in-flight
+    refresh, then run. Skipping here silently returned the stale cache, so a goal
+    created moments earlier didn't reach dtd until the periodic daemon's next
+    cycle (~3min) — the 'I did 0g but it didn't show at once' bug (2026-07-01)."""
     import fcntl
     lock_path = TASK_QUEUE_PATH.with_suffix(".lock")
+    lock_fd = open(lock_path, "w")
+    flags = fcntl.LOCK_EX if block else (fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
-        lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock_fd, flags)
     except (IOError, OSError):
-        # Another refresh is already running; return existing cache
+        # Non-blocking only: another refresh is already running → return existing.
         print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
+        lock_fd.close()
         if TASK_QUEUE_PATH.exists():
             return json.loads(TASK_QUEUE_PATH.read_text())
         return {}
@@ -1558,7 +1569,9 @@ def main():
         return
 
     if sys.argv[1] == "--refresh-cache":
-        data = refresh_task_queue()
+        # Explicit refresh: block on the lock so a concurrent daemon/dtd refresh
+        # can't make this silently no-op (goals must reach dtd immediately).
+        data = refresh_task_queue(block=True)
         counts = {k: len(v) for k, v in data.items() if isinstance(v, list)}
         print(json.dumps({"status": "ok", "counts": counts}, indent=2))
         return
@@ -1573,7 +1586,7 @@ def main():
         # dtd's auto-reload watcher polls, so an open dtd updates live instead of
         # showing the completed ritual until a manual ctrl-r (regression 2026-06-29).
         try:
-            refresh_task_queue()
+            refresh_task_queue(block=True)  # explicit: must not skip on lock
             result["cache_refreshed"] = True
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a refresh
             result["cache_refresh_error"] = str(e)
