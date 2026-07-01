@@ -946,16 +946,23 @@ def test_1g_card_suppressed_when_asleep():
     """Structural: the -1g card (count + guard) must be gated on `not sleep_block`
     so a goal prompt never fires for a block the user slept through (overnight
     block-watcher restarts make the current block a sleep block, e.g. 卯 at
-    midnight)."""
+    midnight). The gate also admits `skip_comms` (rituals-only /inbound) so the
+    goal card still surfaces there when goals aren't set yet."""
     src = SRC.read_text()
     assert "sleep_block = is_asleep_now()" in src, (
         "main() must compute sleep_block from is_asleep_now()"
     )
     # Both the card-count and the card-guard conditions must include the gate.
-    assert src.count("if not goals_set and not sleep_block:") == 2, (
-        "both the -1g card count and the -1g card guard must check `not sleep_block`"
+    gate = "if not sleep_block and (not goals_set or skip_comms):"
+    assert src.count(gate) == 2, (
+        f"both the -1g card count and the -1g card guard must gate on `not "
+        f"sleep_block`; found {src.count(gate)} occurrence(s) of the gate"
     )
-    # The ungated form must be gone from those two sites.
-    assert "if not goals_set:\n            cards_needed.append" not in src, (
-        "ungated -1g card-count condition reintroduced"
+    # The card-count site must append -1g only behind that gate.
+    assert f'{gate}\n        cards_needed.append("-1g")' in src, (
+        "the -1g card-count append must sit directly under the sleep gate"
+    )
+    # The ungated pre-refactor form must be gone (it must admit skip_comms too).
+    assert "if not goals_set and not sleep_block:" not in src, (
+        "pre-skip_comms -1g gate reintroduced"
     )
