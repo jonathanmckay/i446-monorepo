@@ -166,6 +166,18 @@ if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2
   fi
 fi
 
+# --- Bail early if keychain is unusable ---
+# If we've already alerted for keychain_locked, running claude will just 401
+# for ~3h until the watchdog kills it — burning compute and battery for nothing.
+# The dream-alert.sh call above has already stubbed morning-brief.md and written
+# FAILED, so exit cleanly here.
+if [[ "$KEYCHAIN_OK" == "0" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Skipping claude run: keychain locked (alert already fired)" >> "$LOG"
+  # Ensure READY sentinel exists so downstream watchers move on (they read FAILED).
+  date '+%Y-%m-%d %H:%M:%S' > "$RUN_DIR/READY"
+  exit 0
+fi
+
 # --- Run claude with activity watchdog ---
 # Watchdog checks every 3 min: if no new file writes in RUN_DIR for 15 min,
 # kill claude (stalled). Launcher then checks what pass completed and retries
