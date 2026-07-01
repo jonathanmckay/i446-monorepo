@@ -327,3 +327,42 @@ def test_reconcile_picks_up_late_prayer(tmp_path, monkeypatch):
     build.write_text(build.read_text().replace("- 卯 🎯\n", "- 卯 🎯 ☀️\n"), encoding="utf-8")
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)   # 卯=4 now → 7
     assert totals == [6, 7], totals                    # late ☀️ picked up (+1)
+
+
+def test_reconcile_preserves_goal_marker_on_past_blocks(tmp_path, monkeypatch):
+    """Regression (v52 code-review): if a user (or a next-day clear) removes a
+    checkbox line from an already-fired block, the reconcile's strip-phase
+    would revoke that block's 🎯 — silently erasing a legitimately-earned
+    marker. Past blocks must never have 🎯 revoked; the current in-progress
+    block is the only one where 🎯 freshness matches the file's goal freshness."""
+    mod = _load_daemon()
+    build = tmp_path / "build.md"
+    # 卯 fired at 06:00 with 🎯 (goal existed at fire time). Later the goal
+    # bullet was deleted (e.g. user tidied the file, or next-day clear).
+    build.write_text(
+        "## -1₲\n\n"
+        "- 卯 🎯 ☀️\n"     # 🎯 earned at 06:00
+        # NOTE: goal bullet removed
+        "- 辰 🎯\n"
+        "    - [ ] current goal\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BUILD_ORDER", build)
+    # live for past 卯 returns 🎯=False (no goal in file anymore) but 🎯 was
+    # legitimately earned earlier — must not be stripped.
+    def fake_live(bn, fh, td):
+        return {mod.GOAL_MARKER: mod._block_has_goals(bn),
+                mod.TOGGL_MARKER: False, mod.TODOIST_MARKER: False}
+    monkeypatch.setattr(mod, "_live_for_block", fake_live)
+    monkeypatch.setattr(mod, "neon_set_p",
+                        lambda d, f, t, dry_run=False: "OK")
+    import datetime as dt
+    # upto_hour=8 → 卯 is a past block (fired at 06); 辰 is the current one.
+    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)
+    text = build.read_text(encoding="utf-8")
+    # Past 卯: 🎯 preserved despite live saying not-earned
+    line_mao = next(l for l in text.split("\n") if l.startswith("- 卯"))
+    assert "🎯" in line_mao, line_mao
+    # Current 辰: 🎯 also preserved (goal exists)
+    line_chen = next(l for l in text.split("\n") if l.startswith("- 辰"))
+    assert "🎯" in line_chen, line_chen

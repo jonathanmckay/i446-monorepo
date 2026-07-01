@@ -658,8 +658,15 @@ def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
                 if live.get(TODOIST_MARKER):
                     _write_block_marker(bn, TODOIST_MARKER, dry_run=dry_run)
         # Drop any daemon-owned marker that fresh live data says wasn't earned,
-        # so phantoms (stale ✅/⏱️/🎯) don't linger on the header.
-        _strip_unearned_markers(bn, live, dry_run=dry_run)
+        # so phantoms (stale ✅/⏱️/🎯) don't linger on the header. For past
+        # blocks, DON'T revoke 🎯 — a manual edit to build-order.md (or a next-
+        # day goals-clear) would otherwise silently erase a legitimately-earned
+        # goal marker. The current in-progress block is the only one where 🎯
+        # freshness matches goal-file freshness.
+        strip_live = live
+        if strip_live is not None and fh != upto_hour:
+            strip_live = {k: v for k, v in strip_live.items() if k != GOAL_MARKER}
+        _strip_unearned_markers(bn, strip_live, dry_run=dry_run)
         parts.append(score_block_from_emojis(bn, live=live))
     total = sum(parts)
     formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
