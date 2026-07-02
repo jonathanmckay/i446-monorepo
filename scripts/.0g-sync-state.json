@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "go for another run": {
-      "todoist_id": "6h2XgGg9Wvh3j9W2",
-      "minutes": 40
-    },
-    "30m 冥想": {
-      "todoist_id": "6h2XgGrhpQ3776XR",
-      "minutes": 25
-    }
-  },
-  "last_sync": "2026-07-02T03:55:04.910550-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-02T05:30:13.521314-07:00"
 }
