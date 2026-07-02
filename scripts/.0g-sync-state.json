@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-02T06:00:06.502499-07:00"
+  "tasks": {
+    "be thankful to mariah, lx, cb": {
+      "todoist_id": "6h2pfPWrR9gqfcVR",
+      "minutes": 30
+    },
+    "2 outdoor activities before going to cda": {
+      "todoist_id": "6h2pfPfR8JgJ5Gc2",
+      "minutes": 60
+    },
+    "prep for july 5th + july 3rd parties": {
+      "todoist_id": "6h2pfPmhhjjQHXjR",
+      "minutes": 60
+    },
+    "tasks <40": {
+      "todoist_id": "6h2pfPqpmrXV9H32",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-07-02T08:00:08.439167-07:00"
 }
