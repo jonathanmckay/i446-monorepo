@@ -1138,12 +1138,29 @@ TICKER_PID=$!
 # actual mtime advance (cache changes ~once per add/refresh), so it stays quiet
 # during normal navigation. The reload cmd matches DTD_RELOAD built in the UI
 # loop (same constant args).
-DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
+# NOTE: the reload cmd and completed-today overlay are rebuilt INSIDE the loop
+# with a freshly-computed date ($watch_today), NOT the startup $LOCAL_TODAY. The
+# UI loop's fzf call blocks, so its own midnight-rollover code never runs while
+# dtd sits open; an idle-open dtd that crosses midnight must still filter to the
+# NEW day. Baking in the frozen startup date showed yesterday's tasks even after
+# the cache refreshed with today's (bug 2026-07-02: "new day, but dtd didn't
+# refresh").
 (
   last_m=$(stat -f %m "$CACHE" 2>/dev/null)
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
+  last_day="$(date +%Y-%m-%d)"
   while [[ -f "$DTD_PORT" ]]; do
     sleep 2
+    watch_today="$(date +%Y-%m-%d)"
+    # Day rollover while dtd sits open: reset the per-day overlays (mirrors the
+    # UI-loop rollover, which can't run behind the blocking fzf) and pull today's
+    # tasks so the new day's recurring set surfaces without a relaunch.
+    if [[ "$watch_today" != "$last_day" ]]; then
+      last_day="$watch_today"
+      : > "$DTD_SESSION"; : > "$DTD_JOURNAL"; : > "$DTD_SKIPPED"
+      echo "$watch_today" > "$DTD_SKIPPED.date"
+      ( python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 ) &
+    fi
     # New 2h 地支 block: the daemon rolls the -1neon ritual cards at the boundary.
     # Refresh the local cache so an idle-open dtd surfaces the new block's -1n
     # cards without a relaunch (regression 2026-06-29). The daemon does its
@@ -1173,20 +1190,23 @@ DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$
     # propagation lag) — e.g. a -1g ritual completed in inbound not coming off
     # dtd. Mirrors the UI-loop build (see below); atomic write so a concurrent
     # reload never reads a torn file.
-    _dn=$(jq -c --arg t "$LOCAL_TODAY" 'if .date == $t then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
-    _di=$(jq -c --arg t "$LOCAL_TODAY" 'if .date == $t then (.ids // {}) else {} end' "$DONE" 2>/dev/null || echo '{}')
+    _dn=$(jq -c --arg t "$watch_today" 'if .date == $t then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
+    _di=$(jq -c --arg t "$watch_today" 'if .date == $t then (.ids // {}) else {} end' "$DONE" 2>/dev/null || echo '{}')
     _se=$(jq -c -R -s 'split("\n") | map(select(. != ""))' < "$DTD_SESSION" 2>/dev/null || echo '[]')
     _ac=$(echo "[$_dn, $_se]" | jq -c 'add | map(ascii_downcase)' 2>/dev/null || echo '[]')
-    if jq -cn --arg t "$LOCAL_TODAY" --argjson names "$_ac" --argjson ids "$_di" \
+    if jq -cn --arg t "$watch_today" --argjson names "$_ac" --argjson ids "$_di" \
          '{date: $t, names: $names, ids: $ids}' > "$DTD_DONE_FILE.tmp" 2>/dev/null; then
       mv "$DTD_DONE_FILE.tmp" "$DTD_DONE_FILE"
     fi
     port=$(cat "$DTD_PORT" 2>/dev/null)
     [[ -z "$port" ]] && continue
+    # Rebuild with the freshly-computed date so a post-midnight reload filters to
+    # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
+    watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
     if [[ -n "$FZF_API_KEY" ]]; then
-      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($DTD_WATCH_RELOAD)" >/dev/null 2>&1
+      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     else
-      curl -s -XPOST "localhost:$port" --data "reload($DTD_WATCH_RELOAD)" >/dev/null 2>&1
+      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     fi
   done
 ) &>/dev/null &
