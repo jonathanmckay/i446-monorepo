@@ -107,3 +107,30 @@ def test_fetch_points_reads_gio_values_and_mirrors_residual():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_block_display_clamped_to_day_total():
+    """Regression (2026-07-02): 辰 showed 666 on a 272分 day. A block is a
+    residual of Σ (=D-SUM(locked) ≤ D), so it can never exceed today_points; a
+    stuck/torn value that does must be clamped, not displayed."""
+    m = _load_tui()
+    m.STATE.today_points = 272
+    m.STATE.block_points = {"卯": 6, "辰": 666}  # 辰 stuck above Σ
+    assert m._block_display_pts("辰") == 272, "block capped at the day total"
+    assert m._block_display_pts("卯") == 6, "a normal block is unaffected"
+
+
+def test_block_display_normal_value_not_clamped():
+    m = _load_tui()
+    m.STATE.today_points = 272
+    m.STATE.block_points = {"辰": 266}
+    assert m._block_display_pts("辰") == 266
+
+
+def test_block_display_no_clamp_when_total_unknown():
+    """A failed/zero Σ read must NOT blank a real block value (clamp only when Σ
+    is a sane positive)."""
+    m = _load_tui()
+    m.STATE.today_points = 0
+    m.STATE.block_points = {"辰": 100}
+    assert m._block_display_pts("辰") == 100

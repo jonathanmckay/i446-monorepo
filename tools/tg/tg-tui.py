@@ -1386,13 +1386,22 @@ def _block_display_pts(name: str) -> int:
 
     The reconstruction survives only as a cold-start fallback: before the first
     successful Neon read block_points is empty, so show the current clock block's
-    running total rather than a blank header."""
+    running total rather than a blank header.
+
+    A block is a residual of the day's Σ (=D-SUM(locked) ≤ D), so it can NEVER
+    exceed today_points. block_points and today_points update on different gates,
+    so a stuck/torn block value can momentarily outrun Σ (666 shown on a 272分
+    day, 2026-07-02). Clamp to Σ: a block over the whole-day total is impossible,
+    and capping it is strictly better than displaying nonsense."""
     if STATE.block_points:
-        return STATE.block_points.get(name, 0)
-    cur_now = hour_to_block(view_now().hour)
-    if cur_now and name == cur_now[0]:
-        return _current_block_running_pts()
-    return 0
+        v = STATE.block_points.get(name, 0)
+    else:
+        cur_now = hour_to_block(view_now().hour)
+        v = (_current_block_running_pts()
+             if cur_now and name == cur_now[0] else 0)
+    # Clamp only when Σ is a sane positive (a failed/zero total read must not
+    # blank a real block).
+    return min(v, STATE.today_points) if STATE.today_points > 0 else v
 
 
 def _detail_merge_past(win_start, win_end) -> list[dict]:
