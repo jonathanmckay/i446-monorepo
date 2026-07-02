@@ -43,6 +43,7 @@ if not os.environ.get("TOGGL_API_KEY"):
         pass
 
 from mcp.toggl_server import toggl_api  # noqa: E402
+from mcp.toggl_server import throttle as toggl_throttle  # noqa: E402
 from mcp.toggl_server.config import PROJECT_NAMES  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
@@ -285,6 +286,7 @@ class State:
         # call during the limit only prolongs it.
         self.toggl_blocked_until = 0.0
         self.day_reload_token = 0  # debounce guard for Ctrl+←/→ day scrubbing
+        self.sigusr1_token = 0  # debounce guard for a burst of mutation nudges
 
 
 STATE = State()
@@ -293,8 +295,11 @@ STATE = State()
 # ─── Data fetchers ─────────────────────────────────────────────────────────
 
 def _toggl_blocked() -> bool:
-    """True while inside a post-402 cooldown — skip Toggl reads entirely."""
-    return time.monotonic() < STATE.toggl_blocked_until
+    """True while inside a post-402 cooldown — skip Toggl reads entirely. Honors
+    BOTH this process's own back-off AND the shared cross-process cooldown, so a
+    402 tripped by any /tg/0t backfill silences tg-tui's pollers for the window
+    (instead of them dribbling GETs through and re-tripping the limit)."""
+    return time.monotonic() < STATE.toggl_blocked_until or toggl_throttle.cooling_down()
 
 
 def _note_rate_limit():
@@ -2054,6 +2059,12 @@ async def ticker_points(app):
 
 async def _sigusr1_refresh():
     """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer).
+
+    Debounced: a morning backfill fires one SIGUSR1 per /tg, and each refresh does
+    two Toggl GETs (fetch_current + forced fetch_today) — 15 rapid entries meant
+    ~30 GETs on top of the 15 POSTs, which is what tripped the rate limit. Coalesce
+    a burst into ONE refresh ~0.4s after the last nudge (the entries land together
+    a heartbeat later instead of one-by-one). Skip entirely during a cooldown.
 
     Every fetch stays OFF the event loop: fetch_points is Excel-over-ssh
     (4-15s) and the Toggl reads are network calls. Running them inline froze

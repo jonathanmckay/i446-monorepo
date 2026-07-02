@@ -114,6 +114,20 @@ def acquire(max_wait: float | None = None) -> float:
         waited += nap
 
 
+def cooling_down() -> bool:
+    """True while a post-402 cooldown is active (read from the shared state file).
+    Lets EVERY process go quiet after a 402 — not just the one that hit it — so
+    background pollers (tg-tui) stop adding load and the limit can recover, rather
+    than dribbling calls through and re-tripping it."""
+    if fcntl is None:
+        return False
+    try:
+        d = json.loads(STATE.read_text())
+        return time.time() < float(d.get("cooldown_until", 0.0))
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return False
+
+
 def note_rate_limit(seconds: float | None = None) -> None:
     """Record that Toggl rate-limited us (402/429) so every process backs off
     until the shared cooldown clears. Best-effort."""
