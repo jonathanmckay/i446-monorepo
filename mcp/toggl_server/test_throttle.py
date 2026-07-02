@@ -66,3 +66,16 @@ def test_no_fcntl_is_noop(tmp_path, monkeypatch):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_cooling_down_reflects_shared_cooldown(tmp_path):
+    m = _load(tmp_path, COOLDOWN=30.0)
+    assert m.cooling_down() is False, "no cooldown initially"
+    m.note_rate_limit()
+    assert m.cooling_down() is True, "a 402 puts every process into cooldown"
+
+
+def test_cooling_down_false_after_expiry(tmp_path):
+    m = _load(tmp_path)
+    m.note_rate_limit(-1)  # already expired
+    assert m.cooling_down() is False

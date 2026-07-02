@@ -2071,6 +2071,11 @@ async def _sigusr1_refresh():
     repaints exactly when the idle nag was mid-flash — the screen stuck in
     the inverted frame until the refresh finished. fetch_current goes first
     with its own repaint so the nag clears the moment the timer is confirmed."""
+    STATE.sigusr1_token += 1
+    token = STATE.sigusr1_token
+    await asyncio.sleep(0.4)  # debounce: collapse a burst of nudges into one refresh
+    if token != STATE.sigusr1_token:
+        return  # a newer nudge arrived; let the latest one do the work
     old_count = len(STATE.entries)
     await asyncio.to_thread(fetch_current)
     app.invalidate()

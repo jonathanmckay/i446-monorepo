@@ -17,6 +17,10 @@ def _load():
     m = importlib.util.module_from_spec(spec)
     sys.modules["tg_tui_ne"] = m
     spec.loader.exec_module(m)
+    # Isolate from the shared cross-process cooldown file (a live cooldown there
+    # would make _toggl_blocked() skip the fetch these tests exercise).
+    m.toggl_throttle.cooling_down = lambda: False
+    m.STATE.toggl_blocked_until = 0.0
     return m
 
 
