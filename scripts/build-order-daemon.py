@@ -667,6 +667,41 @@ def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
     return neon_set_p(target_date, formula, total, dry_run=dry_run)
 
 
+def _branch_for_hour(hour: int) -> str | None:
+    """The in-progress 地支 block name for a wall-clock hour, or None outside
+    the 04–22 ritual day."""
+    for name, s, e in BRANCH_HOURS:
+        if s <= hour <= e:
+            return name
+    return None
+
+
+def compute_p_formula(target_date: dt.date, upto_hour: int,
+                      current_block: str | None = None):
+    """Pure -1₦ (P) score from CURRENTLY-STAMPED header emojis: every block that
+    has closed (fire hour <= upto_hour) plus the in-progress `current_block`.
+
+    Unlike reconcile_p_for_day this TRUSTS the stamps (live=None) — it does NOT
+    re-validate against Toggl/Todoist and writes nothing: no Excel, no build-order
+    mutation, no API calls. It backs the on-demand path (a ritual completed
+    mid-block credits P immediately and instantly); the daemon's boundary
+    reconcile_p_for_day stays the validating self-heal that strips stale stamps
+    and re-SETs. The current block scores with live=None so its manual ☀️/🎯/📧
+    count as stamped while its retrospective ⏱️/✅ (unknowable until the block
+    closes) are simply absent. Returns (formula, total, parts)."""
+    parts = []
+    for fh in sorted(h for h in BLOCK_FIRE_HOURS if h <= upto_hour):
+        bn = HOUR_TO_BRANCH_BLOCK.get(fh)
+        if not bn:
+            continue
+        parts.append(score_block_from_emojis(bn, live=None))
+    if current_block:
+        parts.append(score_block_from_emojis(current_block, live=None))
+    total = sum(parts)
+    formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
+    return formula, total, parts
+
+
 def neon_read_y(target_date: dt.date) -> str:
     """Read computed value of -1₦ (col Y) for target_date. Returns string or 'ERROR'."""
     body = (
@@ -1653,10 +1688,11 @@ def run_toggl_sync(dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Build-order daemon")
-    parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive", "toggl-sync"])
+    parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive",
+                                         "toggl-sync", "compute-p"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hour", type=int, default=None,
-                        help="(lock-and-mark only) override current hour for testing")
+                        help="(lock-and-mark/compute-p only) override current hour for testing")
     args = parser.parse_args()
 
     if args.mode == "link-meetings":
@@ -1665,6 +1701,14 @@ def main():
         run_lock_and_mark(dry_run=args.dry_run, force_hour=args.hour)
     elif args.mode == "toggl-sync":
         run_toggl_sync(dry_run=args.dry_run)
+    elif args.mode == "compute-p":
+        # On-demand: print today's -1₦ score from currently-stamped emojis so a
+        # caller (did-fast run_ritual) can SET col P immediately. Log lines land
+        # on stdout too, so emit a uniquely-prefixed line for robust parsing.
+        h = args.hour if args.hour is not None else dt.datetime.now().hour
+        cur = _branch_for_hour(h)
+        formula, total, _parts = compute_p_formula(dt.date.today(), h, current_block=cur)
+        print(f"P_RESULT\t{formula}\t{total}")
     else:
         run_archive(dry_run=args.dry_run)
 

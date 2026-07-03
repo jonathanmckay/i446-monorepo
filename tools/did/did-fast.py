@@ -1541,14 +1541,51 @@ def run_ritual(tag: str) -> dict:
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
             out["completed_today_error"] = str(e)
 
-    # NOTE: we deliberately do NOT write 0分!P here. P is owned solely by the
-    # daemon's reconcile_p_for_day at the 2h block boundary, which scores only
-    # FIRED blocks and validates 🎯/⏱️/✅ against live Toggl/Todoist. A
-    # completion-time write can't do either: the build order carries stamps on
-    # not-yet-fired and unvalidated blocks, so a naive header sum overcounts
-    # (measured 63 vs the daemon's correct 18). Closing the card + stamping the
-    # emoji is enough — the daemon credits P for this block when it closes.
-    out["p_note"] = "credited at block turnover by daemon reconcile"
+    # 4. Credit -1₦ (0分!P) NOW, so points land as each ritual is done instead of
+    #    only at the 2h boundary. We recompute P from the just-stamped LOCAL
+    #    build-order.md (no vault-sync lag) via the daemon's pure `compute-p`,
+    #    which TRUSTS the stamps — zero Toggl/Todoist calls, instant, rate-limit
+    #    safe — then SET col P for today's row on Ix. This can only overcount vs
+    #    the validating path if a stamp is stale; the daemon's boundary
+    #    reconcile_p_for_day strips stale stamps and re-SETs, so it self-heals.
+    #    (Historical note: the old "naive header sum overcounts 63 vs 18" fear was
+    #    about summing ALL headers incl. future blocks; compute-p bounds to fired
+    #    blocks + the current one, which is exactly what reconcile does.)
+    try:
+        daemon = Path.home() / "i446-monorepo/scripts/build-order-daemon.py"
+        cp = subprocess.run([sys.executable, str(daemon), "compute-p"],
+                            capture_output=True, text=True, timeout=25)
+        formula = total = None
+        for line in cp.stdout.splitlines():
+            if line.startswith("P_RESULT\t"):
+                _, formula, total = line.split("\t", 2)
+        if formula:
+            now = datetime.now()
+            script = (
+                'tell application "Microsoft Excel"\n'
+                '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
+                '    set todayRow to 0\n'
+                '    repeat with i from 2 to 400\n'
+                f'        if (string value of cell ("B" & i) of s) = "{now.month}/{now.day}" then\n'
+                '            set todayRow to i\n'
+                '            exit repeat\n'
+                '        end if\n'
+                '    end repeat\n'
+                '    if todayRow = 0 then return "ERR: no 0分 row"\n'
+                f'    set formula of cell ("P" & todayRow) of s to "{formula}"\n'
+                '    return "P=" & (value of cell ("P" & todayRow) of s)\n'
+                'end tell'
+            )
+            res = ix_run(script)
+            out["p_reconcile"] = {
+                "formula": formula, "total": int(total),
+                "ok": res.returncode == 0,
+                "excel": (res.stdout or res.stderr or "").strip()[:80],
+            }
+        else:
+            out["p_reconcile_error"] = f"compute-p gave no P_RESULT: {cp.stderr.strip()[:120]}"
+    except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
+        out["p_reconcile_error"] = str(e)
     return out
 
 
