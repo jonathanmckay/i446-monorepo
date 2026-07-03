@@ -92,3 +92,39 @@ def test_render_morning_routes_mao_to_exception():
     src = (HERE / "tg-tui.py").read_text()
     body = src.split("def render_morning", 1)[1].split("\ndef ", 1)[0]
     assert "_mao_line(" in body, "render_morning no longer special-cases 卯"
+
+
+def test_render_morning_shows_kmao_activity_when_awake(monkeypatch):
+    """Regression (2026-07-03): on an early wake you work through part of 卯
+    (prayer/ibx/…). Those entries must SHOW, not be collapsed away by the
+    sleep-only _mao_line. Bug report: '-1n prayer during 卯 isn't showing up'."""
+    mod = _load_tui()
+    today = _midnight()
+    # Pin the morning window so 卯 is the (only) past block rendered here.
+    monkeypatch.setattr(mod, "detail_window",
+                        lambda: (today.replace(hour=6), today.replace(hour=10)))
+    monkeypatch.setattr(mod, "_read_block_emojis", lambda *a, **k: {"卯": "☀️"})
+    mod.STATE.entries = [
+        _entry("-1n", today.replace(hour=5, minute=23),
+               today.replace(hour=5, minute=32)),  # the prayer, done awake in 卯
+    ]
+    mod.STATE.entries_yday = []
+    mod.STATE.block_points = {}
+    text = "".join(t for _, t in mod.render_morning())
+    assert "-1n" in text, f"early-wake 卯 activity hidden by sleep collapse: {text!r}"
+
+
+def test_render_morning_collapses_kmao_when_all_sleep(monkeypatch):
+    """The collapse still applies when 卯 is genuinely all sleep: one wake-time
+    line, no per-entry rows."""
+    mod = _load_tui()
+    today = _midnight()
+    monkeypatch.setattr(mod, "detail_window",
+                        lambda: (today.replace(hour=6), today.replace(hour=10)))
+    monkeypatch.setattr(mod, "_read_block_emojis", lambda *a, **k: {})
+    mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=5, minute=45))]
+    mod.STATE.entries_yday = []
+    mod.STATE.block_points = {}
+    text = "".join(t for _, t in mod.render_morning())
+    assert "睡觉 →05:45" in text
+    assert text.count("\n") == 1, f"all-sleep 卯 must stay one collapsed line: {text!r}"

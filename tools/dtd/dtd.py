@@ -99,14 +99,23 @@ def _refresh_cache_if_stale(force: bool = False):
         except Exception as e:
             print("WARN refresh-cache:", e, file=sys.stderr)
 
-def _completed_names() -> set[str]:
+def _completed_ids() -> set[str]:
+    """Todoist ids completed today (from completed-today.json `ids` map).
+
+    Hiding is by id ONLY, never by name. Names are unreliable: -1neon block
+    rituals (سمش / -1g / -1ibx) are deleted+recreated with identical names at
+    every 2h boundary, so a stale name-only completion (e.g. a goal-set that
+    recorded '😈 -1g' with no id) would wrongly suppress the new block's card.
+    Genuinely-closed tasks drop out of the cache on refresh regardless; this id
+    set only guards the window between a completion and the next cache refresh.
+    """
     try:
         d = json.loads(DONE_FILE.read_text())
-        if d.get("date") == _dt.date.today().isoformat():
-            return {n.lower() for n in d.get("names", [])}
     except Exception:
-        pass
-    return set()
+        return set()
+    if d.get("date") != _dt.date.today().isoformat():
+        return set()
+    return {str(v) for v in (d.get("ids") or {}).values()}
 
 def build_tasks(force_refresh: bool = False) -> list[dict]:
     _refresh_cache_if_stale(force=force_refresh)
@@ -139,7 +148,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
                   key=lambda t: _prank(t.get("priority")))
     ordered = rituals + neg1g + zeroneon + oneneon + zerog + critical + rest
 
-    done_names = _completed_names()
+    completed_ids = _completed_ids()
     seen = set()
     out = []
     for t in ordered:
@@ -147,10 +156,9 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         if not t.get("content") or tid in seen:
             continue
         seen.add(tid)
-        raw = t["content"]
-        clean = strip_ann(raw)
-        if clean.lower() in done_names:
+        if tid is not None and str(tid) in completed_ids:
             continue
+        raw = t["content"]
         display = t.get("short") or raw
         title = strip_ann(display) or raw
         est, pts = parse_est(raw)

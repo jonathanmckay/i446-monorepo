@@ -6,7 +6,7 @@ Sits next to dtd in the right half of a terminal. Three jobs:
   2. Show ±2h around now in 15-min detail (Toggl past + gcal future)
   3. Show rest-of-day overview (morning = Toggl, evening = gcal)
 
-Keys: c=change  s=stop  r=refresh  j/k=scroll detail  q=quit
+Keys: c=change  s=stop  r=refresh  j/k=scroll detail  [/]=prev/next day  q=quit
 """
 from __future__ import annotations
 
@@ -1346,9 +1346,16 @@ def render_morning() -> list[tuple[str, str]]:
             break  # rest handled by the detail band
         pts = STATE.block_points.get(blk_name, 0)
         if blk_name == "卯":
-            # Layout exception: sleep block collapses to a single wake-time line
-            out += _mao_line(bo_emojis.get(blk_name, ""))
-            continue
+            # Layout exception: the sleep block normally collapses to a single
+            # wake-time line. But on an early wake you work through part of 卯
+            # (prayer, ibx, …), and collapsing would HIDE those entries — the
+            # "-1n prayer during 卯 isn't showing" bug (2026-07-03). Collapse
+            # only when 卯 is genuinely all-sleep (no non-睡觉 tracked activity);
+            # otherwise fall through and render it as a normal block.
+            kmao_picks = _past_block_picks("卯", merged)
+            if not any("睡觉" not in (p.get("label") or "") for p in kmao_picks):
+                out += _mao_line(bo_emojis.get(blk_name, ""))
+                continue
         picks = _past_block_picks(blk_name, merged)
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
         if sleep:
@@ -1718,7 +1725,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def render_all() -> list[tuple[str, str]]:
@@ -1870,7 +1877,8 @@ def _reload_day(app):
     app.create_background_task(_r())
 
 
-@kb.add("c-left")  # view the previous day (to fill in missed time entries)
+@kb.add("c-left")   # view the previous day (to fill in missed time entries)
+@kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 def _(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
@@ -1879,6 +1887,7 @@ def _(event):
 
 
 @kb.add("c-right")  # view the next day, capped at today
+@kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 def _(event):
     if STATE.day_offset >= 0:
         flash("already on today")
