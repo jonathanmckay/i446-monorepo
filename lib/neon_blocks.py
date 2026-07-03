@@ -48,6 +48,35 @@ def emoji_points() -> dict[str, int]:
     return {r["emoji"]: r["points"] for r in load_config()["rituals"]}
 
 
+def ritual_card_tag(name: str, cfg: Optional[dict] = None) -> Optional[str]:
+    """Ritual tag for a daemon-created -1neon card name (`😈 <tag>`), else None.
+
+    Completing a ritual card must go through did-fast's run_ritual (header
+    emoji stamp + -1₦ credit), but dtd completes tasks BY NAME through the
+    generic did-fast path — this resolves such a name back to its ritual tag
+    so the caller can reroute it (bug 2026-07-03: -1ibx closed in dtd never
+    stamped 📧, and the daemon's header-based reconcile dropped the points).
+
+    The auto_marker is REQUIRED and must be non-empty (fail closed: a task
+    literally named `-1g` must never be hijacked). Matching tolerates trailing
+    annotations (`😈 -1g (15) [15]`) via whole-token comparison, and only
+    manual rituals match — auto ones (-1t/-1l) never exist as cards.
+    """
+    if cfg is None:
+        cfg = load_config()
+    marker = cfg.get("auto_marker", "")
+    if not marker or marker not in name:
+        return None
+    bare = name.replace(marker, "").strip()
+    for r in cfg["rituals"]:
+        if r.get("mode") != "manual":
+            continue
+        tag = r["tag"]
+        if bare == tag or tag in bare.split():
+            return tag
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Block geometry
 # ---------------------------------------------------------------------------

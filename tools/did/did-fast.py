@@ -1644,6 +1644,59 @@ def main():
         print(json.dumps({"error": "no items parsed"}))
         sys.exit(1)
 
+    # 1b. Ritual cards: a daemon-created -1neon card (`😈 <tag>`) completed BY
+    # NAME — dtd's enter/alt-enter worker pipes the card content here verbatim —
+    # must go through run_ritual (header emoji stamp + instant -1₦ credit), not
+    # the generic Todoist close below. The generic path closes the card without
+    # the stamp, and the daemon's turnover reconcile scores manual rituals FROM
+    # the header stamps, so the points were silently lost (2026-07-03: -1ibx
+    # completed in dtd left 辰/巳 with no 📧, -1₦ 3 short per block). Skipped
+    # under --points-only: the split flow promises no Todoist side effects and
+    # run_ritual is all side effects.
+    ritual_entries: list[dict] = []
+    if not points_only:
+        # Tag resolution is pure; only IT gets the fallback-to-generic except.
+        # A failure AFTER a run_ritual must not re-feed that item to the
+        # generic path (it would double-close and double-credit).
+        try:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import neon_blocks as nb
+            _r_cfg = nb.load_config()
+            resolved = [(it, nb.ritual_card_tag(it.name, _r_cfg)) for it in items]
+        except Exception as e:  # noqa: BLE001 — no side effects yet
+            print(f"ritual-card resolution failed: {e}", file=sys.stderr)
+            resolved = [(it, None) for it in items]
+        items = [it for it, _tag in resolved if _tag is None]
+        for it, _tag in resolved:
+            if _tag is None:
+                continue
+            try:
+                res = run_ritual(_tag)
+            except Exception as e:  # noqa: BLE001 — surface, never reroute
+                res = {"error": str(e)}
+            td = res.get("todoist") or {}
+            # Deliberately NO Todoist id here: undo-fast reopens any results
+            # entry carrying todoist.id, but nothing un-stamps the header — a
+            # half-undo that leaves points scored on an open card. Without the
+            # id, undo skips it (the --ritual CLI path never journals at all).
+            ritual_entries.append({
+                "name": it.name, "step": "ritual",
+                "todoist": {"closed": bool(td.get("closed")),
+                            "content": td.get("content", it.name)},
+                "ritual": res,
+            })
+        if ritual_entries:
+            # The cache mtime bump is dtd's only reload signal (2026-06-29), so
+            # refresh even in a mixed batch, not just the all-ritual early return.
+            try:
+                refresh_task_queue(block=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"cache refresh failed: {e}", file=sys.stderr)
+        if not items:
+            print(json.dumps({"results": ritual_entries, "agent_needed": []},
+                             ensure_ascii=False, indent=2))
+            return
+
     # 2. Load caches
     headers = load_headers()
     tq = load_task_queue()
@@ -2015,8 +2068,8 @@ end tell'''
         mc.append_names(completed_names, points=completed_points,
                         ids=completed_ids or None)
 
-    # 8. Build output
-    output = {"results": [], "agent_needed": []}
+    # 8. Build output (ritual-card entries from step 1b lead the list)
+    output = {"results": list(ritual_entries), "agent_needed": []}
 
     # Pre-image maps for undo (captured by the write scripts themselves)
     pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}
