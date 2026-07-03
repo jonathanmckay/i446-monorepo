@@ -263,6 +263,17 @@ task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+# Reinstated (2026-07-03): cpap asks for a 1-3 sleep-quality score on completion.
+# The number is appended so did-fast writes it to cpap's 0n column. Needs a tty,
+# so alt-enter is bound with execute (not execute-silent). Blank input just
+# completes with no score.
+clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
+if [[ "\$clean_lower" == cpap && -r /dev/tty ]]; then
+  printf "\n→ CPAP quality (1-3): " > /dev/tty
+  read cpap_q < /dev/tty
+  cpap_q=\${cpap_q// /}
+  [[ -n "\$cpap_q" ]] && clean="\$clean \$cpap_q"
+fi
 echo "\$clean_for_filter" >> "\$SESSION"
 echo "\$clean_for_filter" >> "\$REMOVED"
 echo "x" >> "\$PUSHED"
@@ -271,6 +282,27 @@ echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\n' "\$clean" > "\$FIFO"
 DONEEOF
 chmod +x "$DTD_DONE"
+
+# --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
+# Only cpap needs a tty (for its 1-3 quality prompt), so route cpap → execute
+# (which gives the DONE script a terminal) and every other task → execute-silent
+# (flicker-free, as before). The router emits ONLY the execute/execute-silent
+# action; the reload/clear-query/transform-header chain stays in the binding
+# where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
+# action keeps the transform output free of fzf placeholders; task ids are
+# alphanumeric, so no quoting is needed around \$_id.
+DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
+cat > "$DTD_DONE_ROUTER" << ROUTEREOF
+#!/bin/zsh
+_id="\$1"
+_t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
+if [[ "\$_t" == cpap ]]; then
+  printf 'execute(%s %s)' "$DTD_DONE" "\$_id"
+else
+  printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id"
+fi
+ROUTEREOF
+chmod +x "$DTD_DONE_ROUTER"
 
 # --- Defer script used by fzf ctrl-d binding ---
 DTD_DEFER="/tmp/dtd-$DTD_ID.defer.sh"
@@ -1277,7 +1309,7 @@ while true; do
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
@@ -1391,4 +1423,4 @@ fi
 kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
