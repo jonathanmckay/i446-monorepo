@@ -94,6 +94,12 @@ def test_total_trustworthy_unit():
     assert m._total_trustworthy(4351, None) is False  # over cap, no P:Y
     assert m._total_trustworthy(606, None) is True    # under cap, no P:Y
     assert m._total_trustworthy(759, 758) is True     # ±1 rounding tolerance
+    # Regression (2026-07-03): D and its own P:Y range torn to the SAME spike must
+    # STILL be rejected — agreement above the cap isn't proof of a real total.
+    # (This set the cold-start current-block header to 5064分.)
+    assert m._total_trustworthy(5064, 5064) is False  # matching torn spike over cap
+    assert m._total_trustworthy(2001, 2001) is False  # just over the cap, agreeing
+    assert m._total_trustworthy(2000, 2000) is True   # exactly at the cap is fine
 
 
 def test_current_block_running_rounds_once(monkeypatch):

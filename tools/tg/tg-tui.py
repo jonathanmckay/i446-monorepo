@@ -689,9 +689,17 @@ def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
     (D=-46, D=4351) is still rejected."""
     if candidate is None or candidate < 0:
         return False
+    # Absolute ceiling FIRST, before the sum_py cross-check: a mid-recalc snapshot
+    # can tear D and its own P:Y input range to the SAME spike (both read from the
+    # poisoned formula cache), so agreement alone isn't proof — D=5064 with sum_py
+    # =5064 passed the ±1 check and set Σ=5064, which the cold-start current-block
+    # reconstruction (Σ−locked) then showed as 5064分 (2026-07-03). No real day
+    # tops _MAX_PLAUSIBLE_TOTAL, so reject above it whether or not sum_py agrees.
+    if candidate > _MAX_PLAUSIBLE_TOTAL:
+        return False
     if sum_py is not None:
         return abs(candidate - sum_py) <= 1  # ±1 for float rounding
-    return candidate <= _MAX_PLAUSIBLE_TOTAL
+    return True
 
 
 def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
