@@ -31,7 +31,7 @@ The vault (`~/vault`) is **150k+ files, ~70% of them `.stversions` junk**. Never
    | Ext | Command |
    |-----|---------|
    | `.pdf` | `open -a "Preview" "<path>"` |
-   | `.md` | `open -a "Obsidian" "<path>"` (fallback: `open "obsidian://open?path=<urlencoded-abs-path>"`) |
+   | `.md` | `open "obsidian://open?path=<urlencoded-abs-path>"` — ALWAYS the URI form. `open -a "Obsidian" "<path>"` silently fails to load the file on filenames with special chars (`≥`, `₦`, CJK, spaces): it focuses the app but the doc never opens (verified 2026-07-04) |
    | `.html` `.htm` / any URL | `open -a "Google Chrome" "<path>"` |
    | anything else | `open "<path>"` (system default app) |
 

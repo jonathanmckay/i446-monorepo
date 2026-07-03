@@ -8,6 +8,7 @@
       "Bash(python3 -c *)"
     ]
   },
+  "model": "Fable",
   "hooks": {
     "PermissionRequest": [
       {

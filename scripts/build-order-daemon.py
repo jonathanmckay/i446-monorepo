@@ -45,6 +45,7 @@ BUILD_ORDER = VAULT / "g245" / "build-order.md"
 D357_DIR = VAULT / "d357"  # canonical flat location, filenames YYYY.MM.DD-<kebab>.md
 ARCHIVE_ROOT = VAULT / "g245" / "archive"
 RESET_SCRIPT = Path.home() / "i446-monorepo" / "scripts" / "-1g-cron.py"
+DID_FAST = Path.home() / "i446-monorepo" / "tools" / "did" / "did-fast.py"
 
 # --- Constants ---
 
@@ -1179,6 +1180,29 @@ def delete_block_rituals(dry_run: bool = False) -> None:
             log(f"rituals: delete {content!r} ERROR {e}")
 
 
+def _refresh_dtd_cache(dry_run: bool = False) -> None:
+    """Rebuild task-queue.json so the new block's -1neon cards reach dtd at the
+    block turn instead of on the periodic refresh daemon's next cycle (~3min) —
+    the 'rituals didn't reappear at the turn of the block' bug (2026-07-03).
+
+    The cards are created with due_string 'today', so they land in the cache's
+    'today' bucket; but creating them in Todoist does not itself rebuild the
+    cache, and dtd only reloads on a task-queue.json mtime bump. Mirrors the
+    --refresh-cache call /0g and /0t make after mutating tasks. Foreground with a
+    short timeout; a refresh failure must never break the fire."""
+    if dry_run:
+        log("[DRY RUN] refresh dtd cache")
+        return
+    try:
+        subprocess.run(
+            ["python3", str(DID_FAST), "--refresh-cache"],
+            capture_output=True, text=True, timeout=45,
+        )
+        log("rituals: dtd cache refreshed")
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log(f"rituals: cache refresh failed: {e}")
+
+
 def run_block_ritual_cards(hour: int, dry_run: bool = False) -> None:
     """-1neon card lifecycle at a 2h fire. Delete the just-ended block's leftover
     manual cards, then create the starting block's set. Order matters."""
@@ -1186,6 +1210,8 @@ def run_block_ritual_cards(hour: int, dry_run: bool = False) -> None:
         delete_block_rituals(dry_run=dry_run)
     if 4 <= hour <= 20:                   # 04..20: a waking block (卯..亥) starts
         create_block_rituals(dry_run=dry_run)
+    # Surface the mutated card set to dtd now, not on the periodic daemon's cycle.
+    _refresh_dtd_cache(dry_run=dry_run)
 
 
 def run_lock_and_mark(dry_run=False, force_hour=None):
