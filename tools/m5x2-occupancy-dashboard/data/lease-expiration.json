@@ -660,18 +660,6 @@
     "rent": "1430.00"
   },
   {
-    "unit_id": 257,
-    "property_name": "m405",
-    "unit": "11",
-    "tenant_name": "Vazquez Navarro, Rafael",
-    "status": "Pending",
-    "lease_sign_date": "2024-07-10",
-    "move_in": "2024-07-20",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-08-01",
-    "rent": "925.00"
-  },
-  {
     "unit_id": 408,
     "property_name": "ps17",
     "unit": "A6",
@@ -682,18 +670,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-08-01",
     "rent": "910.00"
-  },
-  {
-    "unit_id": 372,
-    "property_name": "ps25",
-    "unit": "B14",
-    "tenant_name": "Reyes , Alberto",
-    "status": "Pending",
-    "lease_sign_date": "2025-02-11",
-    "move_in": "2025-03-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1128.00"
   },
   {
     "unit_id": 591,
@@ -888,18 +864,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 861,
-    "property_name": "kn47 K1",
-    "unit": "C209",
-    "tenant_name": "Acevedo , Sara N.",
-    "status": "Pending",
-    "lease_sign_date": "2025-08-15",
-    "move_in": "2025-08-25",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 990,
     "property_name": "kn47 K1",
     "unit": "M207",
@@ -910,18 +874,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1089.00"
-  },
-  {
-    "unit_id": 1029,
-    "property_name": "kn47 K2",
-    "unit": "C106",
-    "tenant_name": "Kasparek, Joshua L.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2008-02-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-12-01",
-    "rent": "860.00"
   },
   {
     "unit_id": 1045,
@@ -1504,7 +1456,7 @@
     "property_name": "kn47 K1",
     "unit": "D106",
     "tenant_name": "Bates, Teresa",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2020-11-24",
     "renewal_start_date": null,
@@ -1521,18 +1473,6 @@
     "move_in": "2025-03-27",
     "renewal_start_date": null,
     "last_lease_renewal": "2026-04-01",
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 882,
-    "property_name": "kn47 K1",
-    "unit": "E104",
-    "tenant_name": "Pe\u00f1a, Ana",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2017-10-27",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
     "rent": "1089.00"
   },
   {
@@ -1608,18 +1548,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 1001,
-    "property_name": "kn47 K2",
-    "unit": "A202",
-    "tenant_name": "Rojas, Melanie",
-    "status": "Eligible",
-    "lease_sign_date": "2025-03-24",
-    "move_in": "2025-03-24",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 1010,
     "property_name": "kn47 K2",
     "unit": "B103",
@@ -1684,7 +1612,7 @@
     "property_name": "kn47 K2",
     "unit": "E104",
     "tenant_name": "Heinrich, Skyler",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2017-02-01",
     "renewal_start_date": null,
