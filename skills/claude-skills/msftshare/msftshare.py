@@ -39,6 +39,9 @@ ONEDRIVE = Path(os.environ.get(
     str(Path.home() / "Library/CloudStorage/OneDrive-Microsoft")))
 SHARED_ROOT = ONEDRIVE / "vault-shared"
 STUB_MARKER = "msft-onedrive"
+# Sentinel that marks the auto-inserted "open the .docx" link line so re-runs
+# replace it in place instead of stacking duplicates.
+DOCX_LINK_SENTINEL = "<!-- msftshare:docx-link -->"
 # dirs not worth walking when resolving a bare name
 PRUNE = {".git", ".stversions", ".obsidian", ".trash", "node_modules",
          "i446-monorepo", "drive-main", "drive-fundraising-legal",
@@ -183,6 +186,21 @@ def file_uri(p: Path) -> str:
     return "file://" + urllib.parse.quote(str(p))
 
 
+def ensure_body_docx_link(body: str, docx_path: Path, stem: str) -> str:
+    """Idempotently place a clickable link to the local .docx at the top of the
+    body, so the shared Word doc is findable from Obsidian (default mode records
+    only a frontmatter path otherwise, which you can't click). Replaces an
+    existing sentinel-marked line in place; else inserts at the top."""
+    link_line = (f"> 📄 **Shared Word copy:** [{stem}.docx]({file_uri(docx_path)})"
+                 f" · right-click in OneDrive → Copy link to share. {DOCX_LINK_SENTINEL}")
+    lines = body.split("\n")
+    for i, ln in enumerate(lines):
+        if DOCX_LINK_SENTINEL in ln:
+            lines[i] = link_line
+            return "\n".join(lines)
+    return link_line + "\n\n" + body.lstrip("\n")
+
+
 def update_index(doc: Path, name: str):
     """Idempotently link the doc in its folder note (file named after the
     folder) under a '## MSFT-shared' heading. Returns a status string, or None
@@ -267,11 +285,15 @@ def main():
         out.append(f"  ⚠ {w}")
 
     if not msft:
-        # Default mode: vault stays source of truth; record the shadow pointer.
+        # Default mode: vault stays source of truth; record the shadow pointer
+        # AND inject a clickable link to the .docx into the body (frontmatter
+        # alone isn't clickable, so the Word doc would otherwise be unfindable).
         fm2 = list(fm)
         fm_set(fm2, "msft_shadow", shadow_rel)
-        doc.write_text(assemble(fm2, body), encoding="utf-8")
+        body2 = ensure_body_docx_link(body, docx_path, stem)
+        doc.write_text(assemble(fm2, body2), encoding="utf-8")
         out.append("  source of truth: vault (this file)")
+        out.append("  ↪ clickable link to the .docx added at the top of the doc")
         out.append("  → in OneDrive, right-click the .docx → Copy link to share "
                    "(wait for the cloud-sync badge to clear first)")
         print("\n".join(out))

@@ -24,6 +24,20 @@ Compare what you planned (1g goals) vs what you spent time on (Toggl) vs what yo
 
 Run these three prep steps before the analysis.
 
+#### Step 0-pre: MSFT share pull (weekly, must run interactively)
+
+```bash
+python3 ~/i446-monorepo/skills/claude-skills/msftshare/msftpull.py
+```
+
+Pulls every OneDrive `vault-shared/*.docx`, measures coworker edit volume since
+last week, refreshes `.md` sidecars on flipped docs, and flags vault-truth
+shadows whose `.docx` has diverged (re-running `/msftshare` on those clobbers
+coworker edits). Report: `~/vault/i447/msftshare-pull-report.md`. Echo the
+one-line summary; surface any ⚠ clobber flags to the user. This step lives here
+(not launchd) deliberately: macOS TCC blocks CloudStorage for launchd-spawned
+python3, and /1s already runs weekly in a terminal with full access.
+
 #### Step 0a: Run /1n (weekly donut charts)
 
 Invoke the `/1n` skill. This generates two donut charts for the review week and inserts them into the `1分+1s` sheet at O{week} and P{week}.
