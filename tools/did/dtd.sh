@@ -365,6 +365,10 @@ echo "x" >> "$DTD_PUSHED"
   fi
   echo "x" >> "$DTD_PROCESSED"
 ) >/dev/null 2>&1 &!
+# Reset any mouse-tracking mode a child enabled — leaked SGR motion
+# sequences type themselves into fzf's query (bug 2026-07-05).
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
@@ -391,6 +395,10 @@ printf "\nNew points for: %s\n[N]> " "\$clean" > /dev/tty
 read newpts < /dev/tty
 out=\$(python3 "\$POINTS_FAST" "\$query" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ points update failed}" > "\$HDR"
+# Reset any mouse-tracking mode a child enabled — leaked SGR motion
+# sequences type themselves into fzf's query (bug 2026-07-05).
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+
 POINTSEOF
 chmod +x "$DTD_POINTS"
 
@@ -420,6 +428,10 @@ if [[ -z "\${edits// /}" ]]; then
 fi
 out=\$(python3 "\$EDIT_FAST" "\$query" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
+# Reset any mouse-tracking mode a child enabled — leaked SGR motion
+# sequences type themselves into fzf's query (bug 2026-07-05).
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+
 EDITEOF
 chmod +x "$DTD_EDIT"
 
@@ -1298,7 +1310,16 @@ while true; do
   #                          $DTD_HDRGEN on load/result and after every action so
   #                          worker confirmations persist alongside the count.
   # The start binding publishes fzf's --listen port for the ticker to POST to.
+  # --no-mouse + the mode reset below: SGR mouse-motion sequences (ESC[<34;x;yM)
+  # were leaking into the query as literal text (bug 2026-07-05). fzf only
+  # parses the click/scroll events it subscribes to; motion events — forwarded
+  # by cmux once ANY mouse mode is on, or left enabled (1002/1003) by a child
+  # program from an execute() binding — fall through the parser into the input
+  # box. dtd is keyboard-driven, so disable fzf's mouse subscription entirely
+  # and defensively turn off every stray tracking mode before each launch.
+  printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
+      --no-mouse \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \
