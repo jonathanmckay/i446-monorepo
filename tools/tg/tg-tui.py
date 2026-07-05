@@ -1301,6 +1301,24 @@ def _block_sleep_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     return out
 
 
+def _block_toggl_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
+    """Half-hour marks of a past block covered by ANY Toggl entry → style.
+
+    Generalizes _block_sleep_cont to every tracked entry: an entry renders one
+    row at its start slot, so the marks a >30m entry flows through drew as bare
+    gridlines — on a past-day view a 3h entry read as two hours of nothing.
+    Covered marks draw the ◇ │ continuation in the entry's project color, the
+    same treatment gcal events already get."""
+    out: dict[tuple[int, int], str] = {}
+    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+        t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        for e in STATE.entries:
+            if e["start_dt"] <= t < e["end_dt"]:
+                out[(hh, mm)] = project_style(e["project_id"])
+                break
+    return out
+
+
 def _mao_line(emojis) -> list[tuple[str, str]]:
     """卯 layout exception: one line instead of the standard four.
 
@@ -1387,7 +1405,11 @@ def render_morning() -> list[tuple[str, str]]:
         # and caps at 3 rows.
         body = picks + gaps
         body.sort(key=lambda x: x["start_dt"])
-        cont = {**_block_sleep_cont(blk_sh, cutoff), **_block_gcal_cont(blk_sh, cutoff)}
+        # Tracked reality (Toggl, incl. sleep) wins over the gcal plan on
+        # elapsed blocks; merge order = ascending authority.
+        cont = {**_block_sleep_cont(blk_sh, cutoff),
+                **_block_gcal_cont(blk_sh, cutoff),
+                **_block_toggl_cont(blk_sh, cutoff)}
         out += _compact_block_lines(blk_name, blk_sh, body, pts,
                                     bo_emojis.get(blk_name, ""), cont=cont,
                                     is_future=False)
