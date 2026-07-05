@@ -49,5 +49,7 @@ def test_dtd_palette_rgb_matches_canonical():
 
 
 def test_jia_specifically_present():
-    """The trigger case: 家 must be colored (Ferrari #ff4136)."""
-    assert _dtd_colors().get("家") == (255, 65, 54)
+    """The trigger case: 家 must be colored. Pool Party #00b8d4 (teal) since
+    2026-07-05 — it was Ferrari red before, which read as orange in dtd and
+    contradicted the user's mental model of 家 = teal."""
+    assert _dtd_colors().get("家") == (0, 184, 212)

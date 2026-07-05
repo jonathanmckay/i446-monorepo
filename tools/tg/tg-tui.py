@@ -205,7 +205,7 @@ PROJECT_COLORS = {
     "hcm":  "#aa00ff",   # Purple Haze (no map entry; reasonable fit for hcm parent)
     "hcmp": "#7c4dff",   # Lavender Lightning
     "hcmr": "#bda6ff",   # Weak-sauce Purple
-    "家":   "#ff4136",    # Ferrari (family)
+    "家":   "#00b8d4",    # Pool Party (family)
 }
 
 
