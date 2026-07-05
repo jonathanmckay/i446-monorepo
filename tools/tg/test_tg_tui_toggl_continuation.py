@@ -75,6 +75,9 @@ def test_render_morning_draws_toggl_continuation():
     mod.STATE.events = []
     mod.STATE.block_points = {}
     mod._read_block_emojis = lambda now=None: {}
+    # Pin the detail band past 辰 so it renders as an elapsed compact block
+    # regardless of the wall clock (same trick as the sleep-spillover test).
+    mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
     text = "".join(t for _, t in mod.render_morning())
     chen = text[text.index("辰:00"):]
     chen_block = chen[:chen.index("巳:00")] if "巳:00" in chen else chen

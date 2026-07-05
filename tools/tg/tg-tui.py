@@ -49,6 +49,7 @@ from zoneinfo import ZoneInfo  # noqa: E402
 
 from prompt_toolkit import Application  # noqa: E402
 from prompt_toolkit.buffer import Buffer  # noqa: E402
+from prompt_toolkit.filters import Condition  # noqa: E402
 from prompt_toolkit.key_binding import KeyBindings  # noqa: E402
 from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
@@ -1763,7 +1764,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def render_all() -> list[tuple[str, str]]:
@@ -1915,9 +1916,17 @@ def _reload_day(app):
     app.create_background_task(_r())
 
 
+# -/= also scrub days: Ctrl+-/Ctrl+= carry no control-char encoding in most
+# terminals — they transmit the PLAIN character — so "ctrl+= to go forward"
+# silently did nothing (bug 2026-07-05). Gated on an empty command line so
+# typing time ranges (`05:00-05:23`) or descriptions is never intercepted.
+_input_empty = Condition(lambda: not input_buffer.text)
+
+
 @kb.add("c-left")   # view the previous day (to fill in missed time entries)
 @kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
-def _(event):
+@kb.add("-", filter=_input_empty)
+def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
     flash(f"◀ {view_now():%a %-m/%-d}")
@@ -1926,7 +1935,8 @@ def _(event):
 
 @kb.add("c-right")  # view the next day, capped at today
 @kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
-def _(event):
+@kb.add("=", filter=_input_empty)
+def _day_forward(event):
     if STATE.day_offset >= 0:
         flash("already on today")
         return
