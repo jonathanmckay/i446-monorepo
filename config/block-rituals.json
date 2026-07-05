@@ -1,5 +1,5 @@
 {
-  "_note": "Block-ritual (-1neon) definitions. Read by scripts/build-order-daemon.py (per-block card creation + -1t/-1l retrospective eval) and tools/did/did-fast.py (--ritual completion). All points go to 0分!P (the -1₦ column) and NOWHERE else. P is always written via an idempotent SET-from-block-headers recompute, never appended. NOT managed by register-habit.py.",
+  "_note": "Block-ritual (-1neon) definitions. Read by scripts/build-order-daemon.py (per-block card creation + -1t/-1l retrospective eval) and tools/did/did-fast.py (--ritual completion). The daemon creates cards for ALL 5 rituals (since 2026-07-05); auto (-1t/-1l) cards are visibility-only — the daemon evaluates at block close and completes (earned) or deletes (unearned) the card; user-completing an auto card closes it without stamping or points. All points go to 0分!P (the -1₦ column) and NOWHERE else. P is always written via an idempotent SET-from-block-headers recompute, never appended. NOT managed by register-habit.py.",
   "label": "-1neon",
   "auto_marker": "😈",
   "blocks": ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"],

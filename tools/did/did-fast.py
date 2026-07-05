@@ -1515,6 +1515,23 @@ def run_ritual(tag: str) -> dict:
     except Exception as e:  # noqa: BLE001
         out["todoist"] = {"closed": False, "error": str(e)}
 
+    # Auto rituals (-1t/-1l): their card is visibility/acknowledgment only.
+    # The daemon is the sole evaluator — it stamps ⏱️/✅ retrospectively at the
+    # block close and completes (earned) or deletes (unearned) the card then.
+    # Completing it here just clears it from the list: no emoji stamp, no P
+    # write — points follow the daemon's validated reconcile.
+    if r.get("mode") == "auto":
+        if closed_id:
+            try:
+                name = (out.get("todoist", {}).get("content") or f"{marker} {tag}").strip()
+                mc.append_names([name], ids={name: closed_id})
+                out["completed_today"] = True
+            except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
+                out["completed_today_error"] = str(e)
+        out["auto"] = True
+        out["note"] = "auto ritual — daemon stamps and scores at block close"
+        return out
+
     # 2. Stamp the emoji on the current block header (local build-order.md).
     bo = Path.home() / "vault/g245/build-order.md"
     block = nb.current_block(datetime.now().hour)

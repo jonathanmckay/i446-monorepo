@@ -1074,11 +1074,19 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         body_picks = picks[1:]
         left = f"{blk_name}:00{emoji_str} "
         dur = f"({head['dur_min']})"
-        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(dur) - 1)
+        # The header row is labelled :00, but the dominant event riding it may
+        # start later in the block — without its own time an 11:00 meeting
+        # reads as filling 午 from 10:00. Print the full start time whenever
+        # the event isn't exactly at the block's :00.
+        hs = head["start_dt"]
+        tpfx = "" if (hs.hour, hs.minute) == (blk_sh, 0) else f"{hs:%H:%M} "
+        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(tpfx) - dwidth(dur) - 1)
         label = truncate(head["label"], avail)
         head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or "class:future")
-        # Duration sits right after the label: `午:00 ☀️ GamePass sync (60)`.
+        # Duration sits right after the label: `午:00 ☀️ 11:00 GamePass sync (60)`.
         out.append(("class:dim", left))
+        if tpfx:
+            out.append(("class:time", tpfx))
         out.append((head_sty, label))
         out.append(("class:dim", f" {dur}\n"))
     else:

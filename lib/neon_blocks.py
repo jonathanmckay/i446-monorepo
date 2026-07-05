@@ -59,8 +59,11 @@ def ritual_card_tag(name: str, cfg: Optional[dict] = None) -> Optional[str]:
 
     The auto_marker is REQUIRED and must be non-empty (fail closed: a task
     literally named `-1g` must never be hijacked). Matching tolerates trailing
-    annotations (`😈 -1g (15) [15]`) via whole-token comparison, and only
-    manual rituals match — auto ones (-1t/-1l) never exist as cards.
+    annotations (`😈 -1g (15) [15]`) via whole-token comparison. ALL rituals
+    match, auto ones (-1t/-1l) included — the daemon creates cards for the full
+    set since 2026-07-05, and a bare `-1t`/`-1l` falling through to the generic
+    /did path would mis-route to the unrelated 0₦ habits of the same name.
+    run_ritual branches on mode (auto = close card only, no stamp/points).
     """
     if cfg is None:
         cfg = load_config()
@@ -69,8 +72,6 @@ def ritual_card_tag(name: str, cfg: Optional[dict] = None) -> Optional[str]:
         return None
     bare = name.replace(marker, "").strip()
     for r in cfg["rituals"]:
-        if r.get("mode") != "manual":
-            continue
         tag = r["tag"]
         if bare == tag or tag in bare.split():
             return tag
