@@ -564,18 +564,6 @@
     "rent": "1295.00"
   },
   {
-    "unit_id": 745,
-    "property_name": "c313",
-    "unit": "37",
-    "tenant_name": "Ishtiaq, Sumaira",
-    "status": "Notice Given",
-    "lease_sign_date": null,
-    "move_in": "2020-04-24",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "1036.00"
-  },
-  {
     "unit_id": 330,
     "property_name": "k104- LeFevre",
     "unit": "509-2",
@@ -607,18 +595,6 @@
     "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2024-09-10",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "1304.00"
-  },
-  {
-    "unit_id": 917,
-    "property_name": "kn47 K1",
-    "unit": "G203",
-    "tenant_name": "Ramirez, Blanca G.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-07-16",
     "renewal_start_date": null,
     "last_lease_renewal": "2026-02-01",
     "rent": "1304.00"
@@ -660,16 +636,16 @@
     "rent": "1430.00"
   },
   {
-    "unit_id": 408,
-    "property_name": "ps17",
-    "unit": "A6",
-    "tenant_name": "Badillo, Maria  F.",
+    "unit_id": 497,
+    "property_name": "ps91",
+    "unit": "8",
+    "tenant_name": "Favela Galvez , Odalis",
     "status": "Pending",
-    "lease_sign_date": "2025-02-27",
-    "move_in": "2025-03-01",
+    "lease_sign_date": "2025-03-03",
+    "move_in": "2025-02-27",
     "renewal_start_date": null,
     "last_lease_renewal": "2025-08-01",
-    "rent": "910.00"
+    "rent": "1075.00"
   },
   {
     "unit_id": 591,
@@ -856,7 +832,7 @@
     "property_name": "kn47 K1",
     "unit": "C208",
     "tenant_name": "Patrick, Domynique M.",
-    "status": "Pending",
+    "status": "Notice Given",
     "lease_sign_date": "2025-08-20",
     "move_in": "2025-08-20",
     "renewal_start_date": null,
@@ -898,18 +874,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1089.00"
-  },
-  {
-    "unit_id": 1076,
-    "property_name": "kn47-k3",
-    "unit": "K201",
-    "tenant_name": "Deweber, Hailee",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-06-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-09-01",
-    "rent": "1430.00"
   },
   {
     "unit_id": 424,
@@ -1492,7 +1456,7 @@
     "property_name": "kn47 K1",
     "unit": "F201",
     "tenant_name": "Bennett, Dean",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2025-02-19",
     "renewal_start_date": null,
@@ -1738,18 +1702,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1315.00"
-  },
-  {
-    "unit_id": 404,
-    "property_name": "ps17",
-    "unit": "A2",
-    "tenant_name": "Ashenbrenner, Samantha J.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-10-14",
-    "move_in": "2025-10-17",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "910.00"
   },
   {
     "unit_id": 413,
