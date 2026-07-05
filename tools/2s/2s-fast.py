@@ -99,31 +99,23 @@ def write_scorecard(year: int, month: int, values: list[str], dry: bool) -> str:
         f'set value of range ("{c}" & theRow) of theSheet to {v}'
         for c, v in pairs)
     script = f'''tell application "Microsoft Excel"
-    set wbOpen to false
-    repeat with w in workbooks
-        if name of w is "{SCORECARD}" then set wbOpen to true
-    end repeat
-    if not wbOpen then open POSIX file "{SCORECARD_PATH}"
+    set wbNames to (name of every workbook)
+    if wbNames does not contain "{SCORECARD}" then open POSIX file "{SCORECARD_PATH}"
     set theSheet to sheet "{SHEET_2S}" of workbook "{SCORECARD}"
     set theRow to 0
     repeat with r from 2 to 200
         try
-            if (value of range ("A" & r) of theSheet) = {year} and ¬
-               (value of range ("B" & r) of theSheet) = {month} then
+            if (value of range ("A" & r) of theSheet) = {year} and (value of range ("B" & r) of theSheet) = {month} then
                 set theRow to r
                 exit repeat
             end if
         end try
     end repeat
     if theRow = 0 then return "ERROR: no {year}-{month} row in {SHEET_2S}"
-    {sets if not dry else '-- dry run: no writes'}
+    {sets}
     save workbook "{SCORECARD}"
     return "OK row=" & theRow
 end tell'''
-    if dry:
-        # still resolve the row so the dry-run proves the lookup
-        script = script.replace(f'{sets}\n    save workbook "{SCORECARD}"',
-                                '-- dry run') if not dry else script
     r = subprocess.run(["osascript", "-"], input=script, capture_output=True,
                        text=True, timeout=60)
     out = (r.stdout or "").strip()
@@ -134,11 +126,19 @@ end tell'''
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("month", help="4 | april | 2026-04")
+    ap.add_argument("month", nargs="?", default=None,
+                    help="4 | april | 2026-04 (default: previous month)")
     ap.add_argument("--year", type=int, default=date.today().year)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    year, month = parse_month(a.month, a.year)
+    if a.month is None:
+        # /2s is a month-end review — default to the month that just ended.
+        first = date.today().replace(day=1)
+        prev = first.replace(year=first.year - 1, month=12) if first.month == 1 \
+            else first.replace(month=first.month - 1)
+        year, month = prev.year, prev.month
+    else:
+        year, month = parse_month(a.month, a.year)
 
     raw = read_neon_month(month)
     src_row, vals = raw[0], raw[1:]
