@@ -45,6 +45,7 @@ BUILD_ORDER = VAULT / "g245" / "build-order.md"
 D357_DIR = VAULT / "d357"  # canonical flat location, filenames YYYY.MM.DD-<kebab>.md
 ARCHIVE_ROOT = VAULT / "g245" / "archive"
 RESET_SCRIPT = Path.home() / "i446-monorepo" / "scripts" / "-1g-cron.py"
+DID_FAST = Path.home() / "i446-monorepo" / "tools" / "did" / "did-fast.py"
 
 # --- Constants ---
 
@@ -658,20 +659,48 @@ def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
                 if live.get(TODOIST_MARKER):
                     _write_block_marker(bn, TODOIST_MARKER, dry_run=dry_run)
         # Drop any daemon-owned marker that fresh live data says wasn't earned,
-        # so phantoms (stale ✅/⏱️/🎯) don't linger on the header. For past
-        # blocks, DON'T revoke 🎯 — a manual edit to build-order.md (or a next-
-        # day goals-clear) would otherwise silently erase a legitimately-earned
-        # goal marker. The current in-progress block is the only one where 🎯
-        # freshness matches goal-file freshness.
-        strip_live = live
-        if strip_live is not None and fh != upto_hour:
-            strip_live = {k: v for k, v in strip_live.items() if k != GOAL_MARKER}
-        _strip_unearned_markers(bn, strip_live, dry_run=dry_run)
+        # so phantoms (stale ✅/⏱️/🎯) don't linger on the header.
+        _strip_unearned_markers(bn, live, dry_run=dry_run)
         parts.append(score_block_from_emojis(bn, live=live))
     total = sum(parts)
     formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
     log(f"reconcile_p: {target_date} parts={parts} total={total}")
     return neon_set_p(target_date, formula, total, dry_run=dry_run)
+
+
+def _branch_for_hour(hour: int) -> str | None:
+    """The in-progress 地支 block name for a wall-clock hour, or None outside
+    the 04–22 ritual day."""
+    for name, s, e in BRANCH_HOURS:
+        if s <= hour <= e:
+            return name
+    return None
+
+
+def compute_p_formula(target_date: dt.date, upto_hour: int,
+                      current_block: str | None = None):
+    """Pure -1₦ (P) score from CURRENTLY-STAMPED header emojis: every block that
+    has closed (fire hour <= upto_hour) plus the in-progress `current_block`.
+
+    Unlike reconcile_p_for_day this TRUSTS the stamps (live=None) — it does NOT
+    re-validate against Toggl/Todoist and writes nothing: no Excel, no build-order
+    mutation, no API calls. It backs the on-demand path (a ritual completed
+    mid-block credits P immediately and instantly); the daemon's boundary
+    reconcile_p_for_day stays the validating self-heal that strips stale stamps
+    and re-SETs. The current block scores with live=None so its manual ☀️/🎯/📧
+    count as stamped while its retrospective ⏱️/✅ (unknowable until the block
+    closes) are simply absent. Returns (formula, total, parts)."""
+    parts = []
+    for fh in sorted(h for h in BLOCK_FIRE_HOURS if h <= upto_hour):
+        bn = HOUR_TO_BRANCH_BLOCK.get(fh)
+        if not bn:
+            continue
+        parts.append(score_block_from_emojis(bn, live=None))
+    if current_block:
+        parts.append(score_block_from_emojis(current_block, live=None))
+    total = sum(parts)
+    formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
+    return formula, total, parts
 
 
 def neon_read_y(target_date: dt.date) -> str:
@@ -1103,9 +1132,14 @@ def _todoist_write(path: str, payload: dict | None, token: str, method: str = "P
 
 
 def create_block_rituals(dry_run: bool = False) -> None:
-    """At a block start, create the 3 manual -1neon cards (😈-marked) for the
-    current block. Skips any already open so a catch-up/duplicate fire can't
-    create doubles. -1t/-1l are NOT tasks — the daemon computes them."""
+    """At a block start, create ALL 5 -1neon cards (😈-marked) for the current
+    block — manual (سمش/-1g/-1ibx) and auto (-1t/-1l) alike, so the full ritual
+    set is visible as tasks (user request 2026-07-05). Skips any already open so
+    a catch-up/duplicate fire can't create doubles.
+
+    Auto cards are visibility/acknowledgment only: the daemon stays the sole
+    evaluator of ⏱️/✅ at the block close, where an EARNED auto card is
+    completed and an unearned one deleted (see delete_block_rituals)."""
     token = _todoist_token()
     if not token:
         log("rituals: no token — cannot create cards")
@@ -1115,8 +1149,6 @@ def create_block_rituals(dry_run: bool = False) -> None:
     open_bare = {(t.get("content") or "").replace(marker, "").strip()
                  for t in _todoist_open_rituals(token)}
     for r in cfg["rituals"]:
-        if r.get("mode") != "manual":
-            continue
         tag = r["tag"]
         if tag in open_bare:
             log(f"rituals: {tag} already open — skip")
@@ -1133,31 +1165,76 @@ def create_block_rituals(dry_run: bool = False) -> None:
             log(f"rituals: create {content!r} ERROR {e}")
 
 
-def delete_block_rituals(dry_run: bool = False) -> None:
-    """At a block turnover, delete still-open manual -1neon cards from the
-    just-ended block (skipped = no points, no list pollution)."""
+def delete_block_rituals(dry_run: bool = False, live: dict | None = None) -> None:
+    """At a block turnover, retire the just-ended block's still-open -1neon cards.
+
+    Manual cards (سمش/-1g/-1ibx): delete — skipped means no points, and a stale
+    card pollutes the list. Auto cards (-1t/-1l): if the just-ended block's
+    evaluation (`live`, keyed by marker emoji) says EARNED, complete the card so
+    it counts as a done task; otherwise delete it like a skipped manual card.
+    With no live results (API failure), auto cards fall back to delete — never
+    award a completion the evaluator didn't confirm."""
     token = _todoist_token()
     if not token:
         return
+    cfg = _load_block_rituals()
+    marker = cfg.get("auto_marker", "😈")
+    auto_emoji = {r["tag"]: r["emoji"] for r in cfg["rituals"]
+                  if r.get("mode") == "auto"}
     for t in _todoist_open_rituals(token):
         tid, content = t.get("id"), t.get("content", "")
+        bare = (content or "").replace(marker, "").strip()
+        earned = (bare in auto_emoji and live is not None
+                  and bool(live.get(auto_emoji[bare])))
+        verb = "close (earned)" if earned else "delete"
         if dry_run:
-            log(f"[DRY RUN] delete leftover card {content!r}")
+            log(f"[DRY RUN] {verb} leftover card {content!r}")
             continue
         try:
-            _todoist_write(f"/tasks/{tid}", None, token, method="DELETE")
-            log(f"rituals: − {content}")
+            if earned:
+                _todoist_write(f"/tasks/{tid}/close", {}, token)
+                log(f"rituals: ✓ {content} (earned at block close)")
+            else:
+                _todoist_write(f"/tasks/{tid}", None, token, method="DELETE")
+                log(f"rituals: − {content}")
         except Exception as e:
-            log(f"rituals: delete {content!r} ERROR {e}")
+            log(f"rituals: {verb} {content!r} ERROR {e}")
 
 
-def run_block_ritual_cards(hour: int, dry_run: bool = False) -> None:
-    """-1neon card lifecycle at a 2h fire. Delete the just-ended block's leftover
-    manual cards, then create the starting block's set. Order matters."""
+def _refresh_dtd_cache(dry_run: bool = False) -> None:
+    """Rebuild task-queue.json so the new block's -1neon cards reach dtd at the
+    block turn instead of on the periodic refresh daemon's next cycle (~3min) —
+    the 'rituals didn't reappear at the turn of the block' bug (2026-07-03).
+
+    The cards are created with due_string 'today', so they land in the cache's
+    'today' bucket; but creating them in Todoist does not itself rebuild the
+    cache, and dtd only reloads on a task-queue.json mtime bump. Mirrors the
+    --refresh-cache call /0g and /0t make after mutating tasks. Foreground with a
+    short timeout; a refresh failure must never break the fire."""
+    if dry_run:
+        log("[DRY RUN] refresh dtd cache")
+        return
+    try:
+        subprocess.run(
+            ["python3", str(DID_FAST), "--refresh-cache"],
+            capture_output=True, text=True, timeout=45,
+        )
+        log("rituals: dtd cache refreshed")
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log(f"rituals: cache refresh failed: {e}")
+
+
+def run_block_ritual_cards(hour: int, dry_run: bool = False,
+                           live: dict | None = None) -> None:
+    """-1neon card lifecycle at a 2h fire. Retire the just-ended block's leftover
+    cards (manual: delete; auto: close-if-earned per `live`, else delete), then
+    create the starting block's full set. Order matters."""
     if HOUR_TO_BRANCH_BLOCK.get(hour):   # 06..22: a block just ended
-        delete_block_rituals(dry_run=dry_run)
+        delete_block_rituals(dry_run=dry_run, live=live)
     if 4 <= hour <= 20:                   # 04..20: a waking block (卯..亥) starts
         create_block_rituals(dry_run=dry_run)
+    # Surface the mutated card set to dtd now, not on the periodic daemon's cycle.
+    _refresh_dtd_cache(dry_run=dry_run)
 
 
 def run_lock_and_mark(dry_run=False, force_hour=None):
@@ -1178,6 +1255,7 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
         neon_lock_cell(today, lock_col, dry_run=dry_run)
 
     # Phase 1: evaluate daemon-checkable habits and write emojis
+    live = None
     if block_name:
         live = evaluate_and_mark_block(block_name, hour, today, dry_run=dry_run)
 
@@ -1201,10 +1279,11 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
     # Toggl tag/project aggregation (same 2h cadence)
     run_toggl_sync(dry_run=dry_run)
 
-    # -1neon card lifecycle: retire the just-ended block's leftover manual cards
-    # and spawn the new block's set (😈-marked). Done after scoring so the
-    # just-ended block's reconcile reads its emojis before its cards are deleted.
-    run_block_ritual_cards(hour, dry_run=dry_run)
+    # -1neon card lifecycle: retire the just-ended block's leftover cards
+    # (auto -1t/-1l close-if-earned per `live`) and spawn the new block's full
+    # set (😈-marked). Done after scoring so the just-ended block's reconcile
+    # reads its emojis before its cards are retired.
+    run_block_ritual_cards(hour, dry_run=dry_run, live=live)
 
 
 # Countdown: notify for next N fires then disable
@@ -1660,10 +1739,11 @@ def run_toggl_sync(dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Build-order daemon")
-    parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive", "toggl-sync"])
+    parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive",
+                                         "toggl-sync", "compute-p"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hour", type=int, default=None,
-                        help="(lock-and-mark only) override current hour for testing")
+                        help="(lock-and-mark/compute-p only) override current hour for testing")
     args = parser.parse_args()
 
     if args.mode == "link-meetings":
@@ -1672,6 +1752,14 @@ def main():
         run_lock_and_mark(dry_run=args.dry_run, force_hour=args.hour)
     elif args.mode == "toggl-sync":
         run_toggl_sync(dry_run=args.dry_run)
+    elif args.mode == "compute-p":
+        # On-demand: print today's -1₦ score from currently-stamped emojis so a
+        # caller (did-fast run_ritual) can SET col P immediately. Log lines land
+        # on stdout too, so emit a uniquely-prefixed line for robust parsing.
+        h = args.hour if args.hour is not None else dt.datetime.now().hour
+        cur = _branch_for_hour(h)
+        formula, total, _parts = compute_p_formula(dt.date.today(), h, current_block=cur)
+        print(f"P_RESULT\t{formula}\t{total}")
     else:
         run_archive(dry_run=args.dry_run)
 
