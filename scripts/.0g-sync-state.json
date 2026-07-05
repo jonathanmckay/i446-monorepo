@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-05T08:00:08.335421-07:00"
+  "tasks": {
+    "have a relaxing party (people on point for bigs and aurora)": {
+      "todoist_id": "6h3VcJxcqrjrgp2R",
+      "minutes": 60
+    },
+    "3 outdoor activities": {
+      "todoist_id": "6h3VcM3R6pVqRJ5R",
+      "minutes": 90
+    }
+  },
+  "last_sync": "2026-07-05T10:00:05.085291-07:00"
 }
