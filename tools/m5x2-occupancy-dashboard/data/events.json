@@ -2788,5 +2788,25 @@
     "unit": "6",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-07-06",
+    "effective": "2026-07-05",
+    "kind": "moveout",
+    "unit_id": "327",
+    "prop": "k104- LeFevre",
+    "unit": "506-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-06",
+    "effective": "2026-07-09",
+    "kind": "ntv",
+    "unit_id": "1168",
+    "prop": "tc68",
+    "unit": "A19",
+    "tenant": null,
+    "baseline": false
   }
 ]
