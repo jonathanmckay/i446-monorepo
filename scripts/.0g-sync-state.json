@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "have a relaxing party (people on point for bigs and aurora)": {
-      "todoist_id": "6h3VcJxcqrjrgp2R",
-      "minutes": 60
-    },
-    "3 outdoor activities": {
-      "todoist_id": "6h3VcM3R6pVqRJ5R",
-      "minutes": 90
-    },
-    "all neon": {
-      "todoist_id": "6h3cWgmfhmjc5g9R",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-07-06T03:55:01.823836-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-06T04:00:14.579612-07:00"
 }
