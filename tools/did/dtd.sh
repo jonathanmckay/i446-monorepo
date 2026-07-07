@@ -516,6 +516,10 @@ COLORS = {
 }
 RESET = '\033[0m'
 
+# -1neon ritual cards carry only the '-1neon' label (no domain), so they render
+# colorless. Map each ritual tag to its natural domain color (user 2026-07-07).
+RITUAL_DOMAIN = {'-1ibx': 'i9', '-1l': 'g245', '-1t': 'n156', 'سمش': 'hcm'}
+
 def prank(p):
     return -(p or 1)
 
@@ -627,12 +631,20 @@ for t in unique:
 
     is_skipped = clean in skipped
 
-    # Find color from labels
+    # Find color from labels. Ritual cards (label '-1neon') have no domain
+    # label — resolve their color from the ritual tag in the name instead.
     color = ''
-    for lbl in t.get('labels', []):
-        if lbl in COLORS:
-            color = COLORS[lbl]
-            break
+    if '-1neon' in t.get('labels', []):
+        bare = clean.replace('😈', '').strip()
+        for tag, dom in RITUAL_DOMAIN.items():
+            if bare == tag or tag in bare.split():
+                color = COLORS[dom]
+                break
+    if not color:
+        for lbl in t.get('labels', []):
+            if lbl in COLORS:
+                color = COLORS[lbl]
+                break
 
     # Recurring indicator
     recurring = t.get('recurring', False)

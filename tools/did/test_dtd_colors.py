@@ -53,3 +53,12 @@ def test_jia_specifically_present():
     2026-07-05 — it was Ferrari red before, which read as orange in dtd and
     contradicted the user's mental model of 家 = teal."""
     assert _dtd_colors().get("家") == (0, 184, 212)
+
+
+def test_ritual_cards_get_domain_colors():
+    """-1neon cards carry no domain label; dtd maps the ritual tag to a domain
+    color (2026-07-07): -1ibx→i9, -1l→g245, -1t→n156, سمش→hcm."""
+    src = DTD.read_text()
+    assert "RITUAL_DOMAIN = {'-1ibx': 'i9', '-1l': 'g245', '-1t': 'n156', 'سمش': 'hcm'}" in src
+    assert "'-1neon' in t.get('labels', [])" in src, (
+        "list builder must resolve ritual-card color from the tag name")
