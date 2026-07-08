@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-07T16:00:05.946992-07:00"
+  "tasks": {
+    "120 prayers": {
+      "todoist_id": "6h45C96cR6vcFCGR",
+      "minutes": 60
+    },
+    "all colors": {
+      "todoist_id": "6h45C973rj68WR5R",
+      "minutes": 50
+    },
+    "catch up with m5x2": {
+      "todoist_id": "6h45C99g8vFV4C5R",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-07-07T18:00:05.711972-07:00"
 }
