@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "120 prayers": {
-      "todoist_id": "6h45C96cR6vcFCGR",
-      "minutes": 60
-    },
-    "all colors": {
-      "todoist_id": "6h45C973rj68WR5R",
-      "minutes": 50
-    },
-    "catch up with m5x2": {
-      "todoist_id": "6h45C99g8vFV4C5R",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-07-08T03:55:06.536683-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-08T04:00:11.659520-07:00"
 }
