@@ -1202,6 +1202,18 @@ TICKER_PID=$!
 # the cache refreshed with today's (bug 2026-07-02: "new day, but dtd didn't
 # refresh").
 (
+  # Wait for fzf's start binding to publish the listen port before entering the
+  # loop. The port file is created ~100ms+ AFTER fzf boots, but this subshell
+  # spawns before fzf — checking `-f $DTD_PORT` immediately made the loop
+  # condition false and the watcher EXITED AT BIRTH, every session (bug
+  # 2026-07-07: block turnover never auto-refreshed; the session snapshot
+  # stayed frozen at startup mtime). Mirrors the ticker's port wait; if fzf
+  # never publishes (died at boot), fall through — the while sees no file and
+  # exits, same as before.
+  for _w in {1..150}; do
+    [[ -f "$DTD_PORT" ]] && break
+    sleep 0.2
+  done
   last_m=$(stat -f %m "$CACHE" 2>/dev/null)
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
   last_day="$(date +%Y-%m-%d)"
