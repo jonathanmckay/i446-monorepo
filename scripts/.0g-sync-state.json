@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-08T05:30:09.993654-07:00"
+  "tasks": {
+    "120s": {
+      "todoist_id": "6h4CFVghRFXVgQgR",
+      "minutes": 60
+    },
+    "45 o314": {
+      "todoist_id": "6h4CFVhj62qqx27R",
+      "minutes": 20
+    },
+    "clear m5x2 queue": {
+      "todoist_id": "6h4CFVrP6MCFQ4qR",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-07-08T10:00:07.337149-07:00"
 }
