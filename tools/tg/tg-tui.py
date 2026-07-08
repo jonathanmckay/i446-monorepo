@@ -282,6 +282,7 @@ class State:
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
         self.last_points_fetch = 0.0
+        self.points_day = None  # date the points state belongs to (cross-day guard)
         # When Toggl returns a 402 (free-tier rate limit), back off until this
         # monotonic time instead of hammering every tick/keypress — continuing to
         # call during the limit only prolongs it.
@@ -513,6 +514,19 @@ def fetch_points():
     try:
         now = view_now()  # viewed day's 0分 row
         today_md = f"{now.month}/{now.day}"
+
+        # Cross-day guard: points state from another day's row must never
+        # display as this day's. "Keep last good on a rejected read" is right
+        # WITHIN a day, but every read of a new day can be rejected for hours
+        # (torn D during active writes), which kept YESTERDAY's Σ and blocks
+        # on screen until mid-afternoon (990 shown at 16:11 on a 323分 day,
+        # 2026-07-07). On rollover/day-nav, blank the state; empty renders as
+        # no points until the first clean read of the new day's row.
+        if STATE.points_day is not None and STATE.points_day != now.date():
+            STATE.today_points = 0
+            STATE.block_points = {}
+            STATE.block_running_pts = 0
+        STATE.points_day = now.date()
 
         # Read the Σ total (column D) AND the per-block columns (G:O, headed
         # 卯辰巳午未申酉戌亥) for today's row in one ix-osa call. G:O is the
@@ -921,8 +935,12 @@ def display_desc(desc: str) -> str:
 
 def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(TZ)
+    # int(round()) at every 分 render site: the sheet now carries fractional
+    # cells (variable-task minutes/7 → D=695.357142857143 live 2026-07-07), and
+    # a float leaking into an f-string prints its full repr next to 分 — which
+    # reads as concatenated garbage digits on the rule line.
     pts = STATE.today_points
-    pts_str = f" · {pts}分" if pts else ""
+    pts_str = f" · {int(round(pts))}分" if pts else ""
     # The running process is behind the file on disk → tell the user to restart;
     # the whole header goes red so it can't be missed.
     if _code_is_stale():
@@ -965,7 +983,7 @@ def section_rule(label: str, focus: bool = False, pts: int = 0) -> list[tuple[st
     bold white so the day's 分 are scannable at a glance."""
     s = f"─ {label} "
     cls = "class:focus_rule" if focus else "class:rule"
-    pts_str = f" {pts}分" if pts else ""
+    pts_str = f" {int(round(pts))}分" if pts else ""  # never print a float repr
     trail = max(0, WIDTH_HINT - dwidth(s) - dwidth(pts_str))
     out: list[tuple[str, str]] = [(cls, s + "─" * trail)]
     if pts_str:
@@ -1093,7 +1111,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     else:
         body_picks = picks
         left = f"{blk_name}:00{emoji_str}"
-        pts_str = f"{pts}分" if pts else ""
+        pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
         trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
         out.append(("class:dim", left + " " * trail))
         if pts_str:
@@ -1379,7 +1397,7 @@ def render_morning() -> list[tuple[str, str]]:
     for blk_name, blk_sh, blk_eh in BLOCKS:
         if blk_eh + 1 > cutoff.hour:
             break  # rest handled by the detail band
-        pts = STATE.block_points.get(blk_name, 0)
+        pts = _block_display_pts(blk_name)  # clamped to Σ, same as the focus rules
         if blk_name == "卯":
             # Layout exception: the sleep block normally collapses to a single
             # wake-time line. But on an early wake you work through part of 卯
