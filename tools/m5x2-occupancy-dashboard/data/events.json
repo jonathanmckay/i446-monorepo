@@ -2808,5 +2808,95 @@
     "unit": "A19",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-07-08",
+    "kind": "movein",
+    "unit_id": "455",
+    "prop": "c302",
+    "unit": "1",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "414",
+    "prop": "ps17",
+    "unit": "A12",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-07-08",
+    "kind": "movein",
+    "unit_id": "872",
+    "prop": "kn47 K1",
+    "unit": "D202",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "860",
+    "prop": "kn47 K1",
+    "unit": "C208",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-07-08",
+    "kind": "ntv",
+    "unit_id": "1052",
+    "prop": "kn47 K2",
+    "unit": "D205",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-07-11",
+    "kind": "ntv",
+    "unit_id": "1228",
+    "prop": "tc68",
+    "unit": "D079",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-07-19",
+    "kind": "leased",
+    "unit_id": "1127",
+    "prop": "o155-Oak",
+    "unit": "D6",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-08-26",
+    "kind": "leased",
+    "unit_id": "327",
+    "prop": "k104- LeFevre",
+    "unit": "506-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-08",
+    "effective": "2026-07-29",
+    "kind": "leased",
+    "unit_id": "442",
+    "prop": "w226",
+    "unit": "9",
+    "tenant": null,
+    "baseline": false
   }
 ]
