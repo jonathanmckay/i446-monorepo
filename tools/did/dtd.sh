@@ -1243,7 +1243,13 @@ TICKER_PID=$!
     cur_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
     if [[ "$cur_blk" != "$last_blk" ]]; then
       last_blk="$cur_blk"
-      ( for _s in 20 25 45; do sleep "$_s"; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; done ) &
+      # Cumulative +20/45/90/150/270s. did-fast now unions the -1neon cards in
+      # via the direct label endpoint (fresh in seconds; the today|overdue FILTER
+      # query lags minutes), so the +45s shot usually catches the daemon's
+      # boundary+30s card creation. The later shots backstop a slow daemon
+      # (Todoist 503 retries) so the new block's -1n cards still surface in-
+      # session, not only on the next ~3min did-refresh-cache daemon cycle.
+      ( for _s in 20 25 45 60 120; do sleep "$_s"; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; done ) &
     fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue

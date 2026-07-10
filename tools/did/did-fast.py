@@ -627,6 +627,30 @@ def _refresh_task_queue_inner() -> dict:
     else:
         results["today"] = today_result or []
 
+    # Union the -1neon block-ritual cards in via the DIRECT label endpoint.
+    # The daemon (re)creates these 5 cards at each 2h boundary; they reach the
+    # cache ONLY through fetch_today's "today | overdue" FILTER query, whose
+    # index lags minutes behind task creation — so a boundary refresh fired
+    # ~30-90s after the daemon made the cards returned stale results and the new
+    # block's -1n cards didn't surface in dtd until the next ~3min daemon cycle
+    # (the "dtd won't auto-refresh at block turnover" bug, 2026-07-09). The
+    # /tasks?label=-1neon endpoint is fresh within seconds, so fetching it
+    # directly and merging (dedup by id, due<=today) closes the gap. -1neon is
+    # deliberately NOT a top-level cache key (dtd reads ritual cards from
+    # `today`), so union rather than add a bucket.
+    try:
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+        neg1 = fetch_label("-1neon")
+        have = {t.get("id") for t in results["today"]}
+        for t in neg1:
+            if t.get("id") in have:
+                continue
+            if t.get("due") and t["due"] <= today_iso:
+                results["today"].append(t)
+                have.add(t.get("id"))
+    except Exception as e:
+        print(f"WARN: -1neon union skipped: {e}", file=sys.stderr)
+
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": datetime.now().isoformat()}
