@@ -620,12 +620,19 @@ for t in unique:
     # Hide by id first: definitive, and immune to same-name collisions.
     if t.get('id') is not None and str(t['id']) in completed_ids:
         continue
+    # -1neon ritual cards (😈 سمش / -1g / -1ibx / -1t / -1l) RECUR every 2h block
+    # with IDENTICAL names. Name-based hiding therefore suppresses the current
+    # block's fresh card whenever an earlier block's same-named card was
+    # completed/skipped today (bug 2026-07-10: prayer + -1g vanished all day
+    # after being done once). Hide rituals by id ONLY (the check above); the
+    # name/removed pass below is for one-off tasks whose names are unique.
+    is_ritual = '-1neon' in t.get('labels', [])
     # removed entries may be truncated prefixes (fzf middle-truncates long
     # names in the defer/split bindings) — match by startswith, not equality
     # (regression 2026-06-06: split task stayed in the list). Name hide uses
     # name_only_completed so an id-backed completion can't suppress a different
     # open task with the same name (regression 2026-06-26: 'stats').
-    if (clean in name_only_completed or prefix in name_only_completed
+    if not is_ritual and (clean in name_only_completed or prefix in name_only_completed
             or any(clean == r or (r and clean.startswith(r)) for r in removed)):
         continue
 
