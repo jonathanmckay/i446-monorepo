@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-09T10:00:06.510835-07:00"
+  "tasks": {
+    "productive plane ride": {
+      "todoist_id": "6h4WVw3gjGvWPhc2",
+      "minutes": 40
+    },
+    "town hall goes well": {
+      "todoist_id": "6h4WVw4ccw8XM5w2",
+      "minutes": 100
+    },
+    "enjoy the evening": {
+      "todoist_id": "6h4WVwFFf5Rgv682",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-07-09T18:00:08.913186-07:00"
 }
