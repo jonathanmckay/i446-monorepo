@@ -467,6 +467,15 @@ DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
 # Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file
+# $5 (columns) is baked into the reload binding at launch, so it goes STALE if
+# the terminal is resized (or was mis-reported wide at launch). rjust_est pads
+# estimate rows to that width; a stale-wide value makes the padded line exceed
+# the REAL width and WRAP, so a task with (N)/[N] renders on two lines
+# (2026-07-12: "Reach out to Andie Perez" appeared twice — baked 192 vs a real
+# 80-col terminal). Prefer fzf's live width, then the real tty width, then $5.
+_cols="${FZF_COLUMNS:-}"
+[ -z "$_cols" ] && _cols="$(tput cols 2>/dev/null </dev/tty)"
+[ -z "$_cols" ] && _cols="$5"
 python3 -c "
 import json, sys, re, time
 
@@ -751,7 +760,7 @@ for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
-" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+" "$1" "$2" "$3" "$4" "$_cols" "$6" "$7" "$8"
 LISTEOF
 chmod +x "$DTD_LIST"
 
