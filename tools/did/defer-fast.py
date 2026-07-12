@@ -202,8 +202,19 @@ def find_task(query: str) -> dict:
             # so duplicate names differing only in annotations resolve cleanly
             exact = [m for m in matches
                      if m.get("content", "").lower().strip() == query_lower.strip()]
-            if len(exact) == 1:
+            if exact:
+                # Exact-content DUPLICATES (e.g. a recurring task + a stale
+                # one-off copy of the same occurrence, both overdue) used to
+                # error here, which failed the whole defer — dtd then rolled
+                # back its optimistic hide and the task kept reappearing
+                # (2026-07-12: "give kids allowance" x2). Resolve
+                # deterministically instead of bailing: prefer the recurring
+                # series (the canonical one), else the first. The collision-proof
+                # path is --id (dtd passes the row's id); this is the name-based
+                # fallback.
+                exact.sort(key=lambda m: 0 if (m.get("due") or {}).get("is_recurring") else 1)
                 return exact[0]
+            # Substring matches with NO exact hit → genuinely different tasks.
             print(json.dumps({
                 "error": "multiple matches",
                 "matches": [{"id": m["id"], "content": m["content"]}
@@ -213,6 +224,25 @@ def find_task(query: str) -> dict:
 
     print(json.dumps({"error": "task not found"}))
     sys.exit(1)
+
+
+def find_task_by_id(task_id: str) -> dict:
+    """Fetch a single task by its Todoist id — the collision-proof path dtd uses.
+
+    The dtd list row carries the task id in its 2nd tab field, so passing --id
+    defers the EXACT task the user selected even when several open tasks share
+    the same name (name search can't disambiguate those). Bypasses find_task's
+    content search entirely.
+    """
+    try:
+        t = _api("GET", f"/tasks/{quote(str(task_id))}")
+    except Exception as e:
+        print(json.dumps({"error": f"task id {task_id} fetch failed: {e}"}))
+        sys.exit(1)
+    if not t or not t.get("id"):
+        print(json.dumps({"error": f"task id {task_id} not found"}))
+        sys.exit(1)
+    return t
 
 
 # ---------------------------------------------------------------------------
@@ -386,9 +416,24 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    task_name = sys.argv[1]
-    explicit_target = sys.argv[2] if len(sys.argv) > 2 else None
-    claimed_points = (int(sys.argv[3]) if len(sys.argv) > 3
+    # Two invocation forms:
+    #   defer-fast --id <task_id> [days] [claimed_points]   ← dtd (collision-proof)
+    #   defer-fast <task_name>     [days] [claimed_points]   ← name-based fallback
+    argv = sys.argv[1:]
+    task_id = None
+    if argv and argv[0] == "--id":
+        if len(argv) < 2:
+            print("usage: defer-fast.py --id <task_id> [days|YYYY-MM-DD] [claimed_points]",
+                  file=sys.stderr)
+            sys.exit(1)
+        task_id = argv[1]
+        argv = argv[2:]           # remaining: [days?, claimed_points?]
+        task_name = None
+    else:
+        task_name = argv[0]
+        argv = argv[1:]
+    explicit_target = argv[0] if len(argv) > 0 else None
+    claimed_points = (int(argv[1]) if len(argv) > 1
                       else DEFAULT_CLAIMED_POINTS)
 
     # "0" or "auto" (dtd's blank-prompt sentinel): a recurring task skips to
@@ -399,8 +444,8 @@ def main():
     if raw == "auto":
         explicit_target = None  # never let the sentinel reach resolve_target
 
-    # Find the task
-    task = find_task(task_name)
+    # Resolve the task: by id (exact, collision-proof) or by name (fallback).
+    task = find_task_by_id(task_id) if task_id else find_task(task_name)
 
     # Target = today+1 (default), today+N (bare integer), or an absolute date.
     target_date = resolve_target(explicit_target)
