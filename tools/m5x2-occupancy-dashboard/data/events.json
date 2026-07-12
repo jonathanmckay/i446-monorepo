@@ -2898,5 +2898,115 @@
     "unit": "9",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-09",
+    "kind": "moveout",
+    "unit_id": "1168",
+    "prop": "tc68",
+    "unit": "A19",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-08-02",
+    "kind": "ntv",
+    "unit_id": "1048",
+    "prop": "kn47 K2",
+    "unit": "D201",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-08-02",
+    "kind": "ntv",
+    "unit_id": "935",
+    "prop": "kn47 K1",
+    "unit": "J101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-20",
+    "kind": "leased",
+    "unit_id": "864",
+    "prop": "kn47 K1",
+    "unit": "D102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-11",
+    "kind": "moveout",
+    "unit_id": "1228",
+    "prop": "tc68",
+    "unit": "D079",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-12",
+    "kind": "movein",
+    "unit_id": "734",
+    "prop": "c313",
+    "unit": "26",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-08",
+    "kind": "moveout",
+    "unit_id": "179",
+    "prop": "b101",
+    "unit": "16",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-31",
+    "kind": "leased",
+    "unit_id": "339",
+    "prop": "k104- LeFevre",
+    "unit": "505-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-20",
+    "kind": "leased",
+    "unit_id": "437",
+    "prop": "w226",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-08",
+    "kind": "moveout",
+    "unit_id": "1052",
+    "prop": "kn47 K2",
+    "unit": "D205",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-12",
+    "effective": "2026-07-12",
+    "kind": "movein",
+    "unit_id": "787",
+    "prop": "v202",
+    "unit": "1",
+    "tenant": null,
+    "baseline": false
   }
 ]
