@@ -78,9 +78,12 @@ def test_run_ritual_auto_branch_skips_stamp_and_points():
     src = _func_src(DIDFAST, "run_ritual")
     i_auto = src.index('r.get("mode") == "auto"')
     i_stamp = src.index("stamp_emoji")
-    i_p = src.index("compute-p")
-    # The auto branch must return before both the stamp and the P write.
-    assert i_auto < i_stamp and i_auto < i_p
+    # The auto branch must return before stamping the emoji. (Neither branch
+    # writes P any more — P is daemon-owned — so there is no P-write to order
+    # against; the whole-function no-P contract is pinned in
+    # test_ritual_immediate_p.test_run_ritual_does_not_write_p.)
+    assert i_auto < i_stamp
+    assert "compute-p" not in src, "run_ritual must not recompute P for any branch"
     auto_block = src[i_auto:i_stamp]
     assert "return out" in auto_block, "auto branch must return before stamping"
     # And it still records completed-today so dtd hides the card at once.
