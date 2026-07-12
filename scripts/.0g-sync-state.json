@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-12T14:00:05.618893-07:00"
+  "tasks": {
+    "3 instances of math": {
+      "todoist_id": "6h5CMJ6hj45rRqMR",
+      "minutes": 90
+    },
+    "play bball w/hiit": {
+      "todoist_id": "6h5C2H5HM3r9mJJR",
+      "minutes": 50
+    },
+    "tasks down to something manageable": {
+      "todoist_id": "6h5C2H7rp4VrX9G2",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-07-12T16:00:06.922836-07:00"
 }
