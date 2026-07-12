@@ -1134,6 +1134,18 @@ DTD_UNDO="/tmp/dtd-$DTD_ID.undo.sh"
 cat > "$DTD_UNDO" << UNDOEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
+# Don't drop a ctrl-z that lands mid-completion. If a task is still in flight
+# (pushed > processed) the journal entry we need to reverse hasn't been written
+# yet, so QUEUE the undo: poll for the worker to settle (up to ~5s, 100ms steps)
+# instead of bailing immediately. The reload + transform-header in the fzf
+# binding still fire after this script returns, so the undone task reappears.
+for _ in {1..50}; do
+  pushed=\$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0)
+  processed=\$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0)
+  (( pushed <= processed )) && break
+  echo "⏳ \$((pushed - processed)) task(s) processing — undo queued…" > "\$HDR"
+  sleep 0.1
+done
 pushed=\$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0)
 processed=\$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0)
 if (( pushed > processed )); then

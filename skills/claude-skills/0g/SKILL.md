@@ -89,6 +89,11 @@ Each line/item becomes one goal. Strip leading `-`, `*`, `[ ]`, `[x]` markers. P
 - `@code` → domain label (remove from content)
 - `{N}` → bonus points (keep in content)
 
+**Point-bracket normalization (default to `{N}`).** A 0g goal's completion points belong in the **0g column**, which `/did` credits only from `{N}` (curly). `[N]` routes to the goal's *domain* column instead, so it silently misfiles the points (bug 2026-07-11: a `/0g` run wrote `[100]`/`[60]`/`[40]` and those goals would have credited hcbp/xk rather than 0g). Therefore:
+- If a goal carries neither `{N}` nor `[N]`, **auto-estimate and append `{N}`** (same scale as `/-1g`: quick/routine `{5}`, medium `{8}`–`{12}`, ambitious `{15}`–`{20}`). Never leave a 0g goal without a point bracket.
+- If the user typed `[N]` with no `{N}`, treat it as `{N}` (convert to curly) unless they *explicitly* want the points on the domain column. Daily 0g goals should carry `{N}`.
+- Never default un-annotated 0g goals to `[N]`.
+
 **Step 2: Update build order**
 
 Read the build order file. Find `## 0₲`. Replace the existing goal items (lines matching `  - [ ]` or `  - [x]`) with the new goals formatted as:
