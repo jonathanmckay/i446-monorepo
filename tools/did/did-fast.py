@@ -1593,23 +1593,47 @@ def run_ritual(tag: str) -> dict:
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
             out["completed_today_error"] = str(e)
 
-    # 4. Do NOT write 0分!P here. P is owned SOLELY by the daemon's
-    #    reconcile_p_for_day (g245 CLAUDE.md: "P is written ONLY by the daemon's
-    #    reconcile … Completion does NOT write P").
-    #
-    #    History: a 2026-07-03 "immediate P" feature recomputed P here via the
-    #    daemon's on-demand pure P scorer (a header sum of the LOCAL build order)
-    #    and SET the Excel cell. That was wrong and actively destructive (bug
-    #    2026-07-11):
-    #    the retrospective auto markers ⏱️ (-1t) / ✅ (-1l) are written by the
-    #    daemon onto Ix's build order and are NOT present in the Straylight copy
-    #    a ritual completion sees, so that header sum excludes them and
-    #    OVERWRITES the daemon's correct P. Example: the 20:00 reconcile set
-    #    P=19 (four back-filled ⏱️); a 20:04 /-1g completion recomputed P=14,
-    #    silently dropping 12 earned points. Stamping the manual emoji (step 2)
-    #    is enough — the daemon credits P at the next block boundary, and its
-    #    reconcile self-heals late/retrospective markers.
-    out["p_note"] = "P is daemon-owned; completion stamps the emoji only"
+    # 4. Credit 0分!P IMMEDIATELY (2026-07-12 redesign): completing a ritual
+    #    awards its points right now — the user shouldn't wait for the block
+    #    boundary. This is an INCREMENT (formula-append `=…+N`), NOT a
+    #    recompute-from-headers. That distinction is the whole bug fix: the
+    #    2026-07-11 clobber came from RE-SUMMING the header emojis (which miss
+    #    the retrospective ⏱️/✅) and SETting P low. A pure `+N` can't clobber —
+    #    it only adds this ritual's own points. The daemon's boundary reconcile
+    #    remains the checksum: it re-validates the block's stamps and SETs P to
+    #    the true total, correcting any provisional over-credit.
+    pts = int(r.get("points") or 0)
+    if pts:
+        now = datetime.now()
+        script = (
+            'tell application "Microsoft Excel"\n'
+            '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
+            '    set rr to 0\n'
+            '    repeat with i from 2 to 400\n'
+            f'        if (string value of cell ("B" & i) of s) = "{now.month}/{now.day}" then\n'
+            '            set rr to i\n'
+            '            exit repeat\n'
+            '        end if\n'
+            '    end repeat\n'
+            '    if rr = 0 then return "ERR: no 0分 row"\n'
+            '    set c to cell ("P" & rr) of s\n'
+            '    set f to (get formula of c) as text\n'
+            '    if f = "" or f = "0" then\n'
+            f'        set formula of c to "=0+{pts}"\n'
+            '    else if character 1 of f is not "=" then\n'
+            f'        set formula of c to "=" & f & "+{pts}"\n'
+            '    else\n'
+            f'        set formula of c to f & "+{pts}"\n'
+            '    end if\n'
+            '    return "P=" & (value of cell ("P" & rr) of s)\n'
+            'end tell'
+        )
+        try:
+            res = ix_run(script)
+            out["p_credit"] = {"points": pts, "ok": res.returncode == 0,
+                               "excel": (res.stdout or res.stderr or "").strip()[:60]}
+        except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
+            out["p_credit_error"] = str(e)
     return out
 
 

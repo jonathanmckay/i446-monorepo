@@ -58,19 +58,28 @@ def test_boundary_reconcile_is_the_sole_validating_p_writer():
     assert "_strip_unearned_markers" in src
 
 
-# ── did-fast: run_ritual must NOT write P ─────────────────────────────────────
+# ── did-fast: run_ritual credits P by INCREMENT, never recompute ─────────────
+# 2026-07-12 redesign: completing a ritual credits its points immediately (the
+# user shouldn't wait for the block boundary). It must do so by INCREMENTING
+# (`=…+N`), never by recomputing from the header emojis — the recompute path was
+# the 2026-07-11 clobber (a header sum missed retrospective ⏱️/✅ and SET P low).
 
-def test_run_ritual_does_not_write_p():
-    """Completion stamps the emoji only. It must never recompute or SET col P —
-    doing so clobbers the daemon's authoritative P with a stamp-stripped sum."""
+def test_run_ritual_increments_p_immediately():
+    src = _func_src(DIDFAST, "run_ritual")
+    assert 'cell ("P" &' in src, "run_ritual must write column P (immediate credit)"
+    assert "+{pts}" in src, "must append THIS ritual's own points (increment)"
+
+
+def test_run_ritual_does_not_recompute_p():
+    """The increment must not resurrect the clobber: no compute-p shell, no
+    P_RESULT parse, no re-summing of header emojis."""
     src = _func_src(DIDFAST, "run_ritual")
     assert "compute-p" not in src, "run_ritual must NOT shell the daemon's compute-p"
-    assert 'cell ("P" &' not in src, "run_ritual must NOT write column P"
-    assert "P_RESULT" not in src, "run_ritual must NOT parse a P total"
+    assert "P_RESULT" not in src, "run_ritual must NOT parse a recomputed P total"
 
 
-def test_run_ritual_documents_daemon_owned_p():
-    """The reverted contract should be self-documenting so it isn't re-added."""
+def test_run_ritual_documents_reconcile_is_checksum():
+    """Self-documenting so the increment isn't mistaken for the authority: the
+    daemon reconcile remains the checksum that corrects provisional credit."""
     src = _func_src(DIDFAST, "run_ritual")
-    assert "daemon" in src.lower() and "P" in src, (
-        "run_ritual should note that P is daemon-owned")
+    assert "daemon" in src.lower() and "checksum" in src.lower()

@@ -395,90 +395,6 @@ def load_toggl_range(days, return_counts=False):
     return minutes
 
 
-TOGGL_WORKSPACE_ID = int(os.environ.get("TOGGL_WORKSPACE_ID", "2092616"))
-
-
-def load_toggl_reports_range(days, return_counts=False):
-    """Toggl entries for the last `days` days via the Reports v3 API.
-
-    Unlike load_toggl_range (the v9 /me/time_entries endpoint, confirmed
-    hard-capped to ~90 days back from today — start_date earlier than that
-    returns a 400), Reports v3 accepts up to a 366-day range in one request.
-    Used for weekly/monthly granular chart views that need more history than
-    v9 can serve; load_toggl_range/_build_weekly_data stay on v9 since they
-    never request more than ~90 days and v9 is simpler.
-
-    Reports v3 groups results by (project, description); each group nests its
-    individual time_entries. Paginates via the X-Next-Id/X-Next-Row-Number
-    response headers (documented Toggl contract: echo them back as first_id/
-    first_row_number in the next request body) up to MAX_PAGES — generous for
-    this user's entry volume. If a page request fails or the pagination
-    contract doesn't hold, returns whatever was gathered so far rather than
-    raising: partial historical data beats a broken chart.
-    """
-    api_key = os.environ.get("TOGGL_API_KEY", "")
-    if not api_key:
-        return ({}, {}) if return_counts else {}
-    today = date.today()
-    floor = today - timedelta(days=min(days, 365))
-    url = f"https://api.track.toggl.com/reports/api/v3/workspace/{TOGGL_WORKSPACE_ID}/search/time_entries"
-    creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
-
-    MAX_PAGES = 20
-    rows = []
-    payload = {"start_date": floor.isoformat(), "end_date": today.isoformat()}
-    for _ in range(MAX_PAGES):
-        req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST")
-        req.add_header("Authorization", f"Basic {creds}")
-        req.add_header("Content-Type", "application/json")
-        try:
-            # A full 366-day range takes ~16s server-side (confirmed live) —
-            # comfortably under a 90s cap so a slow-but-successful page isn't
-            # mistaken for a dead connection.
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                # Toggl sends lowercase header names (x-next-id, not X-Next-Id);
-                # a plain dict(getheaders()) lookup by mixed-case key silently
-                # returns None even when a next page exists, truncating to page
-                # 1 forever. Confirmed live — normalize to lowercase before use.
-                hdrs = {k.lower(): v for k, v in resp.getheaders()}
-                page_rows = json.loads(resp.read())
-        except Exception:
-            break
-        rows.extend(page_rows)
-        next_id = hdrs.get("x-next-id")
-        next_row = hdrs.get("x-next-row-number")
-        if not next_id or not next_row or len(page_rows) < 50:
-            break
-        payload = {**payload, "first_id": int(next_id), "first_row_number": int(next_row)}
-
-    result = defaultdict(lambda: defaultdict(int))
-    entry_counts = defaultdict(lambda: defaultdict(int))
-    for row in rows:
-        proj_id = row.get("project_id")
-        code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
-        for te in row.get("time_entries", []):
-            secs = te.get("seconds", 0)
-            if not secs or secs <= 0:
-                continue
-            start_str = te.get("start", "")
-            if not start_str:
-                continue
-            try:
-                start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
-            except (ValueError, TypeError):
-                continue
-            d = start_dt.date()
-            if d < floor or d > today:
-                continue
-            result[d.isoformat()][code] += secs // 60
-            entry_counts[d.isoformat()][code] += 1
-
-    minutes = {k: dict(v) for k, v in result.items()}
-    if return_counts:
-        return minutes, {k: dict(v) for k, v in entry_counts.items()}
-    return minutes
-
-
 def _build_weekly_data(n_weeks=8):
     """Weekly time/points by category + cumulative this-week vs last-week shadow."""
     today = date.today()
@@ -669,8 +585,17 @@ def _build_granular_chart_data(granularity):
     n_buckets = len(bucket_starts)
 
     points_all = load_points_all()
-    # Reports v3, not v9: weekly (182d)/monthly (365d) windows exceed v9's ~90-day cap.
-    toggl_all, toggl_counts = load_toggl_reports_range(days_span, return_counts=True)
+    # Time/Entries: v9 /me/time_entries is hard-capped to ~90 days back
+    # (confirmed live — start_date earlier than that 400s). The Reports v3
+    # endpoint *can* cover a full year, but for this account it requires deep
+    # pagination (grouped by project+description, and descriptions here are
+    # highly varied, not just per-project) — confirmed live at ~16s/page and
+    # 20+ pages to cover a year, i.e. minutes of latency per request. Not
+    # viable for a live dashboard load, so Time/Entries only get v9's ~89-day
+    # window here; older buckets are genuinely empty for those two charts
+    # only. Points/Tasks come from unbounded sources and still cover the full
+    # requested weekly/monthly range.
+    toggl_all, toggl_counts = load_toggl_range(min(days_span, 89), return_counts=True)
     tasks_all = load_tasks_data(n_days=days_span)
 
     # Points, bucketed and summed
