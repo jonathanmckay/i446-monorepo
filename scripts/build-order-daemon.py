@@ -580,12 +580,17 @@ def _live_for_block(block_name: str, hour: int, target_date: dt.date):
     with NO marker writes. Used to re-score already-fired blocks during a
     reconcile. Returns None on any validation error so the block falls back to
     trusting its header markers (legacy behavior) rather than losing points."""
-    start, end = hour - 2, hour
+    # ⏱️/✅ measure the PREVIOUS block: block X's -1t/-1l reward having RECORDED
+    # block X-1 (its Toggl time categorized, its completed tasks pointed). The
+    # just-ended block started 2h before the fire, so the previous block is
+    # [fire-4, fire-2]. 🎯 stays current-block (goals are set for X itself).
+    # (2026-07-12 redesign — was the block's OWN window.)
+    prev_start, prev_end = hour - 4, hour - 2
     try:
         return {
             GOAL_MARKER: _block_has_goals(block_name),
-            TOGGL_MARKER: _toggl_covers_block(target_date, start, end),
-            TODOIST_MARKER: _todoist_l_satisfied(target_date, start, end),
+            TOGGL_MARKER: _toggl_covers_block(target_date, prev_start, prev_end),
+            TODOIST_MARKER: _todoist_l_satisfied(target_date, prev_start, prev_end),
         }
     except Exception as e:  # noqa: BLE001 — never drop points on a transient API error
         log(f"_live_for_block {block_name}: validation error {e}; trusting header")
@@ -953,18 +958,20 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
     else:
         log(f"score: {block_name} no goals found")
 
-    # -1t: toggl coverage for the block
-    # Find block hours from HOUR_TO_BRANCH_BLOCK (fire_hour maps to just-ended block)
-    block_start = hour - 2  # block that just ended started 2h before fire
-    block_end = hour
-    live[TOGGL_MARKER] = _toggl_covers_block(target_date, block_start, block_end)
+    # -1t/-1l measure the PREVIOUS block: block X's ⏱️/✅ reward having RECORDED
+    # block X-1 (e.g. 戌's ⏱️ ⇔ 酉 fully recorded). The just-ended block started
+    # 2h before the fire, so the previous block window is [fire-4, fire-2].
+    # (2026-07-12 redesign — was the block's OWN window.)
+    prev_start = hour - 4
+    prev_end = hour - 2
+    live[TOGGL_MARKER] = _toggl_covers_block(target_date, prev_start, prev_end)
     if live[TOGGL_MARKER]:
         _write_block_marker(block_name, TOGGL_MARKER, dry_run=dry_run)
     else:
-        log(f"score: {block_name} toggl coverage below threshold")
+        log(f"score: {block_name} prev-block toggl coverage below threshold")
 
-    # -1l: todoist completions during the block
-    live[TODOIST_MARKER] = _todoist_l_satisfied(target_date, block_start, block_end)
+    # -1l: todoist completions during the PREVIOUS block
+    live[TODOIST_MARKER] = _todoist_l_satisfied(target_date, prev_start, prev_end)
     if live[TODOIST_MARKER]:
         _write_block_marker(block_name, TODOIST_MARKER, dry_run=dry_run)
     else:
