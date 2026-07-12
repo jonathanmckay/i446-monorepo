@@ -1,6 +1,11 @@
 """Past-block gap rows: untracked stretches >= GAP_MIN render as their own
-body line (faint ┄ fill) with the minutes figure in alarm red; the 卯 sleep
-total is dim like other duration figures, not bold white."""
+body line, labelled "empty → HH:MM (Nm)" (explicit end time + the word
+"empty", not just a duration figure), pulsing solid-red-block↔plain-red-text;
+the 卯 sleep total is dim like other duration figures, not bold white.
+
+Redesigned 2026-07-11 (user report: the old thin ┄-fill red↔grey flash was too
+subtle, never stated when the empty stretch began/ended, and never said the
+word "empty" — you had to infer emptiness from dash texture alone)."""
 import datetime as dtm
 import importlib.util
 import sys
@@ -90,7 +95,7 @@ def test_gap_alarm_on_toggles_each_half_second():
     assert on0 is True and off is False and on1 is True
 
 
-def test_gap_row_renders_red_minutes_on_own_line(monkeypatch):
+def test_gap_row_states_empty_and_end_time_off_phase(monkeypatch):
     mod = _load_tui()
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: False)  # off phase
     today = _midnight()
@@ -101,27 +106,46 @@ def test_gap_row_renders_red_minutes_on_own_line(monkeypatch):
     frags = mod._compact_block_lines("巳", 8, [entry, gap], 0, "")
     text = "".join(t for _, t in frags)
     assert text.count("\n") == 4, "block must stay exactly 4 lines"
-    red = [t for s, t in frags if "no_entry" in s]
-    assert any("30" in t for t in red), "gap minutes stay solid red"
-    # Off phase: the ┄ fill is muted grey (idle), not red.
-    assert any("┄" in t for s, t in frags if "idle" in s)
+    assert "empty" in text, "gap row must say the word 'empty', not just imply it"
+    assert "09:10" in text, "gap row must state its real end time (08:40 + 30m)"
+    # Off phase: plain red text, not the solid-block alarm style.
+    assert any("empty" in t for s, t in frags if s == "class:no_entry")
+    assert not any("empty" in t for s, t in frags if "no_entry_bg" in s)
 
 
-def test_gap_row_fill_pulses_red_when_alarm_on(monkeypatch):
+def test_gap_row_pulses_solid_block_when_alarm_on(monkeypatch):
     mod = _load_tui()
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)  # on phase
     today = _midnight()
     gap = {"start_dt": today.replace(hour=8, minute=40), "time_str": "08:40",
            "label": "", "style": "", "dur_min": 30, "is_gap": True}
     frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
-    # On phase: the ┄ fill reddens (no_entry), and no idle ┄ remains.
-    assert any("┄" in t for s, t in frags if "no_entry" in s)
-    assert not any("┄" in t for s, t in frags if "idle" in s)
+    # On phase: the whole label (padded to width) carries the solid-block
+    # style, not plain "no_entry" text and not the old idle grey.
+    assert any("empty" in t for s, t in frags if s == "class:no_entry_bg")
+    assert not any(s == "class:no_entry" for s, t in frags if "empty" in t)
+    assert not any("idle" in s for s, t in frags if "empty" in t)
 
 
-def test_detail_band_past_gap_flashes_red(monkeypatch):
-    """In the focus band, an untracked past stretch renders a real HH:MM-HH:MM
-    gap row pulsing a red ┄ fill (no 15-min rounding)."""
+def test_gap_style_never_uses_reverse_attribute():
+    """The gap alarm must not use prompt_toolkit's 'reverse' attribute: the
+    whole-screen _NoTimerFlash transformation also toggles 'reverse' (on the
+    exact same wall-clock phase, since both derive from the sub-second clock),
+    so a gap row styled with 'reverse' would cancel back to normal — or
+    scramble — right when no timer is running, i.e. exactly when the user is
+    most likely to be staring at gaps to backfill. Solid explicit fg/bg colors
+    (no_entry / no_entry_bg) compose safely instead."""
+    src = (HERE / "tg-tui.py").read_text()
+    i = src.index('"no_entry_bg":')
+    line = src[i:src.index("\n", i)]
+    assert "reverse" not in line
+
+
+def test_detail_band_past_gap_states_empty_and_end_time(monkeypatch):
+    """In the focus band, an untracked past stretch renders a real gap row
+    that says 'empty' and states its true end time (window end here, since
+    there are no entries to close it), pulsing solid-block when the alarm is
+    on."""
     mod = _load_tui()
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)  # on phase
     today = _midnight()
@@ -137,14 +161,17 @@ def test_detail_band_past_gap_flashes_red(monkeypatch):
     mod.STATE.scroll_min = 0
     mod.STATE.entries = []  # no toggl entries → the whole window is one gap
     frags = mod.render_detail()
-    flashing = [t for s, t in frags if s == "class:no_entry" and "┄" in t]
-    assert flashing, "an untracked past stretch must render a flashing red ┄ row"
+    text = "".join(t for _, t in frags)
+    assert "empty" in text, "an untracked past stretch must say 'empty' outright"
+    assert "06:00" in text, "gap must state its real end time (window end)"
     assert any("04:00 │" in t for s, t in frags), "gap is keyed by its start time"
+    assert any(s == "class:no_entry_bg" and "empty" in t for s, t in frags), (
+        "alarm-on phase must render the solid-block style, not plain text")
 
 
 def test_detail_band_past_gap_muted_when_alarm_off(monkeypatch):
-    """Off phase: the same gap row renders muted grey, not red — proving it
-    pulses rather than sitting permanently red."""
+    """Off phase: the same gap row renders plain red text, not the solid-block
+    alarm style — proving it pulses rather than sitting permanently loud."""
     mod = _load_tui()
     monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: False)
     today = _midnight()
@@ -158,8 +185,37 @@ def test_detail_band_past_gap_muted_when_alarm_off(monkeypatch):
     mod.STATE.scroll_min = 0
     mod.STATE.entries = []
     frags = mod.render_detail()
-    assert not any(s == "class:no_entry" and "┄" in t for s, t in frags)
-    assert any(s == "class:idle" and "┄" in t for s, t in frags)
+    assert not any(s == "class:no_entry_bg" for s, t in frags)
+    assert any(s == "class:no_entry" and "empty" in t for s, t in frags)
+
+
+def test_detail_band_gap_end_time_survives_capped_closing_entry(monkeypatch):
+    """A gap's stated end time must be the TRUE closing entry's start, computed
+    against full coverage — not the next row actually shown. If the closing
+    entry gets absorbed/capped out of `shown`, the next VISIBLE row could be a
+    much later entry, which would make the gap look longer than it really was
+    (regression guard for the gap_ends-by-full-coverage design)."""
+    mod = _load_tui()
+    monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)
+    today = _midnight()
+    monkeypatch.setattr(mod, "view_now", lambda: today.replace(hour=6, minute=30))
+    monkeypatch.setattr(mod, "detail_window",
+                        lambda: (today.replace(hour=4), today.replace(hour=6)))
+    mod.STATE.current = None
+    mod.STATE.current_known = True
+    mod.STATE.events = []
+    mod.STATE.block_points = {}
+    mod.STATE.scroll_min = 0
+    # A tiny (sub-DETAIL_MIN) entry closes the gap at 04:20, then a real entry
+    # runs 04:25-05:00. The tiny entry is absorbed (never shown), but the gap
+    # must still report ending at 04:20, not 04:25.
+    mod.STATE.entries = [
+        _entry("blip", today.replace(hour=4, minute=20), today.replace(hour=4, minute=21)),
+        _entry("work", today.replace(hour=4, minute=25), today.replace(hour=5)),
+    ]
+    frags = mod.render_detail()
+    text = "".join(t for _, t in frags)
+    assert "04:20" in text, "gap must end at the true closing entry's start"
 
 
 def test_gap_never_rides_the_header_rule():

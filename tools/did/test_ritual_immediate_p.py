@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Regression: block-ritual points (-1₦, 0分!P) allocate as each ritual is done,
-not only at the 2h block boundary.
+"""Regression: block-ritual completion (did-fast run_ritual) must NOT write P.
 
-Change (2026-07-03): previously run_ritual (did-fast) closed the card + stamped
-the emoji but deliberately did NOT write P — the daemon's boundary
-reconcile_p_for_day was the sole P writer. Now run_ritual credits P immediately
-by recomputing from the just-stamped LOCAL build-order.md via the daemon's pure
-`compute-p` (trusts stamps → no Toggl/Todoist calls) and SETting col P on Ix.
+History:
+- Original design: run_ritual closed the card + stamped the emoji, and the
+  daemon's boundary reconcile_p_for_day was the SOLE P writer.
+- 2026-07-03: an "immediate P" feature had run_ritual recompute P from the
+  just-stamped LOCAL build-order.md via the daemon's `compute-p` and SET col P
+  on Ix, so points landed as each ritual was done.
+- 2026-07-11: that feature was REVERTED — it was actively destructive. The
+  retrospective auto markers ⏱️ (-1t) / ✅ (-1l) are written by the daemon onto
+  Ix's build order and are absent from the Straylight copy a completion reads
+  (and get stripped off Ix by Syncthing between fires), so compute-p's header
+  sum excludes them and OVERWRITES the daemon's correct P. Observed: the 20:00
+  reconcile set P=19; a 20:04 /-1g recomputed P=14, dropping 5 earned points.
 
-These pin the wiring: the daemon exposes `compute-p`, compute_p_formula bounds to
-fired blocks plus the current one, and run_ritual writes P (and dropped the old
-"credited at block turnover" no-op note).
+These pin the reverted contract: completion stamps the emoji only; P is owned
+solely by the daemon's validating reconcile (which re-derives ⏱️/✅ from Toggl/
+Todoist each fire, so it self-heals). compute_p stays a pure daemon-side scorer.
 """
 import ast
 from pathlib import Path
@@ -28,55 +34,43 @@ def _func_src(path: Path, name: str) -> str:
     raise AssertionError(f"{name} not found in {path.name}")
 
 
-# ── daemon: on-demand pure scorer ────────────────────────────────────────────
+# ── daemon: pure scorer still exists (used only daemon-side, never by completion)
 
-def test_daemon_has_compute_p_mode():
+def test_daemon_still_has_compute_p_mode():
     src = DAEMON.read_text()
-    assert '"compute-p"' in src, "compute-p must be a daemon mode"
-    assert "P_RESULT" in src, "compute-p must emit a parseable P_RESULT line"
-
-
-def test_compute_p_bounds_to_fired_blocks_plus_current():
-    src = _func_src(DAEMON, "compute_p_formula")
-    # Same fired-block bound as reconcile_p_for_day — never sums future blocks.
-    assert "if h <= upto_hour" in src
-    # The in-progress block is scored trusting its stamps (no early ⏱️/✅ eval).
-    assert "current_block" in src and "live=None" in src
+    assert '"compute-p"' in src, "compute-p remains a daemon mode"
+    assert "P_RESULT" in src, "compute-p still emits a parseable P_RESULT line"
 
 
 def test_compute_p_is_pure_no_excel_or_api():
-    """compute_p_formula must not write Excel or re-validate (that's the daemon's
-    boundary job); it only reads stamps so the on-demand path stays instant."""
+    """compute_p_formula must not write Excel or re-validate — it only reads
+    stamps, so it stays instant and side-effect-free."""
     src = _func_src(DAEMON, "compute_p_formula")
-    assert "neon_set_p" not in src         # no Excel write
-    assert "_live_for_block" not in src     # no Toggl/Todoist re-validation
+    assert "neon_set_p" not in src          # no Excel write
+    assert "_live_for_block" not in src      # no Toggl/Todoist re-validation
 
 
-def test_boundary_reconcile_still_validates():
-    """The daemon's authoritative boundary reconcile must remain the validating
-    self-heal — unchanged (still uses _live_for_block + strips stale markers)."""
+def test_boundary_reconcile_is_the_sole_validating_p_writer():
+    """The daemon's boundary reconcile must remain the validating self-heal —
+    it re-derives ⏱️/✅ from live Toggl/Todoist and strips stale markers."""
     src = _func_src(DAEMON, "reconcile_p_for_day")
     assert "_live_for_block" in src
     assert "_strip_unearned_markers" in src
 
 
-# ── did-fast: run_ritual now writes P ────────────────────────────────────────
+# ── did-fast: run_ritual must NOT write P ─────────────────────────────────────
 
-def test_run_ritual_writes_p_immediately():
+def test_run_ritual_does_not_write_p():
+    """Completion stamps the emoji only. It must never recompute or SET col P —
+    doing so clobbers the daemon's authoritative P with a stamp-stripped sum."""
     src = _func_src(DIDFAST, "run_ritual")
-    assert "compute-p" in src, "run_ritual must recompute P via the daemon's compute-p"
-    assert "ix_run(" in src, "run_ritual must SET P on Ix via ix_run"
-    assert 'cell ("P" &' in src, "run_ritual must write column P for today's row"
+    assert "compute-p" not in src, "run_ritual must NOT shell the daemon's compute-p"
+    assert 'cell ("P" &' not in src, "run_ritual must NOT write column P"
+    assert "P_RESULT" not in src, "run_ritual must NOT parse a P total"
 
 
-def test_run_ritual_dropped_stale_no_op_note():
+def test_run_ritual_documents_daemon_owned_p():
+    """The reverted contract should be self-documenting so it isn't re-added."""
     src = _func_src(DIDFAST, "run_ritual")
-    assert "credited at block turnover by daemon reconcile" not in src, (
-        "the old P-not-written note must be gone")
-
-
-def test_run_ritual_p_write_never_fails_the_ritual():
-    """A P-write error must be swallowed — closing the card + stamping is the
-    critical path; points are best-effort/self-healing."""
-    src = _func_src(DIDFAST, "run_ritual")
-    assert "p_reconcile_error" in src and "except Exception" in src
+    assert "daemon" in src.lower() and "P" in src, (
+        "run_ritual should note that P is daemon-owned")

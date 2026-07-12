@@ -57,10 +57,14 @@ def test_bare_tag_is_not_hijacked():
     assert nb.ritual_card_tag("-1g", CFG) is None
 
 
-def test_auto_rituals_never_match():
-    # -1t/-1l are daemon-computed, never cards — even 😈-marked they must not route.
-    assert nb.ritual_card_tag("😈 -1t", CFG) is None
-    assert nb.ritual_card_tag("😈 -1l", CFG) is None
+def test_auto_rituals_resolve_but_are_daemon_scored():
+    # Since 2026-07-05 the daemon creates cards for ALL 5 rituals, so the auto
+    # pair (-1t/-1l) DOES resolve — completing `😈 -1t` in dtd must close the
+    # card, not fall through to the unrelated 0₦ habit named `-1t`. run_ritual's
+    # auto branch closes it WITHOUT stamping ⏱️/✅ or writing P (the daemon's
+    # retrospective eval of the PREVIOUS block remains their sole scorer).
+    assert nb.ritual_card_tag("😈 -1t", CFG) == "-1t"
+    assert nb.ritual_card_tag("😈 -1l", CFG) == "-1l"
 
 
 def test_ordinary_names_pass_through():

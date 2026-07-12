@@ -1587,11 +1587,12 @@ def run_ritual(tag: str) -> dict:
     #    reconcile … Completion does NOT write P").
     #
     #    History: a 2026-07-03 "immediate P" feature recomputed P here via the
-    #    daemon's `compute-p` (a header sum of the LOCAL build order) and SET the
-    #    Excel cell. That was wrong and actively destructive (bug 2026-07-11):
+    #    daemon's on-demand pure P scorer (a header sum of the LOCAL build order)
+    #    and SET the Excel cell. That was wrong and actively destructive (bug
+    #    2026-07-11):
     #    the retrospective auto markers ⏱️ (-1t) / ✅ (-1l) are written by the
     #    daemon onto Ix's build order and are NOT present in the Straylight copy
-    #    a ritual completion sees, so compute-p's header sum excludes them and
+    #    a ritual completion sees, so that header sum excludes them and
     #    OVERWRITES the daemon's correct P. Example: the 20:00 reconcile set
     #    P=19 (four back-filled ⏱️); a 20:04 /-1g completion recomputed P=14,
     #    silently dropping 12 earned points. Stamping the manual emoji (step 2)

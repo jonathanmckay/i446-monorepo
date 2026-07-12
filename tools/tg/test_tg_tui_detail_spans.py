@@ -61,7 +61,8 @@ def test_completed_entry_shows_start_time_only(monkeypatch):
 
 
 def test_gap_after_entry_flashes(monkeypatch):
-    """The 05:31 untracked stretch is its own flashing gap row (start-keyed)."""
+    """The 05:31 untracked stretch is its own flashing gap row (start-keyed),
+    labelled 'empty' with its real end time (05:48, when 'next thing' starts)."""
     mod = _load_tui()
     base = _midnight()
     _setup(mod, monkeypatch,
@@ -74,7 +75,8 @@ def test_gap_after_entry_flashes(monkeypatch):
     frags = mod.render_detail()
     text = "".join(t for _, t in frags)
     assert "05:31 │" in text, f"interior gap must show its start:\n{text}"
-    assert any(s == "class:no_entry" and "┄" in t for s, t in frags), "gap flashes"
+    assert "empty" in text and "05:48" in text, f"gap states 'empty' + end time:\n{text}"
+    assert any(s == "class:no_entry_bg" and "empty" in t for s, t in frags), "gap flashes"
 
 
 def test_tiny_entry_is_absorbed_no_row(monkeypatch):
