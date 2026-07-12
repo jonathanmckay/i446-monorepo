@@ -1209,6 +1209,18 @@ TICKER_PID=$!
 # the cache refreshed with today's (bug 2026-07-02: "new day, but dtd didn't
 # refresh").
 (
+  # Close the inherited copy of fd 3 (the persistent FIFO writer opened by
+  # `exec 3>"$DTD_FIFO"` above). This subshell is forked AFTER that exec, so
+  # it inherits fd 3 by default and, left open, keeps its own independent
+  # write-end on the FIFO for as long as the watcher runs. On exit the main
+  # loop does `exec 3>&-` to close ITS copy and signal EOF to the background
+  # worker's `read < "$DTD_FIFO"` loop — but the watcher's inherited copy
+  # keeps the FIFO's writer count above zero, so the worker never sees EOF and
+  # blocks on read() forever, the "Waiting for N tasks..." exit-time
+  # `kill -0 $WORKER_PID` loop spins forever (kill "$WATCHER_PID" only runs
+  # AFTER that loop), and dtd hangs on exit whenever the session completed at
+  # least one task (regression 2026-07-11: dtd never returns to the prompt).
+  exec 3>&-
   # Wait for fzf's start binding to publish the listen port before entering the
   # loop. The port file is created ~100ms+ AFTER fzf boots, but this subshell
   # spawns before fzf — checking `-f $DTD_PORT` immediately made the loop

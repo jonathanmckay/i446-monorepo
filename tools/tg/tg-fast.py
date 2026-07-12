@@ -71,6 +71,8 @@ SHORTCODES = {
     "hospital time": ("xk87", []), "generic placeholder": ("infra", []),
     "unsure": ("infra", []),
     "stats m5x2": ("m5x2", []),
+    # Kid-time (Theo/Ren/Rori) → family project
+    "xk20": ("xk87", []), "xk22": ("xk87", []), "xk26": ("xk87", []),
 }
 
 # Domain-only shortcodes
