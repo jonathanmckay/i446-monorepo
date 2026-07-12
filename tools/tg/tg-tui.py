@@ -231,11 +231,18 @@ EVENT_KEYWORDS = [
 
 def gcal_project_code(event: dict) -> str:
     """Resolve a gcal event to a Neon project code."""
+    title_lower = event.get("title", "").lower()
+    # A literal "m5x2" in the title is unambiguous and wins over the calendar
+    # map: lx@m5c7.com carries BOTH Louisa's personal invites (→ xk88) and
+    # m5x2 business meetings (she's on the m5x2 team), so the calendar-level
+    # default can't tell them apart — "m5x2 Strat (1|1|1)" rendered xk88-orange
+    # despite saying "m5x2" right in its name (regression 2026-07-12).
+    if "m5x2" in title_lower:
+        return "m5x2"
     cal = event.get("calendar", "")
     code = CALENDAR_PROJECT_MAP.get(cal)
     if code:
         return code
-    title_lower = event.get("title", "").lower()
     for keywords, kw_code in EVENT_KEYWORDS:
         if any(kw in title_lower for kw in keywords):
             return kw_code
