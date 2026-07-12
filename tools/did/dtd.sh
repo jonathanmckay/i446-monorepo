@@ -135,7 +135,8 @@ fi
 
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
-      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
+      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" \
+      "/tmp/dtd-$DTD_ID.removed.ids"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
@@ -237,6 +238,15 @@ timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
 if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
   echo "\$clean_for_filter" >> "\$SESSION"
   echo "\$clean_for_filter" >> "\$REMOVED"
+  # Optimistic id-hide, RITUAL cards only (name carries 😈): they are name-EXEMPT
+  # from the \$REMOVED hide (so a completed card can't suppress the next block's
+  # same-named card), so they'd otherwise linger visible for the full ~7s
+  # worker+refresh until the daemon overlay learns their id. Record the id (\$1 =
+  # the {2} id field) so the list builder hides the completed card at once.
+  # Gated to rituals: a normal task already hides instantly by name, and ctrl-z
+  # undo (which reopens by clearing \$REMOVED) can't clear this id file — but undo
+  # skips ritual entries anyway, so rituals never hit that path.
+  [[ "\$clean" == *😈* ]] && echo "\$1" >> "\$REMOVED.ids"
   echo "x" >> "\$PUSHED"
   : > "\$TIMER"
   echo "⏳ completing: \$clean_for_filter" > "\$HDR"
@@ -276,6 +286,10 @@ if [[ "\$clean_lower" == cpap && -r /dev/tty ]]; then
 fi
 echo "\$clean_for_filter" >> "\$SESSION"
 echo "\$clean_for_filter" >> "\$REMOVED"
+# Optimistic id-hide (see enter.sh), RITUAL cards only (name carries 😈): they
+# are name-exempt from \$REMOVED, so record the id (\$1 = {2}) to hide the
+# completed card instantly instead of after the ~7s worker+refresh.
+[[ "\$clean" == *😈* ]] && echo "\$1" >> "\$REMOVED.ids"
 echo "x" >> "\$PUSHED"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
@@ -482,6 +496,14 @@ try:
     with open(removed_file) as f:
         removed = [l.strip().lower() for l in f if l.strip()]
 except: removed = []
+# Optimistically-removed Todoist ids (written by enter.sh/done.sh on completion).
+# id-based so it hides a just-completed RITUAL card immediately — rituals are
+# exempt from the name-based `removed` hide, so without this they linger for the
+# whole ~7s worker+refresh until the daemon overlay learns the id.
+try:
+    with open(removed_file + '.ids') as f:
+        removed_ids = {l.strip() for l in f if l.strip()}
+except: removed_ids = set()
 
 # Load skipped items (display at bottom, not hidden)
 try:
@@ -619,6 +641,11 @@ for t in unique:
     prefix = clean.split(' - ')[0]
     # Hide by id first: definitive, and immune to same-name collisions.
     if t.get('id') is not None and str(t['id']) in completed_ids:
+        continue
+    # Optimistic id-hide: a just-completed card (esp. a name-exempt ritual)
+    # whose id was recorded by enter.sh/done.sh — hide it at once, not after
+    # the ~7s worker+refresh.
+    if t.get('id') is not None and str(t['id']) in removed_ids:
         continue
     # -1neon ritual cards (😈 سمش / -1g / -1ibx / -1t / -1l) RECUR every 2h block
     # with IDENTICAL names. Name-based hiding therefore suppresses the current
@@ -1505,4 +1532,4 @@ fi
 kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
