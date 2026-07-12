@@ -345,6 +345,30 @@ def load_points_all():
         return {}
 
 
+_TOGGL_DAILY_CACHE_PATH = Path(__file__).parent / ".toggl-daily-cache.json"
+
+
+def load_toggl_daily_cache():
+    """Persistent per-day Toggl minutes + entry-counts, populated by
+    backfill_toggl_cache.py via the Reports v3 API (reaches back further than
+    the live v9 endpoint's ~90-day floor — see that script's docstring for why
+    the live endpoint can't just be asked for a longer range).
+
+    Returns ({date_str: {code: minutes}}, {date_str: {code: entry_count}}), a
+    point-in-time snapshot — callers needing today/yesterday to be current
+    should overlay a live load_toggl_range() tail on top.
+    """
+    if not _TOGGL_DAILY_CACHE_PATH.exists():
+        return {}, {}
+    try:
+        raw = json.loads(_TOGGL_DAILY_CACHE_PATH.read_text())
+    except Exception:
+        return {}, {}
+    minutes = {d: v.get("minutes", {}) for d, v in raw.items()}
+    entries = {d: v.get("entries", {}) for d, v in raw.items()}
+    return minutes, entries
+
+
 def load_toggl_range(days, return_counts=False):
     """Toggl entries for the last `days` days → {date_str: {project: minutes}}.
 
@@ -585,17 +609,19 @@ def _build_granular_chart_data(granularity):
     n_buckets = len(bucket_starts)
 
     points_all = load_points_all()
-    # Time/Entries: v9 /me/time_entries is hard-capped to ~90 days back
-    # (confirmed live — start_date earlier than that 400s). The Reports v3
-    # endpoint *can* cover a full year, but for this account it requires deep
-    # pagination (grouped by project+description, and descriptions here are
-    # highly varied, not just per-project) — confirmed live at ~16s/page and
-    # 20+ pages to cover a year, i.e. minutes of latency per request. Not
-    # viable for a live dashboard load, so Time/Entries only get v9's ~89-day
-    # window here; older buckets are genuinely empty for those two charts
-    # only. Points/Tasks come from unbounded sources and still cover the full
-    # requested weekly/monthly range.
-    toggl_all, toggl_counts = load_toggl_range(min(days_span, 89), return_counts=True)
+    # Time/Entries: base data comes from the persistent .toggl-daily-cache.json
+    # (built by backfill_toggl_cache.py via the Reports v3 API, chunked into
+    # ~60-day windows to stay fast — see that script's docstring for why a
+    # single large Reports v3 request is too slow, and why the live v9
+    # endpoint can't reach back this far at all). That cache is a
+    # point-in-time snapshot, so the last few days are overlaid with a live v9
+    # fetch (fast, and within v9's ~90-day floor) for freshness — same
+    # refetch-tail pattern as load_tasks_data's _TASKS_REFETCH_TAIL.
+    TOGGL_CACHE_TAIL_DAYS = 3
+    toggl_all, toggl_counts = load_toggl_daily_cache()
+    live_minutes, live_counts = load_toggl_range(TOGGL_CACHE_TAIL_DAYS, return_counts=True)
+    toggl_all = {**toggl_all, **live_minutes}
+    toggl_counts = {**toggl_counts, **live_counts}
     tasks_all = load_tasks_data(n_days=days_span)
 
     # Points, bucketed and summed

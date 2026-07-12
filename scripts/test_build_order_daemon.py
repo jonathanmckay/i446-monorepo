@@ -327,3 +327,34 @@ def test_reconcile_picks_up_late_prayer(tmp_path, monkeypatch):
     build.write_text(build.read_text().replace("- 卯 🎯\n", "- 卯 🎯 ☀️\n"), encoding="utf-8")
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)   # 卯=4 now → 7
     assert totals == [6, 7], totals                    # late ☀️ picked up (+1)
+
+
+# ── 2026-07-12 redesign: -1t/-1l measure the PREVIOUS block ──────────────────
+# Block X's ⏱️/✅ reward having RECORDED block X-1 (e.g. 戌's ⏱️ ⇔ 酉 fully
+# recorded), so both validators use the [fire-4, fire-2] window, not the block's
+# own [fire-2, fire]. 🎯 stays current-block (goals are set for X itself).
+
+def _func_body(src: str, name: str) -> str:
+    idx = src.index(f"def {name}")
+    nxt = src.index("\ndef ", idx + 1)
+    return src[idx:nxt]
+
+
+def test_auto_rituals_measure_previous_block_window():
+    src = DAEMON.read_text(encoding="utf-8")
+    for fn in ("evaluate_and_mark_block", "_live_for_block"):
+        body = _func_body(src, fn)
+        assert "hour - 4" in body, (
+            f"{fn} must validate -1t/-1l against the previous block [hour-4, hour-2]")
+        assert "_toggl_covers_block(target_date, prev" in body, (
+            f"{fn} must pass the previous-block window to _toggl_covers_block")
+        assert "_todoist_l_satisfied(target_date, prev" in body, (
+            f"{fn} must pass the previous-block window to _todoist_l_satisfied")
+
+
+def test_goal_marker_stays_current_block():
+    # 🎯 (-1g) is a current-block ritual — validated on THIS block's goals, not
+    # the previous block's coverage.
+    src = DAEMON.read_text(encoding="utf-8")
+    body = _func_body(src, "_live_for_block")
+    assert "GOAL_MARKER: _block_has_goals(block_name)" in body
