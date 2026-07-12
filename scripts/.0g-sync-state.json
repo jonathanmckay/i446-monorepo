@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "relaxing time outside [100]": {
-      "todoist_id": "6h549Xcmc89C63f2",
-      "minutes": null
-    },
-    "2 academics with both [60]": {
-      "todoist_id": "6h549XjRgqmM2v32",
-      "minutes": null
-    },
-    "lx starts to recover [40]": {
-      "todoist_id": "6h549XgH3c24rJ5R",
-      "minutes": null
-    }
-  },
-  "last_sync": "2026-07-12T03:55:02.570709-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-12T04:00:09.534011-07:00"
 }
