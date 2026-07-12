@@ -83,10 +83,20 @@ def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
-        print("✗ usage: edit-fast.py <query> <edits> <cache_file>")
+    # Forms:  edit-fast.py --id <id> <edits> <cache_file>   ← dtd
+    #         edit-fast.py <query>   <edits> <cache_file>   ← fallback
+    argv = sys.argv[1:]
+    task_id = None
+    if argv and argv[0] == "--id":
+        task_id = argv[1] if len(argv) > 1 else None
+        argv = argv[2:]
+    if (task_id is None and len(argv) < 3) or (task_id is not None and len(argv) < 2):
+        print("✗ usage: edit-fast.py [--id <id>] <query> <edits> <cache_file>")
         return 2
-    query, edits, cache_file = sys.argv[1], sys.argv[2], sys.argv[3]
+    if task_id is not None:
+        query, edits, cache_file = None, argv[0], argv[1]
+    else:
+        query, edits, cache_file = argv[0], argv[1], argv[2]
     new_name, domain, points = parse_edits(edits)
     if new_name is None and domain is None and points is None:
         print("✗ nothing to change")
@@ -101,9 +111,9 @@ def main() -> int:
         print(f"✗ cache unreadable: {e}")
         return 1
 
-    task = _pf.resolve_from_cache(cache, query)
+    task = _pf.resolve_by_id(cache, task_id) if task_id else _pf.resolve_from_cache(cache, query)
     if not task:
-        print(f"✗ no task matched: {query}")
+        print(f"✗ no task matched: {task_id or query}")
         return 1
 
     orig_content = task["content"]

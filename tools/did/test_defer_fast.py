@@ -190,3 +190,70 @@ def test_find_task_single_substring_match_unchanged(df, monkeypatch):
     tasks = [{"id": "9", "content": "call dad (20) [20]"}]
     monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
     assert df.find_task("call dad")["id"] == "9"
+
+
+# ── exact DUPLICATES (same content) must not fail the defer ──────────────────
+# Regression (2026-07-12): "give kids allowance" existed twice — a recurring
+# "every friday" parent + a stale non-recurring one-off copy, both overdue and
+# IDENTICAL in content. find_task found two EXACT matches and sys.exit'd
+# ("multiple matches"), so the defer failed, dtd rolled back its optimistic
+# hide, and the task kept reappearing. find_task must now resolve rather than
+# bail, preferring the recurring series.
+
+def test_find_task_exact_duplicates_resolve_to_recurring(df, monkeypatch):
+    tasks = [
+        {"id": "copy", "content": "give kids allowance (5) [10]",
+         "due": {"is_recurring": False}},
+        {"id": "series", "content": "give kids allowance (5) [10]",
+         "due": {"is_recurring": True, "string": "every friday"}},
+    ]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    t = df.find_task("give kids allowance (5) [10]")
+    assert t["id"] == "series"  # prefer the recurring parent, don't sys.exit
+
+
+def test_find_task_exact_duplicates_all_nonrecurring_take_first(df, monkeypatch):
+    tasks = [
+        {"id": "a", "content": "give kids allowance (5) [10]", "due": {}},
+        {"id": "b", "content": "give kids allowance (5) [10]", "due": {}},
+    ]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    assert df.find_task("give kids allowance (5) [10]")["id"] == "a"
+
+
+# ── id-based resolution (dtd's collision-proof path) ─────────────────────────
+
+def test_find_task_by_id_fetches_exact_task_via_get(df, monkeypatch):
+    calls = {}
+    def fake_api(method, path, body=None, timeout=15.0):
+        calls["method"], calls["path"] = method, path
+        return {"id": "6h33w6W83VJG5wMw",
+                "content": "give kids allowance (5) [10]", "due": {}}
+    monkeypatch.setattr(df, "_api", fake_api)
+    t = df.find_task_by_id("6h33w6W83VJG5wMw")
+    assert t["id"] == "6h33w6W83VJG5wMw"
+    assert calls["method"] == "GET"
+    assert "/tasks/6h33w6W83VJG5wMw" in calls["path"]
+
+
+def test_find_task_by_id_exits_when_missing(df, monkeypatch):
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    with pytest.raises(SystemExit):
+        df.find_task_by_id("nope")
+
+
+def test_main_id_flag_routes_to_find_task_by_id(df):
+    import inspect
+    src = inspect.getsource(df.main)
+    assert '"--id"' in src, "main must accept an --id form"
+    assert "find_task_by_id(task_id)" in src, "main must resolve --id via find_task_by_id"
+
+
+def test_dtd_defer_binding_passes_id_not_name():
+    # The dtd ctrl-d binding must invoke defer-fast with --id "$1" (the fzf id
+    # field), not the name query — otherwise duplicate names re-introduce the
+    # ambiguity this whole change fixes.
+    dtd = (_HERE / "dtd.sh").read_text()
+    # dtd.sh's defer script lives in an unquoted heredoc, so the source keeps the
+    # `\$` escaping (`\$DEFER_FAST`, `\$1`).
+    assert r'"\$DEFER_FAST" --id "\$1"' in dtd

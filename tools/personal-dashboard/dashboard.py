@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 import openpyxl
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 
 # GA4 imports (optional — dashboard works without analytics)
 try:
@@ -319,6 +319,18 @@ def _week_start(d):
     return d - timedelta(days=(d.weekday() + 1) % 7)
 
 
+def _month_start(d):
+    """First of the month containing date d."""
+    return d.replace(day=1)
+
+
+def _add_month(d, n=1):
+    """First-of-month date n months after d (d must be day=1)."""
+    m0 = d.month - 1 + n
+    y, m = d.year + m0 // 12, m0 % 12 + 1
+    return date(y, m, 1)
+
+
 def load_points_all():
     """Full points cache {date_str: {label: value}} with no day clipping."""
     cache = Path(__file__).parent / ".points-cache.json"
@@ -333,11 +345,16 @@ def load_points_all():
         return {}
 
 
-def load_toggl_range(days):
-    """Toggl entries for the last `days` days → {date_str: {project: minutes}}."""
+def load_toggl_range(days, return_counts=False):
+    """Toggl entries for the last `days` days → {date_str: {project: minutes}}.
+
+    With return_counts=True, also returns {date_str: {project: entry_count}}
+    as a second tuple element (mirrors load_toggl_data's shape for arbitrary
+    day ranges, so granular chart views can compute the Entries chart too).
+    """
     api_key = os.environ.get("TOGGL_API_KEY", "")
     if not api_key:
-        return {}
+        return ({}, {}) if return_counts else {}
     today = date.today()
     floor = today - timedelta(days=days)
     start = floor.isoformat()
@@ -351,8 +368,9 @@ def load_toggl_range(days):
         with urllib.request.urlopen(req, timeout=15) as resp:
             entries = json.loads(resp.read())
     except Exception:
-        return {}
+        return ({}, {}) if return_counts else {}
     result = defaultdict(lambda: defaultdict(int))
+    entry_counts = defaultdict(lambda: defaultdict(int))
     for e in entries:
         dur = e.get("duration", 0)
         if dur <= 0:
@@ -370,7 +388,88 @@ def load_toggl_range(days):
         proj_id = e.get("project_id")
         code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
         result[d.isoformat()][code] += dur // 60
-    return {k: dict(v) for k, v in result.items()}
+        entry_counts[d.isoformat()][code] += 1
+    minutes = {k: dict(v) for k, v in result.items()}
+    if return_counts:
+        return minutes, {k: dict(v) for k, v in entry_counts.items()}
+    return minutes
+
+
+TOGGL_WORKSPACE_ID = int(os.environ.get("TOGGL_WORKSPACE_ID", "2092616"))
+
+
+def load_toggl_reports_range(days, return_counts=False):
+    """Toggl entries for the last `days` days via the Reports v3 API.
+
+    Unlike load_toggl_range (the v9 /me/time_entries endpoint, confirmed
+    hard-capped to ~90 days back from today — start_date earlier than that
+    returns a 400), Reports v3 accepts up to a 366-day range in one request.
+    Used for weekly/monthly granular chart views that need more history than
+    v9 can serve; load_toggl_range/_build_weekly_data stay on v9 since they
+    never request more than ~90 days and v9 is simpler.
+
+    Reports v3 groups results by (project, description); each group nests its
+    individual time_entries. Paginates via the X-Next-Id/X-Next-Row-Number
+    response headers (documented Toggl contract: echo them back as first_id/
+    first_row_number in the next request body) up to MAX_PAGES — generous for
+    this user's entry volume. If a page request fails or the pagination
+    contract doesn't hold, returns whatever was gathered so far rather than
+    raising: partial historical data beats a broken chart.
+    """
+    api_key = os.environ.get("TOGGL_API_KEY", "")
+    if not api_key:
+        return ({}, {}) if return_counts else {}
+    today = date.today()
+    floor = today - timedelta(days=min(days, 365))
+    url = f"https://api.track.toggl.com/reports/api/v3/workspace/{TOGGL_WORKSPACE_ID}/search/time_entries"
+    creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
+
+    MAX_PAGES = 20
+    rows = []
+    payload = {"start_date": floor.isoformat(), "end_date": today.isoformat()}
+    for _ in range(MAX_PAGES):
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST")
+        req.add_header("Authorization", f"Basic {creds}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                hdrs = dict(resp.getheaders())
+                page_rows = json.loads(resp.read())
+        except Exception:
+            break
+        rows.extend(page_rows)
+        next_id = hdrs.get("X-Next-Id") or hdrs.get("X-Next-ID")
+        next_row = hdrs.get("X-Next-Row-Number")
+        if not next_id or not next_row or len(page_rows) < 50:
+            break
+        payload = {**payload, "first_id": int(next_id), "first_row_number": int(next_row)}
+
+    result = defaultdict(lambda: defaultdict(int))
+    entry_counts = defaultdict(lambda: defaultdict(int))
+    for row in rows:
+        proj_id = row.get("project_id")
+        code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
+        for te in row.get("time_entries", []):
+            secs = te.get("seconds", 0)
+            if not secs or secs <= 0:
+                continue
+            start_str = te.get("start", "")
+            if not start_str:
+                continue
+            try:
+                start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
+            except (ValueError, TypeError):
+                continue
+            d = start_dt.date()
+            if d < floor or d > today:
+                continue
+            result[d.isoformat()][code] += secs // 60
+            entry_counts[d.isoformat()][code] += 1
+
+    minutes = {k: dict(v) for k, v in result.items()}
+    if return_counts:
+        return minutes, {k: dict(v) for k, v in entry_counts.items()}
+    return minutes
 
 
 def _build_weekly_data(n_weeks=8):
@@ -506,6 +605,170 @@ def _build_weekly_data(n_weeks=8):
     }
 
 
+# ── Granular chart data (Task/Entries/Time/Points dropdown: weekly/monthly) ────
+# Daily granularity reuses the existing /api/data payload client-side (no
+# server code path here) — this only builds the weekly/monthly bucketed views,
+# kept deliberately separate from _build_api_data so the daily payload (and
+# everything else it feeds — email/ga4/imessage/cache cards) is untouched.
+
+GRANULAR_WEEKS = 26   # ~6 months of Su-Sa weeks
+GRANULAR_MONTHS = 12  # 1 year of calendar months
+
+
+def _build_granular_chart_data(granularity):
+    """Points/Time/Tasks/Entries chart data bucketed weekly or monthly.
+
+    Returns the same shape as the relevant subset of _build_api_data()'s
+    payload (dates/points/time/tasks_*/entries/time_entries), so the
+    frontend's chart-building code can treat daily/weekly/monthly uniformly.
+    """
+    today = date.today()
+
+    if granularity == "monthly":
+        this_month = _month_start(today)
+        first_month = this_month
+        for _ in range(GRANULAR_MONTHS - 1):
+            first_month = date(first_month.year - (1 if first_month.month == 1 else 0),
+                                12 if first_month.month == 1 else first_month.month - 1, 1)
+        bucket_starts = []
+        cur = first_month
+        for _ in range(GRANULAR_MONTHS):
+            bucket_starts.append(cur)
+            cur = _add_month(cur)
+        bucket_labels = [bs.strftime("%b '%y") for bs in bucket_starts]
+        days_span = (today - first_month).days + 2
+
+        def bucket_index(d):
+            if d < first_month:
+                return None
+            for i in range(len(bucket_starts) - 1, -1, -1):
+                if d >= bucket_starts[i]:
+                    return i
+            return None
+    else:  # "weekly" (default fallback for anything unrecognized)
+        this_week_start = _week_start(today)
+        first_week_start = this_week_start - timedelta(weeks=GRANULAR_WEEKS - 1)
+        bucket_starts = [first_week_start + timedelta(weeks=i) for i in range(GRANULAR_WEEKS)]
+        bucket_labels = [ws.strftime("%-m/%-d") for ws in bucket_starts]
+        days_span = (today - first_week_start).days + 2
+
+        def bucket_index(d):
+            delta = (d - first_week_start).days
+            if delta < 0:
+                return None
+            wi = delta // 7
+            return wi if wi < GRANULAR_WEEKS else None
+
+    n_buckets = len(bucket_starts)
+
+    points_all = load_points_all()
+    # Reports v3, not v9: weekly (182d)/monthly (365d) windows exceed v9's ~90-day cap.
+    toggl_all, toggl_counts = load_toggl_reports_range(days_span, return_counts=True)
+    tasks_all = load_tasks_data(n_days=days_span)
+
+    # Points, bucketed and summed
+    pts_cats = [m["label"] for m in POINTS_COLS.values()]
+    pts_colors = {m["label"]: m["color"] for m in POINTS_COLS.values()}
+    pts_bucketed = {cat: [0] * n_buckets for cat in pts_cats}
+    for dstr, day in points_all.items():
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        bi = bucket_index(d)
+        if bi is None:
+            continue
+        for cat, val in day.items():
+            if cat in pts_bucketed and isinstance(val, (int, float)):
+                pts_bucketed[cat][bi] += val
+
+    POINTS_PRIORITY = ["i9", "xk", "m5"]
+    def pts_sort(label):
+        if label in POINTS_PRIORITY:
+            return (0, POINTS_PRIORITY.index(label))
+        return (1, pts_cats.index(label))
+    ordered_pts = sorted([c for c in pts_cats if any(pts_bucketed[c])], key=pts_sort)
+    points_datasets = [{
+        "label": c, "data": pts_bucketed[c],
+        "backgroundColor": pts_colors.get(c, "#9e9e9e"),
+    } for c in ordered_pts]
+
+    # Time (minutes) + entry counts, bucketed and summed, same project order/colors as daily
+    TIME_PRIORITY = ["i9", "xk87", "m5x2"]
+    time_bucketed = defaultdict(lambda: [0] * n_buckets)
+    for dstr, day in toggl_all.items():
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        bi = bucket_index(d)
+        if bi is None:
+            continue
+        for code, mins in day.items():
+            time_bucketed[code][bi] += mins
+
+    def time_sort(code):
+        if code in TIME_PRIORITY:
+            return (0, TIME_PRIORITY.index(code))
+        if code == "睡觉":
+            return (2, 0)
+        return (1, -sum(time_bucketed[code]))
+    time_codes = sorted([c for c in time_bucketed if any(time_bucketed[c])], key=time_sort)
+    time_datasets = [{
+        "label": c, "data": time_bucketed[c],
+        "backgroundColor": PROJECT_COLORS.get(c, "#424242"),
+    } for c in time_codes]
+
+    entries_bucketed = defaultdict(lambda: [0] * n_buckets)
+    for dstr, day in toggl_counts.items():
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        bi = bucket_index(d)
+        if bi is None:
+            continue
+        for code, cnt in day.items():
+            entries_bucketed[code][bi] += cnt
+    entry_codes_sorted = [c for c in time_codes if c in entries_bucketed] + \
+        [c for c in entries_bucketed if c not in time_codes]
+    entries_datasets = [{
+        "label": c, "data": entries_bucketed[c],
+        "backgroundColor": PROJECT_COLORS.get(c, "#424242"),
+    } for c in entry_codes_sorted if any(entries_bucketed[c])]
+    time_entries_values = [sum(entries_bucketed[c][i] for c in entries_bucketed) for i in range(n_buckets)]
+
+    # Tasks, bucketed and summed
+    tasks_neon = [0] * n_buckets
+    tasks_posthoc = [0] * n_buckets
+    tasks_1n = [0] * n_buckets
+    tasks_other = [0] * n_buckets
+    for dstr, counts in tasks_all.items():
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        bi = bucket_index(d)
+        if bi is None or counts is None:
+            continue
+        tasks_neon[bi] += counts.get("neon", 0)
+        tasks_posthoc[bi] += counts.get("posthoc", 0)
+        tasks_1n[bi] += counts.get("one_n", 0)
+        tasks_other[bi] += counts.get("other", 0)
+
+    return {
+        "dates": bucket_labels,
+        "points": {"datasets": points_datasets},
+        "time": {"datasets": time_datasets},
+        "tasks_neon": tasks_neon,
+        "tasks_posthoc": tasks_posthoc,
+        "tasks_1n": tasks_1n,
+        "tasks_other": tasks_other,
+        "time_entries": time_entries_values,
+        "entries": {"datasets": entries_datasets},
+    }
+
+
 # 5-min TTL cache for /api/weekly
 _WEEKLY_CACHE: dict = {"payload": None, "ts": 0.0}
 _WEEKLY_LOCK = threading.Lock()
@@ -558,7 +821,7 @@ def _fetch_tasks_for_day(day, token):
     return day.isoformat(), counts
 
 
-def load_tasks_data():
+def load_tasks_data(n_days=DAYS):
     """Fetch completed tasks from Todoist, split by category tag in content.
     Returns {date_str: {"neon", "posthoc", "one_n", "other", "total"}}.
 
@@ -566,11 +829,13 @@ def load_tasks_data():
     - Historical days (older than today/yesterday) are read from a disk cache
       and never refetched (they're immutable).
     - Today + yesterday are always refetched in parallel.
-    - Cold cache: parallel fetch of all DAYS+1 days.
+    - Cold cache: parallel fetch of all n_days+1 days. The disk cache is
+      shared across all callers regardless of n_days, so widening the window
+      (e.g. for a monthly chart view) only pays the network cost once.
     """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
     today = date.today()
-    all_days = [today - timedelta(days=n) for n in range(DAYS, -1, -1)]
+    all_days = [today - timedelta(days=n) for n in range(n_days, -1, -1)]
     refresh_cutoff = today - timedelta(days=_TASKS_REFETCH_TAIL - 1)
 
     # Load disk cache
@@ -844,6 +1109,14 @@ def api_points_today():
         return jsonify({"value": None, "error": str(e)})
 
 
+@app.route("/api/chart-granular")
+def api_chart_granular():
+    granularity = request.args.get("granularity", "weekly")
+    if granularity not in ("weekly", "monthly"):
+        granularity = "weekly"
+    return jsonify(_granular_cached(granularity))
+
+
 @app.route("/api/refresh", methods=["GET", "POST"])
 def api_refresh():
     """Invalidate the data cache so the next /api/data fetch is fresh."""
@@ -853,6 +1126,8 @@ def api_refresh():
     with _WEEKLY_LOCK:
         _WEEKLY_CACHE["payload"] = None
         _WEEKLY_CACHE["ts"] = 0.0
+    with _GRANULAR_LOCK:
+        _GRANULAR_CACHE.clear()
     return jsonify({"status": "ok"})
 
 
@@ -871,6 +1146,24 @@ def _api_data_cached():
     with _API_DATA_LOCK:
         _API_DATA_CACHE["payload"] = payload
         _API_DATA_CACHE["ts"] = time.time()
+    return payload
+
+
+# 5-min TTL cache for /api/chart-granular, keyed by granularity
+_GRANULAR_CACHE: dict = {}
+_GRANULAR_LOCK = threading.Lock()
+_GRANULAR_TTL = 300.0
+
+
+def _granular_cached(granularity):
+    now = time.time()
+    with _GRANULAR_LOCK:
+        entry = _GRANULAR_CACHE.get(granularity)
+        if entry is not None and (now - entry["ts"]) < _GRANULAR_TTL:
+            return entry["payload"]
+    payload = _build_granular_chart_data(granularity)
+    with _GRANULAR_LOCK:
+        _GRANULAR_CACHE[granularity] = {"payload": payload, "ts": time.time()}
     return payload
 
 
@@ -1355,7 +1648,14 @@ HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div class="topbar">
-  <h1>JM DASH</h1>
+  <div style="display:flex;align-items:baseline;gap:12px;">
+    <h1>JM DASH</h1>
+    <select id="granularitySelect" style="background:var(--card);color:var(--h1);border:1px solid var(--nav);border-radius:4px;padding:3px 8px;font-size:12px;letter-spacing:1px;font-family:inherit;">
+      <option value="daily" selected>DAILY</option>
+      <option value="weekly">WEEKLY</option>
+      <option value="monthly">MONTHLY</option>
+    </select>
+  </div>
   <div style="display:flex;align-items:baseline;gap:16px;">
     <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
     <div style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">Oct 2 '27: <span id="daysLeftVal" style="color:var(--text);font-weight:600;"></span><script>document.getElementById('daysLeftVal').textContent=Math.ceil((new Date('2027-10-02')-new Date())/864e5)+'d';</script></div>
@@ -1373,19 +1673,19 @@ HTML = """<!DOCTYPE html>
     <div class="summary" id="emailSummary"></div>
   </div>
   <div class="card">
-    <h2>Tasks &amp; Entries / Day</h2>
+    <h2 id="tasksEntriesLabel">Tasks &amp; Entries / Day</h2>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
     <div class="summary" id="tasksSummary"></div>
     <div class="chart-wrap xs"><canvas id="entriesChart"></canvas></div>
     <div class="summary" id="entriesSummary"></div>
   </div>
   <div class="card">
-    <h2>Time / Day</h2>
+    <h2 id="timeLabel">Time / Day</h2>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
   <div class="card">
-    <h2>Points / Day</h2>
+    <h2 id="pointsLabel">Points / Day</h2>
     <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
     <div class="summary" id="pointsSummary"></div>
   </div>
@@ -1404,7 +1704,147 @@ function pollPointsToday() {
 pollPointsToday();
 setInterval(pollPointsToday, 30000);
 
+// Task/Entries/Time/Points charts — shared renderer for daily/weekly/monthly.
+// Daily granularity reuses the /api/data payload already on the page (cached
+// in dailyPayload); weekly/monthly fetch /api/chart-granular on demand.
+let dailyPayload = null;
+let _tasksChart = null, _entriesChart = null, _timeChart = null, _pointsChart = null;
+const GRANULARITY_NOUN = { daily: 'Day', weekly: 'Week', monthly: 'Month' };
+
+function renderFourCharts(data, granularity) {
+  const labels = data.dates;
+  const isDaily = granularity === 'daily';
+  const noun = GRANULARITY_NOUN[granularity] || 'Day';
+  document.getElementById('tasksEntriesLabel').textContent = `Tasks & Entries / ${noun}`;
+  document.getElementById('timeLabel').textContent = `Time / ${noun}`;
+  document.getElementById('pointsLabel').textContent = `Points / ${noun}`;
+
+  if (_pointsChart) _pointsChart.destroy();
+  _pointsChart = new Chart(document.getElementById('pointsChart'), {
+    type: 'bar',
+    data: { labels, datasets: data.points.datasets },
+    options: isDaily ? {
+      ...CHART_DEFAULTS,
+      scales: {
+        ...CHART_DEFAULTS.scales,
+        y: {
+          ...CHART_DEFAULTS.scales.y,
+          max: 2160,
+          ticks: {
+            ...CHART_DEFAULTS.scales.y.ticks,
+            stepSize: 360,
+            callback: v => [0,360,720,1080,1440,2160].includes(v) ? v : ''
+          }
+        }
+      }
+    } : CHART_DEFAULTS
+  });
+
+  if (_timeChart) _timeChart.destroy();
+  _timeChart = new Chart(document.getElementById('timeChart'), {
+    type: 'bar',
+    data: { labels, datasets: data.time.datasets },
+    options: isDaily
+      ? { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
+      : CHART_DEFAULTS
+  });
+
+  const stackedOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+      y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+    }
+  };
+
+  if (_tasksChart) _tasksChart.destroy();
+  const taskSeries = [
+    { label: '0₦', data: data.tasks_neon,    bg: '#0a0a0a' },
+    { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff' },
+    { label: '1₦', data: data.tasks_1n,      bg: '#00e676' },
+    { label: 't779', data: data.tasks_other, bg: '#2979ff' },
+  ];
+  _tasksChart = new Chart(document.getElementById('tasksChart'), {
+    type: 'bar',
+    data: { labels, datasets: taskSeries.map(s => ({
+      label: s.label, data: s.data,
+      backgroundColor: s.bg, borderColor: s.bg, borderWidth: 0,
+    }))},
+    options: stackedOpts
+  });
+  const tkEl = document.getElementById('tasksSummary');
+  tkEl.innerHTML = '';
+  taskSeries.forEach(s => {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.bg};margin-right:4px;vertical-align:middle;"></span>${s.label}`;
+    tkEl.appendChild(b);
+  });
+
+  if (_entriesChart) _entriesChart.destroy();
+  _entriesChart = new Chart(document.getElementById('entriesChart'), {
+    type: 'bar',
+    data: { labels, datasets: data.entries.datasets.map(ds => ({
+      label: ds.label, data: ds.data,
+      backgroundColor: ds.backgroundColor, borderColor: ds.backgroundColor, borderWidth: 0,
+    }))},
+    options: stackedOpts
+  });
+  const enEl = document.getElementById('entriesSummary');
+  enEl.innerHTML = '';
+  const enTotal = (data.time_entries || []).reduce((a,b) => a+b, 0);
+  const enBuckets = (data.time_entries || []).filter(v => v > 0).length;
+  enEl.innerHTML = `<span class="badge">${enTotal} entries / ${enBuckets > 0 ? Math.round(enTotal/enBuckets) : 0} avg</span>`;
+
+  // Points/time summary badges — summed from datasets directly, so this works
+  // identically regardless of granularity (daily payload's separate
+  // `summary.total_points/total_mins` field is daily-only and not reused here).
+  const ptEl = document.getElementById('pointsSummary');
+  ptEl.innerHTML = '';
+  (data.points.datasets || [])
+    .map(ds => [ds.label, (ds.data || []).reduce((a,b) => a+(b||0), 0), ds.backgroundColor])
+    .sort((a,b) => b[1]-a[1])
+    .forEach(([k,v,color]) => {
+      const b = document.createElement('div');
+      b.className = 'badge';
+      const dot = color ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:4px;vertical-align:middle;"></span>` : '';
+      b.innerHTML = `${dot}${k} <span>${Math.round(v)}</span>`;
+      ptEl.appendChild(b);
+    });
+  const tmEl = document.getElementById('timeSummary');
+  tmEl.innerHTML = '';
+  (data.time.datasets || [])
+    .map(ds => [ds.label, (ds.data || []).reduce((a,b) => a+(b||0), 0), ds.backgroundColor])
+    .sort((a,b) => b[1]-a[1])
+    .forEach(([k,v,color]) => {
+      const b = document.createElement('div');
+      b.className = 'badge';
+      const dot = color ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:4px;vertical-align:middle;"></span>` : '';
+      b.innerHTML = `${dot}${k} <span>${Math.round(v)}m</span>`;
+      tmEl.appendChild(b);
+    });
+}
+
+const _granularCache = {};
+document.getElementById('granularitySelect').addEventListener('change', (e) => {
+  const g = e.target.value;
+  if (g === 'daily') {
+    if (dailyPayload) renderFourCharts(dailyPayload, 'daily');
+    return;
+  }
+  if (_granularCache[g]) {
+    renderFourCharts(_granularCache[g], g);
+    return;
+  }
+  fetch(`/api/chart-granular?granularity=${g}`).then(r => r.json()).then(d => {
+    _granularCache[g] = d;
+    renderFourCharts(d, g);
+  });
+});
+
 fetch('/api/data').then(r => r.json()).then(data => {
+  dailyPayload = data;
   const labels = data.dates;
 
   // Cache bars (Q2 cumulative + or - 分 by area)
@@ -1433,85 +1873,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     cbEl.appendChild(row);
   });
 
-  // Points chart
-  new Chart(document.getElementById('pointsChart'), {
-    type: 'bar',
-    data: { labels, datasets: data.points.datasets },
-    options: {
-      ...CHART_DEFAULTS,
-      scales: {
-        ...CHART_DEFAULTS.scales,
-        y: {
-          ...CHART_DEFAULTS.scales.y,
-          max: 2160,
-          ticks: {
-            ...CHART_DEFAULTS.scales.y.ticks,
-            stepSize: 360,
-            callback: v => [0,360,720,1080,1440,2160].includes(v) ? v : ''
-          }
-        }
-      }
-    }
-  });
-
-  // Time chart
-  new Chart(document.getElementById('timeChart'), {
-    type: 'bar',
-    data: { labels, datasets: data.time.datasets },
-    options: { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
-  });
-
-  // Tasks chart (stacked: 0n, posthoc, 1n, other — neon palette)
-  const taskSeries = [
-    { label: '0₦', data: data.tasks_neon,    bg: '#0a0a0a' },
-    { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff' },
-    { label: '1₦', data: data.tasks_1n,      bg: '#00e676' },
-    { label: 't779', data: data.tasks_other, bg: '#2979ff' },
-  ];
-  new Chart(document.getElementById('tasksChart'), {
-    type: 'bar',
-    data: { labels, datasets: taskSeries.map(s => ({
-      label: s.label, data: s.data,
-      backgroundColor: s.bg, borderColor: s.bg, borderWidth: 0,
-    }))},
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
-      }
-    }
-  });
-  // Tasks legend badges
-  const tkEl = document.getElementById('tasksSummary');
-  taskSeries.forEach(s => {
-    const b = document.createElement('div');
-    b.className = 'badge';
-    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.bg};margin-right:4px;vertical-align:middle;"></span>${s.label}`;
-    tkEl.appendChild(b);
-  });
-
-  // Time entries per day chart (stacked by project, same colors as time chart)
-  new Chart(document.getElementById('entriesChart'), {
-    type: 'bar',
-    data: { labels, datasets: data.entries.datasets.map(ds => ({
-      label: ds.label, data: ds.data,
-      backgroundColor: ds.backgroundColor, borderColor: ds.backgroundColor, borderWidth: 0,
-    }))},
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
-        y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
-      }
-    }
-  });
-  const enEl = document.getElementById('entriesSummary');
-  const enTotal = (data.time_entries || []).reduce((a,b) => a+b, 0);
-  const enDays = (data.time_entries || []).filter(v => v > 0).length;
-  enEl.innerHTML = `<span class="badge">${enTotal} entries / ${enDays > 0 ? Math.round(enTotal/enDays) : 0} avg</span>`;
+  renderFourCharts(data, 'daily');
 
   // Email chart: blended response time line (purple) + per-account count bars (stacked)
   new Chart(document.getElementById('emailChart'), {
@@ -1529,31 +1891,6 @@ fetch('/api/data').then(r => r.json()).then(data => {
         y2: { position: 'left', min: 0, stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { display: false }, title: { display: true, text: 'msgs', color: TICK, font: { size: 10 } } },
       }
     }
-  });
-
-  // Summaries
-  const s = data.summary;
-  // Build color maps from datasets
-  const ptColors = {};
-  (data.points.datasets || []).forEach(ds => { ptColors[ds.label] = ds.backgroundColor; });
-  const tmColors = {};
-  (data.time.datasets || []).forEach(ds => { tmColors[ds.label] = ds.backgroundColor; });
-
-  const ptEl = document.getElementById('pointsSummary');
-  Object.entries(s.total_points).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
-    const b = document.createElement('div');
-    b.className = 'badge';
-    const dot = ptColors[k] ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ptColors[k]};margin-right:4px;vertical-align:middle;"></span>` : '';
-    b.innerHTML = `${dot}${k} <span>${v}</span>`;
-    ptEl.appendChild(b);
-  });
-  const tmEl = document.getElementById('timeSummary');
-  Object.entries(s.total_mins).sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
-    const b = document.createElement('div');
-    b.className = 'badge';
-    const dot = tmColors[k] ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tmColors[k]};margin-right:4px;vertical-align:middle;"></span>` : '';
-    b.innerHTML = `${dot}${k} <span>${v}m</span>`;
-    tmEl.appendChild(b);
   });
 
   // Email legend (same style as Points/Day)

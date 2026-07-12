@@ -185,8 +185,18 @@ def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
     return sum(1 for t in query_tokens if t in task_set) / len(query_tokens)
 
 
-def match_todoist_task(query: str, tasks: list[dict]) -> Optional[dict]:
-    """Find best Todoist task match using word overlap."""
+def match_todoist_task(query: str, tasks: list[dict],
+                       preferred_id: str | None = None) -> Optional[dict]:
+    """Find best Todoist task match using word overlap.
+
+    preferred_id (dtd's collision-proof path): if given and a task in `tasks`
+    carries that id, return it directly — the EXACT row the user selected, so a
+    duplicate task name can't complete the wrong instance (2026-07-12).
+    """
+    if preferred_id:
+        for task in tasks:
+            if str(task.get("id")) == str(preferred_id):
+                return task
     queries = [query]
     alias = ALIASES.get(query.strip().lower())
     if alias and alias != query.strip().lower():
@@ -691,7 +701,8 @@ class RouteResult:
 
 
 def route_items(items: list[ParsedItem], headers: dict, tq: dict,
-                skip_todoist: bool = False) -> list[RouteResult]:
+                skip_todoist: bool = False,
+                preferred_id: str | None = None) -> list[RouteResult]:
     """Route each item through 0₦ → 1n+ → Todoist → variable.
 
     skip_todoist=True bypasses the Todoist match/close and build-order steps
@@ -764,7 +775,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
             # Find matching Todoist task to close
             neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
-            matched = match_todoist_task(item.name, neon_tasks)
+            matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id)
             if matched:
                 r.todoist_task = matched
                 # By default, 0n habits do NOT write to 0分: Excel's own
@@ -817,14 +828,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                             variable_value=var_val)
             # Find matching Todoist 1neon task to close
             neon_1n_tasks = tq.get("1neon", [])
-            matched = match_todoist_task(item.name, neon_1n_tasks)
+            matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id)
             if matched:
                 r.todoist_task = matched
             results.append(r)
             continue
 
         # Step 0.3: Todoist match
-        matched = None if skip_todoist else match_todoist_task(item.name, all_tasks)
+        matched = None if skip_todoist else match_todoist_task(item.name, all_tasks, preferred_id=preferred_id)
         if matched:
             # Extract points
             pts_match = POINTS_RE.search(matched["content"])
@@ -1649,6 +1660,16 @@ def main():
     points_only = "--points-only" in argv
     if points_only:
         argv = [a for a in argv if a != "--points-only"]
+    # --task-id <id>: dtd passes the fzf row id so completion closes the EXACT
+    # selected task, not a name match (duplicate names would close the wrong
+    # instance). Only honoured for a single-item completion — a batch has no
+    # single target. Habits/rituals still route by name; the id only wins when
+    # it's present in the matched candidate list (see match_todoist_task).
+    task_id_override = None
+    if "--task-id" in argv:
+        _i = argv.index("--task-id")
+        task_id_override = argv[_i + 1] if _i + 1 < len(argv) else None
+        del argv[_i:_i + 2]
     raw = " ".join(argv)
 
     # 1. Parse
@@ -1715,7 +1736,8 @@ def main():
     tq = load_task_queue()
 
     # 3. Route
-    routes = route_items(items, headers, tq, skip_todoist=points_only)
+    routes = route_items(items, headers, tq, skip_todoist=points_only,
+                         preferred_id=(task_id_override if len(items) == 1 else None))
 
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]

@@ -142,10 +142,23 @@ echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
 
 (
-  while IFS= read -r task_clean; do
-    [[ -z "$task_clean" ]] && continue
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    # FIFO lines are "id<TAB>content" (enter.sh/done.sh send the fzf row id so
+    # completion closes the EXACT selected task, not a name match — duplicate
+    # names would otherwise complete the wrong instance). Bare content (no tab)
+    # is still accepted for safety.
+    if [[ "$line" == *$'\t'* ]]; then
+      task_id="${line%%$'\t'*}"; task_clean="${line#*$'\t'}"
+    else
+      task_id=""; task_clean="$line"
+    fi
     echo "⏳ $task_clean" > "$DTD_HDR"
-    result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
+    if [[ -n "$task_id" ]]; then
+      result=$(python3 "$DID_FAST" --task-id "$task_id" "$task_clean" 2>>"$DTD_LOG.err")
+    else
+      result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
+    fi
     # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
     # the pushed/processed counters, so the journal entry must land first)
     echo "$result" | python3 "$UNDO_FAST" --journal-done "$DTD_JOURNAL" 2>/dev/null
@@ -250,7 +263,7 @@ if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; t
   echo "x" >> "\$PUSHED"
   : > "\$TIMER"
   echo "⏳ completing: \$clean_for_filter" > "\$HDR"
-  printf '%s\n' "\$clean" > "\$FIFO"
+  printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 else
   "\$START" "\$task"
 fi
@@ -293,7 +306,7 @@ echo "\$clean_for_filter" >> "\$REMOVED"
 echo "x" >> "\$PUSHED"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
-printf '%s\n' "\$clean" > "\$FIFO"
+printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 DONEEOF
 chmod +x "$DTD_DONE"
 
@@ -365,7 +378,7 @@ echo "\$clean" >> "\$REMOVED"
 echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
 echo "x" >> "$DTD_PUSHED"
 (
-  result=\$(python3 "\$DEFER_FAST" "\$query" "\$days" 2>/dev/null)
+  result=\$(python3 "\$DEFER_FAST" --id "\$1" "\$days" 2>/dev/null)
   ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
   if [[ -n "\$ok" ]]; then
     # Journal for ctrl-z undo
@@ -407,7 +420,7 @@ if [[ "\$clean" == *"…"* ]]; then
 fi
 printf "\nNew points for: %s\n[N]> " "\$clean" > /dev/tty
 read newpts < /dev/tty
-out=\$(python3 "\$POINTS_FAST" "\$query" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
+out=\$(python3 "\$POINTS_FAST" --id "\$1" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ points update failed}" > "\$HDR"
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
@@ -440,7 +453,7 @@ if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
   exit 0
 fi
-out=\$(python3 "\$EDIT_FAST" "\$query" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
+out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
@@ -809,6 +822,9 @@ for s in d.values():
         if c == q or (prefix and c.startswith(prefix)):
             print(t['id']); sys.exit(0)
 " "\$clean" "\$CACHE_FILE" 2>/dev/null)
+# fzf field 2 (\$1) IS the Todoist id — override any name-based match so a
+# duplicate name can never delete the wrong row (id-based, 2026-07-12).
+tid="\$1"
 if [[ -n "\$tid" ]]; then
   # Get full name from cache for the removed list (clean may be truncated)
   fullname=\$(python3 -c "

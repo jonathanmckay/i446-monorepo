@@ -54,6 +54,17 @@ def resolve_from_cache(cache: dict, query: str) -> dict | None:
     return None
 
 
+def resolve_by_id(cache: dict, task_id: str) -> dict | None:
+    """Find the cache row by its Todoist id — collision-proof (dtd passes the
+    row's id, so duplicate-named tasks resolve to the exact selected one)."""
+    for v in cache.values():
+        if isinstance(v, list):
+            for t in v:
+                if isinstance(t, dict) and str(t.get("id")) == str(task_id):
+                    return t
+    return None
+
+
 def patch_cache(cache: dict, task_id: str, new_content: str) -> None:
     for v in cache.values():
         if isinstance(v, list):
@@ -63,10 +74,20 @@ def patch_cache(cache: dict, task_id: str, new_content: str) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
-        print("✗ usage: points-fast.py <query> <new_points> <cache_file>")
+    # Forms:  points-fast.py --id <id> <new_points> <cache_file>   ← dtd
+    #         points-fast.py <query>   <new_points> <cache_file>   ← fallback
+    argv = sys.argv[1:]
+    task_id = None
+    if argv and argv[0] == "--id":
+        task_id = argv[1] if len(argv) > 1 else None
+        argv = argv[2:]
+    if (task_id is None and len(argv) < 3) or (task_id is not None and len(argv) < 2):
+        print("✗ usage: points-fast.py [--id <id>] <query> <new_points> <cache_file>")
         return 2
-    query, pts_raw, cache_file = sys.argv[1], sys.argv[2], sys.argv[3]
+    if task_id is not None:
+        query, pts_raw, cache_file = None, argv[0], argv[1]
+    else:
+        query, pts_raw, cache_file = argv[0], argv[1], argv[2]
     if not re.fullmatch(r"\d+", pts_raw):
         print(f"✗ not a number: {pts_raw}")
         return 1
@@ -78,9 +99,9 @@ def main() -> int:
         print(f"✗ cache unreadable: {e}")
         return 1
 
-    task = resolve_from_cache(cache, query)
+    task = resolve_by_id(cache, task_id) if task_id else resolve_from_cache(cache, query)
     if not task:
-        print(f"✗ no task matched: {query}")
+        print(f"✗ no task matched: {task_id or query}")
         return 1
 
     new_content = set_points(task["content"], pts)
