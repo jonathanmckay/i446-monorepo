@@ -1056,6 +1056,20 @@ def _gap_label(end_dt: dt.datetime, dur_min: int) -> str:
     return f"empty → {end_dt:%H:%M} ({fmt_dur(dur_min)})"
 
 
+def _gap_fill(label: str, width: int) -> str:
+    """The gap label, truncated to width, then a ┄ dash fill for the
+    remainder — not blank padding. The 2026-07-11 redesign (see _gap_label)
+    dropped the dash fill entirely, and the label sitting in an otherwise
+    blank row read as floating text rather than a highlighted bar (user
+    report 2026-07-12: "add back the lines for each block"). Restores the
+    dash texture while keeping the explicit "empty → HH:MM (Nm)" wording."""
+    t = truncate(label, width)
+    rem = width - dwidth(t)
+    if rem <= 1:
+        return t + " " * max(0, rem)
+    return t + " " + "┄" * (rem - 1)
+
+
 # Placeholder timer labels — tracked time the user hasn't actually categorized.
 # These nag (pulse red↔grey, exactly like empty/gap time) until relabelled.
 _PLACEHOLDER_LABELS = {"generic placeholder"}
@@ -1174,15 +1188,16 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             continue
         if p.get("is_gap"):
             # Untracked past stretch (≥ GAP_MIN): a solid-red-block↔plain-red-text
-            # label pulse, not a thin dashed fill — the whole row is the alarm, not
-            # just a texture on it. Labelled "empty → HH:MM (Nm)" so the block's
-            # end time and the word "empty" are stated outright, never inferred.
+            # label pulse, filled out with a ┄ dash line (not blank padding) so
+            # the row still reads as a highlighted bar. Labelled "empty → HH:MM
+            # (Nm)" so the block's end time and the word "empty" are stated
+            # outright, never inferred.
             end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
             label = _gap_label(end, p["dur_min"])
             fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
             out.append(("class:time", tcol + " "))
-            out.append((fill_cls, pad(truncate(label, space), space) + "\n"))
+            out.append((fill_cls, _gap_fill(label, space) + "\n"))
             continue
         dur = f"({p['dur_min']})" if is_future else fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
@@ -1535,7 +1550,7 @@ def _detail_gap_row(s, end) -> list[tuple[str, str]]:
     fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
     prefix = f" {s:%H:%M} │ "
     space = max(1, WIDTH_HINT - dwidth(prefix) - 1)
-    return [("class:time", prefix), (fill_cls, pad(truncate(label, space), space) + "\n")]
+    return [("class:time", prefix), (fill_cls, _gap_fill(label, space) + "\n")]
 
 
 def _detail_rule_row(s, label, cls) -> list[tuple[str, str]]:

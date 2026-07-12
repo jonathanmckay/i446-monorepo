@@ -5,7 +5,11 @@ the 卯 sleep total is dim like other duration figures, not bold white.
 
 Redesigned 2026-07-11 (user report: the old thin ┄-fill red↔grey flash was too
 subtle, never stated when the empty stretch began/ended, and never said the
-word "empty" — you had to infer emptiness from dash texture alone)."""
+word "empty" — you had to infer emptiness from dash texture alone). The
+2026-07-11 redesign initially padded the label with blank spaces instead of
+dashes; restored the ┄ fill on 2026-07-12 (user report: "add back the lines
+for each block") since the label otherwise read as floating text in an
+unfilled row rather than a highlighted bar."""
 import datetime as dtm
 import importlib.util
 import sys
@@ -125,6 +129,33 @@ def test_gap_row_pulses_solid_block_when_alarm_on(monkeypatch):
     assert any("empty" in t for s, t in frags if s == "class:no_entry_bg")
     assert not any(s == "class:no_entry" for s, t in frags if "empty" in t)
     assert not any("idle" in s for s, t in frags if "empty" in t)
+
+
+def test_gap_row_fills_remaining_width_with_dashes(monkeypatch):
+    """The gap row's label doesn't just sit in an otherwise-blank line — the
+    remaining width fills with a ┄ dash line, same style as the label, so the
+    row still reads as one continuous highlighted bar (restored 2026-07-12)."""
+    mod = _load_tui()
+    monkeypatch.setattr(mod, "_gap_alarm_on", lambda *a, **k: True)
+    today = _midnight()
+    gap = {"start_dt": today.replace(hour=8, minute=40), "time_str": "08:40",
+           "label": "", "style": "", "dur_min": 30, "is_gap": True}
+    frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
+    body = "".join(t for s, t in frags if s == "class:no_entry_bg")
+    assert "┄" in body, "gap row must fill its remaining width with dashes"
+    assert not body.rstrip("\n").endswith(" "), (
+        "the row must not end in blank padding once dashes are restored")
+
+
+def test_gap_fill_helper_dashes_not_spaces():
+    mod = _load_tui()
+    today = _midnight()
+    end = today.replace(hour=8, minute=50)
+    label = mod._gap_label(end, 30)
+    out = mod._gap_fill(label, 40)
+    assert out.startswith(label)
+    assert "┄" in out[len(label):]
+    assert " " * 3 not in out[len(label):], "fill must be dashes, not runs of spaces"
 
 
 def test_gap_style_never_uses_reverse_attribute():
