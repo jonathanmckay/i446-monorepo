@@ -432,14 +432,21 @@ def load_toggl_reports_range(days, return_counts=False):
         req.add_header("Authorization", f"Basic {creds}")
         req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                hdrs = dict(resp.getheaders())
+            # A full 366-day range takes ~16s server-side (confirmed live) —
+            # comfortably under a 90s cap so a slow-but-successful page isn't
+            # mistaken for a dead connection.
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                # Toggl sends lowercase header names (x-next-id, not X-Next-Id);
+                # a plain dict(getheaders()) lookup by mixed-case key silently
+                # returns None even when a next page exists, truncating to page
+                # 1 forever. Confirmed live — normalize to lowercase before use.
+                hdrs = {k.lower(): v for k, v in resp.getheaders()}
                 page_rows = json.loads(resp.read())
         except Exception:
             break
         rows.extend(page_rows)
-        next_id = hdrs.get("X-Next-Id") or hdrs.get("X-Next-ID")
-        next_row = hdrs.get("X-Next-Row-Number")
+        next_id = hdrs.get("x-next-id")
+        next_row = hdrs.get("x-next-row-number")
         if not next_id or not next_row or len(page_rows) < 50:
             break
         payload = {**payload, "first_id": int(next_id), "first_row_number": int(next_row)}
