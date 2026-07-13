@@ -230,17 +230,17 @@ def last_meal_today():
 
 PRAYER_MARKER = "☀️"
 INBOX_MARKER = "📧"
-TIME_MARKER = "⏰"
+TIME_MARKER = "😈"  # daemon-fired stamp (demon/daemon pun)
 GOAL_MARKER = "🎯"
 
 
 def _block_name_from_header(line: str) -> str:
     """Extract the clean 地支 block name from a header line, stripping any
-    trailing markers (e.g. '- 申 ☀️ 📧 ⏰ (134min)' → '申')."""
+    trailing markers (e.g. '- 申 ☀️ 📧 😈 (134min)' → '申')."""
     name = line.strip().lstrip("- ").strip()
     # The block name is always the first whitespace-delimited token (a single
     # 地支 character). Everything after it is marker/duration decoration
-    # (☀️ 📧 ⏰ ✅ 🎯 ⏱️ … or "(134min)"), so we don't need to enumerate every
+    # (☀️ 📧 😈 ✅ 🎯 ⏱️ … or "(134min)"), so we don't need to enumerate every
     # possible marker — just take the leading token.
     tokens = name.split()
     return tokens[0] if tokens else name
@@ -352,7 +352,7 @@ def write_inbox_marker(block_name):
 
 
 def clear_prayer_markers():
-    """Strip all block header emojis (☀️📧⏰🎯⏱️✅) from -1₲. Called during daily wipe."""
+    """Strip all block header emojis (☀️📧😈🎯⏱️✅) from -1₲. Called during daily wipe."""
     if not BUILD_ORDER.exists():
         return
     text = BUILD_ORDER.read_text()

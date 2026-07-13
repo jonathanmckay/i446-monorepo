@@ -98,7 +98,7 @@ Skip 睡觉 entries (they start before 卯).
 
 Under each 地支 line's existing items, append:
 ```
-- 辰 ⏰
+- 辰 😈
     - [ ] (existing goals)
     - actual:
         - 新闻 @hcmc (07:54-08:04, 10m)

@@ -727,13 +727,13 @@ def test_snapshot_archives_yesterday_not_today():
 
 def test_block_name_strips_duration_suffix(tmp_path):
     """Regression: block headers with (Nmin) duration suffix caused goal lookup
-    to miss existing goals. _block_name_from_header('- 午 ☀️ 📧 ⏰ (134min)')
+    to miss existing goals. _block_name_from_header('- 午 ☀️ 📧 😈 (134min)')
     returned '午    (134min)' instead of '午', so goals_set was False even when
     goals were written under that block."""
     m = _load_two_n()
     # Direct function test
-    assert m._block_name_from_header("- 辰 ☀️ 📧 ⏰ (134min)") == "辰"
-    assert m._block_name_from_header("- 午 ☀️ 📧 ⏰ (90min)") == "午"
+    assert m._block_name_from_header("- 辰 ☀️ 📧 😈 (134min)") == "辰"
+    assert m._block_name_from_header("- 午 ☀️ 📧 😈 (90min)") == "午"
     assert m._block_name_from_header("- 申") == "申"
     assert m._block_name_from_header("- 亥 📧") == "亥"
 
@@ -741,12 +741,12 @@ def test_block_name_strips_duration_suffix(tmp_path):
     fake_bo = tmp_path / "bo.md"
     fake_bo.write_text(
         "## -1₲\n\n"
-        "- 辰 ☀️ 📧 ⏰ (134min)\n"
+        "- 辰 ☀️ 📧 😈 (134min)\n"
         "    - [ ] morning goal\n"
-        "- 巳 ☀️ 📧 ⏰ (124min)\n"
+        "- 巳 ☀️ 📧 😈 (124min)\n"
         "    - [x] done goal\n"
         "    - [ ] open goal\n"
-        "- 午 ☀️ 📧 ⏰\n"
+        "- 午 ☀️ 📧 😈\n"
         "    - [ ] afternoon goal\n"
     )
     with patch.object(m, "BUILD_ORDER", fake_bo):
@@ -758,20 +758,20 @@ def test_block_name_strips_duration_suffix(tmp_path):
 
 def test_block_name_strips_status_focus_timer_markers(tmp_path):
     """Regression: block headers can carry ✅ (done), 🎯 (focus), and ⏱️ (timer)
-    markers in addition to ☀️ 📧 ⏰. _block_name_from_header only stripped the
+    markers in addition to ☀️ 📧 😈. _block_name_from_header only stripped the
     latter three, so '- 午 ✅ 🎯' resolved to '午 ✅ 🎯' instead of '午'. That
     made write_block_goals fail to match the current block and report
     'failed to write goals to build order' even though the block existed."""
     m = _load_two_n()
     assert m._block_name_from_header("- 午 ✅ 🎯") == "午"
-    assert m._block_name_from_header("- 巳 ✅ 🎯 ⏱️ ⏰") == "巳"
-    assert m._block_name_from_header("- 辰 🎯 ⏰") == "辰"
+    assert m._block_name_from_header("- 巳 ✅ 🎯 ⏱️ 😈") == "巳"
+    assert m._block_name_from_header("- 辰 🎯 😈") == "辰"
 
     # End-to-end: writing goals to a block whose header has ✅/🎯 must succeed.
     fake_bo = tmp_path / "bo.md"
     fake_bo.write_text(
         "## -1₲\n\n"
-        "- 巳 ✅ 🎯 ⏱️ ⏰\n    - [ ] \n"
+        "- 巳 ✅ 🎯 ⏱️ 😈\n    - [ ] \n"
         "- 午 ✅ 🎯\n    - [ ] \n"
         "- 未\n    - [ ] \n"
     )

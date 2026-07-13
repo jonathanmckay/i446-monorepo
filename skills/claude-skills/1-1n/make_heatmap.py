@@ -79,7 +79,7 @@ LIVE_BUILD_ORDER = '/Users/mckay/vault/g245/build-order.md'
 
 def _block_line_name(line):
     """First token after the bullet — headers carry variable annotations
-    (`- 辰 (25min)   (32min) ⏰`), so only the leading token is stable."""
+    (`- 辰 (25min)   (32min) 😈`), so only the leading token is stable."""
     rest = line[2:].strip()
     return rest.split()[0] if rest else ''
 

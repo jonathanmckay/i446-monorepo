@@ -128,7 +128,7 @@ def _load_daemon():
 
 def test_marker_earned_rejects_stale_daemon_marker():
     mod = _load_daemon()
-    line = "- 巳 🎯 ⏰"
+    line = "- 巳 🎯 😈"
     # Live says no goals today → stale 🎯 must not earn
     assert mod._marker_earned("🎯", line, {"🎯": False}) is False
     # Live confirms goals → earns
@@ -156,7 +156,7 @@ def test_marker_earned_legacy_trust_when_live_none():
 def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
     mod = _load_daemon()
     build = tmp_path / "build.md"
-    # ⏰ (fired stamp) is written in Phase 3, after scoring, so the header has
+    # 😈 (fired stamp) is written in Phase 3, after scoring, so the header has
     # only the sub-habit markers at score time.
     build.write_text(
         "## -1₲\n\n"
@@ -254,16 +254,16 @@ def test_daemon_owned_markers_excludes_toggl_and_todoist():
 
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     """Regression (2026-06-12): enrich writes mid-line annotations on block
-    headers (`- 辰 (25min)   (32min) ⏰`, `(15分, 163min)`). The old matcher
+    headers (`- 辰 (25min)   (32min) 😈`, `(15分, 163min)`). The old matcher
     stripped only one trailing `(Nmin)`, so name comparison failed and blocks
     scored 0/13 even with every ritual earned — -1₦ points never reached Neon."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     build.write_text(
         "## -1₲\n\n"
-        "- 卯 🎯 ⏱️ ⏰\n"
+        "- 卯 🎯 ⏱️ 😈\n"
         "    - [ ] wake up well\n"
-        "- 辰 (25min)   (32min) ⏰ ⏱️\n"
+        "- 辰 (25min)   (32min) 😈 ⏱️\n"
         "    - [ ] morning goal\n"
         "- 巳     (15分, 119min)  (15分, 163min) ☀️ ✅ 📧 🎯\n"
         "    - [x] grind list\n",
@@ -272,7 +272,7 @@ def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "BUILD_ORDER", build)
 
     # Name extraction is the first token, annotations ignored
-    assert mod._block_line_name("- 辰 (25min)   (32min) ⏰") == "辰"
+    assert mod._block_line_name("- 辰 (25min)   (32min) 😈") == "辰"
     assert mod._block_line_name("- 巳     (15分, 119min)  (15分, 163min) ☀️") == "巳"
 
     # Scoring matches annotated headers (was 0 before the fix)
@@ -283,7 +283,7 @@ def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     # Goal lookup and marker write also match annotated headers
     assert mod._block_has_goals("辰") is True
     assert mod._write_block_marker("辰", "🎯") is True
-    assert "- 辰 (25min)   (32min) ⏰ ⏱️ 🎯" in build.read_text(encoding="utf-8")
+    assert "- 辰 (25min)   (32min) 😈 ⏱️ 🎯" in build.read_text(encoding="utf-8")
 
 
 # ── Reconcile: P must self-heal late markers, not drift below the header ──────

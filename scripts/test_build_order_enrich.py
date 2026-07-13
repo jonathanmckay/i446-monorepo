@@ -88,7 +88,7 @@ def test_d357_links_inline_on_time_entries():
 
 
 def test_block_name_clean_strips_duration_suffix():
-    """Regression: block_name_clean('- 辰 ☀️ 📧 ⏰ (134min)') returned
+    """Regression: block_name_clean('- 辰 ☀️ 📧 😈 (134min)') returned
     '辰    (134min)' instead of '辰', causing block matching to fail on
     re-enrichment runs. Duration suffixes must be stripped."""
     import importlib.util, sys
@@ -97,13 +97,13 @@ def test_block_name_clean_strips_duration_suffix():
     sys.modules["boe_test"] = mod
     spec.loader.exec_module(mod)
 
-    assert mod.block_name_clean("- 辰 ☀️ 📧 ⏰ (134min)") == "辰"
-    assert mod.block_name_clean("- 午 ☀️ 📧 ⏰ (90min)") == "午"
-    assert mod.block_name_clean("- 巳 ☀️ 📧 ⏰ (20分, 124min)") == "巳"
+    assert mod.block_name_clean("- 辰 ☀️ 📧 😈 (134min)") == "辰"
+    assert mod.block_name_clean("- 午 ☀️ 📧 😈 (90min)") == "午"
+    assert mod.block_name_clean("- 巳 ☀️ 📧 😈 (20分, 124min)") == "巳"
     assert mod.block_name_clean("- 申") == "申"
     assert mod.block_name_clean("- 亥 📧") == "亥"
     # Without duration
-    assert mod.block_name_clean("- 午 ☀️ 📧 ⏰") == "午"
+    assert mod.block_name_clean("- 午 ☀️ 📧 😈") == "午"
 
 
 def test_block_name_clean_strips_scoring_markers():
@@ -119,10 +119,10 @@ def test_block_name_clean_strips_scoring_markers():
 
     block_names = {b[0] for b in mod.BLOCKS}
     headers = [
-        "- 卯 🎯 ⏰",
-        "- 巳 ✅ 🎯 ⏰",
+        "- 卯 🎯 😈",
+        "- 巳 ✅ 🎯 😈",
         "- 午 ☀️ 📧 🎯 ✅",
-        "- 申 (23min) 🎯 ⏰",
+        "- 申 (23min) 🎯 😈",
         "- 未 ⏱️",
     ]
     for h in headers:

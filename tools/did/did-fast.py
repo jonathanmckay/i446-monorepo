@@ -1496,6 +1496,31 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
     return results
 
 
+def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[bool, str | None]:
+    """Reschedule an OVERDUE recurring task forward to `target_iso`, preserving
+    its recurrence, instead of a plain /close.
+
+    /close advances a recurrence by ONE interval from the task's (stale) due
+    date, so a daily habit that fell behind can never catch up — it stays
+    overdue and lingers in the Todoist mobile Today view forever (2026-07-13:
+    '2nd hci' stuck at 2026-06-29). Passing due_date + the bare recurrence
+    due_string re-anchors the date to the next occurrence without dropping the
+    repeat (same shape defer-fast uses for recurring parents)."""
+    body = {"due_date": target_iso}
+    if due_string:
+        body["due_string"] = due_string
+    try:
+        req = urllib.request.Request(
+            f"{TODOIST_BASE}/tasks/{task_id}",
+            data=json.dumps(body).encode(), method="POST",
+            headers={"Authorization": f"Bearer {TODOIST_TOKEN}",
+                     "Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=15)
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
     stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
@@ -1989,9 +2014,11 @@ end tell'''
     defer_items = {}  # tid → (defer_date, points_claimed, content)
     id_to_name = {}
     future_skipped = []  # tasks skipped because due date is in the future
+    catch_up = []  # (tid, due_string) for OVERDUE recurring habits to fast-forward
     # 0neon recurring tasks that may be completed in advance
     ADVANCE_ALLOWED = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
     today_str = date.today().isoformat()
+    tomorrow_str = (date.today() + timedelta(days=1)).isoformat()
     # Idempotency source of truth: a recurring habit already in today's
     # completed-today.json must NOT be closed again. Each close advances an
     # "every day" recurrence by a day, so a same-day double-tap drifts the due
@@ -2044,10 +2071,22 @@ end tell'''
             if r.item.defer_date:
                 pts = r.item.points_override or r.fen_points or 0
                 defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
+            elif r.todoist_task.get("recurring") and task_due and task_due < today_str:
+                # OVERDUE recurring habit: a plain /close advances only +1 interval
+                # from the stale due date, so it can never catch up and lingers
+                # overdue on mobile forever. Fast-forward it to the next
+                # occurrence instead (2026-07-13: '2nd hci' stuck at 2026-06-29).
+                catch_up.append((tid, r.todoist_task.get("due_string", "")))
             else:
                 task_ids.append(tid)
 
     close_results = close_todoist_tasks(task_ids)
+
+    # Fast-forward OVERDUE recurring habits to their next occurrence (see
+    # catch_up_recurring) so they stop lingering overdue in Todoist mobile.
+    catch_up_results = {}
+    for _tid, _due_string in catch_up:
+        catch_up_results[_tid] = catch_up_recurring(_tid, _due_string, tomorrow_str)
 
     # Defer tasks (reschedule + deduct points)
     defer_results = {}
