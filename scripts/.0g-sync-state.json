@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "3 instances of math": {
-      "todoist_id": "6h5CMJ6hj45rRqMR",
-      "minutes": 90
-    },
     "play bball w/hiit": {
       "todoist_id": "6h5C2H5HM3r9mJJR",
       "minutes": 50
@@ -14,5 +10,5 @@
       "minutes": 60
     }
   },
-  "last_sync": "2026-07-12T16:00:06.922836-07:00"
+  "last_sync": "2026-07-12T18:00:07.715925-07:00"
 }
