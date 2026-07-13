@@ -104,6 +104,47 @@ def test_clean_filter_files(tmp_path):
     assert json.loads(done.read_text()) == ["新闻"]
 
 
+def test_clean_filter_files_strips_only_the_matching_id(tmp_path):
+    # Bug (2026-07-13): defer's optimistic hide moved from name-keyed
+    # ($REMOVED) to id-keyed ($REMOVED.ids), since two tasks sharing an
+    # annotation-stripped name (e.g. two "AoS (15) [15]" tasks) both
+    # vanished from dtd's list when only one was deferred by id. Undo must
+    # mirror that: strip ONLY this task's id from $REMOVED.ids, never by
+    # name, and never touch a sibling's id.
+    removed = tmp_path / "removed"
+    ids_path = tmp_path / "removed.ids"
+    removed.write_text("")
+    ids_path.write_text("111\n222\n")
+    uf.clean_filter_files(["AoS"], None, str(removed), None, task_id="111")
+    kept = ids_path.read_text().splitlines()
+    assert kept == ["222"], "must remove only the undone task's own id"
+
+
+def test_clean_filter_files_no_task_id_leaves_ids_file_untouched(tmp_path):
+    removed = tmp_path / "removed"
+    ids_path = tmp_path / "removed.ids"
+    removed.write_text("")
+    ids_path.write_text("111\n")
+    uf.clean_filter_files(["AoS"], None, str(removed), None, task_id=None)
+    assert ids_path.read_text().splitlines() == ["111"]
+
+
+def test_journal_pop_and_reverse_passes_task_id_to_cleanup(tmp_path, monkeypatch):
+    # The journal record for a defer already carries task_id (see
+    # --journal-defer) — journal_pop_and_reverse must forward it to
+    # clean_filter_files so the id-keyed hide actually gets cleared on undo.
+    monkeypatch.setattr(uf, "reverse_record", lambda record, errors: None)
+    captured = {}
+    monkeypatch.setattr(
+        uf, "clean_filter_files",
+        lambda names, session, removed, done_json, task_id=None:
+            captured.update(names=names, task_id=task_id))
+    j = tmp_path / "journal"
+    uf.journal_append(str(j), {"type": "defer", "names": ["AoS"], "task_id": "111"})
+    uf.journal_pop_and_reverse(str(j), None, None, None)
+    assert captured["task_id"] == "111"
+
+
 # ---------------------------------------------------------------------------
 # Reversal op collection (mocked transports)
 # ---------------------------------------------------------------------------
