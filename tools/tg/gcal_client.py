@@ -69,6 +69,32 @@ def _cache_path(day: dt.date) -> Path:
     return CACHE_DIR / f"gcal-{day.isoformat()}.json"
 
 
+# lx@m5c7.com is Louisa's calendar, visible on the m5c7 account — it carries
+# BOTH her personal solo events (call nanny, dentist, ...) AND real m5x2
+# business meetings (she's on the m5x2 team, so Strat/Analytics/People show
+# there too). Filter out the personal ones at fetch time rather than hiding
+# the whole calendar, which would also hide the business meetings.
+PERSONAL_CALENDARS_FILTERED = {"lx@m5c7.com"}
+
+
+def _is_personal_solo_event(cal_summary: str, title: str, attendees: list | None) -> bool:
+    """True for a private personal reminder that shouldn't surface in tg-tui.
+
+    A literal "m5x2" in the title is an unambiguous business signal (same
+    rule tg-tui.py's gcal_project_code uses) and always wins. Otherwise, an
+    event with no attendees besides the calendar owner herself (her solo
+    "call nanny" / "Call Nanny candidate" entries — user report 2026-07-13)
+    is a personal reminder, not a shared meeting; a real meeting (even one
+    that doesn't include Jonathan, like "HZ/LX 1:1") always lists at least
+    one other attendee."""
+    if cal_summary not in PERSONAL_CALENDARS_FILTERED:
+        return False
+    if "m5x2" in title.lower():
+        return False
+    non_self = [a for a in (attendees or []) if not a.get("self")]
+    return not non_self
+
+
 def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) -> list[dict]:
     """Return events overlapping [start, end). Times are tz-aware."""
     cache = _cache_path(start.astimezone(TZ).date())
@@ -100,11 +126,15 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
             e = ev["end"].get("dateTime") or ev["end"].get("date")
             if not s or not e:
                 continue
+            title = ev.get("summary", "(no title)")
+            cal_summary = cal.get("summary", cid)
+            if _is_personal_solo_event(cal_summary, title, ev.get("attendees")):
+                continue
             out.append({
-                "title": ev.get("summary", "(no title)"),
+                "title": title,
                 "start": s,
                 "end": e,
-                "calendar": cal.get("summary", cid),
+                "calendar": cal_summary,
                 "all_day": "date" in ev["start"],
                 "transparency": ev.get("transparency", "opaque"),
             })
