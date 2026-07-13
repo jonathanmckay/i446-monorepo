@@ -985,20 +985,31 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
 def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     """Decide whether a marker earns its points for a block header `line`.
 
-    The emoji must be present on the header. For daemon-owned markers
-    (🎯/⏱️/✅) `live` must also confirm the habit happened today — this is what
-    blocks stale markers from prior days. ☀️/📧 are written by /inbound and have
-    no daemon-side validator, so header presence alone is trusted. When `live`
-    is None (e.g. a re-score with no evaluation pass), all markers are trusted,
-    preserving the legacy behavior."""
+    The emoji must be present on the header. Only GOAL_MARKER (🎯) is still
+    live-gated: `live` must confirm the habit happened today, blocking stale
+    goal markers from prior days. ☀️/📧 are written by /inbound with no
+    daemon-side validator, so header presence alone is trusted.
+
+    ⏱️/✅ (TOGGL_MARKER/TODOIST_MARKER) are ALSO header-trusted now (2026-07-13
+    OR redesign) — did-fast's run_ritual stamps them immediately on manual
+    completion, and the daemon's own auto-check independently stamps them via
+    `_write_block_marker` when it passes (see `evaluate_and_mark_block`).
+    Either path writes the same emoji to the same header line, so trusting
+    presence alone naturally gives "manual OR auto earns it" without needing
+    to distinguish which path wrote it. When `live` is None (e.g. a re-score
+    with no evaluation pass), all markers are trusted, preserving legacy
+    behavior."""
     if emoji not in line:
         return False
-    if live is not None and emoji in live and not live[emoji]:
+    if emoji == GOAL_MARKER and live is not None and emoji in live and not live[emoji]:
         return False
     return True
 
 
-DAEMON_OWNED_MARKERS = {GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER}
+# Only GOAL_MARKER is still stripped when its live check fails — TOGGL_MARKER/
+# TODOIST_MARKER are OR'd with manual completion (see _marker_earned) so a
+# failing auto-check must never erase a mark manual completion already earned.
+DAEMON_OWNED_MARKERS = {GOAL_MARKER}
 
 
 def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:

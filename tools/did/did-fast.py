@@ -185,8 +185,18 @@ def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
     return sum(1 for t in query_tokens if t in task_set) / len(query_tokens)
 
 
-def match_todoist_task(query: str, tasks: list[dict]) -> Optional[dict]:
-    """Find best Todoist task match using word overlap."""
+def match_todoist_task(query: str, tasks: list[dict],
+                       preferred_id: str | None = None) -> Optional[dict]:
+    """Find best Todoist task match using word overlap.
+
+    preferred_id (dtd's collision-proof path): if given and a task in `tasks`
+    carries that id, return it directly — the EXACT row the user selected, so a
+    duplicate task name can't complete the wrong instance (2026-07-12).
+    """
+    if preferred_id:
+        for task in tasks:
+            if str(task.get("id")) == str(preferred_id):
+                return task
     queries = [query]
     alias = ALIASES.get(query.strip().lower())
     if alias and alias != query.strip().lower():
@@ -487,17 +497,28 @@ def load_task_queue() -> dict:
     return json.loads(TASK_QUEUE_PATH.read_text())
 
 
-def refresh_task_queue() -> dict:
+def refresh_task_queue(block: bool = False) -> dict:
     """Fetch 0neon + 1neon + 夜neon + 関键路径 from Todoist, rebuild cache.
-    Uses a file lock to prevent concurrent refreshes from clobbering each other."""
+    Uses a file lock to prevent concurrent refreshes from clobbering each other.
+
+    block=False (opportunistic callers): if another refresh holds the lock, skip
+    and return the existing cache — piling up redundant refreshes is pointless.
+
+    block=True (an EXPLICIT 'refresh now' — the --refresh-cache CLI that /0g,
+    /-1g etc. rely on to surface a just-created goal): WAIT for the in-flight
+    refresh, then run. Skipping here silently returned the stale cache, so a goal
+    created moments earlier didn't reach dtd until the periodic daemon's next
+    cycle (~3min) — the 'I did 0g but it didn't show at once' bug (2026-07-01)."""
     import fcntl
     lock_path = TASK_QUEUE_PATH.with_suffix(".lock")
+    lock_fd = open(lock_path, "w")
+    flags = fcntl.LOCK_EX if block else (fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
-        lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock_fd, flags)
     except (IOError, OSError):
-        # Another refresh is already running; return existing cache
+        # Non-blocking only: another refresh is already running → return existing.
         print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
+        lock_fd.close()
         if TASK_QUEUE_PATH.exists():
             return json.loads(TASK_QUEUE_PATH.read_text())
         return {}
@@ -616,6 +637,30 @@ def _refresh_task_queue_inner() -> dict:
     else:
         results["today"] = today_result or []
 
+    # Union the -1neon block-ritual cards in via the DIRECT label endpoint.
+    # The daemon (re)creates these 5 cards at each 2h boundary; they reach the
+    # cache ONLY through fetch_today's "today | overdue" FILTER query, whose
+    # index lags minutes behind task creation — so a boundary refresh fired
+    # ~30-90s after the daemon made the cards returned stale results and the new
+    # block's -1n cards didn't surface in dtd until the next ~3min daemon cycle
+    # (the "dtd won't auto-refresh at block turnover" bug, 2026-07-09). The
+    # /tasks?label=-1neon endpoint is fresh within seconds, so fetching it
+    # directly and merging (dedup by id, due<=today) closes the gap. -1neon is
+    # deliberately NOT a top-level cache key (dtd reads ritual cards from
+    # `today`), so union rather than add a bucket.
+    try:
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+        neg1 = fetch_label("-1neon")
+        have = {t.get("id") for t in results["today"]}
+        for t in neg1:
+            if t.get("id") in have:
+                continue
+            if t.get("due") and t["due"] <= today_iso:
+                results["today"].append(t)
+                have.add(t.get("id"))
+    except Exception as e:
+        print(f"WARN: -1neon union skipped: {e}", file=sys.stderr)
+
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": datetime.now().isoformat()}
@@ -656,7 +701,8 @@ class RouteResult:
 
 
 def route_items(items: list[ParsedItem], headers: dict, tq: dict,
-                skip_todoist: bool = False) -> list[RouteResult]:
+                skip_todoist: bool = False,
+                preferred_id: str | None = None) -> list[RouteResult]:
     """Route each item through 0₦ → 1n+ → Todoist → variable.
 
     skip_todoist=True bypasses the Todoist match/close and build-order steps
@@ -729,7 +775,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
             # Find matching Todoist task to close
             neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
-            matched = match_todoist_task(item.name, neon_tasks)
+            matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id)
             if matched:
                 r.todoist_task = matched
                 # By default, 0n habits do NOT write to 0分: Excel's own
@@ -782,14 +828,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                             variable_value=var_val)
             # Find matching Todoist 1neon task to close
             neon_1n_tasks = tq.get("1neon", [])
-            matched = match_todoist_task(item.name, neon_1n_tasks)
+            matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id)
             if matched:
                 r.todoist_task = matched
             results.append(r)
             continue
 
         # Step 0.3: Todoist match
-        matched = None if skip_todoist else match_todoist_task(item.name, all_tasks)
+        matched = None if skip_todoist else match_todoist_task(item.name, all_tasks, preferred_id=preferred_id)
         if matched:
             # Extract points
             pts_match = POINTS_RE.search(matched["content"])
@@ -1451,14 +1497,14 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
 
 
 def run_ritual(tag: str) -> dict:
-    """Complete one block ritual (-1neon card): close its open Todoist task and
-    stamp the ritual emoji on the current 地支 block in build-order.md.
+    """Complete one block ritual (-1neon card): close its open Todoist task,
+    stamp the ritual emoji on the relevant 地支 block in build-order.md, and
+    credit 0分!P immediately.
 
-    Points (-1₦, 0分!P) are NOT written here — see the note in the body. The
-    daemon's turnover reconcile is the single authoritative P writer; it scores
-    only fired blocks and validates 🎯/⏱️/✅, which a completion-time write
-    cannot. This keeps P idempotent and free of the future/unvalidated-block
-    overcount that a naive header sum would produce.
+    All 5 rituals now earn their points on manual completion, including ⏱️/✅
+    (auto rituals) — see the note in the body for the OR semantics with the
+    daemon's automatic Toggl/Todoist validation, and why ⏱️/✅ target the
+    PREVIOUS block rather than the current one.
     """
     import sys as _s
     _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
@@ -1504,9 +1550,23 @@ def run_ritual(tag: str) -> dict:
     except Exception as e:  # noqa: BLE001
         out["todoist"] = {"closed": False, "error": str(e)}
 
-    # 2. Stamp the emoji on the current block header (local build-order.md).
+    # Auto rituals (-1t/-1l): OR semantics (2026-07-13 redesign) — completing
+    # the card is now an independent, equally-valid path to earning the marker,
+    # alongside the daemon's automatic Toggl/Todoist validation at block close.
+    # ⏱️/✅ reward having recorded the PREVIOUS block (its Toggl time
+    # categorized, its completed tasks pointed), so a manual completion here
+    # targets that same previous block — not the current one — to stay
+    # consistent with what the daemon's own auto-check judges.
+    is_auto = r.get("mode") == "auto"
+
+    # 2. Stamp the emoji on the target block header (local build-order.md).
+    #    Manual rituals (☀️/🎯/📧) target the CURRENT block. Auto rituals
+    #    (⏱️/✅) target the block that just ended, matching the daemon's own
+    #    "hour-4..hour-2" previous-block offset.
     bo = Path.home() / "vault/g245/build-order.md"
-    block = nb.current_block(datetime.now().hour)
+    cur_idx = nb.current_block_index(datetime.now().hour)
+    target_idx = max(0, cur_idx - 1) if is_auto else cur_idx
+    block = nb.BRANCHES[target_idx]
     out["block"] = block
     if not bo.exists():
         out["error"] = "build-order.md not found"
@@ -1516,6 +1576,7 @@ def run_ritual(tag: str) -> dict:
     if changed:
         bo.write_text(new_text, encoding="utf-8")
     out["stamped"] = changed
+    out["auto"] = is_auto
 
     # 3. Record the completion in completed-today so dtd hides the card at once.
     #    dtd hides a cached task when its id is in completed-today's id map; the
@@ -1530,14 +1591,87 @@ def run_ritual(tag: str) -> dict:
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
             out["completed_today_error"] = str(e)
 
-    # NOTE: we deliberately do NOT write 0分!P here. P is owned solely by the
-    # daemon's reconcile_p_for_day at the 2h block boundary, which scores only
-    # FIRED blocks and validates 🎯/⏱️/✅ against live Toggl/Todoist. A
-    # completion-time write can't do either: the build order carries stamps on
-    # not-yet-fired and unvalidated blocks, so a naive header sum overcounts
-    # (measured 63 vs the daemon's correct 18). Closing the card + stamping the
-    # emoji is enough — the daemon credits P for this block when it closes.
-    out["p_note"] = "credited at block turnover by daemon reconcile"
+    # 4. Credit 0分!P IMMEDIATELY (increment, never recompute — the 2026-07-11
+    #    clobber came from RE-SUMMING header emojis on a build-order.md copy
+    #    that can lag Ix's by several seconds/minutes over Syncthing, so a
+    #    "true" recompute here can UNDERCOUNT and SET P below what the daemon
+    #    (self-contained on Ix, no cross-machine read) already correctly wrote.
+    #    A pure `+N` append can't clobber — it only adds this ritual's own
+    #    points to whatever P currently holds. The daemon's boundary reconcile
+    #    remains the checksum: it re-derives ⏱️/✅ from live Toggl/Todoist on
+    #    its OWN local file each fire and re-groups P into one term per block,
+    #    correcting any provisional over/under-credit or ungrouped terms.
+    #
+    #    Grouped by block, when safe: manual rituals (☀️/🎯/📧) target the
+    #    CURRENT block, so `line_before` (this block's own header line, read
+    #    fresh) tells us whether another ritual already live-credited THIS
+    #    block — if so we merge into P's last term instead of opening a new
+    #    one. Auto rituals (⏱️/✅) target the PREVIOUS block, which is NOT
+    #    necessarily P's last term (the current block may already have its own
+    #    later term) — merging positionally there risks crediting the wrong
+    #    block, so auto credits always open a fresh term. The next daemon
+    #    reconcile (≤2h) re-groups it into the previous block's own term.
+    pts = int(r.get("points") or 0)
+    if pts and changed:
+        now = datetime.now()
+        if is_auto:
+            same_block_merge = False
+        else:
+            emoji_pts_map = nb.emoji_points()
+            line_before = next((ln for b, ln in nb.iter_block_lines(text) if b == block), "")
+            same_block_merge = any(e in line_before for e in emoji_pts_map if e != emoji)
+
+        read_script = (
+            'tell application "Microsoft Excel"\n'
+            '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
+            '    set rr to 0\n'
+            '    repeat with i from 2 to 400\n'
+            f'        if (string value of cell ("B" & i) of s) = "{now.month}/{now.day}" then\n'
+            '            set rr to i\n'
+            '            exit repeat\n'
+            '        end if\n'
+            '    end repeat\n'
+            '    if rr = 0 then return "ERR: no 0分 row"\n'
+            '    set f to (get formula of cell ("P" & rr) of s) as text\n'
+            '    return (rr as text) & "|" & f\n'
+            'end tell'
+        )
+        try:
+            read_res = ix_run(read_script)
+            raw = (read_res.stdout or "").strip()
+            if read_res.returncode != 0 or "|" not in raw:
+                raise RuntimeError((read_res.stderr or raw or "read failed")[:120])
+            row_s, f = raw.split("|", 1)
+
+            if f in ("", "0"):
+                terms = ["0"]
+            elif f.startswith("="):
+                terms = f[1:].split("+") or ["0"]
+            else:
+                terms = ["0", f]
+
+            if same_block_merge and len(terms) > 1:
+                try:
+                    terms[-1] = str(int(terms[-1]) + pts)
+                except ValueError:
+                    terms.append(str(pts))
+            else:
+                terms.append(str(pts))
+            new_formula = "=" + "+".join(terms)
+
+            write_script = (
+                'tell application "Microsoft Excel"\n'
+                '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
+                f'    set formula of cell ("P" & {row_s}) of s to "{new_formula}"\n'
+                f'    return "P=" & (value of cell ("P" & {row_s}) of s)\n'
+                'end tell'
+            )
+            write_res = ix_run(write_script)
+            out["p_credit"] = {"points": pts, "ok": write_res.returncode == 0,
+                               "merged": same_block_merge,
+                               "excel": (write_res.stdout or write_res.stderr or "").strip()[:60]}
+        except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
+            out["p_credit_error"] = str(e)
     return out
 
 
@@ -1558,7 +1692,9 @@ def main():
         return
 
     if sys.argv[1] == "--refresh-cache":
-        data = refresh_task_queue()
+        # Explicit refresh: block on the lock so a concurrent daemon/dtd refresh
+        # can't make this silently no-op (goals must reach dtd immediately).
+        data = refresh_task_queue(block=True)
         counts = {k: len(v) for k, v in data.items() if isinstance(v, list)}
         print(json.dumps({"status": "ok", "counts": counts}, indent=2))
         return
@@ -1573,7 +1709,7 @@ def main():
         # dtd's auto-reload watcher polls, so an open dtd updates live instead of
         # showing the completed ritual until a manual ctrl-r (regression 2026-06-29).
         try:
-            refresh_task_queue()
+            refresh_task_queue(block=True)  # explicit: must not skip on lock
             result["cache_refreshed"] = True
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a refresh
             result["cache_refresh_error"] = str(e)
@@ -1586,6 +1722,16 @@ def main():
     points_only = "--points-only" in argv
     if points_only:
         argv = [a for a in argv if a != "--points-only"]
+    # --task-id <id>: dtd passes the fzf row id so completion closes the EXACT
+    # selected task, not a name match (duplicate names would close the wrong
+    # instance). Only honoured for a single-item completion — a batch has no
+    # single target. Habits/rituals still route by name; the id only wins when
+    # it's present in the matched candidate list (see match_todoist_task).
+    task_id_override = None
+    if "--task-id" in argv:
+        _i = argv.index("--task-id")
+        task_id_override = argv[_i + 1] if _i + 1 < len(argv) else None
+        del argv[_i:_i + 2]
     raw = " ".join(argv)
 
     # 1. Parse
@@ -1594,12 +1740,66 @@ def main():
         print(json.dumps({"error": "no items parsed"}))
         sys.exit(1)
 
+    # 1b. Ritual cards: a daemon-created -1neon card (`😈 <tag>`) completed BY
+    # NAME — dtd's enter/alt-enter worker pipes the card content here verbatim —
+    # must go through run_ritual (header emoji stamp + instant -1₦ credit), not
+    # the generic Todoist close below. The generic path closes the card without
+    # the stamp, and the daemon's turnover reconcile scores manual rituals FROM
+    # the header stamps, so the points were silently lost (2026-07-03: -1ibx
+    # completed in dtd left 辰/巳 with no 📧, -1₦ 3 short per block). Skipped
+    # under --points-only: the split flow promises no Todoist side effects and
+    # run_ritual is all side effects.
+    ritual_entries: list[dict] = []
+    if not points_only:
+        # Tag resolution is pure; only IT gets the fallback-to-generic except.
+        # A failure AFTER a run_ritual must not re-feed that item to the
+        # generic path (it would double-close and double-credit).
+        try:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import neon_blocks as nb
+            _r_cfg = nb.load_config()
+            resolved = [(it, nb.ritual_card_tag(it.name, _r_cfg)) for it in items]
+        except Exception as e:  # noqa: BLE001 — no side effects yet
+            print(f"ritual-card resolution failed: {e}", file=sys.stderr)
+            resolved = [(it, None) for it in items]
+        items = [it for it, _tag in resolved if _tag is None]
+        for it, _tag in resolved:
+            if _tag is None:
+                continue
+            try:
+                res = run_ritual(_tag)
+            except Exception as e:  # noqa: BLE001 — surface, never reroute
+                res = {"error": str(e)}
+            td = res.get("todoist") or {}
+            # Deliberately NO Todoist id here: undo-fast reopens any results
+            # entry carrying todoist.id, but nothing un-stamps the header — a
+            # half-undo that leaves points scored on an open card. Without the
+            # id, undo skips it (the --ritual CLI path never journals at all).
+            ritual_entries.append({
+                "name": it.name, "step": "ritual",
+                "todoist": {"closed": bool(td.get("closed")),
+                            "content": td.get("content", it.name)},
+                "ritual": res,
+            })
+        if ritual_entries:
+            # The cache mtime bump is dtd's only reload signal (2026-06-29), so
+            # refresh even in a mixed batch, not just the all-ritual early return.
+            try:
+                refresh_task_queue(block=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"cache refresh failed: {e}", file=sys.stderr)
+        if not items:
+            print(json.dumps({"results": ritual_entries, "agent_needed": []},
+                             ensure_ascii=False, indent=2))
+            return
+
     # 2. Load caches
     headers = load_headers()
     tq = load_task_queue()
 
     # 3. Route
-    routes = route_items(items, headers, tq, skip_todoist=points_only)
+    routes = route_items(items, headers, tq, skip_todoist=points_only,
+                         preferred_id=(task_id_override if len(items) == 1 else None))
 
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
@@ -1889,8 +2089,8 @@ end tell'''
                    f"{tr[0][:2]}:{tr[0][2:]}", f"{tr[1][:2]}:{tr[1][2:]}"]
             if proj:
                 cmd.append(proj)
-            if tags:
-                cmd.extend(tags)
+            for tag in tags:
+                cmd.extend(["--tag", tag])
             cmd.extend(["--date", today_str])
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -1965,8 +2165,8 @@ end tell'''
         mc.append_names(completed_names, points=completed_points,
                         ids=completed_ids or None)
 
-    # 8. Build output
-    output = {"results": [], "agent_needed": []}
+    # 8. Build output (ritual-card entries from step 1b lead the list)
+    output = {"results": list(ritual_entries), "agent_needed": []}
 
     # Pre-image maps for undo (captured by the write scripts themselves)
     pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}
