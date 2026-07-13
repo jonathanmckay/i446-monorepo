@@ -105,7 +105,7 @@ HOUR_TO_BRANCH_BLOCK = {
     20: "戌",  # 戌 (18–20)
     22: "亥",  # 亥 (20–22)
 }
-DAEMON_FIRED_EMOJI = "⏰"
+DAEMON_FIRED_EMOJI = "😈"  # demon/daemon pun — matches the -1neon card auto_marker
 
 # At each fire hour, freeze the just-ended block's column in 0分 from formula
 # (`=D-SUM(prior blocks)`) to literal value, so the next block's residual
@@ -252,7 +252,7 @@ def find_neg1_section(lines):
 
 def find_branch_headers(lines, start, end):
     """Return list of (branch_name, line_idx) in file order within [start, end).
-    Tolerates trailing emoji/text after the branch char (e.g. `- 卯 ⏰`)."""
+    Tolerates trailing emoji/text after the branch char (e.g. `- 卯 😈`)."""
     headers = []
     for i in range(start, end):
         line = lines[i]
@@ -735,7 +735,7 @@ def neon_read_y(target_date: dt.date) -> str:
 def _block_line_name(line: str) -> str:
     """Block name from a `- 卯 ...` header line: the first whitespace token
     after the bullet. Headers accumulate annotations in the middle and at the
-    end (`- 辰 (25min)   (32min) ⏰`, `(15分, 163min)`), so any strip-suffixes
+    end (`- 辰 (25min)   (32min) 😈`, `(15分, 163min)`), so any strip-suffixes
     approach breaks; the leading token is the only stable part."""
     rest = line[2:].strip()
     return rest.split()[0] if rest else ""

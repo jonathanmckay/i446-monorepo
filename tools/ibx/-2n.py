@@ -15,6 +15,7 @@ import json
 import os
 import re
 import readline  # enables line editing (backspace, arrows) in input()
+import shlex
 import subprocess
 import sys
 import threading
@@ -229,17 +230,17 @@ def last_meal_today():
 
 PRAYER_MARKER = "☀️"
 INBOX_MARKER = "📧"
-TIME_MARKER = "⏰"
+TIME_MARKER = "😈"  # daemon-fired stamp (demon/daemon pun)
 GOAL_MARKER = "🎯"
 
 
 def _block_name_from_header(line: str) -> str:
     """Extract the clean 地支 block name from a header line, stripping any
-    trailing markers (e.g. '- 申 ☀️ 📧 ⏰ (134min)' → '申')."""
+    trailing markers (e.g. '- 申 ☀️ 📧 😈 (134min)' → '申')."""
     name = line.strip().lstrip("- ").strip()
     # The block name is always the first whitespace-delimited token (a single
     # 地支 character). Everything after it is marker/duration decoration
-    # (☀️ 📧 ⏰ ✅ 🎯 ⏱️ … or "(134min)"), so we don't need to enumerate every
+    # (☀️ 📧 😈 ✅ 🎯 ⏱️ … or "(134min)"), so we don't need to enumerate every
     # possible marker — just take the leading token.
     tokens = name.split()
     return tokens[0] if tokens else name
@@ -351,7 +352,7 @@ def write_inbox_marker(block_name):
 
 
 def clear_prayer_markers():
-    """Strip all block header emojis (☀️📧⏰🎯⏱️✅) from -1₲. Called during daily wipe."""
+    """Strip all block header emojis (☀️📧😈🎯⏱️✅) from -1₲. Called during daily wipe."""
     if not BUILD_ORDER.exists():
         return
     text = BUILD_ORDER.read_text()
@@ -757,9 +758,23 @@ def spawn_1g_background(goals_text):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"1g-{int(time.time())}.log"
     log_fh = open(log_path, "wb")
+    # Create the Todoist goals via /-1g, THEN deterministically refresh the dtd
+    # cache so the new #-1g goal surfaces in an open dtd (its watcher reloads on
+    # the cache-mtime bump). We must run the refresh ourselves, NOT rely on the
+    # skill's own Step-5 refresh: this `claude -p` runs headless in an untrusted
+    # workspace, which suppresses its Bash tool calls ("Ignoring permissions.allow
+    # … not been trusted"), so the skill's refresh never ran and a goal set via
+    # inbound never reached dtd (bug 2026-07-01). `;` (not `&&`) so the refresh
+    # runs even if claude exits non-zero.
+    did_fast = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+    tools = "Skill,Bash,Read,Edit,Write,mcp__todoist__find-tasks,mcp__todoist__add-tasks"
+    cmd = (
+        f"claude -p {shlex.quote(f'/-1g {goals_text}')} "
+        f"--allowedTools {shlex.quote(tools)} ; "
+        f"python3 {shlex.quote(str(did_fast))} --refresh-cache"
+    )
     return subprocess.Popen(
-        ["claude", "-p", f"/-1g {goals_text}", "--allowedTools",
-         "Skill,Bash,Read,Edit,Write,mcp__todoist__find-tasks,mcp__todoist__add-tasks"],
+        ["bash", "-c", cmd],
         stdin=subprocess.DEVNULL,
         stdout=log_fh,
         stderr=log_fh,
@@ -1461,7 +1476,14 @@ def snapshot_build_order():
         return  # already archived
     if BUILD_ORDER.exists():
         v_logs.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(BUILD_ORDER.read_text())
+        # Prepend a wikilink to the previous day's archive so the dailies are
+        # navigable backward in Obsidian.
+        try:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import build_order_links as _bol
+            snapshot.write_text(_bol.with_prev_day_link(BUILD_ORDER.read_text(), yesterday.date()))
+        except Exception:
+            snapshot.write_text(BUILD_ORDER.read_text())
         # After archiving yesterday, reset the new day: strip stale emoji
         # markers AND wipe yesterday's -1₲ goals/actuals so /inbound focuses on
         # today (yesterday's cards don't carry over). Runs once per day — gated

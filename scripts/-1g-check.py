@@ -73,7 +73,7 @@ def read_block_goals(branch: str, md_path: Path = MD_FILE):
     items = []
     in_block = False
     # Header is "- <branch>" optionally followed by enrichment markers/stats
-    # (e.g. "- 巳 ☀️ ✅ 🎯 (158min) ⏱️ ⏰"). Match the leading 地支 token and
+    # (e.g. "- 巳 ☀️ ✅ 🎯 (158min) ⏱️ 😈"). Match the leading 地支 token and
     # ignore the rest, or the goals read empty once a block is enriched — the
     # "blank build order" bug. Mirrors -2n's _block_name_from_header.
     block_header = re.compile(r"^- (\S+)(?:\s|$)")

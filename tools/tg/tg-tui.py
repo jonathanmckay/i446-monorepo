@@ -6,7 +6,7 @@ Sits next to dtd in the right half of a terminal. Three jobs:
   2. Show ±2h around now in 15-min detail (Toggl past + gcal future)
   3. Show rest-of-day overview (morning = Toggl, evening = gcal)
 
-Keys: c=change  s=stop  r=refresh  j/k=scroll detail  q=quit
+Keys: c=change  s=stop  r=refresh  j/k=scroll detail  [/]=prev/next day  q=quit
 """
 from __future__ import annotations
 
@@ -43,11 +43,13 @@ if not os.environ.get("TOGGL_API_KEY"):
         pass
 
 from mcp.toggl_server import toggl_api  # noqa: E402
+from mcp.toggl_server import throttle as toggl_throttle  # noqa: E402
 from mcp.toggl_server.config import PROJECT_NAMES  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
 from prompt_toolkit import Application  # noqa: E402
 from prompt_toolkit.buffer import Buffer  # noqa: E402
+from prompt_toolkit.filters import Condition  # noqa: E402
 from prompt_toolkit.key_binding import KeyBindings  # noqa: E402
 from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
@@ -144,8 +146,34 @@ DETAIL_MIN = 5      # focus band: entries shorter than this are absorbed (no row
 DETAIL_ROWS = 8     # focus band: target rows per block (keep the longest entries)
 TOGGL_MIN_INTERVAL = 20   # s — coalesce bursty non-forced fetch_today calls
 RATE_LIMIT_COOLDOWN = 60  # s — back off all Toggl reads after a 402
+
+# Staleness self-check: a long-lived tg-tui keeps running the code it loaded at
+# launch, so a shipped fix is invisible until restart — which has repeatedly
+# masked fixes (stuck 4227 block points, old residual reconstruction, …). Capture
+# the source mtime at import; render_header warns when the file on disk is newer.
+try:
+    _SRC = Path(__file__).resolve()
+    _SRC_MTIME = _SRC.stat().st_mtime
+except (OSError, NameError):
+    _SRC, _SRC_MTIME = None, 0.0
+_stale_state = {"checked": 0.0, "stale": False}
+
+
+def _code_is_stale(now=None) -> bool:
+    """True when tg-tui.py on disk is newer than this running process loaded.
+    Cached ~5s so the 0.1s repaint doesn't stat the file every frame."""
+    if _SRC is None:
+        return False
+    t = now if now is not None else time.monotonic()
+    if t - _stale_state["checked"] > 5.0:
+        _stale_state["checked"] = t
+        try:
+            _stale_state["stale"] = _SRC.stat().st_mtime > _SRC_MTIME + 1.0
+        except OSError:
+            _stale_state["stale"] = False
+    return _stale_state["stale"]
 BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
-BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "⏰"]
+BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "😈"]
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
 PROJECT_CODE = {}
@@ -177,7 +205,7 @@ PROJECT_COLORS = {
     "hcm":  "#aa00ff",   # Purple Haze (no map entry; reasonable fit for hcm parent)
     "hcmp": "#7c4dff",   # Lavender Lightning
     "hcmr": "#bda6ff",   # Weak-sauce Purple
-    "家":   "#ff4136",    # Ferrari (family)
+    "家":   "#00b8d4",    # Pool Party (family)
 }
 
 
@@ -203,11 +231,18 @@ EVENT_KEYWORDS = [
 
 def gcal_project_code(event: dict) -> str:
     """Resolve a gcal event to a Neon project code."""
+    title_lower = event.get("title", "").lower()
+    # A literal "m5x2" in the title is unambiguous and wins over the calendar
+    # map: lx@m5c7.com carries BOTH Louisa's personal invites (→ xk88) and
+    # m5x2 business meetings (she's on the m5x2 team), so the calendar-level
+    # default can't tell them apart — "m5x2 Strat (1|1|1)" rendered xk88-orange
+    # despite saying "m5x2" right in its name (regression 2026-07-12).
+    if "m5x2" in title_lower:
+        return "m5x2"
     cal = event.get("calendar", "")
     code = CALENDAR_PROJECT_MAP.get(cal)
     if code:
         return code
-    title_lower = event.get("title", "").lower()
     for keywords, kw_code in EVENT_KEYWORDS:
         if any(kw in title_lower for kw in keywords):
             return kw_code
@@ -254,11 +289,13 @@ class State:
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
         self.last_points_fetch = 0.0
+        self.points_day = None  # date the points state belongs to (cross-day guard)
         # When Toggl returns a 402 (free-tier rate limit), back off until this
         # monotonic time instead of hammering every tick/keypress — continuing to
         # call during the limit only prolongs it.
         self.toggl_blocked_until = 0.0
         self.day_reload_token = 0  # debounce guard for Ctrl+←/→ day scrubbing
+        self.sigusr1_token = 0  # debounce guard for a burst of mutation nudges
 
 
 STATE = State()
@@ -267,8 +304,11 @@ STATE = State()
 # ─── Data fetchers ─────────────────────────────────────────────────────────
 
 def _toggl_blocked() -> bool:
-    """True while inside a post-402 cooldown — skip Toggl reads entirely."""
-    return time.monotonic() < STATE.toggl_blocked_until
+    """True while inside a post-402 cooldown — skip Toggl reads entirely. Honors
+    BOTH this process's own back-off AND the shared cross-process cooldown, so a
+    402 tripped by any /tg/0t backfill silences tg-tui's pollers for the window
+    (instead of them dribbling GETs through and re-tripping the limit)."""
+    return time.monotonic() < STATE.toggl_blocked_until or toggl_throttle.cooling_down()
 
 
 def _note_rate_limit():
@@ -482,6 +522,19 @@ def fetch_points():
         now = view_now()  # viewed day's 0分 row
         today_md = f"{now.month}/{now.day}"
 
+        # Cross-day guard: points state from another day's row must never
+        # display as this day's. "Keep last good on a rejected read" is right
+        # WITHIN a day, but every read of a new day can be rejected for hours
+        # (torn D during active writes), which kept YESTERDAY's Σ and blocks
+        # on screen until mid-afternoon (990 shown at 16:11 on a 323分 day,
+        # 2026-07-07). On rollover/day-nav, blank the state; empty renders as
+        # no points until the first clean read of the new day's row.
+        if STATE.points_day is not None and STATE.points_day != now.date():
+            STATE.today_points = 0
+            STATE.block_points = {}
+            STATE.block_running_pts = 0
+        STATE.points_day = now.date()
+
         # Read the Σ total (column D) AND the per-block columns (G:O, headed
         # 卯辰巳午未申酉戌亥) for today's row in one ix-osa call. G:O is the
         # authoritative per-block distribution — reconstructing blocks from
@@ -619,7 +672,8 @@ end tell'''
             STATE.last_points_fetch = time.monotonic()
             # Only adopt fresh blocks alongside a freshly-accepted total — never
             # pair new blocks with a stale total kept from a torn read.
-            if total_ok and _blocks_consistent(STATE.today_points, bp_excel):
+            if (total_ok and _blocks_consistent(STATE.today_points, bp_excel)
+                    and _blocks_plausible(bp_excel)):
                 STATE.block_points = bp_excel
                 # Current-block running 分 = Σ − locked, rounded ONCE in full
                 # precision so it equals the sheet's own residual cell (a 217.5分
@@ -657,9 +711,17 @@ def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
     (D=-46, D=4351) is still rejected."""
     if candidate is None or candidate < 0:
         return False
+    # Absolute ceiling FIRST, before the sum_py cross-check: a mid-recalc snapshot
+    # can tear D and its own P:Y input range to the SAME spike (both read from the
+    # poisoned formula cache), so agreement alone isn't proof — D=5064 with sum_py
+    # =5064 passed the ±1 check and set Σ=5064, which the cold-start current-block
+    # reconstruction (Σ−locked) then showed as 5064分 (2026-07-03). No real day
+    # tops _MAX_PLAUSIBLE_TOTAL, so reject above it whether or not sum_py agrees.
+    if candidate > _MAX_PLAUSIBLE_TOTAL:
+        return False
     if sum_py is not None:
         return abs(candidate - sum_py) <= 1  # ±1 for float rounding
-    return candidate <= _MAX_PLAUSIBLE_TOTAL
+    return True
 
 
 def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
@@ -671,6 +733,18 @@ def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
     blocks are literals and Σ may legitimately exceed their sum, so only the
     sum > Σ direction is rejected."""
     return sum(bp.values()) <= total + 2
+
+
+def _blocks_plausible(bp: dict[str, int]) -> bool:
+    """No single block may exceed the heaviest realistic DAY total.
+
+    The first-unlocked block's G:O cell is the residual =D-SUM(locked); when D is
+    read mid-recalc and spikes, that residual spikes with it (辰 read 4227 on a
+    429分 day, 2026-06-30). _blocks_consistent can't catch it — the residual makes
+    sum==Σ by construction — and if the torn Σ slipped past _total_trustworthy too,
+    the spike stuck on screen. A single block topping _MAX_PLAUSIBLE_TOTAL is
+    impossible on a real day, so reject the whole read and keep the last good."""
+    return all(v <= _MAX_PLAUSIBLE_TOTAL for v in bp.values())
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
@@ -868,8 +942,18 @@ def display_desc(desc: str) -> str:
 
 def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(TZ)
+    # int(round()) at every 分 render site: the sheet now carries fractional
+    # cells (variable-task minutes/7 → D=695.357142857143 live 2026-07-07), and
+    # a float leaking into an f-string prints its full repr next to 分 — which
+    # reads as concatenated garbage digits on the rule line.
     pts = STATE.today_points
-    pts_str = f" · {pts}分" if pts else ""
+    pts_str = f" · {int(round(pts))}分" if pts else ""
+    # The running process is behind the file on disk → tell the user to restart;
+    # the whole header goes red so it can't be missed.
+    if _code_is_stale():
+        title = f" tg · ⚠ RESTART — code updated{pts_str} "
+        line = title + "─" * max(0, WIDTH_HINT - len(title))
+        return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
         title = f" tg · {now:%a %H:%M:%S}{pts_str} "
         line = title + "─" * max(0, WIDTH_HINT - len(title))
@@ -906,7 +990,7 @@ def section_rule(label: str, focus: bool = False, pts: int = 0) -> list[tuple[st
     bold white so the day's 分 are scannable at a glance."""
     s = f"─ {label} "
     cls = "class:focus_rule" if focus else "class:rule"
-    pts_str = f" {pts}分" if pts else ""
+    pts_str = f" {int(round(pts))}分" if pts else ""  # never print a float repr
     trail = max(0, WIDTH_HINT - dwidth(s) - dwidth(pts_str))
     out: list[tuple[str, str]] = [(cls, s + "─" * trail)]
     if pts_str:
@@ -955,9 +1039,35 @@ def _read_block_emojis(now: dt.datetime | None = None) -> dict[str, str]:
 def _gap_alarm_on(now: dt.datetime | None = None) -> bool:
     """Half-second on/off toggle for the past-untracked-time alarm. Animated by
     the app's 0.1s refresh_interval — same cadence as the NO TIME ENTRY cursor.
-    Past empty stretches pulse red↔grey on this so untracked time nags."""
+    Past empty stretches pulse a solid red block↔plain red text on this so
+    untracked time nags."""
     t = (now or dt.datetime.now(TZ)).timestamp()
     return int(t * 2) % 2 == 0
+
+
+def _gap_label(end_dt: dt.datetime, dur_min: int) -> str:
+    """'empty → HH:MM (Nm)': says the word "empty" and states the gap's END
+    time explicitly, so a gap row is never just inferred from dash texture
+    (user report 2026-07-11: "doesn't tell me when the empty block began or
+    end, just infers with flashing"). The START time is deliberately omitted —
+    every caller's own time column/prefix already shows it, and repeating it
+    ate the label's width budget in narrow panes, truncating away the one new
+    fact (the end time) this label exists to add."""
+    return f"empty → {end_dt:%H:%M} ({fmt_dur(dur_min)})"
+
+
+def _gap_fill(label: str, width: int) -> str:
+    """The gap label, truncated to width, then a ┄ dash fill for the
+    remainder — not blank padding. The 2026-07-11 redesign (see _gap_label)
+    dropped the dash fill entirely, and the label sitting in an otherwise
+    blank row read as floating text rather than a highlighted bar (user
+    report 2026-07-12: "add back the lines for each block"). Restores the
+    dash texture while keeping the explicit "empty → HH:MM (Nm)" wording."""
+    t = truncate(label, width)
+    rem = width - dwidth(t)
+    if rem <= 1:
+        return t + " " * max(0, rem)
+    return t + " " + "┄" * (rem - 1)
 
 
 # Placeholder timer labels — tracked time the user hasn't actually categorized.
@@ -1016,17 +1126,25 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         body_picks = picks[1:]
         left = f"{blk_name}:00{emoji_str} "
         dur = f"({head['dur_min']})"
-        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(dur) - 1)
+        # The header row is labelled :00, but the dominant event riding it may
+        # start later in the block — without its own time an 11:00 meeting
+        # reads as filling 午 from 10:00. Print the full start time whenever
+        # the event isn't exactly at the block's :00.
+        hs = head["start_dt"]
+        tpfx = "" if (hs.hour, hs.minute) == (blk_sh, 0) else f"{hs:%H:%M} "
+        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(tpfx) - dwidth(dur) - 1)
         label = truncate(head["label"], avail)
         head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or "class:future")
-        # Duration sits right after the label: `午:00 ☀️ GamePass sync (60)`.
+        # Duration sits right after the label: `午:00 ☀️ 11:00 GamePass sync (60)`.
         out.append(("class:dim", left))
+        if tpfx:
+            out.append(("class:time", tpfx))
         out.append((head_sty, label))
         out.append(("class:dim", f" {dur}\n"))
     else:
         body_picks = picks
         left = f"{blk_name}:00{emoji_str}"
-        pts_str = f"{pts}分" if pts else ""
+        pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
         trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
         out.append(("class:dim", left + " " * trail))
         if pts_str:
@@ -1069,13 +1187,17 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 out.append(("class:idle", "\n"))
             continue
         if p.get("is_gap"):
-            # Untracked past stretch (≥ GAP_MIN): ┄ fill pulses red↔grey to nag.
-            dur = fmt_dur(p["dur_min"])
-            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - len(dur) - 1)
-            fill_cls = "class:no_entry" if _gap_alarm_on() else "class:idle"
+            # Untracked past stretch (≥ GAP_MIN): a solid-red-block↔plain-red-text
+            # label pulse, filled out with a ┄ dash line (not blank padding) so
+            # the row still reads as a highlighted bar. Labelled "empty → HH:MM
+            # (Nm)" so the block's end time and the word "empty" are stated
+            # outright, never inferred.
+            end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
+            label = _gap_label(end, p["dur_min"])
+            fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
+            space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
             out.append(("class:time", tcol + " "))
-            out.append((fill_cls, "┄" * space))
-            out.append(("class:no_entry", f" {dur}\n"))
+            out.append((fill_cls, _gap_fill(label, space) + "\n"))
             continue
         dur = f"({p['dur_min']})" if is_future else fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
@@ -1235,6 +1357,24 @@ def _block_sleep_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     return out
 
 
+def _block_toggl_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
+    """Half-hour marks of a past block covered by ANY Toggl entry → style.
+
+    Generalizes _block_sleep_cont to every tracked entry: an entry renders one
+    row at its start slot, so the marks a >30m entry flows through drew as bare
+    gridlines — on a past-day view a 3h entry read as two hours of nothing.
+    Covered marks draw the ◇ │ continuation in the entry's project color, the
+    same treatment gcal events already get."""
+    out: dict[tuple[int, int], str] = {}
+    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+        t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        for e in STATE.entries:
+            if e["start_dt"] <= t < e["end_dt"]:
+                out[(hh, mm)] = project_style(e["project_id"])
+                break
+    return out
+
+
 def _mao_line(emojis) -> list[tuple[str, str]]:
     """卯 layout exception: one line instead of the standard four.
 
@@ -1294,11 +1434,18 @@ def render_morning() -> list[tuple[str, str]]:
     for blk_name, blk_sh, blk_eh in BLOCKS:
         if blk_eh + 1 > cutoff.hour:
             break  # rest handled by the detail band
-        pts = STATE.block_points.get(blk_name, 0)
+        pts = _block_display_pts(blk_name)  # clamped to Σ, same as the focus rules
         if blk_name == "卯":
-            # Layout exception: sleep block collapses to a single wake-time line
-            out += _mao_line(bo_emojis.get(blk_name, ""))
-            continue
+            # Layout exception: the sleep block normally collapses to a single
+            # wake-time line. But on an early wake you work through part of 卯
+            # (prayer, ibx, …), and collapsing would HIDE those entries — the
+            # "-1n prayer during 卯 isn't showing" bug (2026-07-03). Collapse
+            # only when 卯 is genuinely all-sleep (no non-睡觉 tracked activity);
+            # otherwise fall through and render it as a normal block.
+            kmao_picks = _past_block_picks("卯", merged)
+            if not any("睡觉" not in (p.get("label") or "") for p in kmao_picks):
+                out += _mao_line(bo_emojis.get(blk_name, ""))
+                continue
         picks = _past_block_picks(blk_name, merged)
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
         if sleep:
@@ -1314,7 +1461,11 @@ def render_morning() -> list[tuple[str, str]]:
         # and caps at 3 rows.
         body = picks + gaps
         body.sort(key=lambda x: x["start_dt"])
-        cont = {**_block_sleep_cont(blk_sh, cutoff), **_block_gcal_cont(blk_sh, cutoff)}
+        # Tracked reality (Toggl, incl. sleep) wins over the gcal plan on
+        # elapsed blocks; merge order = ascending authority.
+        cont = {**_block_sleep_cont(blk_sh, cutoff),
+                **_block_gcal_cont(blk_sh, cutoff),
+                **_block_toggl_cont(blk_sh, cutoff)}
         out += _compact_block_lines(blk_name, blk_sh, body, pts,
                                     bo_emojis.get(blk_name, ""), cont=cont,
                                     is_future=False)
@@ -1341,13 +1492,22 @@ def _block_display_pts(name: str) -> int:
 
     The reconstruction survives only as a cold-start fallback: before the first
     successful Neon read block_points is empty, so show the current clock block's
-    running total rather than a blank header."""
+    running total rather than a blank header.
+
+    A block is a residual of the day's Σ (=D-SUM(locked) ≤ D), so it can NEVER
+    exceed today_points. block_points and today_points update on different gates,
+    so a stuck/torn block value can momentarily outrun Σ (666 shown on a 272分
+    day, 2026-07-02). Clamp to Σ: a block over the whole-day total is impossible,
+    and capping it is strictly better than displaying nonsense."""
     if STATE.block_points:
-        return STATE.block_points.get(name, 0)
-    cur_now = hour_to_block(view_now().hour)
-    if cur_now and name == cur_now[0]:
-        return _current_block_running_pts()
-    return 0
+        v = STATE.block_points.get(name, 0)
+    else:
+        cur_now = hour_to_block(view_now().hour)
+        v = (_current_block_running_pts()
+             if cur_now and name == cur_now[0] else 0)
+    # Clamp only when Σ is a sane positive (a failed/zero total read must not
+    # blank a real block).
+    return min(v, STATE.today_points) if STATE.today_points > 0 else v
 
 
 def _detail_merge_past(win_start, win_end) -> list[dict]:
@@ -1380,13 +1540,17 @@ def _detail_entry_row(s, body_cls, body_text) -> list[tuple[str, str]]:
     return [("class:time", prefix), (body_cls, truncate(body_text, space) + "\n")]
 
 
-def _detail_gap_row(s) -> list[tuple[str, str]]:
-    """A flashing untracked-time row, keyed by the gap's start (its end is the
-    next row's start)."""
-    fill_cls = "class:no_entry" if _gap_alarm_on() else "class:idle"
+def _detail_gap_row(s, end) -> list[tuple[str, str]]:
+    """A flashing untracked-time row, keyed by the gap's start (shown via the
+    HH:MM prefix) and its real end (``end``, the next row's start — or the
+    window/tail boundary for a trailing gap). Labelled "empty → HH:MM (Nm)",
+    same solid-red-block↔plain-red-text pulse as the compact block view."""
+    dur_min = max(0, int((end - s).total_seconds() // 60))
+    label = _gap_label(end, dur_min)
+    fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
     prefix = f" {s:%H:%M} │ "
-    fill = "┄" * max(1, WIDTH_HINT - dwidth(prefix) - 1)
-    return [("class:time", prefix), (fill_cls, fill + "\n")]
+    space = max(1, WIDTH_HINT - dwidth(prefix) - 1)
+    return [("class:time", prefix), (fill_cls, _gap_fill(label, space) + "\n")]
 
 
 def _detail_rule_row(s, label, cls) -> list[tuple[str, str]]:
@@ -1422,17 +1586,24 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
     """The focus band's elapsed region, keyed by real START times (end implied by
     the next row). Tiny entries (< DETAIL_MIN) are absorbed rather than given a
     line; each block is held near DETAIL_ROWS lines by keeping its longest
-    entries. Untracked stretches ≥ GAP_MIN flash red↔grey. When ``live`` the tail
-    is the now-row (running timer at its real start, or the idle alarm)."""
+    entries. Untracked stretches ≥ GAP_MIN render an explicit "empty → HH:MM
+    (Nm)" label that pulses solid-red-block↔plain-red-text. When ``live`` the
+    tail is the now-row (running timer at its real start, or the idle alarm)."""
     full = _detail_merge_past(win_start, win_end)  # all entries = coverage
 
     # Gaps come from FULL coverage, so an absorbed tiny entry never reads as a
     # gap. Trailing gap (after the last entry) is the live/past-day tail's job.
+    # gap_ends is keyed by start and computed here (against FULL coverage, not
+    # the display-filtered `shown`), so a gap's stated end time is always the
+    # true closing entry's start — even when that entry itself gets absorbed or
+    # capped out of `shown` and never appears as its own row.
     gap_starts: list = []
+    gap_ends: dict = {}
     cursor = win_start
     for seg in full:
         if (seg["start"] - cursor).total_seconds() >= GAP_MIN * 60:
             gap_starts.append(cursor)
+            gap_ends[cursor] = seg["start"]
         cursor = max(cursor, seg["end"])
     tail_cursor = cursor
 
@@ -1447,7 +1618,7 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for tstart, kind, seg in rows:
         if kind == "g":
-            out += _detail_gap_row(tstart)
+            out += _detail_gap_row(tstart, gap_ends[tstart])
             continue
         code = proj_code(seg["pid"])
         label = seg["desc"] + (f"  · {code}" if code else "")
@@ -1457,7 +1628,7 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
 
     if not live:
         if (win_end - tail_cursor).total_seconds() >= GAP_MIN * 60:
-            out += _detail_gap_row(tail_cursor)
+            out += _detail_gap_row(tail_cursor, win_end)
         return out
 
     # Live tail (today, now inside the window).
@@ -1468,7 +1639,7 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
             rs = tail_cursor
         rs = max(rs, win_start)
         if (rs - tail_cursor).total_seconds() >= GAP_MIN * 60:
-            out += _detail_gap_row(tail_cursor)
+            out += _detail_gap_row(tail_cursor, rs)
         desc = display_desc(STATE.current.get("description") or "")
         code = proj_code(STATE.current.get("project_id"))
         el = max(0.0, (now - rs).total_seconds())
@@ -1659,7 +1830,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def render_all() -> list[tuple[str, str]]:
@@ -1811,8 +1982,17 @@ def _reload_day(app):
     app.create_background_task(_r())
 
 
-@kb.add("c-left")  # view the previous day (to fill in missed time entries)
-def _(event):
+# -/= also scrub days: Ctrl+-/Ctrl+= carry no control-char encoding in most
+# terminals — they transmit the PLAIN character — so "ctrl+= to go forward"
+# silently did nothing (bug 2026-07-05). Gated on an empty command line so
+# typing time ranges (`05:00-05:23`) or descriptions is never intercepted.
+_input_empty = Condition(lambda: not input_buffer.text)
+
+
+@kb.add("c-left")   # view the previous day (to fill in missed time entries)
+@kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
+@kb.add("-", filter=_input_empty)
+def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
     flash(f"◀ {view_now():%a %-m/%-d}")
@@ -1820,7 +2000,9 @@ def _(event):
 
 
 @kb.add("c-right")  # view the next day, capped at today
-def _(event):
+@kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
+@kb.add("=", filter=_input_empty)
+def _day_forward(event):
     if STATE.day_offset >= 0:
         flash("already on today")
         return
@@ -1892,6 +2074,7 @@ style = Style.from_dict({
     "time": "#888888",
     "now": "bold #ffffff",
     "no_entry": "bold #ff4444",
+    "no_entry_bg": "bold bg:#ff4444 #000000",
     "flash": "bold yellow",
     "hint": "italic #666666",
     "prompt": "bold cyan",
@@ -2001,11 +2184,22 @@ async def ticker_points(app):
 async def _sigusr1_refresh():
     """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer).
 
+    Debounced: a morning backfill fires one SIGUSR1 per /tg, and each refresh does
+    two Toggl GETs (fetch_current + forced fetch_today) — 15 rapid entries meant
+    ~30 GETs on top of the 15 POSTs, which is what tripped the rate limit. Coalesce
+    a burst into ONE refresh ~0.4s after the last nudge (the entries land together
+    a heartbeat later instead of one-by-one). Skip entirely during a cooldown.
+
     Every fetch stays OFF the event loop: fetch_points is Excel-over-ssh
     (4-15s) and the Toggl reads are network calls. Running them inline froze
     repaints exactly when the idle nag was mid-flash — the screen stuck in
     the inverted frame until the refresh finished. fetch_current goes first
     with its own repaint so the nag clears the moment the timer is confirmed."""
+    STATE.sigusr1_token += 1
+    token = STATE.sigusr1_token
+    await asyncio.sleep(0.4)  # debounce: collapse a burst of nudges into one refresh
+    if token != STATE.sigusr1_token:
+        return  # a newer nudge arrived; let the latest one do the work
     old_count = len(STATE.entries)
     await asyncio.to_thread(fetch_current)
     app.invalidate()
