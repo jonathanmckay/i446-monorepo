@@ -1602,10 +1602,24 @@ def run_ritual(tag: str) -> dict:
     #    it only adds this ritual's own points. The daemon's boundary reconcile
     #    remains the checksum: it re-validates the block's stamps and SETs P to
     #    the true total, correcting any provisional over-credit.
+    #
+    #    Grouped by block (2026-07-12): P should read as one number per block
+    #    (=0+13+10+8…), not one number per ritual (=0+1+3+3+3…). `line_before`
+    #    is this block's header line as it stood before step 2 stamped `emoji`
+    #    onto it — if another scoring emoji was already there, a ritual in
+    #    this block already live-credited P, so the new points are merged into
+    #    that block's existing term instead of opening a new one. This only
+    #    inspects presence of emoji markers (trusted, just-written-or-read),
+    #    never their point VALUES from headers, so the clobber risk above does
+    #    not apply.
     pts = int(r.get("points") or 0)
-    if pts:
+    if pts and changed:
         now = datetime.now()
-        script = (
+        emoji_pts_map = nb.emoji_points()
+        line_before = next((ln for b, ln in nb.iter_block_lines(text) if b == block), "")
+        same_block_merge = any(e in line_before for e in emoji_pts_map if e != emoji)
+
+        read_script = (
             'tell application "Microsoft Excel"\n'
             '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
             '    set rr to 0\n'
@@ -1616,22 +1630,44 @@ def run_ritual(tag: str) -> dict:
             '        end if\n'
             '    end repeat\n'
             '    if rr = 0 then return "ERR: no 0分 row"\n'
-            '    set c to cell ("P" & rr) of s\n'
-            '    set f to (get formula of c) as text\n'
-            '    if f = "" or f = "0" then\n'
-            f'        set formula of c to "=0+{pts}"\n'
-            '    else if character 1 of f is not "=" then\n'
-            f'        set formula of c to "=" & f & "+{pts}"\n'
-            '    else\n'
-            f'        set formula of c to f & "+{pts}"\n'
-            '    end if\n'
-            '    return "P=" & (value of cell ("P" & rr) of s)\n'
+            '    set f to (get formula of cell ("P" & rr) of s) as text\n'
+            '    return (rr as text) & "|" & f\n'
             'end tell'
         )
         try:
-            res = ix_run(script)
-            out["p_credit"] = {"points": pts, "ok": res.returncode == 0,
-                               "excel": (res.stdout or res.stderr or "").strip()[:60]}
+            read_res = ix_run(read_script)
+            raw = (read_res.stdout or "").strip()
+            if read_res.returncode != 0 or "|" not in raw:
+                raise RuntimeError((read_res.stderr or raw or "read failed")[:120])
+            row_s, f = raw.split("|", 1)
+
+            if f in ("", "0"):
+                terms = ["0"]
+            elif f.startswith("="):
+                terms = f[1:].split("+") or ["0"]
+            else:
+                terms = ["0", f]
+
+            if same_block_merge and len(terms) > 1:
+                try:
+                    terms[-1] = str(int(terms[-1]) + pts)
+                except ValueError:
+                    terms.append(str(pts))
+            else:
+                terms.append(str(pts))
+            new_formula = "=" + "+".join(terms)
+
+            write_script = (
+                'tell application "Microsoft Excel"\n'
+                '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
+                f'    set formula of cell ("P" & {row_s}) of s to "{new_formula}"\n'
+                f'    return "P=" & (value of cell ("P" & {row_s}) of s)\n'
+                'end tell'
+            )
+            write_res = ix_run(write_script)
+            out["p_credit"] = {"points": pts, "ok": write_res.returncode == 0,
+                               "merged": same_block_merge,
+                               "excel": (write_res.stdout or write_res.stderr or "").strip()[:60]}
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
             out["p_credit_error"] = str(e)
     return out
