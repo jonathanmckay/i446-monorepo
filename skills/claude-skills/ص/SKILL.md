@@ -95,7 +95,7 @@ Replace `N` with the user's argument.
 ## Build-order prayer marker (always run after the AP write)
 
 After the Neon write succeeds, stamp the ☀️ صلاة marker on the current 地支 block
-in the build order so the prayer shows up in tg-tui, -2n/inbound, wakeup, and the
+in the build order so the prayer shows up in janus, -2n/inbound, wakeup, and the
 1-1n heatmap (all of which read ☀️ from the build order, not from Neon AP):
 
 ```bash

@@ -3,7 +3,7 @@
 Toggl's free tier is ~a 1 req/sec leaky bucket; bursts come back as 402 (Payment
 Required) or 429. The tricky part: `tg-fast` spawns a fresh PROCESS per /tg
 command, so an in-process limiter can't coordinate across invocations. This
-paces EVERY caller (the MCP server, toggl_cli/tg-fast, tg-tui, 0t-fast) through
+paces EVERY caller (the MCP server, toggl_cli/tg-fast, janus, 0t-fast) through
 one shared token bucket kept in a small fcntl-locked state file, plus a shared
 cooldown that all processes honour after a 402/429.
 
@@ -12,7 +12,7 @@ Design notes:
   the post-402 cooldown is the reactive backstop.
 - acquire() never blocks longer than MAX_WAIT: for an interactive command,
   proceeding (and maybe eating one 429, which _request retries) beats freezing
-  the UI for the full cooldown. Background callers (tg-tui) already skip via
+  the UI for the full cooldown. Background callers (janus) already skip via
   their own non-blocking guard, so they never sit in here.
 - All knobs are env-overridable so an interactive context can tighten MAX_WAIT.
 """
@@ -117,7 +117,7 @@ def acquire(max_wait: float | None = None) -> float:
 def cooling_down() -> bool:
     """True while a post-402 cooldown is active (read from the shared state file).
     Lets EVERY process go quiet after a 402 — not just the one that hit it — so
-    background pollers (tg-tui) stop adding load and the limit can recover, rather
+    background pollers (janus) stop adding load and the limit can recover, rather
     than dribbling calls through and re-tripping it."""
     if fcntl is None:
         return False

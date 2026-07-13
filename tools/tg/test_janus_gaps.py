@@ -21,9 +21,9 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_gaps", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_gaps", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_gaps"] = mod
+    sys.modules["janus_gaps"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -166,7 +166,7 @@ def test_gap_style_never_uses_reverse_attribute():
     scramble — right when no timer is running, i.e. exactly when the user is
     most likely to be staring at gaps to backfill. Solid explicit fg/bg colors
     (no_entry / no_entry_bg) compose safely instead."""
-    src = (HERE / "tg-tui.py").read_text()
+    src = (HERE / "janus.py").read_text()
     i = src.index('"no_entry_bg":')
     line = src[i:src.index("\n", i)]
     assert "reverse" not in line

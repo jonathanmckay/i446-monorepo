@@ -1,4 +1,4 @@
-"""Regression (2026-06-11): starting a task froze tg-tui in the inverted
+"""Regression (2026-06-11): starting a task froze janus in the inverted
 (highlighted) idle-nag frame. _sigusr1_refresh ran fetch_points (Excel over
 ssh, 4-15s) and the Toggl fetches synchronously on the event loop, blocking
 all repaints; the last painted frame was the flash 'on' phase.
@@ -14,7 +14,7 @@ FETCHES = {"fetch_current", "fetch_today", "fetch_points", "fetch_short_names"}
 
 
 def _sigusr1_func() -> ast.AsyncFunctionDef:
-    tree = ast.parse((HERE / "tg-tui.py").read_text())
+    tree = ast.parse((HERE / "janus.py").read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_sigusr1_refresh":
             return node

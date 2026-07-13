@@ -1,4 +1,4 @@
-"""Regression test (2026-06-22): the in-progress block showed no 分 in tg-tui.
+"""Regression test (2026-06-22): the in-progress block showed no 分 in janus.
 Its 0分 G:O cell is the live residual formula =D-SUM(locked), which fetch_points
 skips, so block_points never holds the current block and its header read 0. Fix:
 reconstruct the running total as Σ_today minus the locked literal blocks and show
@@ -13,9 +13,9 @@ HERE = Path(__file__).parent
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_curblk", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_curblk", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_curblk"] = mod
+    sys.modules["janus_curblk"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -38,7 +38,7 @@ def test_cold_start_current_block_gets_running_total(monkeypatch):
     # Before the first successful Neon read block_points is EMPTY; the current
     # clock block then falls back to the reconstructed running total so its
     # header isn't blank. (Once a read succeeds, block_points holds the block's
-    # real value and the fallback no longer fires — see test_tg_tui_block_pts_from_neon.)
+    # real value and the fallback no longer fires — see test_janus_block_pts_from_neon.)
     m = _load_tui()
     m.STATE.today_points = 300
     m.STATE.block_points = {}            # no successful read yet

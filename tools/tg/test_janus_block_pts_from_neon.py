@@ -1,6 +1,6 @@
 """Regression (2026-06-24): 申 showed the wrong 分 (it read 0 while Neon showed
 90). Root cause: Neon's 申 cell is the live residual formula =D-SUM(locked) whose
-VALUE is the running unallocated total. tg-tui read G:O as formulas, SKIPPED the
+VALUE is the running unallocated total. janus read G:O as formulas, SKIPPED the
 residual, and reconstructed Σ−locked pinned to the *clock* block — but when an
 earlier block (未) locks ahead of the clock, the residual lives in 申 while the
 clock sits in 未, so the 90 became homeless and 申 displayed 0.
@@ -17,9 +17,9 @@ HERE = Path(__file__).parent
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_bpneon", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_bpneon", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_bpneon"] = mod
+    sys.modules["janus_bpneon"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -94,7 +94,7 @@ def test_fetch_points_reads_gio_values_and_mirrors_residual():
     """Structural guard: fetch_points must (a) read G:O VALUES in the AppleScript
     pass and (b) assign the residual cell's value into block_points, rather than
     skipping `=` cells outright."""
-    src = (HERE / "tg-tui.py").read_text(encoding="utf-8")
+    src = (HERE / "janus.py").read_text(encoding="utf-8")
     # Two G:O reads in the AppleScript: formulas AND values (cells 7..15 twice).
     assert src.count("repeat with c from 7 to 15") == 2, \
         "AppleScript must read G:O as both formulas and values"

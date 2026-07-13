@@ -7,7 +7,7 @@ Argument-shape interpreter behind the `/tg` skill. Resolves shortcodes, project
 overrides (`@code`), time ranges, and backdated starts, then drives the
 underlying `toggl_cli.py`.
 
-## `tg-tui.py`
+## `janus.py`
 Narrow vertical TUI designed for the right pane of a split terminal (lives next
 to `dtd`). Three jobs:
 
@@ -35,24 +35,24 @@ to `dtd`). Three jobs:
   current entry every 15 s, today's entries every 60 s.
 - **Google Calendar**: `gcal_client.py` calls the API directly using the OAuth
   tokens at `~/.config/google-calendar-mcp/{tokens.json,gcp-oauth.keys.json}`
-  (account `m5c7`). 5-min file cache at `~/.cache/tg-tui/gcal-YYYY-MM-DD.json`.
+  (account `m5c7`). 5-min file cache at `~/.cache/janus/gcal-YYYY-MM-DD.json`.
   Auto-refresh every 5 min; `r` forces a fresh fetch.
 - **Outlook**: not yet wired.
 
 ### Launch
 ```sh
-python3 ~/i446-monorepo/tools/tg/tg-tui.py
+python3 ~/i446-monorepo/tools/tg/janus.py
 ```
 
 Or, if you have `~/bin` on PATH, drop a wrapper:
 ```sh
 echo '#!/usr/bin/env bash
-exec python3 ~/i446-monorepo/tools/tg/tg-tui.py "$@"' > ~/bin/tg-tui
-chmod +x ~/bin/tg-tui
+exec python3 ~/i446-monorepo/tools/tg/janus.py "$@"' > ~/bin/janus
+chmod +x ~/bin/janus
 ```
 
 ### Width
-Targets `WIDTH_HINT = 50` columns. Adjust at the top of `tg-tui.py` if your
+Targets `WIDTH_HINT = 50` columns. Adjust at the top of `janus.py` if your
 right pane is a different size.
 
 ### Dependencies

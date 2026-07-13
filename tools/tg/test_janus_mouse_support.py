@@ -1,4 +1,4 @@
-"""Regression test: tg-tui must claim the terminal mouse mode.
+"""Regression test: janus must claim the terminal mouse mode.
 
 Bug (2026-06-27): Application(...) omitted mouse_support, defaulting to False.
 In full_screen mode the mouse-tracking mode left enabled by the spawning app
@@ -17,9 +17,9 @@ HERE = Path(__file__).parent
 
 
 def _load():
-    spec = importlib.util.spec_from_file_location("tg_tui_mouse", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_mouse", HERE / "janus.py")
     m = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_mouse"] = m
+    sys.modules["janus_mouse"] = m
     spec.loader.exec_module(m)
     return m
 
@@ -28,4 +28,4 @@ def test_mouse_support_enabled():
     m = _load()
     # The Application must own the mouse so scroll wheel events are consumed,
     # not leaked into the query buffer as junk characters.
-    assert to_filter(m.app.mouse_support)(), "tg-tui Application must set mouse_support=True"
+    assert to_filter(m.app.mouse_support)(), "janus Application must set mouse_support=True"

@@ -7,7 +7,7 @@ Two defects behind "current block points rendering wrong" (2026-07-07):
    — right within a day, but after midnight every read of the NEW day's row
    can be rejected for hours (torn D during active writes), so YESTERDAY's Σ
    and block points stayed on screen (990 shown at 16:11 on a 323分 day, per
-   /tmp/tg-tui-points-rejected.log). fetch_points must blank the state when
+   /tmp/janus-points-rejected.log). fetch_points must blank the state when
    the viewed day changes.
 
 2. Float repr next to 分. The sheet now carries fractional cells (variable
@@ -28,9 +28,9 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_ptsday", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_ptsday", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_ptsday"] = mod
+    sys.modules["janus_ptsday"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -99,7 +99,7 @@ def test_header_rounds_float_total():
 def test_morning_blocks_use_clamped_accessor():
     """render_morning must route per-block 分 through _block_display_pts (the
     Σ-clamped path the focus rules use), not raw block_points."""
-    src = (HERE / "tg-tui.py").read_text()
+    src = (HERE / "janus.py").read_text()
     i_def = src.index("def render_morning")
     i_end = src.index("def _current_block_running_pts")
     seg = src[i_def:i_end]

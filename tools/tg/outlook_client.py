@@ -12,7 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Los_Angeles")
-CACHE_DIR = Path.home() / ".cache" / "tg-tui"
+CACHE_DIR = Path.home() / ".cache" / "janus"
 WINDOWS_TZ_MAP = {
     "UTC": "UTC",
     "Coordinated Universal Time": "UTC",
@@ -128,7 +128,7 @@ def _parse_graph_dt(s: str, timezone_name: str = "") -> dt.datetime:
 
 
 def _normalize(raw_events: list[dict]) -> list[dict]:
-    """Convert raw API events to the tg-tui event format."""
+    """Convert raw API events to the janus event format."""
     out = []
     for ev in raw_events:
         try:

@@ -1,4 +1,4 @@
-"""Regression tests for tg-tui's idle 'NO TIME ENTRY' indicator.
+"""Regression tests for janus's idle 'NO TIME ENTRY' indicator.
 
 When no Toggl timer is running, the detail band's now-slot should show a
 flashing red 'NO TIME ENTRY' with the elapsed idle time, in the spot the
@@ -13,9 +13,9 @@ HERE = Path(__file__).parent
 
 
 def _load():
-    spec = importlib.util.spec_from_file_location("tg_tui_ne", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_ne", HERE / "janus.py")
     m = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_ne"] = m
+    sys.modules["janus_ne"] = m
     spec.loader.exec_module(m)
     # Isolate from the shared cross-process cooldown file (a live cooldown there
     # would make _toggl_blocked() skip the fetch these tests exercise).
@@ -28,7 +28,7 @@ def test_no_entry_style_registered():
     # The flashing indicator needs a dedicated style key, referenced by the
     # idle now-slot. (prompt_toolkit's Style doesn't expose its dict, so
     # assert the definition + use-site exist in source.)
-    src = (HERE / "tg-tui.py").read_text()
+    src = (HERE / "janus.py").read_text()
     assert '"no_entry"' in src, "no_entry style not defined"
     assert "class:no_entry" in src, "no_entry style never applied"
 
@@ -121,7 +121,7 @@ def test_flash_cursor_toggles_every_half_second():
     seq = [cur(base + i * 0.5) for i in range(4)]
     assert seq == ["█", " ", "█", " "]
     # source uses the 0.5s formula, not the old 4×/sec one
-    src = (HERE / "tg-tui.py").read_text()
+    src = (HERE / "janus.py").read_text()
     assert "now.timestamp() * 2" in src, "cursor flash must be 0.5s (timestamp*2)"
 
 

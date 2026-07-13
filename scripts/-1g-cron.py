@@ -38,7 +38,7 @@ MINUS1G_LABEL = "#-1g"
 MD_FILE = Path.home() / "vault/g245/build-order.md"
 
 # The 9 地支 (Earthly Branch) time-of-day headings (order matters).
-# 卯 = 04-06: the build-order / 0分 / tg-tui convention.
+# 卯 = 04-06: the build-order / 0分 / janus convention.
 TIME_BLOCKS = [
     "卯",  # 卯  04-06
     "辰",  # 辰  06-08

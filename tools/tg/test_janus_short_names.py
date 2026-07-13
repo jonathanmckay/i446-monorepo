@@ -1,6 +1,6 @@
-"""Regression tests for tg-tui sharing dtd's abbreviated (Haiku) task names.
+"""Regression tests for janus sharing dtd's abbreviated (Haiku) task names.
 
-dtd shows a `short` label per task; tg-tui should render the same label so a
+dtd shows a `short` label per task; janus should render the same label so a
 timer reads identically in both. The Toggl description is the task content with
 (N)/[N]/{N} annotations stripped, so display_desc maps a normalized description
 to the cleaned short name, falling back to the description when none exists.
@@ -14,9 +14,9 @@ HERE = Path(__file__).parent
 
 
 def _load():
-    spec = importlib.util.spec_from_file_location("tg_tui_short", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_short", HERE / "janus.py")
     m = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_short"] = m
+    sys.modules["janus_short"] = m
     spec.loader.exec_module(m)
     return m
 

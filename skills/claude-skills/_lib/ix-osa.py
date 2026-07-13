@@ -69,22 +69,22 @@ def run(script: str, *, timeout: float = 30.0) -> IxResult:
     if first.startswith("ERROR:") or first.startswith("ERR:"):
         return IxResult(2, proc.stdout, proc.stderr)
 
-    _notify_tg_tui(script)
+    _notify_janus(script)
     return IxResult(0, proc.stdout, proc.stderr)
 
 
-def _notify_tg_tui(script: str) -> None:
-    """Best-effort SIGUSR1 to tg-tui after a successful Excel *write*.
+def _notify_janus(script: str) -> None:
+    """Best-effort SIGUSR1 to janus after a successful Excel *write*.
 
-    Keeps tg-tui's neon status event-driven instead of waiting on its 120s
+    Keeps janus's neon status event-driven instead of waiting on its 120s
     ticker. Write detection is by AppleScript verb so read-only scripts
-    (e.g. tg-tui's own fetch_points) never signal — that would self-loop.
+    (e.g. janus's own fetch_points) never signal — that would self-loop.
     A missing pidfile or dead pid is silently ignored.
     """
     if "set value" not in script and "set formula" not in script:
         return
     try:
-        pid = int((Path.home() / ".cache" / "tg-tui.pid").read_text().strip())
+        pid = int((Path.home() / ".cache" / "janus.pid").read_text().strip())
         os.kill(pid, signal.SIGUSR1)
     except (OSError, ValueError):
         pass

@@ -41,7 +41,7 @@ picked up the fix).
 
 For each, ask the questions that most often expose this household's failures:
 
-- **Stale process / wrong target**: long-running TUIs (tg-tui, dtd, ibx) bake
+- **Stale process / wrong target**: long-running TUIs (janus, dtd, ibx) bake
   their scripts into `/tmp` at startup and read synced or symlinked copies
   (`~/i446-monorepo` → vault; `~/.claude/skills` ⇄ monorepo via Syncthing).
   Did the edit land where the running code actually reads, and was the process

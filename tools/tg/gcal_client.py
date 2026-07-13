@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Google Calendar helper for tg-tui.
+"""Google Calendar helper for janus.
 
 Reads OAuth credentials saved by google-calendar-mcp at
 ~/.config/google-calendar-mcp/{tokens.json,gcp-oauth.keys.json} and lists
 events across every calendar visible on the m5c7 account.
 
-5-minute file cache at ~/.cache/tg-tui/gcal-YYYY-MM-DD.json.
+5-minute file cache at ~/.cache/janus/gcal-YYYY-MM-DD.json.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo  # noqa: E402
 TZ = ZoneInfo("America/Los_Angeles")
 TOKENS_PATH = Path("~/.config/google-calendar-mcp/tokens.json").expanduser()
 KEYS_PATH = Path("~/.config/google-calendar-mcp/gcp-oauth.keys.json").expanduser()
-CACHE_DIR = Path("~/.cache/tg-tui").expanduser()
+CACHE_DIR = Path("~/.cache/janus").expanduser()
 CACHE_TTL = 300  # seconds
 ACCOUNT = "m5c7"
 
@@ -78,10 +78,10 @@ PERSONAL_CALENDARS_FILTERED = {"lx@m5c7.com"}
 
 
 def _is_personal_solo_event(cal_summary: str, title: str, attendees: list | None) -> bool:
-    """True for a private personal reminder that shouldn't surface in tg-tui.
+    """True for a private personal reminder that shouldn't surface in janus.
 
     A literal "m5x2" in the title is an unambiguous business signal (same
-    rule tg-tui.py's gcal_project_code uses) and always wins. Otherwise, an
+    rule janus.py's gcal_project_code uses) and always wins. Otherwise, an
     event with no attendees besides the calendar owner herself (her solo
     "call nanny" / "Call Nanny candidate" entries — user report 2026-07-13)
     is a personal reminder, not a shared meeting; a real meeting (even one

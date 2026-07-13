@@ -1,4 +1,4 @@
-"""Regression tests for tg-tui per-block points.
+"""Regression tests for janus per-block points.
 
 Bug: per-block 分 were reconstructed from completed-today.json LOGGING
 timestamps, so batch-logged work all piled into the current block ("everything
@@ -17,9 +17,9 @@ HERE = Path(__file__).parent
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_pts", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_pts", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_pts"] = mod
+    sys.modules["janus_pts"] = mod
     spec.loader.exec_module(mod)
     return mod
 

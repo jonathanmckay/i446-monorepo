@@ -2,8 +2,8 @@
 block, and /ص wires it in.
 
 Bug: /ص (the standalone prayer counter) wrote only the Neon AP column, never the
-build-order ☀️ marker that tg-tui reads, so a prayer logged via /ص never showed
-up in tg-tui. The fix extracts a shared stamp_prayer_marker() and calls it from
+build-order ☀️ marker that janus reads, so a prayer logged via /ص never showed
+up in janus. The fix extracts a shared stamp_prayer_marker() and calls it from
 /ص. These tests pin the block math, the stamping behavior, and the /ص wiring.
 """
 

@@ -234,16 +234,16 @@ COMMANDS = {
 }
 
 def _notify_tui():
-    """Signal tg-tui to refresh via SIGUSR1 after timer state changes."""
+    """Signal janus to refresh via SIGUSR1 after timer state changes."""
     try:
         from pathlib import Path
-        pid = int((Path.home() / ".cache" / "tg-tui.pid").read_text().strip())
+        pid = int((Path.home() / ".cache" / "janus.pid").read_text().strip())
         os.kill(pid, signal.SIGUSR1)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
 
 
-# Commands that change timer state and should trigger tg-tui refresh
+# Commands that change timer state and should trigger janus refresh
 _MUTATING_COMMANDS = {"start", "stop", "create", "delete"}
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Feature: Ticking timer + calendar event colors
 
 ## Summary
-Two visual improvements to tg-tui: (1) show the running timer with a live seconds counter so it feels alive, and (2) color future calendar events by their Neon domain category using the existing PROJECT_COLORS palette.
+Two visual improvements to janus: (1) show the running timer with a live seconds counter so it feels alive, and (2) color future calendar events by their Neon domain category using the existing PROJECT_COLORS palette.
 
 ## Design
 
@@ -13,12 +13,12 @@ Two visual improvements to tg-tui: (1) show the running timer with a live second
 1. **Calendar name mapping**: Map calendar names to project codes (e.g. "Xbox" calendar → i9, "McKay Capital" → m5x2, "Personal" → xk87). This covers the majority of events.
 2. **Keyword fallback**: For shared/default calendars, scan the event title for keywords (e.g. "1:1" or "standup" → i9).
 
-The calendar-to-project mapping lives as a dict in tg-tui.py alongside PROJECT_COLORS.
+The calendar-to-project mapping lives as a dict in janus.py alongside PROJECT_COLORS.
 
 Apply color in `_slot_label_gcal`, `render_detail`, and `render_evening` by returning the resolved project code and using `project_style()`.
 
 ### Files to change
-- `tg-tui.py` — all changes (ticking display, calendar color mapping, render functions)
+- `janus.py` — all changes (ticking display, calendar color mapping, render functions)
 
 ### Files to NOT change
 - `gcal_client.py` — already returns calendar name in event dict; no changes needed
@@ -46,6 +46,6 @@ Apply color in `_slot_label_gcal`, `render_detail`, and `render_evening` by retu
 
 ## Result
 - **Status:** Complete
-- **Tests:** Syntax check passes. Visual verification needed (run tg-tui).
-- **Changes:** `tg-tui.py` only. Added `fmt_dur_seconds`, `CALENDAR_PROJECT_MAP`, `EVENT_KEYWORD_MAP`, `gcal_project_code()`. Updated `render_current`, `_slot_label_gcal`, `render_detail`, `render_evening`.
+- **Tests:** Syntax check passes. Visual verification needed (run janus).
+- **Changes:** `janus.py` only. Added `fmt_dur_seconds`, `CALENDAR_PROJECT_MAP`, `EVENT_KEYWORD_MAP`, `gcal_project_code()`. Updated `render_current`, `_slot_label_gcal`, `render_detail`, `render_evening`.
 - **Calendar mapping:** 3494 House/m5x2 Cal → m5x2, CAIS School → xk87, Habits → hcm, lx@m5c7.com/lxu888 → xk88, Calendar/gmail → infra. Keyword fallback for i9 (1:1, standup, etc.).

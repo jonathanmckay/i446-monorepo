@@ -6,7 +6,7 @@ PRESERVED the "today" bucket verbatim. -1neon rituals and #0g/#-1g goals live in
 "today", so the periodic daemon never surfaced a new block's rituals or newly-set
 goals — and the skills' background `--refresh-cache &` doesn't reliably complete,
 so the daemon is the dependable path. Fix: refetch DYNAMIC_TODAY_LABELS and splice
-into "today", and SIGUSR1 tg-tui so it re-reads.
+into "today", and SIGUSR1 janus so it re-reads.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def test_structural_covers_goals_and_nudges_tgtui():
     main = next(n for n in ast.walk(ast.parse(SRC)) if isinstance(n, ast.FunctionDef) and n.name == "main")
     body = ast.get_source_segment(SRC, main)
     assert 'data["today"] = fresh_dynamic + today_rest' in body, "dynamic labels must be spliced into today"
-    assert "_nudge_tg_tui()" in body, "main must SIGUSR1 tg-tui after refresh"
+    assert "_nudge_janus()" in body, "main must SIGUSR1 janus after refresh"
 
 
 def test_refetched_dynamic_replace_stale_today(tmp_path, monkeypatch):
@@ -58,7 +58,7 @@ def test_refetched_dynamic_replace_stale_today(tmp_path, monkeypatch):
             return [{"id": "NEWG", "content": "fiction {40}", "labels": ["#0g", "hcm"], "due": {"date": "2026-06-30"}}]
         return []  # #-1g and the 4 neon buckets
     monkeypatch.setattr(m.todoist, "find_tasks", fake_find)
-    monkeypatch.setattr(m, "_nudge_tg_tui", lambda: None)
+    monkeypatch.setattr(m, "_nudge_janus", lambda: None)
 
     m.main()
     ids = [t["id"] for t in json.loads(cache.read_text())["today"]]

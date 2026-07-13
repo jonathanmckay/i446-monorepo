@@ -12,27 +12,27 @@ from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
 BASE_URL = "https://api.track.toggl.com/api/v9"
 
-# tg-tui polls the running timer only every 30s; signalling it after a
+# janus polls the running timer only every 30s; signalling it after a
 # timer-state change makes it refresh immediately. This lives in toggl_api
 # (the shared HTTP layer) so EVERY caller benefits — the MCP server and
 # /d357, not just the toggl_cli path that previously had its own nudge.
-TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 # Shared running-timer cache. Toggl is a ~1 req/sec leaky bucket, and several
-# processes poll /current independently (tg-tui every 30s, every open dtd picker
+# processes poll /current independently (janus every 30s, every open dtd picker
 # via dtd-ticker, …). Each live get_current() write-throughs here; pollers read
 # this file within CURRENT_CACHE_TTL instead of each hitting the API — collapsing
 # N independent pollers into ~one network read per window. Load scales with UI
 # activity (idle → zero), which a standalone 24/7 daemon would not give.
 CURRENT_CACHE = Path.home() / ".cache" / "toggl-current.json"
-CURRENT_CACHE_TTL = 30.0  # seconds; matches tg-tui's steady-state poll cadence
+CURRENT_CACHE_TTL = 30.0  # seconds; matches janus's steady-state poll cadence
 
 
 def _notify_tui():
-    """SIGUSR1 the running tg-tui so it refreshes now instead of on its poll.
+    """SIGUSR1 the running janus so it refreshes now instead of on its poll.
     Best-effort: a missing/stale pid file or dead process is ignored."""
     try:
-        os.kill(int(TG_TUI_PID.read_text().strip()), signal.SIGUSR1)
+        os.kill(int(JANUS_PID.read_text().strip()), signal.SIGUSR1)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
 
@@ -88,7 +88,7 @@ def _request(method, path, body=None):
             with urllib.request.urlopen(req) as resp:
                 if resp.status == 200:
                     result = json.loads(resp.read())
-                    if method != "GET":  # a mutation succeeded → wake tg-tui now
+                    if method != "GET":  # a mutation succeeded → wake janus now
                         _invalidate_current_cache()  # running state may have changed
                         _notify_tui()
                     return result

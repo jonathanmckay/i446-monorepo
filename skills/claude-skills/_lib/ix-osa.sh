@@ -86,13 +86,13 @@ case "$trimmed" in
     ERROR:*|ERR:*) exit 2 ;;
 esac
 
-# Successful write → nudge tg-tui (SIGUSR1) so neon status refreshes
+# Successful write → nudge janus (SIGUSR1) so neon status refreshes
 # immediately instead of waiting for its 120s ticker. Write detection is
-# by AppleScript verb so read-only scripts (e.g. tg-tui's own fetch_points)
+# by AppleScript verb so read-only scripts (e.g. janus's own fetch_points)
 # don't signal — that would loop. Best-effort: a dead/stale pid is ignored.
 case "$script" in
     *"set value"*|*"set formula"*)
-        tg_pid_file="${HOME}/.cache/tg-tui.pid"
+        tg_pid_file="${HOME}/.cache/janus.pid"
         if [ -f "$tg_pid_file" ]; then
             kill -USR1 "$(cat "$tg_pid_file")" 2>/dev/null || true
         fi

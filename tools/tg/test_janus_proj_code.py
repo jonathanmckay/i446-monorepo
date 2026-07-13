@@ -1,8 +1,8 @@
-"""Regression test for tg-tui project-code resolution.
+"""Regression test for janus project-code resolution.
 
 Bug: a duplicate Toggl project named 'xk87' (id 220114400, created via the
 mobile picker) wasn't in the static PROJECT_MAP, so 一起饭 entries rendered
-uncolored (white) in tg-tui. proj_code must fall back to resolving unknown
+uncolored (white) in janus. proj_code must fall back to resolving unknown
 project ids by NAME via the Toggl API.
 """
 import importlib.util
@@ -13,9 +13,9 @@ HERE = Path(__file__).parent
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_t", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_t", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_t"] = mod
+    sys.modules["janus_t"] = mod
     spec.loader.exec_module(mod)
     return mod
 

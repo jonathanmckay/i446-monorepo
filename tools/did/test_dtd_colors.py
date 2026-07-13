@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Regression: dtd's COLORS palette must cover every project in the canonical
-tg-tui PROJECT_COLORS palette, with matching RGB values.
+janus PROJECT_COLORS palette, with matching RGB values.
 
 Bug (2026-06-06): 家-labeled tasks (e.g. 一起饭) rendered colorless in dtd —
-dtd's palette was missing 家 and 睡觉, which tg-tui (sourced from
+dtd's palette was missing 家 and 睡觉, which janus (sourced from
 vault/i447/neon-color-pallette.md) defines.
 """
 import re
 from pathlib import Path
 
 DTD = Path(__file__).resolve().parent / "dtd.sh"
-TG_TUI = Path(__file__).resolve().parent.parent / "tg" / "tg-tui.py"
+JANUS = Path(__file__).resolve().parent.parent / "tg" / "janus.py"
 
 
 def _dtd_colors() -> dict:
@@ -24,8 +24,8 @@ def _dtd_colors() -> dict:
     }
 
 
-def _tg_tui_colors() -> dict:
-    src = TG_TUI.read_text()
+def _janus_colors() -> dict:
+    src = JANUS.read_text()
     block = src[src.index("PROJECT_COLORS = {"):]
     block = block[:block.index("}")]
     out = {}
@@ -36,14 +36,14 @@ def _tg_tui_colors() -> dict:
 
 
 def test_dtd_palette_covers_canonical_palette():
-    dtd, tui = _dtd_colors(), _tg_tui_colors()
-    assert tui, "failed to parse tg-tui palette"
+    dtd, tui = _dtd_colors(), _janus_colors()
+    assert tui, "failed to parse janus palette"
     missing = sorted(set(tui) - set(dtd))
     assert not missing, f"dtd COLORS missing projects from canonical palette: {missing}"
 
 
 def test_dtd_palette_rgb_matches_canonical():
-    dtd, tui = _dtd_colors(), _tg_tui_colors()
+    dtd, tui = _dtd_colors(), _janus_colors()
     mismatched = {k: (dtd[k], tui[k]) for k in tui if k in dtd and dtd[k] != tui[k]}
     assert not mismatched, f"dtd colors diverge from canonical palette: {mismatched}"
 

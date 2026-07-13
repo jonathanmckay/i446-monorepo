@@ -9,9 +9,9 @@ HERE = Path(__file__).parent
 
 
 def _load():
-    spec = importlib.util.spec_from_file_location("tg_tui_rl", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_rl", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_rl"] = mod
+    sys.modules["janus_rl"] = mod
     spec.loader.exec_module(mod)
     mod.STATE.day_offset = 0
     mod.STATE.toggl_blocked_until = 0.0
@@ -74,7 +74,7 @@ if __name__ == "__main__":
 
 
 def test_shared_cooldown_silences_pollers(monkeypatch):
-    """A 402 tripped by any process (shared cooldown) must silence tg-tui's
+    """A 402 tripped by any process (shared cooldown) must silence janus's
     pollers even when this process has no in-process back-off."""
     m = _load()
     m.STATE.toggl_blocked_until = 0.0          # no in-process cooldown

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tg-tui — narrow Toggl + Calendar TUI.
+"""janus — narrow Toggl + Calendar TUI.
 
 Sits next to dtd in the right half of a terminal. Three jobs:
   1. Switch / stop the running Toggl entry (press `c`, type as if /tg)
@@ -64,7 +64,7 @@ import outlook_client  # noqa: E402
 from blocks import is_future_block  # noqa: E402  shared future-block gate
 
 # dtd's Haiku title shortener, reused for long calendar event titles. Optional:
-# tg-tui must still boot if the did tooling (or lib/state_paths) is broken.
+# janus must still boot if the did tooling (or lib/state_paths) is broken.
 try:
     sys.path.insert(0, str(Path("~/i446-monorepo/tools/did").expanduser()))
     import shorten as _dtd_shorten  # noqa: E402
@@ -73,7 +73,7 @@ except Exception:
 
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
-# Layout widths track the actual pane. tg-tui is the narrow companion to dtd:
+# Layout widths track the actual pane. janus is the narrow companion to dtd:
 # on a tty we measure the real column count so a wider 1/8-XDR pane shows fuller
 # descriptions (and a narrower one never overflows the pane — the old fixed 50
 # could), capped so it stays narrow. Off-tty (pytest, pipes) we keep the legacy
@@ -96,7 +96,7 @@ else:
     DESC_MAX = 24    # max display width for task/event descriptions
     EVENT_SHORT_COLS = 33  # event titles wider than this get a Haiku short name
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
-EVENT_SHORTS = Path("~/.cache/tg-tui/event-shortnames.json").expanduser()
+EVENT_SHORTS = Path("~/.cache/janus/event-shortnames.json").expanduser()
 # Earthly branch blocks (name, start_hour, end_hour inclusive). Local table:
 # carries end-hours and the 子 sleep block for layout. Canonical start schedule
 # + the future-block gate live in lib/blocks.py (is_future_block).
@@ -147,7 +147,7 @@ DETAIL_ROWS = 8     # focus band: target rows per block (keep the longest entrie
 TOGGL_MIN_INTERVAL = 20   # s — coalesce bursty non-forced fetch_today calls
 RATE_LIMIT_COOLDOWN = 60  # s — back off all Toggl reads after a 402
 
-# Staleness self-check: a long-lived tg-tui keeps running the code it loaded at
+# Staleness self-check: a long-lived janus keeps running the code it loaded at
 # launch, so a shipped fix is invisible until restart — which has repeatedly
 # masked fixes (stuck 4227 block points, old residual reconstruction, …). Capture
 # the source mtime at import; render_header warns when the file on disk is newer.
@@ -160,7 +160,7 @@ _stale_state = {"checked": 0.0, "stale": False}
 
 
 def _code_is_stale(now=None) -> bool:
-    """True when tg-tui.py on disk is newer than this running process loaded.
+    """True when janus.py on disk is newer than this running process loaded.
     Cached ~5s so the 0.1s repaint doesn't stat the file every frame."""
     if _SRC is None:
         return False
@@ -306,7 +306,7 @@ STATE = State()
 def _toggl_blocked() -> bool:
     """True while inside a post-402 cooldown — skip Toggl reads entirely. Honors
     BOTH this process's own back-off AND the shared cross-process cooldown, so a
-    402 tripped by any /tg/0t backfill silences tg-tui's pollers for the window
+    402 tripped by any /tg/0t backfill silences janus's pollers for the window
     (instead of them dribbling GETs through and re-tripping the limit)."""
     return time.monotonic() < STATE.toggl_blocked_until or toggl_throttle.cooling_down()
 
@@ -319,7 +319,7 @@ def _note_rate_limit():
 
 def fetch_current(cached=False):
     """Refresh the running timer. cached=True rides the shared current cache
-    (used by the steady 30s ticker, so tg-tui and every open dtd picker share
+    (used by the steady 30s ticker, so janus and every open dtd picker share
     ~one fetch per window); the post-command bursts pass cached=False to force a
     live read that beats Toggl's /current propagation lag.
 
@@ -685,7 +685,7 @@ end tell'''
                 # Torn read (implausible total, or daemon lock / did-fast append
                 # in flight): keep last good values and leave evidence for diagnosis.
                 try:
-                    with open("/tmp/tg-tui-points-rejected.log", "a") as fh:
+                    with open("/tmp/janus-points-rejected.log", "a") as fh:
                         fh.write(f"{dt.datetime.now(TZ):%F %T} total_ok={total_ok} "
                                  f"cand={candidate} D={STATE.today_points} "
                                  f"bp={bp_excel} raw={raw_out!r}\n")
@@ -879,7 +879,7 @@ def pad(s: str, n: int) -> str:
 
 # ─── Short (Haiku) task names, shared with dtd ──────────────────────────────
 # dtd displays AI-abbreviated task names from the `short` field of the task
-# cache; tg-tui shows the same labels so a timer reads identically in both. The
+# cache; janus shows the same labels so a timer reads identically in both. The
 # Toggl description is the task content minus (N)/[N]/{N} annotations, so we map
 # normalized-cleaned content → cleaned short and look entries up by description.
 
@@ -1875,11 +1875,11 @@ input_buffer = Buffer(multiline=False)
 
 
 def _boot_grace_active(window: float = 2.0) -> bool:
-    """True while tg-tui is still booting. The tty can hold queued text from
+    """True while janus is still booting. The tty can hold queued text from
     the spawning terminal (cmux respawn-pane types the launch command into the
     pane); without this gate that text + newline reaches the enter handler and
     starts a Toggl timer named after the command line (regression 2026-06-11:
-    timer 'python3 ~/i446-monorepo/tools/tg/tg-tui.py')."""
+    timer 'python3 ~/i446-monorepo/tools/tg/janus.py')."""
     return time.monotonic() - STATE.boot_time < window
 
 
@@ -2118,7 +2118,7 @@ app = Application(layout=Layout(root, focused_element=input_window),
                   refresh_interval=0.1)
 
 
-PID_FILE = Path.home() / ".cache" / "tg-tui.pid"
+PID_FILE = Path.home() / ".cache" / "janus.pid"
 
 
 def _owns_pid_file() -> bool:

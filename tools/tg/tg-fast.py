@@ -27,7 +27,7 @@ DO_SESSION = Path.home() / ".claude/skills/do/active.json"
 DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 TASK_QUEUE = str(_sp.TASK_QUEUE)
-TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 # ── Shortcode table ──────────────────────────────────────────────────────────
 
@@ -464,9 +464,9 @@ def _process_entry(raw: str) -> str:
 
 
 def notify_tui():
-    """Signal tg-tui to refresh immediately via SIGUSR1."""
+    """Signal janus to refresh immediately via SIGUSR1."""
     try:
-        pid = int(TG_TUI_PID.read_text().strip())
+        pid = int(JANUS_PID.read_text().strip())
         os.kill(pid, signal.SIGUSR1)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass

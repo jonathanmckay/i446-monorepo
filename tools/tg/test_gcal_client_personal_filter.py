@@ -1,9 +1,9 @@
 """lx@m5c7.com carries both Louisa's personal solo events (call nanny, ...)
-and real m5x2 business meetings (she's on the m5x2 team). tg-tui showed her
+and real m5x2 business meetings (she's on the m5x2 team). janus showed her
 "call nanny" / "Call Nanny candidate" entries — private reminders with no
 other attendees — as if they were on the user's own calendar (user report
 2026-07-13: "I can't find them on my calendar" — because they aren't; they're
-Louisa's solo events, surfaced only because tg-tui reads her calendar too).
+Louisa's solo events, surfaced only because janus reads her calendar too).
 
 _is_personal_solo_event filters those out at fetch time without hiding the
 whole calendar, which would also hide legitimate m5x2 meetings living there."""

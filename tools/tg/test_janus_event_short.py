@@ -18,9 +18,9 @@ SHORT_NAME = "XBOX+Battle.net sync"
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_evshort", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_evshort", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_evshort"] = mod
+    sys.modules["janus_evshort"] = mod
     spec.loader.exec_module(mod)
     return mod
 

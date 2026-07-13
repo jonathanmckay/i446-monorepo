@@ -2,7 +2,7 @@
 "has this block started yet?" gate.
 
 Both the -1₦ ritual heatmap (skills/claude-skills/1-1n/make_heatmap.py) and
-tg-tui render per-block ritual completion off the build order's `## -1₲`
+janus render per-block ritual completion off the build order's `## -1₲`
 section. That section PRE-STAMPS every block header for the whole day (☀️
 prayer, 🎯 goal, ✅ done, …), so a naive reader credits rituals to blocks that
 have not happened yet. A ritual cannot be completed in a block that has not

@@ -1,4 +1,4 @@
-"""Regression test (2026-06-21): /current was polled independently by tg-tui
+"""Regression test (2026-06-21): /current was polled independently by janus
 (30s), every open dtd picker (dtd-ticker), and others, each hitting Toggl's
 ~1 req/sec bucket. Fix: a shared write-through cache — get_current() persists the
 running entry, get_current_cached() serves it within CURRENT_CACHE_TTL so N
@@ -33,7 +33,7 @@ class _FakeResp:
 def _isolate_cache(monkeypatch, tmp_path):
     cache = tmp_path / "toggl-current.json"
     monkeypatch.setattr(toggl_api, "CURRENT_CACHE", cache)
-    monkeypatch.setattr(toggl_api, "TG_TUI_PID", tmp_path / "absent.pid")
+    monkeypatch.setattr(toggl_api, "JANUS_PID", tmp_path / "absent.pid")
     return cache
 
 

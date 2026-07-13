@@ -13,9 +13,9 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_compact", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_compact", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_compact"] = mod
+    sys.modules["janus_compact"] = mod
     spec.loader.exec_module(mod)
     return mod
 

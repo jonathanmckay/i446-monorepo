@@ -1,6 +1,6 @@
-"""tg-tui warns when the running process is behind the file on disk — a shipped
+"""janus warns when the running process is behind the file on disk — a shipped
 fix is invisible until restart, which has repeatedly masked fixes. The header
-flashes a RESTART banner when tg-tui.py's mtime is newer than load time."""
+flashes a RESTART banner when janus.py's mtime is newer than load time."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -9,9 +9,9 @@ HERE = Path(__file__).parent
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_stale", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_stale", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_stale"] = mod
+    sys.modules["janus_stale"] = mod
     spec.loader.exec_module(mod)
     return mod
 

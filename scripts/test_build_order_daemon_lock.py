@@ -3,7 +3,7 @@
 2026-06-12 bug: the 06:00 fire locked 卯 (column G) at -46 because D's live
 0n penalty rollups sit negative until morning habits are logged. The frozen
 negative then inflated every later block's residual (=D-SUM(locked)) by the
-same amount — tg-tui showed 巳 at 173分 of a 127分 day, disagreeing with the
+same amount — janus showed 巳 at 173分 of a 127分 day, disagreeing with the
 points the user actually had. Locks must clamp negative residuals to 0 so the
 transient stays in the unlocked tail and self-corrects.
 """
@@ -44,7 +44,7 @@ def test_lock_clamps_negative_residual_before_writing():
 
 def test_lock_columns_follow_block_convention():
     """LOCK_AT_FIRE_HOUR must lock the column of the block that just ended,
-    using the 卯=04-06 convention shared with tg-tui and the 0分 sheet writer.
+    using the 卯=04-06 convention shared with janus and the 0分 sheet writer.
     A drift here silently shifts every block's points by one column."""
     mod = _load()
     for i, (branch, lo, hi) in enumerate(mod.BRANCH_HOURS):

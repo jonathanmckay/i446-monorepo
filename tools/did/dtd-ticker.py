@@ -11,7 +11,7 @@ dtd's own start/complete bindings write the running entry to a local timer file
 (`desc<TAB>start_epoch`, emptied on stop) the instant they fire. The ticker
 watches that file every tick (a cheap stat, no network) so a dtd-initiated
 start/switch/stop shows in the footer within ~0.1s. The Toggl API poll is kept
-only to RECONCILE externally-started timers (e.g. /tg, /do, tg-tui) when the
+only to RECONCILE externally-started timers (e.g. /tg, /do, janus) when the
 local file is idle; on its own it lagged dtd-initiated changes by up to POLL.
 
 Best-effort: every error is swallowed — the timer is non-critical eye-candy and
@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path("~/i446-monorepo").expanduser()))
 os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
 
 # config.py reads TOGGL_API_KEY from the env at import time, so seed it from
-# ~/.claude.json (same source as tg-tui) BEFORE toggl_api is imported.
+# ~/.claude.json (same source as janus) BEFORE toggl_api is imported.
 if not os.environ.get("TOGGL_API_KEY"):
     try:
         cj = json.loads(Path("~/.claude.json").expanduser().read_text())
@@ -63,7 +63,7 @@ def _toggl_api():
 
 
 def fmt(elapsed: float) -> str:
-    """Match tg-tui's running clock: 12m05.3s."""
+    """Match janus's running clock: 12m05.3s."""
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)
     return f"{m}m{s:02d}.{frac}s"
@@ -152,7 +152,7 @@ def main() -> None:
         if api and now - last_poll >= POLL:
             last_poll = now
             try:
-                # Shared cache: ride tg-tui's (or any other poller's) fetch
+                # Shared cache: ride janus's (or any other poller's) fetch
                 # instead of hitting Toggl every POLL. The elapsed clock is
                 # extrapolated locally, so a cache up to TTL old still renders an
                 # exact footer; a started/stopped timer invalidates it at once.

@@ -32,13 +32,13 @@ CACHE_KEY = {"关键径路": "关键路径", "夜neon": "夜neon", "0neon": "0ne
 # Dynamic "today"-bucket labels that change intra-day and must be refetched every
 # run. The "today" bucket is otherwise preserved verbatim, so without this the
 # periodic daemon never surfaces newly-set goals or a new block's rituals in
-# dtd/tg-tui — and the skills' background `--refresh-cache &` doesn't reliably
+# dtd/janus — and the skills' background `--refresh-cache &` doesn't reliably
 # complete, so the daemon is the dependable path (regression 2026-06-29/30):
 #   -1neon  block rituals (سمش/-1g/-1ibx), roll over every 2h block
 #   #0g     daily goals set via /0g
 #   #-1g    block goals set via /-1g
 DYNAMIC_TODAY_LABELS = ["-1neon", "#0g", "#-1g"]
-TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 
 def _shape(t: dict) -> dict:
@@ -48,11 +48,11 @@ def _shape(t: dict) -> dict:
     }
 
 
-def _nudge_tg_tui() -> None:
-    """SIGUSR1 a running tg-tui so it re-reads the freshened cache — it only
+def _nudge_janus() -> None:
+    """SIGUSR1 a running janus so it re-reads the freshened cache — it only
     re-reads on startup + SIGUSR1, so a silent file rewrite wouldn't show."""
     try:
-        pid = int(TG_TUI_PID.read_text().strip())
+        pid = int(JANUS_PID.read_text().strip())
         os.kill(pid, signal.SIGUSR1)
     except (OSError, ValueError):
         pass
@@ -113,7 +113,7 @@ def main() -> int:
 
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    _nudge_tg_tui()  # so a running tg-tui re-reads the freshened cache
+    _nudge_janus()  # so a running janus re-reads the freshened cache
     counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}
     counts["today-dynamic"] = len(fresh_dynamic)
     print(f"refreshed {CACHE}: {counts}")

@@ -13,9 +13,9 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_mao", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_mao", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_mao"] = mod
+    sys.modules["janus_mao"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -89,7 +89,7 @@ def test_mao_line_no_sleep_entry_still_one_line():
 def test_render_morning_routes_mao_to_exception():
     """Structural: render_morning must use _mao_line for 卯, not the 4-line
     compact block."""
-    src = (HERE / "tg-tui.py").read_text()
+    src = (HERE / "janus.py").read_text()
     body = src.split("def render_morning", 1)[1].split("\ndef ", 1)[0]
     assert "_mao_line(" in body, "render_morning no longer special-cases 卯"
 

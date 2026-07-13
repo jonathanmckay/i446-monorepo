@@ -11,9 +11,9 @@ HERE = Path(__file__).parent
 
 
 def _load_tui():
-    spec = importlib.util.spec_from_file_location("tg_tui_ph", HERE / "tg-tui.py")
+    spec = importlib.util.spec_from_file_location("janus_ph", HERE / "janus.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["tg_tui_ph"] = mod
+    sys.modules["janus_ph"] = mod
     spec.loader.exec_module(mod)
     return mod
 
