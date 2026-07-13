@@ -1496,6 +1496,17 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
     return results
 
 
+def _is_daily_recurrence(due_string: str) -> bool:
+    """True for DAILY recurrences only, where the next occurrence == tomorrow.
+    Weekly/monthly recurrences have their own next-occurrence math (next matching
+    weekday / next month), so fast-forwarding them to 'tomorrow' would break the
+    cadence — a plain /close (advances one interval) is the right catch-up there
+    for a single miss."""
+    s = (due_string or "").lower()
+    return ("every day" in s or "daily" in s
+            or bool(re.search(r"\bevery (morning|afternoon|evening|night)\b", s)))
+
+
 def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[bool, str | None]:
     """Reschedule an OVERDUE recurring task forward to `target_iso`, preserving
     its recurrence, instead of a plain /close.
@@ -2071,11 +2082,15 @@ end tell'''
             if r.item.defer_date:
                 pts = r.item.points_override or r.fen_points or 0
                 defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
-            elif r.todoist_task.get("recurring") and task_due and task_due < today_str:
-                # OVERDUE recurring habit: a plain /close advances only +1 interval
-                # from the stale due date, so it can never catch up and lingers
-                # overdue on mobile forever. Fast-forward it to the next
-                # occurrence instead (2026-07-13: '2nd hci' stuck at 2026-06-29).
+            elif (r.todoist_task.get("recurring") and task_due and task_due < today_str
+                  and _is_daily_recurrence(r.todoist_task.get("due_string", ""))):
+                # OVERDUE *daily* habit: a plain /close advances only +1 interval
+                # from the stale due date, so a multi-day-behind daily task can
+                # never catch up and lingers overdue on mobile forever
+                # (2026-07-13: '2nd hci' stuck at 2026-06-29). Fast-forward it to
+                # tomorrow instead. Scoped to daily because tomorrow is only the
+                # correct next occurrence for a daily recurrence; weekly/monthly
+                # tasks self-heal via a normal /close (advances one interval).
                 catch_up.append((tid, r.todoist_task.get("due_string", "")))
             else:
                 task_ids.append(tid)

@@ -410,24 +410,41 @@ def _dup_key(name: str) -> str:
 
 
 def clean_filter_files(names: list[str], session: str | None,
-                       removed: str | None, done_json: str | None) -> None:
+                       removed: str | None, done_json: str | None,
+                       task_id: str | None = None) -> None:
     keys = {_dup_key(n) for n in names if _dup_key(n)}
-    if not keys:
-        return
+    if keys:
+        for fpath in (session, removed):
+            if not fpath or not os.path.exists(fpath):
+                continue
+            try:
+                with open(fpath) as f:
+                    lines = f.readlines()
+                kept = [l for l in lines if _dup_key(l.strip()) not in keys]
+                tmp = fpath + ".tmp"
+                with open(tmp, "w") as f:
+                    f.writelines(kept)
+                os.replace(tmp, fpath)
+            except OSError:
+                pass
 
-    for fpath in (session, removed):
-        if not fpath or not os.path.exists(fpath):
-            continue
-        try:
-            with open(fpath) as f:
-                lines = f.readlines()
-            kept = [l for l in lines if _dup_key(l.strip()) not in keys]
-            tmp = fpath + ".tmp"
-            with open(tmp, "w") as f:
-                f.writelines(kept)
-            os.replace(tmp, fpath)
-        except OSError:
-            pass
+    # id-keyed hide (dtd's $REMOVED.ids — defer/ritual completions hide by id,
+    # not name, so two same-named tasks can't suppress each other; see dtd.sh's
+    # defer binding). Strip ONLY this task's id, never by name, for the same
+    # collision-safety reason the hide itself exists.
+    if task_id and removed:
+        ids_path = removed + ".ids"
+        if os.path.exists(ids_path):
+            try:
+                with open(ids_path) as f:
+                    lines = f.readlines()
+                kept = [l for l in lines if l.strip() != str(task_id)]
+                tmp = ids_path + ".tmp"
+                with open(tmp, "w") as f:
+                    f.writelines(kept)
+                os.replace(tmp, ids_path)
+            except OSError:
+                pass
 
     if done_json and os.path.exists(done_json):
         try:
@@ -500,7 +517,8 @@ def journal_pop_and_reverse(journal: str, session: str | None,
             errors: list[str] = []
             reverse_record(record, errors)
             names = record.get("names", [])
-            clean_filter_files(names, session, removed, done_json)
+            clean_filter_files(names, session, removed, done_json,
+                               task_id=record.get("task_id"))
 
             out = {
                 "ok": True,

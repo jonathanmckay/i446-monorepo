@@ -391,7 +391,15 @@ defer_label="+\$days"
 # 3-10s) detached so fzf never blocks on the network. On failure the hide is
 # rolled back so the task reappears. The pushed/processed counters keep
 # ctrl-z honest while the defer is in flight.
-echo "\$clean" >> "\$REMOVED"
+#
+# Hide by id (\$REMOVED.ids), NOT by name (\$REMOVED): defer already resolves
+# the exact task via --id (collision-proof), but hiding by its annotation-
+# stripped name suppressed EVERY task sharing that name — e.g. two identical
+# "AoS (15) [15]" tasks (a recurring one + an unrelated one-off due later)
+# both vanished from the list when only one was deferred (2026-07-13). The
+# id-keyed \$REMOVED.ids file is the same mechanism enter.sh/done.sh already
+# use for this exact reason (see the removed_ids check in dtd's list script).
+echo "\$1" >> "\$REMOVED.ids"
 echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
 echo "x" >> "$DTD_PUSHED"
 (
@@ -403,8 +411,8 @@ echo "x" >> "$DTD_PUSHED"
     echo "⏭ \$clean \$ok" > "\$HDR"
   else
     # Roll back the optimistic hide so the task reappears on next reload
-    grep -v -x -F -- "\$clean" "\$REMOVED" > "\$REMOVED.tmp" 2>/dev/null
-    mv "\$REMOVED.tmp" "\$REMOVED"
+    grep -v -x -F -- "\$1" "\$REMOVED.ids" > "\$REMOVED.ids.tmp" 2>/dev/null
+    mv "\$REMOVED.ids.tmp" "\$REMOVED.ids"
     echo "? defer failed: \$clean (restored to list)" > "\$HDR"
   fi
   echo "x" >> "$DTD_PROCESSED"
