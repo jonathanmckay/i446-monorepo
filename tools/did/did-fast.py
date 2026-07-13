@@ -2051,8 +2051,8 @@ end tell'''
                    f"{tr[0][:2]}:{tr[0][2:]}", f"{tr[1][:2]}:{tr[1][2:]}"]
             if proj:
                 cmd.append(proj)
-            if tags:
-                cmd.extend(tags)
+            for tag in tags:
+                cmd.extend(["--tag", tag])
             cmd.extend(["--date", today_str])
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)

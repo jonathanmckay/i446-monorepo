@@ -232,18 +232,28 @@ def resolve(raw: str):
     tags = []
     override = False
 
-    # Extract @project override
-    m = re.search(r'\s@(\S+)\s*$', desc)
+    # Extract #tag tokens (anywhere in the string) → Toggl tags
+    tag_matches = re.findall(r'#(-?\w+)', desc)
+    explicit_tags = bool(tag_matches)
+    if tag_matches:
+        tags = tag_matches
+        desc = re.sub(r'\s*#-?\w+', '', desc).strip()
+
+    # Extract @project override (anywhere in the string)
+    m = re.search(r'@(\w+)', desc)
     if m:
         project = m.group(1)
-        desc = desc[:m.start()].strip()
+        desc = re.sub(r'\s*' + re.escape(m.group(0)), '', desc, count=1).strip()
         override = True
 
     if not override:
         key = desc.lower()
         # Exact shortcode match
         if key in SHORTCODES:
-            project, tags = SHORTCODES[key]
+            sc_project, sc_tags = SHORTCODES[key]
+            project = sc_project
+            if not explicit_tags:
+                tags = sc_tags
         # Domain-only
         elif key in DOMAINS:
             project = key
@@ -282,6 +292,8 @@ def cmd_create_range(desc, project, tags, start_t, end_t):
     args = ["create", desc, start_t, end_t]
     if project:
         args.append(project)
+    for tag in tags:
+        args.extend(["--tag", tag])
     out = _run_cli(*args)
     return out
 

@@ -164,9 +164,10 @@ def cmd_today(_args):
 
 def cmd_create(args):
     if len(args) < 3:
-        sys.exit("Usage: create <description> <HH:MM|HHMM> <HH:MM|HHMM> [project] [tags...] [--date YYYY-MM-DD]")
+        sys.exit("Usage: create <description> <HH:MM|HHMM> <HH:MM|HHMM> [project] [tags...] [--tag TAG]... [--date YYYY-MM-DD]")
     desc, start_str, end_str = args[0], args[1], args[2]
     project = ""
+    project_consumed = False
     tags = []
     ref_date = datetime.datetime.now(TZ).date()
     i = 3
@@ -174,8 +175,14 @@ def cmd_create(args):
         if args[i] == "--date" and i + 1 < len(args):
             ref_date = datetime.date.fromisoformat(args[i + 1])
             i += 2
-        elif not project:
+        elif args[i] == "--tag" and i + 1 < len(args):
+            # Unambiguous tag flag — use this when passing tags without a
+            # project, since bare positional args always fill project first.
+            tags.append(args[i + 1])
+            i += 2
+        elif not project_consumed:
             project = args[i]
+            project_consumed = True
             i += 1
         else:
             tags.append(args[i])
