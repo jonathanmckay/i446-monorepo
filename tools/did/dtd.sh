@@ -1352,9 +1352,9 @@ TICKER_PID=$!
     # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
     watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
     if [[ -n "$FZF_API_KEY" ]]; then
-      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
+      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)+clear-screen" >/dev/null 2>&1
     else
-      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
+      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)+clear-screen" >/dev/null 2>&1
     fi
   done
 ) &>/dev/null &
@@ -1433,19 +1433,19 @@ while true; do
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
+      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)")
 
   task="$fzf_output"
 
