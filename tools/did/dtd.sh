@@ -135,16 +135,30 @@ fi
 
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
-      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
+      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" \
+      "/tmp/dtd-$DTD_ID.removed.ids"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
 
 (
-  while IFS= read -r task_clean; do
-    [[ -z "$task_clean" ]] && continue
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    # FIFO lines are "id<TAB>content" (enter.sh/done.sh send the fzf row id so
+    # completion closes the EXACT selected task, not a name match — duplicate
+    # names would otherwise complete the wrong instance). Bare content (no tab)
+    # is still accepted for safety.
+    if [[ "$line" == *$'\t'* ]]; then
+      task_id="${line%%$'\t'*}"; task_clean="${line#*$'\t'}"
+    else
+      task_id=""; task_clean="$line"
+    fi
     echo "⏳ $task_clean" > "$DTD_HDR"
-    result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
+    if [[ -n "$task_id" ]]; then
+      result=$(python3 "$DID_FAST" --task-id "$task_id" "$task_clean" 2>>"$DTD_LOG.err")
+    else
+      result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
+    fi
     # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
     # the pushed/processed counters, so the journal entry must land first)
     echo "$result" | python3 "$UNDO_FAST" --journal-done "$DTD_JOURNAL" 2>/dev/null
@@ -201,7 +215,24 @@ task="\$1"
 # Strip ANSI codes first
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
+# Ritual (-1neon) cards carry the 😈 marker; their Toggl project comes from the
+# ritual→domain map — the SAME source as their row color (keep in sync with
+# RITUAL_DOMAIN in the list generator) — NOT tg-fast, whose shortcodes differ
+# (e.g. -1ibx→m5x2 there but i9 here) and which can't resolve the 😈-prefixed
+# name. The python also strips 😈 so the Toggl entry reads '-1g', not '😈 -1g'.
+# Non-ritual tasks pass through unchanged and fall back to tg-fast below.
+_rr=\$(python3 -c "
+import sys
+RITUAL_DOMAIN = {'-1ibx':'i9','-1l':'g245','-1t':'n156','سمش':'hcm'}
+c = sys.argv[1]; bare = c.replace('😈','').strip(); proj=''
+for tag,dom in RITUAL_DOMAIN.items():
+    if bare == tag or tag in bare.split():
+        proj = dom; break
+print(bare); print(proj)
+" "\$clean" 2>/dev/null)
+clean=\$(printf '%s' "\$_rr" | sed -n 1p)
+project=\$(printf '%s' "\$_rr" | sed -n 2p)
+[ -z "\$project" ] && project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
 python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
 printf '%s\t%s\n' "\$clean" "\$(date +%s)" > "\$TIMER"
@@ -237,10 +268,19 @@ timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
 if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
   echo "\$clean_for_filter" >> "\$SESSION"
   echo "\$clean_for_filter" >> "\$REMOVED"
+  # Optimistic id-hide, RITUAL cards only (name carries 😈): they are name-EXEMPT
+  # from the \$REMOVED hide (so a completed card can't suppress the next block's
+  # same-named card), so they'd otherwise linger visible for the full ~7s
+  # worker+refresh until the daemon overlay learns their id. Record the id (\$1 =
+  # the {2} id field) so the list builder hides the completed card at once.
+  # Gated to rituals: a normal task already hides instantly by name, and ctrl-z
+  # undo (which reopens by clearing \$REMOVED) can't clear this id file — but undo
+  # skips ritual entries anyway, so rituals never hit that path.
+  [[ "\$clean" == *😈* ]] && echo "\$1" >> "\$REMOVED.ids"
   echo "x" >> "\$PUSHED"
   : > "\$TIMER"
   echo "⏳ completing: \$clean_for_filter" > "\$HDR"
-  printf '%s\n' "\$clean" > "\$FIFO"
+  printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 else
   "\$START" "\$task"
 fi
@@ -263,14 +303,50 @@ task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+# Reinstated (2026-07-03): cpap asks for a 1-3 sleep-quality score on completion.
+# The number is appended so did-fast writes it to cpap's 0n column. Needs a tty,
+# so alt-enter is bound with execute (not execute-silent). Blank input just
+# completes with no score.
+clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
+if [[ "\$clean_lower" == cpap && -r /dev/tty ]]; then
+  printf "\n→ CPAP quality (1-3): " > /dev/tty
+  read cpap_q < /dev/tty
+  cpap_q=\${cpap_q// /}
+  [[ -n "\$cpap_q" ]] && clean="\$clean \$cpap_q"
+fi
 echo "\$clean_for_filter" >> "\$SESSION"
 echo "\$clean_for_filter" >> "\$REMOVED"
+# Optimistic id-hide (see enter.sh), RITUAL cards only (name carries 😈): they
+# are name-exempt from \$REMOVED, so record the id (\$1 = {2}) to hide the
+# completed card instantly instead of after the ~7s worker+refresh.
+[[ "\$clean" == *😈* ]] && echo "\$1" >> "\$REMOVED.ids"
 echo "x" >> "\$PUSHED"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
-printf '%s\n' "\$clean" > "\$FIFO"
+printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 DONEEOF
 chmod +x "$DTD_DONE"
+
+# --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
+# Only cpap needs a tty (for its 1-3 quality prompt), so route cpap → execute
+# (which gives the DONE script a terminal) and every other task → execute-silent
+# (flicker-free, as before). The router emits ONLY the execute/execute-silent
+# action; the reload/clear-query/transform-header chain stays in the binding
+# where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
+# action keeps the transform output free of fzf placeholders; task ids are
+# alphanumeric, so no quoting is needed around \$_id.
+DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
+cat > "$DTD_DONE_ROUTER" << ROUTEREOF
+#!/bin/zsh
+_id="\$1"
+_t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
+if [[ "\$_t" == cpap ]]; then
+  printf 'execute(%s %s)' "$DTD_DONE" "\$_id"
+else
+  printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id"
+fi
+ROUTEREOF
+chmod +x "$DTD_DONE_ROUTER"
 
 # --- Defer script used by fzf ctrl-d binding ---
 DTD_DEFER="/tmp/dtd-$DTD_ID.defer.sh"
@@ -315,11 +391,19 @@ defer_label="+\$days"
 # 3-10s) detached so fzf never blocks on the network. On failure the hide is
 # rolled back so the task reappears. The pushed/processed counters keep
 # ctrl-z honest while the defer is in flight.
-echo "\$clean" >> "\$REMOVED"
+#
+# Hide by id (\$REMOVED.ids), NOT by name (\$REMOVED): defer already resolves
+# the exact task via --id (collision-proof), but hiding by its annotation-
+# stripped name suppressed EVERY task sharing that name — e.g. two identical
+# "AoS (15) [15]" tasks (a recurring one + an unrelated one-off due later)
+# both vanished from the list when only one was deferred (2026-07-13). The
+# id-keyed \$REMOVED.ids file is the same mechanism enter.sh/done.sh already
+# use for this exact reason (see the removed_ids check in dtd's list script).
+echo "\$1" >> "\$REMOVED.ids"
 echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
 echo "x" >> "$DTD_PUSHED"
 (
-  result=\$(python3 "\$DEFER_FAST" "\$query" "\$days" 2>/dev/null)
+  result=\$(python3 "\$DEFER_FAST" --id "\$1" "\$days" 2>/dev/null)
   ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
   if [[ -n "\$ok" ]]; then
     # Journal for ctrl-z undo
@@ -327,12 +411,16 @@ echo "x" >> "$DTD_PUSHED"
     echo "⏭ \$clean \$ok" > "\$HDR"
   else
     # Roll back the optimistic hide so the task reappears on next reload
-    grep -v -x -F -- "\$clean" "\$REMOVED" > "\$REMOVED.tmp" 2>/dev/null
-    mv "\$REMOVED.tmp" "\$REMOVED"
+    grep -v -x -F -- "\$1" "\$REMOVED.ids" > "\$REMOVED.ids.tmp" 2>/dev/null
+    mv "\$REMOVED.ids.tmp" "\$REMOVED.ids"
     echo "? defer failed: \$clean (restored to list)" > "\$HDR"
   fi
   echo "x" >> "$DTD_PROCESSED"
 ) >/dev/null 2>&1 &!
+# Reset any mouse-tracking mode a child enabled — leaked SGR motion
+# sequences type themselves into fzf's query (bug 2026-07-05).
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
@@ -357,8 +445,12 @@ if [[ "\$clean" == *"…"* ]]; then
 fi
 printf "\nNew points for: %s\n[N]> " "\$clean" > /dev/tty
 read newpts < /dev/tty
-out=\$(python3 "\$POINTS_FAST" "\$query" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
+out=\$(python3 "\$POINTS_FAST" --id "\$1" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ points update failed}" > "\$HDR"
+# Reset any mouse-tracking mode a child enabled — leaked SGR motion
+# sequences type themselves into fzf's query (bug 2026-07-05).
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+
 POINTSEOF
 chmod +x "$DTD_POINTS"
 
@@ -386,8 +478,12 @@ if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
   exit 0
 fi
-out=\$(python3 "\$EDIT_FAST" "\$query" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
+out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
+# Reset any mouse-tracking mode a child enabled — leaked SGR motion
+# sequences type themselves into fzf's query (bug 2026-07-05).
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+
 EDITEOF
 chmod +x "$DTD_EDIT"
 
@@ -438,6 +534,14 @@ try:
     with open(removed_file) as f:
         removed = [l.strip().lower() for l in f if l.strip()]
 except: removed = []
+# Optimistically-removed Todoist ids (written by enter.sh/done.sh on completion).
+# id-based so it hides a just-completed RITUAL card immediately — rituals are
+# exempt from the name-based removed-hide, so without this they linger for the
+# whole ~7s worker+refresh until the daemon overlay learns the id.
+try:
+    with open(removed_file + '.ids') as f:
+        removed_ids = {l.strip() for l in f if l.strip()}
+except: removed_ids = set()
 
 # Load skipped items (display at bottom, not hidden)
 try:
@@ -467,10 +571,14 @@ COLORS = {
     'hcbp': '\033[38;2;255;64;129m',   'infra':'\033[38;2;158;158;158m',
     'i444': '\033[38;2;97;97;97m',     'i447': '\033[38;2;168;156;138m',
     'hcm':  '\033[38;2;170;0;255m',    'hcmp': '\033[38;2;124;77;255m',
-    'hcmr': '\033[38;2;189;166;255m',  '家':   '\033[38;2;255;65;54m',
+    'hcmr': '\033[38;2;189;166;255m',  '家':   '\033[38;2;0;184;212m',
     '睡觉': '\033[38;2;102;102;102m',
 }
 RESET = '\033[0m'
+
+# -1neon ritual cards carry only the '-1neon' label (no domain), so they render
+# colorless. Map each ritual tag to its natural domain color (user 2026-07-07).
+RITUAL_DOMAIN = {'-1ibx': 'i9', '-1l': 'g245', '-1t': 'n156', 'سمش': 'hcm'}
 
 def prank(p):
     return -(p or 1)
@@ -572,23 +680,43 @@ for t in unique:
     # Hide by id first: definitive, and immune to same-name collisions.
     if t.get('id') is not None and str(t['id']) in completed_ids:
         continue
+    # Optimistic id-hide: a just-completed card (esp. a name-exempt ritual)
+    # whose id was recorded by enter.sh/done.sh — hide it at once, not after
+    # the ~7s worker+refresh.
+    if t.get('id') is not None and str(t['id']) in removed_ids:
+        continue
+    # -1neon ritual cards (😈 سمش / -1g / -1ibx / -1t / -1l) RECUR every 2h block
+    # with IDENTICAL names. Name-based hiding therefore suppresses the current
+    # block's fresh card whenever an earlier block's same-named card was
+    # completed/skipped today (bug 2026-07-10: prayer + -1g vanished all day
+    # after being done once). Hide rituals by id ONLY (the check above); the
+    # name/removed pass below is for one-off tasks whose names are unique.
+    is_ritual = '-1neon' in t.get('labels', [])
     # removed entries may be truncated prefixes (fzf middle-truncates long
     # names in the defer/split bindings) — match by startswith, not equality
     # (regression 2026-06-06: split task stayed in the list). Name hide uses
     # name_only_completed so an id-backed completion can't suppress a different
     # open task with the same name (regression 2026-06-26: 'stats').
-    if (clean in name_only_completed or prefix in name_only_completed
+    if not is_ritual and (clean in name_only_completed or prefix in name_only_completed
             or any(clean == r or (r and clean.startswith(r)) for r in removed)):
         continue
 
     is_skipped = clean in skipped
 
-    # Find color from labels
+    # Find color from labels. Ritual cards (label '-1neon') have no domain
+    # label — resolve their color from the ritual tag in the name instead.
     color = ''
-    for lbl in t.get('labels', []):
-        if lbl in COLORS:
-            color = COLORS[lbl]
-            break
+    if '-1neon' in t.get('labels', []):
+        bare = clean.replace('😈', '').strip()
+        for tag, dom in RITUAL_DOMAIN.items():
+            if bare == tag or tag in bare.split():
+                color = COLORS[dom]
+                break
+    if not color:
+        for lbl in t.get('labels', []):
+            if lbl in COLORS:
+                color = COLORS[lbl]
+                break
 
     # Recurring indicator
     recurring = t.get('recurring', False)
@@ -719,6 +847,9 @@ for s in d.values():
         if c == q or (prefix and c.startswith(prefix)):
             print(t['id']); sys.exit(0)
 " "\$clean" "\$CACHE_FILE" 2>/dev/null)
+# fzf field 2 (\$1) IS the Todoist id — override any name-based match so a
+# duplicate name can never delete the wrong row (id-based, 2026-07-12).
+tid="\$1"
 if [[ -n "\$tid" ]]; then
   # Get full name from cache for the removed list (clean may be truncated)
   fullname=\$(python3 -c "
@@ -1071,6 +1202,18 @@ DTD_UNDO="/tmp/dtd-$DTD_ID.undo.sh"
 cat > "$DTD_UNDO" << UNDOEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
+# Don't drop a ctrl-z that lands mid-completion. If a task is still in flight
+# (pushed > processed) the journal entry we need to reverse hasn't been written
+# yet, so QUEUE the undo: poll for the worker to settle (up to ~5s, 100ms steps)
+# instead of bailing immediately. The reload + transform-header in the fzf
+# binding still fire after this script returns, so the undone task reappears.
+for _ in {1..50}; do
+  pushed=\$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0)
+  processed=\$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0)
+  (( pushed <= processed )) && break
+  echo "⏳ \$((pushed - processed)) task(s) processing — undo queued…" > "\$HDR"
+  sleep 0.1
+done
 pushed=\$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0)
 processed=\$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0)
 if (( pushed > processed )); then
@@ -1138,32 +1281,105 @@ TICKER_PID=$!
 # actual mtime advance (cache changes ~once per add/refresh), so it stays quiet
 # during normal navigation. The reload cmd matches DTD_RELOAD built in the UI
 # loop (same constant args).
-DTD_WATCH_RELOAD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
+# NOTE: the reload cmd and completed-today overlay are rebuilt INSIDE the loop
+# with a freshly-computed date ($watch_today), NOT the startup $LOCAL_TODAY. The
+# UI loop's fzf call blocks, so its own midnight-rollover code never runs while
+# dtd sits open; an idle-open dtd that crosses midnight must still filter to the
+# NEW day. Baking in the frozen startup date showed yesterday's tasks even after
+# the cache refreshed with today's (bug 2026-07-02: "new day, but dtd didn't
+# refresh").
 (
+  # Close the inherited copy of fd 3 (the persistent FIFO writer opened by
+  # `exec 3>"$DTD_FIFO"` above). This subshell is forked AFTER that exec, so
+  # it inherits fd 3 by default and, left open, keeps its own independent
+  # write-end on the FIFO for as long as the watcher runs. On exit the main
+  # loop does `exec 3>&-` to close ITS copy and signal EOF to the background
+  # worker's `read < "$DTD_FIFO"` loop — but the watcher's inherited copy
+  # keeps the FIFO's writer count above zero, so the worker never sees EOF and
+  # blocks on read() forever, the "Waiting for N tasks..." exit-time
+  # `kill -0 $WORKER_PID` loop spins forever (kill "$WATCHER_PID" only runs
+  # AFTER that loop), and dtd hangs on exit whenever the session completed at
+  # least one task (regression 2026-07-11: dtd never returns to the prompt).
+  exec 3>&-
+  # Wait for fzf's start binding to publish the listen port before entering the
+  # loop. The port file is created ~100ms+ AFTER fzf boots, but this subshell
+  # spawns before fzf — checking `-f $DTD_PORT` immediately made the loop
+  # condition false and the watcher EXITED AT BIRTH, every session (bug
+  # 2026-07-07: block turnover never auto-refreshed; the session snapshot
+  # stayed frozen at startup mtime). Mirrors the ticker's port wait; if fzf
+  # never publishes (died at boot), fall through — the while sees no file and
+  # exits, same as before.
+  for _w in {1..150}; do
+    [[ -f "$DTD_PORT" ]] && break
+    sleep 0.2
+  done
   last_m=$(stat -f %m "$CACHE" 2>/dev/null)
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
+  last_day="$(date +%Y-%m-%d)"
   while [[ -f "$DTD_PORT" ]]; do
     sleep 2
+    watch_today="$(date +%Y-%m-%d)"
+    # Day rollover while dtd sits open: reset the per-day overlays (mirrors the
+    # UI-loop rollover, which can't run behind the blocking fzf) and pull today's
+    # tasks so the new day's recurring set surfaces without a relaunch.
+    if [[ "$watch_today" != "$last_day" ]]; then
+      last_day="$watch_today"
+      : > "$DTD_SESSION"; : > "$DTD_JOURNAL"; : > "$DTD_SKIPPED"
+      echo "$watch_today" > "$DTD_SKIPPED.date"
+      ( python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 ) &
+    fi
     # New 2h 地支 block: the daemon rolls the -1neon ritual cards at the boundary.
     # Refresh the local cache so an idle-open dtd surfaces the new block's -1n
-    # cards without a relaunch (regression 2026-06-29). Delay 15s so the daemon
-    # has created them first, and background it so mtime polling keeps running;
-    # the refresh's cache-mtime bump trips the reload below.
+    # cards without a relaunch (regression 2026-06-29). The daemon does its
+    # scoring/reconcile FIRST and only then deletes+creates the cards, so they
+    # don't exist until ~boundary+25-30s (later still on a Todoist 503 retry). A
+    # single +15s refresh raced ahead of that and never retried, so the new
+    # block's -1n cards never appeared until a manual ctrl-r (bug 2026-07-01).
+    # Fire STAGGERED refreshes across the first ~90s instead (cumulative +20/+45/
+    # +90s); each bumps the cache mtime and trips the reload below, so whichever
+    # lands after the daemon finishes surfaces the cards. Backgrounded so the
+    # mtime poll keeps running.
     cur_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
     if [[ "$cur_blk" != "$last_blk" ]]; then
       last_blk="$cur_blk"
-      ( sleep 15; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 ) &
+      # Cumulative +20/45/90/150/270s. did-fast now unions the -1neon cards in
+      # via the direct label endpoint (fresh in seconds; the today|overdue FILTER
+      # query lags minutes), so the +45s shot usually catches the daemon's
+      # boundary+30s card creation. The later shots backstop a slow daemon
+      # (Todoist 503 retries) so the new block's -1n cards still surface in-
+      # session, not only on the next ~3min did-refresh-cache daemon cycle.
+      ( for _s in 20 25 45 60 120; do sleep "$_s"; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; done ) &
     fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
     last_m="$cur_m"
     cp "$CACHE" "$DTD_CACHE_FILE" 2>/dev/null
+    # Rebuild the completed-today overlay from the LIVE $DONE before reloading.
+    # The UI loop only regenerates $DTD_DONE_FILE when it cycles (on user
+    # interaction); while dtd sits idle that overlay goes stale. Without this, a
+    # task just completed in /inbound (which writes the live $DONE AND refreshes
+    # the cache, tripping this watcher) reloads against a stale overlay and stays
+    # visible if the refreshed cache still carries it (Todoist "today | overdue"
+    # propagation lag) — e.g. a -1g ritual completed in inbound not coming off
+    # dtd. Mirrors the UI-loop build (see below); atomic write so a concurrent
+    # reload never reads a torn file.
+    _dn=$(jq -c --arg t "$watch_today" 'if .date == $t then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
+    _di=$(jq -c --arg t "$watch_today" 'if .date == $t then (.ids // {}) else {} end' "$DONE" 2>/dev/null || echo '{}')
+    _se=$(jq -c -R -s 'split("\n") | map(select(. != ""))' < "$DTD_SESSION" 2>/dev/null || echo '[]')
+    _ac=$(echo "[$_dn, $_se]" | jq -c 'add | map(ascii_downcase)' 2>/dev/null || echo '[]')
+    if jq -cn --arg t "$watch_today" --argjson names "$_ac" --argjson ids "$_di" \
+         '{date: $t, names: $names, ids: $ids}' > "$DTD_DONE_FILE.tmp" 2>/dev/null; then
+      mv "$DTD_DONE_FILE.tmp" "$DTD_DONE_FILE"
+    fi
     port=$(cat "$DTD_PORT" 2>/dev/null)
     [[ -z "$port" ]] && continue
+    # Rebuild with the freshly-computed date so a post-midnight reload filters to
+    # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
+    watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
     if [[ -n "$FZF_API_KEY" ]]; then
-      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($DTD_WATCH_RELOAD)" >/dev/null 2>&1
+      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     else
-      curl -s -XPOST "localhost:$port" --data "reload($DTD_WATCH_RELOAD)" >/dev/null 2>&1
+      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     fi
   done
 ) &>/dev/null &
@@ -1223,7 +1439,16 @@ while true; do
   #                          $DTD_HDRGEN on load/result and after every action so
   #                          worker confirmations persist alongside the count.
   # The start binding publishes fzf's --listen port for the ticker to POST to.
+  # --no-mouse + the mode reset below: SGR mouse-motion sequences (ESC[<34;x;yM)
+  # were leaking into the query as literal text (bug 2026-07-05). fzf only
+  # parses the click/scroll events it subscribes to; motion events — forwarded
+  # by cmux once ANY mouse mode is on, or left enabled (1002/1003) by a child
+  # program from an execute() binding — fall through the parser into the input
+  # box. dtd is keyboard-driven, so disable fzf's mouse subscription entirely
+  # and defensively turn off every stray tracking mode before each launch.
+  printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
+      --no-mouse \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \
@@ -1234,7 +1459,7 @@ while true; do
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
       --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "alt-enter:execute-silent($DTD_DONE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
@@ -1348,4 +1573,4 @@ fi
 kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
