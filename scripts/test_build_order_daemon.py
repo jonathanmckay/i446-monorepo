@@ -192,10 +192,10 @@ def test_block_has_goals_rejects_whitespace_only_bullet(tmp_path, monkeypatch):
     assert mod._block_has_goals("辰") is True
 
 
-def test_strip_unearned_markers_removes_phantom_but_guards_none(tmp_path, monkeypatch):
-    """_strip_unearned_markers drops a daemon-owned marker the live data says
-    wasn't earned (e.g. a phantom ✅), never touches ☀️/📧, and is a no-op when
-    live is None (an API failure must not destroy a genuinely-earned mark)."""
+def test_strip_unearned_markers_removes_phantom_goal_but_guards_none(tmp_path, monkeypatch):
+    """_strip_unearned_markers drops GOAL_MARKER (🎯) when the live data says it
+    wasn't earned, never touches ☀️/📧, and is a no-op when live is None (an API
+    failure must not destroy a genuinely-earned mark)."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     original = (
@@ -210,17 +210,46 @@ def test_strip_unearned_markers_removes_phantom_but_guards_none(tmp_path, monkey
     mod._strip_unearned_markers("辰", None)
     assert build.read_text(encoding="utf-8") == original
 
-    # ✅ not earned, 🎯 earned → strip ✅ only; keep ☀️ (no validator) + 🎯
-    mod._strip_unearned_markers("辰", {"🎯": True, "⏱️": False, "✅": False})
+    # 🎯 not earned → strip 🎯 only; ✅ stays even though its own live check is
+    # False too (2026-07-13 OR redesign: ⏱️/✅ are no longer daemon-strippable —
+    # a manual completion may have earned them independently of the auto-check,
+    # so a failing auto-check must never erase them). ☀️ has no validator either.
+    mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False})
     line = next(l for l in build.read_text(encoding="utf-8").split("\n")
                 if l.startswith("- 辰"))
-    assert "✅" not in line and "☀️" in line and "🎯" in line
+    assert "🎯" not in line and "☀️" in line and "✅" in line
 
     # dry_run leaves the file untouched
     build.write_text(original, encoding="utf-8")
-    mod._strip_unearned_markers("辰", {"🎯": True, "⏱️": False, "✅": False},
+    mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False},
                                 dry_run=True)
     assert build.read_text(encoding="utf-8") == original
+
+
+# ── OR redesign: ⏱️/✅ are earned by manual completion OR the auto-check ─────
+# Bug: -1t/-1l were "auto"-only — completing their card did nothing (no stamp,
+# no P credit); the daemon's Toggl/Todoist auto-check was the sole path. Users
+# who genuinely did the work but whose real tasks lacked [N]/{N} (or whose
+# Toggl categorization missed the threshold) never earned the marker even
+# though they manually confirmed it. Fix: header presence alone earns ⏱️/✅
+# (like ☀️/📧 always have) — the daemon's auto-check still WRITES the marker
+# when it independently passes, but a failing auto-check no longer strips a
+# marker manual completion already wrote. Only 🎯 (GOAL_MARKER) keeps the old
+# live-gated/strippable behavior.
+
+def test_marker_earned_ors_manual_completion_with_failing_auto_check():
+    mod = _load_daemon()
+    # ✅ manually stamped, but the daemon's own auto-check for this block fails
+    # (e.g. no [N]/{N}-pointed task completed in the window) — must still earn.
+    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
+    assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is True
+    # Absent marker never earns regardless of live.
+    assert mod._marker_earned("✅", "- 巳", {"✅": True}) is False
+
+
+def test_daemon_owned_markers_excludes_toggl_and_todoist():
+    mod = _load_daemon()
+    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER}
 
 
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):

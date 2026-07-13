@@ -11,8 +11,10 @@ rituals (سمش/-1g/-1ibx); -1t/-1l were invisible daemon-computed markers. Now:
   - ritual_card_tag matches auto cards too, so completing `😈 -1t` in dtd
     routes to run_ritual instead of the generic /did path (which would
     mis-route to the unrelated 0₦ habit named `-1t`);
-  - run_ritual's auto branch closes the card WITHOUT stamping ⏱️/✅ or writing
-    P — those stay daemon-validated at the boundary.
+  - (2026-07-13) run_ritual's auto branch now ALSO stamps ⏱️/✅ (on the
+    previous block) and credits P immediately, OR'd with the daemon's
+    boundary validation of that same previous block — see
+    test_did_ritual_manual_or_auto.py.
 """
 import ast
 import sys
@@ -72,19 +74,17 @@ def test_bare_names_without_marker_never_match():
     assert nb.ritual_card_tag("time log -1t style") is None
 
 
-# ── did-fast: auto branch closes card only ───────────────────────────────────
+# ── did-fast: auto rituals stamp + credit too (2026-07-13 OR redesign) ───────
 
-def test_run_ritual_auto_branch_skips_stamp_and_points():
+def test_run_ritual_auto_branch_falls_through_to_stamp_and_credit():
+    # Auto rituals (-1t/-1l) must reach the SAME stamp_emoji + P-credit path as
+    # manual ones — no early return that skips them. See
+    # test_did_ritual_manual_or_auto.py for the full regression coverage
+    # (previous-block targeting, append-only P credit).
     src = _func_src(DIDFAST, "run_ritual")
+    assert 'if r.get("mode") == "auto":' not in src, (
+        "the old auto-mode branch (an `if` that returned before stamping) "
+        "must be gone — mode is now just a plain is_auto flag, not a branch")
     i_auto = src.index('r.get("mode") == "auto"')
     i_stamp = src.index("stamp_emoji")
-    # The auto branch must return before stamping the emoji. (Neither branch
-    # writes P any more — P is daemon-owned — so there is no P-write to order
-    # against; the whole-function no-P contract is pinned in
-    # test_ritual_immediate_p.test_run_ritual_does_not_write_p.)
     assert i_auto < i_stamp
-    assert "compute-p" not in src, "run_ritual must not recompute P for any branch"
-    auto_block = src[i_auto:i_stamp]
-    assert "return out" in auto_block, "auto branch must return before stamping"
-    # And it still records completed-today so dtd hides the card at once.
-    assert "append_names" in auto_block

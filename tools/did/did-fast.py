@@ -1497,14 +1497,14 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
 
 
 def run_ritual(tag: str) -> dict:
-    """Complete one block ritual (-1neon card): close its open Todoist task and
-    stamp the ritual emoji on the current 地支 block in build-order.md.
+    """Complete one block ritual (-1neon card): close its open Todoist task,
+    stamp the ritual emoji on the relevant 地支 block in build-order.md, and
+    credit 0分!P immediately.
 
-    Points (-1₦, 0分!P) are NOT written here — see the note in the body. The
-    daemon's turnover reconcile is the single authoritative P writer; it scores
-    only fired blocks and validates 🎯/⏱️/✅, which a completion-time write
-    cannot. This keeps P idempotent and free of the future/unvalidated-block
-    overcount that a naive header sum would produce.
+    All 5 rituals now earn their points on manual completion, including ⏱️/✅
+    (auto rituals) — see the note in the body for the OR semantics with the
+    daemon's automatic Toggl/Todoist validation, and why ⏱️/✅ target the
+    PREVIOUS block rather than the current one.
     """
     import sys as _s
     _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
@@ -1550,26 +1550,23 @@ def run_ritual(tag: str) -> dict:
     except Exception as e:  # noqa: BLE001
         out["todoist"] = {"closed": False, "error": str(e)}
 
-    # Auto rituals (-1t/-1l): their card is visibility/acknowledgment only.
-    # The daemon is the sole evaluator — it stamps ⏱️/✅ retrospectively at the
-    # block close and completes (earned) or deletes (unearned) the card then.
-    # Completing it here just clears it from the list: no emoji stamp, no P
-    # write — points follow the daemon's validated reconcile.
-    if r.get("mode") == "auto":
-        if closed_id:
-            try:
-                name = (out.get("todoist", {}).get("content") or f"{marker} {tag}").strip()
-                mc.append_names([name], ids={name: closed_id})
-                out["completed_today"] = True
-            except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
-                out["completed_today_error"] = str(e)
-        out["auto"] = True
-        out["note"] = "auto ritual — daemon stamps and scores at block close"
-        return out
+    # Auto rituals (-1t/-1l): OR semantics (2026-07-13 redesign) — completing
+    # the card is now an independent, equally-valid path to earning the marker,
+    # alongside the daemon's automatic Toggl/Todoist validation at block close.
+    # ⏱️/✅ reward having recorded the PREVIOUS block (its Toggl time
+    # categorized, its completed tasks pointed), so a manual completion here
+    # targets that same previous block — not the current one — to stay
+    # consistent with what the daemon's own auto-check judges.
+    is_auto = r.get("mode") == "auto"
 
-    # 2. Stamp the emoji on the current block header (local build-order.md).
+    # 2. Stamp the emoji on the target block header (local build-order.md).
+    #    Manual rituals (☀️/🎯/📧) target the CURRENT block. Auto rituals
+    #    (⏱️/✅) target the block that just ended, matching the daemon's own
+    #    "hour-4..hour-2" previous-block offset.
     bo = Path.home() / "vault/g245/build-order.md"
-    block = nb.current_block(datetime.now().hour)
+    cur_idx = nb.current_block_index(datetime.now().hour)
+    target_idx = max(0, cur_idx - 1) if is_auto else cur_idx
+    block = nb.BRANCHES[target_idx]
     out["block"] = block
     if not bo.exists():
         out["error"] = "build-order.md not found"
@@ -1579,6 +1576,7 @@ def run_ritual(tag: str) -> dict:
     if changed:
         bo.write_text(new_text, encoding="utf-8")
     out["stamped"] = changed
+    out["auto"] = is_auto
 
     # 3. Record the completion in completed-today so dtd hides the card at once.
     #    dtd hides a cached task when its id is in completed-today's id map; the
@@ -1593,31 +1591,35 @@ def run_ritual(tag: str) -> dict:
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
             out["completed_today_error"] = str(e)
 
-    # 4. Credit 0分!P IMMEDIATELY (2026-07-12 redesign): completing a ritual
-    #    awards its points right now — the user shouldn't wait for the block
-    #    boundary. This is an INCREMENT (formula-append `=…+N`), NOT a
-    #    recompute-from-headers. That distinction is the whole bug fix: the
-    #    2026-07-11 clobber came from RE-SUMMING the header emojis (which miss
-    #    the retrospective ⏱️/✅) and SETting P low. A pure `+N` can't clobber —
-    #    it only adds this ritual's own points. The daemon's boundary reconcile
-    #    remains the checksum: it re-validates the block's stamps and SETs P to
-    #    the true total, correcting any provisional over-credit.
+    # 4. Credit 0分!P IMMEDIATELY (increment, never recompute — the 2026-07-11
+    #    clobber came from RE-SUMMING header emojis on a build-order.md copy
+    #    that can lag Ix's by several seconds/minutes over Syncthing, so a
+    #    "true" recompute here can UNDERCOUNT and SET P below what the daemon
+    #    (self-contained on Ix, no cross-machine read) already correctly wrote.
+    #    A pure `+N` append can't clobber — it only adds this ritual's own
+    #    points to whatever P currently holds. The daemon's boundary reconcile
+    #    remains the checksum: it re-derives ⏱️/✅ from live Toggl/Todoist on
+    #    its OWN local file each fire and re-groups P into one term per block,
+    #    correcting any provisional over/under-credit or ungrouped terms.
     #
-    #    Grouped by block (2026-07-12): P should read as one number per block
-    #    (=0+13+10+8…), not one number per ritual (=0+1+3+3+3…). `line_before`
-    #    is this block's header line as it stood before step 2 stamped `emoji`
-    #    onto it — if another scoring emoji was already there, a ritual in
-    #    this block already live-credited P, so the new points are merged into
-    #    that block's existing term instead of opening a new one. This only
-    #    inspects presence of emoji markers (trusted, just-written-or-read),
-    #    never their point VALUES from headers, so the clobber risk above does
-    #    not apply.
+    #    Grouped by block, when safe: manual rituals (☀️/🎯/📧) target the
+    #    CURRENT block, so `line_before` (this block's own header line, read
+    #    fresh) tells us whether another ritual already live-credited THIS
+    #    block — if so we merge into P's last term instead of opening a new
+    #    one. Auto rituals (⏱️/✅) target the PREVIOUS block, which is NOT
+    #    necessarily P's last term (the current block may already have its own
+    #    later term) — merging positionally there risks crediting the wrong
+    #    block, so auto credits always open a fresh term. The next daemon
+    #    reconcile (≤2h) re-groups it into the previous block's own term.
     pts = int(r.get("points") or 0)
     if pts and changed:
         now = datetime.now()
-        emoji_pts_map = nb.emoji_points()
-        line_before = next((ln for b, ln in nb.iter_block_lines(text) if b == block), "")
-        same_block_merge = any(e in line_before for e in emoji_pts_map if e != emoji)
+        if is_auto:
+            same_block_merge = False
+        else:
+            emoji_pts_map = nb.emoji_points()
+            line_before = next((ln for b, ln in nb.iter_block_lines(text) if b == block), "")
+            same_block_merge = any(e in line_before for e in emoji_pts_map if e != emoji)
 
         read_script = (
             'tell application "Microsoft Excel"\n'

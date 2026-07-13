@@ -67,7 +67,9 @@ def test_boundary_reconcile_is_the_sole_validating_p_writer():
 def test_run_ritual_increments_p_immediately():
     src = _func_src(DIDFAST, "run_ritual")
     assert 'cell ("P" &' in src, "run_ritual must write column P (immediate credit)"
-    assert "+{pts}" in src, "must append THIS ritual's own points (increment)"
+    assert "terms.append(str(pts))" in src, (
+        "must append THIS ritual's own points onto whatever P currently holds "
+        "(increment, not a from-headers recompute)")
 
 
 def test_run_ritual_does_not_recompute_p():
