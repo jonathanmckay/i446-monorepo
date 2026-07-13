@@ -158,6 +158,15 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         seen.add(tid)
         if tid is not None and str(tid) in completed_ids:
             continue
+        # Cross-machine "done today": a recurring daily habit whose due date has
+        # advanced past today was completed today (each /close bumps it +1 day).
+        # The 0neon/夜neon sections are bounded to due<=tomorrow (to survive a
+        # drift), so these completed-and-advanced habits would otherwise linger.
+        # completed-today.json is machine-local and is stale on this host when the
+        # completion happened on the desktop (Straylight), so it can't hide them;
+        # the Todoist due date carried in the cache is the durable signal.
+        if t.get("recurring") and t.get("due") and t["due"] > today:
+            continue
         raw = t["content"]
         display = t.get("short") or raw
         title = strip_ann(display) or raw
