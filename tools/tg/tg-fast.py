@@ -27,7 +27,7 @@ DO_SESSION = Path.home() / ".claude/skills/do/active.json"
 DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 TASK_QUEUE = str(_sp.TASK_QUEUE)
-TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 # ── Shortcode table ──────────────────────────────────────────────────────────
 
@@ -71,6 +71,8 @@ SHORTCODES = {
     "hospital time": ("xk87", []), "generic placeholder": ("infra", []),
     "unsure": ("infra", []),
     "stats m5x2": ("m5x2", []),
+    # Kid-time (Theo/Ren/Rori) → family project
+    "xk20": ("xk87", []), "xk22": ("xk87", []), "xk26": ("xk87", []),
 }
 
 # Domain-only shortcodes
@@ -230,18 +232,28 @@ def resolve(raw: str):
     tags = []
     override = False
 
-    # Extract @project override
-    m = re.search(r'\s@(\S+)\s*$', desc)
+    # Extract #tag tokens (anywhere in the string) → Toggl tags
+    tag_matches = re.findall(r'#(-?\w+)', desc)
+    explicit_tags = bool(tag_matches)
+    if tag_matches:
+        tags = tag_matches
+        desc = re.sub(r'\s*#-?\w+', '', desc).strip()
+
+    # Extract @project override (anywhere in the string)
+    m = re.search(r'@(\w+)', desc)
     if m:
         project = m.group(1)
-        desc = desc[:m.start()].strip()
+        desc = re.sub(r'\s*' + re.escape(m.group(0)), '', desc, count=1).strip()
         override = True
 
     if not override:
         key = desc.lower()
         # Exact shortcode match
         if key in SHORTCODES:
-            project, tags = SHORTCODES[key]
+            sc_project, sc_tags = SHORTCODES[key]
+            project = sc_project
+            if not explicit_tags:
+                tags = sc_tags
         # Domain-only
         elif key in DOMAINS:
             project = key
@@ -280,6 +292,8 @@ def cmd_create_range(desc, project, tags, start_t, end_t):
     args = ["create", desc, start_t, end_t]
     if project:
         args.append(project)
+    for tag in tags:
+        args.extend(["--tag", tag])
     out = _run_cli(*args)
     return out
 
@@ -401,6 +415,20 @@ def main():
 
 def _process_entry(raw: str) -> str:
     """Resolve and create/start a single timer entry; return the CLI output line."""
+    # Peel off a trailing @project override BEFORE range detection. Every
+    # range regex below anchors the range to the very start or very end of
+    # the string, so "desc TIME-TIME @project" (the documented <desc>
+    # <start>-<end> @<project> syntax) previously matched NEITHER range
+    # pattern — @project sits after the range, breaking the trailing-range
+    # anchor — and silently fell through to "start a timer with the whole
+    # raw string as description". Since Toggl auto-stops the current running
+    # entry on any new start, that corrupted an unrelated timer (2026-07-13).
+    at_override = re.search(r'\s@(\S+)\s*$', raw)
+    project_suffix = ""
+    if at_override:
+        project_suffix = " " + at_override.group(0).strip()
+        raw = raw[:at_override.start()].rstrip()
+
     # Check for time range: "desc HH:MM-HH:MM" or "HH:MM-HH:MM desc" or "desc H-H"
     # Try range at end first, then at start
     range_match = re.search(r'(\d{1,4}(?::\d{2})?)\s*-\s*(\d{1,4}(?::\d{2})?)\s*$', raw)
@@ -414,15 +442,19 @@ def _process_entry(raw: str) -> str:
             if ":" not in e and len(e) == 4:
                 e = e[:2] + ":" + e[2:]
             if ":" in s and ":" in e:
-                desc_part = range_match_start.group(3).strip()
+                desc_part = (range_match_start.group(3).strip() + project_suffix).strip()
                 desc, project, tags = resolve(desc_part)
                 return cmd_create_range(desc or desc_part, project, tags, s, e)
     if range_match:
         start_t = _norm_time(range_match.group(1))
         end_t = _norm_time(range_match.group(2))
-        desc_part = raw[:range_match.start()].strip()
+        desc_part = (raw[:range_match.start()].strip() + project_suffix).strip()
         desc, project, tags = resolve(desc_part)
         return cmd_create_range(desc or desc_part, project, tags, start_t, end_t)
+
+    # No range matched — restore the @project suffix for the backdate/default
+    # paths below, which already handle @ anywhere in the string via resolve().
+    raw = raw + project_suffix
 
     # Check for backdated start: "HHMM desc" or "desc HHMM"
     backdate_match = re.match(r'^(\d{4})\s+(.+)$', raw)
@@ -450,9 +482,9 @@ def _process_entry(raw: str) -> str:
 
 
 def notify_tui():
-    """Signal tg-tui to refresh immediately via SIGUSR1."""
+    """Signal janus to refresh immediately via SIGUSR1."""
     try:
-        pid = int(TG_TUI_PID.read_text().strip())
+        pid = int(JANUS_PID.read_text().strip())
         os.kill(pid, signal.SIGUSR1)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
