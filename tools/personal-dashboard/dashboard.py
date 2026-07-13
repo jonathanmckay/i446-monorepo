@@ -700,6 +700,7 @@ def _build_granular_chart_data(granularity):
     tasks_neon = [0] * n_buckets
     tasks_posthoc = [0] * n_buckets
     tasks_1n = [0] * n_buckets
+    tasks_neg1n = [0] * n_buckets
     tasks_other = [0] * n_buckets
     for dstr, counts in tasks_all.items():
         try:
@@ -712,6 +713,7 @@ def _build_granular_chart_data(granularity):
         tasks_neon[bi] += counts.get("neon", 0)
         tasks_posthoc[bi] += counts.get("posthoc", 0)
         tasks_1n[bi] += counts.get("one_n", 0)
+        tasks_neg1n[bi] += counts.get("neg1n", 0)
         tasks_other[bi] += counts.get("other", 0)
 
     return {
@@ -721,6 +723,7 @@ def _build_granular_chart_data(granularity):
         "tasks_neon": tasks_neon,
         "tasks_posthoc": tasks_posthoc,
         "tasks_1n": tasks_1n,
+        "tasks_neg1n": tasks_neg1n,
         "tasks_other": tasks_other,
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
@@ -759,7 +762,7 @@ def _fetch_tasks_for_day(day, token):
     url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=200"
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
-    counts = {"neon": 0, "posthoc": 0, "one_n": 0, "other": 0}
+    counts = {"neon": 0, "posthoc": 0, "one_n": 0, "neg1n": 0, "other": 0}
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
@@ -771,17 +774,20 @@ def _fetch_tasks_for_day(day, token):
             counts["neon"] += 1
         elif "@posthoc" in content:
             counts["posthoc"] += 1
+        elif "@-1neon" in content:
+            counts["neg1n"] += 1
         elif "@1neon" in content:
             counts["one_n"] += 1
         else:
             counts["other"] += 1
-    counts["total"] = counts["neon"] + counts["posthoc"] + counts["one_n"] + counts["other"]
+    counts["total"] = (counts["neon"] + counts["posthoc"] + counts["one_n"]
+                        + counts["neg1n"] + counts["other"])
     return day.isoformat(), counts
 
 
 def load_tasks_data(n_days=DAYS):
     """Fetch completed tasks from Todoist, split by category tag in content.
-    Returns {date_str: {"neon", "posthoc", "one_n", "other", "total"}}.
+    Returns {date_str: {"neon", "posthoc", "one_n", "neg1n", "other", "total"}}.
 
     Performance:
     - Historical days (older than today/yesterday) are read from a disk cache
@@ -1216,6 +1222,7 @@ def _build_api_data():
     tasks_neon    = [tasks_raw.get(d, {}).get("neon", 0)    for d in dates]
     tasks_posthoc = [tasks_raw.get(d, {}).get("posthoc", 0) for d in dates]
     tasks_1n      = [tasks_raw.get(d, {}).get("one_n", 0)   for d in dates]
+    tasks_neg1n   = [tasks_raw.get(d, {}).get("neg1n", 0)   for d in dates]
     tasks_other   = [tasks_raw.get(d, {}).get("other", 0)   for d in dates]
     tasks_values  = [tasks_raw.get(d, {}).get("total", 0)   for d in dates]
     time_entries_values = [sum(toggl_entry_counts.get(d, {}).values()) for d in dates]
@@ -1510,6 +1517,7 @@ def _build_api_data():
         "tasks_neon": tasks_neon,
         "tasks_posthoc": tasks_posthoc,
         "tasks_1n": tasks_1n,
+        "tasks_neg1n": tasks_neg1n,
         "tasks_other": tasks_other,
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
@@ -1721,6 +1729,7 @@ function renderFourCharts(data, granularity) {
     { label: '0₦', data: data.tasks_neon,    bg: '#0a0a0a' },
     { label: 'posthoc', data: data.tasks_posthoc, bg: '#7c4dff' },
     { label: '1₦', data: data.tasks_1n,      bg: '#00e676' },
+    { label: '-1₦', data: data.tasks_neg1n,  bg: '#e53935' },
     { label: 't779', data: data.tasks_other, bg: '#2979ff' },
   ];
   _tasksChart = new Chart(document.getElementById('tasksChart'), {

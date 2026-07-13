@@ -215,7 +215,24 @@ task="\$1"
 # Strip ANSI codes first
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
+# Ritual (-1neon) cards carry the 😈 marker; their Toggl project comes from the
+# ritual→domain map — the SAME source as their row color (keep in sync with
+# RITUAL_DOMAIN in the list generator) — NOT tg-fast, whose shortcodes differ
+# (e.g. -1ibx→m5x2 there but i9 here) and which can't resolve the 😈-prefixed
+# name. The python also strips 😈 so the Toggl entry reads '-1g', not '😈 -1g'.
+# Non-ritual tasks pass through unchanged and fall back to tg-fast below.
+_rr=\$(python3 -c "
+import sys
+RITUAL_DOMAIN = {'-1ibx':'i9','-1l':'g245','-1t':'n156','سمش':'hcm'}
+c = sys.argv[1]; bare = c.replace('😈','').strip(); proj=''; desc=c
+for tag,dom in RITUAL_DOMAIN.items():
+    if bare == tag or tag in bare.split():
+        proj = dom; desc = bare; break
+print(desc); print(proj)
+" "\$clean" 2>/dev/null)
+clean=\$(printf '%s' "\$_rr" | sed -n 1p)
+project=\$(printf '%s' "\$_rr" | sed -n 2p)
+[ -z "\$project" ] && project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
 python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
 printf '%s\t%s\n' "\$clean" "\$(date +%s)" > "\$TIMER"
@@ -511,7 +528,7 @@ try:
 except: removed = []
 # Optimistically-removed Todoist ids (written by enter.sh/done.sh on completion).
 # id-based so it hides a just-completed RITUAL card immediately — rituals are
-# exempt from the name-based `removed` hide, so without this they linger for the
+# exempt from the name-based removed-hide, so without this they linger for the
 # whole ~7s worker+refresh until the daemon overlay learns the id.
 try:
     with open(removed_file + '.ids') as f:
@@ -1352,9 +1369,9 @@ TICKER_PID=$!
     # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
     watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
     if [[ -n "$FZF_API_KEY" ]]; then
-      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)+clear-screen" >/dev/null 2>&1
+      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     else
-      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)+clear-screen" >/dev/null 2>&1
+      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     fi
   done
 ) &>/dev/null &
@@ -1433,19 +1450,19 @@ while true; do
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
+      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-screen+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+clear-screen+transform-header($DTD_HDRGEN)")
+      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
   task="$fzf_output"
 
