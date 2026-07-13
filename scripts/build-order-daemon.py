@@ -896,8 +896,10 @@ def _at_labels(content: str) -> set:
 
 
 def _has_points(content: str) -> bool:
-    """True if the content carries a [N] value with N > 0 (the points convention)."""
-    return any(int(n) > 0 for n in re.findall(r"\[(\d+)\]", content or ""))
+    """True if the content carries a [N] (task value) or {N} (0g bonus) marker
+    with N > 0 — both are legitimate points conventions (see did-fast.py)."""
+    nums = re.findall(r"\[(\d+)\]", content or "") + re.findall(r"\{(\d+)\}", content or "")
+    return any(int(n) > 0 for n in nums)
 
 
 def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
