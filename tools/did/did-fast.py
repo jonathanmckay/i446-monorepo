@@ -1498,13 +1498,12 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
 
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
-    stamp the ritual emoji on the relevant 地支 block in build-order.md, and
+    stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
     credit 0分!P immediately.
 
     All 5 rituals now earn their points on manual completion, including ⏱️/✅
     (auto rituals) — see the note in the body for the OR semantics with the
-    daemon's automatic Toggl/Todoist validation, and why ⏱️/✅ target the
-    PREVIOUS block rather than the current one.
+    daemon's automatic Toggl/Todoist validation.
     """
     import sys as _s
     _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
@@ -1553,20 +1552,20 @@ def run_ritual(tag: str) -> dict:
     # Auto rituals (-1t/-1l): OR semantics (2026-07-13 redesign) — completing
     # the card is now an independent, equally-valid path to earning the marker,
     # alongside the daemon's automatic Toggl/Todoist validation at block close.
-    # ⏱️/✅ reward having recorded the PREVIOUS block (its Toggl time
-    # categorized, its completed tasks pointed), so a manual completion here
-    # targets that same previous block — not the current one — to stay
-    # consistent with what the daemon's own auto-check judges.
     is_auto = r.get("mode") == "auto"
 
-    # 2. Stamp the emoji on the target block header (local build-order.md).
-    #    Manual rituals (☀️/🎯/📧) target the CURRENT block. Auto rituals
-    #    (⏱️/✅) target the block that just ended, matching the daemon's own
-    #    "hour-4..hour-2" previous-block offset.
+    # 2. Stamp the emoji on the CURRENT block header (local build-order.md).
+    #    ALL 5 rituals target the current block, matching the daemon's own
+    #    convention: evaluate_and_mark_block's ⏱️/✅ CHECK looks at the
+    #    PREVIOUS block's window (hour-4..hour-2 — you can't know a block's
+    #    Toggl/task coverage is complete until it's over), but the resulting
+    #    STAMP always lands on `block_name`, the block currently being scored
+    #    — never on the block that was checked. (2026-07-13: an earlier cut
+    #    of this fix stamped the previous block instead, which put the
+    #    manual credit on the wrong header vs. what the user — and the
+    #    daemon — actually see as "this block's" ⏱️/✅.)
     bo = Path.home() / "vault/g245/build-order.md"
-    cur_idx = nb.current_block_index(datetime.now().hour)
-    target_idx = max(0, cur_idx - 1) if is_auto else cur_idx
-    block = nb.BRANCHES[target_idx]
+    block = nb.current_block(datetime.now().hour)
     out["block"] = block
     if not bo.exists():
         out["error"] = "build-order.md not found"
@@ -1599,7 +1598,9 @@ def run_ritual(tag: str) -> dict:
     #    previous block" apart from "the current block's own later term"
     #    (⏱️/✅ target the former, manual rituals credit the latter, and
     #    once both exist in the same formula neither position is reliably
-    #    "the last term" for a given block).
+    #    "the last term" for a given block). This is a best-effort immediate
+    #    credit only — the daemon's own boundary reconcile is still the
+    #    periodic validating checksum, independent of what did-fast does here.
     #
     #    Guard against the 2026-07-11 clobber: that bug was a recompute off a
     #    build-order.md copy that can lag Ix's over Syncthing, so it could

@@ -80,7 +80,7 @@ def test_run_ritual_auto_branch_falls_through_to_stamp_and_credit():
     # Auto rituals (-1t/-1l) must reach the SAME stamp_emoji + P-credit path as
     # manual ones — no early return that skips them. See
     # test_did_ritual_manual_or_auto.py for the full regression coverage
-    # (previous-block targeting, append-only P credit).
+    # (current-block targeting, guarded recompute P credit).
     src = _func_src(DIDFAST, "run_ritual")
     assert 'if r.get("mode") == "auto":' not in src, (
         "the old auto-mode branch (an `if` that returned before stamping) "

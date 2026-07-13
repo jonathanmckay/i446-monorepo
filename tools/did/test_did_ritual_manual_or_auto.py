@@ -13,9 +13,14 @@ points land.
 Fix: manual completion is now an independent, equally-valid path (OR'd with
 the daemon's auto-check — see build-order-daemon.py's _marker_earned and
 DAEMON_OWNED_MARKERS) — completing ⏱️/✅ stamps the emoji and credits P
-immediately, same as ☀️/\U0001f3af/\U0001f4e7. Since ⏱️/✅ measure the PREVIOUS
-block (not the block the card is completed in), the manual stamp targets that
-same previous block, not the current one.
+immediately, same as ☀️/\U0001f3af/\U0001f4e7. It targets the CURRENT block,
+matching the daemon's own convention: evaluate_and_mark_block's ⏱️/✅ CHECK
+looks at the previous block's window (you can't know a block's Toggl/task
+coverage is complete until it's over), but the resulting STAMP always lands
+on the block being scored, never on the block that was checked. (An earlier
+cut of this fix conflated those two things and stamped the previous block
+instead — wrong, and confirmed wrong live: a user who did all 5 rituals
+while in 午 correctly expected 午 itself to read 13, not 巳.)
 
 Bug 2 (2026-07-13, same day): the first cut of this fix kept P append-only —
 a positional "merge into the last term" for manual (current-block) rituals,
@@ -75,12 +80,17 @@ def test_no_early_return_before_stamping_for_auto_mode():
         "block), not as an early return that skips it")
 
 
-def test_auto_mode_targets_previous_block():
+def test_all_rituals_including_auto_target_the_current_block():
     body = _run_ritual_body()
     assert "is_auto = " in body
-    assert "max(0, cur_idx - 1) if is_auto else cur_idx" in body, (
-        "auto rituals (⏱️/✅) must stamp the PREVIOUS block, matching "
-        "the daemon's own hour-4..hour-2 offset — not the current block")
+    assert "nb.current_block(datetime.now().hour)" in body, (
+        "ALL rituals — including ⏱️/✅ — must stamp the CURRENT block, "
+        "matching the daemon's own convention (its retrospective CHECK looks "
+        "at the previous block, but the STAMP lands on the block being "
+        "scored, never on the block that was checked)")
+    # No previous-block index math should remain.
+    assert "cur_idx - 1" not in body
+    assert "BRANCHES[" not in body
 
 
 def test_p_credit_prefers_recompute_guarded_by_live_total():
