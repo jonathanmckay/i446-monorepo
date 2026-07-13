@@ -415,6 +415,20 @@ def main():
 
 def _process_entry(raw: str) -> str:
     """Resolve and create/start a single timer entry; return the CLI output line."""
+    # Peel off a trailing @project override BEFORE range detection. Every
+    # range regex below anchors the range to the very start or very end of
+    # the string, so "desc TIME-TIME @project" (the documented <desc>
+    # <start>-<end> @<project> syntax) previously matched NEITHER range
+    # pattern — @project sits after the range, breaking the trailing-range
+    # anchor — and silently fell through to "start a timer with the whole
+    # raw string as description". Since Toggl auto-stops the current running
+    # entry on any new start, that corrupted an unrelated timer (2026-07-13).
+    at_override = re.search(r'\s@(\S+)\s*$', raw)
+    project_suffix = ""
+    if at_override:
+        project_suffix = " " + at_override.group(0).strip()
+        raw = raw[:at_override.start()].rstrip()
+
     # Check for time range: "desc HH:MM-HH:MM" or "HH:MM-HH:MM desc" or "desc H-H"
     # Try range at end first, then at start
     range_match = re.search(r'(\d{1,4}(?::\d{2})?)\s*-\s*(\d{1,4}(?::\d{2})?)\s*$', raw)
@@ -428,15 +442,19 @@ def _process_entry(raw: str) -> str:
             if ":" not in e and len(e) == 4:
                 e = e[:2] + ":" + e[2:]
             if ":" in s and ":" in e:
-                desc_part = range_match_start.group(3).strip()
+                desc_part = (range_match_start.group(3).strip() + project_suffix).strip()
                 desc, project, tags = resolve(desc_part)
                 return cmd_create_range(desc or desc_part, project, tags, s, e)
     if range_match:
         start_t = _norm_time(range_match.group(1))
         end_t = _norm_time(range_match.group(2))
-        desc_part = raw[:range_match.start()].strip()
+        desc_part = (raw[:range_match.start()].strip() + project_suffix).strip()
         desc, project, tags = resolve(desc_part)
         return cmd_create_range(desc or desc_part, project, tags, start_t, end_t)
+
+    # No range matched — restore the @project suffix for the backdate/default
+    # paths below, which already handle @ anywhere in the string via resolve().
+    raw = raw + project_suffix
 
     # Check for backdated start: "HHMM desc" or "desc HHMM"
     backdate_match = re.match(r'^(\d{4})\s+(.+)$', raw)

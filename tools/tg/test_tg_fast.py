@@ -89,6 +89,42 @@ def test_end_range_still_matches_legacy_formats():
     assert pattern.search("睡觉 22:00-06:00")
 
 
+def test_desc_range_at_project_creates_range_entry(monkeypatch):
+    """Regression (2026-07-13): 'desc TIME-TIME @project' — the documented
+    <desc> <start>-<end> @<project> syntax — must create a completed range
+    entry, not fall through to starting a new timer.
+
+    Every range regex in _process_entry anchors the range to the very start
+    or very end of the string. With '@project' trailing after the range,
+    neither anchor matched, so the whole string fell through to the default
+    start path. Since Toggl auto-stops the currently running entry whenever
+    a new one starts, that silently corrupted an unrelated running timer
+    (observed live: a 'Bill Hurwitz 1:1' entry got stretched and stripped of
+    its project by this exact input pattern)."""
+    mod = _import_tg_fast()
+    captured = []
+    monkeypatch.setattr(mod, "cmd_create_range",
+                        lambda desc, project, tags, s, e: captured.append((desc, project, tags, s, e)))
+    monkeypatch.setattr(mod, "cmd_start",
+                        lambda desc, project, tags: (_ for _ in ()).throw(
+                            AssertionError("must not fall through to cmd_start")))
+
+    mod._process_entry("bill hurwitz 1408-1430 @i9")
+    assert captured == [("bill hurwitz", "i9", [], "14:08", "14:30")]
+
+
+def test_desc_range_at_project_range_at_start_still_works(monkeypatch):
+    """Sanity check: range-at-start with a trailing @project already worked
+    before this fix (the range anchors to the START, so @project trailing
+    after the description doesn't interfere) — must keep working."""
+    mod = _import_tg_fast()
+    captured = []
+    monkeypatch.setattr(mod, "cmd_create_range",
+                        lambda desc, project, tags, s, e: captured.append((desc, project, tags, s, e)))
+    mod._process_entry("1430-1500 ES 1:1 @i9")
+    assert captured == [("ES 1:1", "i9", [], "14:30", "15:00")]
+
+
 def _import_tg_fast():
     """Import tg-fast.py as a module."""
     import importlib.util
