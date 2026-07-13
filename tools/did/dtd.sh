@@ -224,11 +224,11 @@ clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\
 _rr=\$(python3 -c "
 import sys
 RITUAL_DOMAIN = {'-1ibx':'i9','-1l':'g245','-1t':'n156','سمش':'hcm'}
-c = sys.argv[1]; bare = c.replace('😈','').strip(); proj=''; desc=c
+c = sys.argv[1]; bare = c.replace('😈','').strip(); proj=''
 for tag,dom in RITUAL_DOMAIN.items():
     if bare == tag or tag in bare.split():
-        proj = dom; desc = bare; break
-print(desc); print(proj)
+        proj = dom; break
+print(bare); print(proj)
 " "\$clean" 2>/dev/null)
 clean=\$(printf '%s' "\$_rr" | sed -n 1p)
 project=\$(printf '%s' "\$_rr" | sed -n 2p)
