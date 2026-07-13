@@ -1498,13 +1498,12 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
 
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
-    stamp the ritual emoji on the relevant 地支 block in build-order.md, and
+    stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
     credit 0分!P immediately.
 
     All 5 rituals now earn their points on manual completion, including ⏱️/✅
     (auto rituals) — see the note in the body for the OR semantics with the
-    daemon's automatic Toggl/Todoist validation, and why ⏱️/✅ target the
-    PREVIOUS block rather than the current one.
+    daemon's automatic Toggl/Todoist validation.
     """
     import sys as _s
     _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
@@ -1553,20 +1552,20 @@ def run_ritual(tag: str) -> dict:
     # Auto rituals (-1t/-1l): OR semantics (2026-07-13 redesign) — completing
     # the card is now an independent, equally-valid path to earning the marker,
     # alongside the daemon's automatic Toggl/Todoist validation at block close.
-    # ⏱️/✅ reward having recorded the PREVIOUS block (its Toggl time
-    # categorized, its completed tasks pointed), so a manual completion here
-    # targets that same previous block — not the current one — to stay
-    # consistent with what the daemon's own auto-check judges.
     is_auto = r.get("mode") == "auto"
 
-    # 2. Stamp the emoji on the target block header (local build-order.md).
-    #    Manual rituals (☀️/🎯/📧) target the CURRENT block. Auto rituals
-    #    (⏱️/✅) target the block that just ended, matching the daemon's own
-    #    "hour-4..hour-2" previous-block offset.
+    # 2. Stamp the emoji on the CURRENT block header (local build-order.md).
+    #    ALL 5 rituals target the current block, matching the daemon's own
+    #    convention: evaluate_and_mark_block's ⏱️/✅ CHECK looks at the
+    #    PREVIOUS block's window (hour-4..hour-2 — you can't know a block's
+    #    Toggl/task coverage is complete until it's over), but the resulting
+    #    STAMP always lands on `block_name`, the block currently being scored
+    #    — never on the block that was checked. (2026-07-13: an earlier cut
+    #    of this fix stamped the previous block instead, which put the
+    #    manual credit on the wrong header vs. what the user — and the
+    #    daemon — actually see as "this block's" ⏱️/✅.)
     bo = Path.home() / "vault/g245/build-order.md"
-    cur_idx = nb.current_block_index(datetime.now().hour)
-    target_idx = max(0, cur_idx - 1) if is_auto else cur_idx
-    block = nb.BRANCHES[target_idx]
+    block = nb.current_block(datetime.now().hour)
     out["block"] = block
     if not bo.exists():
         out["error"] = "build-order.md not found"
@@ -1591,35 +1590,34 @@ def run_ritual(tag: str) -> dict:
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a log write
             out["completed_today_error"] = str(e)
 
-    # 4. Credit 0分!P IMMEDIATELY (increment, never recompute — the 2026-07-11
-    #    clobber came from RE-SUMMING header emojis on a build-order.md copy
-    #    that can lag Ix's by several seconds/minutes over Syncthing, so a
-    #    "true" recompute here can UNDERCOUNT and SET P below what the daemon
-    #    (self-contained on Ix, no cross-machine read) already correctly wrote.
-    #    A pure `+N` append can't clobber — it only adds this ritual's own
-    #    points to whatever P currently holds. The daemon's boundary reconcile
-    #    remains the checksum: it re-derives ⏱️/✅ from live Toggl/Todoist on
-    #    its OWN local file each fire and re-groups P into one term per block,
-    #    correcting any provisional over/under-credit or ungrouped terms.
+    # 4. Credit 0分!P IMMEDIATELY: one term per block, always (2026-07-13).
     #
-    #    Grouped by block, when safe: manual rituals (☀️/🎯/📧) target the
-    #    CURRENT block, so `line_before` (this block's own header line, read
-    #    fresh) tells us whether another ritual already live-credited THIS
-    #    block — if so we merge into P's last term instead of opening a new
-    #    one. Auto rituals (⏱️/✅) target the PREVIOUS block, which is NOT
-    #    necessarily P's last term (the current block may already have its own
-    #    later term) — merging positionally there risks crediting the wrong
-    #    block, so auto credits always open a fresh term. The next daemon
-    #    reconcile (≤2h) re-groups it into the previous block's own term.
+    #    Prefer a full recompute from `new_text` (score_day: one term per
+    #    currently-stamped block, in chronological order) — this is what
+    #    keeps P readable, since positional append/merge can't tell "the
+    #    previous block" apart from "the current block's own later term"
+    #    (⏱️/✅ target the former, manual rituals credit the latter, and
+    #    once both exist in the same formula neither position is reliably
+    #    "the last term" for a given block). This is a best-effort immediate
+    #    credit only — the daemon's own boundary reconcile is still the
+    #    periodic validating checksum, independent of what did-fast does here.
+    #
+    #    Guard against the 2026-07-11 clobber: that bug was a recompute off a
+    #    build-order.md copy that can lag Ix's over Syncthing, so it could
+    #    UNDERCOUNT and SET P below what the daemon (self-contained on Ix) had
+    #    already correctly written moments earlier. The guard is simple and
+    #    sufficient — read the CURRENT live P total first; only SET the
+    #    recomputed formula if its total is >= the live total. Our own
+    #    just-written stamp on `new_text` means the common case recomputes
+    #    to something >= live (an improvement: more merged, same or higher
+    #    total). In the rare race (a daemon marker landed on Ix moments ago
+    #    and hasn't synced to us yet), the recompute would be LOWER than
+    #    live — the guard skips the SET and falls back to a plain `+N`
+    #    append instead, so P can still grow but never drops.
     pts = int(r.get("points") or 0)
     if pts and changed:
         now = datetime.now()
-        if is_auto:
-            same_block_merge = False
-        else:
-            emoji_pts_map = nb.emoji_points()
-            line_before = next((ln for b, ln in nb.iter_block_lines(text) if b == block), "")
-            same_block_merge = any(e in line_before for e in emoji_pts_map if e != emoji)
+        _, computed_total, computed_formula = nb.score_day(new_text)
 
         read_script = (
             'tell application "Microsoft Excel"\n'
@@ -1633,7 +1631,8 @@ def run_ritual(tag: str) -> dict:
             '    end repeat\n'
             '    if rr = 0 then return "ERR: no 0分 row"\n'
             '    set f to (get formula of cell ("P" & rr) of s) as text\n'
-            '    return (rr as text) & "|" & f\n'
+            '    set v to (get value of cell ("P" & rr) of s)\n'
+            '    return (rr as text) & "|" & f & "|" & (v as text)\n'
             'end tell'
         )
         try:
@@ -1641,23 +1640,23 @@ def run_ritual(tag: str) -> dict:
             raw = (read_res.stdout or "").strip()
             if read_res.returncode != 0 or "|" not in raw:
                 raise RuntimeError((read_res.stderr or raw or "read failed")[:120])
-            row_s, f = raw.split("|", 1)
+            row_s, f, v = raw.split("|", 2)
+            live_total = float(v or 0)
 
-            if f in ("", "0"):
-                terms = ["0"]
-            elif f.startswith("="):
-                terms = f[1:].split("+") or ["0"]
+            if computed_total >= live_total:
+                new_formula = computed_formula
+                regrouped = True
             else:
-                terms = ["0", f]
-
-            if same_block_merge and len(terms) > 1:
-                try:
-                    terms[-1] = str(int(terms[-1]) + pts)
-                except ValueError:
-                    terms.append(str(pts))
-            else:
+                # Fall back to a safe append — never decreases P.
+                if f in ("", "0"):
+                    terms = ["0"]
+                elif f.startswith("="):
+                    terms = f[1:].split("+") or ["0"]
+                else:
+                    terms = ["0", f]
                 terms.append(str(pts))
-            new_formula = "=" + "+".join(terms)
+                new_formula = "=" + "+".join(terms)
+                regrouped = False
 
             write_script = (
                 'tell application "Microsoft Excel"\n'
@@ -1668,7 +1667,7 @@ def run_ritual(tag: str) -> dict:
             )
             write_res = ix_run(write_script)
             out["p_credit"] = {"points": pts, "ok": write_res.returncode == 0,
-                               "merged": same_block_merge,
+                               "regrouped": regrouped,
                                "excel": (write_res.stdout or write_res.stderr or "").strip()[:60]}
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
             out["p_credit_error"] = str(e)
