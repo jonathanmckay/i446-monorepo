@@ -1,31 +1,42 @@
-"""Regression tests: -1t/-1l (auto rituals) earn points on manual completion.
+"""Regression tests: -1t/-1l (auto rituals) earn points on manual completion,
+and 0分!P always reads as one term per block.
 
-Bug (pre-2026-07-13): completing the \U0001f608 -1t / \U0001f608 -1l card was
-visibility-only — run_ritual's "mode == auto" branch closed the Todoist
+Bug 1 (pre-2026-07-13): completing the \U0001f608 -1t / \U0001f608 -1l card
+was visibility-only — run_ritual's "mode == auto" branch closed the Todoist
 card and returned immediately, with NO emoji stamp and NO 0分!P credit. The
 daemon's automatic Toggl/Todoist validation (_todoist_l_satisfied etc.) was
-the ONLY path to earning ⏱️/✅, so a user who genuinely did the
-work but whose real tasks lacked a [N]/{N} marker (or whose Toggl
-categorization missed the coverage threshold) could complete the card
-every 2h block and never see the points land.
+the ONLY path to earning ⏱️/✅, so a user who genuinely did the work but whose
+real tasks lacked a [N]/{N} marker (or whose Toggl categorization missed the
+coverage threshold) could complete the card every 2h block and never see the
+points land.
 
 Fix: manual completion is now an independent, equally-valid path (OR'd with
 the daemon's auto-check — see build-order-daemon.py's _marker_earned and
 DAEMON_OWNED_MARKERS) — completing ⏱️/✅ stamps the emoji and credits P
-immediately, same as ☀️/\U0001f3af/\U0001f4e7. Since ⏱️/✅ measure the
-PREVIOUS block (not the block the card is completed in), the manual stamp
-targets that same previous block, not the current one.
+immediately, same as ☀️/\U0001f3af/\U0001f4e7. Since ⏱️/✅ measure the PREVIOUS
+block (not the block the card is completed in), the manual stamp targets that
+same previous block, not the current one.
 
-P-credit stays append-only (never a from-headers recompute): the 2026-07-11
-clobber (see test_ritual_immediate_p.py) came from recomputing P off a
-build-order.md copy that can lag Ix's over Syncthing, silently undercounting
-and SETting P below what the daemon's own (self-contained, no cross-machine
-read) reconcile had already correctly written. Since ⏱️/✅ target a block that
-may not be P's last term (the current block can already have its own later
-term), a positional "merge into last term" isn't attempted for them either —
-they always open a fresh term, appended safely, and the next daemon reconcile
-(≤2h, running on Ix against Ix's own file) re-groups it into the previous
-block's own term.
+Bug 2 (2026-07-13, same day): the first cut of this fix kept P append-only —
+a positional "merge into the last term" for manual (current-block) rituals,
+and always-open-a-new-term for auto (previous-block) rituals, to avoid ever
+recomputing from a build-order.md copy that can lag Ix's over Syncthing (the
+2026-07-11 clobber — see test_ritual_immediate_p.py). That's provably safe
+but was observed live to leave P showing multiple terms for one block (e.g.
+`=0+6+3+10+7+3` — five terms for four blocks, 巳 stuck at 10 instead of 13)
+whenever an auto credit landed after the current block already had its own
+later term — exactly the case the position-based append can't merge.
+
+Fix: prefer a full recompute (`neon_blocks.score_day`, one term per
+currently-stamped block, chronological order) using the header text this
+very call just wrote to — so it can't be missing OUR OWN stamp. Guard against
+the 2026-07-11 failure mode with a single check: only use the recomputed
+formula if its total is >= the CURRENTLY LIVE P total (read fresh from
+Excel); otherwise fall back to a plain append, which can still grow P but
+never decreases it. The recompute is an improvement (better grouping, same or
+higher total) in the common case; the rare cross-machine race (a daemon
+marker landed on Ix moments ago, not yet synced to us) fails the guard and
+degrades to append-only instead of clobbering.
 
 This repo's convention (see test_did_ritual_card_routing.py) is structural
 source-inspection over mocking for did-fast.py, since exercising run_ritual
@@ -38,6 +49,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DID_FAST = HERE / "did-fast.py"
+
+sys.path.insert(0, str(HERE.parent.parent / "lib"))
+import neon_blocks as nb  # noqa: E402
 
 
 def _run_ritual_body() -> str:
@@ -69,27 +83,49 @@ def test_auto_mode_targets_previous_block():
         "the daemon's own hour-4..hour-2 offset — not the current block")
 
 
-def test_p_credit_is_append_only_never_a_full_recompute():
-    # Must still be a pure increment (never `score_day`/a from-headers
-    # recompute) — see test_ritual_immediate_p.py for why a recompute can
-    # clobber P using a stale (Syncthing-lagged) local build-order.md copy.
+def test_p_credit_prefers_recompute_guarded_by_live_total():
     body = _run_ritual_body()
-    assert "score_day(" not in body, (
-        "P-credit must stay append-only; a from-headers recompute reintroduces "
-        "the 2026-07-11 clobber via Ix/Straylight sync lag")
-    assert "terms.append(str(pts))" in body, (
-        "must append THIS ritual's own points onto whatever P currently holds")
+    assert "nb.score_day(new_text)" in body, (
+        "must compute the grouped, one-term-per-block formula from the "
+        "just-written header text")
+    assert "computed_total >= live_total" in body, (
+        "must only use the recomputed formula when it's not a regression "
+        "vs. the currently live P total — this is what prevents the "
+        "2026-07-11 clobber (a recompute from a stale copy undercounting)")
+    assert "live_total = float(v or 0)" in body, (
+        "must read the CURRENT live P value fresh before deciding")
 
 
-def test_auto_mode_never_attempts_positional_merge():
-    # Auto rituals target the PREVIOUS block, which is not necessarily P's
-    # last term (the current block may already have a later term of its own)
-    # — merging into "last term" for them would silently credit the wrong
-    # block, so `same_block_merge` must be hardcoded False for is_auto.
+def test_p_credit_falls_back_to_append_never_decreases():
     body = _run_ritual_body()
-    i_is_auto = body.index("if is_auto:")
-    segment = body[i_is_auto:i_is_auto + 200]
-    assert "same_block_merge = False" in segment
+    i_else = body.index("else:\n                # Fall back to a safe append")
+    fallback = body[i_else:i_else + 400]
+    assert "terms.append(str(pts))" in fallback, (
+        "the guard-triggered fallback must still credit this ritual's own "
+        "points via append, not silently drop them")
+
+
+def test_score_day_groups_all_stamped_blocks_into_one_term_each():
+    # Directly demonstrates the fix for the observed bug: a block (巳) with
+    # ALL 5 rituals stamped must score as ONE term (13), not fragment across
+    # multiple terms the way append-only accumulation could leave it.
+    text = (
+        "## -1₲\n\n"
+        "- 卯 ⏱️ ✅\n"
+        "    - [ ] a\n"
+        "- 辰 ⏱️\n"
+        "    - [ ] b\n"
+        "- 巳 ☀️ \U0001f3af \U0001f4e7 ⏱️ ✅\n"
+        "    - [ ] c\n"
+        "- 午 ☀️ \U0001f3af \U0001f4e7\n"
+        "    - [ ] d\n"
+    )
+    parts, total, formula = nb.score_day(text)
+    assert dict(parts) == {"卯": 6, "辰": 3, "巳": 13, "午": 7}
+    assert total == 29
+    assert formula == "=0+6+3+13+7", (
+        "exactly one term per block — this is what 'every block should only "
+        "have 1 number' means for the P formula")
 
 
 if __name__ == "__main__":
