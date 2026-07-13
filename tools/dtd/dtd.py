@@ -32,6 +32,10 @@ STATE_DIR = Path.home() / ".local/state/jm"
 CACHE = STATE_DIR / "task-queue.json"
 DONE_FILE = STATE_DIR / "completed-today.json"
 CACHE_MAX_AGE = 180  # seconds; refresh from Todoist if staler
+SUMMARY_MAX_AGE = 45  # seconds; day-total (points + done) cache
+
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
 
 # Neon domain palette — mirrors tools/did/dtd.sh COLORS (RGB → hex).
 COLORS = {
@@ -215,6 +219,69 @@ def complete(content: str) -> dict:
     }
 
 # ---------------------------------------------------------------------------
+# Day totals for the header: points so far today + tasks completed today.
+# Both derived from cross-machine-durable sources (Excel Σ on Ix + Todoist +
+# the Todoist-due-date cache) rather than the machine-local completed-today.json,
+# so a completion made on the desktop still counts here. MUST run on Ix (the
+# Excel daemon is local and the cache reflects advanced habit due dates).
+# ---------------------------------------------------------------------------
+_SUMMARY = {"at": 0.0, "val": None}
+
+def _todoist_completed_today() -> int:
+    """Count of Todoist completions today. NOTE: recurring habits are absent —
+    completing a recurring task reschedules it, so it never lands in the
+    completed ledger. Those are added back from the cache in day_summary()."""
+    try:
+        tok = TODOIST_TOKEN_FILE.read_text().strip()
+    except Exception:
+        return 0
+    if not tok:
+        return 0
+    today = _dt.date.today().isoformat()
+    url = ("https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
+           "?since=%sT00:00:00&until=%sT23:59:59&limit=200" % (today, today))
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return len(json.loads(r.read()).get("items", []))
+
+def day_summary(force: bool = False) -> dict:
+    now = time.time()
+    if not force and _SUMMARY["val"] is not None and now - _SUMMARY["at"] < SUMMARY_MAX_AGE:
+        return _SUMMARY["val"]
+    today = _dt.date.today()
+    iso = today.isoformat()
+
+    # points so far today = 0分 Σ (col D), the grand total for today's row.
+    points = 0
+    try:
+        from neon import excel
+        r = excel.read("0分", "D", date="%d/%d" % (today.month, today.day))
+        if r.get("ok"):
+            points = int(float(r.get("value") or 0))
+    except Exception as e:
+        print("WARN day_summary points:", e, file=sys.stderr)
+
+    # tasks completed today = Todoist-completed (non-recurring tasks/rituals/goals)
+    # + daily habits whose due date advanced past today (recurring completions
+    # Todoist hides). Matches the felt count; independent of which machine did it.
+    done = 0
+    try:
+        done += _todoist_completed_today()
+    except Exception as e:
+        print("WARN day_summary todoist:", e, file=sys.stderr)
+    try:
+        d = json.loads(CACHE.read_text())
+        done += sum(1 for key in ("0neon", "夜neon") for t in d.get(key, [])
+                    if isinstance(t, dict) and t.get("recurring")
+                    and t.get("due") and t["due"] > iso)
+    except Exception as e:
+        print("WARN day_summary advanced:", e, file=sys.stderr)
+
+    val = {"points": points, "done": done}
+    _SUMMARY.update(at=now, val=val)
+    return val
+
+# ---------------------------------------------------------------------------
 # Flask
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
@@ -223,7 +290,15 @@ app = Flask(__name__)
 def api_tasks():
     try:
         force = request.args.get("refresh") == "1"
-        return jsonify({"ok": True, "tasks": build_tasks(force_refresh=force)})
+        return jsonify({"ok": True, "tasks": build_tasks(force_refresh=force),
+                        "summary": day_summary(force=force)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/summary")
+def api_summary():
+    try:
+        return jsonify({"ok": True, **day_summary(force=request.args.get("refresh") == "1")})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -312,6 +387,12 @@ function toast(msg, err){
   toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 1500);
 }
 
+function setTally(p, c){
+  total = p||0; count = c||0;
+  document.getElementById('tot').textContent = total;
+  document.getElementById('cnt').textContent = count;
+}
+
 async function load(refresh){
   list.innerHTML = '<div class="loading">loading…</div>';
   try {
@@ -319,6 +400,7 @@ async function load(refresh){
     const d = await r.json();
     if(!d.ok) throw new Error(d.error||'fetch failed');
     render(d.tasks);
+    if(d.summary) setTally(d.summary.points, d.summary.done);
   } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
 }
 
@@ -403,9 +485,7 @@ async function commit(t){
   } catch(e){ toast('offline · not synced', true); }
 }
 
-document.getElementById('reload').onclick = ()=>{ total=0;count=0;
-  document.getElementById('tot').textContent=0; document.getElementById('cnt').textContent=0;
-  load(true); };
+document.getElementById('reload').onclick = ()=> load(true);
 load(false);
 </script>
 </body>

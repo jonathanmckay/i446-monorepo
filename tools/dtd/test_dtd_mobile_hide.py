@@ -66,3 +66,35 @@ def test_completed_ids_still_hides_within_ix_window(tmp_path):
 if __name__ == "__main__":
     import sys, pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── day_summary: header shows real day totals, cross-machine ─────────────────
+
+def test_day_summary_counts_points_and_advanced_habits(tmp_path, monkeypatch):
+    cache = {"0neon": [
+        {"id": "a", "due": TOMORROW, "recurring": True, "labels": ["0neon"]},   # done today (advanced)
+        {"id": "b", "due": TODAY,    "recurring": True, "labels": ["0neon"]},    # still due, not done
+    ], "夜neon": [
+        {"id": "c", "due": TOMORROW, "recurring": True, "labels": ["夜neon"]},   # done today (advanced)
+    ]}
+    cf = tmp_path / "task-queue.json"
+    cf.write_text(json.dumps(cache))
+    dtd.CACHE = cf
+    monkeypatch.setattr(dtd, "_todoist_completed_today", lambda: 14)
+    import neon.excel as ex
+    monkeypatch.setattr(ex, "read", lambda *a, **k: {"ok": True, "value": "664.857"})
+    s = dtd.day_summary(force=True)
+    assert s["points"] == 664, "points = int(float(0分 Σ))"
+    # 14 Todoist completions + 2 daily habits advanced past today (a, c); b not counted
+    assert s["done"] == 16
+
+
+def test_day_summary_degrades_gracefully_when_excel_down(tmp_path, monkeypatch):
+    dtd.CACHE = tmp_path / "missing.json"
+    monkeypatch.setattr(dtd, "_todoist_completed_today", lambda: 0)
+    import neon.excel as ex
+    def _boom(*a, **k):
+        raise RuntimeError("daemon down")
+    monkeypatch.setattr(ex, "read", _boom)
+    s = dtd.day_summary(force=True)
+    assert s == {"points": 0, "done": 0}, "a dead Excel daemon must not 500 the header"

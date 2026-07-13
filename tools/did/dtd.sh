@@ -44,6 +44,11 @@ DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 # POSTs change-footer to it ~10x/s. See dtd-ticker.py.
 DTD_PORT="/tmp/dtd-$DTD_ID.port"
 DTD_HDRGEN="/tmp/dtd-$DTD_ID.hdrgen"
+# Day tally ("<points> 分 · <done> done") for the header. A background loop pulls
+# it from the Ix mobile server's /api/summary (the single cross-machine
+# computation) into this file; the header generator reads the file (no network
+# in the header hot path).
+DTD_TALLY="/tmp/dtd-$DTD_ID.tally"
 DTD_TICKER="$HOME/i446-monorepo/tools/did/dtd-ticker.py"
 
 if [[ ! -f "$CACHE" ]]; then
@@ -1248,7 +1253,12 @@ export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: 
 cat > "$DTD_HDRGEN" <<HDRGENEOF
 #!/bin/zsh
 ws=\$(cat "$DTD_HDR" 2>/dev/null | tr '\n' ' ')
-printf '%s left   %s   %s' "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
+tally=\$(cat "$DTD_TALLY" 2>/dev/null | tr '\n' ' ')
+if [ -n "\$tally" ]; then
+  printf '%s   %s left   %s   %s' "\$tally" "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
+else
+  printf '%s left   %s   %s' "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
+fi
 HDRGENEOF
 chmod +x "$DTD_HDRGEN"
 
@@ -1270,6 +1280,26 @@ export TOGGL_MAX_429_DELAY=1
 rm -f "$DTD_PORT"
 python3 "$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER" &>/dev/null &
 TICKER_PID=$!
+
+# Day-tally refresher: pull the single Ix computation (points 分 + tasks done)
+# every 15s into $DTD_TALLY so the header shows today's real totals. It reads
+# from the always-on Ix mobile server (ix:5560/api/summary) rather than
+# recomputing here — the Excel daemon is on Ix and this machine's cache lags.
+# Best-effort; self-exits when the session sentinel is gone.
+: > "$DTD_TALLY"
+(
+  while [[ -f "$DTD_SESSION" ]]; do
+    t=$(curl -fsS --max-time 3 http://ix:5560/api/summary 2>/dev/null \
+        | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin)
+    if d.get("ok"): print("%s 分 · %s done" % (d.get("points",0), d.get("done",0)))
+except Exception: pass' 2>/dev/null)
+    [[ -n "$t" ]] && printf '%s' "$t" > "$DTD_TALLY"
+    sleep 15
+  done
+) &>/dev/null &
+TALLY_PID=$!
 
 # Auto-reload watcher: when the LIVE task cache ($CACHE) changes on its own —
 # e.g. a /-1g or /0g add elsewhere runs `did-fast --refresh-cache` — pull it
@@ -1572,5 +1602,6 @@ fi
 # $DTD_PORT is gone, below).
 kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
+kill "$TALLY_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
