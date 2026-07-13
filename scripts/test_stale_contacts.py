@@ -59,6 +59,22 @@ def test_default_task_content_is_auto_marked():
     assert "overdue monthly" in body
 
 
+def test_default_body_carries_default_points():
+    # The default "Reach out to <name>" body defaults to [10] pts (2026-07-13).
+    c = {"name": "Stuart Bowers", "cadence": "monthly",
+         "last_contact": "2026-02-15", "outreach_task": None}
+    body = sc.task_content(c)
+    assert body.rstrip().endswith(f"[{sc.DEFAULT_POINTS}]")
+    assert sc.DEFAULT_POINTS == 10
+
+
+def test_custom_override_not_given_extra_points():
+    # A custom outreach_task sets its own points — no default [10] appended.
+    c = {"name": "Carol Bryan", "cadence": "weekly",
+         "last_contact": "2026-06-11", "outreach_task": "call mom (20) [20]"}
+    assert sc.task_content(c) == "😈 call mom (20) [20]"  # unchanged, single [20]
+
+
 def test_outreach_task_override_wins_and_is_marked():
     c = {"name": "Carol Bryan", "cadence": "weekly",
          "last_contact": "2026-06-11", "outreach_task": "call mom (20) [20]"}
