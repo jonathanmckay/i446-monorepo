@@ -951,16 +951,16 @@ def render_header() -> list[tuple[str, str]]:
     # The running process is behind the file on disk → tell the user to restart;
     # the whole header goes red so it can't be missed.
     if _code_is_stale():
-        title = f" tg · ⚠ RESTART — code updated{pts_str} "
+        title = f" janus · ⚠ RESTART — code updated{pts_str} "
         line = title + "─" * max(0, WIDTH_HINT - len(title))
         return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
-        title = f" tg · {now:%a %H:%M:%S}{pts_str} "
+        title = f" janus · {now:%a %H:%M:%S}{pts_str} "
         line = title + "─" * max(0, WIDTH_HINT - len(title))
         return [("class:header", line + "\n")]
     # Viewing a past day: badge the date so it's never mistaken for today.
     viewed = view_now()
-    title = f" tg · ◀ {viewed:%a %-m/%-d}{pts_str} · ⎋ today "
+    title = f" janus · ◀ {viewed:%a %-m/%-d}{pts_str} · ⎋ today "
     line = title + "─" * max(0, WIDTH_HINT - len(title))
     return [("class:no_entry", line + "\n")]
 
@@ -1505,9 +1505,20 @@ def _block_display_pts(name: str) -> int:
         cur_now = hour_to_block(view_now().hour)
         v = (_current_block_running_pts()
              if cur_now and name == cur_now[0] else 0)
-    # Clamp only when Σ is a sane positive (a failed/zero total read must not
-    # blank a real block).
-    return min(v, STATE.today_points) if STATE.today_points > 0 else v
+    # Clamp to Σ only when it's a sane positive (a failed/zero total read must
+    # not blank a real block). But a value fetch_points itself could never
+    # produce still needs an upper bound in THIS branch: fetch_points' own
+    # gates (_total_trustworthy, _blocks_plausible) only run before adopting a
+    # read into STATE, so nothing here re-verifies what's already sitting in
+    # STATE once today_points has gone back to 0 (a cross-day reset, or a
+    # read failure) — a stale/torn block_points or block_running_pts value
+    # would then display with NO ceiling at all (2026-07-14: 8442分 shown on
+    # a block; never traced to any value fetch_points actually computed or
+    # rejected, so the display layer itself needed its own hard floor).
+    # _MAX_PLAUSIBLE_TOTAL is fetch_points' own "no real day tops this" cap;
+    # applying it here too is a second, independent line of defense.
+    return (min(v, STATE.today_points) if STATE.today_points > 0
+            else min(v, _MAX_PLAUSIBLE_TOTAL))
 
 
 def _detail_merge_past(win_start, win_end) -> list[dict]:

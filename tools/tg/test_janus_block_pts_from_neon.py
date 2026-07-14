@@ -134,3 +134,23 @@ def test_block_display_no_clamp_when_total_unknown():
     m.STATE.today_points = 0
     m.STATE.block_points = {"辰": 100}
     assert m._block_display_pts("辰") == 100
+
+
+def test_block_display_hard_ceiling_when_total_unknown():
+    """Regression (2026-07-14): "8442分" shown on a block. Never traced to any
+    value fetch_points actually computed, adopted, or rejected (its own gates
+    — _total_trustworthy, _blocks_plausible — cap everything it writes to
+    STATE at _MAX_PLAUSIBLE_TOTAL before it ever lands there) — but nothing
+    re-verifies what's already SITTING in STATE once today_points has gone
+    back to 0 (cross-day reset, or a read failure), so a stale/torn value in
+    that branch had no ceiling at all. The "no clamp when total unknown" gap
+    above must still let a NORMAL value (100) through unclamped, but an
+    implausible one must not display raw."""
+    m = _load_tui()
+    m.STATE.today_points = 0
+    m.STATE.block_points = {"辰": 8442}
+    assert m._block_display_pts("辰") == m._MAX_PLAUSIBLE_TOTAL
+    # A sane value in the same no-total-known state is untouched (no regression
+    # on the fix directly above).
+    m.STATE.block_points = {"辰": 100}
+    assert m._block_display_pts("辰") == 100

@@ -48,6 +48,31 @@ def test_header_shows_restart_banner_when_stale():
     assert any(s == "class:no_entry" for s, _ in frags), "banner is rendered red"
 
 
+def test_header_says_janus_not_tg():
+    """Regression (2026-07-14): the tg-tui -> Janus rename (2026-07-13) missed
+    render_header's title, which still read " tg · ..." — a bare "tg" with no
+    hyphen/underscore, so the rename's grep for tg-tui|tg_tui|TG_TUI never
+    matched it. All three header variants (live, stale-restart, past-day) must
+    say "janus", not "tg"."""
+    mod = _load_tui()
+    mod.STATE.today_points = 0
+    mod.STATE.day_offset = 0
+    mod._stale_state.update({"checked": 1e12, "stale": False})
+    text = "".join(t for _, t in mod.render_header())
+    assert "janus" in text
+    assert " tg " not in text and "tg ·" not in text
+
+    mod._stale_state.update({"checked": 1e12, "stale": True})
+    text = "".join(t for _, t in mod.render_header())
+    assert "janus" in text
+    assert "tg ·" not in text
+
+    mod.STATE.day_offset = -1
+    text = "".join(t for _, t in mod.render_header())
+    assert "janus" in text
+    assert "tg ·" not in text
+
+
 def test_stale_check_is_cached():
     """The 0.1s repaint must not stat the file every frame — the result is cached
     for ~5s."""
