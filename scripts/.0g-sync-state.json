@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "all neon colors": {
-      "todoist_id": "6h5P2V5hv4565gw2",
-      "minutes": 60
-    },
-    "hiit as part of bball {20} @hcbp": {
-      "todoist_id": "6h5P2VFqM8r4rJpR",
-      "minutes": null
-    }
-  },
-  "last_sync": "2026-07-13T18:00:06.651117-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-13T20:00:05.532785-07:00"
 }
