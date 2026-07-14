@@ -136,8 +136,7 @@ def write_answers(answers: dict, today: _dt.date) -> str:
 def run_form(today: _dt.date) -> dict | None:
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
-    from prompt_toolkit.layout.containers import ScrollablePane
+    from prompt_toolkit.layout import HSplit, Layout, ScrollablePane, VSplit, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
     from prompt_toolkit.styles import Style
     from prompt_toolkit.widgets import Frame, TextArea
