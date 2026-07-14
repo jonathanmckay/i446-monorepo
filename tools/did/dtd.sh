@@ -1057,6 +1057,14 @@ msg = f'✂ +{pts_today} today / [{remaining_pts}] deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
 " "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id"
 
+# Flush tty input buffered while the osascript GUI dialogs held focus. With the
+# terminal idle behind the dialogs, two-finger touchpad scroll emits ESC[A/ESC[B
+# arrow bursts that queue in the tty input buffer; left unread, fzf dumps the
+# whole burst into its query as literal ^[[A^[[B text on return (bug 2026-07-14).
+# Draining here consumes them before fzf reads. Also reset mouse modes, matching
+# the defer/points/edit action scripts.
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 SPLITEOF
 # Substitute placeholder paths
 sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_JOURNAL|$DTD_JOURNAL|g" "$DTD_SPLIT"
