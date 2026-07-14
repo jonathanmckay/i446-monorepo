@@ -1496,6 +1496,42 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
     return results
 
 
+def _is_daily_recurrence(due_string: str) -> bool:
+    """True for DAILY recurrences only, where the next occurrence == tomorrow.
+    Weekly/monthly recurrences have their own next-occurrence math (next matching
+    weekday / next month), so fast-forwarding them to 'tomorrow' would break the
+    cadence — a plain /close (advances one interval) is the right catch-up there
+    for a single miss."""
+    s = (due_string or "").lower()
+    return ("every day" in s or "daily" in s
+            or bool(re.search(r"\bevery (morning|afternoon|evening|night)\b", s)))
+
+
+def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[bool, str | None]:
+    """Reschedule an OVERDUE recurring task forward to `target_iso`, preserving
+    its recurrence, instead of a plain /close.
+
+    /close advances a recurrence by ONE interval from the task's (stale) due
+    date, so a daily habit that fell behind can never catch up — it stays
+    overdue and lingers in the Todoist mobile Today view forever (2026-07-13:
+    '2nd hci' stuck at 2026-06-29). Passing due_date + the bare recurrence
+    due_string re-anchors the date to the next occurrence without dropping the
+    repeat (same shape defer-fast uses for recurring parents)."""
+    body = {"due_date": target_iso}
+    if due_string:
+        body["due_string"] = due_string
+    try:
+        req = urllib.request.Request(
+            f"{TODOIST_BASE}/tasks/{task_id}",
+            data=json.dumps(body).encode(), method="POST",
+            headers={"Authorization": f"Bearer {TODOIST_TOKEN}",
+                     "Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=15)
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
     stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
@@ -1648,12 +1684,17 @@ def run_ritual(tag: str) -> dict:
                 regrouped = True
             else:
                 # Fall back to a safe append — never decreases P.
-                if f in ("", "0"):
-                    terms = ["0"]
+                # No literal leading "0" term (see neon_blocks.score_day) —
+                # each block gets exactly one term, so term-count == block-count.
+                if f in ("", "0", "=0"):
+                    terms = []
                 elif f.startswith("="):
-                    terms = f[1:].split("+") or ["0"]
+                    inner = f[1:]
+                    terms = inner.split("+") if inner else []
+                    if terms == ["0"]:
+                        terms = []
                 else:
-                    terms = ["0", f]
+                    terms = [f]
                 terms.append(str(pts))
                 new_formula = "=" + "+".join(terms)
                 regrouped = False
@@ -1989,9 +2030,11 @@ end tell'''
     defer_items = {}  # tid → (defer_date, points_claimed, content)
     id_to_name = {}
     future_skipped = []  # tasks skipped because due date is in the future
+    catch_up = []  # (tid, due_string) for OVERDUE recurring habits to fast-forward
     # 0neon recurring tasks that may be completed in advance
     ADVANCE_ALLOWED = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
     today_str = date.today().isoformat()
+    tomorrow_str = (date.today() + timedelta(days=1)).isoformat()
     # Idempotency source of truth: a recurring habit already in today's
     # completed-today.json must NOT be closed again. Each close advances an
     # "every day" recurrence by a day, so a same-day double-tap drifts the due
@@ -2021,10 +2064,19 @@ end tell'''
             # Guard: don't close tasks due in the future (prevents double-tap on recurring)
             task_due = r.todoist_task.get("due", "")
             if task_due and task_due > today_str:
-                # Allow advance-completion for specific 0neon tasks
+                # Allow advance-completion for specific 0neon tasks, but ONLY one
+                # day ahead (due == tomorrow). Without the ceiling, an
+                # advance-allowed daily habit (新闻/push/hiit/...) advances one
+                # more day on every re-complete and drifts arbitrarily far into
+                # the future, dropping off dtd's today list entirely (2026-07-14:
+                # hiit reached due+2 and vanished). completed-today can't backstop
+                # it because advance-completion is exactly the "not yet done for
+                # this occurrence" case.
                 is_0neon = "0neon" in r.todoist_task.get("labels", [])
                 name_lower = r.item.name.lower()
-                if is_0neon and name_lower not in ADVANCE_ALLOWED:
+                advance_ok = (is_0neon and name_lower in ADVANCE_ALLOWED
+                              and task_due <= tomorrow_str)
+                if not advance_ok:
                     future_skipped.append({
                         "id": tid,
                         "name": r.item.name,
@@ -2033,21 +2085,29 @@ end tell'''
                         "warning": "already done today",
                     })
                     continue
-                elif not is_0neon:
-                    future_skipped.append({
-                        "id": tid,
-                        "name": r.item.name,
-                        "content": r.todoist_task.get("content", ""),
-                        "due": task_due,
-                    })
-                    continue
             if r.item.defer_date:
                 pts = r.item.points_override or r.fen_points or 0
                 defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
+            elif (r.todoist_task.get("recurring") and task_due and task_due < today_str
+                  and _is_daily_recurrence(r.todoist_task.get("due_string", ""))):
+                # OVERDUE *daily* habit: a plain /close advances only +1 interval
+                # from the stale due date, so a multi-day-behind daily task can
+                # never catch up and lingers overdue on mobile forever
+                # (2026-07-13: '2nd hci' stuck at 2026-06-29). Fast-forward it to
+                # tomorrow instead. Scoped to daily because tomorrow is only the
+                # correct next occurrence for a daily recurrence; weekly/monthly
+                # tasks self-heal via a normal /close (advances one interval).
+                catch_up.append((tid, r.todoist_task.get("due_string", "")))
             else:
                 task_ids.append(tid)
 
     close_results = close_todoist_tasks(task_ids)
+
+    # Fast-forward OVERDUE recurring habits to their next occurrence (see
+    # catch_up_recurring) so they stop lingering overdue in Todoist mobile.
+    catch_up_results = {}
+    for _tid, _due_string in catch_up:
+        catch_up_results[_tid] = catch_up_recurring(_tid, _due_string, tomorrow_str)
 
     # Defer tasks (reschedule + deduct points)
     defer_results = {}
