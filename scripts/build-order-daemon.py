@@ -537,14 +537,14 @@ def neon_set_marker(target_date: dt.date, col: str, dry_run: bool = False) -> st
 
 
 def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False) -> str:
-    """Append score to -1₦ column (P) for target_date's row as =0+13+10+8 formula,
+    """Append score to -1₦ column (P) for target_date's row as =13+10+8 formula,
     so the user can see a record of what was added at each block boundary."""
     body = (
         f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
         '    set oldFormula to formula of yCell\n'
         '    if oldFormula is "" or oldFormula is "0" then\n'
-        f'        set formula of yCell to "=0+{score}"\n'
-        f'        return "P_SET =0+{score}"\n'
+        f'        set formula of yCell to "={score}"\n'
+        f'        return "P_SET ={score}"\n'
         '    else\n'
         f'        set formula of yCell to oldFormula & "+{score}"\n'
         f'        return "P_APPEND " & oldFormula & "+{score}"\n'
@@ -598,7 +598,7 @@ def _live_for_block(block_name: str, hour: int, target_date: dt.date):
 
 
 def neon_set_p(target_date: dt.date, formula: str, total: int, dry_run: bool = False) -> str:
-    """SET -1₦ (col P) to `formula` (e.g. '=0+4+3+13'), replacing the cell. Used
+    """SET -1₦ (col P) to `formula` (e.g. '=4+3+13'), replacing the cell. Used
     by the reconcile so the value is idempotent and self-healing (no double-count
     on re-fire). Verifies the write by reading the cell back, mirroring
     neon_add_score_to_p."""
@@ -668,7 +668,8 @@ def reconcile_p_for_day(target_date: dt.date, upto_hour: int,
         _strip_unearned_markers(bn, live, dry_run=dry_run)
         parts.append(score_block_from_emojis(bn, live=live))
     total = sum(parts)
-    formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
+    # One term per block — no literal leading "0" (see neon_blocks.score_day).
+    formula = "=" + "+".join(str(p) for p in parts) if parts else "=0"
     log(f"reconcile_p: {target_date} parts={parts} total={total}")
     return neon_set_p(target_date, formula, total, dry_run=dry_run)
 
@@ -704,7 +705,8 @@ def compute_p_formula(target_date: dt.date, upto_hour: int,
     if current_block:
         parts.append(score_block_from_emojis(current_block, live=None))
     total = sum(parts)
-    formula = "=0+" + "+".join(str(p) for p in parts) if parts else "=0"
+    # One term per block — no literal leading "0" (see neon_blocks.score_day).
+    formula = "=" + "+".join(str(p) for p in parts) if parts else "=0"
     return formula, total, parts
 
 

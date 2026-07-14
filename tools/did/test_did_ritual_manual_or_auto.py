@@ -109,7 +109,7 @@ def test_p_credit_prefers_recompute_guarded_by_live_total():
 def test_p_credit_falls_back_to_append_never_decreases():
     body = _run_ritual_body()
     i_else = body.index("else:\n                # Fall back to a safe append")
-    fallback = body[i_else:i_else + 400]
+    fallback = body[i_else:i_else + 650]
     assert "terms.append(str(pts))" in fallback, (
         "the guard-triggered fallback must still credit this ritual's own "
         "points via append, not silently drop them")
@@ -133,9 +133,10 @@ def test_score_day_groups_all_stamped_blocks_into_one_term_each():
     parts, total, formula = nb.score_day(text)
     assert dict(parts) == {"卯": 6, "辰": 3, "巳": 13, "午": 7}
     assert total == 29
-    assert formula == "=0+6+3+13+7", (
-        "exactly one term per block — this is what 'every block should only "
-        "have 1 number' means for the P formula")
+    assert formula == "=6+3+13+7", (
+        "exactly one term per block, no stray leading '0' — otherwise a day "
+        "with N scored blocks shows N+1 terms (the literal '0' miscounted as "
+        "a phantom block; observed live 2026-07-14: 6 terms for 5 blocks)")
 
 
 if __name__ == "__main__":

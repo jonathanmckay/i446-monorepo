@@ -313,7 +313,7 @@ def test_reconcile_sets_total_over_all_fired_blocks(tmp_path, monkeypatch):
     # upto_hour=8 → fire hours {4,6,8}; 4 has no block, 6→卯(3), 8→辰(🎯+⏱️=6)
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)
     assert captured["total"] == 9, captured           # 3 + 6, not just one block
-    assert captured["formula"] == "=0+3+6"
+    assert captured["formula"] == "=3+6"
 
 
 def test_reconcile_is_idempotent(tmp_path, monkeypatch):
@@ -329,7 +329,7 @@ def test_reconcile_is_idempotent(tmp_path, monkeypatch):
     import datetime as dt
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 6)
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 6)
-    assert seen[0] == seen[1] == ("=0+6", 6)          # identical, no accumulation
+    assert seen[0] == seen[1] == ("=6", 6)          # identical, no accumulation
 
 
 def test_reconcile_picks_up_late_prayer(tmp_path, monkeypatch):

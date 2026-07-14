@@ -1684,12 +1684,17 @@ def run_ritual(tag: str) -> dict:
                 regrouped = True
             else:
                 # Fall back to a safe append — never decreases P.
-                if f in ("", "0"):
-                    terms = ["0"]
+                # No literal leading "0" term (see neon_blocks.score_day) —
+                # each block gets exactly one term, so term-count == block-count.
+                if f in ("", "0", "=0"):
+                    terms = []
                 elif f.startswith("="):
-                    terms = f[1:].split("+") or ["0"]
+                    inner = f[1:]
+                    terms = inner.split("+") if inner else []
+                    if terms == ["0"]:
+                        terms = []
                 else:
-                    terms = ["0", f]
+                    terms = [f]
                 terms.append(str(pts))
                 new_formula = "=" + "+".join(terms)
                 regrouped = False
@@ -2059,24 +2064,25 @@ end tell'''
             # Guard: don't close tasks due in the future (prevents double-tap on recurring)
             task_due = r.todoist_task.get("due", "")
             if task_due and task_due > today_str:
-                # Allow advance-completion for specific 0neon tasks
+                # Allow advance-completion for specific 0neon tasks, but ONLY one
+                # day ahead (due == tomorrow). Without the ceiling, an
+                # advance-allowed daily habit (新闻/push/hiit/...) advances one
+                # more day on every re-complete and drifts arbitrarily far into
+                # the future, dropping off dtd's today list entirely (2026-07-14:
+                # hiit reached due+2 and vanished). completed-today can't backstop
+                # it because advance-completion is exactly the "not yet done for
+                # this occurrence" case.
                 is_0neon = "0neon" in r.todoist_task.get("labels", [])
                 name_lower = r.item.name.lower()
-                if is_0neon and name_lower not in ADVANCE_ALLOWED:
+                advance_ok = (is_0neon and name_lower in ADVANCE_ALLOWED
+                              and task_due <= tomorrow_str)
+                if not advance_ok:
                     future_skipped.append({
                         "id": tid,
                         "name": r.item.name,
                         "content": r.todoist_task.get("content", ""),
                         "due": task_due,
                         "warning": "already done today",
-                    })
-                    continue
-                elif not is_0neon:
-                    future_skipped.append({
-                        "id": tid,
-                        "name": r.item.name,
-                        "content": r.todoist_task.get("content", ""),
-                        "due": task_due,
                     })
                     continue
             if r.item.defer_date:

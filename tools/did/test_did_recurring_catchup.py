@@ -66,3 +66,15 @@ def test_future_recurring_guard_still_present():
 if __name__ == "__main__":
     import sys, pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_advance_completion_capped_at_one_day_ahead():
+    """ADVANCE_ALLOWED habits (新闻/push/hiit/...) may be completed at most ONE
+    day early. Without the cap, each re-complete pushes the recurrence another
+    day out and the habit silently drops off dtd's today list (2026-07-14: hiit
+    drifted to due+2 and vanished)."""
+    m = _func_src("main")
+    assert "name_lower in ADVANCE_ALLOWED" in m
+    assert "task_due <= tomorrow_str" in m, (
+        "advance-completion must be bounded to tomorrow, else recurrence drifts")
+    assert "if not advance_ok:" in m

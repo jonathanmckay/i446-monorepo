@@ -170,5 +170,9 @@ def score_day(
         if score:
             parts.append((block, score))
     total = sum(s for _, s in parts)
-    formula = "=0+" + "+".join(str(s) for _, s in parts) if parts else "=0"
+    # No literal leading "0" term: each block contributes exactly one term, so
+    # a formula with N blocks scored has N "+"-separated terms, not N+1 (the
+    # stray "0" was previously miscounted as a phantom block by anything that
+    # reads term-count off this formula).
+    formula = "=" + "+".join(str(s) for _, s in parts) if parts else "=0"
     return parts, total, formula
