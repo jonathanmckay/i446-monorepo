@@ -230,9 +230,10 @@ def test_compact_block_lines_max_rows_eight_uses_15min_marks_including_00():
     text = "".join(t for _, t in frags)
     assert text.count("\n") == 9, "header + 8 body rows"
     # The :00 slot is the header's own row ("巳:00"); the body covers the
-    # other 7 slots up to the hour rollover, then the rolled-over hour.
+    # other 7 slots up to the hour rollover, then the rolled-over hour. Each
+    # empty mark carries a "·" placeholder (restored 2026-07-15).
     body = text.split("\n", 1)[1]
-    assert ":00\n" in body, "the :00 mark below the header (blk_sh's own :00, not the header)"
+    assert ":00 ·\n" in body, "the :00 mark below the header (blk_sh's own :00, not the header)"
     for mm in (":15", ":30", ":45", "09:00"):
         assert mm in body
 

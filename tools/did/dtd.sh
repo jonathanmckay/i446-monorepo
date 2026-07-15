@@ -1493,18 +1493,19 @@ while true; do
   #                          $DTD_HDRGEN on load/result and after every action so
   #                          worker confirmations persist alongside the count.
   # The start binding publishes fzf's --listen port for the ticker to POST to.
-  # --mouse: let fzf OWN the mouse so it consumes scroll-wheel / two-finger
-  # touchpad scroll as list navigation (like Claude Code) — the scroll events are
-  # parsed by fzf and never reach the query. fzf subscribes to click + SGR scroll
-  # (1000/1006) only, NOT motion (1002/1003), so the motion-leak that once forced
-  # --no-mouse (bug 2026-07-05: ESC[<34;x;yM motion events dumped into the input)
-  # does not apply to fzf's own subscription. The reset below still strips any
-  # stray MOTION mode a child left enabled from an execute() binding. (Supersedes
-  # the earlier --no-mouse + alt-scroll-off workaround, which stopped the
-  # ^[[A^[[B flood but also killed scrolling — bugs 2026-07-14/15.)
+  # Mouse ON = fzf's DEFAULT — this fzf build has no --mouse flag (passing it is
+  # an "unknown option" error that kills fzf and breaks the list pipe, bug
+  # 2026-07-15), so we simply DON'T pass --no-mouse. With mouse on, fzf consumes
+  # scroll-wheel / two-finger touchpad scroll as list navigation (like Claude
+  # Code) — the scroll events are parsed by fzf and never reach the query. fzf
+  # subscribes to click + SGR scroll (1000/1006) only, NOT motion (1002/1003),
+  # so the motion-leak that once forced --no-mouse (bug 2026-07-05: ESC[<34;x;yM
+  # motion events dumped into the input) doesn't apply to fzf's own subscription.
+  # The reset below still strips any stray MOTION mode a child left enabled from
+  # an execute() binding. (Supersedes the --no-mouse + alt-scroll-off workaround,
+  # which stopped the ^[[A^[[B flood but also killed scrolling — bugs 07-14/15.)
   printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
-      --mouse \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \

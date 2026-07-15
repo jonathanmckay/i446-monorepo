@@ -121,6 +121,11 @@ def test_visible_events_only_populated_when_tracking():
     assert mod.STATE.visible_events == ["stale"], \
         "a non-tracking call (every other block) must not touch visible_events"
 
+    # Tracking EXTENDS rather than replaces — render_focus_compact calls this
+    # for both the current AND next block and resets the list itself once up
+    # front, so a bare assignment here would let the second call silently
+    # wipe out the first block's events.
+    mod.STATE.visible_events = []
     mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
     assert mod.STATE.visible_events == [ev]
 

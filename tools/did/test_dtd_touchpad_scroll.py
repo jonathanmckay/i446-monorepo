@@ -19,9 +19,13 @@ from pathlib import Path
 SRC = (Path(__file__).resolve().parent / "dtd.sh").read_text()
 
 
-def test_fzf_uses_mouse_so_scroll_navigates():
-    assert "--mouse \\\n" in SRC, "fzf must run with --mouse (so it consumes scroll)"
+def test_fzf_relies_on_default_mouse_no_invalid_flag():
+    # Mouse is ON by default in fzf; scroll navigation just requires NOT passing
+    # --no-mouse. This fzf build has no --mouse flag — passing it is an
+    # 'unknown option' error that kills fzf and breaks the list pipe (bug
+    # 2026-07-15), so neither flag may appear on the fzf command line.
     assert "--no-mouse \\\n" not in SRC, "the --no-mouse flag killed scroll; must be gone"
+    assert "--mouse \\\n" not in SRC, "--mouse is an unknown option in this fzf; rely on the default"
 
 
 def test_alt_scroll_workaround_removed():

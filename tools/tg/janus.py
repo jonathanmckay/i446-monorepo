@@ -1227,9 +1227,15 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     if track_selection:
         # The event cursor's selectable set is exactly what's ON SCREEN —
         # computed from `rows` (post-slice), so Tab can never land on an
-        # event the max_rows cap trimmed away.
-        STATE.visible_events = [p["event"] for _, _, _, p in rows
-                                if p is not None and p.get("is_event")]
+        # event the max_rows cap trimmed away. EXTEND, not assign:
+        # render_focus_compact calls this for both the current AND next
+        # block with track_selection=True, and clears visible_events once
+        # up front — an assignment here would let the second call silently
+        # wipe out the first block's events (regression 2026-07-15: "still
+        # can't select... future calendar entries" — the next block's
+        # events were never trackable at all, only the current block's).
+        STATE.visible_events.extend(p["event"] for _, _, _, p in rows
+                                    if p is not None and p.get("is_event"))
 
     prev_hour = blk_sh  # the header established this hour at its :00 slot
     for _, hh, mm, p in rows:
@@ -1241,9 +1247,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 out.append(("class:time", tcol + " "))
                 out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
             else:
-                # Genuinely empty: just the time, no fill.
-                out.append(("class:time", tcol))
-                out.append(("class:idle", "\n"))
+                # Genuinely empty: the time, then a faint "·" placeholder —
+                # restoring the marker the old detail-band gcal-preview grid
+                # used for an empty slot (user report 2026-07-15: "add back
+                # the lines for each of the blocks... not sure why you
+                # removed that"), so an empty row still reads as "checked,
+                # nothing here" rather than a bare, easy-to-miss timestamp.
+                out.append(("class:time", tcol + " "))
+                out.append(("class:idle", "·\n"))
             continue
         if p.get("is_gap"):
             # Untracked past stretch (≥ GAP_MIN): a solid-red-block↔plain-red-text
@@ -2029,11 +2040,18 @@ def render_focus_compact() -> list[tuple[str, str]]:
     gets a distinct ▶ marker (_compact_block_lines' is_running branch) and
     idle time still flashes via the same gap treatment as every other
     block — folded into the ordinary picks pipeline instead of a separate
-    live-row/alarm code path."""
+    live-row/alarm code path.
+
+    The event cursor spans BOTH blocks: STATE.visible_events resets once
+    here, then each _compact_block_lines(track_selection=True) call EXTENDS
+    it — the next block's events were previously untrackable at all (Tab
+    could only ever reach the current block's), which read as "can't select
+    future calendar entries" (user report 2026-07-15)."""
     now = view_now()
     cur = hour_to_block(now.hour)
     nxt = next_block(now.hour)
     bo_emojis = _read_block_emojis()
+    STATE.visible_events = []
     out: list[tuple[str, str]] = []
     if cur:
         name, sh, eh = cur
@@ -2043,7 +2061,8 @@ def render_focus_compact() -> list[tuple[str, str]]:
         picks = _future_block_picks(name, STATE.events, limit=FOCUS_ROWS)
         cont = _block_gcal_cont(sh, now, slot_min=15)
         out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
-                                    cont=cont, is_future=True, max_rows=FOCUS_ROWS)
+                                    cont=cont, is_future=True, max_rows=FOCUS_ROWS,
+                                    track_selection=True)
     return out
 
 
