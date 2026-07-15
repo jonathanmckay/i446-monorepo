@@ -1239,7 +1239,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append((sty, prefix + pad(truncate(p["label"], space), space)))
             out.append(("class:dim", f" {dur}\n"))
             continue
-        dur = f"({p['dur_min']})" if is_future else fmt_dur(p["dur_min"])
+        # A gcal event mixed into a non-future (current-block) card via its own
+        # is_event flag still reads as "scheduled" (parenthesized duration),
+        # not "tracked" (fmt_dur) — the block-level is_future flag alone can't
+        # express "elapsed portion is real, remaining portion is a plan".
+        dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
         sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
         out.append(("class:time", tcol + " "))
@@ -1373,6 +1377,7 @@ def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
             "label": event_title(ev),
             "style": project_style(gcal_project_code(ev)),
             "dur_min": mins,
+            "is_event": True,
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
     items = items[:limit]
@@ -1925,7 +1930,18 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     now by fetch_today, so it flows through the ordinary merge/pick path and
     only needs its "running" flag carried through for the ▶ marker; idle
     time since the last entry falls out of _block_gaps (now cutoff-aware)
-    as an ordinary flashing gap row, same as any other block."""
+    as an ordinary flashing gap row, same as any other block.
+
+    The elapsed portion (real Toggl data) is only half the picture: the
+    REST of the block — meetings in progress right now or scheduled later,
+    before the block ends — used to be invisible, drawn only as an anonymous
+    "◇ │" continuation glyph with no title (user report 2026-07-15: "it
+    doesn't seem like janus is showing the other events... specifically the
+    other three meetings"). Not-yet-ENDED gcal events within this block
+    (end_dt > now — covers both "starting later" and "already in progress",
+    the latter matters most for turning a live meeting into a time entry) are
+    folded in via _future_block_picks, same source render_evening uses for
+    every other future block."""
     items = [e for e in STATE.entries if e["start_dt"] < now]
     merged: list[dict] = []
     for e in items:
@@ -1941,7 +1957,9 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     if sleep:
         picks = ([sleep] + picks)[:FOCUS_ROWS]
     gaps = _block_gaps(blk_sh, blk_eh, now)
-    body = picks + gaps
+    upcoming = [ev for ev in STATE.events if ev["end_dt"] > now]
+    event_picks = _future_block_picks(blk_name, upcoming, limit=FOCUS_ROWS)
+    body = picks + gaps + event_picks
     body.sort(key=lambda x: x["start_dt"])
     cont = {**_block_sleep_cont(blk_sh, now, slot_min=15), **_block_gcal_cont(blk_sh, now, slot_min=15),
             **_block_toggl_cont(blk_sh, now, slot_min=15)}

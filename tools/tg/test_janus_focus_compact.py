@@ -149,6 +149,70 @@ def test_next_block_uses_future_compact_picks_not_shared_preview_grid():
     assert "m5x2 Strat" in text
 
 
+def _gcal_event(title, start, end, calendar="Outlook"):
+    return {"start_dt": start, "end_dt": end, "title": title, "calendar": calendar,
+            "all_day": False, "transparency": "opaque"}
+
+
+def test_current_block_shows_upcoming_meeting_title_not_just_a_glyph():
+    """Regression (2026-07-15, user report: "it doesn't seem like janus is
+    showing the other events... specifically the other three meetings that
+    should be in my outlook"): a gcal event later in the CURRENT block used
+    to draw only an anonymous "◇ │" continuation glyph via the cont dict —
+    never its title. The event must show as a real row, same as it would in
+    a future block, with a parenthesized (not tracked) duration."""
+    mod = _load_tui()
+    _setup_common(mod)
+    today = _midnight()
+    mod.STATE.entries = []
+    mod.STATE.current = None
+    mod.STATE.events = [_gcal_event("1:1 Jonathan & Scott",
+                                    today.replace(hour=11, minute=5),
+                                    today.replace(hour=11, minute=30))]
+    mod.view_now = lambda: today.replace(hour=10, minute=31)  # 午 = 10-11
+    text = "".join(t for _, t in mod.render_focus_compact())
+    top = text.split("未:00")[0]
+    assert "1:1 Jonathan & Scott" in top
+    assert "(25)" in top, "scheduled (not tracked) duration must be parenthesized"
+
+
+def test_current_block_shows_in_progress_meeting_even_though_it_already_started():
+    """A meeting that started BEFORE now but hasn't ended yet (the case that
+    matters most for turning a live meeting into a time entry) must still
+    show — not just ones starting later."""
+    mod = _load_tui()
+    _setup_common(mod)
+    today = _midnight()
+    mod.STATE.entries = []
+    mod.STATE.current = None
+    mod.STATE.events = [_gcal_event("Gen 10 Console Forecast Walkthrough",
+                                    today.replace(hour=10, minute=30),
+                                    today.replace(hour=11, minute=0))]
+    mod.view_now = lambda: today.replace(hour=10, minute=45)  # mid-meeting
+    text = "".join(t for _, t in mod.render_focus_compact())
+    top = text.split("未:00")[0]
+    assert "Gen 10 Console Forecast Walkthrough" in top
+
+
+def test_current_block_hides_fully_past_untracked_meeting():
+    """A meeting that already ENDED before now, with no covering Toggl entry,
+    is deliberately out of scope for now (past-calendar-vs-time-entry
+    reconciliation, 2026-07-15: "maybe we don't need to make changes there
+    yet") — it must not show as a phantom row."""
+    mod = _load_tui()
+    _setup_common(mod)
+    today = _midnight()
+    mod.STATE.entries = []
+    mod.STATE.current = None
+    mod.STATE.events = [_gcal_event("HL:JM 1:1",
+                                    today.replace(hour=10, minute=0),
+                                    today.replace(hour=10, minute=20))]
+    mod.view_now = lambda: today.replace(hour=10, minute=31)
+    text = "".join(t for _, t in mod.render_focus_compact())
+    top = text.split("未:00")[0]
+    assert "HL:JM 1:1" not in top
+
+
 def test_compact_block_lines_default_max_rows_unchanged():
     """max_rows defaults to 3 — every OTHER block (render_morning /
     render_evening callers, which never pass max_rows) must render exactly
