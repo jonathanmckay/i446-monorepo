@@ -26,10 +26,12 @@ import json
 import re
 import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION = "1.0.0"
 ADDR = ("127.0.0.1", 9876)
+EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
 WORKBOOK = "Neon分v12.2.xlsx"
 
@@ -212,6 +214,16 @@ ROUTES = {
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Regression (2026-07-15, recurred twice same day): the server was
+    # single-threaded with no socket timeout. A stalled client connection
+    # (e.g. our own curl hitting its own --max-time and giving up client-side
+    # while the server's blocking rfile.read() waited forever for bytes that
+    # were never coming) wedged the ONE request-handling thread permanently —
+    # every subsequent request queued forever, looking identical to "daemon
+    # down" even though the process was alive and the port was LISTENing.
+    # `timeout` makes a stalled read give up instead of hanging forever.
+    timeout = 20
+
     def log_message(self, fmt, *args):  # quieter logs
         sys.stderr.write(f"{self.address_string()} {fmt % args}\n")
 
@@ -238,7 +250,11 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, {"ok": False, "error": "bad_json"})
         try:
-            result = handler(body)
+            # Threads must not send concurrent AppleEvents to Excel — serialize
+            # the actual Excel-touching call; the HTTP layer above stays
+            # threaded so a stalled connection can't block other requests.
+            with EXCEL_LOCK:
+                result = handler(body)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})
         except Exception as e:
@@ -247,7 +263,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    srv = HTTPServer(ADDR, Handler)
+    # ThreadingHTTPServer so one stuck/slow request (a stalled client, a slow
+    # Excel call) can't block every other request behind it — see Handler.timeout.
+    srv = ThreadingHTTPServer(ADDR, Handler)
+    srv.daemon_threads = True
     print(f"excel-http v{VERSION} listening on {ADDR[0]}:{ADDR[1]}", flush=True)
     try:
         srv.serve_forever()
