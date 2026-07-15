@@ -26,8 +26,17 @@ def _load_tui():
     return mod
 
 
+# prompt_toolkit normalizes some @kb.add() aliases to their canonical Keys
+# enum value internally (e.g. "enter" -> Keys.ControlM = "c-m", "tab" ->
+# Keys.ControlI = "c-i") — Keys is a str-mixin enum, so comparing against the
+# canonical string still works, but the ALIAS string used at registration
+# time does not.
+_KEY_ALIASES = {"enter": "c-m", "tab": "c-i"}
+
+
 def _binding(mod, key):
-    hits = [b for b in mod.kb.bindings if b.keys == (key,)]
+    canon = _KEY_ALIASES.get(key, key)
+    hits = [b for b in mod.kb.bindings if b.keys == (canon,)]
     assert hits, f"no binding for {key!r}"
     return hits[0]
 
