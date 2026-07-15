@@ -213,6 +213,34 @@ def test_current_block_hides_fully_past_untracked_meeting():
     assert "HL:JM 1:1" not in top
 
 
+def test_empty_mark_shows_middle_dot_placeholder():
+    """Regression (user report 2026-07-15: "add back the lines for each of
+    the blocks... not sure why you removed that"): a genuinely-empty slot
+    used to render as a bare timestamp with nothing after it, easy to miss —
+    restoring the "·" placeholder the old detail-band gcal-preview grid used
+    for an empty slot, so it reads as "checked, nothing here"."""
+    mod = _load_tui()
+    frags = mod._compact_block_lines("辰", 6, [], 0, "")
+    text = "".join(t for _, t in frags)
+    assert "·" in text
+    lines = [l for l in text.split("\n") if l.strip() and "辰" not in l]
+    assert all(l.rstrip().endswith("·") for l in lines), \
+        f"every empty body row must end in the placeholder: {lines!r}"
+
+
+def test_continuation_mark_unaffected_by_placeholder():
+    """A slot covered by a flowing entry/event still draws its "◇ │"
+    continuation glyph, not the empty-slot "·" placeholder."""
+    mod = _load_tui()
+    cont = {(6, 30): "class:future"}
+    frags = mod._compact_block_lines("辰", 6, [], 0, "", cont=cont)
+    text = "".join(t for _, t in frags)
+    assert "◇ │" in text
+    # The continuation row itself must not also carry a "·".
+    cont_line = [l for l in text.split("\n") if "◇" in l][0]
+    assert "·" not in cont_line
+
+
 def test_compact_block_lines_default_max_rows_unchanged():
     """max_rows defaults to 3 — every OTHER block (render_morning /
     render_evening callers, which never pass max_rows) must render exactly

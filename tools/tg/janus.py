@@ -1177,13 +1177,32 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         tpfx = "" if (hs.hour, hs.minute) == (blk_sh, 0) else f"{hs:%H:%M} "
         avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(tpfx) - dwidth(dur) - 1)
         label = truncate(head["label"], avail)
-        head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or "class:future")
+        # The event cursor must reach the HEAD pick too, not just body rows:
+        # a future block's single/dominant event is riding the header line
+        # (this branch), never `rows` — without this it was structurally
+        # unselectable (user report 2026-07-15: "still can't select... future
+        # calendar entries", since the next focus block's only event is
+        # almost always its head).
+        head_selected = (track_selection and head.get("is_event")
+                        and STATE.event_sel == _event_key(head["event"]))
+        if track_selection and head.get("is_event"):
+            STATE.visible_events.append(head["event"])
+        if head_selected:
+            head_sty = f"bold {head['style']}".strip() + " bg:#3a3a3a" if head["style"] else "class:selected_bg"
+            left_sty = "class:selected_accent"
+            time_sty = "class:selected_accent"
+            dur_sty = "class:selected_bg"
+        else:
+            head_sty = _placeholder_style() if _is_placeholder(head["label"]) else (head["style"] or "class:future")
+            left_sty = "class:dim"
+            time_sty = "class:time"
+            dur_sty = "class:dim"
         # Duration sits right after the label: `午:00 ☀️ 11:00 GamePass sync (60)`.
-        out.append(("class:dim", left))
+        out.append((left_sty, left))
         if tpfx:
-            out.append(("class:time", tpfx))
+            out.append((time_sty, tpfx))
         out.append((head_sty, label))
-        out.append(("class:dim", f" {dur}\n"))
+        out.append((dur_sty, f" {dur}\n"))
     else:
         body_picks = picks
         left = f"{blk_name}:00{emoji_str}"

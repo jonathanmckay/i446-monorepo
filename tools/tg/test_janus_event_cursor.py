@@ -130,6 +130,54 @@ def test_visible_events_only_populated_when_tracking():
     assert mod.STATE.visible_events == [ev]
 
 
+def test_head_event_is_selectable_and_highlighted():
+    """Regression: a future block's dominant/only event rides the HEADER
+    line (the `if is_future and picks:` branch), never the body `rows` — the
+    original track_selection wiring only scanned `rows`, so a block with a
+    single event (the common case) had NOTHING selectable at all."""
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("GamePass sync", today.replace(hour=10, minute=30), today.replace(hour=11))
+    pick = {"start_dt": ev["start_dt"], "time_str": "10:30", "label": "GamePass sync",
+            "style": "fg:#2979ff", "dur_min": 30, "is_event": True, "event": ev}
+    mod.STATE.visible_events = []
+    frags = mod._compact_block_lines("午", 10, [pick], 0, "", is_future=True,
+                                     max_rows=8, track_selection=True)
+    assert mod.STATE.visible_events == [ev], "head event must register for the cursor"
+    assert not any("bg:#3a3a3a" in s or "selected" in s for s, t in frags), \
+        "unselected head must not be highlighted"
+
+    mod.STATE.visible_events = []
+    mod.STATE.event_sel = mod._event_key(ev)
+    frags = mod._compact_block_lines("午", 10, [pick], 0, "", is_future=True,
+                                     max_rows=8, track_selection=True)
+    assert any("GamePass sync" in t and ("bg:#3a3a3a" in s or "selected" in s)
+              for s, t in frags), "selected head must carry the highlight"
+    assert not any("reverse" in s for s, t in frags)
+
+
+def test_render_focus_compact_tracks_next_block_events_too():
+    """Regression (user report 2026-07-15: "still can't seem to select...
+    future calendar entries"): render_focus_compact only tracked the CURRENT
+    block's events for the cursor — the NEXT block's were never added to
+    STATE.visible_events at all, so Tab could never reach them."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = []
+    mod.STATE.entries_known = True
+    mod.STATE.current = None
+    mod.STATE.current_known = True
+    mod.STATE.block_points = {}
+    mod.STATE.day_offset = 0
+    mod.STATE.events = [_gcal_event("future block meeting",
+                                    today.replace(hour=10, minute=30),
+                                    today.replace(hour=11))]
+    mod.view_now = lambda: today.replace(hour=8, minute=5)  # 巳(8-9)=current, 午(10-11)=next
+    mod.render_focus_compact()
+    titles = [e["title"] for e in mod.STATE.visible_events]
+    assert "future block meeting" in titles
+
+
 def test_visible_events_excludes_rows_trimmed_by_max_rows():
     """The event cursor's selectable set must be exactly what's ON SCREEN —
     an event that lost the entry_rows[:max_rows] cut must not be selectable
