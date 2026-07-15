@@ -1582,13 +1582,24 @@ exec 3>&-
 session_count=$(grep -c . "$DTD_SESSION" 2>/dev/null)
 session_count=${session_count:-0}
 if [[ $session_count -gt 0 ]]; then
-  echo ""
-  echo "Waiting for $session_count tasks..."
+  # Only the still-unprocessed backlog needs waiting on. The worker drains while
+  # you read/scroll the list, so most of the session is usually already done by
+  # the time you close — show the honest remaining count (pushed - processed),
+  # NOT the whole session, and stay silent + exit fast when the queue already
+  # drained (the loop still runs so the worker fully exits before cleanup).
+  pushed=$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0); pushed=${pushed// /}
+  processed=$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0); processed=${processed// /}
+  remaining=$(( pushed - processed ))
+  (( remaining < 0 )) && remaining=0
+  if (( remaining > 0 )); then
+    echo ""
+    echo "Waiting for $remaining task(s)..."
+  fi
   while kill -0 $WORKER_PID 2>/dev/null; do
-    sleep 1
-    printf "."
+    sleep 0.2
+    (( remaining > 0 )) && printf "."
   done
-  echo ""
+  (( remaining > 0 )) && echo ""
 
   if [[ -s "$DTD_LOG" ]]; then
     cat "$DTD_LOG"
