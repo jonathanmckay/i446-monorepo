@@ -670,8 +670,14 @@ def domain_of(t):
             return lbl
     return 'zzz'   # unlabelled tasks sort to the end
 
+def time_of(t):
+    m = re.search(r'\((\d+)\)', t.get('short') or t.get('content') or '')
+    return int(m.group(1)) if m else 10**9   # no (N) estimate -> sort to the end
+
 if view == 'project':
     unique.sort(key=lambda t: (domain_of(t), prank(t.get('priority'))))
+elif view == 'time':
+    unique.sort(key=lambda t: (time_of(t), prank(t.get('priority'))))
 
 DIM = '\033[2m'
 running_lines = []
@@ -748,13 +754,9 @@ for t in unique:
     sfx = '\t' + str(t.get('id', ''))
 
     repeat = '↻ ' if recurring else ''
-    # In project view, tag each row with its domain so groups are unmistakable
-    # (color already encodes it, but adjacent palettes can blur).
+    # Project/time views group by color alone — no project-name prefix (the user
+    # knows the domain from the color; the names just add clutter).
     dom_tag = ''
-    if view == 'project':
-        _dd = domain_of(t)
-        if _dd != 'zzz':
-            dom_tag = _dd + ' '
     is_running = bool(running_clean and clean == running_clean)
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
@@ -792,9 +794,9 @@ cat > "$DTD_VIEWTOGGLE" << 'VTEOF'
 #!/bin/zsh
 VIEW="PLACEHOLDER_VIEW"
 HDR="PLACEHOLDER_HDR"
-views=(default project)          # cycle order; append new views here
+views=(default project time)     # cycle order; append new views here
 typeset -A labels
-labels=(default "default" project "by project")
+labels=(default "default" project "by project" time "by time (short first)")
 cur="$(cat "$VIEW" 2>/dev/null)"
 [[ -z "$cur" ]] && cur=default
 next="${views[1]}"               # default wrap target
