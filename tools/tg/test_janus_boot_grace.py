@@ -32,13 +32,25 @@ def test_boot_grace_expires():
 
 
 def test_enter_handler_checks_boot_grace():
-    """Structural: the enter handler must consult _boot_grace_active BEFORE
-    running tg-fast (which starts timers)."""
+    """Structural: the enter handler's TYPED-COMMAND path must consult
+    _boot_grace_active BEFORE running tg-fast (which starts timers) — that's
+    the path vulnerable to text queued by the spawning terminal landing in
+    the input buffer at startup.
+
+    The handler's OTHER run_tg_fast call (the event-cursor "convert to
+    timer" branch, added 2026-07-15) fires only on an EMPTY input buffer
+    with an armed STATE.event_sel — event_sel starts None at boot and can
+    only become non-None via an explicit Tab keypress matching a real
+    visible_events entry (itself empty at boot), so it can never fire from
+    boot-queued text and doesn't need the same gate. Scope this check to the
+    typed-command branch specifically (everything from the boot-grace check
+    onward), not the whole handler."""
     src = (HERE / "janus.py").read_text()
     handler = src.split('@kb.add("enter")', 1)[1].split("@kb.add", 1)[0]
     assert "_boot_grace_active()" in handler, "enter handler lost the boot-grace gate"
-    assert handler.index("_boot_grace_active()") < handler.index("run_tg_fast"), \
-        "boot-grace check must come before the timer start"
+    typed_command_branch = handler[handler.index("_boot_grace_active()"):]
+    assert "run_tg_fast" in typed_command_branch, \
+        "boot-grace check must come before the typed-command timer start"
 
 
 def test_main_rearms_boot_time():

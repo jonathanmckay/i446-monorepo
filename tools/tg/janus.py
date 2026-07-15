@@ -306,6 +306,21 @@ class State:
         self.toggl_blocked_until = 0.0
         self.day_reload_token = 0  # debounce guard for Ctrl+←/→ day scrubbing
         self.sigusr1_token = 0  # debounce guard for a burst of mutation nudges
+        # Event cursor (dtd-style highlight, scoped to the current block's
+        # gcal event rows — "turn a calendar event into a time entry with one
+        # shortcut", user request 2026-07-15). visible_events is the exact
+        # list _compact_block_lines rendered for the current block (populated
+        # from its own post-slice `rows`, so Tab can never land on an event
+        # that got trimmed by the row cap). event_sel is a (start_dt, title)
+        # KEY, not an index — an index would silently point at a different
+        # event after the list resizes (block rollover, day-nav, an event
+        # ending and dropping out of the "not yet ended" filter); a key that
+        # goes missing just reads as "nothing selected," never "wrong thing
+        # selected." No selection is armed by default — the user must Tab
+        # first, so a bare Enter on an empty input line never surprises with
+        # an unintended timer start.
+        self.visible_events: list[dict] = []
+        self.event_sel: tuple | None = None
 
 
 STATE = State()
@@ -442,6 +457,15 @@ _event_shorts_failed: set[str] = set()  # titles Haiku failed on; skip until res
 def event_title(ev: dict) -> str:
     """Display title: the Haiku short name when one exists, else the raw title."""
     return ev.get("short") or ev.get("title") or ""
+
+
+def _event_key(ev: dict):
+    """Stable identity for the event cursor: (start_dt, raw title). Gcal
+    events aren't guaranteed a usable id through this pipeline, and a
+    (start, title) pair is unique enough in practice — collisions would
+    require two same-titled events at the identical start time, which
+    Google Calendar doesn't produce for one person's merged view."""
+    return (ev.get("start_dt"), ev.get("title"))
 
 
 def _load_event_shorts() -> dict:
@@ -1116,7 +1140,8 @@ def _abbrev_tcol(hh: int, mm: int, prev_hour: int | None) -> tuple[str, int]:
 
 
 def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
-                         is_future=False, max_rows: int = 3) -> list[tuple[str, str]]:
+                         is_future=False, max_rows: int = 3,
+                         track_selection: bool = False) -> list[tuple[str, str]]:
     """Render one block as a header (``午:00 ☀️📧``) + ``max_rows`` body rows.
 
     Header is the block's :00 slot. A FUTURE block carries its dominant upcoming
@@ -1199,6 +1224,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         rows = rows + marks[:max_rows - len(rows)]
         rows.sort(key=lambda r: r[0])
 
+    if track_selection:
+        # The event cursor's selectable set is exactly what's ON SCREEN —
+        # computed from `rows` (post-slice), so Tab can never land on an
+        # event the max_rows cap trimmed away.
+        STATE.visible_events = [p["event"] for _, _, _, p in rows
+                                if p is not None and p.get("is_event")]
+
     prev_hour = blk_sh  # the header established this hour at its :00 slot
     for _, hh, mm, p in rows:
         tcol, prev_hour = _abbrev_tcol(hh, mm, prev_hour)
@@ -1245,10 +1277,17 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # express "elapsed portion is real, remaining portion is a plan".
         dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
-        sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
+        is_selected = p.get("is_event") and STATE.event_sel == _event_key(p["event"])
+        if is_selected:
+            # The event cursor's highlight: reverse video on the whole row so
+            # it reads unmistakably as "armed" — Tab to move it, Enter to
+            # convert it into a running Toggl timer.
+            sty = "reverse " + (p["style"] or "class:future")
+        else:
+            sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
         out.append(("class:time", tcol + " "))
         out.append((sty, pad(truncate(p["label"], space), space)))
-        out.append(("class:dim", f" {dur}\n"))
+        out.append((("reverse class:dim" if is_selected else "class:dim"), f" {dur}\n"))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
     for _ in range(max_rows - len(rows)):
@@ -1378,6 +1417,7 @@ def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
             "style": project_style(gcal_project_code(ev)),
             "dur_min": mins,
             "is_event": True,
+            "event": ev,  # raw event, for the event-cursor "convert to timer" action
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
     items = items[:limit]
@@ -1919,7 +1959,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab event · ↵ start · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -1965,7 +2005,8 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
             **_block_toggl_cont(blk_sh, now, slot_min=15)}
     pts = _block_display_pts(blk_name)
     return _compact_block_lines(blk_name, blk_sh, body, pts, emojis, cont=cont,
-                                is_future=False, max_rows=FOCUS_ROWS)
+                                is_future=False, max_rows=FOCUS_ROWS,
+                                track_selection=True)
 
 
 def render_focus_compact() -> list[tuple[str, str]]:
@@ -2047,11 +2088,53 @@ def _boot_grace_active(window: float = 2.0) -> bool:
     return time.monotonic() - STATE.boot_time < window
 
 
+def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
+    """The /tg-style command string that converts a calendar event into a
+    Toggl entry: backdated to the event's own start if it already began
+    (the common case — "usually I'll do that in real time", i.e. mid-
+    meeting), otherwise a plain start (it hasn't happened yet). Reuses
+    tg-fast.py's own self-contained backdated-start handling (stop-current +
+    trim-overlap + start) — nothing about that is reimplemented here."""
+    title = ev.get("title") or ""
+    code = gcal_project_code(ev)
+    suffix = f" @{code}" if code else ""
+    if ev["start_dt"] <= now:
+        return f"{ev['start_dt']:%H%M} {title}{suffix}"
+    return f"{title}{suffix}"
+
+
 @kb.add("enter")
 def _(event):
     text = input_buffer.text.strip()
     input_buffer.reset()
     if not text:
+        # No typed command — if an event is armed (Tab-selected in the
+        # current block), Enter converts IT into a running Toggl timer.
+        # Resolved synchronously (this handler runs to completion on the
+        # event loop before the next 0.1s repaint can touch STATE), so
+        # there's no window where visible_events/event_sel could change out
+        # from under the lookup.
+        sel = STATE.event_sel
+        ev = next((e for e in STATE.visible_events if _event_key(e) == sel), None) if sel else None
+        if not ev:
+            return
+        cmd = _event_to_tg_command(ev, view_now())
+        STATE.event_sel = None
+        flash(f"$ tg {cmd}")
+
+        async def _run_event_and_refresh():
+            res = await asyncio.to_thread(run_tg_fast, cmd)
+            flash(res, 6.0)
+            event.app.invalidate()
+            polls = (0.4, 0.8, 1.5)
+            for i, delay in enumerate(polls):
+                await asyncio.sleep(delay)
+                await asyncio.to_thread(fetch_current)
+                if i == len(polls) - 1:
+                    await asyncio.to_thread(fetch_today, True)
+                event.app.invalidate()
+
+        event.app.create_background_task(_run_event_and_refresh())
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
@@ -2159,6 +2242,7 @@ _input_empty = Condition(lambda: not input_buffer.text)
 def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
+    STATE.event_sel = None  # a different day has different (or no) events
     flash(f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
 
@@ -2172,8 +2256,33 @@ def _day_forward(event):
         return
     STATE.day_offset += 1
     STATE.scroll_min = 0
+    STATE.event_sel = None
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
+
+
+@kb.add("tab", filter=_input_empty)
+def _(event):
+    """Cycle the event cursor forward through the current block's visible
+    gcal events — Tab to arm one, Enter to convert it into a running Toggl
+    timer (see the enter handler above and _event_to_tg_command)."""
+    evs = STATE.visible_events
+    if not evs:
+        return
+    keys = [_event_key(e) for e in evs]
+    i = (keys.index(STATE.event_sel) + 1) % len(keys) if STATE.event_sel in keys else 0
+    STATE.event_sel = keys[i]
+
+
+@kb.add("s-tab", filter=_input_empty)
+def _(event):
+    """Cycle the event cursor backward. See the "tab" binding above."""
+    evs = STATE.visible_events
+    if not evs:
+        return
+    keys = [_event_key(e) for e in evs]
+    i = (keys.index(STATE.event_sel) - 1) % len(keys) if STATE.event_sel in keys else len(keys) - 1
+    STATE.event_sel = keys[i]
 
 
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing
