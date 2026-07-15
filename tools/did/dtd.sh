@@ -1301,8 +1301,15 @@ export TOGGL_MAX_429_DELAY=1
 # Live-timer ticker: owns the footer (top line), POSTing change-footer ~10x/s to
 # the fzf --listen port the start binding writes to $DTD_PORT. Best-effort and
 # self-terminating (exits when $DTD_PORT vanishes at cleanup).
+# `3>&-` closes this job's inherited copy of the FIFO write-end (fd 3, opened
+# by `exec 3>"$DTD_FIFO"` above) BEFORE exec'ing python3 — otherwise the
+# ticker process holds fd 3 open for its whole life, same bug class as the
+# watcher below (regression 2026-07-11): the main loop's `exec 3>&-` on exit
+# no longer drops the FIFO's writer count to zero, the worker's `read` never
+# sees EOF, and dtd hangs silently on exit forever (2026-07-15: `lsof` showed
+# a live dtd-ticker.py holding fd 3w on the FIFO).
 rm -f "$DTD_PORT"
-python3 "$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER" &>/dev/null &
+python3 "$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER" 3>&- &>/dev/null &
 TICKER_PID=$!
 
 # Day-tally refresher: pull the single Ix computation (points 分 + tasks done)
@@ -1312,6 +1319,9 @@ TICKER_PID=$!
 # Best-effort; self-exits when the session sentinel is gone.
 : > "$DTD_TALLY"
 (
+  # Close this subshell's inherited copy of fd 3 immediately — same fix as
+  # the ticker above and the watcher below (regression 2026-07-11 bug class).
+  exec 3>&-
   while [[ -f "$DTD_SESSION" ]]; do
     t=$(curl -fsS --max-time 3 http://ix:5560/api/summary 2>/dev/null \
         | python3 -c 'import sys,json
