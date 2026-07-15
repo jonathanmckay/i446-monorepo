@@ -14,6 +14,7 @@ from typing import Any
 DAEMON_HOST = "ix"
 DAEMON_PORT = 9876
 DAEMON_TIMEOUT = 5
+WORKBOOK = "Neon分v12.2.xlsx"
 
 
 def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict | None:
@@ -109,11 +110,24 @@ def _ssh_fallback(op: str, sheet: str, col: str,
     """If the daemon is unreachable, fall back to one-shot ssh+osascript."""
     if row is None and date is not None:
         dc = _DATE_COL.get(sheet, "B")
+        # Match an M/D text cell OR a real Excel date cell (0n col C) by month/day
+        # — see lookup_row() in services/excel-http/server.py for the rationale.
         lookup_script = (
-            f'tell application "Microsoft Excel" to '
-            f'(repeat with i from 2 to 800\n'
-            f'  if (string value of cell ("{dc}" & i) of sheet "{sheet}" of active workbook) = "{date}" then return i\n'
-            f'end repeat\nreturn 0)'
+            f'tell application "Microsoft Excel"\n'
+            f'  set ws to sheet "{sheet}" of workbook "{WORKBOOK}"\n'
+            f'  repeat with i from 2 to 800\n'
+            f'    set cv to value of cell ("{dc}" & i) of ws\n'
+            f'    if cv is not missing value then\n'
+            f'      if ((class of cv) as text) is "date" then\n'
+            f'        set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)\n'
+            f'        if md = "{date}" then return i\n'
+            f'      else\n'
+            f'        if (cv as text) = "{date}" then return i\n'
+            f'      end if\n'
+            f'    end if\n'
+            f'  end repeat\n'
+            f'  return 0\n'
+            f'end tell'
         )
         r = subprocess.run(
             ["ssh", DAEMON_HOST, "osascript", "-e", lookup_script],
@@ -129,26 +143,40 @@ def _ssh_fallback(op: str, sheet: str, col: str,
     if op == "read":
         script = (
             f'tell application "Microsoft Excel" to '
-            f'return ((value of cell "{col}{row}" of sheet "{sheet}" of active workbook) as string) '
-            f'& "|" & (formula of cell "{col}{row}" of sheet "{sheet}" of active workbook)'
+            f'return ((value of cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}") as string) '
+            f'& "|" & (formula of cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}")'
         )
     elif op == "append":
         v = (value or "").replace("\\", "\\\\").replace('"', '\\"')
         is_numeric = (value or "").lstrip().startswith("+") or (value or "").lstrip().startswith("=")
         if is_numeric:
             empty_set = f'set formula of theCell to "={v.lstrip("+")}"\n'
+            # The existing cell may hold a bare number with no leading "="
+            # (e.g. a plain value-set "2", not a formula). Concatenating
+            # "+2" onto that directly produces the TEXT "2+2" instead of a
+            # formula, so it never computes (observed live 2026-07-14: a
+            # Daily Dozen count cell silently stopped summing). Normalize
+            # to a formula before appending.
+            nonempty_set = (
+                f'if f does not start with "=" then\n'
+                f'      set formula of theCell to "=" & f & "{v}"\n'
+                f'    else\n'
+                f'      set formula of theCell to f & "{v}"\n'
+                f'    end if\n'
+            )
         else:
             # String value: strip leading ", " for empty cells, set as value not formula
             clean = v.lstrip(", ")
             empty_set = f'set value of theCell to "{clean}"\n'
+            nonempty_set = f'set formula of theCell to f & "{v}"\n'
         script = (
             f'tell application "Microsoft Excel"\n'
-            f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of active workbook\n'
+            f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}"\n'
             f'  set f to formula of theCell\n'
             f'  if f = "" or f = "0" then\n'
             f'    {empty_set}'
             f'  else\n'
-            f'    set formula of theCell to f & "{v}"\n'
+            f'    {nonempty_set}'
             f'  end if\n'
             f'  return ((value of theCell) as string) & "|" & (formula of theCell)\n'
             f'end tell'
@@ -158,7 +186,7 @@ def _ssh_fallback(op: str, sheet: str, col: str,
         setter = "formula" if (value or "").startswith("=") else "value"
         script = (
             f'tell application "Microsoft Excel"\n'
-            f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of active workbook\n'
+            f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}"\n'
             f'  set {setter} of theCell to "{v}"\n'
             f'  return ((value of theCell) as string) & "|" & (formula of theCell)\n'
             f'end tell'
