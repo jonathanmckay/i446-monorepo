@@ -1,6 +1,7 @@
 """Tests for excel-http server — structural checks via AST."""
 
 import ast
+import re
 import textwrap
 
 import pytest
@@ -46,6 +47,37 @@ class TestAppendStringValues:
         assert 'lstrip(", ")' in src, (
             "do_append must strip leading ', ' from string values for empty cells"
         )
+
+
+class TestThreadingAndTimeoutHardening:
+    """Regression (2026-07-15, recurred twice same day): the server was a
+    plain single-threaded HTTPServer with no socket timeout. A stalled client
+    connection (our own curl hitting its own client-side timeout while the
+    server's blocking rfile.read() waited forever for bytes that never came)
+    wedged the single request-handling path permanently — every subsequent
+    request queued forever, indistinguishable from 'daemon down' even though
+    the process was alive and the port was LISTENing."""
+
+    def test_uses_threading_http_server(self):
+        src = open("server.py").read()
+        assert "ThreadingHTTPServer" in src, (
+            "must not use a plain single-threaded HTTPServer — one stalled "
+            "connection must not block every other request"
+        )
+
+    def test_handler_has_socket_timeout(self):
+        src = open("server.py").read()
+        assert re.search(r"class Handler\(BaseHTTPRequestHandler\):\s*\n(\s*#.*\n)*\s*timeout\s*=\s*\d+", src), (
+            "Handler must set a socket timeout, or a stalled read blocks forever"
+        )
+
+    def test_excel_calls_are_serialized_across_threads(self):
+        # Threading fixes the stalled-read wedge, but concurrent AppleEvents
+        # to Excel from multiple threads is its own hazard — must be
+        # serialized with a lock around the actual Excel-touching call.
+        src = open("server.py").read()
+        assert "EXCEL_LOCK" in src and "threading.Lock()" in src
+        assert "with EXCEL_LOCK:" in src
 
 
 class TestPinnedWorkbook:
