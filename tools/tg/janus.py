@@ -172,7 +172,7 @@ def _code_is_stale(now=None) -> bool:
         except OSError:
             _stale_state["stale"] = False
     return _stale_state["stale"]
-BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "😈"]
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present

@@ -155,30 +155,60 @@ def run_form(today: _dt.date) -> dict | None:
 
     msg = {"text": ""}
     status = Window(FormattedTextControl(
-        lambda: msg["text"] or "Tab / S-Tab move · ^S save · ^Q cancel   (# = number)"),
+        lambda: msg["text"] or "Enter/Tab next · Enter or Tab on last field saves · S-Tab back · ^S save · ^Q cancel"),
         height=1, style="class:status")
 
     body = HSplit(rows, padding=0)
     root = HSplit([Frame(ScrollablePane(body), title="0s · %s" % _mdy(today)), status])
 
-    kb = KeyBindings()
+    ordered = [(k, areas[k][0], areas[k][1]) for k, *_ in FIELDS]  # (key, area, kind) in field order
+    last_idx = len(ordered) - 1
 
-    @kb.add("tab", eager=True)
-    def _(e):
-        e.app.layout.focus_next()
+    def _focused_idx(app):
+        cc = app.layout.current_control
+        for i, (_k, a, _kind) in enumerate(ordered):
+            if a.control is cc:
+                return i
+        return None
 
-    @kb.add("s-tab", eager=True)
-    def _(e):
-        e.app.layout.focus_previous()
-
-    @kb.add("c-s")
-    def _(e):
+    def _submit(app):
         bad = [lbl for _k, (a, kind, lbl) in areas.items()
                if kind == "num" and a.text.strip() and not _is_num(a.text.strip())]
         if bad:
             msg["text"] = "Not a number: " + ", ".join(bad)
             return
-        e.app.exit(result="submit")
+        app.exit(result="submit")
+
+    kb = KeyBindings()
+
+    @kb.add("tab", eager=True)
+    def _(e):
+        # Tab on the last field saves + exits; elsewhere it advances.
+        if _focused_idx(e.app) == last_idx:
+            _submit(e.app)
+        else:
+            e.app.layout.focus_next()
+
+    @kb.add("s-tab", eager=True)
+    def _(e):
+        e.app.layout.focus_previous()
+
+    @kb.add("enter", eager=True)
+    def _(e):
+        idx = _focused_idx(e.app)
+        if idx is None:
+            return
+        kind = ordered[idx][2]
+        if kind == "textml":
+            e.current_buffer.insert_text("\n")   # multiline fields: newline
+        elif idx == last_idx:
+            _submit(e.app)                        # last field: save + exit
+        else:
+            e.app.layout.focus_next()             # single-line: next field
+
+    @kb.add("c-s")
+    def _(e):
+        _submit(e.app)
 
     @kb.add("c-q")
     @kb.add("c-c")

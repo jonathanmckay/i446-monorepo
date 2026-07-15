@@ -10,7 +10,7 @@ Manage daily goals in the `## 0₲` section of the build order file and sync to 
 
 ## Files
 
-- **Build order**: `~/vault/g245/build-order.md`
+- **Build order**: `~/vault/g245/5e-1/build-order.md`
 - **Section**: `## 0₲` (stop at the next `##` or `###` heading)
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
 - **Todoist labels**: `#0g` on every task (plus the `@code` domain label if present)

@@ -75,7 +75,7 @@ def add_toggl(grid, start, end):
 # (Until 2026-06-12 this read per-block 分 from the Neon sheet, which lit 🎯
 # for any block where points landed, regardless of whether a goal was set.)
 V_LOGS = '/Users/mckay/vault/g245/v_logs'
-LIVE_BUILD_ORDER = '/Users/mckay/vault/g245/build-order.md'
+LIVE_BUILD_ORDER = '/Users/mckay/vault/g245/5e-1/build-order.md'
 
 def _block_line_name(line):
     """First token after the bullet — headers carry variable annotations

@@ -35,7 +35,7 @@ TODOIST_0G_PROJECT_ID = "6XfvCQ3p8Gq6fhGR"
 CRITICAL_PATH_LABEL = "#\u5173\u952e\u5f84\u8def"  # #关键径路
 MINUS1G_LABEL = "#-1g"
 
-MD_FILE = Path.home() / "vault/g245/build-order.md"
+MD_FILE = Path.home() / "vault/g245/5e-1/build-order.md"
 
 # The 9 地支 (Earthly Branch) time-of-day headings (order matters).
 # 卯 = 04-06: the build-order / 0分 / janus convention.

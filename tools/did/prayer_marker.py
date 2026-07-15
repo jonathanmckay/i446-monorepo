@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 PRAYER_MARKER = "☀️"
 # 地支 blocks, two hours each starting at 卯 (04:00). Mirrors did-fast §5c and
 # build-order-enrich's index math so the marker lands on the same block those

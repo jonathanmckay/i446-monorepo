@@ -72,7 +72,7 @@ Create events on the **jbm** archive calendar — `calendarId: jonathan.b.mckay@
 
 ## Output 3: Build Order Actuals
 
-Write Toggl entries into the build order (`~/vault/g245/build-order.md`) under each 地支 time block in the `## -1₲a` section.
+Write Toggl entries into the build order (`~/vault/g245/5e-1/build-order.md`) under each 地支 time block in the `## -1₲a` section.
 
 ### 地支 Time Block Mapping
 
@@ -116,7 +116,7 @@ Only add `actual:` to blocks that have entries. Leave empty blocks unchanged.
 
 After writing actuals (Output 3), snapshot the complete build order to the daily archive:
 
-1. Copy `~/vault/g245/build-order.md` to `~/vault/g245/archive/2026/YYYY.MM.DD/build-order.md`
+1. Copy `~/vault/g245/5e-1/build-order.md` to `~/vault/g245/archive/2026/YYYY.MM.DD/build-order.md`
 2. Create the date directory if it doesn't exist (`mkdir -p`)
 3. This preserves the day's goals + actuals together before the live file gets reset for the next day
 

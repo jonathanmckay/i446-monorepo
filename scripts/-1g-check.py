@@ -21,7 +21,7 @@ import re
 import sys
 from pathlib import Path
 
-MD_FILE = Path.home() / "vault/g245/build-order.md"
+MD_FILE = Path.home() / "vault/g245/5e-1/build-order.md"
 
 # (start_hour, end_hour, 地支, time_range_str)
 # 卯 = 04-06 (build-order / 0分 / janus convention). Hours 22-03 are sleep
