@@ -438,7 +438,7 @@ echo "x" >> "$DTD_PUSHED"
 ) >/dev/null 2>&1 &!
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 
 DEFEREOF
 chmod +x "$DTD_DEFER"
@@ -468,7 +468,7 @@ out=\$(python3 "\$POINTS_FAST" --id "\$1" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/nu
 echo "\${out:-✗ points update failed}" > "\$HDR"
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 
 POINTSEOF
 chmod +x "$DTD_POINTS"
@@ -501,7 +501,7 @@ out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 
 EDITEOF
 chmod +x "$DTD_EDIT"
@@ -1079,7 +1079,7 @@ with open(hdr_file, 'w') as f: f.write(msg)
 # whole burst into its query as literal ^[[A^[[B text on return (bug 2026-07-14).
 # Draining here consumes them before fzf reads. Also reset mouse modes, matching
 # the defer/points/edit action scripts.
-printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 SPLITEOF
 # Substitute placeholder paths
@@ -1504,7 +1504,7 @@ while true; do
   # The reset below still strips any stray MOTION mode a child left enabled from
   # an execute() binding. (Supersedes the --no-mouse + alt-scroll-off workaround,
   # which stopped the ^[[A^[[B flood but also killed scrolling — bugs 07-14/15.)
-  printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
+  printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --info=inline-right \
       --input-border=horizontal \

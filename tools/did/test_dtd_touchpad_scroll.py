@@ -32,11 +32,14 @@ def test_alt_scroll_workaround_removed():
     assert "1007" not in SRC, "the alt-scroll (1007) disable workaround must be gone"
 
 
-def test_mode_resets_are_motion_only():
-    # every terminal-mode reset strips ONLY motion (1002/1003) — never fzf's own
-    # click/scroll (1000/1006), which would break scrolling after an action.
-    assert r"printf '\033[?1002l\033[?1003l' > /dev/tty" in SRC
-    assert r"\033[?1000l" not in SRC and r"\033[?1006l" not in SRC
+def test_mode_resets_reassert_mouse_and_strip_motion():
+    # An execute() binding (ctrl-d/v/g, cpap/xk prompts) suspends fzf; on resume
+    # fzf does NOT restore its mouse, so scroll died after the first such action
+    # (bug 2026-07-15). Every reset must therefore RE-ENABLE fzf's click/scroll
+    # mouse (1000h/1006h) — the same enable fzf sends at startup, no motion — and
+    # only strip the stray MOTION modes (1002l/1003l). It must never DISABLE mouse.
+    assert r"printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty" in SRC
+    assert r"\033[?1000l" not in SRC and r"\033[?1006l" not in SRC, "must never disable fzf's mouse"
 
 
 if __name__ == "__main__":
