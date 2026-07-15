@@ -1101,14 +1101,17 @@ def _abbrev_tcol(hh: int, mm: int, prev_hour: int | None) -> tuple[str, int]:
 
 
 def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
-                         is_future=False) -> list[tuple[str, str]]:
-    """Render one non-focus block as 4 lines: a ``午:00 ☀️📧`` header + 3 body.
+                         is_future=False, max_rows: int = 3) -> list[tuple[str, str]]:
+    """Render one block as a header (``午:00 ☀️📧``) + ``max_rows`` body rows.
 
     Header is the block's :00 slot. A FUTURE block carries its dominant upcoming
     event inline with the duration as ``(N)`` minutes (``午:00 ☀️ standup (60)``);
     a PAST block shows points right-aligned and keeps the header bare. Body rows
-    are the block's three later half-hour marks: each shows an entry (label +
-    duration) when one starts in that half-hour, else just the faint time. The
+    are the block's later slot marks (30-min at the default max_rows=3, matching
+    the original 3-row card; 15-min when max_rows > 3 — the focus band's wider
+    cards, which also include the :00 slot in the marks since a real entry there
+    no longer has the header to lean on): each shows an entry (label + duration)
+    when one starts in that slot, else just the faint time. The
     hour prints only when it rolls over (``13:00`` then ``  :30``). Future
     durations read ``(N)``, past ones ``Nm``. Labels arrive Haiku-shortened
     (event_title / dtd short names); truncate is only the width fallback.
@@ -1151,25 +1154,34 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append(("bold #ffffff", pts_str))
         out.append(("class:dim", "\n"))
 
-    # ── body: 3 half-hour marks after :00, entries on their slots ──
+    # ── body: later slot marks after :00, entries on their slots ──
     # Empty marks always render (this is what fixes a future block like 午
     # dropping its 10:30 / 11:00 rows: the old code blank-padded partially-filled
-    # blocks instead of showing the remaining grid).
+    # blocks instead of showing the remaining grid). At the default max_rows=3
+    # this is 30-min marks AFTER :00 (matching the 4-line card exactly as
+    # before); max_rows > 3 (the focus band's wider cards) switches to 15-min
+    # marks and includes :00 too — a real entry landing there no longer has
+    # the header's bare-pts line to fall back on for visibility.
+    slot_min = 15 if max_rows > 3 else 30
+    include_00 = max_rows > 3
+
     def _slot(p):
-        return (p["start_dt"].hour, 0 if p["start_dt"].minute < 30 else 30)
-    # Entries (and gaps) win the 3 rows; empty half-hour marks only fill what's
-    # left, so a real entry is never crowded out by a gridline.
+        mm = (p["start_dt"].minute // slot_min) * slot_min
+        return (p["start_dt"].hour, mm)
+    # Entries (and gaps) win the rows; empty marks only fill what's left, so a
+    # real entry is never crowded out by a gridline.
     entry_rows = sorted(
         ((p["start_dt"].hour * 60 + p["start_dt"].minute,
           p["start_dt"].hour, p["start_dt"].minute, p) for p in body_picks),
         key=lambda r: r[0])
-    rows = entry_rows[:3]
-    if len(rows) < 3:
+    rows = entry_rows[:max_rows]
+    if len(rows) < max_rows:
         occupied = {_slot(p) for p in body_picks}
+        offsets = range(0 if include_00 else slot_min, 120, slot_min)
+        mark_slots = [(blk_sh + off // 60, off % 60) for off in offsets]
         marks = [(hh * 60 + mm, hh, mm, None)
-                 for hh, mm in ((blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30))
-                 if (hh, mm) not in occupied]
-        rows = rows + marks[:3 - len(rows)]
+                 for hh, mm in mark_slots if (hh, mm) not in occupied]
+        rows = rows + marks[:max_rows - len(rows)]
         rows.sort(key=lambda r: r[0])
 
     prev_hour = blk_sh  # the header established this hour at its :00 slot
@@ -1199,6 +1211,19 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append(("class:time", tcol + " "))
             out.append((fill_cls, _gap_fill(label, space) + "\n"))
             continue
+        if p.get("is_running"):
+            # The live task: same row shape as any entry, but a bold "▶ "
+            # marker and bold style so it still reads distinctly even though
+            # it's otherwise a plain compact row (no sub-second ticking —
+            # the whole-minute duration just recomputes on each repaint).
+            dur = fmt_dur(p["dur_min"])
+            prefix = "▶ "
+            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1)
+            sty = f"bold {p['style']}".strip() if p["style"] else "bold class:running"
+            out.append(("class:time", tcol + " "))
+            out.append((sty, prefix + pad(truncate(p["label"], space), space)))
+            out.append(("class:dim", f" {dur}\n"))
+            continue
         dur = f"({p['dur_min']})" if is_future else fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
         sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
@@ -1206,14 +1231,18 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         out.append((sty, pad(truncate(p["label"], space), space)))
         out.append(("class:dim", f" {dur}\n"))
 
-    # Pad to exactly 3 body rows so every block stays 4 lines tall.
-    for _ in range(3 - len(rows)):
+    # Pad to exactly max_rows body rows so every block stays a consistent height.
+    for _ in range(max_rows - len(rows)):
         out.append(("class:idle", "\n"))
     return out
 
 
-def _past_block_picks(blk_name, merged) -> list[dict]:
-    """Top-4 Toggl entries (by duration) starting in this block, chronological."""
+def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
+    """Top-``limit`` Toggl entries (by duration) starting in this block,
+    chronological. The RUNNING entry (if merged carries one — the focus
+    band's current-block call includes it, clipped to now) always survives
+    the cut regardless of its duration-so-far: it's the live task, not a
+    candidate to be crowded out by longer finished ones."""
     items = []
     for m in merged:
         blk = hour_to_block(m["start_dt"].hour)
@@ -1231,9 +1260,12 @@ def _past_block_picks(blk_name, merged) -> list[dict]:
             "label": label,
             "style": project_style(m["project_id"]),
             "dur_min": mins,
+            "is_running": bool(m.get("running")),
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
-    items = items[:4]
+    running = [x for x in items if x["is_running"]]
+    rest = [x for x in items if not x["is_running"]]
+    items = running + rest[:max(0, limit - len(running))]
     items.sort(key=lambda x: x["start_dt"])
     return items
 
@@ -1262,10 +1294,16 @@ def _block_sleep_item(blk_sh, blk_eh, cutoff) -> dict | None:
 
 
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
-    """Untracked stretches >= GAP_MIN minutes inside a past block's window,
+    """Untracked stretches >= GAP_MIN minutes inside a block's window,
     chronological. Sweeps raw STATE.entries (not the merged display spans,
     which join same-desc neighbours and would hide stop/resume gaps). A gap
-    straddling a block boundary is split, each block reporting its share."""
+    straddling a block boundary is split, each block reporting its share.
+
+    The trailing gap (after the last entry) stops at min(blk_end, cutoff),
+    not the bare block end: for a fully-elapsed past block cutoff is always
+    >= blk_end, so this is a no-op there — but for the CURRENT, still-in-
+    progress block (cutoff = now < blk_end), a bare blk_end would flash
+    FUTURE, not-yet-elapsed minutes as "untracked"."""
     blk_start = cutoff.replace(hour=blk_sh, minute=0, second=0, microsecond=0)
     blk_end = blk_start + dt.timedelta(hours=blk_eh + 1 - blk_sh)
 
@@ -1289,13 +1327,13 @@ def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
         pos = max(pos, en)
         if pos >= blk_end:
             return items
-    if (g := gap_item(pos, blk_end)):
+    if (g := gap_item(pos, min(blk_end, cutoff))):
         items.append(g)
     return items
 
 
-def _future_block_picks(blk_name, events) -> list[dict]:
-    """Top-4 gcal events (by duration) starting in this block, chronological."""
+def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
+    """Top-``limit`` gcal events (by duration) starting in this block, chronological."""
     items = []
     for ev in events:
         blk = hour_to_block(ev["start_dt"].hour)
@@ -1312,7 +1350,7 @@ def _future_block_picks(blk_name, events) -> list[dict]:
             "dur_min": mins,
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
-    items = items[:4]
+    items = items[:limit]
     items.sort(key=lambda x: x["start_dt"])
     return items
 
