@@ -51,3 +51,20 @@ def test_non_numeric_num_field_skipped():
 if __name__ == "__main__":
     import sys, pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_review_date_defaults_to_yesterday():
+    """0s is accrual/retrospective: with no date arg it reviews YESTERDAY, so the
+    main fields land in yesterday's row (not today's)."""
+    assert z._review_date(None) == dt.date.today() - dt.timedelta(days=1)
+
+
+def test_review_date_arg_is_the_reviewed_day():
+    assert z._review_date("2026-07-13") == dt.date(2026, 7, 13)
+
+
+def test_default_run_writes_main_to_yesterday_motivation_to_today():
+    rd = z._review_date(None)                 # yesterday
+    s = z.build_applescript({"title": "x", "motivation": "m"}, rd)
+    assert 'if bv = "%s" then set todayRow to r' % z._mdy(rd) in s          # main -> reviewed day
+    assert 'if bv = "%s" then set tomRow to r' % z._mdy(rd + dt.timedelta(days=1)) in s  # motivation -> next day

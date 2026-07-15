@@ -1,6 +1,6 @@
 ---
 name: "0s"
-description: "Daily social/reflection review. Opens a full-screen form (all questions at once) to fill title, gratitude, wins, scores, etc., then writes each answer to today's row in the Neon 0s897 tab. Usage: /0s [YYYY-MM-DD]"
+description: "Daily social/reflection review (accrual: reviews yesterday). Opens a full-screen form (all questions at once) to fill title, gratitude, wins, scores, etc., then writes each answer to the reviewed day's row in the Neon 0s897 tab (yesterday by default; motivation to the next day). Usage: /0s [YYYY-MM-DD]"
 user-invocable: true
 ---
 
@@ -8,8 +8,11 @@ user-invocable: true
 
 A full-screen TUI form for the daily 0s review. All questions are on screen at
 once so you fill them one after the next; on submit (`^S`) each answer is written
-to the matching column of **today's** row in the Neon `0s897` tab. The
-forward-looking **motivation** field is written to **tomorrow's** row (col D).
+to the matching column of the **reviewed day's** row in the Neon `0s897` tab. 0s
+is **accrual/retrospective** — you fill it the next day about the day before — so
+by default it reviews **yesterday** and the main fields land in **yesterday's**
+row. The forward-looking **motivation** field is written to the following day's
+row (**today**, by default; col D).
 
 ## Field → column map (0s897, one row per day, date in col B as M/D/YY)
 
@@ -22,7 +25,7 @@ forward-looking **motivation** field is written to **tomorrow's** row (col D).
 | Learning for tomorrow | I | Learnings (others) | T |
 | 霓虹 (num) | K | ⌈ ceiling (others) | V |
 | 帮助 (num) | L | ⌊ floor (others) | W |
-| 身体 (num) | M | Motivation → **tomorrow** row | D |
+| 身体 (num) | M | Motivation → **following day** (today) row | D |
 | Body Notes | N | | |
 
 `霓虹 / 帮助 / 身体` and the `⌈ / ⌊ / x̄` fields are numbers, entered manually
@@ -62,8 +65,9 @@ If cmux is unavailable, tell the user to run it themselves:
 
 - The writer routes through `~/.claude/skills/_lib/ix-osa.sh` (Excel is open on
   Ix), matching every other Neon write. Never writes a local copy.
-- Row is found by matching today's date (`M/D/YY`) in `0s897` col B; motivation
-  goes to the next day's row.
+- The reviewed-day row is found by matching its date (`M/D/YY`) in `0s897` col B.
+  With no arg the reviewed day is **yesterday**; motivation goes to the following
+  day's row (today). Pass `[YYYY-MM-DD]` to review a specific day.
 - Non-interactive paths (for scripting/tests): `0s.py --from-json <file>` writes
   answers from JSON; `0s.py --print-script --from-json <file>` prints the
   AppleScript without writing.

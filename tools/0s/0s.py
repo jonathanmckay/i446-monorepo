@@ -3,9 +3,11 @@
 
 A full-screen form (prompt_toolkit) that shows all questions at once so you can
 fill them one after the next, then writes each answer to the matching column of
-today's row in the Neon `0s897` tab. The forward-looking "motivation" field is
-written to TOMORROW's row instead (it's the motivation you're setting for the
-next day).
+the REVIEWED DAY's row in the Neon `0s897` tab. 0s is accrual/retrospective: you
+fill it the next day about the day before, so the reviewed day defaults to
+YESTERDAY. The forward-looking "motivation" field is written to the FOLLOWING
+day's row (today, by default) — it's the motivation you're setting for the day
+after the one you're reviewing.
 
 Column map (0s897 tab, one row per day, date in col B as M/D/YY):
   E Title of the Day        K 霓虹 (num)      P ⌈ (num)   S proud of / others
@@ -19,7 +21,7 @@ Usage:
   python3 0s.py                 # interactive full-screen form, then writes Excel
   python3 0s.py --from-json F   # non-interactive: write answers from JSON file
   python3 0s.py --print-script  # print the AppleScript for given --from-json, no write
-  python3 0s.py [YYYY-MM-DD]    # target a specific day (default: today)
+  python3 0s.py [YYYY-MM-DD]    # review a specific day (default: yesterday)
 """
 from __future__ import annotations
 
@@ -61,6 +63,16 @@ def _mdy(d: _dt.date) -> str:
     return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
 
 
+def _review_date(arg: str | None) -> _dt.date:
+    """The day the survey is ABOUT. 0s is accrual/retrospective — filled the next
+    day about the day before — so with no arg it defaults to YESTERDAY. The main
+    fields land in this row; the forward-looking motivation lands in the next
+    day's row (this date + 1)."""
+    if arg:
+        return _dt.date.fromisoformat(arg)
+    return _dt.date.today() - _dt.timedelta(days=1)
+
+
 def _is_num(s: str) -> bool:
     try:
         float(s)
@@ -76,12 +88,13 @@ def _as_applescript(s: str) -> str:
     return " & linefeed & ".join('"%s"' % e for e in esc) if esc else '""'
 
 
-def build_applescript(answers: dict, today: _dt.date) -> str:
-    """Build the AppleScript that writes filled answers to today's 0s897 row
-    (and the motivation field to tomorrow's row). Only non-empty fields are
-    written, so blanks never clobber existing cells."""
-    today_s = _mdy(today)
-    tomorrow_s = _mdy(today + _dt.timedelta(days=1))
+def build_applescript(answers: dict, target: _dt.date) -> str:
+    """Build the AppleScript that writes filled answers to the reviewed day's
+    0s897 row (`target`), and the forward-looking motivation to the following
+    day's row (`target + 1`). Only non-empty fields are written, so blanks never
+    clobber existing cells."""
+    target_s = _mdy(target)
+    next_s = _mdy(target + _dt.timedelta(days=1))
     L = [
         'tell application "Microsoft Excel"',
         '  set wb to workbook "%s"' % WORKBOOK,
@@ -90,10 +103,10 @@ def build_applescript(answers: dict, today: _dt.date) -> str:
         '  set tomRow to 0',
         '  repeat with r from 3 to 600',
         '    set bv to (string value of range ("B" & r) of ws)',
-        '    if bv = "%s" then set todayRow to r' % today_s,
-        '    if bv = "%s" then set tomRow to r' % tomorrow_s,
+        '    if bv = "%s" then set todayRow to r' % target_s,
+        '    if bv = "%s" then set tomRow to r' % next_s,
         '  end repeat',
-        '  if todayRow = 0 then return "ERROR: date %s not found in 0s897 col B"' % today_s,
+        '  if todayRow = 0 then return "ERROR: date %s not found in 0s897 col B"' % target_s,
         '  set wrote to 0',
     ]
     for key, _label, col, target, kind in FIELDS:
@@ -121,8 +134,8 @@ def build_applescript(answers: dict, today: _dt.date) -> str:
     return "\n".join(L)
 
 
-def write_answers(answers: dict, today: _dt.date) -> str:
-    script = build_applescript(answers, today)
+def write_answers(answers: dict, target: _dt.date) -> str:
+    script = build_applescript(answers, target)
     proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True, text=True, timeout=60)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):
@@ -133,7 +146,7 @@ def write_answers(answers: dict, today: _dt.date) -> str:
 # ---------------------------------------------------------------------------
 # Full-screen form (prompt_toolkit)
 # ---------------------------------------------------------------------------
-def run_form(today: _dt.date) -> dict | None:
+def run_form(target: _dt.date) -> dict | None:
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import HSplit, Layout, ScrollablePane, VSplit, Window
@@ -159,7 +172,7 @@ def run_form(today: _dt.date) -> dict | None:
         height=1, style="class:status")
 
     body = HSplit(rows, padding=0)
-    root = HSplit([Frame(ScrollablePane(body), title="0s · %s" % _mdy(today)), status])
+    root = HSplit([Frame(ScrollablePane(body), title="0s · reviewing %s" % _mdy(target)), status])
 
     ordered = [(k, areas[k][0], areas[k][1]) for k, *_ in FIELDS]  # (key, area, kind) in field order
     last_idx = len(ordered) - 1
@@ -236,24 +249,24 @@ def main() -> int:
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     args = ap.parse_args()
 
-    today = _dt.date.fromisoformat(args.date) if args.date else _dt.date.today()
+    target = _review_date(args.date)  # default: yesterday (accrual/retrospective)
 
     if args.from_json:
         answers = json.loads(Path(args.from_json).read_text())
     elif args.print_script:
         answers = {}  # empty demo
     else:
-        answers = run_form(today)
+        answers = run_form(target)
         if answers is None:
             print("0s cancelled.")
             return 1
 
     if args.print_script:
-        print(build_applescript(answers, today))
+        print(build_applescript(answers, target))
         return 0
 
     filled = sum(1 for k, *_ in FIELDS if (answers.get(k) or "").strip())
-    result = write_answers(answers, today)
+    result = write_answers(answers, target)
     print("0s → %s (%d fields) · %s" % (SHEET, filled, result))
     return 0
 
