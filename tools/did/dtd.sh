@@ -438,7 +438,7 @@ echo "x" >> "$DTD_PUSHED"
 ) >/dev/null 2>&1 &!
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
 
 DEFEREOF
 chmod +x "$DTD_DEFER"
@@ -468,7 +468,7 @@ out=\$(python3 "\$POINTS_FAST" --id "\$1" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/nu
 echo "\${out:-✗ points update failed}" > "\$HDR"
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
 
 POINTSEOF
 chmod +x "$DTD_POINTS"
@@ -501,7 +501,7 @@ out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
 
 EDITEOF
 chmod +x "$DTD_EDIT"
@@ -1079,7 +1079,7 @@ with open(hdr_file, 'w') as f: f.write(msg)
 # whole burst into its query as literal ^[[A^[[B text on return (bug 2026-07-14).
 # Draining here consumes them before fzf reads. Also reset mouse modes, matching
 # the defer/points/edit action scripts.
-printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 SPLITEOF
 # Substitute placeholder paths
@@ -1493,25 +1493,23 @@ while true; do
   #                          $DTD_HDRGEN on load/result and after every action so
   #                          worker confirmations persist alongside the count.
   # The start binding publishes fzf's --listen port for the ticker to POST to.
-  # --no-mouse + the mode reset below: SGR mouse-motion sequences (ESC[<34;x;yM)
-  # were leaking into the query as literal text (bug 2026-07-05). fzf only
-  # parses the click/scroll events it subscribes to; motion events — forwarded
-  # by cmux once ANY mouse mode is on, or left enabled (1002/1003) by a child
-  # program from an execute() binding — fall through the parser into the input
-  # box. dtd is keyboard-driven, so disable fzf's mouse subscription entirely
-  # and defensively turn off every stray tracking mode before each launch.
-  # Also disable ALTERNATE SCROLL mode (1007): with --no-mouse, cmux/Ghostty
-  # translate two-finger touchpad scroll into arrow-key bursts (ESC[A/ESC[B) that
-  # flood the query as literal ^[[A^[[B text (bug 2026-07-15). With 1007 off,
-  # touchpad scroll is a no-op; keyboard arrows still navigate the list.
-  printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1007l' > /dev/tty 2>/dev/null || true
+  # --mouse: let fzf OWN the mouse so it consumes scroll-wheel / two-finger
+  # touchpad scroll as list navigation (like Claude Code) — the scroll events are
+  # parsed by fzf and never reach the query. fzf subscribes to click + SGR scroll
+  # (1000/1006) only, NOT motion (1002/1003), so the motion-leak that once forced
+  # --no-mouse (bug 2026-07-05: ESC[<34;x;yM motion events dumped into the input)
+  # does not apply to fzf's own subscription. The reset below still strips any
+  # stray MOTION mode a child left enabled from an execute() binding. (Supersedes
+  # the earlier --no-mouse + alt-scroll-off workaround, which stopped the
+  # ^[[A^[[B flood but also killed scrolling — bugs 2026-07-14/15.)
+  printf '\033[?1002l\033[?1003l' > /dev/tty 2>/dev/null || true
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
-      --no-mouse \
+      --mouse \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \
       --header="$DTD_KEYS" \
-      --bind "start:execute-silent(printf '\\033[?1007l' > /dev/tty; echo \$FZF_PORT > $DTD_PORT)" \
+      --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
       --bind "load:transform-header($DTD_HDRGEN)" \
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
