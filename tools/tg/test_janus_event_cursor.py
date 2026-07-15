@@ -149,7 +149,10 @@ def test_visible_events_excludes_rows_trimmed_by_max_rows():
     assert all(ev in events for ev in mod.STATE.visible_events)
 
 
-def test_selected_event_row_renders_with_reverse_style():
+def test_selected_event_row_gets_full_row_background_band():
+    """dtd-style highlight (user report 2026-07-15): a flat background band
+    across the WHOLE row, not ANSI reverse video — the time column, label,
+    and duration must all carry the highlight background."""
     mod = _load_tui()
     today = _midnight()
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
@@ -157,10 +160,15 @@ def test_selected_event_row_renders_with_reverse_style():
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = mod._event_key(ev)
     frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
-    assert any("reverse" in s for s, t in frags if "standup" in t)
+    # Time column gets the accent style; label carries the fg color + bg band;
+    # the trailing " (15)\n" duration fragment carries the plain bg band.
+    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t in frags)
+    assert any("bg:#3a3a3a" in s and "standup" in t for s, t in frags)
+    assert any(s == "class:selected_bg" and t == " (15)\n" for s, t in frags)
+    assert not any("reverse" in s for s, t in frags), "must not use ANSI reverse video"
 
 
-def test_unselected_event_row_has_no_reverse_style():
+def test_unselected_event_row_uses_plain_time_and_dim_styles():
     mod = _load_tui()
     today = _midnight()
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
@@ -168,7 +176,28 @@ def test_unselected_event_row_has_no_reverse_style():
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = None
     frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
-    assert not any("reverse" in s for s, t in frags if "standup" in t)
+    assert any(s == "class:time" for s, t in frags if t.strip() == "09:00")
+    assert any(s == "class:dim" for s, t in frags if t == " (15)\n")
+    assert not any("selected" in s or "reverse" in s for s, t in frags)
+
+
+def test_selection_never_shifts_row_horizontal_position():
+    """Regression (user report 2026-07-15: "keep the horizontal positioning
+    that I had per block"): highlighting a row must be a pure color change —
+    same characters, same widths, same right-justified duration column — so
+    toggling event_sel never moves anything left/right."""
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
+            "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
+    mod.STATE.event_sel = None
+    unselected = "".join(t for _, t in
+                         mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True))
+    mod.STATE.event_sel = mod._event_key(ev)
+    selected = "".join(t for _, t in
+                       mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True))
+    assert selected == unselected, "highlighting must not change any character or width, only color"
 
 
 # ─── Tab / Shift-Tab keybindings ────────────────────────────────────────────

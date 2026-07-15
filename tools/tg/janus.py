@@ -1279,15 +1279,24 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
         is_selected = p.get("is_event") and STATE.event_sel == _event_key(p["event"])
         if is_selected:
-            # The event cursor's highlight: reverse video on the whole row so
-            # it reads unmistakably as "armed" — Tab to move it, Enter to
-            # convert it into a running Toggl timer.
-            sty = "reverse " + (p["style"] or "class:future")
+            # The event cursor's highlight, dtd-style: a flat background band
+            # across the WHOLE row (not ANSI reverse, which just inverts
+            # whatever fg/bg happen to be in play and looked inconsistent
+            # row to row) plus an accent color on the leading time column,
+            # echoing dtd's left-edge marker. Same characters, same widths,
+            # same pad()/space math as an unselected row — only the colors
+            # change, so the row's horizontal position never shifts (user
+            # report 2026-07-15: wanted the per-block column alignment kept).
+            sty = f"bold {p['style']}".strip() + " bg:#3a3a3a" if p["style"] else "class:selected_bg"
+            time_sty = "class:selected_accent"
+            dur_sty = "class:selected_bg"
         else:
             sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
-        out.append(("class:time", tcol + " "))
+            time_sty = "class:time"
+            dur_sty = "class:dim"
+        out.append((time_sty, tcol + " "))
         out.append((sty, pad(truncate(p["label"], space), space)))
-        out.append((("reverse class:dim" if is_selected else "class:dim"), f" {dur}\n"))
+        out.append((dur_sty, f" {dur}\n"))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
     for _ in range(max_rows - len(rows)):
@@ -2348,6 +2357,8 @@ style = Style.from_dict({
     "now": "bold #ffffff",
     "no_entry": "bold #ff4444",
     "no_entry_bg": "bold bg:#ff4444 #000000",
+    "selected_bg": "bg:#3a3a3a",
+    "selected_accent": "bold bg:#3a3a3a #ff2d78",
     "flash": "bold yellow",
     "hint": "italic #666666",
     "prompt": "bold cyan",
