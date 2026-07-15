@@ -72,16 +72,20 @@ Get current local time (America/Los_Angeles). Compute which block using `(hour -
 
 Extract goal items from the user's input. Each line starting with `-` or `*` or a numbered list is one goal. If no list markers, split by newlines. Strip checkbox syntax if present (e.g., `- [ ] foo` becomes `foo`). Preserve `{N}` bonus point annotations.
 
-**Auto-estimate bonus points:** If a goal does NOT already contain `{N}`, estimate and append one. Use `{5}` to `{20}` based on the goal's ambition and difficulty:
+**`{N}` = block goal · `[N]`-only = plain todo.** Split the items by which bracket they carry:
+- **`{N}` (or no bracket)** → a **block goal**: it goes under the block's 地支 heading in the build order and into Todoist with `#-1g` (Steps 3–4); its `{N}` credits the 0g column on completion. If it has no `{N}`, auto-estimate one (below).
+- **`[N]` only, no `{N}`** → the user is just **adding a plain todo**, not a block goal. Do NOT stamp it into the build order (Step 3) and do NOT give it `#-1g`. Create it exactly like `/todo`: Inbox (no project), an inferred `@domain` label, the `[N]` kept in the content, due today. It is not a goal for the block.
+
+**Auto-estimate bonus points:** If a **block goal** does NOT already contain `{N}`, estimate and append one. Use `{5}` to `{20}` based on the goal's ambition and difficulty:
 - Quick/routine tasks (send a message, check something, review): `{5}`
 - Medium tasks (write something, prep, research): `{8}` to `{12}`
 - Ambitious/hard tasks (deep work, build, create, ship): `{15}` to `{20}`
 
-Always add the estimate. Never leave a goal without `{N}`.
+Always add the estimate **to block goals**. Never leave a block goal without `{N}`. (A `[N]`-only plain todo keeps its `[N]` as-is and is never given `{N}`.)
 
 ### Step 3: Update build order markdown
 
-Read the build order file. Find the `## -1₲` heading (match any line starting with `## -1₲`, ignoring trailing characters). If no match is found, error with "ERROR: ## -1₲ section not found in build order". Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new goals as `    - [ ] <goal>` lines (4-space indent).
+Read the build order file. Find the `## -1₲` heading (match any line starting with `## -1₲`, ignoring trailing characters). If no match is found, error with "ERROR: ## -1₲ section not found in build order". Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new **block goals** (the `{N}` items only) as `    - [ ] <goal>` lines (4-space indent). `[N]`-only plain todos are NOT written here.
 
 Also add `🎯` to the block's header line (e.g., `- 巳` becomes `- 巳 🎯`) if it is not already present. Append it after any existing emojis/text on that line. **Only add 🎯 if at least one goal has non-empty text.** Do not mark a block as goals-set if all goals are blank.
 
@@ -91,13 +95,15 @@ Keep all other time blocks untouched.
 
 First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists (substring match).
 
-For each **new** goal (no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
+For each **new block goal** (`{N}` item, no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
 - **Content**: the goal text **including its `{N}` marker verbatim** (e.g. `tasks down to 70 {20}`, not `tasks down to 70`). Stripping the `{N}` causes /did to log 0 pts on completion.
 - **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
 - **Labels**: `["#-1g", "<domain>"]` (e.g. `["#-1g", "i9"]`)
 - **Priority**: `p1`
 - **Due**: `today`
 - **Duration**: from `(N)` annotation if present (e.g., `(30)` → `"30m"`). If no `(N)`, omit.
+
+For each **`[N]`-only plain todo**, create an ordinary Todoist task instead: **no project** (Inbox), labels `["<domain>"]` (the inferred domain only — **no `#-1g`**), the `[N]` kept in the content, priority `p4`, due `today`. These are just added to the todo list, not tracked as block goals.
 
 ### Step 5: Refresh the dtd task cache
 
