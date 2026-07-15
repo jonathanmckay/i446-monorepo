@@ -313,11 +313,23 @@ clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ 
 # so alt-enter is bound with execute (not execute-silent). Blank input just
 # completes with no score.
 clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
-if [[ "\$clean_lower" == cpap && -r /dev/tty ]]; then
-  printf "\n→ CPAP quality (1-3): " > /dev/tty
-  read cpap_q < /dev/tty
-  cpap_q=\${cpap_q// /}
-  [[ -n "\$cpap_q" ]] && clean="\$clean \$cpap_q"
+# Tasks that ask for a value on completion (like cpap). The typed number is
+# appended so did-fast writes it to the task's own 0n column: cpap = 1-3 sleep
+# quality; xk20/xk22/xk26 = minutes with Theo/Ren/Rori. Needs a tty, so the
+# router (below) sends these to execute, not execute-silent. Blank input just
+# completes with no number.
+_ip=""
+case "\$clean_lower" in
+  cpap) _ip="CPAP quality (1-3)";;
+  xk20) _ip="xk20 minutes (Theo)";;
+  xk22) _ip="xk22 minutes (Ren)";;
+  xk26) _ip="xk26 minutes (Rori)";;
+esac
+if [[ -n "\$_ip" && -r /dev/tty ]]; then
+  printf "\n→ %s: " "\$_ip" > /dev/tty
+  read _iv < /dev/tty
+  _iv=\${_iv// /}
+  [[ -n "\$_iv" ]] && clean="\$clean \$_iv"
 fi
 echo "\$clean_for_filter" >> "\$SESSION"
 echo "\$clean_for_filter" >> "\$REMOVED"
@@ -333,8 +345,9 @@ DONEEOF
 chmod +x "$DTD_DONE"
 
 # --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
-# Only cpap needs a tty (for its 1-3 quality prompt), so route cpap → execute
-# (which gives the DONE script a terminal) and every other task → execute-silent
+# cpap + xk20/xk22/xk26 prompt for a value on completion and so need a tty —
+# route them → execute (which gives the DONE script a terminal) and every other
+# task → execute-silent
 # (flicker-free, as before). The router emits ONLY the execute/execute-silent
 # action; the reload/clear-query/transform-header chain stays in the binding
 # where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
@@ -345,11 +358,12 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
 _id="\$1"
 _t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
-if [[ "\$_t" == cpap ]]; then
-  printf 'execute(%s %s)' "$DTD_DONE" "\$_id"
-else
-  printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id"
-fi
+case "\$_t" in
+  cpap|xk20|xk22|xk26)
+    printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
+  *)
+    printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
+esac
 ROUTEREOF
 chmod +x "$DTD_DONE_ROUTER"
 
@@ -1543,10 +1557,10 @@ while true; do
   # Track original name for list filtering (strip {N} too for matching)
   clean_for_filter=$(echo "$clean" | sed -E 's/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
-  # Tasks that need args (e.g. cpap needs a score)
+  # Tasks that need args (e.g. cpap needs a score; xk20/xk22/xk26 need minutes)
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26)
       # If a Toggl timer for this exact task is running, use its elapsed
       # minutes as the value instead of prompting. Stop it here to read the
       # duration; did-fast then sees the explicit number (clean + N) and the
