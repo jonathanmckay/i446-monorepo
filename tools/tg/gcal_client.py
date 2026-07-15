@@ -70,29 +70,32 @@ def _cache_path(day: dt.date) -> Path:
 
 
 # lx@m5c7.com is Louisa's calendar, visible on the m5c7 account — it carries
-# BOTH her personal solo events (call nanny, dentist, ...) AND real m5x2
-# business meetings (she's on the m5x2 team, so Strat/Analytics/People show
-# there too). Filter out the personal ones at fetch time rather than hiding
-# the whole calendar, which would also hide the business meetings.
+# her personal solo events (call nanny, dentist, ...), m5x2 business meetings
+# Jonathan is actually part of (m5x2 Strat, m5x2 People), AND meetings that
+# are purely between her and someone else on the m5x2 team (HZ/LX 1:1, her
+# 1:1 with Han Zhao). Only the middle category belongs in janus — filter the
+# rest at fetch time rather than hiding the whole calendar, which would also
+# hide the meetings Jonathan actually needs to see.
 PERSONAL_CALENDARS_FILTERED = {"lx@m5c7.com"}
+JONATHAN_EMAILS = {"mckay@m5c7.com"}
 
 
-def _is_personal_solo_event(cal_summary: str, title: str, attendees: list | None) -> bool:
-    """True for a private personal reminder that shouldn't surface in janus.
+def _should_hide_lx_event(cal_summary: str, title: str, attendees: list | None) -> bool:
+    """True for an lx@m5c7.com event that shouldn't surface in janus.
 
     A literal "m5x2" in the title is an unambiguous business signal (same
-    rule janus.py's gcal_project_code uses) and always wins. Otherwise, an
-    event with no attendees besides the calendar owner herself (her solo
-    "call nanny" / "Call Nanny candidate" entries — user report 2026-07-13)
-    is a personal reminder, not a shared meeting; a real meeting (even one
-    that doesn't include Jonathan, like "HZ/LX 1:1") always lists at least
-    one other attendee."""
+    rule janus.py's gcal_project_code uses) and always wins, in case attendee
+    data is ever missing/incomplete. Otherwise: hide anything Jonathan isn't
+    actually an attendee of. The 2026-07-13 fix only dropped her SOLO events
+    (no attendees besides herself — "call nanny"); meetings between her and
+    someone else, with Jonathan not invited, still leaked through (user
+    report 2026-07-15: "can we not show the lx events")."""
     if cal_summary not in PERSONAL_CALENDARS_FILTERED:
         return False
     if "m5x2" in title.lower():
         return False
-    non_self = [a for a in (attendees or []) if not a.get("self")]
-    return not non_self
+    attendee_emails = {(a.get("email") or "").lower() for a in (attendees or [])}
+    return not (attendee_emails & JONATHAN_EMAILS)
 
 
 def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) -> list[dict]:
@@ -128,7 +131,7 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
                 continue
             title = ev.get("summary", "(no title)")
             cal_summary = cal.get("summary", cid)
-            if _is_personal_solo_event(cal_summary, title, ev.get("attendees")):
+            if _should_hide_lx_event(cal_summary, title, ev.get("attendees")):
                 continue
             out.append({
                 "title": title,
