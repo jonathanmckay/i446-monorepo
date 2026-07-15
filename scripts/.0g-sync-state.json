@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-15T06:00:07.490774-07:00"
+  "tasks": {
+    "write roles and responsibilites": {
+      "todoist_id": "6h5rhPqrQ7V6Gx52",
+      "minutes": 120
+    },
+    "get windows cadence set up": {
+      "todoist_id": "6h5rhQ3fc3vvpRQ2",
+      "minutes": 30
+    },
+    "bball with kettlebell": {
+      "todoist_id": "6h5rhQ724qCrrhWR",
+      "minutes": 20
+    },
+    "no youtube/feeds (not even russia ukraine news)": {
+      "todoist_id": "6h5rhQ9xqGgMGh52",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-07-15T10:00:05.140520-07:00"
 }
