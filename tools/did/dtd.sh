@@ -1500,14 +1500,18 @@ while true; do
   # program from an execute() binding — fall through the parser into the input
   # box. dtd is keyboard-driven, so disable fzf's mouse subscription entirely
   # and defensively turn off every stray tracking mode before each launch.
-  printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l' > /dev/tty 2>/dev/null || true
+  # Also disable ALTERNATE SCROLL mode (1007): with --no-mouse, cmux/Ghostty
+  # translate two-finger touchpad scroll into arrow-key bursts (ESC[A/ESC[B) that
+  # flood the query as literal ^[[A^[[B text (bug 2026-07-15). With 1007 off,
+  # touchpad scroll is a no-op; keyboard arrows still navigate the list.
+  printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1007l' > /dev/tty 2>/dev/null || true
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --no-mouse \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \
       --header="$DTD_KEYS" \
-      --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
+      --bind "start:execute-silent(printf '\\033[?1007l' > /dev/tty; echo \$FZF_PORT > $DTD_PORT)" \
       --bind "load:transform-header($DTD_HDRGEN)" \
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
