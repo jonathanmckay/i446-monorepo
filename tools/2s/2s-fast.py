@@ -124,6 +124,24 @@ end tell'''
     return out
 
 
+def normalize_value(v: str) -> str:
+    """Excel cell text -> the literal to SET in the scorecard. 分 (and 分-
+    derived rates like 分/d) are measured as integers everywhere else in this
+    system (janus.py, the 0分 sheet); this pasted str(float(v)) straight
+    through, so a value like 306 wrote as "306.0" and a genuinely fractional
+    one (BC 分/d is a monthly average; some raw totals are themselves
+    fractional — variable-task points divide by 7, e.g. 323.714285714286
+    live in 0分) wrote its full repr (2026-07-14: "these values are adding
+    decimals"). Round once, same as every other 分 render site."""
+    v = v.strip()
+    if v in ("missing value", ""):
+        return '""'
+    try:
+        return str(int(round(float(v))))
+    except ValueError:
+        return '"' + v.replace('"', '') + '"'
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("month", nargs="?", default=None,
@@ -145,16 +163,7 @@ def main() -> None:
     if len(vals) != 12:
         sys.exit(f"ERROR: expected 12 values, got {len(vals)}: {vals}")
     # Normalize: AppleScript renders missing as "missing value"
-    norm = []
-    for v in vals:
-        v = v.strip()
-        if v in ("missing value", ""):
-            norm.append('""')
-        else:
-            try:
-                norm.append(str(float(v)))
-            except ValueError:
-                norm.append('"' + v.replace('"', '') + '"')
+    norm = [normalize_value(v) for v in vals]
     empty = sum(1 for v in norm if v == '""')
     if empty >= len(norm):
         sys.exit(f"ERROR: {SHEET_1S} row {src_row} ({month}.1) is empty — "
