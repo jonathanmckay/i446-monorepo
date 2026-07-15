@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 VERSION = "1.0.0"
 ADDR = ("127.0.0.1", 9876)
 TIMEOUT = 15  # osascript hard timeout
+WORKBOOK = "Neon分v12.2.xlsx"
 
 DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
 
@@ -57,11 +58,11 @@ def lookup_row(sheet: str, date_str: str) -> int | None:
     target = safe_str(date_str)
     script = f'''
 tell application "Microsoft Excel"
-    set theSheet to sheet "{sheet}" of active workbook
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     repeat with i from 2 to 800
         set cv to value of cell ("{dc}" & i) of theSheet
         if cv is not missing value then
-            if (class of cv) is date then
+            if ((class of cv) as text) is "date" then
                 set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
                 if md = "{target}" then return i
             else
@@ -114,18 +115,31 @@ def do_append(req: dict) -> dict:
     is_numeric = val.lstrip().startswith("+") or val.lstrip().startswith("=")
     if is_numeric:
         empty_set = f'set formula of theCell to "={val_esc.lstrip("+")}"'
+        # The existing cell may hold a bare number with no leading "="
+        # (e.g. a plain value-set "2", not a formula). Concatenating "+2"
+        # onto that directly produces the TEXT "2+2" instead of a formula,
+        # so it silently stops summing (observed live 2026-07-14 on hcbi
+        # Daily Dozen count cells). Normalize to a formula before appending.
+        nonempty_set = (
+            f'if oldFormula does not start with "=" then\n'
+            f'        set formula of theCell to "=" & oldFormula & "{val_esc}"\n'
+            f'    else\n'
+            f'        set formula of theCell to oldFormula & "{val_esc}"\n'
+            f'    end if'
+        )
     else:
         clean_esc = safe_str(val.lstrip(", "))
         empty_set = f'set value of theCell to "{clean_esc}"'
+        nonempty_set = f'set formula of theCell to oldFormula & "{val_esc}"'
     script = f'''
 tell application "Microsoft Excel"
-    set theSheet to sheet "{sheet}" of active workbook
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     set theCell to cell ("{col}{row}") of theSheet
     set oldFormula to formula of theCell
     if oldFormula = "" or oldFormula = "0" then
         {empty_set}
     else
-        set formula of theCell to oldFormula & "{val_esc}"
+        {nonempty_set}
     end if
     return ((value of theCell) as string) & "|" & (formula of theCell)
 end tell
@@ -149,7 +163,7 @@ def do_write(req: dict) -> dict:
     setter = "formula" if is_formula else "value"
     script = f'''
 tell application "Microsoft Excel"
-    set theCell to cell ("{col}{row}") of sheet "{sheet}" of active workbook
+    set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
     set {setter} of theCell to "{val_esc}"
     return ((value of theCell) as string) & "|" & (formula of theCell)
 end tell
@@ -169,7 +183,7 @@ def do_read(req: dict) -> dict:
     sheet = req["sheet"]
     script = f'''
 tell application "Microsoft Excel"
-    set theCell to cell ("{col}{row}") of sheet "{sheet}" of active workbook
+    set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
     return ((value of theCell) as string) & "|" & (formula of theCell)
 end tell
 '''
