@@ -43,6 +43,7 @@ def test_block_gaps_sees_stop_resume_on_same_task():
     mod = _load_tui()
     today = _midnight()
     cutoff = today.replace(hour=10)
+    mod.STATE.entries_known = True
     mod.STATE.entries = [
         _entry("email", today.replace(hour=8), today.replace(hour=8, minute=40)),
         _entry("email", today.replace(hour=9, minute=10), today.replace(hour=10)),
@@ -58,6 +59,7 @@ def test_block_gaps_below_threshold_folded():
     mod = _load_tui()
     today = _midnight()
     cutoff = today.replace(hour=10)
+    mod.STATE.entries_known = True
     mod.STATE.entries = [
         _entry("a", today.replace(hour=8), today.replace(hour=8, minute=58)),
         _entry("b", today.replace(hour=9, minute=2), today.replace(hour=10)),
@@ -69,6 +71,7 @@ def test_block_gaps_fully_empty_block_is_one_full_gap():
     mod = _load_tui()
     today = _midnight()
     cutoff = today.replace(hour=10)
+    mod.STATE.entries_known = True
     mod.STATE.entries = []
     gaps = mod._block_gaps(8, 9, cutoff)
     assert len(gaps) == 1 and gaps[0]["dur_min"] == 120
@@ -79,6 +82,7 @@ def test_block_gaps_spillover_coverage_clips_at_boundary():
     mod = _load_tui()
     today = _midnight()
     cutoff = today.replace(hour=10)
+    mod.STATE.entries_known = True
     mod.STATE.entries = [
         _entry("deep work", today.replace(hour=7, minute=30), today.replace(hour=9, minute=15)),
         _entry("standup", today.replace(hour=9, minute=45), today.replace(hour=10)),
@@ -86,6 +90,57 @@ def test_block_gaps_spillover_coverage_clips_at_boundary():
     gaps = mod._block_gaps(8, 9, cutoff)
     assert len(gaps) == 1
     assert gaps[0]["time_str"] == "09:15" and gaps[0]["dur_min"] == 30
+
+
+def test_block_gaps_unconfirmed_entries_never_flash(monkeypatch):
+    """Regression (2026-07-15, user report: "janus has time as empty but
+    toggl shows it as filled"): a cold-start Toggl 402 (or any failed fetch)
+    leaves STATE.entries at its empty default — indistinguishable from a
+    genuinely tracked-nothing block. Without entries_known, _block_gaps
+    rendered a confident "empty → HH:MM" flash over time Toggl had actually
+    filled, just not yet successfully re-fetched. entries_known False must
+    suppress ALL gaps, even an otherwise-legitimate one."""
+    mod = _load_tui()
+    today = _midnight()
+    cutoff = today.replace(hour=10)
+    mod.STATE.entries_known = False
+    mod.STATE.entries = []  # never fetched, NOT "confirmed empty"
+    assert mod._block_gaps(8, 9, cutoff) == []
+
+    # Even with real (stale-looking) entries present, an unconfirmed state
+    # must not compute/report gaps around them either — we simply don't know.
+    mod.STATE.entries = [
+        _entry("email", today.replace(hour=8), today.replace(hour=8, minute=40)),
+    ]
+    assert mod._block_gaps(8, 9, cutoff) == []
+
+
+def test_block_gaps_resume_confirmed_after_entries_known_flips_true():
+    """Once entries_known flips back to True (the next successful fetch),
+    gaps resume normally — this isn't a permanent kill switch."""
+    mod = _load_tui()
+    today = _midnight()
+    cutoff = today.replace(hour=10)
+    mod.STATE.entries_known = True
+    mod.STATE.entries = []
+    gaps = mod._block_gaps(8, 9, cutoff)
+    assert len(gaps) == 1 and gaps[0]["dur_min"] == 120
+
+
+def test_fetch_today_marks_entries_known_on_success_and_unknown_on_failure():
+    """fetch_today must set entries_known the same way fetch_current sets
+    current_known — the AST shape, since a live network call isn't
+    exercised here."""
+    src = (HERE / "janus.py").read_text()
+    i_def = src.index("def fetch_today(")
+    i_end = src.index("\n\n\n", i_def)
+    body = src[i_def:i_end]
+    assert "STATE.entries_known = True" in body
+    assert "STATE.entries_known = False" in body
+    # The success assignment must come before the failure one in source order
+    # (try body, then except block) so a successful read isn't immediately
+    # undone by leftover except-block logic.
+    assert body.index("STATE.entries_known = True") < body.index("STATE.entries_known = False")
 
 
 def test_gap_alarm_on_toggles_each_half_second():

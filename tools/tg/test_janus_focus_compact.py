@@ -41,6 +41,7 @@ def _midnight():
 
 def _setup_common(mod):
     mod.STATE.current_known = True
+    mod.STATE.entries_known = True
     mod.STATE.events = []
     mod.STATE.block_points = {}
     mod.STATE.day_offset = 0

@@ -272,6 +272,15 @@ class State:
         # enter handler so tty text queued before startup (e.g. the command
         # line cmux types when respawning the pane) can't start a junk timer
         self.entries: list[dict] = []  # today's entries
+        # Whether STATE.entries reflects a CONFIRMED Toggl read — same idea as
+        # current_known. False until the first successful fetch_today, and
+        # reset on a failed one (402 rate limit, network error). Gates gap
+        # ("empty → HH:MM") flashing: an unconfirmed/never-fetched entries
+        # list is EMPTY, same as a genuinely tracked-nothing block, and
+        # without this flag the two are indistinguishable — a cold-start 402
+        # right after restart rendered a confident "empty" gap over time
+        # Toggl actually had filled (2026-07-15).
+        self.entries_known = False
         self.entries_yday: list[dict] = []  # yesterday's (for 卯 sleep total)
         self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
@@ -389,9 +398,14 @@ def fetch_today(force=False):
             })
         out.sort(key=lambda x: x["start_dt"])
         STATE.entries = out
+        STATE.entries_known = True
         STATE.entries_yday = yout
         STATE.last_toggl_fetch = time.monotonic()
     except Exception as e:
+        # Fetch failed → we no longer know today's entries are current. Leave
+        # STATE.entries as-is (last known) but mark it unconfirmed so gap
+        # flashing doesn't treat "haven't fetched yet" as "confirmed empty".
+        STATE.entries_known = False
         if "402" in str(e):
             _note_rate_limit()
         else:
@@ -1305,7 +1319,16 @@ def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
     not the bare block end: for a fully-elapsed past block cutoff is always
     >= blk_end, so this is a no-op there — but for the CURRENT, still-in-
     progress block (cutoff = now < blk_end), a bare blk_end would flash
-    FUTURE, not-yet-elapsed minutes as "untracked"."""
+    FUTURE, not-yet-elapsed minutes as "untracked".
+
+    Returns nothing at all when STATE.entries isn't a CONFIRMED read
+    (STATE.entries_known False — never fetched yet, or the last fetch
+    failed/402'd): an empty STATE.entries is indistinguishable from a
+    genuinely tracked-nothing block, and without this gate a cold-start rate
+    limit rendered a confident "empty → HH:MM" flash over time Toggl had
+    actually filled (2026-07-15)."""
+    if not STATE.entries_known:
+        return []
     blk_start = cutoff.replace(hour=blk_sh, minute=0, second=0, microsecond=0)
     blk_end = blk_start + dt.timedelta(hours=blk_eh + 1 - blk_sh)
 
