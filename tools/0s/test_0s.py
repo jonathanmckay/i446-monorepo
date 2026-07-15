@@ -68,3 +68,26 @@ def test_default_run_writes_main_to_yesterday_motivation_to_today():
     s = z.build_applescript({"title": "x", "motivation": "m"}, rd)
     assert 'if bv = "%s" then set todayRow to r' % z._mdy(rd) in s          # main -> reviewed day
     assert 'if bv = "%s" then set tomRow to r' % z._mdy(rd + dt.timedelta(days=1)) in s  # motivation -> next day
+
+
+def test_points_checked_is_last_and_has_no_column():
+    last = z.FIELDS[-1]
+    assert last[0] == "points_checked"
+    assert last[2] is None and last[3] is None, "points_checked must not map to a neon column"
+
+
+def test_points_checked_never_written_to_excel():
+    s = z.build_applescript({"points_checked": "1", "title": "x"}, TODAY)
+    assert "points_checked" not in s
+    # only the real field (title) produces a write
+    assert s.count("set value of range") == 1
+
+
+def test_points_checked_1_marks_0l_done():
+    import ast
+    src = (z.__file__ and open(z.__file__).read()) or ""
+    m = ast.get_source_segment(src, [n for n in ast.walk(ast.parse(src))
+                                     if isinstance(n, ast.FunctionDef) and n.name == "main"][0])
+    assert 'answers.get("points_checked")' in m
+    assert '== "1"' in m
+    assert 'str(DID_FAST), "0l"' in m, "points_checked=1 must run did-fast 0l"

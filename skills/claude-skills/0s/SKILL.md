@@ -32,6 +32,10 @@ row (**today**, by default; col D).
 (no auto-computation). Empty fields are skipped on write, so blanks never
 overwrite existing cells.
 
+The **last** field, **Points checked? (1 = mark 0l done)**, is *not* a neon
+column — it's an action toggle: enter `1` and on save the form runs `did-fast 0l`
+(marks the daily 0l habit done); `0` or blank leaves 0l untouched.
+
 ## Launch
 
 The form is a full-screen prompt_toolkit TUI, so it needs its own terminal —

@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
+DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 WORKBOOK = "Neon分v12.2.xlsx"
 SHEET = "0s897"
 
@@ -55,6 +56,9 @@ FIELDS = [
     ("ceil2",        "⌈  ceiling (others)",         "V", "today",    "num"),
     ("floor2",       "⌊  floor (others)",           "W", "today",    "num"),
     ("motivation",   "Motivation (for tomorrow)",   "D", "tomorrow", "text"),
+    # Not a neon column (col=None → never written to Excel). 1 marks 0l done via
+    # did-fast; 0 or blank leaves it. Kept last so Enter/Tab on it saves.
+    ("points_checked", "Points checked? (1 = mark 0l done)", None, None, "num"),
 ]
 
 
@@ -111,7 +115,7 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
     ]
     for key, _label, col, target, kind in FIELDS:
         val = (answers.get(key) or "").strip()
-        if not val:
+        if not val or not col:          # col=None → non-neon field (e.g. points_checked)
             continue
         rowvar = "todayRow" if target == "today" else "tomRow"
         guard = target == "tomorrow"
@@ -265,9 +269,21 @@ def main() -> int:
         print(build_applescript(answers, target))
         return 0
 
-    filled = sum(1 for k, *_ in FIELDS if (answers.get(k) or "").strip())
+    filled = sum(1 for k, _l, col, *_ in FIELDS if col and (answers.get(k) or "").strip())
     result = write_answers(answers, target)
-    print("0s → %s (%d fields) · %s" % (SHEET, filled, result))
+    msg = "0s → %s (%d fields) · %s" % (SHEET, filled, result)
+
+    # "Points checked" is not a neon column: 1 marks 0l done via did-fast;
+    # 0/blank leaves it alone.
+    if (answers.get("points_checked") or "").strip() == "1":
+        try:
+            subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
+                           capture_output=True, text=True, timeout=60)
+            msg += " · 0l marked done"
+        except Exception as e:  # noqa: BLE001
+            msg += " · 0l mark FAILED: %s" % e
+
+    print(msg)
     return 0
 
 
