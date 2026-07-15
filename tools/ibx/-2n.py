@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 console = Console()
 
 TERM_COLOR = Path(__file__).parent.parent.parent / "scripts" / "term-color.sh"
-BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 VALIDATE_HABITS = Path.home() / "i446-monorepo/scripts/validate-daily-habits.py"
 HABITS_CHECK_CACHE = Path.home() / ".cache/jm/daily-habits-check.json"
 TZ = "America/Los_Angeles"

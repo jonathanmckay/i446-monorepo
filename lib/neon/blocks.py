@@ -11,15 +11,15 @@ from datetime import datetime
 from pathlib import Path
 
 VAULT = Path.home() / "vault"
-# The live build order. Every other module (did, -2n, tg-tui, the daemon,
+# The live build order. Every other module (did, -2n, janus, the daemon,
 # enrich) uses this filename; the old "-1₦ , 0₦ - Neon {Build Order}.md" path
 # no longer exists, so flip_checkbox / parse_block_goals here were silently
 # reading a missing file.
-BUILD_ORDER = VAULT / "g245" / "build-order.md"
+BUILD_ORDER = VAULT / "g245" / "5e-1" / "build-order.md"
 
 # (start_hour, branch). The 2h block is [start, start+2). Hours 0-3 land in 子 (sleep).
 # 卯 = 04-06: the convention shared by the 0分 sheet writer (build-order-daemon
-# LOCK_AT_FIRE_HOUR), tg-tui, -2n, and did-fast. Do not shift to the
+# LOCK_AT_FIRE_HOUR), janus, -2n, and did-fast. Do not shift to the
 # traditional 卯=05-07/06-08 readings — the sheet's historical data is 04-06.
 BLOCKS = [
     (4, "卯"), (6, "辰"), (8, "巳"), (10, "午"), (12, "未"),

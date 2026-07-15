@@ -19,7 +19,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Los_Angeles")
-BUILD_ORDER = Path.home() / "vault/g245/build-order.md"
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 COMPLETED_TODAY = _sp.COMPLETED_TODAY
 COMPLETED_ARCHIVE_DIR = Path.home() / "vault/z_ibx/completed-archive"

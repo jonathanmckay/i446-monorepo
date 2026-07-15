@@ -35,10 +35,10 @@ TODOIST_0G_PROJECT_ID = "6XfvCQ3p8Gq6fhGR"
 CRITICAL_PATH_LABEL = "#\u5173\u952e\u5f84\u8def"  # #关键径路
 MINUS1G_LABEL = "#-1g"
 
-MD_FILE = Path.home() / "vault/g245/build-order.md"
+MD_FILE = Path.home() / "vault/g245/5e-1/build-order.md"
 
 # The 9 地支 (Earthly Branch) time-of-day headings (order matters).
-# 卯 = 04-06: the build-order / 0分 / tg-tui convention.
+# 卯 = 04-06: the build-order / 0分 / janus convention.
 TIME_BLOCKS = [
     "卯",  # 卯  04-06
     "辰",  # 辰  06-08
@@ -138,7 +138,8 @@ def run_block_end(api_key: str, dry_run: bool):
 def _archive_before_reset():
     """Archive yesterday's enriched build order before resetting."""
     from datetime import datetime, timedelta
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
+    yday = datetime.now() - timedelta(days=1)
+    yesterday = yday.strftime("%Y.%m.%d")
     v_logs = MD_FILE.parent / "v_logs"
     snapshot = v_logs / f"{yesterday}-build-order.md"
     if snapshot.exists():
@@ -146,7 +147,15 @@ def _archive_before_reset():
         return
     if MD_FILE.exists():
         v_logs.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(MD_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        text = MD_FILE.read_text(encoding="utf-8")
+        # Back-link to the previous day's archive (navigable in Obsidian).
+        try:
+            import sys as _s; _s.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import build_order_links as _bol
+            text = _bol.with_prev_day_link(text, yday.date())
+        except Exception:
+            pass
+        snapshot.write_text(text, encoding="utf-8")
         print(f"[{LOG_PREFIX}] archived {snapshot.name}")
 
 

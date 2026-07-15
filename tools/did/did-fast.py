@@ -872,7 +872,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         # Step 0.37: Build order -1₲ goal match
         # If the input matches an unchecked goal in the build order, flip it
         # and write {N} bonus points to 0分 column Z.
-        bo_path = Path.home() / "vault/g245/build-order.md"
+        bo_path = Path.home() / "vault/g245/5e-1/build-order.md"
         if not skip_todoist and bo_path.exists():
             bo_text = bo_path.read_text()
             if "## -1₲" in bo_text:
@@ -1600,7 +1600,7 @@ def run_ritual(tag: str) -> dict:
     #    of this fix stamped the previous block instead, which put the
     #    manual credit on the wrong header vs. what the user — and the
     #    daemon — actually see as "this block's" ⏱️/✅.)
-    bo = Path.home() / "vault/g245/build-order.md"
+    bo = Path.home() / "vault/g245/5e-1/build-order.md"
     block = nb.current_block(datetime.now().hour)
     out["block"] = block
     if not bo.exists():
@@ -1965,7 +1965,7 @@ end tell'''
     prayer_done = any(r.item.name.lower() in PRAYER_HABITS for r in fast if r.step == "0n")
     if prayer_done:
         try:
-            _bo = Path.home() / "vault/g245/build-order.md"
+            _bo = Path.home() / "vault/g245/5e-1/build-order.md"
             if _bo.exists():
                 _now_h = datetime.now().hour
                 _bidx = max(0, min(8, (_now_h - 4) // 2))
@@ -1996,7 +1996,7 @@ end tell'''
     # 5e. Flip build order checkboxes for completed tasks
     # Matches closed Todoist tasks and build_order items against -1₲ goals
     try:
-        _bo = Path.home() / "vault/g245/build-order.md"
+        _bo = Path.home() / "vault/g245/5e-1/build-order.md"
         if _bo.exists():
             _bo_text = _bo.read_text()
             if "## -1₲" in _bo_text:
