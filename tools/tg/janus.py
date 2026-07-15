@@ -143,7 +143,8 @@ def next_block(h: int) -> tuple[str, int, int] | None:
     return None
 SLOT_MIN = 15
 DETAIL_MIN = 5      # focus band: entries shorter than this are absorbed (no row)
-DETAIL_ROWS = 8     # focus band: target rows per block (keep the longest entries)
+DETAIL_ROWS = 8     # old detail band (dormant, kept for its tests): target rows per block
+FOCUS_ROWS = 8      # current+next block compact cards: body rows (vs. 3 elsewhere)
 TOGGL_MIN_INTERVAL = 20   # s — coalesce bursty non-forced fetch_today calls
 RATE_LIMIT_COOLDOWN = 60  # s — back off all Toggl reads after a 402
 
@@ -1249,7 +1250,8 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
         if not blk or blk[0] != blk_name:
             continue
         mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
-        if mins < 1:
+        is_running = bool(m.get("running"))
+        if mins < 1 and not is_running:
             continue
         is_sleep = (m["desc"] or "").strip() == "睡觉"
         code = proj_code(m["project_id"])
@@ -1260,7 +1262,7 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
             "label": label,
             "style": project_style(m["project_id"]),
             "dur_min": mins,
-            "is_running": bool(m.get("running")),
+            "is_running": is_running,
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
     running = [x for x in items if x["is_running"]]
@@ -1355,8 +1357,18 @@ def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
     return items
 
 
-def _block_gcal_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
-    """Half-hour marks of a block covered by a gcal event → project style.
+def _block_cont_slots(blk_sh, slot_min):
+    """Every (hour, minute) mark in a 2-hour block at ``slot_min`` resolution,
+    starting at :00. Shared by the _block_*_cont helpers so their granularity
+    stays in lockstep with _compact_block_lines' own marks (30-min for a
+    standard 3-row card, 15-min for an 8-row focus card — a mismatch would
+    leave the finer marks with no continuation lookup, reading as bare gaps
+    instead of ◇ │ under a long-running entry/event)."""
+    return [(blk_sh + off // 60, off % 60) for off in range(0, 120, slot_min)]
+
+
+def _block_gcal_cont(blk_sh, ref, slot_min: int = 30) -> dict[tuple[int, int], str]:
+    """Slot marks of a block covered by a gcal event → project style.
 
     Block picks only see what STARTS in the block, so an event flowing
     through it (a 4h workshop started two blocks earlier, or one spanning the
@@ -1364,7 +1376,7 @@ def _block_gcal_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     draw the focus band's ◇ │ continuation glyphs — in future blocks and,
     through the event's end, in past blocks too."""
     out: dict[tuple[int, int], str] = {}
-    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+    for hh, mm in _block_cont_slots(blk_sh, slot_min):
         t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
         for ev in STATE.events:
             if ev.get("transparency") == "transparent" or ev.get("all_day"):
@@ -1375,16 +1387,16 @@ def _block_gcal_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     return out
 
 
-def _block_sleep_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
-    """Half-hour marks of a past block covered by an overnight 睡觉 entry → style.
+def _block_sleep_cont(blk_sh, ref, slot_min: int = 30) -> dict[tuple[int, int], str]:
+    """Slot marks of a past block covered by an overnight 睡觉 entry → style.
 
     The sleep counterpart to _block_gcal_cont. _block_sleep_item only fills the
     header row, so a late wake-up sleeping clean through a block (e.g. 辰) left
-    the rows below it blank. Marking the covered half-hours lets the compact
+    the rows below it blank. Marking the covered slots lets the compact
     renderer draw the ◇ │ continuation after the spillover header, so the block
     reads as 'still asleep' rather than empty."""
     out: dict[tuple[int, int], str] = {}
-    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+    for hh, mm in _block_cont_slots(blk_sh, slot_min):
         t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
         for e in STATE.entries:
             if (e["desc"] or "").strip() != "睡觉":
@@ -1395,8 +1407,8 @@ def _block_sleep_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     return out
 
 
-def _block_toggl_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
-    """Half-hour marks of a past block covered by ANY Toggl entry → style.
+def _block_toggl_cont(blk_sh, ref, slot_min: int = 30) -> dict[tuple[int, int], str]:
+    """Slot marks of a past block covered by ANY Toggl entry → style.
 
     Generalizes _block_sleep_cont to every tracked entry: an entry renders one
     row at its start slot, so the marks a >30m entry flows through drew as bare
@@ -1404,7 +1416,7 @@ def _block_toggl_cont(blk_sh, ref) -> dict[tuple[int, int], str]:
     Covered marks draw the ◇ │ continuation in the entry's project color, the
     same treatment gcal events already get."""
     out: dict[tuple[int, int], str] = {}
-    for hh, mm in ((blk_sh, 0), (blk_sh, 30), (blk_sh + 1, 0), (blk_sh + 1, 30)):
+    for hh, mm in _block_cont_slots(blk_sh, slot_min):
         t = ref.replace(hour=hh, minute=mm, second=0, microsecond=0)
         for e in STATE.entries:
             if e["start_dt"] <= t < e["end_dt"]:
@@ -1882,11 +1894,73 @@ def render_footer() -> list[tuple[str, str]]:
     return [("class:hint", " type to run · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
+def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
+    """The current (in-progress) block, compact-card style, FOCUS_ROWS body
+    rows — same picks/gaps pipeline render_morning uses for a PAST block,
+    just clipped to ``now`` instead of a fixed cutoff. The running entry (if
+    any) is already in STATE.entries with end_dt continuously extended to
+    now by fetch_today, so it flows through the ordinary merge/pick path and
+    only needs its "running" flag carried through for the ▶ marker; idle
+    time since the last entry falls out of _block_gaps (now cutoff-aware)
+    as an ordinary flashing gap row, same as any other block."""
+    items = [e for e in STATE.entries if e["start_dt"] < now]
+    merged: list[dict] = []
+    for e in items:
+        end = min(e["end_dt"], now)
+        if merged and merged[-1]["desc"] == e["desc"]:
+            merged[-1]["end_dt"] = end
+            merged[-1]["running"] = merged[-1].get("running") or e.get("running")
+        else:
+            merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"],
+                           "project_id": e["project_id"], "running": e.get("running", False)})
+    picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
+    sleep = _block_sleep_item(blk_sh, blk_eh, now)
+    if sleep:
+        picks = ([sleep] + picks)[:FOCUS_ROWS]
+    gaps = _block_gaps(blk_sh, blk_eh, now)
+    body = picks + gaps
+    body.sort(key=lambda x: x["start_dt"])
+    cont = {**_block_sleep_cont(blk_sh, now, slot_min=15), **_block_gcal_cont(blk_sh, now, slot_min=15),
+            **_block_toggl_cont(blk_sh, now, slot_min=15)}
+    pts = _block_display_pts(blk_name)
+    return _compact_block_lines(blk_name, blk_sh, body, pts, emojis, cont=cont,
+                                is_future=False, max_rows=FOCUS_ROWS)
+
+
+def render_focus_compact() -> list[tuple[str, str]]:
+    """Current + next block, in the SAME compact-card style as the rest of
+    the day (render_morning / render_evening) — just FOCUS_ROWS body rows
+    instead of the usual 3. Replaces the old dash-ruled "detail band"
+    (section_rule + _detail_past_rows + a 15-min gcal preview grid + a
+    ticking timer bar), which the user found visually inconsistent
+    (2026-07-15: "I like the way 午 is rendering... but not 巳... render in
+    the same style I do for the rest of the day"). The running task still
+    gets a distinct ▶ marker (_compact_block_lines' is_running branch) and
+    idle time still flashes via the same gap treatment as every other
+    block — folded into the ordinary picks pipeline instead of a separate
+    live-row/alarm code path."""
+    now = view_now()
+    cur = hour_to_block(now.hour)
+    nxt = next_block(now.hour)
+    bo_emojis = _read_block_emojis()
+    out: list[tuple[str, str]] = []
+    if cur:
+        name, sh, eh = cur
+        out += _current_block_lines(name, sh, eh, now, bo_emojis.get(name, ""))
+    if nxt:
+        name, sh, eh = nxt
+        picks = _future_block_picks(name, STATE.events, limit=FOCUS_ROWS)
+        cont = _block_gcal_cont(sh, now, slot_min=15)
+        out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
+                                    cont=cont, is_future=True, max_rows=FOCUS_ROWS)
+    return out
+
+
 def render_all() -> list[tuple[str, str]]:
     parts: list[tuple[str, str]] = []
     parts += render_header()
     parts += render_morning()
-    parts += render_detail()
+    parts += render_focus_compact()
     parts += render_evening()
     return parts
 
