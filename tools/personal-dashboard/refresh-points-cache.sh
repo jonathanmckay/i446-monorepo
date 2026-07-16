@@ -19,6 +19,9 @@ from datetime import datetime, date, timedelta
 wb = openpyxl.load_workbook('$NEON', data_only=True, read_only=True)
 ws = wb['0分']
 COLS = {16: '-1₦', 17: '0₲', 18: 'i9', 19: 'm5', 20: '个', 21: '媒', 22: '思', 23: 'hcb', 24: 'xk', 25: '社'}
+# Per-block points (卯..亥), independent of COLS above — see dashboard.py's
+# BRANCH_BLOCKS / load_points_data() for the matching '__block__' read.
+BLOCK_COLS = {7: '卯', 8: '辰', 9: '巳', 10: '午', 11: '未', 12: '申', 13: '酉', 14: '戌', 15: '亥'}
 today = date.today()
 cutoff = today - timedelta(days=90)
 result = {}
@@ -34,6 +37,13 @@ for row in ws.iter_rows(min_row=3, values_only=True):
         val = row[idx - 1]
         if val is not None and isinstance(val, (int, float)) and val > 0:
             day_data[label] = int(round(float(val)))
+    block_data = {}
+    for idx, label in BLOCK_COLS.items():
+        val = row[idx - 1]
+        if val is not None and isinstance(val, (int, float)) and val > 0:
+            block_data[label] = int(round(float(val)))
+    if block_data:
+        day_data['__block__'] = block_data
     if day_data:
         result[d.isoformat()] = day_data
 wb.close()

@@ -139,6 +139,26 @@ PROJECT_ID_TO_CODE = {
 
 DAYS = 30
 
+# 地支 2-hour blocks (卯..亥, 04:00-22:00) — skips the 22:00-04:00 sleep
+# window. Mirrors scripts/build-order-daemon.py's BRANCH_HOURS; G:O are the
+# per-block points columns in the 0分 sheet (see g245/CLAUDE.md's column map).
+BRANCH_BLOCKS = [
+    ("卯", 4, "G"), ("辰", 6, "H"), ("巳", 8, "I"), ("午", 10, "J"),
+    ("未", 12, "K"), ("申", 14, "L"), ("酉", 16, "M"), ("戌", 18, "N"),
+    ("亥", 20, "O"),
+]
+N_BLOCKS_PER_DAY = len(BRANCH_BLOCKS)
+GRANULAR_BLOCK_DAYS = 3  # trailing days shown in the per-block chart view (27 bars)
+
+
+def _block_index_for_hour(hour):
+    """0-8 index into BRANCH_BLOCKS for a wall-clock hour, or None if asleep (22-04)."""
+    for i, (_, start_hour, _) in enumerate(BRANCH_BLOCKS):
+        if start_hour <= hour < start_hour + 2:
+            return i
+    return None
+
+
 # GA4 config
 GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID", "")
 GA4_OAUTH_KEYS = Path(__file__).parent / "ga4-oauth.keys.json"
@@ -150,6 +170,12 @@ GA4_SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
 
 def load_points_data():
     """Read 0分 sheet, return {date_str: {label: value}} for last DAYS days.
+
+    Each day's dict also carries a "__block__": {branch: points} entry read
+    from the G:O per-block columns (卯..亥) in the same pass — independent
+    numbers from the P:Y domain totals (each block column is locked to a
+    literal value as the daemon fires; see build-order-daemon.py's
+    LOCK_AT_FIRE_HOUR), not derived from POINTS_COLS.
 
     Uses xlwings to read from the running Excel instance so cross-sheet
     formulas are fully evaluated (openpyxl data_only reads stale caches).
@@ -180,7 +206,7 @@ def load_points_data():
         wb = xw.Book(str(NEON_PATH))
         ws = wb.sheets["0分"]
         last_row = ws.range("B2").end("down").row
-        min_idx = min(POINTS_COLS)
+        min_idx = 7  # G — first per-block points column, precedes POINTS_COLS' P:Y range
         max_idx = max(POINTS_COLS)
         def _col_letter(idx):
             return chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)
@@ -193,10 +219,7 @@ def load_points_data():
         if not isinstance(block, list):
             block = [[block]]
         elif block and not isinstance(block[0], list):
-            if min_idx == max_idx:
-                block = [[v] for v in block]
-            else:
-                block = [block]
+            block = [block]
 
         result = {}
         for i, b in enumerate(b_vals):
@@ -218,6 +241,13 @@ def load_points_data():
                 val = row_vals[offset] if offset < len(row_vals) else None
                 if val is not None and isinstance(val, (int, float)) and val > 0:
                     day_data[meta["label"]] = int(round(float(val)))
+            block_data = {}
+            for j, (branch, _, _) in enumerate(BRANCH_BLOCKS):
+                val = row_vals[j] if j < len(row_vals) else None
+                if val is not None and isinstance(val, (int, float)) and val > 0:
+                    block_data[branch] = int(round(float(val)))
+            if block_data:
+                day_data["__block__"] = block_data
             if day_data:
                 result[day_str] = day_data
         if result:
@@ -369,19 +399,16 @@ def load_toggl_daily_cache():
     return minutes, entries
 
 
-def load_toggl_range(days, return_counts=False):
-    """Toggl entries for the last `days` days → {date_str: {project: minutes}}.
-
-    With return_counts=True, also returns {date_str: {project: entry_count}}
-    as a second tuple element (mirrors load_toggl_data's shape for arbitrary
-    day ranges, so granular chart views can compute the Entries chart too).
-    """
+def _fetch_toggl_entries(days):
+    """Raw Toggl time entries for the last `days` days (empty list on any
+    failure). Shared by load_toggl_range (day-bucketed) and the per-block
+    chart builder (2-hour-bucketed) so both consume the same API call shape
+    without duplicating the request/auth boilerplate."""
     api_key = os.environ.get("TOGGL_API_KEY", "")
     if not api_key:
-        return ({}, {}) if return_counts else {}
+        return []
     today = date.today()
-    floor = today - timedelta(days=days)
-    start = floor.isoformat()
+    start = (today - timedelta(days=days)).isoformat()
     end = (today + timedelta(days=1)).isoformat()
     url = f"https://api.track.toggl.com/api/v9/me/time_entries?start_date={start}&end_date={end}"
     creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
@@ -390,9 +417,23 @@ def load_toggl_range(days, return_counts=False):
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            entries = json.loads(resp.read())
+            return json.loads(resp.read())
     except Exception:
+        return []
+
+
+def load_toggl_range(days, return_counts=False):
+    """Toggl entries for the last `days` days → {date_str: {project: minutes}}.
+
+    With return_counts=True, also returns {date_str: {project: entry_count}}
+    as a second tuple element (mirrors load_toggl_data's shape for arbitrary
+    day ranges, so granular chart views can compute the Entries chart too).
+    """
+    if not os.environ.get("TOGGL_API_KEY", ""):
         return ({}, {}) if return_counts else {}
+    today = date.today()
+    floor = today - timedelta(days=days)
+    entries = _fetch_toggl_entries(days)
     result = defaultdict(lambda: defaultdict(int))
     entry_counts = defaultdict(lambda: defaultdict(int))
     for e in entries:
@@ -562,6 +603,135 @@ GRANULAR_WEEKS = 26   # ~6 months of Su-Sa weeks
 GRANULAR_MONTHS = 12  # 1 year of calendar months
 
 
+def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
+    """Points/Time/Tasks/Entries chart data bucketed into trailing 2-hour 地支
+    blocks (last n_days days x 9 blocks/day, skipping the 22:00-04:00 sleep
+    window). Bars are labeled with just the branch character (卯..亥) — the
+    label repeats once per day across the window, per design.
+
+    Unlike the weekly/monthly buckets in _build_granular_chart_data, Points
+    here is a single "分" series (the sheet's G:O columns are per-block
+    totals, not broken out by domain like P:Y), not a stacked-by-domain set.
+    """
+    today = date.today()
+    day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
+    bucket_labels = [branch for _ in day_list for branch, _, _ in BRANCH_BLOCKS]
+    n_buckets = len(bucket_labels)
+    day_pos = {d: i for i, d in enumerate(day_list)}
+    branch_pos = {branch: i for i, (branch, _, _) in enumerate(BRANCH_BLOCKS)}
+
+    def bucket_index(d, branch):
+        di = day_pos.get(d)
+        bi = branch_pos.get(branch)
+        if di is None or bi is None:
+            return None
+        return di * N_BLOCKS_PER_DAY + bi
+
+    # Points — single series, summed from the "__block__" per-day breakdown
+    points_all = load_points_all()
+    pts_bucketed = [0] * n_buckets
+    for dstr, day in points_all.items():
+        block_data = day.get("__block__") if isinstance(day, dict) else None
+        if not block_data:
+            continue
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        for branch, val in block_data.items():
+            idx = bucket_index(d, branch)
+            if idx is not None and isinstance(val, (int, float)):
+                pts_bucketed[idx] += val
+    points_datasets = [{"label": "分", "data": pts_bucketed, "backgroundColor": "#7c4dff"}]
+
+    # Time (minutes) + entry counts — bucketed from raw Toggl entries via
+    # their real start timestamps (unlike weekly/monthly, no daily-cache
+    # overlay needed: n_days is small enough for a single live fetch)
+    entries = _fetch_toggl_entries(n_days)
+    time_bucketed = defaultdict(lambda: [0] * n_buckets)
+    entries_bucketed = defaultdict(lambda: [0] * n_buckets)
+    for e in entries:
+        dur = e.get("duration", 0)
+        if dur <= 0:
+            continue
+        start_str = e.get("start", "")
+        if not start_str:
+            continue
+        try:
+            start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
+        except (ValueError, TypeError):
+            continue
+        bi = _block_index_for_hour(start_dt.hour)
+        if bi is None:
+            continue
+        idx = bucket_index(start_dt.date(), BRANCH_BLOCKS[bi][0])
+        if idx is None:
+            continue
+        proj_id = e.get("project_id")
+        code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
+        time_bucketed[code][idx] += dur // 60
+        entries_bucketed[code][idx] += 1
+
+    TIME_PRIORITY = ["i9", "xk87", "m5x2"]
+    def time_sort(code):
+        if code in TIME_PRIORITY:
+            return (0, TIME_PRIORITY.index(code))
+        if code == "睡觉":
+            return (2, 0)
+        return (1, -sum(time_bucketed[code]))
+    time_codes = sorted([c for c in time_bucketed if any(time_bucketed[c])], key=time_sort)
+    time_datasets = [{
+        "label": c, "data": time_bucketed[c],
+        "backgroundColor": PROJECT_COLORS.get(c, "#424242"),
+    } for c in time_codes]
+
+    entry_codes_sorted = [c for c in time_codes if c in entries_bucketed] + \
+        [c for c in entries_bucketed if c not in time_codes]
+    entries_datasets = [{
+        "label": c, "data": entries_bucketed[c],
+        "backgroundColor": PROJECT_COLORS.get(c, "#424242"),
+    } for c in entry_codes_sorted if any(entries_bucketed[c])]
+    time_entries_values = [sum(entries_bucketed[c][i] for c in entries_bucketed) for i in range(n_buckets)]
+
+    # Tasks — bucketed from each completion's completed_at via load_tasks_by_block
+    tasks_all_blocked = load_tasks_by_block(n_days)
+    tasks_neon = [0] * n_buckets
+    tasks_posthoc = [0] * n_buckets
+    tasks_1n = [0] * n_buckets
+    tasks_neg1n = [0] * n_buckets
+    tasks_other = [0] * n_buckets
+    for dstr, counts in tasks_all_blocked.items():
+        by_block = (counts or {}).get("by_block") or {}
+        if not by_block:
+            continue
+        try:
+            d = date.fromisoformat(dstr)
+        except Exception:
+            continue
+        for branch, cat_counts in by_block.items():
+            idx = bucket_index(d, branch)
+            if idx is None:
+                continue
+            tasks_neon[idx] += cat_counts.get("neon", 0)
+            tasks_posthoc[idx] += cat_counts.get("posthoc", 0)
+            tasks_1n[idx] += cat_counts.get("one_n", 0)
+            tasks_neg1n[idx] += cat_counts.get("neg1n", 0)
+            tasks_other[idx] += cat_counts.get("other", 0)
+
+    return {
+        "dates": bucket_labels,
+        "points": {"datasets": points_datasets},
+        "time": {"datasets": time_datasets},
+        "tasks_neon": tasks_neon,
+        "tasks_posthoc": tasks_posthoc,
+        "tasks_1n": tasks_1n,
+        "tasks_neg1n": tasks_neg1n,
+        "tasks_other": tasks_other,
+        "time_entries": time_entries_values,
+        "entries": {"datasets": entries_datasets},
+    }
+
+
 def _build_granular_chart_data(granularity):
     """Points/Time/Tasks/Entries chart data bucketed weekly or monthly.
 
@@ -569,6 +739,9 @@ def _build_granular_chart_data(granularity):
     payload (dates/points/time/tasks_*/entries/time_entries), so the
     frontend's chart-building code can treat daily/weekly/monthly uniformly.
     """
+    if granularity == "block":
+        return _build_block_chart_data()
+
     today = date.today()
 
     if granularity == "monthly":
@@ -754,7 +927,14 @@ _TASKS_REFETCH_TAIL = 2
 
 
 def _fetch_tasks_for_day(day, token):
-    """Fetch one day's completed-task counts from Todoist. Returns (date_str, counts) or (date_str, None)."""
+    """Fetch one day's completed-task counts from Todoist. Returns (date_str, counts) or (date_str, None).
+
+    counts also carries counts["by_block"]: {branch: {"neon":n, "posthoc":n,
+    "one_n":n, "neg1n":n, "other":n}}, bucketed from each completion's
+    completed_at timestamp into the BRANCH_BLOCKS 2-hour window (skipped if
+    it falls in the 22:00-04:00 sleep gap) — read alongside the day-level
+    counts above since both come from the same API response.
+    """
     since_dt = datetime.combine(day, datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
     until_dt = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
     since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -763,6 +943,8 @@ def _fetch_tasks_for_day(day, token):
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
     counts = {"neon": 0, "posthoc": 0, "one_n": 0, "neg1n": 0, "other": 0}
+    by_block = {branch: {"neon": 0, "posthoc": 0, "one_n": 0, "neg1n": 0, "other": 0}
+                for branch, _, _ in BRANCH_BLOCKS}
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
@@ -771,17 +953,29 @@ def _fetch_tasks_for_day(day, token):
     for item in data.get("items", []):
         content = item.get("content", "")
         if "@0neon" in content:
-            counts["neon"] += 1
+            cat = "neon"
         elif "@posthoc" in content:
-            counts["posthoc"] += 1
+            cat = "posthoc"
         elif "@-1neon" in content:
-            counts["neg1n"] += 1
+            cat = "neg1n"
         elif "@1neon" in content:
-            counts["one_n"] += 1
+            cat = "one_n"
         else:
-            counts["other"] += 1
+            cat = "other"
+        counts[cat] += 1
+        completed_str = item.get("completed_at", "")
+        if completed_str:
+            try:
+                completed_dt = datetime.fromisoformat(
+                    completed_str.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+                bi = _block_index_for_hour(completed_dt.hour)
+                if bi is not None:
+                    by_block[BRANCH_BLOCKS[bi][0]][cat] += 1
+            except (ValueError, TypeError):
+                pass
     counts["total"] = (counts["neon"] + counts["posthoc"] + counts["one_n"]
                         + counts["neg1n"] + counts["other"])
+    counts["by_block"] = by_block
     return day.isoformat(), counts
 
 
@@ -833,6 +1027,44 @@ def load_tasks_data(n_days=DAYS):
     # Build return dict from cache (only days in our window)
     wanted = {d.isoformat() for d in all_days}
     return {d: counts for d, counts in cache.items() if d in wanted}
+
+
+def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS):
+    """Completed-task counts for the trailing n_days, bucketed into
+    BRANCH_BLOCKS via _fetch_tasks_for_day's "by_block" breakdown.
+
+    Shares load_tasks_data's disk cache (.tasks-cache.json), but a cached day
+    written before "by_block" existed won't have it — so unlike
+    load_tasks_data's 2-day refetch tail, this refetches ANY day in the
+    window missing the key, not just today/yesterday. Bounded cost since the
+    per-block view only spans GRANULAR_BLOCK_DAYS days.
+    """
+    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    today = date.today()
+    day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
+
+    cache = {}
+    if _TASKS_CACHE_PATH.exists():
+        try:
+            cache = json.loads(_TASKS_CACHE_PATH.read_text())
+        except Exception:
+            cache = {}
+
+    to_fetch = [d for d in day_list
+                if d.isoformat() not in cache or "by_block" not in cache[d.isoformat()]]
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(_fetch_tasks_for_day, d, token) for d in to_fetch]
+            for fut in futures:
+                day_str, counts = fut.result()
+                if counts is not None:
+                    cache[day_str] = counts
+        try:
+            _TASKS_CACHE_PATH.write_text(json.dumps(cache))
+        except Exception:
+            pass
+
+    return {d.isoformat(): cache[d.isoformat()] for d in day_list if d.isoformat() in cache}
 
 
 def load_turns_data():
@@ -1076,7 +1308,7 @@ def api_points_today():
 @app.route("/api/chart-granular")
 def api_chart_granular():
     granularity = request.args.get("granularity", "weekly")
-    if granularity not in ("weekly", "monthly"):
+    if granularity not in ("weekly", "monthly", "block"):
         granularity = "weekly"
     return jsonify(_granular_cached(granularity))
 
@@ -1620,6 +1852,7 @@ HTML = """<!DOCTYPE html>
       <option value="daily" selected>DAILY</option>
       <option value="weekly">WEEKLY</option>
       <option value="monthly">MONTHLY</option>
+      <option value="block">BLOCK</option>
     </select>
   </div>
   <div style="display:flex;align-items:baseline;gap:16px;">
@@ -1675,7 +1908,7 @@ setInterval(pollPointsToday, 30000);
 // in dailyPayload); weekly/monthly fetch /api/chart-granular on demand.
 let dailyPayload = null;
 let _tasksChart = null, _entriesChart = null, _timeChart = null, _pointsChart = null;
-const GRANULARITY_NOUN = { daily: 'Day', weekly: 'Week', monthly: 'Month' };
+const GRANULARITY_NOUN = { daily: 'Day', weekly: 'Week', monthly: 'Month', block: 'Block' };
 
 function renderFourCharts(data, granularity) {
   const labels = data.dates;
