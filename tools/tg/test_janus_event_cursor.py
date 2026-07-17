@@ -345,13 +345,31 @@ def test_event_to_did_command_is_time_range_not_backdated_start():
 
 def test_tab_and_shift_tab_are_bound_and_gated_on_empty_input():
     mod = _load_tui()
-    for key in ("tab", "s-tab"):
+    for key in ("tab", "s-tab", "down", "up"):
         b = _binding(mod, key)
         mod.input_buffer.text = ""
         assert bool(b.filter()), f"{key!r} must fire on an empty command line"
         mod.input_buffer.text = "some typed thing"
         assert not bool(b.filter()), f"{key!r} must not intercept mid-input text"
     mod.input_buffer.text = ""
+
+
+def test_down_up_arrows_cycle_the_same_as_tab_shift_tab():
+    """Arrow-key aliases (user request 2026-07-17: "can I use arrow keys to
+    navigate?") — Down mirrors Tab (forward), Up mirrors Shift-Tab (backward),
+    same wrap-around semantics, not a separate cursor concept."""
+    mod = _load_tui()
+    today = _midnight()
+    evs = [_gcal_event(str(i), today.replace(hour=9, minute=i * 10),
+                       today.replace(hour=9, minute=i * 10 + 5)) for i in range(3)]
+    mod.STATE.visible_events = evs
+    mod.STATE.event_sel = None
+    _binding(mod, "down").handler(_FakeEvent())
+    assert mod.STATE.event_sel == mod._event_key(evs[0])
+    _binding(mod, "down").handler(_FakeEvent())
+    assert mod.STATE.event_sel == mod._event_key(evs[1])
+    _binding(mod, "up").handler(_FakeEvent())
+    assert mod.STATE.event_sel == mod._event_key(evs[0])
 
 
 def test_tab_with_no_visible_events_is_a_noop():

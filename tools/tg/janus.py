@@ -2035,7 +2035,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab event · ↵ start/log · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ event · ↵ start/log · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -2412,6 +2412,7 @@ def _day_forward(event):
 
 
 @kb.add("tab", filter=_input_empty)
+@kb.add("down", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
     """Cycle the event cursor forward through the current block's visible
     gcal events — Tab to arm one, Enter to convert it into a running Toggl
@@ -2425,6 +2426,7 @@ def _(event):
 
 
 @kb.add("s-tab", filter=_input_empty)
+@kb.add("up", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
     """Cycle the event cursor backward. See the "tab" binding above."""
     evs = STATE.visible_events
