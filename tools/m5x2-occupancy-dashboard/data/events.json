@@ -3308,5 +3308,35 @@
     "unit": "19",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-07-17",
+    "effective": "2026-08-01",
+    "kind": "leased",
+    "unit_id": "418",
+    "prop": "ps17",
+    "unit": "B4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-17",
+    "effective": "2026-07-27",
+    "kind": "leased",
+    "unit_id": "516",
+    "prop": "rl16",
+    "unit": "A03",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-17",
+    "effective": "2026-08-01",
+    "kind": "leased",
+    "unit_id": "395",
+    "prop": "ps25",
+    "unit": "F37",
+    "tenant": null,
+    "baseline": false
   }
 ]
