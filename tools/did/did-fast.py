@@ -24,6 +24,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+TZ = ZoneInfo("America/Los_Angeles")
 
 # ---------------------------------------------------------------------------
 # Paths & constants
@@ -1215,6 +1218,82 @@ def parse_pre_lines(stdout: str) -> dict[str, str]:
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 
 
+def _toggl_api():
+    """Load toggl_cli.py's own toggl_api handle (importlib, same pattern as the
+    ix_osa/mark-completed imports above) instead of duplicating its API-key
+    loading and sys.path setup here. Lazy: only paid by callers that actually
+    touch Toggl (trim/overlap checks), not --refresh-cache/--ritual runs."""
+    spec = importlib.util.spec_from_file_location("toggl_cli_lib", TOGGL_CLI)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod.toggl_api
+
+
+def _trim_toggl_range(start_dt: datetime, end_dt: datetime) -> list[str]:
+    """Ensure no existing Toggl entry -- completed or the currently-running
+    one -- keeps covering [start_dt, end_dt) before a new entry lands there.
+    Split/trim/delete whatever overlaps.
+
+    Fixes the double-minutes class of bug from backfilling a range that
+    overlaps something already tracked (2026-07-16: manually logging "asha"
+    then "asha prep" over the same half hour double-counted both time and
+    points; this generalizes tg-fast.py's point-based `_trim_overlapping` to
+    a full range, since a time-range /did item can overlap on EITHER side,
+    not just at a single backdate instant).
+
+    The running entry is special-cased: it has no fixed end, so its portion
+    AFTER the new range isn't "trimmed to a stop" -- it's resumed as a new
+    running entry starting right after, so the live timer keeps going instead
+    of silently vanishing.
+    """
+    toggl_api = _toggl_api()
+    results: list[str] = []
+    day = start_dt.date()
+    entries = toggl_api.get_entries(
+        start_date=day.isoformat(),
+        end_date=(day + timedelta(days=1)).isoformat(),
+    ) or []
+    for e in entries:
+        try:
+            e_start = datetime.fromisoformat(e["start"]).astimezone(TZ)
+        except (KeyError, ValueError, TypeError):
+            continue
+        is_running = (e.get("duration") or 0) < 0
+        if is_running:
+            e_end = datetime.now(TZ)
+        else:
+            stop = e.get("stop")
+            if not stop:
+                continue
+            try:
+                e_end = datetime.fromisoformat(stop).astimezone(TZ)
+            except (ValueError, TypeError):
+                continue
+        if e_end <= start_dt or e_start >= end_dt:
+            continue  # no overlap
+        desc = e.get("description") or ""
+        proj_id = e.get("project_id")
+        tags = e.get("tags") or None
+        if e_start < start_dt:
+            pre_end = start_dt - timedelta(minutes=1)
+            if pre_end > e_start:
+                toggl_api.create_entry(desc, e_start.isoformat(), pre_end.isoformat(),
+                                        int((pre_end - e_start).total_seconds()), proj_id, tags)
+                results.append(f"Trimmed: {desc} {e_start:%H:%M}-{pre_end:%H:%M}")
+        if is_running:
+            post_start = end_dt + timedelta(minutes=1)
+            toggl_api.start_timer(desc, proj_id, tags, start_time=post_start.isoformat())
+            results.append(f"Resumed: {desc} from {post_start:%H:%M}")
+        elif e_end > end_dt:
+            post_start = end_dt + timedelta(minutes=1)
+            if e_end > post_start:
+                toggl_api.create_entry(desc, post_start.isoformat(), e_end.isoformat(),
+                                        int((e_end - post_start).total_seconds()), proj_id, tags)
+                results.append(f"Trimmed: {desc} {post_start:%H:%M}-{e_end:%H:%M}")
+        toggl_api.delete_entry(e["id"])
+    return results
+
+
 def _parse_stop_minutes(output: str) -> Optional[int]:
     """Parse duration minutes from toggl_cli stop output.
 
@@ -2144,6 +2223,17 @@ end tell'''
                 parts = td.split("/")
                 if len(parts) == 2:
                     today_str = f"{date.today().year}-{int(parts[0]):02d}-{int(parts[1]):02d}"
+            ref_date = date.fromisoformat(today_str)
+            def _parse_hhmm(t):
+                h, m = int(t[:2]), int(t[2:4])
+                return datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=TZ)
+            start_dt, end_dt = _parse_hhmm(tr[0]), _parse_hhmm(tr[1])
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+            try:
+                trim_lines = _trim_toggl_range(start_dt, end_dt)
+            except Exception as e:  # noqa: BLE001 — never block entry creation on a trim failure
+                trim_lines = [f"trim failed: {e}"]
             cmd = ["python3", str(TOGGL_CLI), "create", name,
                    f"{tr[0][:2]}:{tr[0][2:]}", f"{tr[1][:2]}:{tr[1][2:]}"]
             if proj:
@@ -2153,7 +2243,10 @@ end tell'''
             cmd.extend(["--date", today_str])
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                return name, proc.returncode == 0, proc.stdout.strip()
+                out = proc.stdout.strip()
+                if trim_lines:
+                    out = "\n".join(trim_lines) + ("\n" + out if out else "")
+                return name, proc.returncode == 0, out
             except Exception as e:
                 return name, False, str(e)
 

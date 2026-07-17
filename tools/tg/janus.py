@@ -73,6 +73,7 @@ except Exception:
 
 TZ = ZoneInfo("America/Los_Angeles")
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
+DID_FAST = str(Path("~/i446-monorepo/tools/did/did-fast.py").expanduser())
 # Layout widths track the actual pane. janus is the narrow companion to dtd:
 # on a tty we measure the real column count so a wider 1/8-XDR pane shows fuller
 # descriptions (and a narrower one never overflows the pane — the old fixed 50
@@ -321,6 +322,13 @@ class State:
         # an unintended timer start.
         self.visible_events: list[dict] = []
         self.event_sel: tuple | None = None
+        # True while a past-event → did-fast conversion subprocess is running
+        # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
+        # Excel-writing call — unlike tg-fast's plain Toggl start, a second
+        # concurrent invocation could double-create the entry/points and race
+        # on the same ix-osa Excel write. Gates re-entry from a double-tap and
+        # tells ticker_points to skip a beat so it doesn't read Neon mid-write.
+        self.conversion_in_flight = False
 
 
 STATE = State()
@@ -1464,6 +1472,28 @@ def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
     return items
 
 
+def _event_covered(ev: dict, entries: list[dict]) -> bool:
+    """True if some raw (unclipped) Toggl entry overlaps this event's window
+    at all. Checked against STATE.entries directly, never the per-block
+    CLIPPED `merged`/`picks` lists — clipping a long entry to a 2h block
+    window would make its true (possibly multi-hour) span invisible, which
+    is exactly the "long running generic timer hides three real meetings"
+    case this feature exists to fix."""
+    return any(e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]
+               for e in entries)
+
+
+def _past_event_picks(blk_name, events, entries, now, limit: int = 4) -> list[dict]:
+    """Ended gcal events in this block with NO overlapping Toggl entry -- the
+    "I had three meetings but Toggl shows nothing/one giant blob" case (user
+    report 2026-07-17). Shares _future_block_picks' item shape (is_event=True,
+    raw event carried) so the existing event-cursor/Enter-conversion plumbing
+    treats an uncovered past meeting identically to an upcoming one; only the
+    Enter handler's did-fast-vs-tg-fast branch cares about past vs. future."""
+    ended = [ev for ev in events if ev["end_dt"] <= now and not _event_covered(ev, entries)]
+    return _future_block_picks(blk_name, ended, limit=limit)
+
+
 def _block_cont_slots(blk_sh, slot_min):
     """Every (hour, minute) mark in a 2-hour block at ``slot_min`` resolution,
     starting at :00. Shared by the _block_*_cont helpers so their granularity
@@ -1613,10 +1643,17 @@ def render_morning() -> list[tuple[str, str]]:
         # just restate the empty grid the body already draws.
         if len(gaps) == 1 and gaps[0]["dur_min"] >= full_block:
             gaps = []
+        # Meetings that actually happened but never got a Toggl entry (or got
+        # swallowed by one giant undifferentiated timer) — "turn a calendar
+        # event into a time entry" for PAST meetings too, not just the
+        # current/next block (user report 2026-07-17). Only events with no
+        # overlapping raw entry show; one already covered by real Toggl data
+        # renders normally via `picks` above, not duplicated here.
+        event_picks = _past_event_picks(blk_name, STATE.events, STATE.entries, cutoff)
         # The header is now the bare :00 slot, so every entry and gap is a body
         # row. _compact_block_lines merges them with the empty half-hour marks
         # and caps at 3 rows.
-        body = picks + gaps
+        body = picks + gaps + event_picks
         body.sort(key=lambda x: x["start_dt"])
         # Tracked reality (Toggl, incl. sleep) wins over the gcal plan on
         # elapsed blocks; merge order = ascending authority.
@@ -1625,7 +1662,7 @@ def render_morning() -> list[tuple[str, str]]:
                 **_block_toggl_cont(blk_sh, cutoff)}
         out += _compact_block_lines(blk_name, blk_sh, body, pts,
                                     bo_emojis.get(blk_name, ""), cont=cont,
-                                    is_future=False)
+                                    is_future=False, track_selection=True)
     return out
 
 
@@ -1998,7 +2035,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab event · ↵ start · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab event · ↵ start/log · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -2061,16 +2098,16 @@ def render_focus_compact() -> list[tuple[str, str]]:
     block — folded into the ordinary picks pipeline instead of a separate
     live-row/alarm code path.
 
-    The event cursor spans BOTH blocks: STATE.visible_events resets once
-    here, then each _compact_block_lines(track_selection=True) call EXTENDS
-    it — the next block's events were previously untrackable at all (Tab
-    could only ever reach the current block's), which read as "can't select
-    future calendar entries" (user report 2026-07-15)."""
+    The event cursor spans BOTH blocks here (and, via render_all's shared
+    reset, the whole day): each _compact_block_lines(track_selection=True)
+    call EXTENDS STATE.visible_events — the next block's events were
+    previously untrackable at all (Tab could only ever reach the current
+    block's), which read as "can't select future calendar entries" (user
+    report 2026-07-15)."""
     now = view_now()
     cur = hour_to_block(now.hour)
     nxt = next_block(now.hour)
     bo_emojis = _read_block_emojis()
-    STATE.visible_events = []
     out: list[tuple[str, str]] = []
     if cur:
         name, sh, eh = cur
@@ -2086,6 +2123,11 @@ def render_focus_compact() -> list[tuple[str, str]]:
 
 
 def render_all() -> list[tuple[str, str]]:
+    # Event cursor spans the WHOLE day now (past blocks' uncovered meetings,
+    # the current + next block) — reset once here, before anything renders,
+    # so render_morning's registrations survive render_focus_compact's (each
+    # _compact_block_lines(track_selection=True) call only EXTENDs the list).
+    STATE.visible_events = []
     parts: list[tuple[str, str]] = []
     parts += render_header()
     parts += render_morning()
@@ -2110,6 +2152,26 @@ def run_tg_fast(text: str) -> str:
         )
         out = (proc.stdout or proc.stderr or "").strip().splitlines()
         return out[-1] if out else "(no output)"
+    except Exception as e:
+        return f"err: {e}"
+
+
+def run_did_fast(text: str) -> str:
+    """Like run_tg_fast, but for did-fast.py — used to convert an ALREADY-
+    ENDED calendar event into a completed Toggl entry AND grant its points in
+    one shot (the tg-fast path only ever starts a running timer, no points).
+    did-fast is a much heavier call: an Excel write over ix-osa plus Todoist
+    round-trips, commonly 10-20s and occasionally more — hence the longer
+    timeout than run_tg_fast's 15s."""
+    try:
+        proc = subprocess.run(
+            ["python3", DID_FAST, text],
+            capture_output=True, text=True, timeout=45,
+        )
+        out = (proc.stdout or proc.stderr or "").strip()
+        return out.splitlines()[-1] if out else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "err: did-fast timed out"
     except Exception as e:
         return f"err: {e}"
 
@@ -2150,36 +2212,77 @@ def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
     return f"{title}{suffix}"
 
 
+def _event_to_did_command(ev: dict) -> str:
+    """The /did-style time-range command that backfills an ALREADY-ENDED
+    calendar event as a completed Toggl entry AND grants its points in one
+    shot ("grant the points for them at the same time" — user request
+    2026-07-17). did-fast's Step 6 variable-task path takes duration-in-
+    minutes as the points value for a "<desc> HHMM-HHMM @code" input — the
+    exact format already verified manually (2026-07-16, the "asha prep"
+    backfill). Never used for a still-in-progress/future event — the enter
+    handler only calls this when the event has actually ended (ev["end_dt"]
+    <= now); an unfinished meeting has no real end time to encode."""
+    title = ev.get("title") or ""
+    code = gcal_project_code(ev)
+    suffix = f" @{code}" if code else ""
+    return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}"
+
+
 @kb.add("enter")
 def _(event):
     text = input_buffer.text.strip()
     input_buffer.reset()
     if not text:
-        # No typed command — if an event is armed (Tab-selected in the
-        # current block), Enter converts IT into a running Toggl timer.
-        # Resolved synchronously (this handler runs to completion on the
-        # event loop before the next 0.1s repaint can touch STATE), so
-        # there's no window where visible_events/event_sel could change out
-        # from under the lookup.
+        # No typed command — if an event is armed (Tab-selected anywhere
+        # today: a past block's uncovered meeting, or the current/next
+        # block), Enter converts IT into a Toggl entry. Resolved
+        # synchronously (this handler runs to completion on the event loop
+        # before the next 0.1s repaint can touch STATE), so there's no
+        # window where visible_events/event_sel could change out from under
+        # the lookup.
         sel = STATE.event_sel
         ev = next((e for e in STATE.visible_events if _event_key(e) == sel), None) if sel else None
         if not ev:
             return
-        cmd = _event_to_tg_command(ev, view_now())
+        if STATE.conversion_in_flight:
+            # did-fast is a ~10-45s Excel write; a double-Enter mid-flight
+            # would double-create the entry AND double-grant points, plus
+            # race two ix-osa writes against the same sheet. tg-fast's plain
+            # timer-start doesn't need this guard (idempotent enough), but
+            # this path does.
+            flash("still converting the last one…", 3.0)
+            return
+        now = view_now()
+        is_past = ev["end_dt"] <= now
+        cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
         STATE.event_sel = None
-        flash(f"$ tg {cmd}")
+        flash(f"$ {'did' if is_past else 'tg'} {cmd}")
 
         async def _run_event_and_refresh():
-            res = await asyncio.to_thread(run_tg_fast, cmd)
-            flash(res, 6.0)
-            event.app.invalidate()
-            polls = (0.4, 0.8, 1.5)
-            for i, delay in enumerate(polls):
-                await asyncio.sleep(delay)
-                await asyncio.to_thread(fetch_current)
-                if i == len(polls) - 1:
-                    await asyncio.to_thread(fetch_today, True)
+            STATE.conversion_in_flight = True
+            try:
+                runner = run_did_fast if is_past else run_tg_fast
+                res = await asyncio.to_thread(runner, cmd)
+                flash(res, 6.0)
                 event.app.invalidate()
+                if is_past:
+                    # did-fast's own Excel write + Toggl create has already
+                    # landed by the time the subprocess returns — no need for
+                    # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
+                    # propagation lag, just one forced re-read of both.
+                    await asyncio.to_thread(fetch_today, True)
+                    await asyncio.to_thread(fetch_points)
+                    event.app.invalidate()
+                else:
+                    polls = (0.4, 0.8, 1.5)
+                    for i, delay in enumerate(polls):
+                        await asyncio.sleep(delay)
+                        await asyncio.to_thread(fetch_current)
+                        if i == len(polls) - 1:
+                            await asyncio.to_thread(fetch_today, True)
+                        event.app.invalidate()
+            finally:
+                STATE.conversion_in_flight = False
 
         event.app.create_background_task(_run_event_and_refresh())
         return
@@ -2500,6 +2603,10 @@ async def ticker_gcal(app):
 async def ticker_points(app):
     while True:
         await asyncio.sleep(120)
+        if STATE.conversion_in_flight:
+            # A did-fast conversion is mid-write to the same Neon sheet this
+            # ticker reads — skip this beat rather than risk reading it torn.
+            continue
         _bg_fetch(app, fetch_points)
 
 

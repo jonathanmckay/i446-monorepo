@@ -253,6 +253,94 @@ def test_selection_never_shifts_row_horizontal_position():
     assert selected == unselected, "highlighting must not change any character or width, only color"
 
 
+# ─── Past-event backfill: uncovered calendar events → did-fast ─────────────
+# (user request 2026-07-17: "if either there is long running time entry or
+# the time entries are empty, it shows the calendar entries instead... hit
+# enter... it invokes did-fast to record time entry and grant points")
+
+def test_event_covered_true_when_toggl_entry_overlaps():
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    entries = [{"start_dt": today.replace(hour=8, minute=50), "end_dt": today.replace(hour=9, minute=10)}]
+    assert mod._event_covered(ev, entries) is True
+
+
+def test_event_covered_false_when_no_overlap():
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    entries = [{"start_dt": today.replace(hour=10), "end_dt": today.replace(hour=10, minute=30)}]
+    assert mod._event_covered(ev, entries) is False
+
+
+def test_event_covered_false_when_entries_empty():
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    assert mod._event_covered(ev, []) is False
+
+
+def test_past_event_picks_excludes_covered_and_not_yet_ended():
+    mod = _load_tui()
+    today = _midnight()
+    covered = _gcal_event("covered mtg", today.replace(hour=10), today.replace(hour=10, minute=15))
+    uncovered = _gcal_event("uncovered mtg", today.replace(hour=10, minute=20), today.replace(hour=10, minute=35))
+    not_yet_ended = _gcal_event("still going", today.replace(hour=10, minute=40), today.replace(hour=11, minute=5))
+    entries = [{"start_dt": today.replace(hour=10), "end_dt": today.replace(hour=10, minute=15)}]
+    now = today.replace(hour=10, minute=50)
+    picks = mod._past_event_picks("午", [covered, uncovered, not_yet_ended], entries, now)
+    titles = [p["label"] for p in picks]
+    assert "uncovered mtg" in titles
+    assert "covered mtg" not in titles, "an event with a real overlapping Toggl entry must not duplicate as a row"
+    assert "still going" not in titles, "an event that hasn't ended yet belongs to the current/next-block path, not this one"
+
+
+def test_render_morning_shows_uncovered_past_meeting_and_registers_for_cursor():
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.current_known = True
+    mod.STATE.current = None
+    mod.STATE.entries_known = True
+    mod.STATE.entries = []
+    mod.STATE.block_points = {}
+    mod.STATE.day_offset = 0
+    mod.STATE.visible_events = []
+    ev = _gcal_event("forgotten standup", today.replace(hour=10), today.replace(hour=10, minute=30))
+    mod.STATE.events = [ev]
+    mod.view_now = lambda: today.replace(hour=12, minute=5)  # 未 current -> 午 is a past block
+    text = "".join(t for _, t in mod.render_morning())
+    assert "forgotten standup" in text
+    assert ev in mod.STATE.visible_events, "an uncovered past meeting must be selectable, same as any other event row"
+
+
+def test_render_morning_hides_covered_past_meeting_no_duplicate_row():
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.current_known = True
+    mod.STATE.current = None
+    mod.STATE.entries_known = True
+    mod.STATE.block_points = {}
+    mod.STATE.day_offset = 0
+    mod.STATE.visible_events = []
+    ev = _gcal_event("tracked standup", today.replace(hour=10), today.replace(hour=10, minute=30))
+    mod.STATE.events = [ev]
+    mod.STATE.entries = [{"start_dt": today.replace(hour=10), "end_dt": today.replace(hour=10, minute=30),
+                          "desc": "tracked standup", "project_id": None, "id": 1, "running": False}]
+    mod.view_now = lambda: today.replace(hour=12, minute=5)
+    mod.render_morning()
+    assert ev not in mod.STATE.visible_events, "a covered event must not ALSO appear as a selectable event row"
+
+
+def test_event_to_did_command_is_time_range_not_backdated_start():
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    cmd = mod._event_to_did_command(ev)
+    assert cmd.startswith("standup 0900-0915"), f"must encode the full range: {cmd!r}"
+    assert not cmd.startswith("0900 "), "must not look like tg-fast's backdated-start format"
+
+
 # ─── Tab / Shift-Tab keybindings ────────────────────────────────────────────
 
 def test_tab_and_shift_tab_are_bound_and_gated_on_empty_input():
@@ -345,6 +433,54 @@ def test_enter_with_armed_selection_clears_it_and_flashes():
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.event_sel is None, "selection must clear once converted"
     assert "standup" in mod.STATE.flash
+
+
+def test_enter_on_in_progress_event_still_uses_tg_path():
+    """An event that hasn't ENDED yet (mid-meeting) keeps the existing
+    tg-fast backdated-start behavior — no points grant, since it isn't a
+    completed range yet."""
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    mod.STATE.visible_events = [ev]
+    mod.STATE.event_sel = mod._event_key(ev)
+    mod.input_buffer.text = ""
+    mod.view_now = lambda: today.replace(hour=9, minute=5)  # mid-meeting
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.flash.startswith("$ tg "), f"in-progress event must use tg-fast: {mod.STATE.flash!r}"
+
+
+def test_enter_on_ended_event_uses_did_fast_path():
+    """Regression (user request 2026-07-17): an ALREADY-ENDED event must
+    convert via did-fast (time-range command) so it both logs the Toggl
+    entry AND grants points — not tg-fast's plain running-timer start."""
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    mod.STATE.visible_events = [ev]
+    mod.STATE.event_sel = mod._event_key(ev)
+    mod.input_buffer.text = ""
+    mod.view_now = lambda: today.replace(hour=9, minute=30)  # after it ended
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.event_sel is None
+    assert mod.STATE.flash.startswith("$ did "), f"ended event must convert via did-fast: {mod.STATE.flash!r}"
+    assert "0900-0915" in mod.STATE.flash
+
+
+def test_enter_ignores_armed_selection_while_conversion_in_flight():
+    """A did-fast conversion is a ~10-45s Excel write — a double-Enter mid-
+    flight must not fire a second one (double entry + double points + a
+    race on the same ix-osa write)."""
+    mod = _load_tui()
+    today = _midnight()
+    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
+    mod.STATE.visible_events = [ev]
+    mod.STATE.event_sel = mod._event_key(ev)
+    mod.STATE.conversion_in_flight = True
+    mod.input_buffer.text = ""
+    mod.view_now = lambda: today.replace(hour=9, minute=30)
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.event_sel == mod._event_key(ev), "must not consume the selection while one is already in flight"
 
 
 if __name__ == "__main__":
