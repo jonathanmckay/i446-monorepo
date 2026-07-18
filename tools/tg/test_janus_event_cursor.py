@@ -174,7 +174,11 @@ def test_render_focus_compact_tracks_next_block_events_too():
                                     today.replace(hour=11))]
     mod.view_now = lambda: today.replace(hour=8, minute=5)  # 巳(8-9)=current, 午(10-11)=next
     mod.render_focus_compact()
-    titles = [e["title"] for e in mod.STATE.visible_events]
+    # visible_events now also carries non-event kinds (real entries, gaps) —
+    # 巳 has zero tracked entries here, so its untracked stretch registers as
+    # a selectable "empty" item alongside the real event; filter to events
+    # (no "kind" key) before checking titles.
+    titles = [e["title"] for e in mod.STATE.visible_events if e.get("kind") is None]
     assert "future block meeting" in titles
 
 

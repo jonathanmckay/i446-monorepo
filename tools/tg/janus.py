@@ -322,6 +322,15 @@ class State:
         # an unintended timer start.
         self.visible_events: list[dict] = []
         self.event_sel: tuple | None = None
+        # Armed by Enter on a selected real-entry row: the list of Toggl
+        # entry ids the NEXT Enter should update (rename/reproject) instead
+        # of creating something new (user request 2026-07-17: "select toggl
+        # time entries as well... edit description/project"). Consumed
+        # unconditionally at the very top of the enter handler — the one
+        # chokepoint that keeps a stale target from ever leaking into an
+        # unrelated later submission (cancel via empty text, Escape, or a
+        # day-nav all clear it the same way event_sel already does).
+        self.edit_target: list[int] | None = None
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
@@ -474,6 +483,58 @@ def _event_key(ev: dict):
     require two same-titled events at the identical start time, which
     Google Calendar doesn't produce for one person's merged view."""
     return (ev.get("start_dt"), ev.get("title"))
+
+
+def _sel_key(item: dict):
+    """Stable identity for ANY selectable row in STATE.visible_events — a
+    calendar event (the original, unwrapped shape — kept exactly as
+    _event_key already returns it, so every existing event-cursor call site
+    and test keeps working untouched), a real tracked Toggl entry ("kind":
+    "entry", wrapping one or more merged entry ids), or an untracked gap
+    ("kind": "empty", wrapping the gap's own start/duration). The three
+    shapes can never collide: an event key's first element is always a
+    datetime, never the literal string "entry"/"empty"."""
+    kind = item.get("kind")
+    if kind == "entry":
+        return ("entry", item["start_dt"], tuple(item["entry_ids"]))
+    if kind == "empty":
+        return ("empty", item["start_dt"])
+    return _event_key(item)
+
+
+def _entry_edit_prefill(item: dict) -> str:
+    """The editable text Enter loads into the input line for a selected real
+    entry: "<desc> @<code>" (or bare desc when no project), matching what the
+    user would type to recreate it via the ordinary typed-command path — so
+    re-submitting after a plain retype "just works" through the SAME
+    shortcode/@override parsing tg-fast already does."""
+    code = proj_code(item.get("project_id"))
+    suffix = f" @{code}" if code else ""
+    return f"{item['raw_desc']}{suffix}"
+
+
+def _empty_gap_prefill(item: dict) -> str:
+    """The editable text Enter loads for a selected untracked gap: a
+    "HHMM-HHMM " time-range prefix spanning the gap's own tracked-empty
+    window, ready for the user to just type a description (and optional
+    @code) and hit Enter — the EXISTING typed time-range path (tg-fast.py's
+    "<desc> <start>-<end> @<project>") creates it, so this needs no new
+    backend at all."""
+    end = item["start_dt"] + dt.timedelta(minutes=item["dur_min"])
+    return f"{item['start_dt']:%H%M}-{end:%H%M} "
+
+
+def _parse_edit_text(text: str) -> tuple[str, str | None]:
+    """Split "<desc> @<code>" (the same shape _entry_edit_prefill produces,
+    and what a user retyping it would naturally still look like) into
+    (description, project_code_or_None). A trailing "@code" is only ever
+    the LAST token, so this doesn't need tg-fast's fuller shortcode grammar
+    — an entry edit only ever changes description/project, never re-derives
+    a shortcode mapping."""
+    m = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
+    if not m:
+        return text.strip(), None
+    return (m.group(1) or "").strip(), m.group(2)
 
 
 def _load_event_shorts() -> dict:
@@ -1252,17 +1313,35 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         rows.sort(key=lambda r: r[0])
 
     if track_selection:
-        # The event cursor's selectable set is exactly what's ON SCREEN —
-        # computed from `rows` (post-slice), so Tab can never land on an
-        # event the max_rows cap trimmed away. EXTEND, not assign:
-        # render_focus_compact calls this for both the current AND next
-        # block with track_selection=True, and clears visible_events once
-        # up front — an assignment here would let the second call silently
-        # wipe out the first block's events (regression 2026-07-15: "still
-        # can't select... future calendar entries" — the next block's
-        # events were never trackable at all, only the current block's).
-        STATE.visible_events.extend(p["event"] for _, _, _, p in rows
-                                    if p is not None and p.get("is_event"))
+        # The cursor's selectable set is exactly what's ON SCREEN — computed
+        # from `rows` (post-slice), so Tab can never land on something the
+        # max_rows cap trimmed away. EXTEND, not assign: render_focus_compact
+        # calls this for both the current AND next block with
+        # track_selection=True, and clears visible_events once up front — an
+        # assignment here would let the second call silently wipe out the
+        # first block's items (regression 2026-07-15: "still can't
+        # select... future calendar entries").
+        #
+        # Three kinds share this one list (user request 2026-07-17: select
+        # real time entries too, and empty/untracked stretches): a raw gcal
+        # event dict (unwrapped, exactly as before — every existing
+        # event-cursor call site keeps working untouched), a real tracked
+        # entry ("kind": "entry", only when it actually carries entry_ids —
+        # a synthetic pick like the sleep-spillover row has none and stays
+        # unselectable), and an untracked gap ("kind": "empty").
+        for _, _, _, p in rows:
+            if p is None:
+                continue
+            if p.get("is_event"):
+                STATE.visible_events.append(p["event"])
+            elif p.get("is_gap"):
+                STATE.visible_events.append({"kind": "empty", "start_dt": p["start_dt"],
+                                             "dur_min": p["dur_min"]})
+            elif p.get("entry_ids"):
+                STATE.visible_events.append({"kind": "entry", "start_dt": p["start_dt"],
+                                             "entry_ids": p["entry_ids"],
+                                             "raw_desc": p["raw_desc"],
+                                             "project_id": p["project_id"]})
 
     prev_hour = blk_sh  # the header established this hour at its :00 slot
     for _, hh, mm, p in rows:
@@ -1288,12 +1367,22 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # label pulse, filled out with a ┄ dash line (not blank padding) so
             # the row still reads as a highlighted bar. Labelled "empty → HH:MM
             # (Nm)" so the block's end time and the word "empty" are stated
-            # outright, never inferred.
+            # outright, never inferred. Selectable (user request 2026-07-17:
+            # "select empty components and fill them with a time entry") —
+            # Enter prefills a ready-made "HHMM-HHMM " range from this exact
+            # gap, no new backend needed (the typed-command path already
+            # creates ranged entries).
             end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
             label = _gap_label(end, p["dur_min"])
-            fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
+            gap_selected = STATE.event_sel == _sel_key({"kind": "empty", "start_dt": p["start_dt"]})
+            if gap_selected:
+                fill_cls = "class:selected_bg"
+                time_sty = "class:selected_accent"
+            else:
+                fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
+                time_sty = "class:time"
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
-            out.append(("class:time", tcol + " "))
+            out.append((time_sty, tcol + " "))
             out.append((fill_cls, _gap_fill(label, space) + "\n"))
             continue
         if p.get("is_running"):
@@ -1301,13 +1390,24 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # marker and bold style so it still reads distinctly even though
             # it's otherwise a plain compact row (no sub-second ticking —
             # the whole-minute duration just recomputes on each repaint).
+            # Selectable like any other entry — editing a running timer's
+            # description/project doesn't require stopping it first.
             dur = fmt_dur(p["dur_min"])
             prefix = "▶ "
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1)
-            sty = f"bold {p['style']}".strip() if p["style"] else "bold class:running"
-            out.append(("class:time", tcol + " "))
+            running_selected = bool(p.get("entry_ids")) and STATE.event_sel == _sel_key(
+                {"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
+            if running_selected:
+                sty = (f"bold {p['style']}".strip() if p["style"] else "bold class:running") + " bg:#3a3a3a"
+                time_sty = "class:selected_accent"
+                dur_sty = "class:selected_bg"
+            else:
+                sty = f"bold {p['style']}".strip() if p["style"] else "bold class:running"
+                time_sty = "class:time"
+                dur_sty = "class:dim"
+            out.append((time_sty, tcol + " "))
             out.append((sty, prefix + pad(truncate(p["label"], space), space)))
-            out.append(("class:dim", f" {dur}\n"))
+            out.append((dur_sty, f" {dur}\n"))
             continue
         # A gcal event mixed into a non-future (current-block) card via its own
         # is_event flag still reads as "scheduled" (parenthesized duration),
@@ -1315,7 +1415,15 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # express "elapsed portion is real, remaining portion is a plan".
         dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
-        is_selected = p.get("is_event") and STATE.event_sel == _event_key(p["event"])
+        if p.get("is_event"):
+            my_key = _sel_key(p["event"])
+        elif p.get("entry_ids"):
+            # A real (non-running) tracked entry — selectable for edit, same
+            # as the is_running branch above.
+            my_key = _sel_key({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
+        else:
+            my_key = None  # e.g. the synthetic sleep-spillover pick — no real entry behind it
+        is_selected = my_key is not None and STATE.event_sel == my_key
         if is_selected:
             # The event cursor's highlight, dtd-style: a flat background band
             # across the WHOLE row (not ANSI reverse, which just inverts
@@ -1367,6 +1475,18 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
             "style": project_style(m["project_id"]),
             "dur_min": mins,
             "is_running": is_running,
+            # The real Toggl entry id(s) this display row was merged from —
+            # empty for synthetic picks (e.g. _block_sleep_item) that don't
+            # come from a real entry. A merged span (contiguous same-desc
+            # entries) carries ALL of its ids: the row is visually ONE unit,
+            # so an edit (rename/reproject) applies to every entry behind it,
+            # not an arbitrarily-chosen first/last one.
+            "entry_ids": m.get("ids", []),
+            # Raw (undecorated) description + project id — for the entry-edit
+            # prefill, which must retype the actual editable value, not the
+            # Haiku-shortened/code-suffixed display `label` above.
+            "raw_desc": m["desc"],
+            "project_id": m["project_id"],
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
     running = [x for x in items if x["is_running"]]
@@ -1612,9 +1732,11 @@ def render_morning() -> list[tuple[str, str]]:
         end = min(e["end_dt"], cutoff)
         if merged and merged[-1]["desc"] == e["desc"]:
             merged[-1]["end_dt"] = end
+            merged[-1]["ids"].append(e["id"])
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end,
-                           "desc": e["desc"], "project_id": e["project_id"]})
+                           "desc": e["desc"], "project_id": e["project_id"],
+                           "ids": [e["id"]]})
 
     bo_emojis = _read_block_emojis()
     out: list[tuple[str, str]] = []
@@ -2035,7 +2157,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ event · ↵ start/log · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -2065,9 +2187,11 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
         if merged and merged[-1]["desc"] == e["desc"]:
             merged[-1]["end_dt"] = end
             merged[-1]["running"] = merged[-1].get("running") or e.get("running")
+            merged[-1]["ids"].append(e["id"])
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"],
-                           "project_id": e["project_id"], "running": e.get("running", False)})
+                           "project_id": e["project_id"], "running": e.get("running", False),
+                           "ids": [e["id"]]})
     picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
     sleep = _block_sleep_item(blk_sh, blk_eh, now)
     if sleep:
@@ -2230,20 +2354,84 @@ def _event_to_did_command(ev: dict) -> str:
 
 @kb.add("enter")
 def _(event):
+    if STATE.edit_target is not None:
+        # Consumed FIRST, unconditionally, before anything else about this
+        # keypress is inspected — the chokepoint that stops a stale edit
+        # target from ever leaking into an unrelated later Enter (e.g. the
+        # user armed an edit, pressed Escape or a day-nav key instead of
+        # submitting... those already clear edit_target, but if they didn't
+        # this is the last line of defense: an empty submission here always
+        # reads as "cancel", never "fall through to the event-conversion
+        # branch below").
+        ids = STATE.edit_target
+        STATE.edit_target = None
+        text = input_buffer.text.strip()
+        input_buffer.reset()
+        if not text:
+            flash("edit cancelled")
+            return
+        desc, code = _parse_edit_text(text)
+        pid = PROJECT_MAP.get(code) if code else None
+        if code and pid is None:
+            flash(f"unknown project code: {code}", 4.0)
+            return
+        fields = {"description": desc}
+        if pid is not None:
+            fields["project_id"] = pid
+        flash(f"$ edit {desc}" + (f" @{code}" if code else ""))
+
+        async def _apply_edit_and_refresh():
+            try:
+                for eid in ids:
+                    await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
+                flash("updated", 4.0)
+            except Exception as e:  # noqa: BLE001 — a stale/deleted id (e.g. trimmed
+                # by did-fast's overlap handling since this row rendered) must flash,
+                # not crash the app
+                flash(f"edit failed: {e}", 6.0)
+            event.app.invalidate()
+            await asyncio.to_thread(fetch_current)
+            await asyncio.to_thread(fetch_today, True)
+            event.app.invalidate()
+
+        event.app.create_background_task(_apply_edit_and_refresh())
+        return
+
     text = input_buffer.text.strip()
     input_buffer.reset()
     if not text:
-        # No typed command — if an event is armed (Tab-selected anywhere
-        # today: a past block's uncovered meeting, or the current/next
-        # block), Enter converts IT into a Toggl entry. Resolved
-        # synchronously (this handler runs to completion on the event loop
-        # before the next 0.1s repaint can touch STATE), so there's no
-        # window where visible_events/event_sel could change out from under
-        # the lookup.
+        # No typed command — if something is armed (Tab/arrow-selected
+        # anywhere today: a past block's uncovered meeting, a real tracked
+        # entry, an untracked gap, or the current/next block), Enter acts on
+        # IT. Resolved synchronously (this handler runs to completion on the
+        # event loop before the next 0.1s repaint can touch STATE), so
+        # there's no window where visible_events/event_sel could change out
+        # from under the lookup.
         sel = STATE.event_sel
-        ev = next((e for e in STATE.visible_events if _event_key(e) == sel), None) if sel else None
-        if not ev:
+        item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+        if not item:
             return
+        kind = item.get("kind") if isinstance(item, dict) else None
+        if kind == "entry":
+            # Arm the edit target and hand the user editable text instead of
+            # acting immediately — "loads the description into the input
+            # line so you can retype it and re-submit" (user request
+            # 2026-07-17). The NEXT Enter (top of this handler) applies it.
+            STATE.event_sel = None
+            STATE.edit_target = item["entry_ids"]
+            input_buffer.text = _entry_edit_prefill(item)
+            input_buffer.cursor_position = len(input_buffer.text)
+            return
+        if kind == "empty":
+            # Prefill a ready-made time-range and let the ORDINARY typed-
+            # command path create it on the next Enter — no new backend.
+            STATE.event_sel = None
+            input_buffer.text = _empty_gap_prefill(item)
+            input_buffer.cursor_position = len(input_buffer.text)
+            return
+        # Anything else is a raw gcal event dict (kind absent) — the
+        # existing convert-to-Toggl-entry path, unchanged.
+        ev = item
         if STATE.conversion_in_flight:
             # did-fast is a ~10-45s Excel write; a double-Enter mid-flight
             # would double-create the entry AND double-grant points, plus
@@ -2393,6 +2581,12 @@ def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
     STATE.event_sel = None  # a different day has different (or no) events
+    if STATE.edit_target is not None:
+        # A different day's rows are about to render — an armed edit +
+        # prefilled input text from THIS day would otherwise survive the
+        # nav and silently update the wrong entries on the next Enter.
+        STATE.edit_target = None
+        input_buffer.reset()
     flash(f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
 
@@ -2407,6 +2601,9 @@ def _day_forward(event):
     STATE.day_offset += 1
     STATE.scroll_min = 0
     STATE.event_sel = None
+    if STATE.edit_target is not None:
+        STATE.edit_target = None
+        input_buffer.reset()
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
 
@@ -2414,13 +2611,15 @@ def _day_forward(event):
 @kb.add("tab", filter=_input_empty)
 @kb.add("down", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the event cursor forward through the current block's visible
-    gcal events — Tab to arm one, Enter to convert it into a running Toggl
-    timer (see the enter handler above and _event_to_tg_command)."""
-    evs = STATE.visible_events
-    if not evs:
+    """Cycle the selection cursor forward through everything currently on
+    screen and selectable — calendar events, real tracked entries, and
+    untracked gaps alike (user request 2026-07-17: "select toggl time
+    entries as well" / "select empty components"). Tab/↓ to arm one, Enter
+    to act on it (see the enter handler above)."""
+    items = STATE.visible_events
+    if not items:
         return
-    keys = [_event_key(e) for e in evs]
+    keys = [_sel_key(it) for it in items]
     i = (keys.index(STATE.event_sel) + 1) % len(keys) if STATE.event_sel in keys else 0
     STATE.event_sel = keys[i]
 
@@ -2428,17 +2627,24 @@ def _(event):
 @kb.add("s-tab", filter=_input_empty)
 @kb.add("up", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the event cursor backward. See the "tab" binding above."""
-    evs = STATE.visible_events
-    if not evs:
+    """Cycle the selection cursor backward. See the "tab" binding above."""
+    items = STATE.visible_events
+    if not items:
         return
-    keys = [_event_key(e) for e in evs]
+    keys = [_sel_key(it) for it in items]
     i = (keys.index(STATE.event_sel) - 1) % len(keys) if STATE.event_sel in keys else len(keys) - 1
     STATE.event_sel = keys[i]
 
 
-@kb.add("escape")  # snap the detail band back to now; reset to today if browsing
+@kb.add("escape")  # snap the detail band back to now; reset to today if browsing;
+                    # cancel an armed edit/selection
 def _(event):
+    if STATE.edit_target is not None or STATE.event_sel is not None:
+        STATE.edit_target = None
+        STATE.event_sel = None
+        input_buffer.reset()
+        flash("cancelled")
+        return
     STATE.scroll_min = 0
     if STATE.day_offset != 0:
         STATE.day_offset = 0
