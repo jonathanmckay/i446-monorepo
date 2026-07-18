@@ -3338,5 +3338,185 @@
     "unit": "F37",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "596",
+    "prop": "rl16",
+    "unit": "D11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-18",
+    "kind": "movein",
+    "unit_id": "654",
+    "prop": "s129",
+    "unit": "3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "122",
+    "prop": "a210",
+    "unit": "3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "424",
+    "prop": "m221",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "1045",
+    "prop": "kn47 K2",
+    "unit": "D106",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "1146",
+    "prop": "o155-Elm",
+    "unit": "T",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-30",
+    "kind": "ntv",
+    "unit_id": "1245",
+    "prop": "tc68",
+    "unit": "D096",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "96",
+    "prop": "m608",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "521",
+    "prop": "rl16",
+    "unit": "A08",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "593",
+    "prop": "rl16",
+    "unit": "D08",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-18",
+    "kind": "movein",
+    "unit_id": "390",
+    "prop": "ps25",
+    "unit": "E32",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-17",
+    "kind": "moveout",
+    "unit_id": "1121",
+    "prop": "o155-Oak",
+    "unit": "C9",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-09-30",
+    "kind": "leased",
+    "unit_id": "419",
+    "prop": "ps17",
+    "unit": "B5",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "990",
+    "prop": "kn47 K1",
+    "unit": "M207",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-31",
+    "kind": "ntv",
+    "unit_id": "530",
+    "prop": "rl16",
+    "unit": "A17",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-31",
+    "kind": "ntv",
+    "unit_id": "718",
+    "prop": "c313",
+    "unit": "10",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "1061",
+    "prop": "kn47 K2",
+    "unit": "E106",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-07-18",
+    "effective": "2026-07-18",
+    "kind": "movein",
+    "unit_id": "831",
+    "prop": "kn47 K1",
+    "unit": "A201",
+    "tenant": null,
+    "baseline": false
   }
 ]
