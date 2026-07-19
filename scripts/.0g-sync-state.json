@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-19T14:00:04.769435-07:00"
+  "tasks": {
+    "reset with 分": {
+      "todoist_id": "6h6rfVQvJXGm6Mf2",
+      "minutes": 70
+    },
+    "100s": {
+      "todoist_id": "6h6rfVQVqj35xmqR",
+      "minutes": 30
+    },
+    "what is the good life for me, for right now?": {
+      "todoist_id": "6h6rfVRvJ56CWqG2",
+      "minutes": 15
+    },
+    "list down to 50": {
+      "todoist_id": "6h6rfVVGjr8F6462",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-07-19T16:00:04.101973-07:00"
 }
