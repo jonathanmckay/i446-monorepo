@@ -122,12 +122,12 @@ def test_empty_gap_prefill_is_time_range_with_trailing_space():
 
 def test_parse_edit_text_splits_trailing_code():
     mod = _load_tui()
-    assert mod._parse_edit_text("carolina 1:1 sync @i9") == ("carolina 1:1 sync", "i9")
+    assert mod._parse_edit_text("carolina 1:1 sync @i9") == ("carolina 1:1 sync", "i9", None)
 
 
 def test_parse_edit_text_no_code():
     mod = _load_tui()
-    assert mod._parse_edit_text("just a rename") == ("just a rename", None)
+    assert mod._parse_edit_text("just a rename") == ("just a rename", None, None)
 
 
 # ─── Registration: real entries + gaps become selectable ───────────────────
@@ -259,7 +259,7 @@ def test_enter_on_selected_entry_arms_edit_and_prefills_input():
     mod.input_buffer.text = ""
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.event_sel is None
-    assert mod.STATE.edit_target == [7]
+    assert mod.STATE.edit_target == {"ids": [7], "date": today.date()}
     assert mod.input_buffer.text == "carolina 1|1 @i9"
 
 
@@ -279,7 +279,8 @@ def test_enter_on_selected_empty_prefills_without_arming_edit():
 
 def test_enter_with_armed_edit_and_empty_text_cancels():
     mod = _load_tui()
-    mod.STATE.edit_target = [7]
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
     mod.input_buffer.text = ""
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.edit_target is None
@@ -288,7 +289,8 @@ def test_enter_with_armed_edit_and_empty_text_cancels():
 
 def test_enter_with_armed_edit_and_unknown_code_flashes_and_drops_target():
     mod = _load_tui()
-    mod.STATE.edit_target = [7]
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
     mod.input_buffer.text = "renamed thing @notarealcode"
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.edit_target is None, \
@@ -298,18 +300,63 @@ def test_enter_with_armed_edit_and_unknown_code_flashes_and_drops_target():
 
 def test_enter_with_armed_edit_and_valid_text_flashes_edit_command():
     mod = _load_tui()
-    mod.STATE.edit_target = [7, 8]
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7, 8], "date": today.date()}
     mod.input_buffer.text = "carolina 1:1 sync @i9"
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.edit_target is None
     assert mod.STATE.flash.startswith("$ edit carolina 1:1 sync @i9")
 
 
+# ─── Time-range retype retimes, doesn't pollute the description ────────────
+# (user request 2026-07-18: "if I edit an event with a new time seris [sic]
+# (i.e. hhmm-hhmm) it updates the time not the description")
+
+def test_parse_edit_text_extracts_bare_time_range_leaves_desc_none():
+    mod = _load_tui()
+    desc, code, time_range = mod._parse_edit_text("0930-1000")
+    assert desc is None, "a bare time range must not become the new description"
+    assert code is None
+    assert time_range == ("0930", "1000")
+
+
+def test_parse_edit_text_extracts_time_range_alongside_desc_and_code():
+    mod = _load_tui()
+    desc, code, time_range = mod._parse_edit_text("carolina sync 0930-1000 @i9")
+    assert desc == "carolina sync"
+    assert code == "i9"
+    assert time_range == ("0930", "1000")
+
+
+def test_enter_with_armed_edit_bare_time_range_updates_time_only():
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
+    mod.input_buffer.text = "0930-1000"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert "0930-1000" in mod.STATE.flash
+    assert "(desc unchanged)" in mod.STATE.flash
+
+
+def test_enter_with_armed_edit_time_range_on_merged_row_is_refused():
+    """A merged multi-entry row has no single well-defined new time to
+    retime ALL of them to -- must refuse, not silently corrupt one of them."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7, 8], "date": today.date()}
+    mod.input_buffer.text = "0930-1000"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert "merged" in mod.STATE.flash
+
+
 # ─── Cancellation on day-nav / escape ───────────────────────────────────────
 
 def test_escape_clears_armed_edit_and_resets_input():
     mod = _load_tui()
-    mod.STATE.edit_target = [7]
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
     mod.input_buffer.text = "carolina 1|1 @i9"
     _binding(mod, "escape").handler(_FakeEvent())
     assert mod.STATE.edit_target is None
@@ -327,7 +374,8 @@ def test_escape_clears_armed_selection_even_without_edit_target():
 
 def test_day_back_clears_armed_edit_and_resets_input():
     mod = _load_tui()
-    mod.STATE.edit_target = [7]
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
     mod.input_buffer.text = "carolina 1|1 @i9"
     mod.STATE.day_offset = 0
     _binding(mod, "c-left").handler(_FakeEvent())

@@ -322,15 +322,19 @@ class State:
         # an unintended timer start.
         self.visible_events: list[dict] = []
         self.event_sel: tuple | None = None
-        # Armed by Enter on a selected real-entry row: the list of Toggl
-        # entry ids the NEXT Enter should update (rename/reproject) instead
-        # of creating something new (user request 2026-07-17: "select toggl
-        # time entries as well... edit description/project"). Consumed
+        # Armed by Enter on a selected real-entry row: {"ids": [...], "date":
+        # the pick's own date} for the NEXT Enter to update (rename/
+        # reproject/retime) instead of creating something new (user request
+        # 2026-07-17: "select toggl time entries as well... edit description/
+        # project"; 2026-07-18: a retyped HHMM-HHMM must retime, not get
+        # swallowed into the description). `date` anchors an edited HHMM-HHMM
+        # to the entry's OWN day (a past day being browsed via day-nav), not
+        # whatever day janus happens to render on next. Consumed
         # unconditionally at the very top of the enter handler — the one
         # chokepoint that keeps a stale target from ever leaking into an
         # unrelated later submission (cancel via empty text, Escape, or a
         # day-nav all clear it the same way event_sel already does).
-        self.edit_target: list[int] | None = None
+        self.edit_target: dict | None = None
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
@@ -524,17 +528,37 @@ def _empty_gap_prefill(item: dict) -> str:
     return f"{item['start_dt']:%H%M}-{end:%H%M} "
 
 
-def _parse_edit_text(text: str) -> tuple[str, str | None]:
-    """Split "<desc> @<code>" (the same shape _entry_edit_prefill produces,
-    and what a user retyping it would naturally still look like) into
-    (description, project_code_or_None). A trailing "@code" is only ever
-    the LAST token, so this doesn't need tg-fast's fuller shortcode grammar
-    — an entry edit only ever changes description/project, never re-derives
-    a shortcode mapping."""
-    m = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
-    if not m:
-        return text.strip(), None
-    return (m.group(1) or "").strip(), m.group(2)
+_TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
+
+
+def _parse_edit_text(text: str) -> tuple[str | None, str | None, tuple[str, str] | None]:
+    """Parse retyped edit text into (description, project_code, time_range) —
+    any of the three can be None, meaning "leave that field alone" (user
+    request 2026-07-18: "if I edit an event with a new time series [HHMM-HHMM]
+    it updates the time not the description" — a bare time range must NOT get
+    swallowed into the description text).
+
+    A trailing "@code" is stripped first (only ever the last token — an entry
+    edit doesn't need tg-fast's fuller shortcode grammar, just desc/project/
+    time). An embedded "HHMM-HHMM" is then pulled out of whatever remains,
+    from anywhere in the string (not just a prefix/suffix), since the natural
+    retype is either "0930-1000" alone (time only) or "new desc 0930-1000"
+    (both). Whatever text is left after removing both is the new description
+    — empty means "unchanged", not "clear the description"."""
+    m_code = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
+    body = (m_code.group(1) or "").strip() if m_code else text.strip()
+    code = m_code.group(2) if m_code else None
+    time_range = None
+    m_time = _TIME_RANGE_RE.search(body)
+    if m_time:
+        time_range = (m_time.group(1), m_time.group(2))
+        body = (body[:m_time.start()] + body[m_time.end():]).strip()
+    return (body or None), code, time_range
+
+
+def _hhmm_to_dt(ref_date: dt.date, hhmm: str) -> dt.datetime:
+    return dt.datetime(ref_date.year, ref_date.month, ref_date.day,
+                       int(hhmm[:2]), int(hhmm[2:]), tzinfo=TZ)
 
 
 def _load_event_shorts() -> dict:
@@ -2363,22 +2387,48 @@ def _(event):
         # this is the last line of defense: an empty submission here always
         # reads as "cancel", never "fall through to the event-conversion
         # branch below").
-        ids = STATE.edit_target
+        target = STATE.edit_target
         STATE.edit_target = None
+        ids, edit_date = target["ids"], target["date"]
         text = input_buffer.text.strip()
         input_buffer.reset()
         if not text:
             flash("edit cancelled")
             return
-        desc, code = _parse_edit_text(text)
+        desc, code, time_range = _parse_edit_text(text)
         pid = PROJECT_MAP.get(code) if code else None
         if code and pid is None:
             flash(f"unknown project code: {code}", 4.0)
             return
-        fields = {"description": desc}
+        if time_range and len(ids) != 1:
+            # A merged row (contiguous same-desc entries collapsed into one
+            # display line) has no single well-defined new time to retime
+            # ALL of them to — description/project edits are safe to apply
+            # to every id behind it, but time is not.
+            flash("can't retime a merged multi-entry row", 4.0)
+            return
+        fields = {}
+        if desc:
+            fields["description"] = desc
         if pid is not None:
             fields["project_id"] = pid
-        flash(f"$ edit {desc}" + (f" @{code}" if code else ""))
+        if time_range:
+            start_dt = _hhmm_to_dt(edit_date, time_range[0])
+            end_dt = _hhmm_to_dt(edit_date, time_range[1])
+            if end_dt <= start_dt:
+                end_dt += dt.timedelta(days=1)
+            fields["start"] = start_dt.isoformat()
+            fields["stop"] = end_dt.isoformat()
+            fields["duration"] = int((end_dt - start_dt).total_seconds())
+        if not fields:
+            flash("nothing to update", 4.0)
+            return
+        parts = [desc or "(desc unchanged)"]
+        if code:
+            parts.append(f"@{code}")
+        if time_range:
+            parts.append(f"{time_range[0]}-{time_range[1]}")
+        flash("$ edit " + " ".join(parts))
 
         async def _apply_edit_and_refresh():
             try:
@@ -2418,7 +2468,7 @@ def _(event):
             # line so you can retype it and re-submit" (user request
             # 2026-07-17). The NEXT Enter (top of this handler) applies it.
             STATE.event_sel = None
-            STATE.edit_target = item["entry_ids"]
+            STATE.edit_target = {"ids": item["entry_ids"], "date": item["start_dt"].date()}
             input_buffer.text = _entry_edit_prefill(item)
             input_buffer.cursor_position = len(input_buffer.text)
             return
