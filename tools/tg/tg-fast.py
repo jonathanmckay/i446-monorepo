@@ -12,6 +12,7 @@ Usage:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -20,8 +21,22 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+TZ = ZoneInfo("America/Los_Angeles")
 CLI = str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py")
+
+
+def _toggl_api():
+    """Load toggl_cli.py's own toggl_api handle (importlib — same trick
+    did-fast.py uses) instead of duplicating its API-key loading and
+    sys.path setup here. Lazy: only paid by callers that actually touch
+    Toggl directly (the trim-overlap check), not the ordinary _run_cli
+    subprocess path every other command already uses."""
+    spec = importlib.util.spec_from_file_location("toggl_cli_lib", CLI)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod.toggl_api
 CACHE = str(Path.home() / ".claude/skills/tg/cache.json")
 DO_SESSION = Path.home() / ".claude/skills/do/active.json"
 DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
@@ -289,12 +304,36 @@ def cmd_stop():
 
 
 def cmd_create_range(desc, project, tags, start_t, end_t):
+    """Create a completed entry for an explicit "<desc> <start>-<end>" range.
+
+    Trims/splits/deletes any existing entry that overlaps the new range
+    first (user request 2026-07-19: editing/creating time entries must stay
+    MECE — shorten an overlapping entry to make room, or delete it outright
+    on full overlap). This mirrors did-fast.py's identical fix for /did
+    time-range items (2026-07-16, the "asha"/"asha prep" double-count) —
+    both now delegate to the same toggl_api.trim_range."""
+    today = datetime.now(TZ).date()
+
+    def _parse(t):
+        h, m = int(t[:2]), int(t[3:5])
+        return datetime(today.year, today.month, today.day, h, m, tzinfo=TZ)
+
+    start_dt, end_dt = _parse(start_t), _parse(end_t)
+    if end_dt <= start_dt:
+        end_dt += timedelta(days=1)
+    try:
+        trim_lines = _toggl_api().trim_range(start_dt, end_dt)
+    except Exception as e:  # noqa: BLE001 — never block entry creation on a trim failure
+        trim_lines = [f"trim failed: {e}"]
+
     args = ["create", desc, start_t, end_t]
     if project:
         args.append(project)
     for tag in tags:
         args.extend(["--tag", tag])
     out = _run_cli(*args)
+    if trim_lines:
+        out = "\n".join(trim_lines) + ("\n" + out if out else "")
     return out
 
 

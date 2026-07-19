@@ -5,6 +5,7 @@ import signal
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import throttle
@@ -210,3 +211,75 @@ def delete_entry(entry_id):
         if e.code in (402, 429):
             throttle.note_rate_limit()
         raise RuntimeError(f"Toggl API DELETE -> {e.code}: {e.read().decode()}")
+
+
+def trim_range(start_dt, end_dt, exclude_ids=None):
+    """Ensure no existing Toggl entry -- completed or the currently-running
+    one -- keeps covering [start_dt, end_dt) once a new or retimed entry
+    claims it. Split/trim/delete whatever overlaps, except any id in
+    exclude_ids (the entry itself, when this is a RETIME rather than a plain
+    create -- it shouldn't try to trim itself out from under its own edit).
+
+    Shared by every caller that creates or moves a definite time range:
+    tg-fast.py's "<desc> <start>-<end>" range creation, did-fast.py's
+    time-range /did items, and janus.py's entry-edit-to-a-new-time path
+    (2026-07-19: "if I edit an event with a new time... MECE -- shorten [an
+    overlapping entry] to make room, or delete the old one if full overlap").
+    Originally did-fast-only (as `_trim_toggl_range`, fixing the 2026-07-16
+    "asha"/"asha prep" double-count); promoted here once a third caller
+    needed the identical logic rather than a third copy of it.
+
+    The running entry is special-cased: it has no fixed end, so its portion
+    AFTER the range isn't trimmed to a stop -- it's RESUMED as a new running
+    entry starting right after, so live tracking keeps going instead of
+    silently vanishing. Returns human-readable log lines, one per entry
+    trimmed/split/resumed."""
+    exclude_ids = exclude_ids or set()
+    tz = start_dt.tzinfo
+    results = []
+    day = start_dt.date()
+    entries = get_entries(
+        start_date=day.isoformat(),
+        end_date=(day + timedelta(days=1)).isoformat(),
+    ) or []
+    for e in entries:
+        if e.get("id") in exclude_ids:
+            continue
+        try:
+            e_start = datetime.fromisoformat(e["start"]).astimezone(tz)
+        except (KeyError, ValueError, TypeError):
+            continue
+        is_running = (e.get("duration") or 0) < 0
+        if is_running:
+            e_end = datetime.now(tz)
+        else:
+            stop = e.get("stop")
+            if not stop:
+                continue
+            try:
+                e_end = datetime.fromisoformat(stop).astimezone(tz)
+            except (ValueError, TypeError):
+                continue
+        if e_end <= start_dt or e_start >= end_dt:
+            continue  # no overlap
+        desc = e.get("description") or ""
+        proj_id = e.get("project_id")
+        tags = e.get("tags") or None
+        if e_start < start_dt:
+            pre_end = start_dt - timedelta(minutes=1)
+            if pre_end > e_start:
+                create_entry(desc, e_start.isoformat(), pre_end.isoformat(),
+                              int((pre_end - e_start).total_seconds()), proj_id, tags)
+                results.append(f"Trimmed: {desc} {e_start:%H:%M}-{pre_end:%H:%M}")
+        if is_running:
+            post_start = end_dt + timedelta(minutes=1)
+            start_timer(desc, proj_id, tags, start_time=post_start.isoformat())
+            results.append(f"Resumed: {desc} from {post_start:%H:%M}")
+        elif e_end > end_dt:
+            post_start = end_dt + timedelta(minutes=1)
+            if e_end > post_start:
+                create_entry(desc, post_start.isoformat(), e_end.isoformat(),
+                              int((e_end - post_start).total_seconds()), proj_id, tags)
+                results.append(f"Trimmed: {desc} {post_start:%H:%M}-{e_end:%H:%M}")
+        delete_entry(e["id"])
+    return results

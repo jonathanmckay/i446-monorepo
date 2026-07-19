@@ -2134,12 +2134,6 @@ def render_evening() -> list[tuple[str, str]]:
         cont = _block_gcal_cont(sh, cutoff)
         out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
                                     cont=cont, is_future=True)
-    # Sleep marker
-    rule_text = " 睡觉 "
-    trail = max(0, WIDTH_HINT - 1 - len(rule_text))
-    out.append(("class:rule", "─"))
-    out.append((f"fg:{PROJECT_COLORS.get('睡觉', '#666666')}", rule_text))
-    out.append(("class:rule", "─" * trail + "\n"))
     return out
 
 
@@ -2279,6 +2273,12 @@ def render_all() -> list[tuple[str, str]]:
     parts: list[tuple[str, str]] = []
     parts += render_header()
     parts += render_morning()
+    # The rule that used to mark a fixed 22:00 sleep boundary (removed
+    # 2026-07-19 — a clock-time marker made little sense once focus blocks
+    # already carry their own visual weight) moves here instead: a plain
+    # divider marking where "now" actually is, right before the current/next
+    # focus band — the boundary a glance actually needs.
+    parts.append(("class:rule", "─" * WIDTH_HINT + "\n"))
     parts += render_focus_compact()
     parts += render_evening()
     return parts
@@ -2717,8 +2717,10 @@ bottom_bar = Window(
 
 
 def render_input_rule():
-    # Horizontal border above the input, mirroring dtd's --input-border and
-    # Claude's boxed prompt — separates the always-on command line from content.
+    # Horizontal border — used both above AND below the input (boxing it in,
+    # user request 2026-07-19), mirroring dtd's --input-border and Claude's
+    # boxed prompt. Separates the always-on command line from content above
+    # and from the key-hint/flash line below.
     return [("class:rule", "─" * WIDTH_HINT + "\n")]
 
 
@@ -2731,6 +2733,7 @@ def render_input_prompt():
 
 
 rule_window = Window(content=FormattedTextControl(render_input_rule), height=1, wrap_lines=False)
+rule_window_below = Window(content=FormattedTextControl(render_input_rule), height=1, wrap_lines=False)
 input_window = Window(
     content=BufferControl(buffer=input_buffer, focusable=True),
     height=1,
@@ -2743,7 +2746,7 @@ footer_window = Window(content=FormattedTextControl(render_footer), height=1, wr
 from prompt_toolkit.layout import VSplit  # noqa: E402
 
 input_row = VSplit([prompt_window, input_window])
-root = HSplit([main_window, bottom_bar, rule_window, input_row, footer_window])
+root = HSplit([main_window, bottom_bar, rule_window, input_row, rule_window_below, footer_window])
 
 style = Style.from_dict({
     "header": "bold cyan",

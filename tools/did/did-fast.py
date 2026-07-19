@@ -1230,68 +1230,13 @@ def _toggl_api():
 
 
 def _trim_toggl_range(start_dt: datetime, end_dt: datetime) -> list[str]:
-    """Ensure no existing Toggl entry -- completed or the currently-running
-    one -- keeps covering [start_dt, end_dt) before a new entry lands there.
-    Split/trim/delete whatever overlaps.
-
-    Fixes the double-minutes class of bug from backfilling a range that
-    overlaps something already tracked (2026-07-16: manually logging "asha"
-    then "asha prep" over the same half hour double-counted both time and
-    points; this generalizes tg-fast.py's point-based `_trim_overlapping` to
-    a full range, since a time-range /did item can overlap on EITHER side,
-    not just at a single backdate instant).
-
-    The running entry is special-cased: it has no fixed end, so its portion
-    AFTER the new range isn't "trimmed to a stop" -- it's resumed as a new
-    running entry starting right after, so the live timer keeps going instead
-    of silently vanishing.
-    """
-    toggl_api = _toggl_api()
-    results: list[str] = []
-    day = start_dt.date()
-    entries = toggl_api.get_entries(
-        start_date=day.isoformat(),
-        end_date=(day + timedelta(days=1)).isoformat(),
-    ) or []
-    for e in entries:
-        try:
-            e_start = datetime.fromisoformat(e["start"]).astimezone(TZ)
-        except (KeyError, ValueError, TypeError):
-            continue
-        is_running = (e.get("duration") or 0) < 0
-        if is_running:
-            e_end = datetime.now(TZ)
-        else:
-            stop = e.get("stop")
-            if not stop:
-                continue
-            try:
-                e_end = datetime.fromisoformat(stop).astimezone(TZ)
-            except (ValueError, TypeError):
-                continue
-        if e_end <= start_dt or e_start >= end_dt:
-            continue  # no overlap
-        desc = e.get("description") or ""
-        proj_id = e.get("project_id")
-        tags = e.get("tags") or None
-        if e_start < start_dt:
-            pre_end = start_dt - timedelta(minutes=1)
-            if pre_end > e_start:
-                toggl_api.create_entry(desc, e_start.isoformat(), pre_end.isoformat(),
-                                        int((pre_end - e_start).total_seconds()), proj_id, tags)
-                results.append(f"Trimmed: {desc} {e_start:%H:%M}-{pre_end:%H:%M}")
-        if is_running:
-            post_start = end_dt + timedelta(minutes=1)
-            toggl_api.start_timer(desc, proj_id, tags, start_time=post_start.isoformat())
-            results.append(f"Resumed: {desc} from {post_start:%H:%M}")
-        elif e_end > end_dt:
-            post_start = end_dt + timedelta(minutes=1)
-            if e_end > post_start:
-                toggl_api.create_entry(desc, post_start.isoformat(), e_end.isoformat(),
-                                        int((e_end - post_start).total_seconds()), proj_id, tags)
-                results.append(f"Trimmed: {desc} {post_start:%H:%M}-{e_end:%H:%M}")
-        toggl_api.delete_entry(e["id"])
-    return results
+    """Ensure no existing Toggl entry keeps covering [start_dt, end_dt)
+    before a new entry lands there. Thin delegate to toggl_api.trim_range
+    (promoted out of here 2026-07-19 once janus.py's entry-edit-to-a-new-
+    time feature needed the identical overlap-cleanup logic — originally
+    added here 2026-07-16 after backfilling "asha" then "asha prep" over the
+    same half hour double-counted both time and points)."""
+    return _toggl_api().trim_range(start_dt, end_dt)
 
 
 def _parse_stop_minutes(output: str) -> Optional[int]:
