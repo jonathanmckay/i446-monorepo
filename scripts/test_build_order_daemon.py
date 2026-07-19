@@ -389,6 +389,7 @@ def test_prev_block_window_is_the_prior_days_hai_for_mao():
     # ⏱️/✅ for 卯 never signaled anything real (credited while asleep, having
     # done nothing). 卯's real previous block is 亥 (20:00-22:00) of the PRIOR
     # calendar day.
+    import datetime as dt
     mod = _load_daemon()
     today = dt.date(2026, 7, 19)
     start, end, date = mod._prev_block_window(6, today)
@@ -401,6 +402,7 @@ def test_prev_block_window_is_the_prior_days_hai_for_mao():
 def test_prev_block_window_is_unchanged_for_every_other_block():
     # Every other fire hour must keep the plain same-day [hour-4, hour-2]
     # window — only 卯 (hour=6) is the wraparound special case.
+    import datetime as dt
     mod = _load_daemon()
     today = dt.date(2026, 7, 19)
     for fh in (8, 10, 12, 14, 16, 18, 20, 22):
