@@ -65,3 +65,47 @@ def test_refetched_dynamic_replace_stale_today(tmp_path, monkeypatch):
     assert "NEWR" in ids and "NEWG" in ids, "fresh ritual + goal must be present"
     assert "OLDR" not in ids and "OLDG" not in ids, "stale ritual + goal must be dropped"
     assert "T1" in ids, "non-dynamic today task must be preserved"
+
+
+def test_empty_fetch_preserves_still_open_dynamic_entries(tmp_path, monkeypatch):
+    """Regression (2026-07-19): "-1n tasks disappear ... for like 5 seconds"
+    whenever a ritual is completed in dtd.
+
+    find_tasks() has no retry; an empty list it returns is indistinguishable
+    from "genuinely nothing open under this label" vs. a transient Todoist
+    eventual-consistency hiccup on that label's index — the same lag class
+    did-fast.py's own fetch_today already guards against with a retry +
+    fallback-to-old. Completing a ritual writes to the SAME -1neon label
+    queried here, and this refresh runs both on a launchd timer and
+    fire-and-forget after every write, so the race is frequent. Before the
+    fix, an empty fetch for -1neon unconditionally wiped the OTHER four
+    still-open ritual cards from "today" (today_rest strips every
+    dynamic-labeled entry regardless of whether fresh_dynamic actually
+    replaced them) until the next successful refresh restored them.
+    """
+    m = _load()
+    cache = tmp_path / "task-queue.json"
+    cache.write_text(json.dumps({
+        "updated": "2026-07-19T08:00:00",
+        "today": [
+            {"id": "RIT1", "content": "😈 -1ibx", "labels": ["-1neon"], "due": "2026-07-19"},
+            {"id": "RIT2", "content": "😈 -1t", "labels": ["-1neon"], "due": "2026-07-19"},
+            {"id": "GOAL1", "content": "block goal {10}", "labels": ["#-1g", "i9"], "due": "2026-07-19"},
+            {"id": "T1", "content": "find car rental (20) [10]", "labels": ["i444"], "due": "2026-07-19"},
+        ],
+    }))
+    monkeypatch.setattr(m, "CACHE", cache)
+
+    def fake_find_empty(labels=None, limit=200):
+        # Simulate the Todoist label-index lag: every dynamic label transiently
+        # returns nothing, even though RIT1/RIT2/GOAL1 are all still open.
+        return []
+    monkeypatch.setattr(m.todoist, "find_tasks", fake_find_empty)
+    monkeypatch.setattr(m, "_nudge_janus", lambda: None)
+
+    m.main()
+    ids = [t["id"] for t in json.loads(cache.read_text())["today"]]
+    assert "RIT1" in ids and "RIT2" in ids, (
+        "an empty -1neon fetch must not wipe still-open ritual cards from the cache")
+    assert "GOAL1" in ids, "an empty #-1g fetch must not wipe a still-open block goal"
+    assert "T1" in ids, "non-dynamic today task must be preserved"

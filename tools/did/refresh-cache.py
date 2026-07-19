@@ -92,9 +92,25 @@ def main() -> int:
     # goals and a new block's rituals appear (the rest of "today" is left as
     # did-fast --refresh-cache last wrote it). Drop stale entries for these labels,
     # splice in the freshly-fetched ones, dedup by id (a task may carry two).
+    #
+    # Per-label empty-fetch guard (bug 2026-07-19: "-1n tasks disappear ... for
+    # like 5 seconds" whenever a ritual is completed). find_tasks() has no retry
+    # and a bare empty list is indistinguishable from "genuinely nothing open" vs.
+    # a transient Todoist eventual-consistency hiccup on that exact label's index
+    # (the same lag class did-fast.py's own fetch_today already guards against
+    # with a retry + fallback-to-old). Completing a ritual writes to the SAME
+    # -1neon label being queried here, and this runs both on a launchd timer and
+    # fire-and-forget after every write, so the race is frequent in practice. If a
+    # label's fresh fetch comes back empty but the previous cache had entries
+    # under it, trust the old data instead of wiping still-open cards — the
+    # unconditional splice below otherwise drops them from "today" outright, not
+    # just leaves them un-refreshed.
     fresh_dynamic, _seen = [], set()
     for lbl in DYNAMIC_TODAY_LABELS:
-        for t in todoist.find_tasks(labels=[lbl], limit=200):
+        fetched = todoist.find_tasks(labels=[lbl], limit=200)
+        if not fetched:
+            fetched = [t for t in data.get("today", []) if lbl in t.get("labels", [])]
+        for t in fetched:
             if t.get("id") not in _seen:
                 _seen.add(t.get("id"))
                 fresh_dynamic.append(_shape(t))
