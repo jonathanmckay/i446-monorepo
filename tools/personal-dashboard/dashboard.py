@@ -889,6 +889,17 @@ def _build_granular_chart_data(granularity):
         tasks_neg1n[bi] += counts.get("neg1n", 0)
         tasks_other[bi] += counts.get("other", 0)
 
+    # Email (Project Bocking) — bucket the same per-day merge used by the
+    # daily builder (_build_email_by_account) into weekly/monthly buckets via
+    # _bucket_email_by_account, then build Chart.js datasets with the SAME
+    # function the daily builder uses (it only cares that labels/keys line up).
+    daily_dates = [(bucket_starts[0] + timedelta(days=i)).isoformat() for i in range(days_span)]
+    email_raw = load_email_data()
+    email_by_account_daily = _build_email_by_account(email_raw, daily_dates)
+    email_by_account_bucketed = _bucket_email_by_account(
+        email_by_account_daily, lambda dstr: bucket_index(date.fromisoformat(dstr)), bucket_labels)
+    email_datasets = _build_email_datasets(email_by_account_bucketed, bucket_labels)
+
     return {
         "dates": bucket_labels,
         "points": {"datasets": points_datasets},
@@ -900,6 +911,7 @@ def _build_granular_chart_data(granularity):
         "tasks_other": tasks_other,
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
+        "email": {"datasets": email_datasets},
     }
 
 
@@ -1166,6 +1178,265 @@ def load_email_data():
         return json.loads(file_content)
     except Exception:
         return {"daily": [], "summary": {}}
+
+
+def _build_email_by_account(email_raw, dates):
+    """Build {account: {date: {avg_hours, avg_hours_daytime, count,
+    count_daytime, sent_count}}} for the given list of YYYY-MM-DD date
+    strings, merging the response-time gist, imsg-responses.db, and
+    archive_log.db (unified source of truth, overrides when it has more
+    replies). Shared by the daily builder and the weekly/monthly granular
+    builder (via _bucket_email_by_account) so the three-source merge logic
+    lives in exactly one place."""
+    email_daily = email_raw.get("daily", [])
+    date_set = set(dates)
+    email_by_account = defaultdict(dict)
+    for entry in email_daily:
+        acct = entry.get("account", "unknown")
+        d = entry.get("date", "")
+        if d and d in date_set:
+            count = entry.get("count", 0)
+            email_by_account[acct][d] = {
+                "avg_hours": entry.get("avg_hours"),
+                "avg_hours_daytime": entry.get("avg_hours_daytime"),
+                "count": count,
+                "count_daytime": entry.get("count_daytime", count),
+                "sent_count": entry.get("sent_count", count),
+            }
+    # Add iMessage daily stats from response DB
+    import sqlite3 as _sq3
+    _imsg_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
+    if _imsg_db.exists():
+        try:
+            _conn = _sq3.connect(f"file:{_imsg_db}?mode=ro", uri=True)
+            _rows = _conn.execute(
+                "SELECT day, median_response_hours, response_count, sent_count, "
+                "median_response_hours_daytime, response_count_daytime "
+                "FROM daily_stats"
+            ).fetchall()
+            _conn.close()
+            for day, median_h, resp_count, sent, median_h_dt, resp_count_dt in _rows:
+                if day in date_set:
+                    email_by_account["imessage"][day] = {
+                        "avg_hours": median_h,
+                        "avg_hours_daytime": median_h_dt,
+                        "count": resp_count or 0,
+                        "count_daytime": resp_count_dt or 0,
+                        "sent_count": sent,
+                    }
+        except Exception:
+            pass
+
+    # Overlay archive_log.db (unified source of truth, shared with /inbound idle screen).
+    # For each day in `dates`, replace per-type counts with archive_log data
+    # so the dashboard matches what /inbound shows.
+    _archive_db = Path.home() / ".config" / "ibx" / "archive_log.db"
+    if _archive_db.exists():
+        try:
+            _aconn = _sq3.connect(f"file:{_archive_db}?mode=ro", uri=True)
+            _TYPE_TO_ACCT = {
+                "email": "m5x2 gmail",
+                "outlook": "outlook",
+                "teams": "teams",
+                "slack": "slack",
+                "imsg": "imessage",
+            }
+            for d in dates:
+                day_start = datetime.strptime(d, "%Y-%m-%d").timestamp()
+                day_end = day_start + 86400
+                rows = _aconn.execute(
+                    "SELECT message_type, COUNT(DISTINCT item_uid), AVG(response_min) "
+                    "FROM archive_log WHERE timestamp >= ? AND timestamp < ? "
+                    "AND action = 'reply' AND response_min IS NOT NULL "
+                    "GROUP BY message_type",
+                    (day_start, day_end),
+                ).fetchall()
+                for msg_type, count, avg_min in rows:
+                    acct = _TYPE_TO_ACCT.get(msg_type)
+                    if not acct or count == 0:
+                        continue
+                    avg_h = avg_min / 60.0 if avg_min else None
+                    existing = email_by_account[acct].get(d, {})
+                    # Only override if archive_log has MORE replies (it's more complete)
+                    if count >= existing.get("count", 0):
+                        email_by_account[acct][d] = {
+                            "avg_hours": avg_h,
+                            "avg_hours_daytime": avg_h,
+                            "count": count,
+                            "count_daytime": count,
+                            "sent_count": count,
+                        }
+            _aconn.close()
+        except Exception:
+            pass
+    return email_by_account
+
+
+def _bucket_email_by_account(email_by_account, bucket_index_fn, bucket_labels):
+    """Fold a per-day email_by_account (see _build_email_by_account) into
+    per-bucket totals, keyed by bucket LABEL — the result has the exact same
+    {account: {key: {...}}} shape as the daily version, so
+    _build_email_datasets builds Chart.js datasets from either unchanged.
+    Response-time hours are count-weighted averages per bucket; counts and
+    sent_counts are summed."""
+    n = len(bucket_labels)
+    acc = defaultdict(lambda: [{"h": 0.0, "c": 0, "h_dt": 0.0, "c_dt": 0, "sent": 0}
+                               for _ in range(n)])
+    for acct, day_map in email_by_account.items():
+        for dstr, entry in day_map.items():
+            bi = bucket_index_fn(dstr)
+            if bi is None:
+                continue
+            slot = acc[acct][bi]
+            h, c = entry.get("avg_hours"), entry.get("count", 0)
+            if h is not None and c > 0:
+                slot["h"] += h * c
+                slot["c"] += c
+            h_dt, c_dt = entry.get("avg_hours_daytime"), entry.get("count_daytime", 0)
+            if h_dt is not None and c_dt > 0:
+                slot["h_dt"] += h_dt * c_dt
+                slot["c_dt"] += c_dt
+            slot["sent"] += entry.get("sent_count", 0) or 0
+
+    bucketed = defaultdict(dict)
+    for acct, slots in acc.items():
+        for bi, slot in enumerate(slots):
+            if slot["c"] == 0 and slot["c_dt"] == 0 and slot["sent"] == 0:
+                continue
+            bucketed[acct][bucket_labels[bi]] = {
+                "avg_hours": round(slot["h"] / slot["c"], 3) if slot["c"] > 0 else None,
+                "avg_hours_daytime": round(slot["h_dt"] / slot["c_dt"], 3) if slot["c_dt"] > 0 else None,
+                "count": slot["c"],
+                "count_daytime": slot["c_dt"],
+                "sent_count": slot["sent"],
+            }
+    return bucketed
+
+
+def _build_email_datasets(email_by_account, labels):
+    """Chart.js datasets (blended response-time lines + per-account stacked
+    inbound/outbound count bars) from an email_by_account dict keyed by
+    `labels` — raw daily YYYY-MM-DD dates OR weekly/monthly bucket labels,
+    same shape either way (see _bucket_email_by_account)."""
+    EMAIL_BAR_COLORS = {
+        "m5x2 gmail": "#d5003266", "m5x2": "#d5003266",
+        "s897 gmail": "#1b5e2066", "personal": "#1b5e2066", "gmail": "#1b5e2066",
+        "imessage": "#34c75966",
+        "slack": "#9b002366",
+        "outlook": "#00b8d466",
+        "teams": "#1249b466",
+    }
+    # Compute blended avg response time (minutes), weighted by reply pair count
+    blended_response = []
+    blended_daytime = []
+    for label in labels:
+        total_hours = 0
+        total_count = 0
+        total_hours_dt = 0
+        total_count_dt = 0
+        for acct, day_map in email_by_account.items():
+            entry = day_map.get(label, {})
+            h = entry.get("avg_hours")
+            c = entry.get("count", 0)
+            h_dt = entry.get("avg_hours_daytime")
+            c_dt = entry.get("count_daytime", 0)
+            if h is not None and c > 0:
+                total_hours += h * c
+                total_count += c
+            if h_dt is not None and c_dt > 0:
+                total_hours_dt += h_dt * c_dt
+                total_count_dt += c_dt
+        blended_response.append(round(total_hours / total_count * 60, 1) if total_count > 0 else None)
+        blended_daytime.append(round(total_hours_dt / total_count_dt * 60, 1) if total_count_dt > 0 else None)
+
+    email_datasets = []
+    # Purple blended line — overall (no exclusions)
+    email_datasets.append({
+        "type": "line",
+        "label": "avg response",
+        "data": blended_response,
+        "borderColor": "#aa00ff",
+        "backgroundColor": "transparent",
+        "borderWidth": 2,
+        "pointRadius": 3,
+        "tension": 0,
+        "spanGaps": True,
+        "yAxisID": "y",
+    })
+    # Pink line — daytime only (excludes inbound 9pm–6am)
+    email_datasets.append({
+        "type": "line",
+        "label": "avg response - daytime",
+        "data": blended_daytime,
+        "borderColor": "#ff4081",
+        "backgroundColor": "transparent",
+        "borderWidth": 2,
+        "pointRadius": 3,
+        "tension": 0,
+        "spanGaps": True,
+        "yAxisID": "y",
+    })
+    # Per-account inbound/reply count bars (stacked) — ordered so m5x2+slack are adjacent
+    EMAIL_BAR_ORDER = ["outlook", "teams", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
+    for acct in EMAIL_BAR_ORDER:
+        day_map = email_by_account.get(acct, {})
+        if not day_map:
+            continue
+        email_datasets.append({
+            "type": "bar",
+            "label": acct,
+            "data": [day_map.get(label, {}).get("count", 0) for label in labels],
+            "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
+            "borderWidth": 0,
+            "yAxisID": "y2",
+            "stack": "inbound",
+        })
+    # Any accounts not in the explicit order
+    for acct, day_map in sorted(email_by_account.items()):
+        if acct not in EMAIL_BAR_ORDER:
+            email_datasets.append({
+                "type": "bar",
+                "label": acct,
+                "data": [day_map.get(label, {}).get("count", 0) for label in labels],
+                "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
+                "borderWidth": 0,
+                "yAxisID": "y2",
+                "stack": "inbound",
+            })
+    # Outbound/sent bars per channel (stacked, darker versions of inbound colors)
+    EMAIL_BAR_COLORS_DARK = {
+        "m5x2 gmail": "#d50032aa", "m5x2": "#d50032aa",
+        "s897 gmail": "#1b5e20aa", "personal": "#1b5e20aa", "gmail": "#1b5e20aa",
+        "imessage": "#34c759aa",
+        "slack": "#9b0023aa",
+        "outlook": "#00b8d4aa",
+        "teams": "#1249b4aa",
+    }
+    for acct in EMAIL_BAR_ORDER:
+        day_map = email_by_account.get(acct, {})
+        if not day_map:
+            continue
+        email_datasets.append({
+            "type": "bar",
+            "label": acct + " sent",
+            "data": [max(0, day_map.get(label, {}).get("sent_count", 0) - day_map.get(label, {}).get("count", 0)) for label in labels],
+            "backgroundColor": EMAIL_BAR_COLORS_DARK.get(acct, "#aaaaaaaa"),
+            "borderWidth": 0,
+            "yAxisID": "y2",
+            "stack": "outbound",
+        })
+    for acct, day_map in sorted(email_by_account.items()):
+        if acct not in EMAIL_BAR_ORDER:
+            email_datasets.append({
+                "type": "bar",
+                "label": acct + " sent",
+                "data": [max(0, day_map.get(label, {}).get("sent_count", 0) - day_map.get(label, {}).get("count", 0)) for label in labels],
+                "backgroundColor": EMAIL_BAR_COLORS_DARK.get(acct, "#aaaaaaaa"),
+                "borderWidth": 0,
+                "yAxisID": "y2",
+                "stack": "outbound",
+            })
+    return email_datasets
 
 
 def _ga4_credentials():
@@ -1515,209 +1786,12 @@ def _build_api_data():
         })
 
     # Email response time datasets — one line per account (response time) +
-    # one bar per account (email count, secondary y-axis)
-    email_daily = email_raw.get("daily", [])
+    # one bar per account (email count, secondary y-axis). Merge logic lives
+    # in _build_email_by_account (shared with the weekly/monthly granular
+    # builder via _bucket_email_by_account) so it's written exactly once.
     email_summary = email_raw.get("summary", {})
-    # Build {account: {date: {avg_hours, count, sent_count}}}
-    email_by_account = defaultdict(dict)
-    for entry in email_daily:
-        acct = entry.get("account", "unknown")
-        d = entry.get("date", "")
-        if d:
-            count = entry.get("count", 0)
-            email_by_account[acct][d] = {
-                "avg_hours": entry.get("avg_hours"),
-                "avg_hours_daytime": entry.get("avg_hours_daytime"),
-                "count": count,
-                "count_daytime": entry.get("count_daytime", count),
-                "sent_count": entry.get("sent_count", count),
-            }
-    # Add iMessage daily stats from response DB
-    import sqlite3 as _sq3
-    _imsg_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
-    if _imsg_db.exists():
-        try:
-            _conn = _sq3.connect(f"file:{_imsg_db}?mode=ro", uri=True)
-            _rows = _conn.execute(
-                "SELECT day, median_response_hours, response_count, sent_count, "
-                "median_response_hours_daytime, response_count_daytime "
-                "FROM daily_stats"
-            ).fetchall()
-            _conn.close()
-            for day, median_h, resp_count, sent, median_h_dt, resp_count_dt in _rows:
-                if day in set(dates):
-                    email_by_account["imessage"][day] = {
-                        "avg_hours": median_h,
-                        "avg_hours_daytime": median_h_dt,
-                        "count": resp_count or 0,
-                        "count_daytime": resp_count_dt or 0,
-                        "sent_count": sent,
-                    }
-        except Exception:
-            pass
-
-    # Overlay archive_log.db (unified source of truth, shared with /inbound idle screen).
-    # For each day in the chart window, replace per-type counts with archive_log data
-    # so the dashboard matches what /inbound shows.
-    _archive_db = Path.home() / ".config" / "ibx" / "archive_log.db"
-    if _archive_db.exists():
-        try:
-            _aconn = _sq3.connect(f"file:{_archive_db}?mode=ro", uri=True)
-            _TYPE_TO_ACCT = {
-                "email": "m5x2 gmail",
-                "outlook": "outlook",
-                "teams": "teams",
-                "slack": "slack",
-                "imsg": "imessage",
-            }
-            for d in dates:
-                day_start = datetime.strptime(d, "%Y-%m-%d").timestamp()
-                day_end = day_start + 86400
-                rows = _aconn.execute(
-                    "SELECT message_type, COUNT(DISTINCT item_uid), AVG(response_min) "
-                    "FROM archive_log WHERE timestamp >= ? AND timestamp < ? "
-                    "AND action = 'reply' AND response_min IS NOT NULL "
-                    "GROUP BY message_type",
-                    (day_start, day_end),
-                ).fetchall()
-                for msg_type, count, avg_min in rows:
-                    acct = _TYPE_TO_ACCT.get(msg_type)
-                    if not acct or count == 0:
-                        continue
-                    avg_h = avg_min / 60.0 if avg_min else None
-                    existing = email_by_account[acct].get(d, {})
-                    # Only override if archive_log has MORE replies (it's more complete)
-                    if count >= existing.get("count", 0):
-                        email_by_account[acct][d] = {
-                            "avg_hours": avg_h,
-                            "avg_hours_daytime": avg_h,
-                            "count": count,
-                            "count_daytime": count,
-                            "sent_count": count,
-                        }
-            _aconn.close()
-        except Exception:
-            pass
-
-    # Blended average response time (purple line) + per-account count bars
-    EMAIL_BAR_COLORS = {
-        "m5x2 gmail": "#d5003266", "m5x2": "#d5003266",
-        "s897 gmail": "#1b5e2066", "personal": "#1b5e2066", "gmail": "#1b5e2066",
-        "imessage": "#34c75966",
-        "slack": "#9b002366",
-        "outlook": "#00b8d466",
-        "teams": "#1249b466",
-    }
-    # Compute blended daily avg response time (minutes), weighted by reply pair count
-    blended_response = []
-    blended_daytime = []
-    for d in dates:
-        total_hours = 0
-        total_count = 0
-        total_hours_dt = 0
-        total_count_dt = 0
-        for acct, day_map in email_by_account.items():
-            entry = day_map.get(d, {})
-            h = entry.get("avg_hours")
-            c = entry.get("count", 0)
-            h_dt = entry.get("avg_hours_daytime")
-            c_dt = entry.get("count_daytime", 0)
-            if h is not None and c > 0:
-                total_hours += h * c
-                total_count += c
-            if h_dt is not None and c_dt > 0:
-                total_hours_dt += h_dt * c_dt
-                total_count_dt += c_dt
-        blended_response.append(round(total_hours / total_count * 60, 1) if total_count > 0 else None)
-        blended_daytime.append(round(total_hours_dt / total_count_dt * 60, 1) if total_count_dt > 0 else None)
-
-    email_datasets = []
-    # Purple blended line — overall (no exclusions)
-    email_datasets.append({
-        "type": "line",
-        "label": "avg response",
-        "data": blended_response,
-        "borderColor": "#aa00ff",
-        "backgroundColor": "transparent",
-        "borderWidth": 2,
-        "pointRadius": 3,
-        "tension": 0,
-        "spanGaps": True,
-        "yAxisID": "y",
-    })
-    # Pink line — daytime only (excludes inbound 9pm–6am)
-    email_datasets.append({
-        "type": "line",
-        "label": "avg response - daytime",
-        "data": blended_daytime,
-        "borderColor": "#ff4081",
-        "backgroundColor": "transparent",
-        "borderWidth": 2,
-        "pointRadius": 3,
-        "tension": 0,
-        "spanGaps": True,
-        "yAxisID": "y",
-    })
-    # Per-account inbound/reply count bars (stacked) — ordered so m5x2+slack are adjacent
-    EMAIL_BAR_ORDER = ["outlook", "teams", "m5x2 gmail", "slack", "imessage", "s897 gmail"]
-    for acct in EMAIL_BAR_ORDER:
-        day_map = email_by_account.get(acct, {})
-        if not day_map:
-            continue
-        email_datasets.append({
-            "type": "bar",
-            "label": acct,
-            "data": [day_map.get(d, {}).get("count", 0) for d in dates],
-            "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
-            "borderWidth": 0,
-            "yAxisID": "y2",
-            "stack": "inbound",
-        })
-    # Any accounts not in the explicit order
-    for acct, day_map in sorted(email_by_account.items()):
-        if acct not in EMAIL_BAR_ORDER:
-            email_datasets.append({
-                "type": "bar",
-                "label": acct,
-                "data": [day_map.get(d, {}).get("count", 0) for d in dates],
-                "backgroundColor": EMAIL_BAR_COLORS.get(acct, "#aaaaaa44"),
-                "borderWidth": 0,
-                "yAxisID": "y2",
-                "stack": "inbound",
-            })
-    # Outbound/sent bars per channel (stacked, darker versions of inbound colors)
-    EMAIL_BAR_COLORS_DARK = {
-        "m5x2 gmail": "#d50032aa", "m5x2": "#d50032aa",
-        "s897 gmail": "#1b5e20aa", "personal": "#1b5e20aa", "gmail": "#1b5e20aa",
-        "imessage": "#34c759aa",
-        "slack": "#9b0023aa",
-        "outlook": "#00b8d4aa",
-        "teams": "#1249b4aa",
-    }
-    for acct in EMAIL_BAR_ORDER:
-        day_map = email_by_account.get(acct, {})
-        if not day_map:
-            continue
-        email_datasets.append({
-            "type": "bar",
-            "label": acct + " sent",
-            "data": [max(0, day_map.get(d, {}).get("sent_count", 0) - day_map.get(d, {}).get("count", 0)) for d in dates],
-            "backgroundColor": EMAIL_BAR_COLORS_DARK.get(acct, "#aaaaaaaa"),
-            "borderWidth": 0,
-            "yAxisID": "y2",
-            "stack": "outbound",
-        })
-    for acct, day_map in sorted(email_by_account.items()):
-        if acct not in EMAIL_BAR_ORDER:
-            email_datasets.append({
-                "type": "bar",
-                "label": acct + " sent",
-                "data": [max(0, day_map.get(d, {}).get("sent_count", 0) - day_map.get(d, {}).get("count", 0)) for d in dates],
-                "backgroundColor": EMAIL_BAR_COLORS_DARK.get(acct, "#aaaaaaaa"),
-                "borderWidth": 0,
-                "yAxisID": "y2",
-                "stack": "outbound",
-            })
+    email_by_account = _build_email_by_account(email_raw, dates)
+    email_datasets = _build_email_datasets(email_by_account, dates)
 
     # Summary stats
     total_points = {label: sum(points_raw.get(d, {}).get(label, 0) for d in dates)
@@ -1867,7 +1941,7 @@ HTML = """<!DOCTYPE html>
     <div id="cacheBars" class="cache-bars"></div>
   </div>
   <div class="card">
-    <h2>Project Blocking — Comms Response Time</h2>
+    <h2>Project Bocking — Comms Response Time</h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
     <div class="summary" id="emailSummary"></div>
   </div>
@@ -1907,7 +1981,7 @@ setInterval(pollPointsToday, 30000);
 // Daily granularity reuses the /api/data payload already on the page (cached
 // in dailyPayload); weekly/monthly fetch /api/chart-granular on demand.
 let dailyPayload = null;
-let _tasksChart = null, _entriesChart = null, _timeChart = null, _pointsChart = null;
+let _tasksChart = null, _entriesChart = null, _timeChart = null, _pointsChart = null, _emailChart = null;
 const GRANULARITY_NOUN = { daily: 'Day', weekly: 'Week', monthly: 'Month', block: 'Block' };
 
 function renderFourCharts(data, granularity) {
@@ -2030,16 +2104,18 @@ const _granularCache = {};
 document.getElementById('granularitySelect').addEventListener('change', (e) => {
   const g = e.target.value;
   if (g === 'daily') {
-    if (dailyPayload) renderFourCharts(dailyPayload, 'daily');
+    if (dailyPayload) { renderFourCharts(dailyPayload, 'daily'); renderEmailChart(dailyPayload); }
     return;
   }
   if (_granularCache[g]) {
     renderFourCharts(_granularCache[g], g);
+    renderEmailChart(_granularCache[g]);
     return;
   }
   fetch(`/api/chart-granular?granularity=${g}`).then(r => r.json()).then(d => {
     _granularCache[g] = d;
     renderFourCharts(d, g);
+    renderEmailChart(d);
   });
 });
 
@@ -2074,11 +2150,30 @@ fetch('/api/data').then(r => r.json()).then(data => {
   });
 
   renderFourCharts(data, 'daily');
+  renderEmailChart(data);
+});
 
-  // Email chart: blended response time line (purple) + per-account count bars (stacked)
-  new Chart(document.getElementById('emailChart'), {
+// Email chart (Project Bocking): blended response-time line (purple) +
+// per-account count bars (stacked). data.email is absent at block
+// granularity (the underlying sources are daily-aggregate only, so there's
+// no real per-2h-block signal to show) — render a "not available" note
+// instead of a misleading empty chart.
+function renderEmailChart(data) {
+  const canvas = document.getElementById('emailChart');
+  const emEl = document.getElementById('emailSummary');
+  if (_emailChart) { _emailChart.destroy(); _emailChart = null; }
+  emEl.innerHTML = '';
+
+  if (!data.email) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    emEl.innerHTML = '<div class="badge">not tracked at block granularity</div>';
+    return;
+  }
+
+  _emailChart = new Chart(canvas, {
     type: 'bar',
-    data: { labels, datasets: data.email.datasets },
+    data: { labels: data.dates, datasets: data.email.datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
@@ -2094,7 +2189,6 @@ fetch('/api/data').then(r => r.json()).then(data => {
   });
 
   // Email legend (same style as Points/Day)
-  const emEl = document.getElementById('emailSummary');
   const emLegend = [
     ['avg response', '#aa00ff', 'line'],
     ['avg response - daytime', '#ff4081', 'line'],
@@ -2114,7 +2208,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     b.innerHTML = `${shape}${label}`;
     emEl.appendChild(b);
   });
-});
+}
 </script>
 
 <div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--h2);">
