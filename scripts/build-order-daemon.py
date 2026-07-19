@@ -575,22 +575,39 @@ def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False)
         return "ERROR"
 
 
+def _prev_block_window(hour: int, target_date: dt.date) -> tuple[int, int, dt.date]:
+    """The (start_hour, end_hour, date) of the block immediately before the one
+    that just ended at `hour`, for -1t/-1l's retrospective "was it recorded"
+    check.
+
+    For every block except 卯, the previous block is a clean 2h window earlier
+    the SAME day (hour-4, hour-2 lands exactly on the prior 地支 block's own
+    hours). 卯 (fires at 06) is the exception: hour-4/hour-2 = [02,04], which
+    falls inside the unscored overnight sleep gap (22:00-04:00) — a single
+    sleep Toggl entry always trivially covers it, so ⏱️/✅ for 卯 never
+    actually signaled anything (observed live 2026-07-19: ⏱️ credited for 卯
+    while asleep and having done nothing). 卯's true previous block is 亥
+    (20:00-22:00) of the PREVIOUS calendar day."""
+    if hour == 6:  # 卯 fires at 06 — its real previous block is 亥, prior day
+        return 20, 22, target_date - dt.timedelta(days=1)
+    return hour - 4, hour - 2, target_date
+
+
 def _live_for_block(block_name: str, hour: int, target_date: dt.date):
     """Read-only re-validation of a block's daemon-checkable markers (🎯/⏱️/✅),
     with NO marker writes. Used to re-score already-fired blocks during a
     reconcile. Returns None on any validation error so the block falls back to
     trusting its header markers (legacy behavior) rather than losing points."""
     # ⏱️/✅ measure the PREVIOUS block: block X's -1t/-1l reward having RECORDED
-    # block X-1 (its Toggl time categorized, its completed tasks pointed). The
-    # just-ended block started 2h before the fire, so the previous block is
-    # [fire-4, fire-2]. 🎯 stays current-block (goals are set for X itself).
-    # (2026-07-12 redesign — was the block's OWN window.)
-    prev_start, prev_end = hour - 4, hour - 2
+    # block X-1 (its Toggl time categorized, its completed tasks pointed). 🎯
+    # stays current-block (goals are set for X itself). See _prev_block_window
+    # for the 卯/sleep-gap wraparound exception.
+    prev_start, prev_end, prev_date = _prev_block_window(hour, target_date)
     try:
         return {
             GOAL_MARKER: _block_has_goals(block_name),
-            TOGGL_MARKER: _toggl_covers_block(target_date, prev_start, prev_end),
-            TODOIST_MARKER: _todoist_l_satisfied(target_date, prev_start, prev_end),
+            TOGGL_MARKER: _toggl_covers_block(prev_date, prev_start, prev_end),
+            TODOIST_MARKER: _todoist_l_satisfied(prev_date, prev_start, prev_end),
         }
     except Exception as e:  # noqa: BLE001 — never drop points on a transient API error
         log(f"_live_for_block {block_name}: validation error {e}; trusting header")
@@ -963,19 +980,17 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
         log(f"score: {block_name} no goals found")
 
     # -1t/-1l measure the PREVIOUS block: block X's ⏱️/✅ reward having RECORDED
-    # block X-1 (e.g. 戌's ⏱️ ⇔ 酉 fully recorded). The just-ended block started
-    # 2h before the fire, so the previous block window is [fire-4, fire-2].
-    # (2026-07-12 redesign — was the block's OWN window.)
-    prev_start = hour - 4
-    prev_end = hour - 2
-    live[TOGGL_MARKER] = _toggl_covers_block(target_date, prev_start, prev_end)
+    # block X-1 (e.g. 戌's ⏱️ ⇔ 酉 fully recorded). See _prev_block_window for
+    # the 卯/sleep-gap wraparound exception (its previous block is 亥, prior day).
+    prev_start, prev_end, prev_date = _prev_block_window(hour, target_date)
+    live[TOGGL_MARKER] = _toggl_covers_block(prev_date, prev_start, prev_end)
     if live[TOGGL_MARKER]:
         _write_block_marker(block_name, TOGGL_MARKER, dry_run=dry_run)
     else:
         log(f"score: {block_name} prev-block toggl coverage below threshold")
 
     # -1l: todoist completions during the PREVIOUS block
-    live[TODOIST_MARKER] = _todoist_l_satisfied(target_date, prev_start, prev_end)
+    live[TODOIST_MARKER] = _todoist_l_satisfied(prev_date, prev_start, prev_end)
     if live[TODOIST_MARKER]:
         _write_block_marker(block_name, TODOIST_MARKER, dry_run=dry_run)
     else:

@@ -373,12 +373,41 @@ def test_auto_rituals_measure_previous_block_window():
     src = DAEMON.read_text(encoding="utf-8")
     for fn in ("evaluate_and_mark_block", "_live_for_block"):
         body = _func_body(src, fn)
-        assert "hour - 4" in body, (
-            f"{fn} must validate -1t/-1l against the previous block [hour-4, hour-2]")
-        assert "_toggl_covers_block(target_date, prev" in body, (
-            f"{fn} must pass the previous-block window to _toggl_covers_block")
-        assert "_todoist_l_satisfied(target_date, prev" in body, (
-            f"{fn} must pass the previous-block window to _todoist_l_satisfied")
+        assert "_prev_block_window(hour, target_date)" in body, (
+            f"{fn} must derive the previous-block window via _prev_block_window "
+            f"(centralizes the 卯/sleep-gap wraparound exception)")
+        assert "_toggl_covers_block(prev_date, prev" in body, (
+            f"{fn} must pass the previous-block's own date to _toggl_covers_block")
+        assert "_todoist_l_satisfied(prev_date, prev" in body, (
+            f"{fn} must pass the previous-block's own date to _todoist_l_satisfied")
+
+
+def test_prev_block_window_is_the_prior_days_hai_for_mao():
+    # Regression (2026-07-19): 卯 fires at 06, and the generic hour-4/hour-2
+    # arithmetic landed on [02,04] — inside the unscored overnight sleep gap
+    # (22:00-04:00), always trivially "covered" by one sleep Toggl entry, so
+    # ⏱️/✅ for 卯 never signaled anything real (credited while asleep, having
+    # done nothing). 卯's real previous block is 亥 (20:00-22:00) of the PRIOR
+    # calendar day.
+    mod = _load_daemon()
+    today = dt.date(2026, 7, 19)
+    start, end, date = mod._prev_block_window(6, today)
+    assert (start, end, date) == (20, 22, dt.date(2026, 7, 18)), (
+        "卯's previous-block window must be 亥 (20-22) of the PRIOR day, "
+        f"got start={start} end={end} date={date}"
+    )
+
+
+def test_prev_block_window_is_unchanged_for_every_other_block():
+    # Every other fire hour must keep the plain same-day [hour-4, hour-2]
+    # window — only 卯 (hour=6) is the wraparound special case.
+    mod = _load_daemon()
+    today = dt.date(2026, 7, 19)
+    for fh in (8, 10, 12, 14, 16, 18, 20, 22):
+        start, end, date = mod._prev_block_window(fh, today)
+        assert (start, end, date) == (fh - 4, fh - 2, today), (
+            f"fire hour {fh} must use the plain same-day window"
+        )
 
 
 def test_goal_marker_stays_current_block():
