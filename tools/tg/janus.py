@@ -2723,9 +2723,11 @@ def render_input_rule():
 
 
 def render_input_prompt():
-    # Permanent "> " prompt; the input is always focused, so it reads as a
-    # live command box (type a tg shortcode / "stop" and press Enter).
-    return [("class:prompt", " > ")]
+    # Permanent "❯ " prompt (Claude Code's own glyph — the explicit source of
+    # truth for this box's look, 2026-07-19; dtd's plain "> " was only ever
+    # an approximation). The input is always focused, so it reads as a live
+    # command box (type a tg shortcode / "stop" and press Enter).
+    return [("class:prompt", " ❯ ")]
 
 
 rule_window = Window(content=FormattedTextControl(render_input_rule), height=1, wrap_lines=False)
