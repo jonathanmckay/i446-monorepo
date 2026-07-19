@@ -2432,6 +2432,14 @@ def _(event):
 
         async def _apply_edit_and_refresh():
             try:
+                if time_range:
+                    # MECE: a retimed entry must not leave a stale overlap
+                    # behind on some OTHER entry (user request 2026-07-19 —
+                    # "shorten it to make room, or delete the old one if
+                    # full overlap"). Exclude the entry(ies) being edited
+                    # themselves — their own current position shouldn't
+                    # trim itself out from under its own edit.
+                    await asyncio.to_thread(toggl_api.trim_range, start_dt, end_dt, set(ids))
                 for eid in ids:
                     await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
                 flash("updated", 4.0)

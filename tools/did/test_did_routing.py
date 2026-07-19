@@ -772,6 +772,96 @@ class HciLabelMapping(unittest.TestCase):
         self.assertEqual(r.fen_points, 26)
 
 
+class PastDatePreferredIdTests(unittest.TestCase):
+    """Regression (2026-07-19): "I've marked the ibx i9 tasks done twice but
+    they are still here."
+
+    A 0₦ habit match whose parsed target_date isn't today (e.g. dtd resolves
+    a stray "ibx i9 7/8 (10) [0]" Todoist task, and parse_input strips the
+    trailing "7/8" into target_date, leaving name="ibx i9" which matches the
+    0₦ header) used to ALWAYS route to needs_agent ("past date requires
+    posthoc flow") — no exceptions. That's fine for a live chat session (a
+    Claude agent catches agent_needed and runs the Step 6b posthoc flow by
+    hand), but dtd's background worker calls did-fast.py --task-id directly
+    with no agent watching: it just prints "?" and drops the item forever.
+    The user could complete the same stray task a hundred times and it would
+    never close, because the CLI path had no way to act on agent_needed.
+
+    Fix: when dtd passes a specific preferred_id, resolve that exact task and
+    close it directly (step="variable", fen_col=None so no Neon write) instead
+    of bailing to needs_agent. Only the preferred_id case changes; a bare
+    chat-session call (no preferred_id) must still get needs_agent so the
+    existing agent-fallback flow is untouched.
+    """
+
+    def setUp(self):
+        self.headers = {"0n": {"ibx i9": 23}, "1n": {}}
+        self.tq = {"0neon": [], "夜neon": [], "1neon": []}
+
+    def test_past_date_with_resolvable_preferred_id_closes_directly(self):
+        fake_task = {
+            "id": "STRAY1", "content": "ibx i9 7/8 (10) [0]",
+            "labels": ["i9"], "due": "2026-07-15",
+            "due_string": "2026-07-08", "recurring": False,
+        }
+        orig = _df_module._fetch_task_by_id
+        _df_module._fetch_task_by_id = lambda tid: fake_task if tid == "STRAY1" else None
+        try:
+            item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
+            results = _df_module.route_items(
+                [item], self.headers, self.tq, preferred_id="STRAY1")
+        finally:
+            _df_module._fetch_task_by_id = orig
+
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertNotEqual(r.step, "needs_agent",
+            "a resolvable preferred_id must not fall through to needs_agent — "
+            "dtd's worker has no agent to catch it and the task lingers forever")
+        self.assertIsNotNone(r.todoist_task)
+        self.assertEqual(r.todoist_task["id"], "STRAY1")
+        self.assertIsNone(r.fen_col, "past-date completion must not write Neon points")
+
+    def test_past_date_without_preferred_id_still_needs_agent(self):
+        # Unchanged behavior: a plain chat-session /did call with no task_id
+        # must still defer to the agent fallback.
+        item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
+        results = _df_module.route_items([item], self.headers, self.tq, preferred_id=None)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "needs_agent")
+
+    def test_past_date_with_unresolvable_preferred_id_falls_back_to_agent(self):
+        # preferred_id given but the fetch fails (task gone/network error) —
+        # must fail safe to needs_agent, not crash or silently no-op.
+        orig = _df_module._fetch_task_by_id
+        _df_module._fetch_task_by_id = lambda tid: None
+        try:
+            item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
+            results = _df_module.route_items(
+                [item], self.headers, self.tq, preferred_id="GHOST")
+        finally:
+            _df_module._fetch_task_by_id = orig
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "needs_agent")
+
+
+class VariableStepPosthocSkipsExistingTaskTests(unittest.TestCase):
+    """Step 6c must not fabricate a duplicate posthoc record for a "variable"
+    RouteResult that already carries a real todoist_task (the preferred_id
+    fast-close path above) — that item means "close this exact existing
+    task", not "log a brand-new posthoc for an activity with no task"."""
+
+    def test_variable_items_filter_excludes_todoist_task_set(self):
+        src = (Path(__file__).parent / "did-fast.py").read_text()
+        i = src.index("# 6c. Create posthoc Todoist tasks for variable items")
+        j = src.index("if variable_items:", i)
+        block = src[i:j]
+        self.assertIn('r.step == "variable" and r.todoist_task is None', block,
+            "the 6c variable_items filter must exclude items that already "
+            "carry a real todoist_task, or a resolved preferred_id closure "
+            "gets a spurious duplicate posthoc record on top of it")
+
+
 class BuildOrderCheckboxTests(unittest.TestCase):
     """Step 5e: completing a -1g goal should flip its build order checkbox."""
 
@@ -856,6 +946,8 @@ def main() -> int:
         ExactMatchTiebreakTests,
         HciLabelMapping,
         DeferFlagParsingTests,
+        PastDatePreferredIdTests,
+        VariableStepPosthocSkipsExistingTaskTests,
         BuildOrderCheckboxTests,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))

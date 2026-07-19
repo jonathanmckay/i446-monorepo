@@ -383,6 +383,84 @@ def test_day_back_clears_armed_edit_and_resets_input():
     assert mod.input_buffer.text == ""
 
 
+# ─── MECE: a retimed entry must trim/split whatever it now overlaps ────────
+# (user request 2026-07-19: "if I make an edit to time entries, I want to
+# make sure the time entries for that period are MECE... shorten [an
+# overlapping entry] to make room, or delete the old one if full overlap")
+
+class _CapturingApp:
+    """Unlike _FakeApp, actually RUNS the background coroutine (via
+    asyncio.run) instead of discarding it — needed to verify what happens
+    INSIDE _apply_edit_and_refresh, not just the synchronous setup before it."""
+
+    def create_background_task(self, coro):
+        import asyncio
+        asyncio.run(coro)
+
+    def invalidate(self):
+        pass
+
+
+class _CapturingEvent:
+    def __init__(self):
+        self.app = _CapturingApp()
+
+
+def test_apply_edit_with_time_range_trims_before_updating(monkeypatch):
+    mod = _load_tui()
+    today = _midnight()
+    calls = []
+
+    class _FakeToggl:
+        def trim_range(self, start_dt, end_dt, exclude_ids=None):
+            calls.append(("trim", start_dt, end_dt, exclude_ids))
+            return ["Trimmed: something"]
+
+        def update_entry(self, entry_id, **fields):
+            calls.append(("update", entry_id, fields))
+
+    monkeypatch.setattr(mod, "toggl_api", _FakeToggl())
+    monkeypatch.setattr(mod, "fetch_current", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "fetch_today", lambda *a, **k: None)
+
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
+    mod.input_buffer.text = "0930-1000"
+    _binding(mod, "enter").handler(_CapturingEvent())
+
+    assert calls[0][0] == "trim"
+    _, start_dt, end_dt, exclude_ids = calls[0]
+    assert start_dt == today.replace(hour=9, minute=30)
+    assert end_dt == today.replace(hour=10)
+    assert exclude_ids == {7}, "the entry being retimed must not trim itself"
+    assert calls[1] == ("update", 7, {"start": start_dt.isoformat(), "stop": end_dt.isoformat(),
+                                       "duration": 1800})
+
+
+def test_apply_edit_without_time_range_never_calls_trim(monkeypatch):
+    mod = _load_tui()
+    today = _midnight()
+    calls = []
+
+    class _FakeToggl:
+        def trim_range(self, *a, **k):
+            calls.append("trim")
+            return []
+
+        def update_entry(self, entry_id, **fields):
+            calls.append(("update", entry_id, fields))
+
+    monkeypatch.setattr(mod, "toggl_api", _FakeToggl())
+    monkeypatch.setattr(mod, "fetch_current", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "fetch_today", lambda *a, **k: None)
+
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
+    mod.input_buffer.text = "just a rename @i9"
+    _binding(mod, "enter").handler(_CapturingEvent())
+
+    assert "trim" not in calls, "a plain desc/project edit must not touch other entries at all"
+    assert calls == [("update", 7, {"description": "just a rename", "project_id": mod.PROJECT_MAP["i9"]})]
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

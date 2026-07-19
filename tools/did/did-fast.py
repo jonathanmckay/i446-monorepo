@@ -754,14 +754,33 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         if name_norm in h0n_norm:
             today_md = item.target_date or f"{date.today().month}/{date.today().day}"
             today_date = date.today()
-            # Past date → needs agent (posthoc flow)
+            # Past date → needs agent (posthoc flow), UNLESS dtd passed a
+            # specific task_id (preferred_id): that means the user is
+            # completing an EXACT, already-open Todoist task they're looking
+            # at (e.g. a manually-created "<habit> M/D" catch-up placeholder
+            # whose bare name happens to collide with a 0₦ header once the
+            # date suffix is parsed off) — not asking to abstractly log the
+            # habit for some date. dtd's worker calls this CLI directly with
+            # no live agent to catch needs_agent, so that path just sat there
+            # forever no matter how many times it was "completed" (bug
+            # 2026-07-19: "ibx i9 tasks marked done twice, still here" — 5
+            # stray one-off catch-up tasks that could never close). Resolve
+            # and close that specific task instead; no Neon write (same as
+            # the agent's Step 6b) since it's not today's occurrence.
             target_parts = today_md.split("/")
             if len(target_parts) == 2:
                 t_month, t_day = int(target_parts[0]), int(target_parts[1])
                 if (t_month, t_day) != (today_date.month, today_date.day):
-                    r = RouteResult(item=item, step="needs_agent",
-                                    error="past date requires posthoc flow")
-                    results.append(r)
+                    fetched = _fetch_task_by_id(preferred_id) if preferred_id else None
+                    if fetched:
+                        r = RouteResult(item=item, step="variable",
+                                        fen_col=None, fen_points=0)
+                        r.todoist_task = fetched
+                        results.append(r)
+                    else:
+                        r = RouteResult(item=item, step="needs_agent",
+                                        error="past date requires posthoc flow")
+                        results.append(r)
                     continue
 
             col = h0n_norm[name_norm]
@@ -1364,6 +1383,27 @@ def _classify_error(e: Exception) -> tuple[str, bool]:
     return repr(e), False
 
 
+def _fetch_task_by_id(task_id: str) -> Optional[dict]:
+    """Fetch a single task by id, shaped like the other task dicts in this
+    file (id/content/labels/due/due_string/recurring). None on any failure."""
+    try:
+        status, body = _todoist_request(f"{TODOIST_BASE}/tasks/{task_id}")
+        if status != 200:
+            return None
+        t = json.loads(body)
+        due = t.get("due") or {}
+        return {
+            "id": t.get("id", ""),
+            "content": t.get("content", ""),
+            "labels": t.get("labels", []),
+            "due": due.get("date", ""),
+            "due_string": due.get("string", "") or "",
+            "recurring": bool(due.get("is_recurring")),
+        }
+    except Exception:
+        return None
+
+
 def _verify_closed(task_id: str) -> tuple[bool, str | None]:
     """Read back the task; return (closed_ok, error). 404 = closed (archived).
 
@@ -1778,6 +1818,14 @@ def main():
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a refresh
             result["cache_refresh_error"] = str(e)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        # Regression (2026-07-19): p_credit_error (e.g. ix unreachable over ssh)
+        # was recorded in the result dict but this handler always exited 0, and
+        # every skill invoking --ritual redirects with `>/dev/null 2>&1` — so a
+        # totally failed point-credit was silently reported to the user as a
+        # successful ritual completion. Exit nonzero so a caller checking $?
+        # (or a human re-running with output visible) can tell.
+        if result.get("p_credit_error"):
+            sys.exit(1)
         return
 
     argv = sys.argv[1:]
@@ -2201,8 +2249,13 @@ end tell'''
 
     # 6c. Create posthoc Todoist tasks for variable items (parallel)
     # Skipped under --points-only: the caller (split) makes its own posthoc.
+    # Also skipped for a "variable" item that already carries a real
+    # todoist_task (the past-date-with-preferred_id fast path above): that
+    # item references an EXISTING task being closed directly, not a fresh
+    # activity that needs a brand-new posthoc record fabricated for it.
     posthoc_results = {}
-    variable_items = [] if points_only else [r for r in fast if r.step == "variable"]
+    variable_items = [] if points_only else [
+        r for r in fast if r.step == "variable" and r.todoist_task is None]
     if variable_items:
         today_iso = date.today().isoformat()
         target_md = variable_items[0].item.target_date or f"{date.today().month}/{date.today().day}"
