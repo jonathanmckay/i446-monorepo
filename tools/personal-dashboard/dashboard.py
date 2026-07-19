@@ -606,8 +606,10 @@ GRANULAR_MONTHS = 12  # 1 year of calendar months
 def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
     """Points/Time/Tasks/Entries chart data bucketed into trailing 2-hour 地支
     blocks (last n_days days x 9 blocks/day, skipping the 22:00-04:00 sleep
-    window). Bars are labeled with just the branch character (卯..亥) — the
-    label repeats once per day across the window, per design.
+    window). Each bar's label is a [branch, "M/D"] pair — Chart.js renders a
+    2-element label array as two tick lines, so every bar shows both its
+    block (卯..亥) and the date it belongs to, making day boundaries in the
+    trailing window legible without a separate grouped-axis renderer.
 
     Unlike the weekly/monthly buckets in _build_granular_chart_data, Points
     here is a single "分" series (the sheet's G:O columns are per-block
@@ -615,7 +617,8 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
     """
     today = date.today()
     day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
-    bucket_labels = [branch for _ in day_list for branch, _, _ in BRANCH_BLOCKS]
+    bucket_labels = [[branch, d.strftime("%-m/%-d")]
+                     for d in day_list for branch, _, _ in BRANCH_BLOCKS]
     n_buckets = len(bucket_labels)
     day_pos = {d: i for i, d in enumerate(day_list)}
     branch_pos = {branch: i for i, (branch, _, _) in enumerate(BRANCH_BLOCKS)}
@@ -646,7 +649,15 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
 
     # Time (minutes) + entry counts — bucketed from raw Toggl entries via
     # their real start timestamps (unlike weekly/monthly, no daily-cache
-    # overlay needed: n_days is small enough for a single live fetch)
+    # overlay needed: n_days is small enough for a single live fetch).
+    #
+    # Minutes are CLIPPED to each block's own 120-min window: an entry that
+    # runs past its start block's boundary (or spans several blocks) used to
+    # dump its FULL duration into the block containing its start, so a single
+    # block's Time bar could exceed the 120 real minutes physically available
+    # in a 2h block. Each entry's overlap with every block is computed via
+    # simple interval intersection and only the overlapping minutes land in
+    # that block, so per-block Time now naturally caps at 120.
     entries = _fetch_toggl_entries(n_days)
     time_bucketed = defaultdict(lambda: [0] * n_buckets)
     entries_bucketed = defaultdict(lambda: [0] * n_buckets)
@@ -661,16 +672,30 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
             start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
         except (ValueError, TypeError):
             continue
-        bi = _block_index_for_hour(start_dt.hour)
-        if bi is None:
-            continue
-        idx = bucket_index(start_dt.date(), BRANCH_BLOCKS[bi][0])
-        if idx is None:
-            continue
+        end_dt = start_dt + timedelta(seconds=dur)
         proj_id = e.get("project_id")
         code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
-        time_bucketed[code][idx] += dur // 60
-        entries_bucketed[code][idx] += 1
+
+        # Entry count stays attributed to the block the entry STARTED in
+        # (unchanged) — only the minutes get split/clipped across blocks.
+        start_bi = _block_index_for_hour(start_dt.hour)
+        if start_bi is not None:
+            start_idx = bucket_index(start_dt.date(), BRANCH_BLOCKS[start_bi][0])
+            if start_idx is not None:
+                entries_bucketed[code][start_idx] += 1
+
+        for d in day_list:
+            for branch, block_start_hour, _ in BRANCH_BLOCKS:
+                idx = bucket_index(d, branch)
+                if idx is None:
+                    continue
+                block_start_dt = datetime(d.year, d.month, d.day, block_start_hour, 0, tzinfo=LOCAL_TZ)
+                block_end_dt = block_start_dt + timedelta(hours=2)
+                overlap_start = max(start_dt, block_start_dt)
+                overlap_end = min(end_dt, block_end_dt)
+                overlap_min = (overlap_end - overlap_start).total_seconds() / 60
+                if overlap_min > 0:
+                    time_bucketed[code][idx] += round(overlap_min)
 
     TIME_PRIORITY = ["i9", "xk87", "m5x2"]
     def time_sort(code):
@@ -2014,11 +2039,17 @@ function renderFourCharts(data, granularity) {
   });
 
   if (_timeChart) _timeChart.destroy();
+  const isBlock = granularity === 'block';
   _timeChart = new Chart(document.getElementById('timeChart'), {
     type: 'bar',
     data: { labels, datasets: data.time.datasets },
     options: isDaily
       ? { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: { ...CHART_DEFAULTS.scales.y, max: 1450 } } }
+      : isBlock
+      ? { ...CHART_DEFAULTS, scales: { ...CHART_DEFAULTS.scales, y: {
+          ...CHART_DEFAULTS.scales.y, max: 120,
+          ticks: { ...CHART_DEFAULTS.scales.y.ticks, stepSize: 30, callback: v => [0,30,60,90,120].includes(v) ? v : '' }
+        } } }
       : CHART_DEFAULTS
   });
 
