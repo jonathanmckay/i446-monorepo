@@ -240,7 +240,13 @@ project=\$(printf '%s' "\$_rr" | sed -n 2p)
 [ -z "\$project" ] && project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
 python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
-printf '%s\t%s\n' "\$clean" "\$(date +%s)" > "\$TIMER"
+# 3rd field carries the task id so the list generator can highlight the
+# EXACT started row, not every row sharing its annotation-stripped name —
+# two Todoist tasks named e.g. "AoS" (a recurring one + an unrelated one-off)
+# both matched the old name-only comparison, so starting either one flagged
+# BOTH as running (bug 2026-07-19: "I started one AoS task, and it marked
+# both as in progress").
+printf '%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" > "\$TIMER"
 echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"
@@ -569,14 +575,21 @@ try:
 except: skipped = []
 
 # Load running timer hint written by dtd's Enter/ctrl-s start path.
+# 3rd field (id) is preferred when present: two tasks can share the same
+# annotation-stripped name (e.g. a recurring 'AoS' + an unrelated one-off
+# 'AoS'), and matching by name alone flagged BOTH as running when only one
+# was started (bug 2026-07-19). Fall back to the name-only match for a timer
+# file written before this fix (2 fields, no id) until it's next overwritten.
 running_clean = ''
 running_started = 0
+running_id = ''
 try:
     timer_raw = open(timer_file).read().strip()
     if timer_raw:
         parts = timer_raw.split('\t')
         running_clean = parts[0].strip().lower()
         running_started = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        running_id = parts[2].strip() if len(parts) > 2 else ''
 except: pass
 
 # Neon color palette (label → ANSI 256-color)
@@ -771,7 +784,10 @@ for t in unique:
     # Project/time views group by color alone — no project-name prefix (the user
     # knows the domain from the color; the names just add clutter).
     dom_tag = ''
-    is_running = bool(running_clean and clean == running_clean)
+    if running_id:
+        is_running = str(t.get('id', '')) == running_id
+    else:
+        is_running = bool(running_clean and clean == running_clean)
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
         prefix = f'▶ {elapsed}m · {dom_tag}'
