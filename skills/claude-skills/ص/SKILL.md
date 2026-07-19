@@ -39,7 +39,7 @@ tell application "Microsoft Excel"
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of cell ("C" & i) of theSheet) = today then
             set todayRow to i
             exit repeat
@@ -73,7 +73,7 @@ tell application "Microsoft Excel"
     set d to ((day of (current date)) * 1) as text
     set today to m & "/" & d
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of cell ("C" & i) of theSheet) = today then
             set todayRow to i
             exit repeat

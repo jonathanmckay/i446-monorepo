@@ -146,7 +146,7 @@ tell application "Microsoft Excel"
     set theSheet to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set today to "TARGET_DATE"
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of cell ("B" & i) of theSheet) = today then
             set todayRow to i
             exit repeat
@@ -220,7 +220,7 @@ tell application "Microsoft Excel"
     set sheet0fen to sheet "0分" of wb
     set today to "TARGET_DATE"
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of range ("B" & i) of sheet0fen) = today then
             set todayRow to i
             exit repeat

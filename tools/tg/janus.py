@@ -684,7 +684,7 @@ def fetch_points():
             script = f'''tell application "Microsoft Excel"
     set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of range ("B" & i) of ws) = "{today_md}" then
             set todayRow to i
             exit repeat

@@ -103,7 +103,7 @@ def write_scorecard(year: int, month: int, values: list[str], dry: bool) -> str:
     if wbNames does not contain "{SCORECARD}" then open POSIX file "{SCORECARD_PATH}"
     set theSheet to sheet "{SHEET_2S}" of workbook "{SCORECARD}"
     set theRow to 0
-    repeat with r from 2 to 200
+    repeat with r from 2 to 500
         try
             if (value of range ("A" & r) of theSheet) = {year} and (value of range ("B" & r) of theSheet) = {month} then
                 set theRow to r
