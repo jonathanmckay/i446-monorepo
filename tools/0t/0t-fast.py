@@ -31,7 +31,17 @@ sys.modules["ix_osa"] = _ix_mod
 _IX_SPEC.loader.exec_module(_ix_mod)
 ix_run = _ix_mod.run
 
+# toggl client-side throttle — shared (fcntl-locked) state file across every
+# process that hits Toggl, so this standalone script can't burst past the others
+# and trip the free-tier limit. Loaded by path (it has no relative imports).
+_TH_PATH = Path.home() / "i446-monorepo/mcp/toggl_server/throttle.py"
+_TH_SPEC = importlib.util.spec_from_file_location("toggl_throttle", _TH_PATH)
+_throttle = importlib.util.module_from_spec(_TH_SPEC)
+sys.modules["toggl_throttle"] = _throttle
+_TH_SPEC.loader.exec_module(_throttle)
+
 # toggl — direct API calls (can't import toggl_api due to relative imports)
+import urllib.error  # noqa: E402
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 SLEEP_PROJECT_ID = 108358083
 HCMC_PROJECT_ID = 109932707
@@ -61,8 +71,14 @@ def _toggl_get(path: str) -> list | dict:
     creds = base64.b64encode(f"{TOGGL_API_KEY}:api_token".encode()).decode()
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Basic {creds}")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    _throttle.acquire()  # share the cross-process pacing + post-402 cooldown
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code in (402, 429):
+            _throttle.note_rate_limit()
+        raise
 
 # did-fast
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
@@ -309,6 +325,15 @@ def refresh_points_cache() -> str:
     import openpyxl
     COLS = {16: '-1₦', 17: '0₲', 18: 'i9', 19: 'm5', 20: '个',
             21: '媒', 22: '思', 23: 'hcb', 24: 'xk', 25: '社'}
+    # G:O — per-block 分 (地支 卯..亥), read into a "__block__" sub-dict so the
+    # dashboard's Points/Block chart has data. This cache is shared with
+    # dashboard.py's load_points_data(), whose own xlwings fallback path
+    # already writes this key — refresh_points_cache() must match that shape
+    # or its daily overwrite silently wipes block data (regression 2026-07-19:
+    # Points/Block showed empty because /0t clobbered the cache every morning
+    # with a version that never had __block__ at all).
+    BLOCK_COLS = {7: '卯', 8: '辰', 9: '巳', 10: '午', 11: '未',
+                  12: '申', 13: '酉', 14: '戌', 15: '亥'}
     today = date.today()
     cutoff = today - timedelta(days=90)
 
@@ -332,6 +357,13 @@ def refresh_points_cache() -> str:
             val = row[idx - 1]
             if val is not None and isinstance(val, (int, float)) and val > 0:
                 day_data[label] = int(round(float(val)))
+        block_data = {}
+        for idx, branch in BLOCK_COLS.items():
+            val = row[idx - 1]
+            if val is not None and isinstance(val, (int, float)) and val > 0:
+                block_data[branch] = int(round(float(val)))
+        if block_data:
+            day_data['__block__'] = block_data
         if day_data:
             result[d.isoformat()] = day_data
     wb.close()
@@ -406,6 +438,17 @@ def main():
     output["did"] = did_result
     if "error" in did_result:
         failed = True
+
+    # 5b. Refresh the dtd task cache so 0t drops off the list. mark_done() records
+    # 0t in completed-today, but dtd's auto-reload watcher only fires on a cache
+    # mtime change — without this, an open dtd keeps showing 0t until the user
+    # interacts (regression 2026-06-30). Foreground so it actually completes.
+    try:
+        subprocess.run(["python3", str(DID_FAST), "--refresh-cache"],
+                       capture_output=True, text=True, timeout=45)
+        output["dtd_cache"] = "refreshed"
+    except Exception as e:
+        output["dtd_cache"] = f"ERROR: {e}"
 
     # 6. Refresh dashboard points cache
     try:
