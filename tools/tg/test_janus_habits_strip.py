@@ -1,14 +1,22 @@
-"""Two-line strip of today's active (nonzero) Neon 0₦ habits, rendered right
-below the header (user request 2026-07-20: "use two lines to show the neon
-habits for today and render them similar to the way I do in neon itself...
-below the title but on the top of janus itself").
+"""Two-row strip of today's Neon 0₦ habits, rendered right below the header
+(user request 2026-07-20: "use two lines to show the neon habits for
+today... below the title but on the top of janus itself").
 
 render_habits_today() is pure display over STATE.habits_today (populated by
-fetch_habits_today, an Excel-over-ssh read like fetch_points) — colored by
-domain via the existing project_style()/PROJECT_COLORS machinery rather than
-reading Excel's own cell colors. Wraps left-to-right across exactly two
-lines; anything past that is dropped (the ask was explicitly two lines, not
-a scrolling list)."""
+fetch_habits_today, an Excel-over-ssh read like fetch_points, which now
+carries EVERY habit — done and not — not just nonzero ones).
+
+Two follow-ups landed the same day, both reflected here:
+1. No name label on done habits — "takes up too much space... make the
+   color the background color... usually the text will be white" — a done
+   habit renders as a bare value inside a solid-background chip (color =
+   domain identity, via PROJECT_COLORS/_habit_chip_style, not Excel's own
+   cell colors).
+2. Split by DONE-ness rather than wrapped across two lines of the same
+   thing — "everything done gets the numbers and then 1 space (not 2)...
+   the second row is the things yet to be done, and that is just the row
+   names." Each row independently drops whatever doesn't fit in WIDTH_HINT
+   (the ask was two lines, not a scrolling list)."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -30,56 +38,104 @@ def test_empty_habits_renders_nothing():
     assert mod.render_habits_today() == []
 
 
-def test_renders_name_and_value_for_each_habit():
+def test_done_row_is_bare_value_no_name_label():
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("wake up", 1.0)]
+    frags = mod.render_habits_today()
+    row1 = "".join(t for _, t in frags).split("\n")[0]
+    assert "765" in row1 and "1" in row1
+    assert "睡觉" not in row1 and "wake up" not in row1
+
+
+def test_pending_row_is_the_bare_habit_name():
+    mod = _load_tui()
+    mod.STATE.habits_today = [("hiit", 0.0), ("teams", 0.0)]
     text = "".join(t for _, t in mod.render_habits_today())
-    assert "睡觉 765" in text
-    assert "wake up 1" in text
+    lines = [l for l in text.split("\n") if l.strip()]
+    assert len(lines) == 1  # nothing done yet -> only the pending row renders
+    assert "hiit" in lines[0] and "teams" in lines[0]
+
+
+def test_done_and_pending_split_into_separate_rows():
+    mod = _load_tui()
+    mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", 0.0)]
+    text = "".join(t for _, t in mod.render_habits_today())
+    lines = [l for l in text.split("\n") if l.strip()]
+    assert len(lines) == 2
+    assert "765" in lines[0] and "睡觉" not in lines[0]
+    assert "hiit" in lines[1] and "765" not in lines[1]
+
+
+def test_done_chips_use_single_trailing_space_not_two():
+    """Follow-up (2026-07-20): "1 space (not 2 like right now)" between
+    done-row chips."""
+    mod = _load_tui()
+    mod.STATE.habits_today = [("teams", 3.0), ("push", 4.0)]
+    row1 = "".join(t for _, t in mod.render_habits_today()).split("\n")[0]
+    assert "3 4" in row1, f"exactly one space must separate chips: {row1!r}"
 
 
 def test_integer_values_render_without_a_trailing_point_zero():
     mod = _load_tui()
     mod.STATE.habits_today = [("teams", 3.0)]
-    text = "".join(t for _, t in mod.render_habits_today())
-    assert "teams 3" in text
-    assert "3.0" not in text
+    row1 = "".join(t for _, t in mod.render_habits_today()).split("\n")[0]
+    assert "3" in row1
+    assert "3.0" not in row1
 
 
-def test_mapped_habit_gets_its_domain_color_not_dim():
+def test_done_chip_gets_its_domain_background_color():
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0)]
-    frags = mod.render_habits_today()
-    style = next(s for s, t in frags if "睡觉" in t)
-    assert style == mod.project_style("睡觉")
-    assert style != "class:dim"
+    style, text = mod.render_habits_today()[0]
+    assert "765" in text
+    assert style == mod._habit_chip_style("睡觉")
+    assert f"bg:{mod.PROJECT_COLORS['睡觉']}" in style
+    assert "#ffffff" in style, "chip text must default to white"
 
 
-def test_unmapped_habit_falls_back_to_dim_not_a_crash():
+def test_pending_chip_also_gets_its_domain_background_color():
+    mod = _load_tui()
+    mod.STATE.habits_today = [("hiit", 0.0)]
+    style, text = mod.render_habits_today()[0]
+    assert "hiit" in text
+    assert style == mod._habit_chip_style(mod.HABIT_COLOR_DOMAIN["hiit"])
+
+
+def test_unmapped_habit_still_gets_a_visible_chip_not_a_crash():
+    """A value with no background at all would read as plain text, breaking
+    the "everything here is a colored chip" scan -- an unmapped habit still
+    gets a neutral chip rather than no styling."""
     mod = _load_tui()
     mod.STATE.habits_today = [("some totally new column", 1.0)]
-    frags = mod.render_habits_today()
-    style = next(s for s, t in frags if "some totally new column" in t)
-    assert style == "class:dim"
+    style, text = mod.render_habits_today()[0]
+    assert "1" in text
+    assert "bg:" in style and "#ffffff" in style
 
 
 def test_output_never_exceeds_two_lines():
     mod = _load_tui()
-    # Many habits -- guaranteed to overflow two WIDTH_HINT-wide lines.
-    mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(40)]
+    # Many habits, half done half pending -- guaranteed to overflow WIDTH_HINT.
+    mod.STATE.habits_today = [(f"habit{i}", float(i % 2)) for i in range(40)]
     text = "".join(t for _, t in mod.render_habits_today())
     assert text.count("\n") <= 2
 
 
-def test_wraps_to_second_line_when_first_is_full():
+def test_each_row_drops_overflow_independently():
     mod = _load_tui()
-    # Long names guarantee the first line fills before all habits fit.
-    names = [f"a very long habit name number {i}" for i in range(6)]
-    mod.STATE.habits_today = [(n, 1.0) for n in names]
+    mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(mod.WIDTH_HINT)]
     text = "".join(t for _, t in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
-    assert len(lines) == 2
-    assert lines[0] != lines[1]
+    assert len(lines) == 1  # all "done" (nonzero) -> only row 1 renders
+    assert len(lines[0]) <= mod.WIDTH_HINT + 1
+
+
+def test_fetch_habits_today_keeps_zero_value_habits_too():
+    """Structural: fetch_habits_today must no longer filter to nonzero-only
+    -- the pending row needs the not-yet-done habits too."""
+    src = (HERE / "janus.py").read_text()
+    i_def = src.index("def fetch_habits_today():")
+    body = src[i_def:src.index("\n\n\n", i_def)]
+    assert "if v:" not in body, "must not still filter out zero-value habits"
 
 
 def test_fetch_habits_today_skips_internal_bookkeeping_columns():

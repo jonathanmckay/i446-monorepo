@@ -1126,10 +1126,10 @@ _HABIT_STRIP_SKIP = {"mee", "日", "n color", "⎣∀clr", "#"}
 
 
 def fetch_habits_today():
-    """Read today's 0₦ (Neon habits) row: every nonzero value, in column
-    order, for the two-line habit strip under the header (user request
-    2026-07-20). Best-effort: any failure just leaves the strip empty/stale,
-    same tolerance as fetch_points."""
+    """Read today's 0₦ (Neon habits) row: EVERY habit (done and not-yet-done
+    alike), in column order, for the two-row habit strip under the header
+    (user request 2026-07-20). Best-effort: any failure just leaves the
+    strip empty/stale, same tolerance as fetch_points."""
     try:
         now = view_now()
         IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
@@ -1178,11 +1178,10 @@ end tell'''
             if not name or name.lower() in _HABIT_STRIP_SKIP:
                 continue
             try:
-                v = float(val)
+                v = float(val.strip()) if val.strip() else 0.0
             except ValueError:
-                continue
-            if v:
-                habits.append((name, v))
+                v = 0.0  # non-numeric/blank cell reads as "not done yet"
+            habits.append((name, v))
         STATE.habits_today = habits
     except Exception:
         pass
@@ -1200,35 +1199,40 @@ def _habit_chip_style(code: str | None) -> str:
     return f"bold bg:{hexv or '#444444'} #ffffff"
 
 
+def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Fit as many chips as WIDTH_HINT allows onto ONE row; drop the rest
+    (each of the two habit rows is its own single line, not a wrap group)."""
+    row: list[tuple[str, str]] = []
+    w = 0
+    for sty, text in chips:
+        cw = dwidth(text)
+        if w + cw > WIDTH_HINT:
+            break
+        row.append((sty, text))
+        w += cw
+    return row
+
+
 def render_habits_today() -> list[tuple[str, str]]:
-    """Two-line strip of today's active (nonzero) Neon habits as solid-
-    background value chips, colored by domain like the rest of janus —
-    "below the title but on top of janus itself" (user request 2026-07-20).
-    No name label (2026-07-20 follow-up: takes up too much space) — the
-    color IS the identifier, same as Neon's own column coloring. Wraps
-    left-to-right; anything past the second line is dropped (the ask was
-    explicitly two lines, not a scrolling list)."""
+    """Two-row strip of today's Neon habits, split by DONE-ness rather than
+    wrapped across two lines of the same thing (2026-07-20 follow-up): row 1
+    is every habit with a value today, as solid-background chips — just the
+    number, one trailing space (not two) between chips; row 2 is every
+    habit WITHOUT a value yet, as the bare habit NAME in the same domain-
+    colored chip style, so it reads as "still open." Each row independently
+    drops whatever doesn't fit in WIDTH_HINT — the ask was two lines, not a
+    scrolling list."""
     if not STATE.habits_today:
         return []
-    lines: list[list[tuple[str, str]]] = [[], []]
-    line_w = [0, 0]
-    li = 0
-    for name, v in STATE.habits_today:
-        chip = f" {v:g} "
-        w = dwidth(chip)
-        while li < 2 and line_w[li] + w > WIDTH_HINT:
-            li += 1
-        if li >= 2:
-            break
-        code = HABIT_COLOR_DOMAIN.get(name.lower())
-        lines[li].append((_habit_chip_style(code), chip))
-        line_w[li] += w
+    done_chips = [(_habit_chip_style(HABIT_COLOR_DOMAIN.get(name.lower())), f"{v:g} ")
+                  for name, v in STATE.habits_today if v]
+    pending_chips = [(_habit_chip_style(HABIT_COLOR_DOMAIN.get(name.lower())), f"{name} ")
+                     for name, v in STATE.habits_today if not v]
     out: list[tuple[str, str]] = []
-    for ln in lines:
-        if not ln:
-            continue
-        out.extend(ln)
-        out.append(("", "\n"))
+    for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
+        if chips:
+            out.extend(chips)
+            out.append(("", "\n"))
     return out
 
 
