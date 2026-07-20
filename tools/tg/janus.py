@@ -296,6 +296,11 @@ class State:
         # the sheet's own residual cell instead of compounding per-term rounding
         # (the 287-vs-288 bug from a 217.5分 locked block).
         self.block_running_pts = 0
+        # Today's nonzero 0₦ (Neon habits) row: [(habit_name, value), ...] in
+        # sheet column order — the two-line habit strip under the header
+        # (user request 2026-07-20: "show the neon habits for today... render
+        # them similar to the way I do in neon itself").
+        self.habits_today: list[tuple[str, float]] = []
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1097,6 +1102,124 @@ def render_header() -> list[tuple[str, str]]:
     return [("class:no_entry", line + "\n")]
 
 
+# 0₦ (Neon habit) column → domain code, for coloring the habit strip the
+# same way the rest of janus colors everything else (project_style/
+# PROJECT_COLORS) rather than reading Excel's actual cell background colors
+# (a second, much slower per-column AppleScript read for a cosmetic match).
+# Seeded from did-fast.py's HABIT_PROJECT (the canonical 0₦→Toggl-project
+# map) and extended with the rest of the 0n sheet's real columns; a few
+# purely-internal bookkeeping columns (N color, ⎣∀clr, #) are skipped
+# entirely rather than guessed at. Best-effort first pass (2026-07-20) —
+# not exhaustively checked against the live sheet's own colors.
+HABIT_COLOR_DOMAIN = {
+    "睡觉": "睡觉", "cpap": "hcb", "wake up": "hcb", "i444": "i444", "i447": "i447",
+    "charge": "infra", "tmrw": "g245", "2nd hci": "hci", "1st hci": "hci",
+    "ibx s897": "s897", "新闻": "hcmc", "词汇": "hcmc", "night hcmc": "hcmc",
+    "0t": "n156", "₦156": "n156", "0l": "g245", "0g": "g245",
+    "stats i9": "i9", "notes": "i9", "ibx i9": "i9", "push": "i9", "teams": "i9",
+    "slack github": "i9", "slack m5x2": "m5x2", "ibx m5x2": "m5x2", "m5x2 stats": "m5x2",
+    "早餐": "hcb", "hiit": "hcb", "问学": "家", "xk20": "xk88", "xk22": "xk88",
+    "xk26": "xk88", "qft": "hcm", "xk88": "xk88", "nvc + e": "hcm", "ص": "hcm",
+    "o314": "hcm", "冥想": "hcm", "其他人": "hcm",
+}
+_HABIT_STRIP_SKIP = {"mee", "日", "n color", "⎣∀clr", "#"}
+
+
+def fetch_habits_today():
+    """Read today's 0₦ (Neon habits) row: every nonzero value, in column
+    order, for the two-line habit strip under the header (user request
+    2026-07-20). Best-effort: any failure just leaves the strip empty/stale,
+    same tolerance as fetch_points."""
+    try:
+        now = view_now()
+        IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
+        script = f'''tell application "Microsoft Excel"
+    set ws to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set targetMonth to {now.month}
+    set targetDay to {now.day}
+    set todayRow to 0
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of ws
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = targetMonth and d = targetDay then
+                    set todayRow to r
+                    exit repeat
+                end if
+            end try
+        end if
+    end repeat
+    if todayRow = 0 then return "ERR"
+    set out to ""
+    repeat with c from 4 to 45
+        set hv to ""
+        try
+            set hv to (value of cell c of row 1 of ws) as text
+        end try
+        set vv to ""
+        try
+            set vv to (value of cell c of row todayRow of ws) as text
+        end try
+        set out to out & hv & "\\t" & vv & "|"
+    end repeat
+    return out
+end tell'''
+        proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
+        if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
+            return
+        habits = []
+        for chunk in proc.stdout.strip().split("|"):
+            if not chunk.strip():
+                continue
+            name, _, val = chunk.partition("\t")
+            name = name.strip()
+            if not name or name.lower() in _HABIT_STRIP_SKIP:
+                continue
+            try:
+                v = float(val)
+            except ValueError:
+                continue
+            if v:
+                habits.append((name, v))
+        STATE.habits_today = habits
+    except Exception:
+        pass
+
+
+def render_habits_today() -> list[tuple[str, str]]:
+    """Two-line strip of today's active (nonzero) Neon habits, colored by
+    domain like the rest of janus — "below the title but on top of janus
+    itself" (user request 2026-07-20). Wraps left-to-right; anything past
+    the second line is dropped (the ask was explicitly two lines, not a
+    scrolling list)."""
+    if not STATE.habits_today:
+        return []
+    lines: list[list[tuple[str, str]]] = [[], []]
+    line_w = [0, 0]
+    li = 0
+    for name, v in STATE.habits_today:
+        vs = f"{v:g}"
+        chip = f" {name} {vs} "
+        w = dwidth(chip)
+        while li < 2 and line_w[li] + w > WIDTH_HINT:
+            li += 1
+        if li >= 2:
+            break
+        code = HABIT_COLOR_DOMAIN.get(name.lower())
+        sty = project_style(code) if code else "class:dim"
+        lines[li].append((sty, chip))
+        line_w[li] += w
+    out: list[tuple[str, str]] = []
+    for ln in lines:
+        if not ln:
+            continue
+        out.extend(ln)
+        out.append(("", "\n"))
+    return out
+
+
 def render_current() -> list[tuple[str, str]]:
     cur = STATE.current
     if not cur:
@@ -1591,6 +1714,42 @@ def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
     return items
 
 
+def _split_gaps_around_events(gaps: list[dict], events: list[dict]) -> list[dict]:
+    """Carve an uncovered event's own window out of any gap it falls inside.
+
+    _block_gaps only ever looks at real Toggl data, so an uncovered calendar
+    event sitting inside an otherwise-untracked stretch didn't shrink the
+    gap at all — a lone 11-min meeting inside a 45-min gap still flashed the
+    WHOLE 45 minutes as "empty" (label "(Nm)", both parenthesized AND
+    minute-suffixed — neither the tracked nor the scheduled convention)
+    right next to the meeting's own correctly-labelled "(11)" row (user
+    report 2026-07-20: "old events... rather than list '11m' just list
+    (11)"). Splits each gap into 0-2 remaining sub-gaps (before/after the
+    event), dropping whatever falls back under GAP_MIN."""
+    if not events:
+        return gaps
+    out = []
+    for g in gaps:
+        segments = [(g["start_dt"], g["start_dt"] + dt.timedelta(minutes=g["dur_min"]))]
+        for ev in events:
+            next_segments = []
+            for s, e in segments:
+                ev_s, ev_e = max(ev["start_dt"], s), min(ev["end_dt"], e)
+                if ev_s >= ev_e:
+                    next_segments.append((s, e))
+                    continue
+                if ev_s > s:
+                    next_segments.append((s, ev_s))
+                if ev_e < e:
+                    next_segments.append((ev_e, e))
+            segments = next_segments
+        for s, e in segments:
+            mins = int((e - s).total_seconds() // 60)
+            if mins >= GAP_MIN:
+                out.append({**g, "start_dt": s, "time_str": f"{s:%H:%M}", "dur_min": mins})
+    return out
+
+
 def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
     """Top-``limit`` gcal events (by duration) starting in this block, chronological."""
     items = []
@@ -1783,12 +1942,6 @@ def render_morning() -> list[tuple[str, str]]:
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
         if sleep:
             picks = ([sleep] + picks)[:4]
-        gaps = _block_gaps(blk_sh, blk_eh, cutoff)
-        full_block = (blk_eh + 1 - blk_sh) * 60
-        # Drop a single gap that spans the whole (untracked) block — it would
-        # just restate the empty grid the body already draws.
-        if len(gaps) == 1 and gaps[0]["dur_min"] >= full_block:
-            gaps = []
         # Meetings that actually happened but never got a Toggl entry (or got
         # swallowed by one giant undifferentiated timer) — "turn a calendar
         # event into a time entry" for PAST meetings too, not just the
@@ -1796,6 +1949,17 @@ def render_morning() -> list[tuple[str, str]]:
         # overlapping raw entry show; one already covered by real Toggl data
         # renders normally via `picks` above, not duplicated here.
         event_picks = _past_event_picks(blk_name, STATE.events, STATE.entries, cutoff)
+        # An uncovered event's own window must be carved OUT of the gap it
+        # sits inside — else it flashes as both a correctly-labelled "(11)"
+        # event row AND (redundantly) part of a generic "(Nm)" untracked-gap
+        # row covering the same minutes (user report 2026-07-20).
+        gaps = _split_gaps_around_events(_block_gaps(blk_sh, blk_eh, cutoff),
+                                         [p["event"] for p in event_picks])
+        full_block = (blk_eh + 1 - blk_sh) * 60
+        # Drop a single gap that spans the whole (untracked) block — it would
+        # just restate the empty grid the body already draws.
+        if len(gaps) == 1 and gaps[0]["dur_min"] >= full_block:
+            gaps = []
         # The header is now the bare :00 slot, so every entry and gap is a body
         # row. _compact_block_lines merges them with the empty half-hour marks
         # and caps at 3 rows.
@@ -2197,7 +2361,17 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     (end_dt > now — covers both "starting later" and "already in progress",
     the latter matters most for turning a live meeting into a time entry) are
     folded in via _future_block_picks, same source render_evening uses for
-    every other future block."""
+    every other future block.
+
+    An event that already ENDED earlier in this still-open block, with no
+    covering Toggl entry, used to have neither path catch it: not "upcoming"
+    (already ended) and not visited by render_morning (block isn't over yet)
+    — it just vanished into the generic untracked-gap row instead, which
+    labels its span "(Nm)" (both parenthesized AND minute-suffixed — neither
+    of the two real conventions), reading as an anonymous idle stretch
+    instead of the actual meeting that happened (user report 2026-07-20:
+    "old events... rather than list '11m' just list (11)"). _past_event_picks
+    (the same helper render_morning uses) closes that gap here too."""
     items = [e for e in STATE.entries if e["start_dt"] < now]
     merged: list[dict] = []
     for e in items:
@@ -2214,10 +2388,12 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     sleep = _block_sleep_item(blk_sh, blk_eh, now)
     if sleep:
         picks = ([sleep] + picks)[:FOCUS_ROWS]
-    gaps = _block_gaps(blk_sh, blk_eh, now)
     upcoming = [ev for ev in STATE.events if ev["end_dt"] > now]
     event_picks = _future_block_picks(blk_name, upcoming, limit=FOCUS_ROWS)
-    body = picks + gaps + event_picks
+    ended_event_picks = _past_event_picks(blk_name, STATE.events, STATE.entries, now, limit=FOCUS_ROWS)
+    gaps = _split_gaps_around_events(_block_gaps(blk_sh, blk_eh, now),
+                                     [p["event"] for p in ended_event_picks])
+    body = picks + gaps + event_picks + ended_event_picks
     body.sort(key=lambda x: x["start_dt"])
     cont = {**_block_sleep_cont(blk_sh, now, slot_min=15), **_block_gcal_cont(blk_sh, now, slot_min=15),
             **_block_toggl_cont(blk_sh, now, slot_min=15)}
@@ -2272,6 +2448,7 @@ def render_all() -> list[tuple[str, str]]:
     STATE.visible_events = []
     parts: list[tuple[str, str]] = []
     parts += render_header()
+    parts += render_habits_today()
     parts += render_morning()
     # The rule that used to mark a fixed 22:00 sleep boundary (removed
     # 2026-07-19 — a clock-time marker made little sense once focus blocks
@@ -2592,6 +2769,7 @@ def _(event):
         flash("refreshed")
         event.app.invalidate()
         _bg_fetch(event.app, fetch_points)  # slowest; repaints itself when done
+        _bg_fetch(event.app, fetch_habits_today)
 
     event.app.create_background_task(_refresh())
 
@@ -2622,6 +2800,7 @@ def _reload_day(app):
         await asyncio.to_thread(fetch_gcal, True)
         app.invalidate()
         _bg_fetch(app, fetch_points)  # slowest; repaints itself when done
+        _bg_fetch(app, fetch_habits_today)
     app.create_background_task(_r())
 
 
@@ -2879,6 +3058,7 @@ async def ticker_points(app):
             # ticker reads — skip this beat rather than risk reading it torn.
             continue
         _bg_fetch(app, fetch_points)
+        _bg_fetch(app, fetch_habits_today)
 
 
 async def _sigusr1_refresh():
@@ -2911,6 +3091,7 @@ async def _sigusr1_refresh():
         flash("☀️", 6.0, style="bold fg:#aa00ff")
     app.invalidate()
     _bg_fetch(app, fetch_points)  # slowest, repaints itself when done
+    _bg_fetch(app, fetch_habits_today)
 
 
 def _bg_fetch(app, fn):
@@ -2939,6 +3120,7 @@ async def _initial_slow_fetches(app):
     first paint left the terminal blank for ~20s — it looked like a hang."""
     _bg_fetch(app, fetch_gcal)
     _bg_fetch(app, fetch_points)
+    _bg_fetch(app, fetch_habits_today)
 
 
 async def main():

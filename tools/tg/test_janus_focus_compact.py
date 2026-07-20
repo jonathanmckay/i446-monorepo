@@ -194,11 +194,15 @@ def test_current_block_shows_in_progress_meeting_even_though_it_already_started(
     assert "Gen 10 Console Forecast Walkthrough" in top
 
 
-def test_current_block_hides_fully_past_untracked_meeting():
-    """A meeting that already ENDED before now, with no covering Toggl entry,
-    is deliberately out of scope for now (past-calendar-vs-time-entry
-    reconciliation, 2026-07-15: "maybe we don't need to make changes there
-    yet") — it must not show as a phantom row."""
+def test_current_block_shows_fully_past_untracked_meeting():
+    """Regression (user report 2026-07-20: "old events... rather than list
+    '11m' just list (11)"): a meeting that already ENDED earlier in the
+    still-open current block, with no covering Toggl entry, used to fall
+    through both the "upcoming" path (already ended) and render_morning
+    (block isn't over) — it just vanished into the generic untracked-gap
+    row instead. The original 2026-07-15 "out of scope for now" call is
+    superseded: it must show as a real, correctly-labelled "(N)" row, same
+    as render_morning already does for a fully-elapsed past block."""
     mod = _load_tui()
     _setup_common(mod)
     today = _midnight()
@@ -210,7 +214,8 @@ def test_current_block_hides_fully_past_untracked_meeting():
     mod.view_now = lambda: today.replace(hour=10, minute=31)
     text = "".join(t for _, t in mod.render_focus_compact())
     top = text.split("未:00")[0]
-    assert "HL:JM 1:1" not in top
+    assert "HL:JM 1:1" in top
+    assert "(20)" in top, "scheduled/uncovered duration must read (N), not Nm"
 
 
 def test_empty_mark_shows_middle_dot_placeholder():
@@ -264,6 +269,76 @@ def test_compact_block_lines_max_rows_eight_uses_15min_marks_including_00():
     assert ":00 ·\n" in body, "the :00 mark below the header (blk_sh's own :00, not the header)"
     for mm in (":15", ":30", ":45", "09:00"):
         assert mm in body
+
+
+# ─── _split_gaps_around_events ──────────────────────────────────────────────
+# (user report 2026-07-20: an uncovered event's own window must be carved
+# OUT of the gap it sits inside, not double-counted as both a correctly-
+# labelled "(N)" event row and part of a generic "(Nm)" untracked-gap row)
+
+def test_split_gaps_carves_event_out_of_the_middle():
+    mod = _load_tui()
+    today = _midnight()
+    gap = {"start_dt": today.replace(hour=8), "dur_min": 45, "is_gap": True,
+           "label": "", "style": "", "time_str": "08:00"}
+    ev = {"start_dt": today.replace(hour=8), "end_dt": today.replace(hour=8, minute=11)}
+    out = mod._split_gaps_around_events([gap], [ev])
+    assert len(out) == 1
+    assert out[0]["start_dt"] == today.replace(hour=8, minute=11)
+    assert out[0]["dur_min"] == 34
+
+
+def test_split_gaps_event_in_the_middle_produces_two_subgaps():
+    mod = _load_tui()
+    today = _midnight()
+    gap = {"start_dt": today.replace(hour=8), "dur_min": 60, "is_gap": True,
+           "label": "", "style": "", "time_str": "08:00"}
+    ev = {"start_dt": today.replace(hour=8, minute=20), "end_dt": today.replace(hour=8, minute=30)}
+    out = mod._split_gaps_around_events([gap], [ev])
+    assert len(out) == 2
+    assert (out[0]["start_dt"], out[0]["dur_min"]) == (today.replace(hour=8), 20)
+    assert (out[1]["start_dt"], out[1]["dur_min"]) == (today.replace(hour=8, minute=30), 30)
+
+
+def test_split_gaps_drops_remainder_under_gap_min():
+    """A sub-gap trimmed below GAP_MIN by the split must not linger as a
+    barely-there row."""
+    mod = _load_tui()
+    today = _midnight()
+    gap = {"start_dt": today.replace(hour=8), "dur_min": 12, "is_gap": True,
+           "label": "", "style": "", "time_str": "08:00"}
+    ev = {"start_dt": today.replace(hour=8), "end_dt": today.replace(hour=8, minute=10)}
+    out = mod._split_gaps_around_events([gap], [ev])
+    assert out == [], f"a 2-minute remainder (< GAP_MIN={mod.GAP_MIN}) must be dropped: {out!r}"
+
+
+def test_split_gaps_no_events_is_a_noop():
+    mod = _load_tui()
+    today = _midnight()
+    gap = {"start_dt": today.replace(hour=8), "dur_min": 45, "is_gap": True,
+           "label": "", "style": "", "time_str": "08:00"}
+    assert mod._split_gaps_around_events([gap], []) == [gap]
+
+
+def test_current_block_uncovered_meeting_shrinks_surrounding_gap():
+    """End-to-end: the event shows as its own "(11)" row AND the
+    surrounding untracked stretch shrinks to exclude it, rather than both
+    the full 45-min gap AND the 11-min event appearing side by side."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.current_known = True
+    mod.STATE.entries_known = True
+    mod.STATE.entries = []
+    mod.STATE.current = None
+    mod.STATE.block_points = {}
+    mod.STATE.day_offset = 0
+    mod.STATE.events = [_gcal_event("old meeting", today.replace(hour=8),
+                                    today.replace(hour=8, minute=11))]
+    mod.view_now = lambda: today.replace(hour=8, minute=45)
+    text = "".join(t for _, t in mod.render_focus_compact())
+    assert "old meeting" in text and "(11)" in text
+    assert "(45m)" not in text, "the gap must shrink around the event, not still span the whole stretch"
+    assert "(34m)" in text
 
 
 if __name__ == "__main__":
