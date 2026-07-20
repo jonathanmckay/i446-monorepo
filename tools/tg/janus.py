@@ -1188,28 +1188,40 @@ end tell'''
         pass
 
 
+def _habit_chip_style(code: str | None) -> str:
+    """Solid background chip, white text — the color alone (no name label)
+    is the identifier, so ~20-30 habits fit across two lines instead of ~10
+    (user request 2026-07-20: "don't want... the names... make the color
+    the background color... white [text]... fit the ~20-30 categories").
+    An unmapped habit still gets a visible (neutral gray) chip rather than
+    no background at all — a value with no chip around it would read as
+    plain text, breaking the "everything here is a colored chip" scan."""
+    hexv = PROJECT_COLORS.get(code) if code else None
+    return f"bold bg:{hexv or '#444444'} #ffffff"
+
+
 def render_habits_today() -> list[tuple[str, str]]:
-    """Two-line strip of today's active (nonzero) Neon habits, colored by
-    domain like the rest of janus — "below the title but on top of janus
-    itself" (user request 2026-07-20). Wraps left-to-right; anything past
-    the second line is dropped (the ask was explicitly two lines, not a
-    scrolling list)."""
+    """Two-line strip of today's active (nonzero) Neon habits as solid-
+    background value chips, colored by domain like the rest of janus —
+    "below the title but on top of janus itself" (user request 2026-07-20).
+    No name label (2026-07-20 follow-up: takes up too much space) — the
+    color IS the identifier, same as Neon's own column coloring. Wraps
+    left-to-right; anything past the second line is dropped (the ask was
+    explicitly two lines, not a scrolling list)."""
     if not STATE.habits_today:
         return []
     lines: list[list[tuple[str, str]]] = [[], []]
     line_w = [0, 0]
     li = 0
     for name, v in STATE.habits_today:
-        vs = f"{v:g}"
-        chip = f" {name} {vs} "
+        chip = f" {v:g} "
         w = dwidth(chip)
         while li < 2 and line_w[li] + w > WIDTH_HINT:
             li += 1
         if li >= 2:
             break
         code = HABIT_COLOR_DOMAIN.get(name.lower())
-        sty = project_style(code) if code else "class:dim"
-        lines[li].append((sty, chip))
+        lines[li].append((_habit_chip_style(code), chip))
         line_w[li] += w
     out: list[tuple[str, str]] = []
     for ln in lines:
