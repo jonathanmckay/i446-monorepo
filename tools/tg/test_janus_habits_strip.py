@@ -49,7 +49,7 @@ def test_done_row_is_bare_value_no_name_label():
 
 def test_pending_row_is_the_bare_habit_name():
     mod = _load_tui()
-    mod.STATE.habits_today = [("hiit", 0.0), ("teams", 0.0)]
+    mod.STATE.habits_today = [("hiit", None), ("teams", None)]
     text = "".join(t for _, t in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 1  # nothing done yet -> only the pending row renders
@@ -58,7 +58,7 @@ def test_pending_row_is_the_bare_habit_name():
 
 def test_done_and_pending_split_into_separate_rows():
     mod = _load_tui()
-    mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", 0.0)]
+    mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
     text = "".join(t for _, t in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 2
@@ -95,7 +95,7 @@ def test_done_chip_gets_its_domain_background_color():
 
 def test_pending_chip_also_gets_its_domain_background_color():
     mod = _load_tui()
-    mod.STATE.habits_today = [("hiit", 0.0)]
+    mod.STATE.habits_today = [("hiit", None)]
     style, text = mod.render_habits_today()[0]
     assert "hiit" in text
     assert style == mod._habit_chip_style(mod.HABIT_COLOR_DOMAIN["hiit"])
@@ -148,12 +148,49 @@ def test_fetch_habits_today_skips_internal_bookkeeping_columns():
 
 
 def test_user_requested_exclusions_are_skipped():
-    """User request (2026-07-20): "remove 词汇"/"remove github [slack github]
-    from one[s] that I track [on this strip]" -- still tracked in Neon, just
-    not wanted here."""
+    """User requests (2026-07-20): "remove 词汇"/"remove github [slack
+    github]"/"问学 is also optional" from what this strip tracks -- still
+    tracked in Neon, just not wanted here."""
     mod = _load_tui()
     assert "词汇" in mod._HABIT_STRIP_SKIP
     assert "slack github" in mod._HABIT_STRIP_SKIP
+    assert "问学" in mod._HABIT_STRIP_SKIP
+
+
+class _FakeProc:
+    def __init__(self, out):
+        self.returncode = 0
+        self.stdout = out
+        self.stderr = ""
+
+
+def _fetch(monkeypatch, mod, chunks):
+    """chunks: list of (habit_name, raw_value_string) pairs, exactly what
+    the ix-osa AppleScript would emit as "name\\tvalue|name\\tvalue|..."."""
+    out = "|".join(f"{name}\t{val}" for name, val in chunks)
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeProc(out))
+    mod.fetch_habits_today()
+
+
+def test_explicit_zero_is_excluded_entirely_not_shown_as_pending_or_done(monkeypatch):
+    """Regression (user report 2026-07-20): "if CPAP is marked zero in neon
+    (not blank) it shouldn't show up" -- distinct from a genuinely blank
+    (not-yet-done) cell, which DOES belong on the pending row."""
+    mod = _load_tui()
+    _fetch(monkeypatch, mod, [("cpap", "0")])
+    assert mod.STATE.habits_today == [], "an explicit 0 must not appear on EITHER row"
+
+
+def test_blank_cell_is_pending_not_excluded(monkeypatch):
+    mod = _load_tui()
+    _fetch(monkeypatch, mod, [("cpap", "")])
+    assert mod.STATE.habits_today == [("cpap", None)]
+
+
+def test_nonzero_value_is_done(monkeypatch):
+    mod = _load_tui()
+    _fetch(monkeypatch, mod, [("teams", "3")])
+    assert mod.STATE.habits_today == [("teams", 3.0)]
 
 
 def test_render_all_places_habit_strip_right_after_header():

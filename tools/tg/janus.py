@@ -295,7 +295,10 @@ class State:
         # sheet column order — the two-line habit strip under the header
         # (user request 2026-07-20: "show the neon habits for today... render
         # them similar to the way I do in neon itself").
-        self.habits_today: list[tuple[str, float]] = []
+        # value is None for a blank (not-yet-done) cell -- an EXPLICIT zero is
+        # excluded from this list entirely at fetch time (deliberately marked
+        # N/A, distinct from "not done yet").
+        self.habits_today: list[tuple[str, float | None]] = []
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1111,7 +1114,7 @@ _HABIT_STRIP_SKIP = {
     "mee", "日", "n color", "⎣∀clr", "#",
     # User-requested exclusions (2026-07-20) — tracked in Neon, just not
     # wanted on this strip.
-    "词汇", "slack github",
+    "词汇", "slack github", "问学",
 }
 
 
@@ -1167,10 +1170,22 @@ end tell'''
             name = name.strip()
             if not name or name.lower() in _HABIT_STRIP_SKIP:
                 continue
+            val = val.strip()
+            if not val:
+                habits.append((name, None))  # blank -> not done yet (pending row)
+                continue
             try:
-                v = float(val.strip()) if val.strip() else 0.0
+                v = float(val)
             except ValueError:
-                v = 0.0  # non-numeric/blank cell reads as "not done yet"
+                habits.append((name, None))  # unparseable -> treat as pending, not done
+                continue
+            if v == 0:
+                # An EXPLICIT zero (as opposed to a blank cell) means the habit
+                # was deliberately marked N/A today -- distinct from "not done
+                # yet" (user request 2026-07-20: "if CPAP is marked zero in
+                # neon (not blank) it shouldn't show up"). Excluded from BOTH
+                # rows entirely, not just the done row.
+                continue
             habits.append((name, v))
         STATE.habits_today = habits
     except Exception:
@@ -1214,10 +1229,13 @@ def render_habits_today() -> list[tuple[str, str]]:
     scrolling list."""
     if not STATE.habits_today:
         return []
+    # An explicit zero is already filtered out at fetch time -- here it's
+    # just "has a value" (done) vs. "blank" (v is None, pending) that split
+    # the two rows.
     done_chips = [(_habit_chip_style(HABIT_COLOR_DOMAIN.get(name.lower())), f"{v:g} ")
-                  for name, v in STATE.habits_today if v]
+                  for name, v in STATE.habits_today if v is not None]
     pending_chips = [(_habit_chip_style(HABIT_COLOR_DOMAIN.get(name.lower())), f"{name} ")
-                     for name, v in STATE.habits_today if not v]
+                     for name, v in STATE.habits_today if v is None]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:
