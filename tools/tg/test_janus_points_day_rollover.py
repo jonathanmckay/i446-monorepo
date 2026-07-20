@@ -50,12 +50,10 @@ def test_fetch_points_resets_state_on_new_day(monkeypatch):
     mod.STATE.points_day = yesterday
     mod.STATE.today_points = 990
     mod.STATE.block_points = {"酉": 317}
-    mod.STATE.block_running_pts = 317
     mod.fetch_points()
     assert mod.STATE.points_day == dtm.datetime.now(TZ).date()
     assert mod.STATE.today_points == 0, "yesterday's Σ must not display today"
     assert mod.STATE.block_points == {}, "yesterday's blocks must not display today"
-    assert mod.STATE.block_running_pts == 0
 
 
 def test_fetch_points_keeps_last_good_within_day(monkeypatch):
@@ -101,7 +99,7 @@ def test_morning_blocks_use_clamped_accessor():
     Σ-clamped path the focus rules use), not raw block_points."""
     src = (HERE / "janus.py").read_text()
     i_def = src.index("def render_morning")
-    i_end = src.index("def _current_block_running_pts")
+    i_end = src.index("def _block_display_pts")
     seg = src[i_def:i_end]
     assert "_block_display_pts(blk_name)" in seg
     assert "STATE.block_points.get(blk_name" not in seg

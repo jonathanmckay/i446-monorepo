@@ -290,12 +290,7 @@ class State:
         self.flash_until = 0.0
         self.flash_style = ""  # optional override style for flash
         self.today_points = 0  # 分 earned today
-        self.block_points: dict[str, int] = {}  # per-block 分
-        # Current (in-progress) block's running 分, computed in fetch_points from
-        # the UNROUNDED Σ and locked-block values and rounded once — so it matches
-        # the sheet's own residual cell instead of compounding per-term rounding
-        # (the 287-vs-288 bug from a 217.5分 locked block).
-        self.block_running_pts = 0
+        self.block_points: dict[str, int] = {}  # per-block 分, straight from Neon's G:O cells
         # Today's nonzero 0₦ (Neon habits) row: [(habit_name, value), ...] in
         # sheet column order — the two-line habit strip under the header
         # (user request 2026-07-20: "show the neon habits for today... render
@@ -669,7 +664,6 @@ def fetch_points():
         if STATE.points_day is not None and STATE.points_day != now.date():
             STATE.today_points = 0
             STATE.block_points = {}
-            STATE.block_running_pts = 0
         STATE.points_day = now.date()
 
         # Read the Σ total (column D) AND the per-block columns (G:O, headed
@@ -680,8 +674,6 @@ def fetch_points():
         bp_excel: dict[str, int] = {}
         read_ok = False
         total_ok = False
-        cand_f = None        # unrounded Σ total, for round-once residual
-        locked_raw = 0.0     # unrounded sum of locked literal blocks
         raw_out = ""
         try:
             import subprocess as _sp
@@ -793,7 +785,6 @@ end tell'''
                         rv = float(raw)
                     except ValueError:
                         continue
-                    locked_raw += rv  # unrounded, for the cold-start residual
                     v = int(round(rv))
                     if v:
                         bp_excel[bname] = v
@@ -812,12 +803,6 @@ end tell'''
             if (total_ok and _blocks_consistent(STATE.today_points, bp_excel)
                     and _blocks_plausible(bp_excel)):
                 STATE.block_points = bp_excel
-                # Current-block running 分 = Σ − locked, rounded ONCE in full
-                # precision so it equals the sheet's own residual cell (a 217.5分
-                # locked block made the round-each-then-subtract path read 287
-                # where the sheet shows 288).
-                if cand_f is not None:
-                    STATE.block_running_pts = max(0, int(round(cand_f - locked_raw)))
             else:
                 # Torn read (implausible total, or daemon lock / did-fast append
                 # in flight): keep last good values and leave evidence for diagnosis.
@@ -1122,7 +1107,12 @@ HABIT_COLOR_DOMAIN = {
     "xk26": "xk88", "qft": "hcm", "xk88": "xk88", "nvc + e": "hcm", "ص": "hcm",
     "o314": "hcm", "冥想": "hcm", "其他人": "hcm",
 }
-_HABIT_STRIP_SKIP = {"mee", "日", "n color", "⎣∀clr", "#"}
+_HABIT_STRIP_SKIP = {
+    "mee", "日", "n color", "⎣∀clr", "#",
+    # User-requested exclusions (2026-07-20) — tracked in Neon, just not
+    # wanted on this strip.
+    "词汇", "slack github",
+}
 
 
 def fetch_habits_today():
@@ -1992,51 +1982,32 @@ def render_morning() -> list[tuple[str, str]]:
     return out
 
 
-def _current_block_running_pts() -> int:
-    """Running 分 for the in-progress block. Its 0分 G:O cell is the live residual
-    formula =D-SUM(locked), which fetch_points skips, so block_points never holds
-    the current block. fetch_points reconstructs it as Σ_today minus the locked
-    literal blocks — rounded ONCE in full precision (STATE.block_running_pts) so it
-    matches the sheet's residual cell — and under sequential block-locking that
-    residual is exactly the current block's earnings (future blocks are 0)."""
-    return STATE.block_running_pts
-
-
 def _block_display_pts(name: str) -> int:
-    """Per-block 分 mirrored from Neon's 0分 G:O cells. fetch_points now reads the
-    live residual block's VALUE straight from the sheet, so block_points holds
-    every nonzero block — locked literals and the in-progress block alike — and
-    the displayed number always matches what Neon shows. No Σ−locked re-
-    attribution to the clock block (which left 申 at 0 while Neon showed 90 when
-    未 locked ahead of the clock). A block the sheet shows empty returns 0.
+    """Per-block 分, mirrored directly from Neon's 0分 G:O cells — no
+    reconstruction, no arithmetic guessing. fetch_points reads every block's
+    VALUE straight from the sheet (a locked block's literal, or the live
+    residual formula's own computed value), so block_points holds every
+    nonzero block, current one included, and the displayed number always
+    matches what Neon shows. A block the sheet shows empty returns 0.
 
-    The reconstruction survives only as a cold-start fallback: before the first
-    successful Neon read block_points is empty, so show the current clock block's
-    running total rather than a blank header.
+    This used to also carry a SEPARATE "Σ − locked" arithmetic
+    reconstruction (STATE.block_running_pts) as a cold-start fallback,
+    before the first successful Neon read landed. That reconstruction was
+    the actual source of at least two "impossible" block values shown on
+    screen (5064分 on 2026-07-03, 6932分 on 2026-07-20) — a torn/mid-recalc
+    read could poison the subtraction even when the direct-value read for
+    every block individually stayed sane. User feedback (2026-07-20): "all
+    you have to do is pull from neon" — so now there IS no other path:
+    before the first successful read, this returns 0 (a blank header for a
+    few seconds), never a guess.
 
-    A block is a residual of the day's Σ (=D-SUM(locked) ≤ D), so it can NEVER
-    exceed today_points. block_points and today_points update on different gates,
-    so a stuck/torn block value can momentarily outrun Σ (666 shown on a 272分
-    day, 2026-07-02). Clamp to Σ: a block over the whole-day total is impossible,
-    and capping it is strictly better than displaying nonsense."""
-    if STATE.block_points:
-        v = STATE.block_points.get(name, 0)
-    else:
-        cur_now = hour_to_block(view_now().hour)
-        v = (_current_block_running_pts()
-             if cur_now and name == cur_now[0] else 0)
-    # Clamp to Σ only when it's a sane positive (a failed/zero total read must
-    # not blank a real block). But a value fetch_points itself could never
-    # produce still needs an upper bound in THIS branch: fetch_points' own
-    # gates (_total_trustworthy, _blocks_plausible) only run before adopting a
-    # read into STATE, so nothing here re-verifies what's already sitting in
-    # STATE once today_points has gone back to 0 (a cross-day reset, or a
-    # read failure) — a stale/torn block_points or block_running_pts value
-    # would then display with NO ceiling at all (2026-07-14: 8442分 shown on
-    # a block; never traced to any value fetch_points actually computed or
-    # rejected, so the display layer itself needed its own hard floor).
-    # _MAX_PLAUSIBLE_TOTAL is fetch_points' own "no real day tops this" cap;
-    # applying it here too is a second, independent line of defense.
+    A block is a residual of the day's Σ (=D-SUM(locked) ≤ D), so it can
+    NEVER exceed today_points. block_points and today_points update on
+    different gates, so a stuck/torn block value can momentarily outrun Σ
+    (666 shown on a 272分 day, 2026-07-02) — clamp to Σ as a second,
+    independent line of defense (a block over the whole-day total is
+    impossible, and capping it is strictly better than displaying nonsense)."""
+    v = STATE.block_points.get(name, 0)
     return (min(v, STATE.today_points) if STATE.today_points > 0
             else min(v, _MAX_PLAUSIBLE_TOTAL))
 

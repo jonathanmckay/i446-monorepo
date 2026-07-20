@@ -102,21 +102,23 @@ def test_total_trustworthy_unit():
     assert m._total_trustworthy(2000, 2000) is True   # exactly at the cap is fine
 
 
-def test_current_block_running_rounds_once(monkeypatch):
-    """The 287-vs-288 bug: a 217.5分 locked block. Rounding each term then
-    subtracting (511 − 6 − 218 = 287) is wrong; the residual must round once
-    (round(511.357 − 223.5) = 288), matching the sheet's own 午 cell. No P:Y →
-    cap backstop accepts the total. Layout: D | 卯=resid | 辰=6 | 巳=217.5 | …resid."""
+def test_residual_block_value_read_directly_rounds_once(monkeypatch):
+    """The current/residual block's 分 is read straight from Neon's own
+    computed VALUE for that cell (not reconstructed via Σ − locked, removed
+    2026-07-20 after it produced 5064分/6932分 on-screen) — a single
+    int(round()) of whatever Neon itself shows, for whichever block's
+    formula happens to be the live residual. Layout: D | 9 formula/literal
+    strings (卯..亥) | 10 P:Y values | 9 G:O VALUES (卯..亥, same order)."""
     m = _load_tui()
-    m.STATE.block_running_pts = 0
-    _run(monkeypatch, m, "511.357142857143|=D|6|217.5|=D|=D|=D|=D|=D|=D")
+    m.STATE.block_points = {}
+    # 卯=6 (literal), 辰=217.5 (literal), 巳..亥 all residual formulas — only
+    # 午's residual VALUE (index 3) is nonzero, the rest resolve to 0.
+    raw_terms = ["6", "217.5"] + ["=D"] * 7
+    py_vals = ["511"] + ["0"] * 9  # sums to today_points, passes the D==SUM(P:Y) cross-check
+    gio_vals = ["0", "0", "0", "288", "0", "0", "0", "0", "0"]
+    out = "|".join(["511.357142857143", *raw_terms, *py_vals, *gio_vals])
+    _run(monkeypatch, m, out)
     assert m.STATE.today_points == 511
-    assert m.STATE.block_running_pts == 288, "current-block residual must round once"
-
-
-def test_torn_read_does_not_update_running_pts(monkeypatch):
-    """A rejected torn read must leave the last-good current-block 分 untouched."""
-    m = _load_tui()
-    m.STATE.block_running_pts = 388  # last good
-    _run(monkeypatch, m, "4351||3|215|=D|=D|=D|=D|=D|=D")  # spike, rejected
-    assert m.STATE.block_running_pts == 388, "torn read must not poison running 分"
+    assert m.STATE.block_points.get("午") == 288, "residual block value must round once, straight from Neon"
+    assert m.STATE.block_points.get("卯") == 6
+    assert m.STATE.block_points.get("辰") == 218  # 217.5 rounds to even

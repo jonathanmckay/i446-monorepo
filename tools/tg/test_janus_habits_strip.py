@@ -147,6 +147,15 @@ def test_fetch_habits_today_skips_internal_bookkeeping_columns():
     assert "_HABIT_STRIP_SKIP" in body
 
 
+def test_user_requested_exclusions_are_skipped():
+    """User request (2026-07-20): "remove 词汇"/"remove github [slack github]
+    from one[s] that I track [on this strip]" -- still tracked in Neon, just
+    not wanted here."""
+    mod = _load_tui()
+    assert "词汇" in mod._HABIT_STRIP_SKIP
+    assert "slack github" in mod._HABIT_STRIP_SKIP
+
+
 def test_render_all_places_habit_strip_right_after_header():
     src = (HERE / "janus.py").read_text()
     i_def = src.index("def render_all()")
