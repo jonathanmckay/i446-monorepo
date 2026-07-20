@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -137,6 +137,57 @@ def test_write_tag_minutes_uses_absolute_overwrite():
             )
             return
     raise AssertionError("write_tag_minutes function not found")
+
+
+def test_refresh_points_cache_includes_block_data(tmp_path):
+    """Regression (2026-07-19): refresh_points_cache() only read the P:Y domain
+    -total columns (COLS), never the G:O per-block (地支 卯..亥) columns, and
+    never wrote a "__block__" key. dashboard.py's load_points_all() reads this
+    SAME .points-cache.json file, and _build_block_chart_data() needs the
+    "__block__" sub-dict to render Points/Block at all — so every /0t run (it
+    calls refresh_points_cache() every morning) silently wiped block data,
+    making Points/Block show empty even though the daemon writes real values
+    to G:O in Neon. Fix: also read G:O into a "__block__" sub-dict, matching
+    the shape dashboard.py's own xlwings fallback path already produces."""
+    import json as _json
+    import openpyxl as _openpyxl
+    import time as _time
+
+    yesterday = date.today() - timedelta(days=1)
+
+    # Row layout (0-indexed): [0]=A, [1]=B(date), [6]=G(卯) .. [14]=O(亥),
+    # [15]=P(-1₦) .. [24]=Y(社) — matches COLS/BLOCK_COLS' 1-indexed offsets.
+    row = [None] * 25
+    row[1] = yesterday
+    row[6] = 6     # G — 卯
+    row[9] = 13    # J — 午
+    row[15] = 10   # P — -1₦ (a domain total, sanity check COLS still works)
+
+    class _FakeSheet:
+        def iter_rows(self, min_row, values_only):
+            yield tuple(row)
+
+    class _FakeWorkbook:
+        def __getitem__(self, name):
+            assert name == "0分"
+            return _FakeSheet()
+
+        def close(self):
+            pass
+
+    fake_cache = tmp_path / ".points-cache.json"
+    with patch.object(_openpyxl, "load_workbook", return_value=_FakeWorkbook()), \
+         patch.object(zerot_fast, "ix_run", return_value=None), \
+         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
+         patch.object(_time, "sleep", return_value=None):
+        zerot_fast.refresh_points_cache()
+
+    cache = _json.loads(fake_cache.read_text())
+    day = cache[yesterday.isoformat()]
+    assert day.get("__block__") == {"卯": 6, "午": 13}, (
+        f"expected __block__ with 卯/午 values, got {day.get('__block__')}"
+    )
+    assert day.get("-1₦") == 10, "domain-total columns (COLS) must still work"
 
 
 def test_marks_done_then_refreshes_dtd_cache():

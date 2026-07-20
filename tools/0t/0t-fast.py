@@ -325,6 +325,15 @@ def refresh_points_cache() -> str:
     import openpyxl
     COLS = {16: '-1₦', 17: '0₲', 18: 'i9', 19: 'm5', 20: '个',
             21: '媒', 22: '思', 23: 'hcb', 24: 'xk', 25: '社'}
+    # G:O — per-block 分 (地支 卯..亥), read into a "__block__" sub-dict so the
+    # dashboard's Points/Block chart has data. This cache is shared with
+    # dashboard.py's load_points_data(), whose own xlwings fallback path
+    # already writes this key — refresh_points_cache() must match that shape
+    # or its daily overwrite silently wipes block data (regression 2026-07-19:
+    # Points/Block showed empty because /0t clobbered the cache every morning
+    # with a version that never had __block__ at all).
+    BLOCK_COLS = {7: '卯', 8: '辰', 9: '巳', 10: '午', 11: '未',
+                  12: '申', 13: '酉', 14: '戌', 15: '亥'}
     today = date.today()
     cutoff = today - timedelta(days=90)
 
@@ -348,6 +357,13 @@ def refresh_points_cache() -> str:
             val = row[idx - 1]
             if val is not None and isinstance(val, (int, float)) and val > 0:
                 day_data[label] = int(round(float(val)))
+        block_data = {}
+        for idx, branch in BLOCK_COLS.items():
+            val = row[idx - 1]
+            if val is not None and isinstance(val, (int, float)) and val > 0:
+                block_data[branch] = int(round(float(val)))
+        if block_data:
+            day_data['__block__'] = block_data
         if day_data:
             result[d.isoformat()] = day_data
     wb.close()
