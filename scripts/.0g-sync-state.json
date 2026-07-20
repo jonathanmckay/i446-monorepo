@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "reset with 分": {
-      "todoist_id": "6h6rfVQvJXGm6Mf2",
-      "minutes": 70
-    },
-    "100s": {
-      "todoist_id": "6h6rfVQVqj35xmqR",
-      "minutes": 30
-    },
-    "list down to 50": {
-      "todoist_id": "6h6rfVVGjr8F6462",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-07-20T03:55:03.645344-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-20T04:00:12.985331-07:00"
 }
