@@ -1,6 +1,6 @@
 ---
 name: "1s"
-description: "Weekly strategic review. Runs /1n donuts, copies 1g summary, opens survey tabs, then compares goals vs time vs points. Usage: /1s"
+description: "Weekly strategic review. Runs /1n donuts, copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
 user-invocable: true
 ---
 
@@ -60,22 +60,41 @@ end tell
 
 Replace `WEEK_ROW` with the ISO week number for the review week.
 
-#### Step 0c: Open tabs side-by-side
+#### Step 0c: Launch the weekly survey form
 
-Use AppleScript to activate the `0s897` sheet in one window and `1分+1s` in another, so the user can fill in the manual survey.
+Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
+the manual questions of the `1分+1s` row (Rating, Title for the Week, Biggest
+Win, Biggest missed opportunity, Proud/Regret w/others, High/Low/Avg, Notes).
+Above each question it surfaces the week's DAILY answers from `0s897`
+(titles, wins, learnings, proud/regret) so answering is selecting/condensing
+rather than composing de novo — typing a day digit (`3`, or `2,5`) as the
+whole answer expands to that day's text on save, and High/Low/Avg come
+prefilled from the daily ⌈/⌊/x̄. On `^S` it writes the answers to the review
+week's row (col A M.W label) and saves.
 
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    -- Activate 1分+1s in the current window
-    set active sheet of active window to sheet "1分+1s" of wb
-    -- Open a new window for the same workbook and show 0s897
-    make new window at wb
-    set active sheet of active window to sheet "0s897" of wb
-end tell
-```
+It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 
-After opening both tabs, **pause and tell the user** the tabs are ready for manual survey entry. Wait for them to confirm before continuing to Step 1.
+1. ```bash
+   cmux new-surface --type terminal
+   ```
+   Parse the surface and pane refs from the output.
+2. ```bash
+   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
+   ```
+   Pass the review-week date through only if the user gave one (`MM/DD` →
+   convert to `YYYY-MM-DD`); no arg reviews the last completed Sun–Sat week.
+3. ```bash
+   cmux focus-pane --pane pane:<N>
+   ```
+4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, ^S saves.`
+
+Do NOT block on the form — continue with Step 1 while the user fills it. If
+cmux is unavailable, tell the user to run it themselves:
+`! python3 ~/i446-monorepo/tools/1s/1s-survey.py`
+
+Non-interactive paths (scripting/tests): `--from-json <file>` writes answers
+directly; `--print-script` prints the AppleScript without writing;
+`--print-context` dumps the fetched daily answers.
 
 ### Step 1: Determine the review week
 
