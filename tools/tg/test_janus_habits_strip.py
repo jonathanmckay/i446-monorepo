@@ -103,6 +103,40 @@ def test_pending_chip_also_gets_its_domain_background_color():
     assert f"bg:{mod.PROJECT_COLORS[mod.HABIT_COLOR_DOMAIN['hiit']]}" in style
 
 
+def test_deferred_habit_hidden_from_pending_row():
+    """A pending habit whose 0neon card(s) were ALL pushed past today is
+    deferred — it can't be completed today and must not show in the pending
+    row (user request 2026-07-21: xk20/xk22). A card due today or overdue
+    keeps the habit visible; a done habit shows its value regardless; on a
+    past-day view the filter is inert (the cache only describes today)."""
+    mod = _load_tui()
+    today = mod.dt.datetime.now(mod.TZ).date()
+    tomorrow = (today + mod.dt.timedelta(days=1)).isoformat()
+    mod.STATE.day_offset = 0
+    mod.HABIT_DUES.clear()
+    mod.HABIT_DUES.update({
+        "xk20": [tomorrow],                      # deferred → hidden
+        "xk22": [tomorrow, tomorrow],            # parent + copy both moved → hidden
+        "xk26": [today.isoformat()],             # still due today → visible
+        "hiit": ["2026-07-16", tomorrow],        # one card still doable → visible
+    })
+    mod.STATE.habits_today = [
+        ("xk20", None), ("xk22", None), ("xk26", None), ("hiit", None),
+        ("0g", None),                            # no card info → visible
+        ("早餐", 1.0),                            # done → value shows regardless
+    ]
+    text = "".join(t for _, t in mod.render_habits_today())
+    assert "xk20" not in text and "xk22" not in text
+    assert "xk26" in text and "hiit" in text and "0g" in text
+    assert "1" in text  # 早餐's value in the done row
+    # Past-day view: deferral info doesn't apply.
+    mod.STATE.day_offset = -1
+    text = "".join(t for _, t in mod.render_habits_today())
+    assert "xk20" in text and "xk22" in text
+    mod.STATE.day_offset = 0
+    mod.HABIT_DUES.clear()
+
+
 def test_domain_map_is_the_color_source_not_the_workbook():
     """0l/0g must render g245 green (user 2026-07-21: "obviously green").
     Regression guard against re-sourcing chip fills from the 0n sheet's

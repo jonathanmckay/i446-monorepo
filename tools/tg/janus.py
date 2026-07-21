@@ -1035,6 +1035,11 @@ def pad(s: str, n: int) -> str:
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 TASK_QUEUE = _sp.TASK_QUEUE
 SHORT_NAMES: dict[str, str] = {}  # normalized cleaned content → cleaned short
+# 0neon (daily habit) card due dates from the same cache: normalized cleaned
+# content → [due ISO strings]. Matched by CONTENT, not labels — card labels
+# are mostly domain codes ('i447' rides the charge card too), so a label
+# match would tie one habit's deferral to another habit's card.
+HABIT_DUES: dict[str, list[str]] = {}
 
 
 def _clean_annotations(s: str) -> str:
@@ -1077,6 +1082,16 @@ def fetch_short_names():
     if out:
         SHORT_NAMES.clear()
         SHORT_NAMES.update(out)
+    # Same read also refreshes the 0neon due-date map (deferral detection for
+    # the habit strip). A card without a due date maps to "" so it can never
+    # satisfy the strictly-after-today test — it blocks hiding instead.
+    dues: dict[str, list[str]] = {}
+    for t in data.get("0neon", []) or []:
+        c = t.get("content")
+        if c:
+            dues.setdefault(_norm_key(c), []).append(t.get("due") or "")
+    HABIT_DUES.clear()
+    HABIT_DUES.update(dues)
 
 
 def display_desc(desc: str) -> str:
@@ -1232,6 +1247,29 @@ def _habit_chip_style(name: str) -> str:
     return f"bold bg:{hexv or '#444444'} #ffffff"
 
 
+def _habit_deferred(name: str) -> bool:
+    """True when the habit's 0neon Todoist card(s) have ALL been pushed past
+    today — i.e. the habit was deferred, so it can't be completed today and
+    shouldn't clutter the pending row (user request 2026-07-21: "if a task
+    has been deferred (such as xk22, xk20 today) it doesn't show up").
+
+    Only the strictly-after-today direction hides: a card due today or
+    overdue is still doable. A habit with a VALUE today never reaches this
+    check (it renders in the done row regardless). Recurring cards completed
+    today also sit at due=tomorrow, but their habit has a value by then, so
+    the pending row never asks about them. Cards match by cleaned content;
+    the deferred one-off copy ("xk22 7.21") drops out of the match, which is
+    fine — the advanced parent card carries the decision. Past-day views
+    skip the check: the cache only describes today."""
+    if STATE.day_offset != 0:
+        return False
+    dues = HABIT_DUES.get(_norm_key(name))
+    if not dues:
+        return False
+    today = dt.datetime.now(TZ).date().isoformat()
+    return all(d[:10] > today for d in dues)
+
+
 def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Fit as many chips as WIDTH_HINT allows onto ONE row; drop the rest
     (each of the two habit rows is its own single line, not a wrap group)."""
@@ -1263,7 +1301,8 @@ def render_habits_today() -> list[tuple[str, str]]:
     done_chips = [(_habit_chip_style(name), f"{v:g} ")
                   for name, v in STATE.habits_today if v is not None]
     pending_chips = [(_habit_chip_style(name), f"{name} ")
-                     for name, v in STATE.habits_today if v is None]
+                     for name, v in STATE.habits_today
+                     if v is None and not _habit_deferred(name)]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:
