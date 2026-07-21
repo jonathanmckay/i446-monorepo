@@ -41,6 +41,23 @@ LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 DAYS = 30
 
+# 地支 2-hour blocks (卯..亥, 04:00-22:00) — mirrors dashboard.py's
+# BRANCH_BLOCKS. Kept independent (no cross-import between this cron script
+# and the dashboard server) since both are small, static tables.
+BRANCH_HOURS = [
+    ("卯", 4), ("辰", 6), ("巳", 8), ("午", 10),
+    ("未", 12), ("申", 14), ("酉", 16), ("戌", 18), ("亥", 20),
+]
+
+
+def _hour_to_branch(hour):
+    """2-hour-block branch for a wall-clock hour, or None if in the
+    22:00-04:00 sleep window (no block covers it)."""
+    for branch, start_hour in BRANCH_HOURS:
+        if start_hour <= hour < start_hour + 2:
+            return branch
+    return None
+
 ACCOUNT_DISPLAY = {
     "m5c7": "m5x2 gmail",
     "gmail": "s897 gmail",
@@ -244,6 +261,59 @@ def build_stats(all_data, sent_counts=None):
     }
 
     return daily, summary
+
+
+def build_block_stats(all_data):
+    """Bucket the same per-event all_data (each record already carries a real
+    recv_hour, set by every producer above) into 2-hour 地支 blocks instead of
+    full days.
+
+    Feature (2026-07-21): Project Bocking previously had no per-block signal
+    at all — the dashboard's block-granularity view showed a "not tracked"
+    badge because every source it read (this gist's "daily" list, and
+    imsg-responses.db's daily_stats table) was pre-aggregated to daily
+    granularity by the time it was persisted. But the raw events (all_data,
+    here) already carry recv_hour before that daily collapse — this just
+    keeps that resolution instead of discarding it, for the trailing 3 days
+    the dashboard's block view actually needs.
+
+    Returns {account: {date: {branch: {avg_hours, count, avg_hours_daytime,
+    count_daytime}}}}. Only covers the last few days (BLOCK_DAYS) — the full
+    30-day all_data set is trivial to bucket, but nothing consumes more than
+    a few trailing days at block granularity, so keeping the payload small
+    is a deliberate choice, not a limitation of the underlying data.
+    """
+    BLOCK_DAYS = 7
+    DAY_START, DAY_END = 6, 21
+    cutoff = (date.today() - timedelta(days=BLOCK_DAYS)).isoformat()
+
+    by_day_acct_branch = defaultdict(list)
+    by_day_acct_branch_daytime = defaultdict(list)
+    for rec in all_data:
+        if rec["date"] < cutoff:
+            continue
+        rh = rec.get("recv_hour")
+        if rh is None:
+            continue
+        branch = _hour_to_branch(rh)
+        if branch is None:
+            continue
+        key = (rec["date"], rec["account"], branch)
+        by_day_acct_branch[key].append(rec["hours"])
+        if DAY_START <= rh < DAY_END:
+            by_day_acct_branch_daytime[key].append(rec["hours"])
+
+    by_block = defaultdict(lambda: defaultdict(dict))
+    for (day, acct, branch), hours_list in by_day_acct_branch.items():
+        daytime_list = by_day_acct_branch_daytime.get((day, acct, branch), [])
+        count = len(hours_list)
+        by_block[acct][day][branch] = {
+            "avg_hours": round(sum(hours_list) / count, 2) if count else None,
+            "count": count,
+            "avg_hours_daytime": round(sum(daytime_list) / len(daytime_list), 2) if daytime_list else None,
+            "count_daytime": len(daytime_list),
+        }
+    return {acct: dict(days) for acct, days in by_block.items()}
 
 
 def push_to_gist(payload, token):
@@ -833,6 +903,7 @@ def main():
         print(f"  WARN: Outlook failed: {e}")
 
     daily, summary = build_stats(all_data, sent_counts=all_sent_counts)
+    by_block = build_block_stats(all_data)
     print(f"\nBuilt {len(daily)} daily entries across {len(all_data)} reply events")
     print(f"Summary: {summary}")
 
@@ -840,6 +911,7 @@ def main():
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "daily": daily,
         "summary": summary,
+        "by_block": by_block,
     }
 
     status = push_to_gist(payload, token)

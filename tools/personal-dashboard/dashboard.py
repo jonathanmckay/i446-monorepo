@@ -828,7 +828,30 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
             tasks_neg1n[idx] += cat_counts.get("neg1n", 0)
             tasks_other[idx] += cat_counts.get("other", 0)
 
-    return {
+    # Project Bocking — real per-block comms data (see
+    # _build_email_by_account_blocked for what makes this possible). Re-key
+    # each account's {(day,branch): entry} onto this chart's own bucket_index
+    # so _build_email_datasets (shared with the daily/weekly/monthly views)
+    # can build the same Chart.js dataset shape unchanged.
+    email_raw = load_email_data()
+    email_by_account_blocked = _build_email_by_account_blocked(email_raw, day_list)
+    email_data = None
+    if email_by_account_blocked:
+        block_keys = [str(i) for i in range(n_buckets)]
+        keyed = defaultdict(dict)
+        for acct, day_branch_map in email_by_account_blocked.items():
+            for (dstr, branch), entry in day_branch_map.items():
+                try:
+                    d = date.fromisoformat(dstr)
+                except Exception:
+                    continue
+                idx = bucket_index(d, branch)
+                if idx is not None:
+                    keyed[acct][str(idx)] = entry
+        if keyed:
+            email_data = {"datasets": _build_email_datasets(keyed, block_keys)}
+
+    result = {
         "dates": bucket_labels,
         "points": {"datasets": points_datasets},
         "time": {"datasets": time_datasets},
@@ -840,6 +863,9 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
     }
+    if email_data:
+        result["email"] = email_data
+    return result
 
 
 def _build_granular_chart_data(granularity):
@@ -1380,6 +1406,133 @@ def _build_email_by_account(email_raw, dates):
         except Exception:
             pass
     return email_by_account
+
+
+def _build_email_by_account_blocked(email_raw, day_list):
+    """Project Bocking at 2-hour 地支 block granularity.
+
+    Feature (2026-07-21): previously the block-granularity chart had NO
+    email/comms signal at all — every source _build_email_by_account reads
+    (the gist's "daily" list, imsg-responses.db's daily_stats table) was
+    pre-aggregated to daily granularity before being persisted, so there was
+    no real per-block number to show. Two of those sources turned out to
+    still have (or cheaply expose) real per-event timestamps:
+
+    - gen_email_stats.py now also pushes a "by_block" key to the gist,
+      bucketed from the same per-event recv_hour every producer already
+      attaches to each reply (see build_block_stats() there) — covers
+      gmail/outlook/teams/slack.
+    - imsg-responses.db's response_pairs table already stores each pair's
+      real recv_time (it's just daily_stats, read elsewhere, that discards
+      the hour) — bucket that directly instead of adding a new table.
+    - archive_log.db already has a raw per-message timestamp column; the
+      day-level overlay in _build_email_by_account becomes a block-level
+      overlay here using the same (day, branch) 2-hour window instead of a
+      full day.
+
+    Returns {account: {(date_iso, branch): {avg_hours, count,
+    avg_hours_daytime, count_daytime, sent_count}}}. No per-block sent_count
+    exists anywhere upstream (only day-level sent totals are tracked), so
+    sent_count == count here — the "sent without reply" dark bars the daily
+    view shows are intentionally absent at block granularity rather than
+    faked.
+    """
+    day_set = {d.isoformat() for d in day_list}
+    by_acct_bucket = defaultdict(dict)
+
+    # gist by_block (gmail/outlook/teams/slack, iMessage overlaid below)
+    for acct, day_map in (email_raw.get("by_block") or {}).items():
+        for dstr, branch_map in day_map.items():
+            if dstr not in day_set:
+                continue
+            for branch, entry in branch_map.items():
+                count = entry.get("count", 0)
+                by_acct_bucket[acct][(dstr, branch)] = {
+                    "avg_hours": entry.get("avg_hours"),
+                    "avg_hours_daytime": entry.get("avg_hours_daytime"),
+                    "count": count,
+                    "count_daytime": entry.get("count_daytime", 0),
+                    "sent_count": count,
+                }
+
+    # iMessage — bucket response_pairs' real recv_time directly (mirrors the
+    # daily view's choice to prefer the local db over the gist for imessage).
+    import sqlite3 as _sq3
+    _imsg_db = Path.home() / "vault" / "i447" / "i446" / "imsg-responses.db"
+    if _imsg_db.exists() and day_list:
+        try:
+            _conn = _sq3.connect(f"file:{_imsg_db}?mode=ro", uri=True)
+            lo, hi = min(day_list).isoformat(), max(day_list).isoformat()
+            _rows = _conn.execute(
+                "SELECT recv_time, response_hours FROM response_pairs "
+                "WHERE day >= ? AND day <= ?", (lo, hi),
+            ).fetchall()
+            _conn.close()
+            slots = defaultdict(list)
+            for recv_time, hours in _rows:
+                try:
+                    recv_dt = datetime.fromisoformat(recv_time)
+                except (ValueError, TypeError):
+                    continue
+                day_iso = recv_dt.date().isoformat()
+                if day_iso not in day_set:
+                    continue
+                bi = _block_index_for_hour(recv_dt.hour)
+                if bi is None:
+                    continue
+                branch = BRANCH_BLOCKS[bi][0]
+                slots[(day_iso, branch)].append(hours)
+            for key, hours_list in slots.items():
+                count = len(hours_list)
+                by_acct_bucket["imessage"][key] = {
+                    "avg_hours": round(sum(hours_list) / count, 2) if count else None,
+                    "avg_hours_daytime": None,
+                    "count": count,
+                    "count_daytime": 0,
+                    "sent_count": count,
+                }
+        except Exception:
+            pass
+
+    # archive_log.db overlay — same source _build_email_by_account uses for
+    # the daily view, same "override only if it has more replies" rule, just
+    # windowed to each 2-hour block instead of the full day.
+    _archive_db = Path.home() / ".config" / "ibx" / "archive_log.db"
+    if _archive_db.exists() and day_list:
+        try:
+            _aconn = _sq3.connect(f"file:{_archive_db}?mode=ro", uri=True)
+            _TYPE_TO_ACCT = {
+                "email": "m5x2 gmail", "outlook": "outlook",
+                "teams": "teams", "slack": "slack", "imsg": "imessage",
+            }
+            for d in day_list:
+                for branch, start_hour, _ in BRANCH_BLOCKS:
+                    block_start = datetime(d.year, d.month, d.day, start_hour, 0, tzinfo=LOCAL_TZ)
+                    block_end = block_start + timedelta(hours=2)
+                    rows = _aconn.execute(
+                        "SELECT message_type, COUNT(DISTINCT item_uid), AVG(response_min) "
+                        "FROM archive_log WHERE timestamp >= ? AND timestamp < ? "
+                        "AND action = 'reply' AND response_min IS NOT NULL "
+                        "GROUP BY message_type",
+                        (block_start.timestamp(), block_end.timestamp()),
+                    ).fetchall()
+                    for msg_type, count, avg_min in rows:
+                        acct = _TYPE_TO_ACCT.get(msg_type)
+                        if not acct or count == 0:
+                            continue
+                        key = (d.isoformat(), branch)
+                        existing = by_acct_bucket[acct].get(key, {})
+                        if count >= existing.get("count", 0):
+                            avg_h = avg_min / 60.0 if avg_min else None
+                            by_acct_bucket[acct][key] = {
+                                "avg_hours": avg_h, "avg_hours_daytime": avg_h,
+                                "count": count, "count_daytime": count, "sent_count": count,
+                            }
+            _aconn.close()
+        except Exception:
+            pass
+
+    return dict(by_acct_bucket)
 
 
 def _bucket_email_by_account(email_by_account, bucket_index_fn, bucket_labels):
@@ -2270,10 +2423,12 @@ fetch('/api/data').then(r => r.json()).then(data => {
 });
 
 // Email chart (Project Bocking): blended response-time line (purple) +
-// per-account count bars (stacked). data.email is absent at block
-// granularity (the underlying sources are daily-aggregate only, so there's
-// no real per-2h-block signal to show) — render a "not available" note
-// instead of a misleading empty chart.
+// per-account count bars (stacked). At block granularity data.email is
+// built from real per-event recv_hour/recv_time timestamps (see
+// _build_email_by_account_blocked in dashboard.py) rather than being
+// daily-aggregate only — it's still absent if none of those sources had any
+// reply in the trailing window, in which case fall back to a note instead
+// of a misleading empty chart.
 function renderEmailChart(data) {
   const canvas = document.getElementById('emailChart');
   const emEl = document.getElementById('emailSummary');
@@ -2283,7 +2438,7 @@ function renderEmailChart(data) {
   if (!data.email) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    emEl.innerHTML = '<div class="badge">not tracked at block granularity</div>';
+    emEl.innerHTML = '<div class="badge">no comms data for this window</div>';
     return;
   }
 

@@ -479,3 +479,85 @@ def test_xlwings_block_window_retries_transient_failures():
     assert "for attempt in range(_XLWINGS_BLOCK_RETRIES)" in fn_src, (
         "must loop the read attempt itself, not just the outer cache check"
     )
+
+
+def _load_gen_email_stats_module():
+    module_path = Path(__file__).with_name("gen_email_stats.py")
+    spec = importlib.util.spec_from_file_location("gen_email_stats_under_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_build_block_stats_buckets_by_recv_hour_not_by_day():
+    """Feature (2026-07-21): Project Bocking had no per-block signal because
+    every persisted source (gist "daily", imsg daily_stats) was aggregated
+    to daily granularity, discarding the recv_hour every producer in this
+    file already attaches to each reply event. build_block_stats() must keep
+    that resolution instead — two replies on the same day but in different
+    2-hour blocks must land in different buckets, not get merged."""
+    gen_email_stats = _load_gen_email_stats_module()
+    from datetime import date, timedelta
+    today = date.today().isoformat()
+    recent = (date.today() - timedelta(days=1)).isoformat()
+
+    all_data = [
+        {"date": today, "account": "outlook", "hours": 1.0, "recv_hour": 9},   # 巳 block (8-10)
+        {"date": today, "account": "outlook", "hours": 3.0, "recv_hour": 9},   # 巳 block (8-10)
+        {"date": today, "account": "outlook", "hours": 2.0, "recv_hour": 15},  # 申 block (14-16)
+        {"date": recent, "account": "teams", "hours": 0.5, "recv_hour": 23},   # sleep window, dropped
+    ]
+    by_block = gen_email_stats.build_block_stats(all_data)
+
+    outlook_today = by_block["outlook"][today]
+    assert outlook_today["巳"]["count"] == 2, "same-block replies must merge"
+    assert outlook_today["巳"]["avg_hours"] == 2.0, "avg must be over just that block's replies"
+    assert outlook_today["申"]["count"] == 1, "different-block reply must land in its own bucket"
+    assert "teams" not in by_block or recent not in by_block.get("teams", {}), (
+        "a recv_hour inside the 22:00-04:00 sleep window has no covering block and must be dropped"
+    )
+
+
+def test_build_email_by_account_blocked_uses_response_pairs_recv_time(tmp_path, monkeypatch):
+    """Feature (2026-07-21): iMessage's block-level Project Bocking data
+    comes from response_pairs' real recv_time column (already persisted per
+    event) rather than daily_stats (which only has day-level aggregates).
+    Two response pairs on the same day but different 2-hour blocks must
+    bucket separately."""
+    dashboard = _load_dashboard()
+
+    imsg_db = tmp_path / "vault" / "i447" / "i446" / "imsg-responses.db"
+    imsg_db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(imsg_db)
+    conn.execute("""
+        CREATE TABLE response_pairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER, chat_name TEXT,
+            recv_time TEXT NOT NULL, sent_time TEXT NOT NULL,
+            response_hours REAL NOT NULL,
+            recv_preview TEXT, sent_preview TEXT, day TEXT NOT NULL
+        )
+    """)
+    day = "2026-07-20"
+    conn.executemany(
+        "INSERT INTO response_pairs (chat_id, chat_name, recv_time, sent_time, "
+        "response_hours, day) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (1, "Alice", f"{day}T09:15:00", f"{day}T09:45:00", 0.5, day),  # 巳 (8-10)
+            (1, "Alice", f"{day}T09:30:00", f"{day}T10:00:00", 0.5, day),  # 巳 (8-10)
+            (2, "Bob",   f"{day}T15:00:00", f"{day}T15:20:00", 0.33, day),  # 申 (14-16)
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(dashboard.Path, "home", lambda: tmp_path)
+    from datetime import date
+    day_list = [date(2026, 7, 20)]
+
+    result = dashboard._build_email_by_account_blocked({}, day_list)
+
+    imsg = result["imessage"]
+    assert imsg[(day, "巳")]["count"] == 2, "same-block pairs on the same day must merge"
+    assert imsg[(day, "申")]["count"] == 1, "different-block pair must bucket separately"

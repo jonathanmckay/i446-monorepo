@@ -188,13 +188,14 @@ except Exception:
 
 
 def _ritual_pts_label(emojis: str) -> str:
-    """Block-header -1₦ score: sum of the stamped rituals' points, rendered as
-    ``₦7`` (``₦13`` = all five). Replaces the raw emoji string in headers
-    (user request 2026-07-20: "rather than showing the icons for each -1n I
-    did in a block... how many -1n points did I get in that block"). Empty
-    when nothing scored, so an unstamped header stays bare like before."""
+    """Block-header -1₦ score: sum of the stamped rituals' points, as a BARE
+    number (``7``, ``13`` = all five) — the ₦ glyph was dropped because it
+    costs a character (user request 2026-07-21); the red-on-white chip style
+    (NEON_PTS_STYLE) is what marks it as the -1n score now. Replaces the raw
+    emoji string in headers (user request 2026-07-20). Empty when nothing
+    scored, so an unstamped header stays bare like before."""
     pts = sum(p for e, p in RITUAL_PTS.items() if e in emojis)
-    return f"₦{pts}" if pts else ""
+    return f"{pts}" if pts else ""
 
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
 PROJECT_CODE = {}
@@ -233,6 +234,9 @@ PROJECT_COLORS = {
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
 # colors in Janus (0n or -1n)... both").
 NEON_ACCENT = "#c3fc0d"
+# Block-line -1n score chip: red background, white text (user request
+# 2026-07-21, replacing the lime ₦N accent).
+NEON_PTS_STYLE = "bold bg:#b3261e #ffffff"
 
 
 CALENDAR_PROJECT_MAP = {
@@ -1330,43 +1334,6 @@ def _habit_deferred(name: str) -> bool:
     return all(d[:10] > today for d in dues)
 
 
-def _current_block_rituals(now: dt.datetime | None = None) -> tuple[list[str], list[str]]:
-    """Current 地支 block's five -1neon rituals, from the LOCAL build order
-    (instant — no Excel round trip): (stamped_emojis, pending_emojis) in
-    RITUAL_PTS order. The habit strip shows these alongside the 0neon chips
-    (user request 2026-07-21: the strip showed 0neon but "not the -1neon
-    habits"). Today-only: past-day views return nothing (the build order
-    holds only today's stamps), as does the 22:00-04:00 gap with no block."""
-    if STATE.day_offset != 0:
-        return [], []
-    now = now or view_now()
-    blk = hour_to_block(now.hour)
-    if not blk:
-        return [], []
-    branch = blk[0]
-    try:
-        text = BUILD_ORDER.read_text()
-    except Exception:
-        return [], []
-    tail = ""
-    in_section = False
-    for line in text.splitlines():
-        if line.strip().startswith("## -1₲"):
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if (in_section and line.startswith("- ")
-                and line[2:].strip().startswith(branch)):
-            tail = line[2:].strip()
-            break
-    if not tail:
-        return [], []
-    done = [e for e in RITUAL_PTS if e in tail]
-    pending = [e for e in RITUAL_PTS if e not in tail]
-    return done, pending
-
-
 def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Fit as many chips as WIDTH_HINT allows onto ONE row; drop the rest
     (each of the two habit rows is its own single line, not a wrap group)."""
@@ -1390,30 +1357,32 @@ def render_habits_today() -> list[tuple[str, str]]:
     colored chip style, so it reads as "still open." Each row independently
     drops whatever doesn't fit in WIDTH_HINT — the ask was two lines, not a
     scrolling list."""
-    # Current block's -1neon rituals lead each row (local build-order read,
-    # so they render immediately even while the Excel fetch is in flight),
-    # on the ₦ accent so they read as one group distinct from habit chips.
-    r_done, r_pending = _current_block_rituals()
-    if not STATE.habits_today and not STATE.habits_ytd and not (r_done or r_pending):
+    if not STATE.habits_today and not STATE.habits_ytd:
         return []
-    ritual_style = f"bold bg:{NEON_ACCENT} #000000"
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
     # the two rows.
-    done_chips = [(ritual_style, f"{e} ") for e in r_done]
+    # -1n leads the done row as ONE chip: the current block's ritual score so
+    # far, a bare number on the red chip — never a strip of ritual emojis
+    # (user request 2026-07-21: "numbers with colors [rather] than emojis").
+    # Local build-order read, same source as the block-line scores.
+    neon_chip: list[tuple[str, str]] = []
+    if STATE.day_offset == 0:
+        blk = hour_to_block(view_now().hour)
+        label = _read_block_emojis().get(blk[0]) if blk else ""
+        if label:
+            neon_chip = [(NEON_PTS_STYLE, f"{label} ")]
+    done_chips = neon_chip + [(_habit_chip_style(name), f"{v:g} ")
+                              for name, v in STATE.habits_today if v is not None]
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
-    # as the jm dashboard "2026" header cards), green at/ahead and red behind,
-    # instead of daily done/pending chips. Ahead of the daily-value chips so
-    # the standing survives the row's width truncation.
+    # as the jm dashboard "2026" header cards), green at/ahead and red
+    # behind, AFTER the daily 0neon values (user-requested order 2026-07-21).
     done_chips += [(f"bold bg:{'#2e7d32' if v >= 0 else '#b3261e'} #ffffff",
                     f"{name} {v:+g} ")
                    for name, v in STATE.habits_ytd.items()]
-    done_chips += [(_habit_chip_style(name), f"{v:g} ")
-                   for name, v in STATE.habits_today if v is not None]
-    pending_chips = [(ritual_style, f"{e} ") for e in r_pending]
-    pending_chips += [(_habit_chip_style(name), f"{name} ")
-                      for name, v in STATE.habits_today
-                      if v is None and not _habit_deferred(name)]
+    pending_chips = [(_habit_chip_style(name), f"{name} ")
+                     for name, v in STATE.habits_today
+                     if v is None and not _habit_deferred(name)]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:
@@ -1630,20 +1599,20 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         out.append((head_sty, label))
         out.append((dur_sty, f" {dur}"))
         if neon_tail:
-            out.append((f"bold fg:{NEON_ACCENT}", neon_tail))
+            out.append((NEON_PTS_STYLE, neon_tail))
         out.append((dur_sty, "\n"))
     else:
         body_picks = picks
         left = f"{blk_name}:00"
         pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
-        # ₦N sits at the RIGHT edge beside the block's 分, not after the block
+        # The -1n score sits at the RIGHT edge beside the block's 分, not after the block
         # name (user request 2026-07-21: "in the block lines... not in the
         # header"): `辰:00              ₦9 73分`.
         right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
         trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
         out.append(("class:dim", left + " " * trail))
         if emojis:
-            out.append((f"bold fg:{NEON_ACCENT}", emojis))
+            out.append((NEON_PTS_STYLE, emojis))
             if pts_str:
                 out.append(("class:dim", " "))
         if pts_str:
@@ -2123,7 +2092,7 @@ def _mao_line(emojis) -> list[tuple[str, str]]:
                 - dwidth(neon_str) - dwidth(pts_str))
     out.append((blk_style, "─" * trail))
     if neon_str:
-        out.append((f"bold fg:{NEON_ACCENT}", neon_str))
+        out.append((NEON_PTS_STYLE, neon_str))
     if pts_str:
         out.append(("class:dim", pts_str))
     out.append((blk_style, "\n"))

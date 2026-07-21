@@ -282,6 +282,37 @@ def _log_archive(item, action):
             (time.time(), uid_str, action, item.get("type", ""), resp_min),
         )
         db.commit()
+        _push_archive_db_to_ix()
+    except Exception:
+        pass
+
+
+_last_archive_push = 0.0
+
+
+def _push_archive_db_to_ix():
+    """archive_log.db lives under ~/.config (not vault-synced across hosts),
+    but the dashboard's Project Bocking chart reads it exclusively on ix,
+    where the dashboard server runs. Found 2026-07-21 while adding
+    block-granularity Bocking data: ix's copy was over a month stale (last
+    write June 20) since nothing ever pushed to it — /inbound normally runs
+    on the laptop, not ix, so this silently made the *existing* daily-view
+    overlay stale too, not just the new block feature. Throttled to once a
+    minute: archiving happens at interactive speed, not worth an scp per
+    action."""
+    global _last_archive_push
+    now = time.time()
+    if now - _last_archive_push < 60:
+        return
+    _last_archive_push = now
+    host_file = Path.home() / ".claude" / ".host-name"
+    if host_file.exists() and host_file.read_text().strip() == "ix":
+        return
+    try:
+        subprocess.run(
+            ["scp", "-q", str(_ARCHIVE_DB_PATH), f"ix:{_ARCHIVE_DB_PATH}"],
+            capture_output=True, timeout=15,
+        )
     except Exception:
         pass
 

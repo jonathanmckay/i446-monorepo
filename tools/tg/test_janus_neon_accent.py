@@ -1,9 +1,9 @@
-"""Regression: the -1₦ block score (₦N) renders in NEON_ACCENT (Radioactive
-#c3fc0d) at the RIGHT edge of the block line — beside the 分, not after the
-block name — in every live header path: the compact block header (past and
-future-head branches) and the 卯 sleep line (user requests 2026-07-21:
-"the neon colors in Janus (0n or -1n)... both"; "in the block lines...
-not in the header")."""
+"""Regression: the -1₦ block score renders as a BARE number in the red chip
+style (NEON_PTS_STYLE: red background, white text — user request 2026-07-21,
+replacing the lime ₦N accent, "no need for the fancy ₦ letter as it takes up
+a character") at the RIGHT edge of the block line — beside the 分, not after
+the block name — in every live header path: the compact block header (past
+and future-head branches) and the 卯 sleep line."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -19,35 +19,49 @@ def _load_tui():
     return mod
 
 
-def _accent_fragments(frags, mod):
-    return [(sty, txt) for sty, txt in frags if mod.NEON_ACCENT in sty]
+def _score_fragments(frags, mod):
+    return [(sty, txt) for sty, txt in frags if sty == mod.NEON_PTS_STYLE]
 
 
-def test_past_block_header_score_is_radioactive_at_right_edge():
+def test_score_style_is_red_bg_white_text():
     mod = _load_tui()
-    frags = mod._compact_block_lines("辰", 6, [], 42, "₦6")
-    accent = _accent_fragments(frags, mod)
-    assert accent and "₦6" in accent[0][1]
+    assert "bg:" in mod.NEON_PTS_STYLE and "#ffffff" in mod.NEON_PTS_STYLE
+    # The lime fg accent must not style the score anywhere.
+    assert mod.NEON_ACCENT not in mod.NEON_PTS_STYLE
+
+
+def test_label_is_bare_number_no_currency_glyph():
+    mod = _load_tui()
+    assert mod._ritual_pts_label("☀️🎯") == "4"
+    assert mod._ritual_pts_label("") == ""
+    assert "₦" not in mod._ritual_pts_label("☀️📧🎯⏱️✅")
+
+
+def test_past_block_header_score_is_red_chip_at_right_edge():
+    mod = _load_tui()
+    frags = mod._compact_block_lines("辰", 6, [], 42, "6")
+    score = _score_fragments(frags, mod)
+    assert score and "6" in score[0][1]
     # The 分 points fragment keeps its own style, untouched.
     assert any("42分" in txt for _sty, txt in frags)
-    # Right-edge placement: the header line reads `辰:00 ... ₦6 42分`.
+    # Right-edge placement: the header line reads `辰:00 ... 6 42分`.
     header = "".join(txt for _sty, txt in frags).split("\n")[0]
-    assert header.startswith("辰:00") and header.endswith("₦6 42分")
+    assert header.startswith("辰:00") and header.endswith("6 42分")
 
 
-def test_no_score_no_accent_fragment():
+def test_no_score_no_chip_fragment():
     mod = _load_tui()
     frags = mod._compact_block_lines("辰", 6, [], 0, "")
-    assert not _accent_fragments(frags, mod)
+    assert not _score_fragments(frags, mod)
 
 
-def test_mao_line_score_is_radioactive():
+def test_mao_line_score_is_red_chip():
     mod = _load_tui()
     mod.STATE.entries = []
     mod.STATE.entries_yday = []
-    frags = mod._mao_line("₦4")
-    accent = _accent_fragments(frags, mod)
-    assert accent and "₦4" in accent[0][1]
+    frags = mod._mao_line("4")
+    score = _score_fragments(frags, mod)
+    assert score and "4" in score[0][1]
 
 
 if __name__ == "__main__":
