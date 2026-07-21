@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-21T06:00:06.457265-07:00"
+  "tasks": {
+    "100s": {
+      "todoist_id": "6h7FHrgwgghhQP5R",
+      "minutes": 50
+    },
+    "stay productive and happy during offsite": {
+      "todoist_id": "6h7FHrqQmrpmf5hR",
+      "minutes": 100
+    },
+    "have an agenda and bundle s897 into the social event tonight": {
+      "todoist_id": "6h7FHrwXVxjXrCP2",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-07-21T10:00:06.537693-07:00"
 }
