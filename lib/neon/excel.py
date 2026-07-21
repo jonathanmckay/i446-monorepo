@@ -13,7 +13,11 @@ from typing import Any
 
 DAEMON_HOST = "ix"
 DAEMON_PORT = 9876
-DAEMON_TIMEOUT = 5
+# Covers a fresh ssh handshake on a congested tailnet path (~10s observed
+# 2026-07-20 at ~630ms RTT) plus curl's own -m 10. At 5s every call fell
+# through to the (then-broken) osascript fallback whenever no connection
+# was already warm.
+DAEMON_TIMEOUT = 25
 WORKBOOK = "Neon分v12.2.xlsx"
 
 
@@ -129,9 +133,13 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'  return 0\n'
             f'end tell'
         )
+        # ssh joins argv with spaces for the remote shell — the script MUST be
+        # shell-quoted or the remote zsh parses its parens/quotes and dies
+        # ("parse error near ')'", found 2026-07-20: the fallback had never
+        # actually worked).
         r = subprocess.run(
-            ["ssh", DAEMON_HOST, "osascript", "-e", lookup_script],
-            capture_output=True, text=True, timeout=15,
+            ["ssh", DAEMON_HOST, f"osascript -e {shlex.quote(lookup_script)}"],
+            capture_output=True, text=True, timeout=45,
         )
         try:
             row = int(r.stdout.strip())
@@ -192,8 +200,8 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'end tell'
         )
     r = subprocess.run(
-        ["ssh", DAEMON_HOST, "osascript", "-e", script],
-        capture_output=True, text=True, timeout=15,
+        ["ssh", DAEMON_HOST, f"osascript -e {shlex.quote(script)}"],
+        capture_output=True, text=True, timeout=45,
     )
     if r.returncode != 0:
         return {"ok": False, "error": r.stderr.strip(), "fallback": True}
