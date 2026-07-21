@@ -1195,34 +1195,52 @@ def fetch_habits_today():
     try:
         now = view_now()
         IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
+        # BULK range reads only — the old shape (a per-row date loop up to
+        # r500 + per-cell header/value reads) was ~580 individual AppleEvents
+        # over ssh, which is the "habit strip takes ~2 minutes" class of slow
+        # (same disease the ص skill had; fixed the same way 2026-07-21). This
+        # shape is ~6 AppleEvents and returns in about a second.
         script = f'''tell application "Microsoft Excel"
     set ws to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set targetMonth to {now.month}
     set targetDay to {now.day}
+    set dateVals to value of range "C3:C500" of ws
     set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of ws
-        if cellDate is not missing value then
+    repeat with i from 1 to (count of dateVals)
+        set cv to item 1 of (item i of dateVals)
+        if cv is not missing value then
             try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = targetMonth and d = targetDay then
-                    set todayRow to r
+                if (month of cv as integer) = targetMonth and (day of cv) = targetDay then
+                    set todayRow to i + 2
                     exit repeat
                 end if
+            on error
+                try
+                    if (cv as text) = (targetMonth as text) & "/" & (targetDay as text) then
+                        set todayRow to i + 2
+                        exit repeat
+                    end if
+                end try
             end try
         end if
     end repeat
     if todayRow = 0 then return "ERR"
+    -- Two-step unwrap on purpose: `item 1 of (value of range ... of ws)`
+    -- compiles as an element specifier dispatched TO Excel and errors; a
+    -- local temporary keeps the `item 1 of` in plain AppleScript.
+    set tmpH to value of range "D1:AS1" of ws
+    set hdrVals to item 1 of tmpH
+    set tmpR to value of range ("D" & todayRow & ":AS" & todayRow) of ws
+    set rowVals to item 1 of tmpR
     set out to ""
-    repeat with c from 4 to 45
+    repeat with i from 1 to (count of hdrVals)
         set hv to ""
         try
-            set hv to (value of cell c of row 1 of ws) as text
+            set hv to (item i of hdrVals) as text
         end try
         set vv to ""
         try
-            set vv to (value of cell c of row todayRow of ws) as text
+            set vv to (item i of rowVals) as text
         end try
         set out to out & hv & "\\t" & vv & "|"
     end repeat
@@ -1312,6 +1330,43 @@ def _habit_deferred(name: str) -> bool:
     return all(d[:10] > today for d in dues)
 
 
+def _current_block_rituals(now: dt.datetime | None = None) -> tuple[list[str], list[str]]:
+    """Current 地支 block's five -1neon rituals, from the LOCAL build order
+    (instant — no Excel round trip): (stamped_emojis, pending_emojis) in
+    RITUAL_PTS order. The habit strip shows these alongside the 0neon chips
+    (user request 2026-07-21: the strip showed 0neon but "not the -1neon
+    habits"). Today-only: past-day views return nothing (the build order
+    holds only today's stamps), as does the 22:00-04:00 gap with no block."""
+    if STATE.day_offset != 0:
+        return [], []
+    now = now or view_now()
+    blk = hour_to_block(now.hour)
+    if not blk:
+        return [], []
+    branch = blk[0]
+    try:
+        text = BUILD_ORDER.read_text()
+    except Exception:
+        return [], []
+    tail = ""
+    in_section = False
+    for line in text.splitlines():
+        if line.strip().startswith("## -1₲"):
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if (in_section and line.startswith("- ")
+                and line[2:].strip().startswith(branch)):
+            tail = line[2:].strip()
+            break
+    if not tail:
+        return [], []
+    done = [e for e in RITUAL_PTS if e in tail]
+    pending = [e for e in RITUAL_PTS if e not in tail]
+    return done, pending
+
+
 def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Fit as many chips as WIDTH_HINT allows onto ONE row; drop the rest
     (each of the two habit rows is its own single line, not a wrap group)."""
@@ -1335,22 +1390,30 @@ def render_habits_today() -> list[tuple[str, str]]:
     colored chip style, so it reads as "still open." Each row independently
     drops whatever doesn't fit in WIDTH_HINT — the ask was two lines, not a
     scrolling list."""
-    if not STATE.habits_today and not STATE.habits_ytd:
+    # Current block's -1neon rituals lead each row (local build-order read,
+    # so they render immediately even while the Excel fetch is in flight),
+    # on the ₦ accent so they read as one group distinct from habit chips.
+    r_done, r_pending = _current_block_rituals()
+    if not STATE.habits_today and not STATE.habits_ytd and not (r_done or r_pending):
         return []
+    ritual_style = f"bold bg:{NEON_ACCENT} #000000"
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
     # the two rows.
-    done_chips = [(_habit_chip_style(name), f"{v:g} ")
-                  for name, v in STATE.habits_today if v is not None]
+    done_chips = [(ritual_style, f"{e} ") for e in r_done]
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
     # as the jm dashboard "2026" header cards), green at/ahead and red behind,
-    # instead of daily done/pending chips.
+    # instead of daily done/pending chips. Ahead of the daily-value chips so
+    # the standing survives the row's width truncation.
     done_chips += [(f"bold bg:{'#2e7d32' if v >= 0 else '#b3261e'} #ffffff",
                     f"{name} {v:+g} ")
                    for name, v in STATE.habits_ytd.items()]
-    pending_chips = [(_habit_chip_style(name), f"{name} ")
-                     for name, v in STATE.habits_today
-                     if v is None and not _habit_deferred(name)]
+    done_chips += [(_habit_chip_style(name), f"{v:g} ")
+                   for name, v in STATE.habits_today if v is not None]
+    pending_chips = [(ritual_style, f"{e} ") for e in r_pending]
+    pending_chips += [(_habit_chip_style(name), f"{name} ")
+                      for name, v in STATE.habits_today
+                      if v is None and not _habit_deferred(name)]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:

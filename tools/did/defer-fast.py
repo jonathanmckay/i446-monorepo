@@ -432,6 +432,9 @@ def handle_recurring(task: dict, target_date: str,
     if pattern:
         body["due_string"] = pattern
     _api("POST", f"/tasks/{task_id}", body)
+    # Daily habit: record the parent id so dtd hides it for the rest of today
+    # (the due-tomorrow drift guard would otherwise keep showing it).
+    mark_habit_deferred(task_id, labels)
 
     # 3. Posthoc eval record (due today, immediately closed).
     today_iso = date.today().isoformat()

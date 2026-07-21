@@ -675,13 +675,32 @@ rituals = [t for t in today_tasks if _has(t, '-1neon')]
 neg1g = [t for t in today_tasks if _has(t, '#-1g') and not _has(t, '-1neon')]
 # 0n: daily habits (0neon + evening 夜neon). 1n: weekly habits.
 # The tomorrow bound is ONLY for recurring cards (due-drift guard, 2026-06-27).
-# Non-recurring 0neon tasks are deferred one-off copies ("xk22 7.21") — they
+# Non-recurring 0neon tasks are deferred one-off copies ('xk22 7.21') — they
 # must stay hidden until actually due, else a just-deferred habit pops right
 # back into today's queue (bug 2026-07-21).
 # (missing 'recurring' defaults to True so a partial cache entry keeps the
 # drift guard; copies always carry an explicit recurring: false.)
+#
+# habits-deferred-<date>.ids: parent ids of daily habits DEFERRED today
+# (written by defer-fast, removed by undo-fast on ctrl-z). A deferred parent
+# advanced to tomorrow is cache-identical to the 2026-06-27 drift case the
+# tomorrow bound exists to rescue, so intent has to come from this marker.
+# Hidden unconditionally (no due predicate): right after a defer the cache
+# may still hold the parent at due=today until the next refresh, and a dtd
+# restart in that window would resurface it. Path uses the CURRENT date, not
+# the session-start 'today' arg, so a session crossing midnight stops
+# honoring yesterday's marker.
+import os as _os
+_deferred_ids = set()
+try:
+    with open(_os.path.expanduser('~/.cache/jm/habits-deferred-%s.ids'
+                                  % _dt.date.today().isoformat())) as _df:
+        _deferred_ids = {_l.strip() for _l in _df if _l.strip()}
+except OSError:
+    pass
 zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
-            if t.get('recurring', True) or t['due'] <= today]
+            if t.get('id') not in _deferred_ids
+            and (t.get('recurring', True) or t['due'] <= today)]
 oneneon = _sec('1neon', today)
 # 0g: today's daily goals.
 zerog = [t for t in today_tasks if _has(t, '#0g') and not _has(t, '-1neon') and not _has(t, '#-1g')]
@@ -832,6 +851,21 @@ for l in skipped_lines:
 " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
 LISTEOF
 chmod +x "$DTD_LIST"
+
+# Self-test the generated list script before fzf takes the screen. The python
+# payload above lives inside a zsh double-quoted string: one stray " in it
+# splits the -c argument, shifts argv, and the picker opens empty with a
+# traceback bleeding into the prompt (bug 2026-07-21: int('2026-07-21')).
+# {} is a valid-but-empty cache; /dev/null feeds the overlay args.
+DTD_SMOKE="/tmp/dtd-$DTD_ID.smoke.json"
+printf '{}' > "$DTD_SMOKE"
+if "$DTD_LIST" "$DTD_SMOKE" /dev/null /dev/null "$(date +%Y-%m-%d)" 80 /dev/null /dev/null /dev/null >/dev/null 2>&1; then
+  rm -f "$DTD_SMOKE"
+else
+  echo "⚠ dtd: list.sh self-test FAILED — likely a stray double-quote in the list heredoc in dtd.sh."
+  echo "  Debug: zsh -x $DTD_LIST $DTD_SMOKE /dev/null /dev/null $(date +%Y-%m-%d) 80"
+  sleep 3
+fi
 
 # View-cycle script (ctrl-t): advance the view-state file to the next view,
 # wrapping around. Add a view by appending to `views` here and handling its

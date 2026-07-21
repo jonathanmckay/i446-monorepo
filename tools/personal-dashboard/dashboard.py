@@ -185,60 +185,100 @@ def _points_col_letter(idx):
     return chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)
 
 
+_XLWINGS_BLOCK_RETRIES = 3
+
+
 def _xlwings_block_window(window_days=_BLOCK_REFRESH_WINDOW_DAYS):
     """Bounded live re-read of the last `window_days` rows of 0分's G:Y
     columns via xlwings. Returns {date_str: day_data} for just that window
-    (empty dict on any failure) — never the full sheet, see the crash note
-    above."""
-    try:
-        import xlwings as xw
-        wb = xw.Book(str(NEON_PATH))
-        ws = wb.sheets["0分"]
-        last_row = ws.range("B2").end("down").row
-        window_start = max(3, last_row - window_days + 1)
-        min_idx = 7  # G — first per-block points column, precedes POINTS_COLS' P:Y range
-        max_idx = max(POINTS_COLS)
-        first_col = _points_col_letter(min_idx)
-        last_col = _points_col_letter(max_idx)
-        b_vals = ws.range(f"B{window_start}:B{last_row}").value
-        if not isinstance(b_vals, list):
-            b_vals = [b_vals]
-        block = ws.range(f"{first_col}{window_start}:{last_col}{last_row}").value
-        if not isinstance(block, list):
-            block = [[block]]
-        elif block and not isinstance(block[0], list):
-            block = [block]
+    (empty dict if every retry fails) — never the full sheet, see the crash
+    note above.
 
-        result = {}
-        for i, b in enumerate(b_vals):
-            if b is None:
-                continue
-            if isinstance(b, datetime):
-                d = b.date()
-            elif isinstance(b, date):
-                d = b
-            else:
-                continue
-            day_str = d.isoformat()
-            day_data = {}
-            row_vals = block[i] if i < len(block) else []
-            for col_idx, meta in POINTS_COLS.items():
-                offset = col_idx - min_idx
-                val = row_vals[offset] if offset < len(row_vals) else None
-                if val is not None and isinstance(val, (int, float)) and val > 0:
-                    day_data[meta["label"]] = int(round(float(val)))
-            block_data = {}
-            for j, (branch, _, _) in enumerate(BRANCH_BLOCKS):
-                val = row_vals[j] if j < len(row_vals) else None
-                if val is not None and isinstance(val, (int, float)) and val > 0:
-                    block_data[branch] = int(round(float(val)))
-            if block_data:
-                day_data["__block__"] = block_data
-            if day_data:
-                result[day_str] = day_data
-        return result
-    except Exception:
-        return {}
+    Retries with a fresh xw.Book() connection each time: the same bounded
+    read was observed (live, 2026-07-21) to fail with
+    `CommandError: OSERROR -609/-1728` on one attempt and succeed
+    immediately on the next with identical arguments — the AppleEvent
+    bridge to Excel is just intermittently flaky (same family as the
+    save-hang issue found the same day), not deterministically broken by
+    range size or row position. Bounding the range lowers how often this
+    hits; it doesn't eliminate it, hence the retry.
+    """
+    for attempt in range(_XLWINGS_BLOCK_RETRIES):
+        try:
+            import xlwings as xw
+            wb = xw.Book(str(NEON_PATH))
+            ws = wb.sheets["0分"]
+            # 0分 is pre-templated with calendar rows reaching months into the
+            # future (empty, no real data) — `end("down")` on B2 walks all the
+            # way to that far frontier (row ~365, into next January), NOT to
+            # today's row. Bounding the window relative to THAT end row (as an
+            # earlier version of this function did) targeted blank future rows
+            # instead of the recent past, which is the whole point of this
+            # function — self-caught live, 2026-07-21: the window computed
+            # this way silently read zero real data every time. Locate today's
+            # actual row via the single-column B scan (bulk single-column
+            # reads have proven reliable even across the full sheet in
+            # testing) and bound the window around THAT instead.
+            last_row = ws.range("B2").end("down").row
+            b_scan = ws.range(f"B3:B{last_row}").value
+            if not isinstance(b_scan, list):
+                b_scan = [b_scan]
+            today = date.today()
+            anchor_row = None
+            for i, b in enumerate(b_scan):
+                d = b.date() if isinstance(b, datetime) else (b if isinstance(b, date) else None)
+                if d is not None and d <= today:
+                    anchor_row = i + 3  # most recent row seen so far that isn't in the future
+                elif d is not None and d > today:
+                    break
+            if anchor_row is None:
+                anchor_row = last_row
+            window_start = max(3, anchor_row - window_days + 1)
+            window_end = anchor_row
+            min_idx = 7  # G — first per-block points column, precedes POINTS_COLS' P:Y range
+            max_idx = max(POINTS_COLS)
+            first_col = _points_col_letter(min_idx)
+            last_col = _points_col_letter(max_idx)
+            b_vals = b_scan[window_start - 3:window_end - 3 + 1]
+            block = ws.range(f"{first_col}{window_start}:{last_col}{window_end}").value
+            if not isinstance(block, list):
+                block = [[block]]
+            elif block and not isinstance(block[0], list):
+                block = [block]
+
+            result = {}
+            for i, b in enumerate(b_vals):
+                if b is None:
+                    continue
+                if isinstance(b, datetime):
+                    d = b.date()
+                elif isinstance(b, date):
+                    d = b
+                else:
+                    continue
+                day_str = d.isoformat()
+                day_data = {}
+                row_vals = block[i] if i < len(block) else []
+                for col_idx, meta in POINTS_COLS.items():
+                    offset = col_idx - min_idx
+                    val = row_vals[offset] if offset < len(row_vals) else None
+                    if val is not None and isinstance(val, (int, float)) and val > 0:
+                        day_data[meta["label"]] = int(round(float(val)))
+                block_data = {}
+                for j, (branch, _, _) in enumerate(BRANCH_BLOCKS):
+                    val = row_vals[j] if j < len(row_vals) else None
+                    if val is not None and isinstance(val, (int, float)) and val > 0:
+                        block_data[branch] = int(round(float(val)))
+                if block_data:
+                    day_data["__block__"] = block_data
+                if day_data:
+                    result[day_str] = day_data
+            return result
+        except Exception:
+            if attempt == _XLWINGS_BLOCK_RETRIES - 1:
+                return {}
+            continue
+    return {}
 
 
 def _get_points_cache():
