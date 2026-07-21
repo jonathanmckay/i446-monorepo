@@ -63,6 +63,20 @@ def compute_missing(manifest: dict, present_contents: list[str]) -> list[str]:
     return missing
 
 
+def na_today(when=None) -> set[str]:
+    """Bare habit names the user deleted from dtd today (= N/A for today).
+    dtd's ctrl-x writes them to ~/.cache/jm/habits-na-YYYY-MM-DD.json alongside
+    the explicit-0 Neon write; --fix must not resurrect these the same day —
+    the recurring card comes back on the next day's validation, whose date
+    lands on a fresh NA file."""
+    from datetime import date as _date
+    p = Path.home() / ".cache/jm" / f"habits-na-{(when or _date.today()).isoformat()}.json"
+    try:
+        return {bare(n) for n in json.loads(p.read_text())}
+    except Exception:
+        return set()
+
+
 def recreate_payload(habit: dict) -> dict:
     """Pure: build the Todoist create-task body from a manifest entry. The 😈
     auto-marker is prefixed so a habit Dream/this job rebuilt is visibly distinct
@@ -126,6 +140,9 @@ def main() -> int:
     token = _token()
     present_contents = _fetch_open(token)
     missing = compute_missing(manifest, present_contents)
+    skipped_na = [k for k in missing
+                  if bare(manifest["habits"][k]["match"]) in na_today()]
+    missing = [k for k in missing if k not in skipped_na]
 
     recreated, errors = [], []
     if args.fix:
@@ -145,6 +162,7 @@ def main() -> int:
         "missing_names": [manifest["habits"][k]["match"] for k in missing],
         "recreated": recreated,
         "recreated_names": [manifest["habits"][k]["match"] for k in recreated],
+        "skipped_na": skipped_na,
         "errors": errors,
     }
     if args.cache:

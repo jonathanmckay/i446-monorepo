@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical daily Todoist habits. validate-daily-habits.py checks each appears as an open recurring task every day and recreates missing ones. Seeded 2026-06-14 from the live healthy set; curate freely (add/remove entries).",
+  "_comment": "Canonical daily Todoist habits. validate-daily-habits.py checks each appears as an open recurring task every day and recreates missing ones. Seeded 2026-06-14 from the live healthy set; curate freely (add/remove entries). Deleting a daily habit card from dtd (ctrl-x) means N/A-for-today: dtd writes an explicit 0 to the habit's 0n Neon column (distinct from blank = not done yet) and records the name in ~/.cache/jm/habits-na-YYYY-MM-DD.json, which the validator honors so --fix does not resurrect the card the same day; the recurring card returns on the next day's validation.",
   "habits": {
     "0g": {
       "match": "0g",
@@ -100,6 +100,17 @@
       ],
       "priority": 3,
       "project_id": "6Crfmq5PfP5VQ286"
+    },
+    "i444": {
+      "match": "i444",
+      "content": "i444 (15) [5]",
+      "due_string": "every day",
+      "labels": [
+        "0neon",
+        "i444"
+      ],
+      "priority": 2,
+      "project_id": "6M6RxxQrj72pRcM7"
     },
     "i447": {
       "match": "i447",

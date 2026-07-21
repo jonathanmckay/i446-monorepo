@@ -659,6 +659,15 @@
       "neon_header": "2 hci",
       "domain": "hci",
       "todoist_label": "1neon"
+    },
+    "i444": {
+      "name": "i444",
+      "category": "0n",
+      "neon_header": "i444",
+      "domain": "i444",
+      "todoist_label": "0neon",
+      "points_default": 5,
+      "minutes_default": 15
     }
   }
 }

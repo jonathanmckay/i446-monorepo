@@ -922,6 +922,37 @@ if not isinstance(task, dict) or not task.get('content'):
 print(json.dumps({'type': 'delete', 'names': [name], 'task': task},
                  ensure_ascii=False))
 " "\${fullname:-\$clean}" "\$clean" | python3 "$UNDO_FAST" --append "$DTD_JOURNAL"
+    # Daily habit (0neon/夜neon) deleted = N/A for today: write an explicit 0
+    # to its 0n Neon column (blank = not done yet; 0 = didn't apply/happen —
+    # Janus hides explicit-0 habits from its strip) and record the name in the
+    # day's NA file so validate-daily-habits --fix doesn't resurrect the card
+    # the same day. The recurring card returns on the next day's validation.
+    # (ctrl-z undo recreates the card but leaves the 0; re-completing the
+    # habit overwrites it.)
+    python3 - "\${fullname:-\$clean}" "\$pre" << 'NAEOF' &
+import datetime, json, pathlib, subprocess, sys
+name = sys.argv[1].strip()
+try:
+    task = json.loads(sys.argv[2])
+except Exception:
+    task = {}
+labels = task.get("labels") or []
+if not ("0neon" in labels or "夜neon" in labels):
+    sys.exit(0)
+na = (pathlib.Path.home() / ".cache/jm"
+      / f"habits-na-{datetime.date.today():%Y-%m-%d}.json")
+na.parent.mkdir(parents=True, exist_ok=True)
+try:
+    names = json.loads(na.read_text())
+except Exception:
+    names = []
+if name not in names:
+    names.append(name)
+    na.write_text(json.dumps(names, ensure_ascii=False) + "\n")
+subprocess.run(
+    ["python3", str(pathlib.Path.home() / "i446-monorepo/tools/did/did-fast.py"),
+     f"{name} 0"], capture_output=True, timeout=120)
+NAEOF
     echo "🗑 Deleted: \$clean" > "\$HDR"
   else
     echo "? delete failed (HTTP \$code): \$clean" > "\$HDR"
