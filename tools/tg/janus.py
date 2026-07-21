@@ -1175,6 +1175,14 @@ HABIT_YTD_CELLS = {
     "冥想": "AR375",
     "其他人": "AS375",
 }
+# Chip backgrounds: each its own purple, the same hues as the dashboard's
+# cards (user request 2026-07-21: "different shades of purple", not
+# standing-red/green).
+HABIT_YTD_COLORS = {
+    "o314": "#7c4dff",
+    "冥想": "#aa00ff",
+    "其他人": "#673ab7",
+}
 
 
 def _ytd_applescript_lines() -> str:
@@ -1375,14 +1383,15 @@ def render_habits_today() -> list[tuple[str, str]]:
     done_chips = neon_chip + [(_habit_chip_style(name), f"{v:g} ")
                               for name, v in STATE.habits_today if v is not None]
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
-    # as the jm dashboard "2026" header cards), green at/ahead and red
-    # behind, AFTER the daily 0neon values (user-requested order 2026-07-21).
-    done_chips += [(f"bold bg:{'#2e7d32' if v >= 0 else '#b3261e'} #ffffff",
-                    f"{name} {v:+g} ")
-                   for name, v in STATE.habits_ytd.items()]
+    # as the jm dashboard "2026" header cards) on the second line AFTER the
+    # pending 0neon names, each in its own purple (HABIT_YTD_COLORS —
+    # user-requested order + palette 2026-07-21).
     pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today
                      if v is None and not _habit_deferred(name)]
+    pending_chips += [(f"bold bg:{HABIT_YTD_COLORS.get(name, '#7c4dff')} #ffffff",
+                       f"{name} {v:+g} ")
+                      for name, v in STATE.habits_ytd.items()]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:

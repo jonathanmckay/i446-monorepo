@@ -38,8 +38,8 @@ def test_render_ytd_chips_signed_and_colored():
     frags = mod.render_habits_today()
     behind = next((s, t) for s, t in frags if "o314" in t)
     ahead = next((s, t) for s, t in frags if "其他人" in t)
-    assert "-107" in behind[1] and "#b3261e" in behind[0]
-    assert "+1" in ahead[1] and "#2e7d32" in ahead[0]
+    assert "-107" in behind[1] and mod.HABIT_YTD_COLORS["o314"] in behind[0]
+    assert "+1" in ahead[1] and mod.HABIT_YTD_COLORS["其他人"] in ahead[0]
 
 
 def test_fetch_filter_drops_ytd_habits_from_daily_rows():
