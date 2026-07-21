@@ -1,7 +1,9 @@
 """Regression: the -1₦ block score (₦N) renders in NEON_ACCENT (Radioactive
-#c3fc0d), not the dim header style, in every live header path — the compact
-block header (past and future-head branches) and the 卯 sleep line (user
-request 2026-07-21: "the neon colors in Janus (0n or -1n)... both")."""
+#c3fc0d) at the RIGHT edge of the block line — beside the 分, not after the
+block name — in every live header path: the compact block header (past and
+future-head branches) and the 卯 sleep line (user requests 2026-07-21:
+"the neon colors in Janus (0n or -1n)... both"; "in the block lines...
+not in the header")."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -21,13 +23,16 @@ def _accent_fragments(frags, mod):
     return [(sty, txt) for sty, txt in frags if mod.NEON_ACCENT in sty]
 
 
-def test_past_block_header_score_is_radioactive():
+def test_past_block_header_score_is_radioactive_at_right_edge():
     mod = _load_tui()
     frags = mod._compact_block_lines("辰", 6, [], 42, "₦6")
     accent = _accent_fragments(frags, mod)
     assert accent and "₦6" in accent[0][1]
     # The 分 points fragment keeps its own style, untouched.
     assert any("42分" in txt for _sty, txt in frags)
+    # Right-edge placement: the header line reads `辰:00 ... ₦6 42分`.
+    header = "".join(txt for _sty, txt in frags).split("\n")[0]
+    assert header.startswith("辰:00") and header.endswith("₦6 42分")
 
 
 def test_no_score_no_accent_fragment():

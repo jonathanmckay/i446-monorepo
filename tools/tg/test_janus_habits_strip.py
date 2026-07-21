@@ -98,22 +98,21 @@ def test_pending_chip_also_gets_its_domain_background_color():
     mod.STATE.habits_today = [("hiit", None)]
     style, text = mod.render_habits_today()[0]
     assert "hiit" in text
-    # _habit_chip_style takes the habit NAME since 2026-07-21 (workbook row-2
-    # colors win; the domain map is the fallback exercised here).
+    # _habit_chip_style takes the habit NAME since 2026-07-21.
     assert style == mod._habit_chip_style("hiit")
     assert f"bg:{mod.PROJECT_COLORS[mod.HABIT_COLOR_DOMAIN['hiit']]}" in style
 
 
-def test_workbook_row2_color_beats_domain_fallback():
-    """The 0n sheet's row-2 cell fill is the canonical neon color; when the
-    fetch has populated STATE.habit_colors it must win over the domain map,
-    and a light fill must flip the chip text to black for contrast."""
+def test_domain_map_is_the_color_source_not_the_workbook():
+    """0l/0g must render g245 green (user 2026-07-21: "obviously green").
+    Regression guard against re-sourcing chip fills from the 0n sheet's
+    row-2 (⊖分) fills — those reds are penalty markers, not habit colors,
+    and briefly turned 0l/0g red. Text stays white on every chip."""
     mod = _load_tui()
-    mod.STATE.habit_colors = {"0t": "#0d3b66", "早餐": "#feccff"}
-    mod.STATE.habits_today = [("0t", None), ("早餐", None)]
-    (s_0t, _), (s_zc, _) = mod.render_habits_today()[:2]
-    assert "bg:#0d3b66" in s_0t and "#ffffff" in s_0t
-    assert "bg:#feccff" in s_zc and "#000000" in s_zc
+    mod.STATE.habits_today = [("0g", None), ("0l", None)]
+    for style, _text in mod.render_habits_today()[:2]:
+        assert f"bg:{mod.PROJECT_COLORS['g245']}" in style
+        assert "#ffffff" in style
 
 
 def test_unmapped_habit_still_gets_a_visible_chip_not_a_crash():

@@ -674,7 +674,14 @@ rituals = [t for t in today_tasks if _has(t, '-1neon')]
 # -1g: this block's goals.
 neg1g = [t for t in today_tasks if _has(t, '#-1g') and not _has(t, '-1neon')]
 # 0n: daily habits (0neon + evening 夜neon). 1n: weekly habits.
-zeroneon = _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
+# The tomorrow bound is ONLY for recurring cards (due-drift guard, 2026-06-27).
+# Non-recurring 0neon tasks are deferred one-off copies ("xk22 7.21") — they
+# must stay hidden until actually due, else a just-deferred habit pops right
+# back into today's queue (bug 2026-07-21).
+# (missing 'recurring' defaults to True so a partial cache entry keeps the
+# drift guard; copies always carry an explicit recurring: false.)
+zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
+            if t.get('recurring', True) or t['due'] <= today]
 oneneon = _sec('1neon', today)
 # 0g: today's daily goals.
 zerog = [t for t in today_tasks if _has(t, '#0g') and not _has(t, '-1neon') and not _has(t, '#-1g')]

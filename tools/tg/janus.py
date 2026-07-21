@@ -323,11 +323,6 @@ class State:
         # excluded from this list entirely at fetch time (deliberately marked
         # N/A, distinct from "not done yet").
         self.habits_today: list[tuple[str, float | None]] = []
-        # habit name (lowercased) → "#rrggbb" from the 0n sheet's row 2 (the
-        # ⊖分 points row, whose cell fills ARE the canonical per-habit neon
-        # colors). Only replaced on a successful fetch; white cells (Excel's
-        # no-fill read) are omitted so the domain fallback colors them.
-        self.habit_colors: dict[str, str] = {}
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1119,13 +1114,15 @@ def render_header() -> list[tuple[str, str]]:
     return [("class:no_entry", line + "\n")]
 
 
-# 0₦ (Neon habit) column → domain code: the habit strip's FALLBACK palette,
-# used only for habits whose 0n row-2 cell is uncolored (white/no-fill) —
-# the workbook's own row-2 fills win when present (STATE.habit_colors,
-# user request 2026-07-21). Seeded from did-fast.py's HABIT_PROJECT (the
-# canonical 0₦→Toggl-project map) and extended with the rest of the 0n
-# sheet's real columns; a few purely-internal bookkeeping columns
-# (N color, ⎣∀clr, #) are skipped entirely rather than guessed at.
+# 0₦ (Neon habit) column → domain code, for coloring the habit strip the
+# same way the rest of janus colors everything else (project_style/
+# PROJECT_COLORS). This map is the color SOURCE — do not "fix" it by reading
+# fills from the workbook: the only colored 0n row is row 2 (⊖分), whose red
+# fills are penalty markers, not habit colors (tried 2026-07-21, turned
+# 0l/0g red; user: "obviously green"). Seeded from did-fast.py's
+# HABIT_PROJECT (the canonical 0₦→Toggl-project map) and extended with the
+# rest of the 0n sheet's real columns; a few purely-internal bookkeeping
+# columns (N color, ⎣∀clr, #) are skipped entirely rather than guessed at.
 HABIT_COLOR_DOMAIN = {
     "睡觉": "睡觉", "cpap": "hcb", "wake up": "hcb", "i444": "i444", "i447": "i447",
     "charge": "infra", "tmrw": "g245", "2nd hci": "hci", "1st hci": "hci",
@@ -1182,12 +1179,7 @@ def fetch_habits_today():
         try
             set vv to (value of cell c of row todayRow of ws) as text
         end try
-        set cv to ""
-        try
-            set cl to color of interior object of cell c of row 2 of ws
-            set cv to ((item 1 of cl) as text) & "," & ((item 2 of cl) as text) & "," & ((item 3 of cl) as text)
-        end try
-        set out to out & hv & "\\t" & vv & "\\t" & cv & "|"
+        set out to out & hv & "\\t" & vv & "|"
     end repeat
     return out
 end tell'''
@@ -1195,26 +1187,14 @@ end tell'''
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
         habits = []
-        colors: dict[str, str] = {}
         for chunk in proc.stdout.strip().split("|"):
             if not chunk.strip():
                 continue
-            fields = chunk.split("\t")
-            name = fields[0].strip()
-            val = fields[1].strip() if len(fields) > 1 else ""
-            rgb = fields[2].strip() if len(fields) > 2 else ""
+            name, _, val = chunk.partition("\t")
+            name = name.strip()
             if not name or name.lower() in _HABIT_STRIP_SKIP:
                 continue
-            if rgb:
-                try:
-                    r, g, b = (int(x) for x in rgb.split(","))
-                    # White is what an Excel no-fill cell reads as — skip it so
-                    # the domain fallback colors the chip. A duplicate habit
-                    # name would collide here (last column wins) — acceptable.
-                    if (r, g, b) != (255, 255, 255):
-                        colors[name.lower()] = f"#{r:02x}{g:02x}{b:02x}"
-                except ValueError:
-                    pass
+            val = val.strip()
             if not val:
                 habits.append((name, None))  # blank -> not done yet (pending row)
                 continue
@@ -1232,40 +1212,24 @@ end tell'''
                 continue
             habits.append((name, v))
         STATE.habits_today = habits
-        if colors:
-            STATE.habit_colors = colors
     except Exception:
         pass
 
 
-def _chip_text_color(hexv: str) -> str:
-    """Black or white text, whichever contrasts more against the chip fill
-    (WCAG crossover at L≈0.179). Neon's light fills — the pastels, amber,
-    gray — get black text, same as they read in Excel; white text on amber
-    is a 1.7:1 unreadable smear."""
-    r, g, b = (int(hexv[i:i + 2], 16) / 255 for i in (1, 3, 5))
-    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-           for c in (r, g, b)]
-    lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
-    return "#000000" if lum > 0.179 else "#ffffff"
-
-
 def _habit_chip_style(name: str) -> str:
-    """Solid background chip — the color alone (no name label) is the
-    identifier, so ~20-30 habits fit across two lines instead of ~10
+    """Solid background chip, white text — the color alone (no name label)
+    is the identifier, so ~20-30 habits fit across two lines instead of ~10
     (user request 2026-07-20: "don't want... the names... make the color
-    the background color... fit the ~20-30 categories").
-    Fill comes from the workbook itself when it says something — the 0n
-    sheet's row-2 (⊖分) cell fills are the canonical per-habit neon colors
-    (user request 2026-07-21) — else the domain map approximates. An
-    unmapped habit still gets a visible (neutral gray) chip rather than
-    no background at all — a value with no chip around it would read as
-    plain text, breaking the "everything here is a colored chip" scan."""
-    key = name.lower()
-    hexv = (STATE.habit_colors.get(key)
-            or PROJECT_COLORS.get(HABIT_COLOR_DOMAIN.get(key, ""))
-            or "#444444")
-    return f"bold bg:{hexv} {_chip_text_color(hexv)}"
+    the background color... white [text]... fit the ~20-30 categories").
+    Fills come from the DOMAIN map (0l/0g green as g245, etc.), NOT the
+    workbook: the 0n sheet's row-2 (⊖分) red fills looked like per-habit
+    colors but are penalty markers — sourcing them turned 0l/0g red (tried
+    and reverted 2026-07-21). An unmapped habit still gets a visible
+    (neutral gray) chip rather than no background at all — a value with no
+    chip around it would read as plain text, breaking the "everything here
+    is a colored chip" scan."""
+    hexv = PROJECT_COLORS.get(HABIT_COLOR_DOMAIN.get(name.lower(), ""))
+    return f"bold bg:{hexv or '#444444'} #ffffff"
 
 
 def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -1448,11 +1412,13 @@ def _abbrev_tcol(hh: int, mm: int, prev_hour: int | None) -> tuple[str, int]:
 def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                          is_future=False, max_rows: int = 3,
                          track_selection: bool = False) -> list[tuple[str, str]]:
-    """Render one block as a header (``午:00 ☀️📧``) + ``max_rows`` body rows.
+    """Render one block as a header (``午:00``) + ``max_rows`` body rows.
 
     Header is the block's :00 slot. A FUTURE block carries its dominant upcoming
-    event inline with the duration as ``(N)`` minutes (``午:00 ☀️ standup (60)``);
-    a PAST block shows points right-aligned and keeps the header bare. Body rows
+    event inline with the duration as ``(N)`` minutes (``午:00 standup (60)``);
+    a PAST block shows points right-aligned and keeps the header bare. The
+    block's -1₦ score (``₦N``, Radioactive) rides the RIGHT edge — beside the
+    分 on a past block, after the duration on a future head. Body rows
     are the block's later slot marks (30-min at the default max_rows=3, matching
     the original 3-row card; 15-min when max_rows > 3 — the focus band's wider
     cards, which also include the :00 slot in the marks since a real entry there
@@ -1467,13 +1433,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     drawn — empty marks render as just the time (per the block redesign).
     """
     out: list[tuple[str, str]] = []
-    emoji_str = f" {emojis}" if emojis else ""
 
     # ── header: the block's :00 slot ──
     if is_future and picks:
         head = picks[0]
         body_picks = picks[1:]
-        left = f"{blk_name}:00{emoji_str} "
+        left = f"{blk_name}:00 "
+        neon_tail = f" {emojis}" if emojis else ""
         dur = f"({head['dur_min']})"
         # The header row is labelled :00, but the dominant event riding it may
         # start later in the block — without its own time an 11:00 meeting
@@ -1481,7 +1447,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # the event isn't exactly at the block's :00.
         hs = head["start_dt"]
         tpfx = "" if (hs.hour, hs.minute) == (blk_sh, 0) else f"{hs:%H:%M} "
-        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(tpfx) - dwidth(dur) - 1)
+        avail = max(1, WIDTH_HINT - dwidth(left) - dwidth(tpfx) - dwidth(dur)
+                    - dwidth(neon_tail) - 1)
         label = truncate(head["label"], avail)
         # The event cursor must reach the HEAD pick too, not just body rows:
         # a future block's single/dominant event is riding the header line
@@ -1503,26 +1470,32 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             left_sty = "class:dim"
             time_sty = "class:time"
             dur_sty = "class:dim"
-        # Duration sits right after the label: `午:00 ☀️ 11:00 GamePass sync (60)`.
-        # ₦N stays Radioactive even under the selected-header accent — the
-        # neon score is a header fact, not part of the selected event.
-        out.append((left_sty, f"{blk_name}:00"))
-        if emoji_str:
-            out.append((f"bold fg:{NEON_ACCENT}", emoji_str))
-        out.append((left_sty, " "))
+        # Duration sits right after the label: `午:00 11:00 GamePass sync (60)`.
+        # ₦N trails at the line's end in Radioactive — right side with the
+        # numbers, not after the block name (user request 2026-07-21), and it
+        # keeps its accent even under the selected-header styling.
+        out.append((left_sty, left))
         if tpfx:
             out.append((time_sty, tpfx))
         out.append((head_sty, label))
-        out.append((dur_sty, f" {dur}\n"))
+        out.append((dur_sty, f" {dur}"))
+        if neon_tail:
+            out.append((f"bold fg:{NEON_ACCENT}", neon_tail))
+        out.append((dur_sty, "\n"))
     else:
         body_picks = picks
-        left = f"{blk_name}:00{emoji_str}"
+        left = f"{blk_name}:00"
         pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
-        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
-        out.append(("class:dim", f"{blk_name}:00"))
-        if emoji_str:
-            out.append((f"bold fg:{NEON_ACCENT}", emoji_str))
-        out.append(("class:dim", " " * trail))
+        # ₦N sits at the RIGHT edge beside the block's 分, not after the block
+        # name (user request 2026-07-21: "in the block lines... not in the
+        # header"): `辰:00              ₦9 73分`.
+        right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
+        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
+        out.append(("class:dim", left + " " * trail))
+        if emojis:
+            out.append((f"bold fg:{NEON_ACCENT}", emojis))
+            if pts_str:
+                out.append(("class:dim", " "))
         if pts_str:
             out.append(("bold #ffffff", pts_str))
         out.append(("class:dim", "\n"))
@@ -1984,21 +1957,23 @@ def _mao_line(emojis) -> list[tuple[str, str]]:
     for e in STATE.entries_yday:
         if (e["desc"] or "").strip() == "睡觉" and e["start_dt"].hour >= 18:
             sleep_min += max(0, int((e["end_dt"] - e["start_dt"]).total_seconds() // 60))
-    emoji_str = f" {emojis}" if emojis else ""
+    # ₦N rides the right edge with the sleep minutes, not the block name
+    # (user request 2026-07-21): `─卯 睡觉 →06:00 ──── ₦4 117m`.
+    neon_str = f" {emojis}" if emojis else ""
     pts_str = f" {sleep_min}m" if sleep_min else ""
     blk_style = f"bold {style}".strip() if style else "class:dim"
     out: list[tuple[str, str]] = []
-    left = f"─卯{emoji_str} "  # built whole so trail's dwidth math stays exact
-    out.append((blk_style, "─卯"))
-    if emoji_str:
-        out.append((f"bold fg:{NEON_ACCENT}", emoji_str))
-    out.append((blk_style, " "))
+    left = "─卯 "
+    out.append((blk_style, left))
     label = ""
     if wake:
         label = f"睡觉 →{wake:%H:%M} "
         out.append((style or blk_style, label))
-    trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(label) - dwidth(pts_str))
+    trail = max(0, WIDTH_HINT - dwidth(left) - dwidth(label)
+                - dwidth(neon_str) - dwidth(pts_str))
     out.append((blk_style, "─" * trail))
+    if neon_str:
+        out.append((f"bold fg:{NEON_ACCENT}", neon_str))
     if pts_str:
         out.append(("class:dim", pts_str))
     out.append((blk_style, "\n"))

@@ -30,30 +30,34 @@ def _pick(mod, label, start, dur=30):
 
 
 def test_header_is_bare_block_stamp_entry_in_body():
-    """Non-focus PAST block: header is the bare `午:00 ₦4` :00 slot (ritual
-    points label); the entry sits in the body (no longer riding the header
-    rule)."""
+    """Non-focus PAST block: header is the bare `午:00` :00 slot with the
+    ritual points label at the RIGHT edge (user request 2026-07-21: "in the
+    block lines... not in the header"); the entry sits in the body (no
+    longer riding the header rule)."""
     mod = _load_tui()
     start = _midnight().replace(hour=12, minute=1)
     frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "₦4")
     text = "".join(t for _, t in frags)
     header = text.split("\n")[0]
-    assert header.startswith("午:00 ₦4"), f"header is block:00 + pts label, got: {header!r}"
+    assert header.startswith("午:00"), f"header starts with block:00, got: {header!r}"
+    assert header.endswith("₦4"), f"pts label right-aligned, got: {header!r}"
     assert "Blizz" not in header, "entry must not ride the header"
     assert "Blizz" in text, "entry shows in the body"
     assert not header.startswith("─"), "no dashed rule header anymore"
 
 
 def test_future_block_header_carries_event_with_minute_duration():
-    """Non-focus FUTURE block: the dominant upcoming event rides the header with
-    its duration as (N) minutes."""
+    """Non-focus FUTURE block: the dominant upcoming event rides the header
+    with its duration as (N) minutes; a ₦ label (rare on a future block)
+    trails at the line's end."""
     mod = _load_tui()
     start = _midnight().replace(hour=14, minute=0)
     frags = mod._compact_block_lines(
         "申", 14, [_pick(mod, "Strategy", start, dur=60)], 0, "₦1", is_future=True)
     header = "".join(t for _, t in frags).split("\n")[0]
-    assert header.startswith("申:00 ₦1"), f"header is block:00 + pts label, got: {header!r}"
+    assert header.startswith("申:00"), f"header starts with block:00, got: {header!r}"
     assert "Strategy" in header and "(60)" in header, f"event + (N) on header: {header!r}"
+    assert header.endswith("₦1"), f"₦ label trails the header line, got: {header!r}"
 
 
 def test_ritual_pts_label_sums_config_points():
