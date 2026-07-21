@@ -332,9 +332,18 @@ case "\$clean_lower" in
   xk26) _ip="xk26 minutes (Rori)";;
 esac
 if [[ -n "\$_ip" && -r /dev/tty ]]; then
-  printf "\n→ %s: " "\$_ip" > /dev/tty
+  # fzf leaves the alternate screen for execute(), but what the terminal shows
+  # then is not guaranteed: cmux keeps the stale fzf frame on screen, so the
+  # prompt was invisible and the user pressed ⌃⏎ blind (bug 2026-07-21). Clear
+  # to home so the question is the only thing visible, and force sane tty modes
+  # so Enter always terminates the read.
+  stty sane < /dev/tty 2>/dev/null
+  printf '\033[2J\033[H→ %s: ' "\$_ip" > /dev/tty
   read _iv < /dev/tty
-  _iv=\${_iv// /}
+  # Digits only: a blind ⌃⏎ (ESC CR) lands a literal ESC byte in the answer,
+  # which would ride into the completion name ("CPAP ␛") and break did-fast's
+  # task match. Any garbage → empty → completes with no score, as documented.
+  _iv=\${_iv//[^0-9]/}
   [[ -n "\$_iv" ]] && clean="\$clean \$_iv"
 fi
 echo "\$clean_for_filter" >> "\$SESSION"

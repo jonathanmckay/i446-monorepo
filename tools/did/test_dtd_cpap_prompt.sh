@@ -15,14 +15,37 @@ echo "PASS: cpap quality 1-3 prompt present"
 # 2. It reads the answer from the tty and appends it to the task content.
 # (The DONE script lives in a heredoc, so the source carries literal \$ — match
 # fixed-string with -F rather than fighting grep escaping.)
-grep -q 'read cpap_q < /dev/tty' "$SCRIPT" || fail "cpap prompt must read from /dev/tty"
-grep -F 'clean="\$clean \$cpap_q"' "$SCRIPT" >/dev/null || fail "cpap score must be appended to clean"
+grep -q 'read _iv < /dev/tty' "$SCRIPT" || fail "cpap prompt must read from /dev/tty"
+grep -F 'clean="\$clean \$_iv"' "$SCRIPT" >/dev/null || fail "cpap score must be appended to clean"
 echo "PASS: cpap score read from tty and appended"
 
-# 3. Only cpap triggers the prompt (a plain completion isn't gated behind input).
-grep -F '"\$clean_lower" == cpap && -r /dev/tty' "$SCRIPT" >/dev/null \
-  || fail "prompt must be gated to cpap + an available tty"
-echo "PASS: prompt gated to cpap with a tty"
+# 3. The prompt is gated behind a value-prompt task (_ip set) + an available tty
+# (a plain completion isn't gated behind input).
+grep -F '[[ -n "\$_ip" && -r /dev/tty ]]' "$SCRIPT" >/dev/null \
+  || fail "prompt must be gated to value-prompt tasks + an available tty"
+echo "PASS: prompt gated to value-prompt tasks with a tty"
+
+# 3b. Regression (2026-07-21): in cmux, fzf's execute() leaves the alternate
+# screen but the stale fzf frame stays visible, so the prompt was invisible and
+# a blind ⌃⏎ (ESC CR) fed a literal ESC byte into the read, corrupting the
+# completion name ("CPAP ␛" — did-fast can no longer match the task). The DONE
+# script must (a) force sane tty modes, (b) clear the screen before prompting,
+# and (c) keep only digits from the answer.
+grep -F 'stty sane < /dev/tty' "$SCRIPT" >/dev/null \
+  || fail "DONE prompt must force sane tty modes before read"
+grep -F "printf '\033[2J\033[H→ %s: '" "$SCRIPT" >/dev/null \
+  || fail "DONE prompt must clear the screen so it is visible over a stale frame"
+grep -F '_iv=\${_iv//[^0-9]/}' "$SCRIPT" >/dev/null \
+  || fail "DONE prompt answer must be sanitized to digits only"
+echo "PASS: prompt clears screen, sanes tty, and keeps digits only"
+
+# 3c. Behavioural: the sanitize step drops an ESC byte (blind ⌃⏎) so the
+# completion name stays clean, while a real score still gets appended.
+san() { zsh -c 'clean="CPAP"; _iv="$1"; _iv=${_iv//[^0-9]/}; [[ -n "$_iv" ]] && clean="$clean $_iv"; printf %s "$clean"' _ "$1"; }
+[[ "$(san $'\x1b')" == "CPAP" ]] || fail "ESC input must sanitize to no-score completion"
+[[ "$(san '2')" == "CPAP 2" ]] || fail "a typed score must be appended"
+[[ "$(san $'\x1b2')" == "CPAP 2" ]] || fail "digits must survive sanitization when mixed with ESC"
+echo "PASS: ESC input completes without score; real scores survive"
 
 # 4. alt-enter routes through the transform router (so only cpap gets a tty and
 #    every other completion stays flicker-free execute-silent).
