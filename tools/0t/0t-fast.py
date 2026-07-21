@@ -369,7 +369,28 @@ def refresh_points_cache() -> str:
     wb.close()
 
     POINTS_CACHE.write_text(json.dumps(result, indent=2) + "\n")
+    _push_points_cache_to_ix()
     return f"{len(result)} days"
+
+
+def _push_points_cache_to_ix() -> None:
+    """The dashboard server (and the .points-cache.json it actually reads)
+    lives on ix, but /0t normally runs on the laptop, and i446-monorepo isn't
+    synced between hosts — so this cache write would otherwise never reach
+    ix, leaving the Points/Block chart stuck on whatever ix last saw (bug
+    2026-07-21). Push a copy straight to ix's matching path unless we're
+    already running there. Best-effort: dashboard.py's own staleness check
+    (_get_points_cache) self-heals from a live Excel read if this fails."""
+    host_file = Path.home() / ".claude" / ".host-name"
+    if host_file.exists() and host_file.read_text().strip() == "ix":
+        return
+    try:
+        subprocess.run(
+            ["scp", "-q", str(POINTS_CACHE), f"ix:{POINTS_CACHE}"],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass
 
 
 def mark_done() -> dict:
