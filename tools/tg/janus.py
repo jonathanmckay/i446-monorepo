@@ -229,6 +229,11 @@ PROJECT_COLORS = {
     "家":   "#00b8d4",    # Pool Party (family)
 }
 
+# Radioactive — the palette's one unassigned signature neon. The ₦ accent:
+# block-header -1₦ scores render in it (user request 2026-07-21: "the neon
+# colors in Janus (0n or -1n)... both").
+NEON_ACCENT = "#c3fc0d"
+
 
 CALENDAR_PROJECT_MAP = {
     "m5x2 Cal": "m5x2",
@@ -318,6 +323,11 @@ class State:
         # excluded from this list entirely at fetch time (deliberately marked
         # N/A, distinct from "not done yet").
         self.habits_today: list[tuple[str, float | None]] = []
+        # habit name (lowercased) → "#rrggbb" from the 0n sheet's row 2 (the
+        # ⊖分 points row, whose cell fills ARE the canonical per-habit neon
+        # colors). Only replaced on a successful fetch; white cells (Excel's
+        # no-fill read) are omitted so the domain fallback colors them.
+        self.habit_colors: dict[str, str] = {}
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1109,15 +1119,13 @@ def render_header() -> list[tuple[str, str]]:
     return [("class:no_entry", line + "\n")]
 
 
-# 0₦ (Neon habit) column → domain code, for coloring the habit strip the
-# same way the rest of janus colors everything else (project_style/
-# PROJECT_COLORS) rather than reading Excel's actual cell background colors
-# (a second, much slower per-column AppleScript read for a cosmetic match).
-# Seeded from did-fast.py's HABIT_PROJECT (the canonical 0₦→Toggl-project
-# map) and extended with the rest of the 0n sheet's real columns; a few
-# purely-internal bookkeeping columns (N color, ⎣∀clr, #) are skipped
-# entirely rather than guessed at. Best-effort first pass (2026-07-20) —
-# not exhaustively checked against the live sheet's own colors.
+# 0₦ (Neon habit) column → domain code: the habit strip's FALLBACK palette,
+# used only for habits whose 0n row-2 cell is uncolored (white/no-fill) —
+# the workbook's own row-2 fills win when present (STATE.habit_colors,
+# user request 2026-07-21). Seeded from did-fast.py's HABIT_PROJECT (the
+# canonical 0₦→Toggl-project map) and extended with the rest of the 0n
+# sheet's real columns; a few purely-internal bookkeeping columns
+# (N color, ⎣∀clr, #) are skipped entirely rather than guessed at.
 HABIT_COLOR_DOMAIN = {
     "睡觉": "睡觉", "cpap": "hcb", "wake up": "hcb", "i444": "i444", "i447": "i447",
     "charge": "infra", "tmrw": "g245", "2nd hci": "hci", "1st hci": "hci",
@@ -1174,7 +1182,12 @@ def fetch_habits_today():
         try
             set vv to (value of cell c of row todayRow of ws) as text
         end try
-        set out to out & hv & "\\t" & vv & "|"
+        set cv to ""
+        try
+            set cl to color of interior object of cell c of row 2 of ws
+            set cv to ((item 1 of cl) as text) & "," & ((item 2 of cl) as text) & "," & ((item 3 of cl) as text)
+        end try
+        set out to out & hv & "\\t" & vv & "\\t" & cv & "|"
     end repeat
     return out
 end tell'''
@@ -1182,14 +1195,26 @@ end tell'''
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
         habits = []
+        colors: dict[str, str] = {}
         for chunk in proc.stdout.strip().split("|"):
             if not chunk.strip():
                 continue
-            name, _, val = chunk.partition("\t")
-            name = name.strip()
+            fields = chunk.split("\t")
+            name = fields[0].strip()
+            val = fields[1].strip() if len(fields) > 1 else ""
+            rgb = fields[2].strip() if len(fields) > 2 else ""
             if not name or name.lower() in _HABIT_STRIP_SKIP:
                 continue
-            val = val.strip()
+            if rgb:
+                try:
+                    r, g, b = (int(x) for x in rgb.split(","))
+                    # White is what an Excel no-fill cell reads as — skip it so
+                    # the domain fallback colors the chip. A duplicate habit
+                    # name would collide here (last column wins) — acceptable.
+                    if (r, g, b) != (255, 255, 255):
+                        colors[name.lower()] = f"#{r:02x}{g:02x}{b:02x}"
+                except ValueError:
+                    pass
             if not val:
                 habits.append((name, None))  # blank -> not done yet (pending row)
                 continue
@@ -1207,20 +1232,40 @@ end tell'''
                 continue
             habits.append((name, v))
         STATE.habits_today = habits
+        if colors:
+            STATE.habit_colors = colors
     except Exception:
         pass
 
 
-def _habit_chip_style(code: str | None) -> str:
-    """Solid background chip, white text — the color alone (no name label)
-    is the identifier, so ~20-30 habits fit across two lines instead of ~10
+def _chip_text_color(hexv: str) -> str:
+    """Black or white text, whichever contrasts more against the chip fill
+    (WCAG crossover at L≈0.179). Neon's light fills — the pastels, amber,
+    gray — get black text, same as they read in Excel; white text on amber
+    is a 1.7:1 unreadable smear."""
+    r, g, b = (int(hexv[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+           for c in (r, g, b)]
+    lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    return "#000000" if lum > 0.179 else "#ffffff"
+
+
+def _habit_chip_style(name: str) -> str:
+    """Solid background chip — the color alone (no name label) is the
+    identifier, so ~20-30 habits fit across two lines instead of ~10
     (user request 2026-07-20: "don't want... the names... make the color
-    the background color... white [text]... fit the ~20-30 categories").
-    An unmapped habit still gets a visible (neutral gray) chip rather than
+    the background color... fit the ~20-30 categories").
+    Fill comes from the workbook itself when it says something — the 0n
+    sheet's row-2 (⊖分) cell fills are the canonical per-habit neon colors
+    (user request 2026-07-21) — else the domain map approximates. An
+    unmapped habit still gets a visible (neutral gray) chip rather than
     no background at all — a value with no chip around it would read as
     plain text, breaking the "everything here is a colored chip" scan."""
-    hexv = PROJECT_COLORS.get(code) if code else None
-    return f"bold bg:{hexv or '#444444'} #ffffff"
+    key = name.lower()
+    hexv = (STATE.habit_colors.get(key)
+            or PROJECT_COLORS.get(HABIT_COLOR_DOMAIN.get(key, ""))
+            or "#444444")
+    return f"bold bg:{hexv} {_chip_text_color(hexv)}"
 
 
 def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -1251,9 +1296,9 @@ def render_habits_today() -> list[tuple[str, str]]:
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
     # the two rows.
-    done_chips = [(_habit_chip_style(HABIT_COLOR_DOMAIN.get(name.lower())), f"{v:g} ")
+    done_chips = [(_habit_chip_style(name), f"{v:g} ")
                   for name, v in STATE.habits_today if v is not None]
-    pending_chips = [(_habit_chip_style(HABIT_COLOR_DOMAIN.get(name.lower())), f"{name} ")
+    pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today if v is None]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
@@ -1459,7 +1504,12 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             time_sty = "class:time"
             dur_sty = "class:dim"
         # Duration sits right after the label: `午:00 ☀️ 11:00 GamePass sync (60)`.
-        out.append((left_sty, left))
+        # ₦N stays Radioactive even under the selected-header accent — the
+        # neon score is a header fact, not part of the selected event.
+        out.append((left_sty, f"{blk_name}:00"))
+        if emoji_str:
+            out.append((f"bold fg:{NEON_ACCENT}", emoji_str))
+        out.append((left_sty, " "))
         if tpfx:
             out.append((time_sty, tpfx))
         out.append((head_sty, label))
@@ -1469,7 +1519,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         left = f"{blk_name}:00{emoji_str}"
         pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
         trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(pts_str))
-        out.append(("class:dim", left + " " * trail))
+        out.append(("class:dim", f"{blk_name}:00"))
+        if emoji_str:
+            out.append((f"bold fg:{NEON_ACCENT}", emoji_str))
+        out.append(("class:dim", " " * trail))
         if pts_str:
             out.append(("bold #ffffff", pts_str))
         out.append(("class:dim", "\n"))
@@ -1935,8 +1988,11 @@ def _mao_line(emojis) -> list[tuple[str, str]]:
     pts_str = f" {sleep_min}m" if sleep_min else ""
     blk_style = f"bold {style}".strip() if style else "class:dim"
     out: list[tuple[str, str]] = []
-    left = f"─卯{emoji_str} "
-    out.append((blk_style, left))
+    left = f"─卯{emoji_str} "  # built whole so trail's dwidth math stays exact
+    out.append((blk_style, "─卯"))
+    if emoji_str:
+        out.append((f"bold fg:{NEON_ACCENT}", emoji_str))
+    out.append((blk_style, " "))
     label = ""
     if wake:
         label = f"睡觉 →{wake:%H:%M} "

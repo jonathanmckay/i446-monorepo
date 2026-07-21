@@ -52,9 +52,10 @@ def test_future_blocks_have_no_ritual_emojis(tmp_path):
     now = dtm.datetime.now(TZ).replace(hour=11, minute=30, second=0, microsecond=0)
     result = _run(mod, tmp_path, now)
 
-    # Started/in-progress blocks keep their icons.
-    assert "巳" in result and "☀️" in result["巳"]
-    assert "午" in result, "in-progress block 午 must keep its icons"
+    # Started/in-progress blocks keep their score label (₦N since 2026-07-20 —
+    # stamped icons render as their summed -1₦ points, not the raw emojis).
+    assert "巳" in result and result["巳"].startswith("₦")
+    assert "午" in result, "in-progress block 午 must keep its score"
 
     # Future blocks must be absent — no prayer/done/goal for blocks not yet begun.
     assert "未" not in result, "future block 未 must not show ritual icons"

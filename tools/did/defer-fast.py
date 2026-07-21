@@ -38,6 +38,14 @@ DURATION_RE = re.compile(r"\((\d+)\)")
 
 DEFAULT_CLAIMED_POINTS = 2
 
+# Daily-habit labels. A deferred occurrence of one of these gets its origin
+# date stamped into the one-off copy's name ("xk20 7.21 (20) [15]") so the
+# catch-up copy is visibly distinct from the daily card the recurring parent
+# regenerates — both sit in the queue together while travelling. The dated
+# name also stops the copy from matching the habit's 0n column on completion
+# (that day's own card owns the column); it completes as a regular task.
+HABIT_LABELS = {"0neon", "夜neon"}
+
 WEEKDAYS = {
     "monday": 0, "mon": 0,
     "tuesday": 1, "tue": 1, "tues": 1,
@@ -317,6 +325,16 @@ def handle_non_recurring(task: dict, target_date: str,
 _ANCHOR_RE = re.compile(r"\s+(starting|start|from|beginning|begins?|since)\b.*$", re.I)
 
 
+def _dated_copy_content(content: str, occurrence: date) -> str:
+    """Stamp the deferred occurrence's date (M.D) into a copy's name, after
+    the name and before any (N)/[N]/{N} annotations."""
+    tag = f"{occurrence.month}.{occurrence.day}"
+    m = re.search(r"\s*[\(\[\{]", content)
+    if m:
+        return f"{content[:m.start()]} {tag}{content[m.start():]}"
+    return f"{content} {tag}"
+
+
 def _recurrence_pattern(due_string: str) -> str:
     """Strip any 'starting <date>' / 'from <date>' anchor off a recurrence
     string, leaving the bare cadence ('every day', 'every friday', ...).
@@ -365,11 +383,16 @@ def handle_recurring(task: dict, target_date: str,
 
     # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
     #    Skip mode carries nothing — the occurrence is simply skipped.
+    #    Daily habits (0neon/夜neon) get the origin date stamped into the copy
+    #    so it stays distinct from the daily card (see HABIT_LABELS).
     copy = None
+    copy_content = content
     if skip_copy:
         target_date = next_date
     else:
-        copy = create_task(content, labels, project_id, target_date, priority)
+        if HABIT_LABELS & set(labels):
+            copy_content = _dated_copy_content(content, current_due)
+        copy = create_task(copy_content, labels, project_id, target_date, priority)
 
     # 2. Advance the parent to its next occurrence, recurrence preserved.
     body = {"due_date": next_date}
@@ -400,6 +423,7 @@ def handle_recurring(task: dict, target_date: str,
         "claimed_points": claimed_points,
         "remaining_points": total_points,
         "closed": False,
+        "deferred_copy_content": copy_content if copy else None,
         "stubs": {"today": posthoc["id"],
                   "deferred_copy": copy["id"] if copy else None,
                   "future": task_id},

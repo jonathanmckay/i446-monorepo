@@ -139,6 +139,84 @@ def test_recurring_skip_mode_advances_without_copy(df, monkeypatch):
     assert "claimed_points" in out and "remaining_points" in out
 
 
+# ── dated copies for daily habits (0neon/夜neon) ───────────────────────────
+
+def test_habit_defer_copy_carries_origin_date(df, monkeypatch):
+    """Feature (2026-07-21): deferring a 0neon/夜neon habit stamps the deferred
+    occurrence's date into the one-off copy ("xk20 7.21 (20) [15]") so it stays
+    visibly distinct from the daily card the recurring parent regenerates."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 21)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "xk20 (20) [15]", "labels": ["0neon", "xk88"],
+            "due": {"is_recurring": True, "date": "2026-07-21",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, "2026-07-28", 2)
+    assert created[0] == "xk20 7.21 (20) [15]"
+    assert out["deferred_copy_content"] == "xk20 7.21 (20) [15]"
+
+
+def test_non_habit_recurring_copy_name_unchanged(df, monkeypatch):
+    """Only daily habits get the date stamp — other recurring defers keep the
+    copy's name identical to the parent."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return FRI
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "hcmr (15) [10]", "labels": ["g245"],
+            "due": {"is_recurring": True, "date": "2026-06-05",
+                    "string": "every Friday"}}
+    out = df.handle_recurring(task, "2026-06-08", 2)
+    assert created[0] == "hcmr (15) [10]"
+    assert out["deferred_copy_content"] == "hcmr (15) [10]"
+
+
+def test_habit_skip_mode_creates_no_dated_copy(df, monkeypatch):
+    """Skip mode ('0'/blank) on a habit still creates no copy at all."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 21)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "xk22 (20) [15]", "labels": ["0neon"],
+            "due": {"is_recurring": True, "date": "2026-07-21",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, "ignored", 2, skip_copy=True)
+    assert len(created) == 1 and created[0].startswith("deferred:")
+    assert out["deferred_copy_content"] is None
+
+
+@pytest.mark.parametrize("content,expected", [
+    ("xk20 (20) [15]", "xk20 7.21 (20) [15]"),      # date before annotations
+    ("xk20 [15] (20)", "xk20 7.21 [15] (20)"),      # order-agnostic
+    ("早起 {5}", "早起 7.21 {5}"),                    # {N} annotation
+    ("xk20", "xk20 7.21"),                           # bare name → append
+])
+def test_dated_copy_content_insertion(df, content, expected):
+    assert df._dated_copy_content(content, date(2026, 7, 21)) == expected
+
+
 def test_auto_sentinel_never_reaches_resolve_target(df):
     """main() must strip the dtd 'auto' sentinel before resolve_target, which
     passes unknown strings through — Todoist would get due_date='auto'."""
