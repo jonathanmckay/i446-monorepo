@@ -61,12 +61,12 @@ def test_future_block_header_carries_event_with_minute_duration():
 
 
 def test_ritual_pts_label_sums_config_points():
-    """Emoji stamps convert to a ₦N points label: ☀️=1 + 📧=3 = ₦4; all five
+    """Emoji stamps convert to a bare points label (₦ dropped 2026-07-21): ☀️=1 + 📧=3 = 4; all five
     rituals = ₦13; the 😈 auto-marker and an unstamped header score nothing
     (user request 2026-07-20: show the block's -1n points, not the icons)."""
     mod = _load_tui()
-    assert mod._ritual_pts_label("☀️📧") == "₦4"
-    assert mod._ritual_pts_label("☀️📧🎯⏱️✅") == "₦13"
+    assert mod._ritual_pts_label("☀️📧") == "4"
+    assert mod._ritual_pts_label("☀️📧🎯⏱️✅") == "13"
     assert mod._ritual_pts_label("😈") == ""
     assert mod._ritual_pts_label("") == ""
 

@@ -1898,7 +1898,16 @@ def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
     items = []
     pos = blk_start
     for e in STATE.entries:  # sorted by start_dt
-        s, en = e["start_dt"], min(e["end_dt"], cutoff)
+        # A running entry's end_dt froze at the last fetch_today (up to
+        # 5min+cooldowns ago) — sweeping with that stale end flashed the
+        # minutes since the fetch as "empty" while a timer was live (user
+        # report 2026-07-21: offsite running, "1402-1424 flashing as
+        # empty"). While STATE.current confirms a timer is running, a
+        # running entry covers through the cutoff; when current is None
+        # (confirmed idle) the stale end is the best available estimate
+        # and the gap flash is legitimate.
+        s = e["start_dt"]
+        en = cutoff if (e.get("running") and STATE.current) else min(e["end_dt"], cutoff)
         if en <= pos:
             continue
         if s >= blk_end:

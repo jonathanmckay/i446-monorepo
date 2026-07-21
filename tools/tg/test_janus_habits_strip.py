@@ -29,6 +29,11 @@ def _load_tui():
     mod = importlib.util.module_from_spec(spec)
     sys.modules["janus_habits_strip"] = mod
     spec.loader.exec_module(mod)
+    # These tests target the HABIT chips. Neutralize the strip's other chip
+    # sources (the current block's -1n score chip reads the LIVE build order;
+    # YTD standing chips read STATE) so live data can't leak into assertions.
+    mod._read_block_emojis = lambda: {}
+    mod.STATE.habits_ytd = {}
     return mod
 
 
