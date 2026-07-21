@@ -168,54 +168,42 @@ GA4_SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
 
 # ── Data loaders ───────────────────────────────────────────────────────────────
 
-def load_points_data():
-    """Read 0分 sheet, return {date_str: {label: value}} for last DAYS days.
+# A full B2:end(down) scan of 0分 reaches ~365 rows (the sheet is pre-templated
+# with calendar rows into next January). Reading the whole G:Y block range
+# (359 rows x 19 cols) in one xlwings/AppleEvent call reliably crashes with
+# `appscript.reference.CommandError: OSERROR -609 (Connection is invalid)`
+# (confirmed live 2026-07-21). Older rows never change once the build-order
+# daemon locks them at fire time, so only a bounded window around "today"
+# ever needs a live re-read — this both avoids the crash and is what made
+# Points/Block silently go empty (see _get_points_cache below).
+_BLOCK_REFRESH_WINDOW_DAYS = 45
 
-    Each day's dict also carries a "__block__": {branch: points} entry read
-    from the G:O per-block columns (卯..亥) in the same pass — independent
-    numbers from the P:Y domain totals (each block column is locked to a
-    literal value as the daemon fires; see build-order-daemon.py's
-    LOCK_AT_FIRE_HOUR), not derived from POINTS_COLS.
+_POINTS_CACHE_PATH = Path(__file__).parent / ".points-cache.json"
 
-    Uses xlwings to read from the running Excel instance so cross-sheet
-    formulas are fully evaluated (openpyxl data_only reads stale caches).
-    Falls back to openpyxl if xlwings/Excel is unavailable.
-    """
-    today = date.today()
-    cutoff = today - timedelta(days=DAYS)
 
-    # Strategy: read from JSON cache if it's newer than the Excel file.
-    # Fall back to xlwings if no cache or cache is stale.
-    _pts_cache = Path(__file__).parent / ".points-cache.json"
-    if _pts_cache.exists():
-        try:
-            cache_mtime = _pts_cache.stat().st_mtime
-            excel_mtime = NEON_PATH.stat().st_mtime if NEON_PATH.exists() else 0
-            if cache_mtime >= excel_mtime:
-                cached = json.loads(_pts_cache.read_text())
-                result = {d: v for d, v in cached.items()
-                          if cutoff < date.fromisoformat(d) <= today}
-                if result:
-                    return result
-        except Exception:
-            pass
+def _points_col_letter(idx):
+    return chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)
 
-    # Fallback: xlwings (works when run interactively, may timeout from launchd)
+
+def _xlwings_block_window(window_days=_BLOCK_REFRESH_WINDOW_DAYS):
+    """Bounded live re-read of the last `window_days` rows of 0分's G:Y
+    columns via xlwings. Returns {date_str: day_data} for just that window
+    (empty dict on any failure) — never the full sheet, see the crash note
+    above."""
     try:
         import xlwings as xw
         wb = xw.Book(str(NEON_PATH))
         ws = wb.sheets["0分"]
         last_row = ws.range("B2").end("down").row
+        window_start = max(3, last_row - window_days + 1)
         min_idx = 7  # G — first per-block points column, precedes POINTS_COLS' P:Y range
         max_idx = max(POINTS_COLS)
-        def _col_letter(idx):
-            return chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)
-        first_col = _col_letter(min_idx)
-        last_col = _col_letter(max_idx)
-        b_vals = ws.range(f"B3:B{last_row}").value
+        first_col = _points_col_letter(min_idx)
+        last_col = _points_col_letter(max_idx)
+        b_vals = ws.range(f"B{window_start}:B{last_row}").value
         if not isinstance(b_vals, list):
             b_vals = [b_vals]
-        block = ws.range(f"{first_col}3:{last_col}{last_row}").value
+        block = ws.range(f"{first_col}{window_start}:{last_col}{last_row}").value
         if not isinstance(block, list):
             block = [[block]]
         elif block and not isinstance(block[0], list):
@@ -230,8 +218,6 @@ def load_points_data():
             elif isinstance(b, date):
                 d = b
             else:
-                continue
-            if d <= cutoff or d > today:
                 continue
             day_str = d.isoformat()
             day_data = {}
@@ -250,15 +236,75 @@ def load_points_data():
                 day_data["__block__"] = block_data
             if day_data:
                 result[day_str] = day_data
-        if result:
-            # Write cache for launchd fallback
-            _pts_cache = Path(__file__).parent / ".points-cache.json"
-            _pts_cache.write_text(json.dumps(result))
         return result
     except Exception:
-        pass
+        return {}
 
-    return {}
+
+def _get_points_cache():
+    """Full, unfiltered {date_str: day_data} points cache, self-healing on
+    staleness.
+
+    Bug (2026-07-21): the block-granularity chart called load_points_all(),
+    which just trusted whatever was on disk forever — no staleness check at
+    all. The ONLY writer of this cache is /0t's refresh_points_cache(), which
+    runs on whichever machine invokes /0t (usually the laptop, not ix where
+    the dashboard server actually lives); i446-monorepo isn't synced between
+    hosts, so that write never reached ix's copy and Points/Block silently
+    went stale indefinitely. This function is now the single source both
+    load_points_data() and load_points_all() call: it compares the cache's
+    mtime against the live Neon file's mtime and, if stale, does a bounded
+    live xlwings re-read (see _xlwings_block_window) and MERGES it into the
+    on-disk cache — merged, not overwritten, so this never destroys the
+    older history the weekly/monthly views depend on (the old xlwings path
+    here used to rebuild+overwrite the whole file with only its own 30-day
+    window, silently truncating everything older every time it ran)."""
+    cached = {}
+    if _POINTS_CACHE_PATH.exists():
+        try:
+            cached = json.loads(_POINTS_CACHE_PATH.read_text())
+        except Exception:
+            cached = {}
+
+    try:
+        cache_mtime = _POINTS_CACHE_PATH.stat().st_mtime if _POINTS_CACHE_PATH.exists() else 0
+        excel_mtime = NEON_PATH.stat().st_mtime if NEON_PATH.exists() else 0
+    except Exception:
+        cache_mtime = excel_mtime = 0
+
+    if cached and cache_mtime >= excel_mtime:
+        return cached
+
+    fresh = _xlwings_block_window()
+    if not fresh:
+        return cached  # live read failed; stale-but-present beats nothing
+
+    merged = dict(cached)
+    merged.update(fresh)
+    try:
+        _POINTS_CACHE_PATH.write_text(json.dumps(merged))
+    except Exception:
+        pass
+    return merged
+
+
+def load_points_data():
+    """Read 0分 sheet, return {date_str: {label: value}} for last DAYS days.
+
+    Each day's dict also carries a "__block__": {branch: points} entry read
+    from the G:O per-block columns (卯..亥) in the same pass — independent
+    numbers from the P:Y domain totals (each block column is locked to a
+    literal value as the daemon fires; see build-order-daemon.py's
+    LOCK_AT_FIRE_HOUR), not derived from POINTS_COLS.
+
+    Backed by _get_points_cache()'s self-healing full cache, filtered here
+    to the trailing DAYS-day window this function has always returned.
+    """
+    today = date.today()
+    cutoff = today - timedelta(days=DAYS)
+    full = _get_points_cache()
+    return {d: v for d, v in full.items()
+            if cutoff < date.fromisoformat(d) <= today}
 
 
 # Each card pulls a single cell from 0n. Headers live on row 369 (and row 1
@@ -362,15 +408,14 @@ def _add_month(d, n=1):
 
 
 def load_points_all():
-    """Full points cache {date_str: {label: value}} with no day clipping."""
-    cache = Path(__file__).parent / ".points-cache.json"
-    if cache.exists():
-        try:
-            return json.loads(cache.read_text())
-        except Exception:
-            pass
+    """Full points cache {date_str: {label: value}} with no day clipping.
+
+    Backed by _get_points_cache(), same self-healing staleness check
+    load_points_data() uses — previously this just read disk unconditionally
+    forever, which is why Points/Block went stale (see _get_points_cache).
+    """
     try:
-        return load_points_data()
+        return _get_points_cache()
     except Exception:
         return {}
 

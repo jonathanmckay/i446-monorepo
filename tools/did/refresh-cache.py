@@ -42,9 +42,17 @@ JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 
 def _shape(t: dict) -> dict:
+    # `recurring` must survive shaping: dtd's daily sections show due-tomorrow
+    # cards only when recurring (the 2026-06-27 drift guard); a non-recurring
+    # deferred copy ("xk22 7.21") due tomorrow must stay hidden. This writer
+    # runs most often and used to strip the flag, leaving that filter inert
+    # (bug 2026-07-21: a deferred habit popped straight back into today).
+    due = t.get("due")
     return {
         "id": t.get("id"), "content": t.get("content"), "labels": t.get("labels", []),
-        "due": (t.get("due") or {}).get("date") if isinstance(t.get("due"), dict) else t.get("due"),
+        "due": (due or {}).get("date") if isinstance(due, dict) else due,
+        "recurring": bool((due or {}).get("is_recurring")) if isinstance(due, dict)
+                     else bool(t.get("recurring")),
     }
 
 
@@ -61,15 +69,7 @@ def _nudge_janus() -> None:
 def fetch(label: str) -> tuple[str, list]:
     """Fetch all open tasks for a label, project-shaped for the cache."""
     raw = todoist.find_tasks(labels=[label], limit=200)
-    out = []
-    for t in raw:
-        out.append({
-            "id": t.get("id"),
-            "content": t.get("content"),
-            "labels": t.get("labels", []),
-            "due": (t.get("due") or {}).get("date") if isinstance(t.get("due"), dict) else t.get("due"),
-        })
-    return CACHE_KEY[label], out
+    return CACHE_KEY[label], [_shape(t) for t in raw]
 
 
 def main() -> int:

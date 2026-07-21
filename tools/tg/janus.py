@@ -323,6 +323,12 @@ class State:
         # excluded from this list entirely at fetch time (deliberately marked
         # N/A, distinct from "not done yet").
         self.habits_today: list[tuple[str, float | None]] = []
+        # YTD standing for minimum-commitment habits (o314/冥想/其他人):
+        # {name: signed value}, read from the same 0n summary cells the jm
+        # dashboard header cards use. Rendered as ±N chips instead of daily
+        # done/pending chips (user request 2026-07-21: "not about doing every
+        # day per se, but holding up a minimum commitment").
+        self.habits_ytd: dict[str, float] = {}
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1156,6 +1162,30 @@ _HABIT_STRIP_SKIP = {
     "词汇", "slack github", "问学",
 }
 
+# Minimum-commitment habits: shown as a YTD standing (±N) instead of daily
+# done/pending chips (user request 2026-07-21). The cells are the 0n summary
+# cells the jm dashboard "2026" header cards read — keep in sync with
+# CACHE_CARDS in tools/personal-dashboard/dashboard.py.
+HABIT_YTD_CELLS = {
+    "o314": "AQ375",
+    "冥想": "AR375",
+    "其他人": "AS375",
+}
+
+
+def _ytd_applescript_lines() -> str:
+    """AppleScript snippet reading each HABIT_YTD_CELLS summary cell; appended
+    to fetch_habits_today's script after a '||' marker, one '|'-terminated
+    value per cell in dict order (a failed read contributes an empty field)."""
+    lines = []
+    for cell in HABIT_YTD_CELLS.values():
+        lines.append(f'''    set yv to ""
+    try
+        set yv to (value of range "{cell}" of ws) as text
+    end try
+    set out to out & yv & "|"''')
+    return "\n".join(lines)
+
 
 def fetch_habits_today():
     """Read today's 0₦ (Neon habits) row: EVERY habit (done and not-yet-done
@@ -1196,18 +1226,30 @@ def fetch_habits_today():
         end try
         set out to out & hv & "\\t" & vv & "|"
     end repeat
+    set out to out & "|"
+{_ytd_applescript_lines()}
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
+        raw, _, ytd_raw = proc.stdout.strip().partition("||")
+        ytd: dict[str, float] = {}
+        for name, val in zip(HABIT_YTD_CELLS, ytd_raw.split("|")):
+            try:
+                ytd[name] = float(val.strip())
+            except ValueError:
+                pass
+        STATE.habits_ytd = ytd
         habits = []
-        for chunk in proc.stdout.strip().split("|"):
+        for chunk in raw.split("|"):
             if not chunk.strip():
                 continue
             name, _, val = chunk.partition("\t")
             name = name.strip()
-            if not name or name.lower() in _HABIT_STRIP_SKIP:
+            # YTD-standing habits render as ±N chips (render_habits_today),
+            # never as daily done/pending chips.
+            if not name or name.lower() in _HABIT_STRIP_SKIP or name.lower() in HABIT_YTD_CELLS:
                 continue
             val = val.strip()
             if not val:
@@ -1293,13 +1335,19 @@ def render_habits_today() -> list[tuple[str, str]]:
     colored chip style, so it reads as "still open." Each row independently
     drops whatever doesn't fit in WIDTH_HINT — the ask was two lines, not a
     scrolling list."""
-    if not STATE.habits_today:
+    if not STATE.habits_today and not STATE.habits_ytd:
         return []
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
     # the two rows.
     done_chips = [(_habit_chip_style(name), f"{v:g} ")
                   for name, v in STATE.habits_today if v is not None]
+    # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
+    # as the jm dashboard "2026" header cards), green at/ahead and red behind,
+    # instead of daily done/pending chips.
+    done_chips += [(f"bold bg:{'#2e7d32' if v >= 0 else '#b3261e'} #ffffff",
+                    f"{name} {v:+g} ")
+                   for name, v in STATE.habits_ytd.items()]
     pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today
                      if v is None and not _habit_deferred(name)]

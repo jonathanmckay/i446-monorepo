@@ -19,11 +19,13 @@ scheduled occurrence (recurrence preserved, cadence unchanged).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
 from datetime import date, timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 # ---------------------------------------------------------------------------
@@ -45,6 +47,37 @@ DEFAULT_CLAIMED_POINTS = 2
 # name also stops the copy from matching the habit's 0n column on completion
 # (that day's own card owns the column); it completes as a regular task.
 HABIT_LABELS = {"0neon", "夜neon"}
+
+
+def deferred_marker_path(when: date | None = None) -> Path:
+    """Per-day marker of DEFERRED daily-habit parent ids (one id per line).
+
+    dtd's daily sections deliberately show recurring cards due tomorrow (the
+    2026-06-27 over-advance drift guard), which is indistinguishable in cache
+    state from a parent that was just deliberately deferred — so a deferred
+    habit popped straight back into today's queue and needed a second defer
+    (bug 2026-07-21). Id-keyed, NOT name-keyed: hiding by name suppressed
+    unrelated same-name tasks once before (2026-07-13). Appended with O_APPEND
+    so concurrent detached defers can't lose entries; dtd reads it fresh each
+    list reload and undo-fast removes the id on ctrl-z."""
+    return (Path.home() / ".cache/jm"
+            / f"habits-deferred-{(when or date.today()).isoformat()}.ids")
+
+
+def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
+    """Record a deferred daily habit's parent id for today (best-effort)."""
+    if not HABIT_LABELS & set(labels):
+        return
+    try:
+        p = deferred_marker_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, f"{task_id}\n".encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # marker is a display nicety; never fail the defer over it
 
 WEEKDAYS = {
     "monday": 0, "mon": 0,
