@@ -177,6 +177,25 @@ def _code_is_stale(now=None) -> bool:
 BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "😈"]
 
+# Ritual emoji → -1₦ points, from the canonical config (fallback matches its
+# 2026-07 values). 😈 is the auto-card marker, not a ritual — never scores.
+_RITUAL_PTS_FALLBACK = {"☀️": 1, "📧": 3, "🎯": 3, "⏱️": 3, "✅": 3}
+try:
+    _rj = json.loads((Path.home() / "i446-monorepo/config/block-rituals.json").read_text())
+    RITUAL_PTS = {r["emoji"]: r["points"] for r in _rj["rituals"]}
+except Exception:
+    RITUAL_PTS = dict(_RITUAL_PTS_FALLBACK)
+
+
+def _ritual_pts_label(emojis: str) -> str:
+    """Block-header -1₦ score: sum of the stamped rituals' points, rendered as
+    ``₦7`` (``₦13`` = all five). Replaces the raw emoji string in headers
+    (user request 2026-07-20: "rather than showing the icons for each -1n I
+    did in a block... how many -1n points did I get in that block"). Empty
+    when nothing scored, so an unstamped header stays bare like before."""
+    pts = sum(p for e, p in RITUAL_PTS.items() if e in emojis)
+    return f"₦{pts}" if pts else ""
+
 # Project code lookup (id -> code) using inverse of PROJECT_MAP if present
 PROJECT_CODE = {}
 try:
@@ -1279,7 +1298,8 @@ def section_rule(label: str, focus: bool = False, pts: int = 0) -> list[tuple[st
 
 
 def _read_block_emojis(now: dt.datetime | None = None) -> dict[str, str]:
-    """Read build order file, return {branch_char: emoji_string} for today's blocks.
+    """Read build order file, return {branch_char: ``₦N`` points label} for
+    today's blocks (the stamped rituals' -1₦ score — see _ritual_pts_label).
 
     The build order pre-stamps future block headers (☀️ prayer, 🎯 goal, ✅ done,
     etc.) for the whole day, so a ritual cannot legitimately be "done" in a block
@@ -1310,8 +1330,9 @@ def _read_block_emojis(now: dt.datetime | None = None) -> dict[str, str]:
                 if sh is not None and is_future_block(sh, now):
                     continue  # block hasn't started yet
                 emojis = "".join(ch for ch in BLOCK_EMOJIS if ch in tail)
-                if emojis:
-                    result[branch] = emojis
+                label = _ritual_pts_label(emojis)
+                if label:
+                    result[branch] = label
     return result
 
 
