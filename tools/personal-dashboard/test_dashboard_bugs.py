@@ -1,5 +1,7 @@
 """Regression tests for personal dashboard bugs."""
 import importlib.util
+import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -368,3 +370,194 @@ def test_parse_teams_replies_detects_app_sent_replies_via_graph():
     r = replies[0]
     assert abs(r["hours"] - 1.0) < 0.01, f"reply latency must be 1h, got {r['hours']}"
     assert "date" in r and "recv_hour" in r
+
+
+def _load_dashboard():
+    module_path = Path(__file__).with_name("dashboard.py")
+    spec = importlib.util.spec_from_file_location("dashboard_under_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_get_points_cache_merges_live_refresh_instead_of_overwriting(tmp_path, monkeypatch):
+    """Bug (2026-07-21): the Points/Block chart (load_points_all) trusted
+    .points-cache.json on disk forever with no staleness check, so once /0t
+    (which writes the cache on whichever host invokes it, usually the
+    laptop, not ix where the dashboard actually reads it) stopped reaching
+    ix's copy, the block chart went stale indefinitely with no self-heal.
+
+    Separately, the OLD xlwings live-refresh path rebuilt the cache from
+    scratch and overwrote the file with ONLY its own trailing window,
+    silently destroying all older history the weekly/monthly views need.
+
+    Fix: _get_points_cache() checks cache_mtime vs the Neon file's mtime and,
+    if stale, merges a bounded live refresh into the EXISTING cache rather
+    than replacing it — old dates untouched, only the refreshed window's
+    dates change.
+    """
+    dashboard = _load_dashboard()
+
+    cache_path = tmp_path / ".points-cache.json"
+    old_history = {"2026-01-01": {"i9": 10}, "2026-06-01": {"i9": 20}}
+    cache_path.write_text(json.dumps(old_history))
+
+    neon_path = tmp_path / "Neon-current.xlsx"
+    neon_path.write_text("stub")  # only its mtime is read, never opened
+
+    monkeypatch.setattr(dashboard, "_POINTS_CACHE_PATH", cache_path)
+    monkeypatch.setattr(dashboard, "NEON_PATH", neon_path)
+
+    # Make the cache look older than the (freshly-touched) Neon file so the
+    # staleness check trips and a live refresh is attempted.
+    old_time = neon_path.stat().st_mtime - 3600
+    os.utime(cache_path, (old_time, old_time))
+
+    fresh_window = {"2026-07-21": {"__block__": {"卯": 5}}}
+    monkeypatch.setattr(dashboard, "_xlwings_block_window", lambda *a, **k: fresh_window)
+
+    result = dashboard._get_points_cache()
+
+    assert result["2026-01-01"] == {"i9": 10}, "merge must not drop older history"
+    assert result["2026-06-01"] == {"i9": 20}, "merge must not drop older history"
+    assert result["2026-07-21"] == {"__block__": {"卯": 5}}, (
+        "merge must apply the freshly-refreshed window"
+    )
+
+    persisted = json.loads(cache_path.read_text())
+    assert persisted == result, "the merged (not overwritten) result must be persisted to disk"
+
+
+def test_load_points_all_goes_through_self_healing_cache():
+    """load_points_all() must not read .points-cache.json off disk directly
+    with no freshness check (the actual root cause of the 2026-07-21 bug) —
+    it must call the shared, staleness-checked _get_points_cache()."""
+    import ast
+    dashboard = _load_dashboard()
+    source = Path(__file__).with_name("dashboard.py").read_text()
+    tree = ast.parse(source)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "load_points_all"), None)
+    assert fn is not None, "load_points_all() not found in dashboard.py"
+    body_src = ast.get_source_segment(source, fn)
+    assert "_get_points_cache()" in body_src, (
+        "load_points_all must delegate to _get_points_cache(), not read disk unconditionally"
+    )
+
+
+def test_xlwings_block_window_anchors_to_todays_row_not_sheet_end():
+    """Bug (2026-07-21): 0分 is pre-templated with calendar rows reaching
+    months into the future. Bounding the live-refresh window relative to
+    `end("down")`'s row (the sheet's far, mostly-blank future frontier)
+    instead of today's actual row meant the 'bounded window' silently read
+    zero real data every time — confirmed live: _xlwings_block_window()
+    returned an empty dict on every attempt until the window was anchored to
+    today's row instead."""
+    source = Path(__file__).with_name("dashboard.py").read_text()
+    fn_src = source[source.index("def _xlwings_block_window"):source.index("def _get_points_cache")]
+    assert "date.today()" in fn_src, (
+        "the window must be anchored to today's actual date, not the sheet's templated end row"
+    )
+    assert "anchor_row" in fn_src, (
+        "must locate today's row explicitly rather than assuming end(\"down\") lands there"
+    )
+
+
+def test_xlwings_block_window_retries_transient_failures():
+    """Bug (2026-07-21): a bounded xlwings read of the exact same range was
+    observed live to fail with `CommandError: OSERROR -609/-1728` on one
+    attempt and succeed immediately on a retry with identical arguments —
+    the Excel AppleEvent bridge is intermittently flaky, not deterministically
+    broken by range size. A single attempt with no retry meant Points/Block
+    could stay empty indefinitely purely from transient bad luck."""
+    source = Path(__file__).with_name("dashboard.py").read_text()
+    fn_src = source[source.index("def _xlwings_block_window"):source.index("def _get_points_cache")]
+    assert "_XLWINGS_BLOCK_RETRIES" in fn_src, (
+        "must retry a bounded number of times rather than giving up on the first failure"
+    )
+    assert "for attempt in range(_XLWINGS_BLOCK_RETRIES)" in fn_src, (
+        "must loop the read attempt itself, not just the outer cache check"
+    )
+
+
+def _load_gen_email_stats_module():
+    module_path = Path(__file__).with_name("gen_email_stats.py")
+    spec = importlib.util.spec_from_file_location("gen_email_stats_under_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_build_block_stats_buckets_by_recv_hour_not_by_day():
+    """Feature (2026-07-21): Project Bocking had no per-block signal because
+    every persisted source (gist "daily", imsg daily_stats) was aggregated
+    to daily granularity, discarding the recv_hour every producer in this
+    file already attaches to each reply event. build_block_stats() must keep
+    that resolution instead — two replies on the same day but in different
+    2-hour blocks must land in different buckets, not get merged."""
+    gen_email_stats = _load_gen_email_stats_module()
+    from datetime import date, timedelta
+    today = date.today().isoformat()
+    recent = (date.today() - timedelta(days=1)).isoformat()
+
+    all_data = [
+        {"date": today, "account": "outlook", "hours": 1.0, "recv_hour": 9},   # 巳 block (8-10)
+        {"date": today, "account": "outlook", "hours": 3.0, "recv_hour": 9},   # 巳 block (8-10)
+        {"date": today, "account": "outlook", "hours": 2.0, "recv_hour": 15},  # 申 block (14-16)
+        {"date": recent, "account": "teams", "hours": 0.5, "recv_hour": 23},   # sleep window, dropped
+    ]
+    by_block = gen_email_stats.build_block_stats(all_data)
+
+    outlook_today = by_block["outlook"][today]
+    assert outlook_today["巳"]["count"] == 2, "same-block replies must merge"
+    assert outlook_today["巳"]["avg_hours"] == 2.0, "avg must be over just that block's replies"
+    assert outlook_today["申"]["count"] == 1, "different-block reply must land in its own bucket"
+    assert "teams" not in by_block or recent not in by_block.get("teams", {}), (
+        "a recv_hour inside the 22:00-04:00 sleep window has no covering block and must be dropped"
+    )
+
+
+def test_build_email_by_account_blocked_uses_response_pairs_recv_time(tmp_path, monkeypatch):
+    """Feature (2026-07-21): iMessage's block-level Project Bocking data
+    comes from response_pairs' real recv_time column (already persisted per
+    event) rather than daily_stats (which only has day-level aggregates).
+    Two response pairs on the same day but different 2-hour blocks must
+    bucket separately."""
+    dashboard = _load_dashboard()
+
+    imsg_db = tmp_path / "vault" / "i447" / "i446" / "imsg-responses.db"
+    imsg_db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(imsg_db)
+    conn.execute("""
+        CREATE TABLE response_pairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER, chat_name TEXT,
+            recv_time TEXT NOT NULL, sent_time TEXT NOT NULL,
+            response_hours REAL NOT NULL,
+            recv_preview TEXT, sent_preview TEXT, day TEXT NOT NULL
+        )
+    """)
+    day = "2026-07-20"
+    conn.executemany(
+        "INSERT INTO response_pairs (chat_id, chat_name, recv_time, sent_time, "
+        "response_hours, day) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (1, "Alice", f"{day}T09:15:00", f"{day}T09:45:00", 0.5, day),  # 巳 (8-10)
+            (1, "Alice", f"{day}T09:30:00", f"{day}T10:00:00", 0.5, day),  # 巳 (8-10)
+            (2, "Bob",   f"{day}T15:00:00", f"{day}T15:20:00", 0.33, day),  # 申 (14-16)
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(dashboard.Path, "home", lambda: tmp_path)
+    from datetime import date
+    day_list = [date(2026, 7, 20)]
+
+    result = dashboard._build_email_by_account_blocked({}, day_list)
+
+    imsg = result["imessage"]
+    assert imsg[(day, "巳")]["count"] == 2, "same-block pairs on the same day must merge"
+    assert imsg[(day, "申")]["count"] == 1, "different-block pair must bucket separately"
