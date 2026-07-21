@@ -36,16 +36,17 @@ DAILY_SHEET = "0s897"
 # (key, label, column in 1分+1s, kind, context_key)
 # kind: text | textml | num. context_key names the daily-answer list shown
 # above the field (None = no daily analog).
+#
+# Rating (P), High (W), Low (X), Avg (Y) are DELIBERATELY absent: those cells
+# hold live formulas (P pulls 'i9'!B{row}; W/X/Y are MAX/MIN/AVERAGE over the
+# week's 0s897 ⌈/⌊/x̄ rows) — they compute themselves from the daily surveys,
+# and a form write would clobber the formulas (user decision 2026-07-21).
 FIELDS = [
-    ("rating",        "Rating",                     "P",  "text",   None),
     ("title",         "Title for the Week",         "R",  "text",   "titles"),
     ("win",           "Biggest Win",                "S",  "textml", "wins"),
     ("missed",        "Biggest missed opportunity", "T",  "textml", "learnings"),
     ("proud_others",  "Proud of w/others",          "U",  "textml", "proud"),
     ("regret_others", "Regret w/others",            "V",  "textml", "learn_others"),
-    ("high",          "High",                       "W",  "num",    None),
-    ("low",           "Low",                        "X",  "num",    None),
-    ("avg",           "Avg",                        "Y",  "num",    None),
     ("notes",         "Notes",                      "AO", "textml", "learnings"),
 ]
 
@@ -165,21 +166,6 @@ def fetch_context(dates: list[_dt.date]) -> dict[str, list[tuple[int, str]]]:
     return parse_context(proc.stdout, dates)
 
 
-def numeric_suggestions(ctx: dict) -> dict[str, str]:
-    """Prefills: High = max daily ⌈, Low = min daily ⌊, Avg = mean daily x̄."""
-    out = {}
-    ceils = [float(v) for _i, v in ctx.get("ceil", []) if _is_num(v)]
-    floors = [float(v) for _i, v in ctx.get("floor", []) if _is_num(v)]
-    means = [float(v) for _i, v in ctx.get("mean", []) if _is_num(v)]
-    if ceils:
-        out["high"] = "%g" % max(ceils)
-    if floors:
-        out["low"] = "%g" % min(floors)
-    if means:
-        out["avg"] = "%g" % round(sum(means) / len(means), 1)
-    return out
-
-
 def expand_selections(answers: dict, ctx: dict) -> dict:
     """'Selecting rather than creating': a text answer that is ONLY day
     digits/commas (e.g. '3' or '2,5') expands to those days' context texts
@@ -198,6 +184,128 @@ def expand_selections(answers: dict, ctx: dict) -> dict:
         if picks:
             out[key] = "; ".join(picks)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Week-completeness gate (user decision 2026-07-21: missing daily surveys /
+# time recording / 0l must be backfilled BEFORE 1s can run)
+# ---------------------------------------------------------------------------
+
+# A day with less than this many tracked Toggl minutes counts as a recording
+# gap. Tracking here is near-total (sleep included), so a real day is ~24h;
+# 20h leaves slack for edge entries without letting a half-recorded day pass.
+MIN_TRACKED_MIN = 20 * 60
+
+
+def build_0l_script(dates: list[_dt.date]) -> str:
+    """Read the 0n sheet's 0l column for each date (0n col C = real date
+    cells, so match displayed month/day; 0l column resolved via neon-cols)."""
+    sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+    try:
+        from neon import cols as _cols
+        col = _cols.maybe_col("0n", "0l") or "S"
+    except Exception:
+        col = "S"
+    conds = "\n".join(
+        '    if md = "%d/%d" then set end of hits to {%d, r}' % (d.month, d.day, i)
+        for i, d in enumerate(dates))
+    return f'''tell application "Microsoft Excel"
+  set ws to sheet "0n" of workbook "{WORKBOOK}"
+  set tmpC to value of range "C3:C500" of ws
+  set hits to {{}}
+  repeat with r from 3 to 500
+    set cv to item 1 of (item (r - 2) of tmpC)
+    if cv is not missing value then
+      try
+        set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
+{conds}
+      end try
+    end if
+  end repeat
+  set out to ""
+  repeat with h in hits
+    set vv to ""
+    try
+      set vv to (value of range ("{col}" & (item 2 of h)) of ws) as text
+    end try
+    set out to out & "<<D>>" & (item 1 of h) & "<<F>>" & vv
+  end repeat
+  return out
+end tell'''
+
+
+def _toggl_minutes_by_day(dates: list[_dt.date]) -> dict[_dt.date, int]:
+    """Tracked minutes per local day for the week, via the Toggl v9 API.
+    Empty dict on any failure (the gate then skips the tracking check
+    rather than false-blocking on a network error)."""
+    import base64
+    import urllib.request
+    try:
+        cj = json.loads((Path.home() / ".claude.json").read_text())
+        key = cj["mcpServers"]["toggl_server"]["env"]["TOGGL_API_KEY"]
+        start = dates[0].isoformat()
+        end = (dates[-1] + _dt.timedelta(days=1)).isoformat()
+        url = ("https://api.track.toggl.com/api/v9/me/time_entries"
+               f"?start_date={start}&end_date={end}")
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", "Basic " + base64.b64encode(
+            f"{key}:api_token".encode()).decode())
+        with urllib.request.urlopen(req, timeout=20) as r:
+            entries = json.loads(r.read())
+    except Exception:
+        return {}
+    mins: dict[_dt.date, int] = {d: 0 for d in dates}
+    for e in entries:
+        dur = e.get("duration", 0)
+        if dur <= 0:
+            continue
+        try:
+            d = _dt.datetime.fromisoformat(
+                e["start"].replace("Z", "+00:00")).astimezone().date()
+        except (KeyError, ValueError):
+            continue
+        if d in mins:
+            mins[d] += dur // 60
+    return mins
+
+
+def check_week(dates: list[_dt.date], ctx: dict | None = None) -> dict:
+    """Blockers for running 1s: {'missing_0s': [date...], 'missing_0l':
+    [date...], 'low_tracking': [(date, minutes)...]}. Empty lists = clear."""
+    ctx = ctx if ctx is not None else fetch_context(dates)
+    filled = {di for di, _t in ctx.get("titles", [])}
+    missing_0s = [dates[i] for i in range(7) if i not in filled]
+
+    missing_0l = list(dates)
+    proc = subprocess.run([str(IX_OSA)], input=build_0l_script(dates),
+                          capture_output=True, text=True, timeout=60)
+    if proc.returncode == 0:
+        done = set()
+        for chunk in proc.stdout.split("<<D>>")[1:]:
+            di, _, vv = chunk.partition("<<F>>")
+            try:
+                if float(vv.strip() or 0) > 0:
+                    done.add(int(di))
+            except ValueError:
+                pass
+        missing_0l = [dates[i] for i in range(7) if i not in done]
+
+    mins = _toggl_minutes_by_day(dates)
+    low_tracking = [(d, m) for d, m in sorted(mins.items())
+                    if m < MIN_TRACKED_MIN]
+    return {"missing_0s": missing_0s, "missing_0l": missing_0l,
+            "low_tracking": low_tracking}
+
+
+def format_blockers(blockers: dict) -> str:
+    lines = []
+    for d in blockers.get("missing_0s", []):
+        lines.append("  0s survey missing for %s → /0s %s" % (_mdy(d), d.isoformat()))
+    for d in blockers.get("missing_0l", []):
+        lines.append("  0l not marked for %s → /did 0l %d/%d" % (_mdy(d), d.month, d.day))
+    for d, m in blockers.get("low_tracking", []):
+        lines.append("  only %dh%02dm tracked on %s → backfill via /tg" % (m // 60, m % 60, _mdy(d)))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -281,14 +389,12 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
     from prompt_toolkit.styles import Style
     from prompt_toolkit.widgets import Frame, TextArea
 
-    prefills = numeric_suggestions(ctx)
     areas = {}
     rows = []
     for key, label, _col, kind, ckey in FIELDS:
         ml = kind == "textml"
         area = TextArea(multiline=ml, height=(3 if ml else 1), wrap_lines=True,
-                        style="class:input", scrollbar=ml,
-                        text=prefills.get(key, ""))
+                        style="class:input", scrollbar=ml)
         areas[key] = (area, kind, label)
         tag = " #" if kind == "num" else (" (digit=pick day)" if ckey else "")
         lbl = Window(FormattedTextControl(label + tag), width=28,
@@ -385,6 +491,12 @@ def main() -> int:
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     ap.add_argument("--print-context", action="store_true", help="dump the fetched daily context")
+    ap.add_argument("--check-week", action="store_true",
+                    help="report week-completeness blockers and exit (3 = blockers found)")
+    ap.add_argument("--force", action="store_true",
+                    help="open the form even with week-completeness blockers")
+    ap.add_argument("--no-mark", action="store_true",
+                    help="do not mark the 1s task done after a successful save")
     args = ap.parse_args()
 
     sunday, saturday = week_range(args.date)
@@ -394,11 +506,30 @@ def main() -> int:
         print(json.dumps(fetch_context(dates), ensure_ascii=False, indent=2))
         return 0
 
+    if args.check_week:
+        blockers = check_week(dates)
+        if any(blockers.values()):
+            print("1s blocked — backfill the week first:")
+            print(format_blockers(blockers))
+            return 3
+        print("week %s complete — 1s clear to run" % week_row_label(sunday))
+        return 0
+
     if args.from_json:
         answers = json.loads(Path(args.from_json).read_text())
         ctx = fetch_context(dates) if not args.print_script else {k: [] for k in DAILY_COLS}
     else:
         ctx = fetch_context(dates)
+        # Hard gate (user decision 2026-07-21): the weekly review may not run
+        # on an incomplete week — missing daily surveys / time recording / 0l
+        # must be backfilled first. --force is the deliberate escape hatch.
+        if not args.force:
+            blockers = check_week(dates, ctx)
+            if any(blockers.values()):
+                print("1s blocked — backfill the week first:")
+                print(format_blockers(blockers))
+                print("(rerun with --force to fill the survey anyway)")
+                return 3
         answers = run_form(sunday, dates, ctx)
         if answers is None:
             print("1s survey cancelled.")
@@ -411,7 +542,21 @@ def main() -> int:
 
     filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
     result = write_answers(answers, sunday)
-    print("1s → %s week %s (%d fields) · %s" % (SHEET, week_row_label(sunday), filled, result))
+    msg = "1s → %s week %s (%d fields) · %s" % (SHEET, week_row_label(sunday), filled, result)
+
+    # Completing the survey IS completing the weekly 1s task (user decision
+    # 2026-07-21: "I need to complete the survey before task is complete") —
+    # mark it here, not in the /1s skill flow.
+    if not args.no_mark:
+        try:
+            subprocess.run(["/usr/bin/python3",
+                            str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
+                           capture_output=True, text=True, timeout=120)
+            msg += " · 1s marked done"
+        except Exception as e:  # noqa: BLE001
+            msg += " · 1s mark FAILED: %s" % e
+
+    print(msg)
     return 0
 
 

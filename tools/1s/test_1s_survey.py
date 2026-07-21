@@ -56,14 +56,11 @@ def test_expand_selections_comma_list_joins():
     assert out["title"] == "A; C"
 
 
-def test_expand_selections_leaves_prose_and_numbers_alone():
+def test_expand_selections_leaves_prose_alone():
     m = _load()
     ctx = {"titles": [(0, "A")]}
-    out = m.expand_selections(
-        {"title": "Big week 3", "high": "7", "rating": "8"}, ctx)
+    out = m.expand_selections({"title": "Big week 3"}, ctx)
     assert out["title"] == "Big week 3"   # prose untouched
-    assert out["high"] == "7"             # num field never expanded
-    assert out["rating"] == "8"           # no context key → untouched
 
 
 def test_expand_selection_missing_day_kept_verbatim():
@@ -87,24 +84,65 @@ def test_parse_context_offsets_and_blanks():
     assert ctx["proud"] == [(2, "Proud")] and ctx["learn_others"] == [(2, "LearnO")]
 
 
-def test_numeric_suggestions_max_min_mean():
+def test_no_formula_fields_in_form():
+    """Regression (2026-07-21): Rating (P), High (W), Low (X), Avg (Y) hold
+    live sheet formulas (P='i9'!B{row}; W/X/Y aggregate the week's 0s897
+    ⌈/⌊/x̄) — they compute themselves from the daily surveys. A form write
+    would clobber the formulas, so those columns must never be FIELDS."""
     m = _load()
-    ctx = {"ceil": [(0, "7.8"), (1, "9")], "floor": [(0, "5.5"), (1, "6.8")],
-           "mean": [(0, "7"), (1, "8")]}
-    s = m.numeric_suggestions(ctx)
-    assert s == {"high": "9", "low": "5.5", "avg": "7.5"}
+    cols = {c for _k, _l, c, _kind, _ck in m.FIELDS}
+    assert not cols & {"P", "W", "X", "Y"}
 
 
 def test_applescript_targets_week_row_and_skips_blanks():
     m = _load()
-    script = m.build_applescript({"title": "T", "win": "", "high": "8"},
+    script = m.build_applescript({"title": "T", "win": "", "notes": "n"},
                                  dt.date(2026, 7, 12))
     assert '"7.2"' in script
     assert '("R" & weekRow)' in script          # title col
-    assert '("W" & weekRow)' in script          # high col
+    assert '("AO" & weekRow)' in script         # notes col
     assert '("S" & weekRow)' not in script      # blank win skipped
-    assert "string value of range" not in script or True
     assert "save wb" in script
+
+
+def test_check_week_flags_missing_days(monkeypatch):
+    m = _load()
+    dates = [dt.date(2026, 7, 12) + dt.timedelta(days=i) for i in range(7)]
+    ctx = {"titles": [(0, "t"), (1, "t"), (3, "t"), (4, "t"), (5, "t"), (6, "t")]}
+    # 0l done every day except day 2; tracking fine except day 6.
+    raw_0l = "".join("<<D>>%d<<F>>1.0" % i for i in range(7) if i != 2)
+    monkeypatch.setattr(m.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 0, "stdout": raw_0l, "stderr": ""})())
+    monkeypatch.setattr(m, "_toggl_minutes_by_day",
+                        lambda ds: {d: (600 if i == 6 else 1400) for i, d in enumerate(ds)})
+    b = m.check_week(dates, ctx)
+    assert b["missing_0s"] == [dates[2]]
+    assert b["missing_0l"] == [dates[2]]
+    assert b["low_tracking"] == [(dates[6], 600)]
+    text = m.format_blockers(b)
+    assert "/0s 2026-07-14" in text and "/did 0l 7/14" in text and "/tg" in text
+
+
+def test_check_week_clear_when_complete(monkeypatch):
+    m = _load()
+    dates = [dt.date(2026, 7, 12) + dt.timedelta(days=i) for i in range(7)]
+    ctx = {"titles": [(i, "t") for i in range(7)]}
+    raw_0l = "".join("<<D>>%d<<F>>1.0" % i for i in range(7))
+    monkeypatch.setattr(m.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 0, "stdout": raw_0l, "stderr": ""})())
+    monkeypatch.setattr(m, "_toggl_minutes_by_day",
+                        lambda ds: {d: 1400 for d in ds})
+    b = m.check_week(dates, ctx)
+    assert not any(b.values())
+
+
+def test_survey_save_marks_1s_done_in_source():
+    """User decision 2026-07-21: completing the survey completes the weekly
+    1s task — the tool runs did-fast's runner after a successful write (with
+    a --no-mark escape hatch), and the /1s skill no longer marks it."""
+    src = (HERE / "1s-survey.py").read_text()
+    assert 'run.py"), "1s"' in src.replace("'", '"')
+    assert "--no-mark" in src
 
 
 def test_daily_context_uses_string_value_for_dates():

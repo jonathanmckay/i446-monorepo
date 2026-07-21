@@ -20,6 +20,22 @@ Compare what you planned (1g goals) vs what you spent time on (Toggl) vs what yo
 
 ## Steps
 
+### Step -1: Week-completeness gate (BLOCKING)
+
+The weekly review may not run on an incomplete week. Check first:
+
+```bash
+python3 ~/i446-monorepo/tools/1s/1s-survey.py --check-week [YYYY-MM-DD]
+```
+
+Exit 0 = clear, proceed. Exit 3 = blockers: missing daily 0s surveys, days
+with 0l unmarked, or days with under 20h of Toggl recording. Present the
+tool's blocker list verbatim (it names the exact backfill commands — `/0s
+<date>`, `/did 0l <M/D>`, `/tg`) and **STOP — do not run any further step**
+until the user has backfilled and the check passes. The survey tool enforces
+the same gate itself (`--force` is the deliberate escape hatch; use it only
+if the user explicitly says to skip backfilling).
+
 ### Step 0: Prep — donuts, 1g summary, open tabs
 
 Run these three prep steps before the analysis.
@@ -63,14 +79,17 @@ Replace `WEEK_ROW` with the ISO week number for the review week.
 #### Step 0c: Launch the weekly survey form
 
 Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
-the manual questions of the `1分+1s` row (Rating, Title for the Week, Biggest
-Win, Biggest missed opportunity, Proud/Regret w/others, High/Low/Avg, Notes).
-Above each question it surfaces the week's DAILY answers from `0s897`
-(titles, wins, learnings, proud/regret) so answering is selecting/condensing
-rather than composing de novo — typing a day digit (`3`, or `2,5`) as the
-whole answer expands to that day's text on save, and High/Low/Avg come
-prefilled from the daily ⌈/⌊/x̄. On `^S` it writes the answers to the review
-week's row (col A M.W label) and saves.
+the manual questions of the `1分+1s` row (Title for the Week, Biggest Win,
+Biggest missed opportunity, Proud/Regret w/others, Notes). Rating and
+High/Low/Avg are NOT asked: those cells hold live formulas computed from the
+week's daily surveys (P pulls `'i9'!B{row}`; W/X/Y aggregate `0s897` ⌈/⌊/x̄)
+and must never be written. Above each question the form surfaces the week's
+DAILY answers from `0s897` (titles, wins, learnings, proud/regret) so
+answering is selecting/condensing rather than composing de novo — typing a
+day digit (`3`, or `2,5`) as the whole answer expands to that day's text on
+save. On `^S` it writes the answers to the review week's row (col A M.W
+label), saves, and **marks the weekly 1s task done** (survey completion IS
+task completion; `--no-mark` suppresses that for reruns).
 
 It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 
@@ -278,9 +297,13 @@ For each stale memory, either:
 
 Ask the user which action to take for each stale entry.
 
-### Step 8: Report + mark done
+### Step 8: Report
 
-Show the comparison table and narrative to the user. Then execute `/did 1s` to mark the weekly task complete.
+Show the comparison table and narrative to the user. Do NOT run `/did 1s`
+here — the weekly 1s task is marked done by the survey form on `^S` (the
+task is not complete until the survey is; user decision 2026-07-21). If the
+survey is still open, say so; if it was cancelled, the task stays open until
+the user submits it (rerun `1s-survey.py` directly if needed).
 
 ## Notes
 
