@@ -389,19 +389,25 @@ cat > "$DTD_DEFER" << DEFEREOF
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
 HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
-task="\$1"
-# Strip ANSI codes and recurring indicator
-task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-# Query with the FULL row content (annotations intact) so duplicate names
-# differing only in (N)/[N] resolve to the exact selected task; fall back
-# to the stripped prefix when fzf truncated the row (regression 2026-06-06:
-# "defer failed: call dad" with two call-dad tasks)
-query="\$task"
-if [[ "\$clean" == *"…"* ]]; then
-  clean="\${clean%%…*}"
-  query="\$clean"
-fi
+# Multi-select (2026-07-23): the ctrl-d binding passes {+2} — every
+# shift-marked row's id, or just the cursor row's id when nothing is marked
+# (the single-task path is the 1-element case of the same loop). Resolve
+# every id up front, prompt ONCE for the defer target, then fan out to the
+# same per-task detached worker as before.
+typeset -a ids names
+for _tid in "\$@"; do
+  [[ -n "\$_tid" ]] || continue
+  task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_tid")  # id (field 2) -> canonical content
+  clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+  # fzf middle-truncates long rows; keep the prefix before the ellipsis
+  # (regression 2026-06-06: "defer failed: call dad" with two call-dad tasks)
+  [[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
+  ids+=("\$_tid")
+  names+=("\$clean")
+done
+(( \${#ids[@]} )) || exit 0
+label="\${names[1]}"
+(( \${#ids[@]} > 1 )) && label="\${#ids[@]} tasks (\${(j:, :)names})"
 # Prompt for the defer target — N days or an absolute date; empty/0 = "auto":
 # recurring tasks skip to their next occurrence, non-recurring default to +1
 # day (0 = today). Gated on DTD_DEFER_PROMPT, which only dtd's fzf session
@@ -409,7 +415,7 @@ fi
 # flag unset and get the non-interactive default.
 days=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
-  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring)> " "\$clean" > /dev/tty
+  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring)> " "\$label" > /dev/tty
   read days < /dev/tty
 fi
 days=\${days// /}
@@ -433,24 +439,33 @@ defer_label="+\$days"
 # both vanished from the list when only one was deferred (2026-07-13). The
 # id-keyed \$REMOVED.ids file is the same mechanism enter.sh/done.sh already
 # use for this exact reason (see the removed_ids check in dtd's list script).
-echo "\$1" >> "\$REMOVED.ids"
-echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
-echo "x" >> "$DTD_PUSHED"
-(
-  result=\$(python3 "\$DEFER_FAST" --id "\$1" "\$days" 2>/dev/null)
-  ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
-  if [[ -n "\$ok" ]]; then
-    # Journal for ctrl-z undo
-    echo "\$result" | python3 "$UNDO_FAST" --journal-defer "$DTD_JOURNAL" "\$clean" 2>/dev/null
-    echo "⏭ \$clean \$ok" > "\$HDR"
-  else
-    # Roll back the optimistic hide so the task reappears on next reload
-    grep -v -x -F -- "\$1" "\$REMOVED.ids" > "\$REMOVED.ids.tmp" 2>/dev/null
-    mv "\$REMOVED.ids.tmp" "\$REMOVED.ids"
-    echo "? defer failed: \$clean (restored to list)" > "\$HDR"
-  fi
-  echo "x" >> "$DTD_PROCESSED"
-) >/dev/null 2>&1 &!
+#
+# Each batch member gets its OWN worker + journal entry, so ctrl-z undoes
+# them one at a time in reverse. (Two FAILING workers rolling back
+# concurrently could race on the .ids rewrite — failure-path only, rare,
+# self-corrects at the next day's file.)
+for i in {1..\${#ids[@]}}; do
+  tid="\${ids[\$i]}"
+  clean="\${names[\$i]}"
+  echo "\$tid" >> "\$REMOVED.ids"
+  echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
+  echo "x" >> "$DTD_PUSHED"
+  (
+    result=\$(python3 "\$DEFER_FAST" --id "\$tid" "\$days" 2>/dev/null)
+    ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
+    if [[ -n "\$ok" ]]; then
+      # Journal for ctrl-z undo
+      echo "\$result" | python3 "$UNDO_FAST" --journal-defer "$DTD_JOURNAL" "\$clean" 2>/dev/null
+      echo "⏭ \$clean \$ok" > "\$HDR"
+    else
+      # Roll back the optimistic hide so the task reappears on next reload
+      grep -v -x -F -- "\$tid" "\$REMOVED.ids" > "\$REMOVED.ids.tmp" 2>/dev/null
+      mv "\$REMOVED.ids.tmp" "\$REMOVED.ids"
+      echo "? defer failed: \$clean (restored to list)" > "\$HDR"
+    fi
+    echo "x" >> "$DTD_PROCESSED"
+  ) >/dev/null 2>&1 &!
+done
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
@@ -899,6 +914,12 @@ cat > "$DTD_SKIP" << SKIPEOF
 #!/bin/zsh
 SKIPPED="$DTD_SKIPPED"
 HDR="$DTD_HDR"
+# Multi-select fan-out (2026-07-23): ctrl-k passes {+2} (all marked ids, or
+# the cursor row's). Re-run self per id so the single-id body stays untouched.
+if (( \$# > 1 )); then
+  for _tid in "\$@"; do "\$0" "\$_tid"; done
+  exit 0
+fi
 task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
@@ -914,6 +935,12 @@ cat > "$DTD_DELETE" << DELETEEOF
 HDR="$DTD_HDR"
 CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
+# Multi-select fan-out (2026-07-23): ctrl-x passes {+2} (all marked ids, or
+# the cursor row's). Re-run self per id so the single-id body stays untouched.
+if (( \$# > 1 )); then
+  for _tid in "\$@"; do "\$0" "\$_tid"; done
+  exit 0
+fi
 task="\$1"
 # Strip ANSI codes and recurring indicator
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
@@ -1365,7 +1392,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view"
+export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -1622,16 +1649,18 @@ while true; do
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-s:execute-silent($DTD_START {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:execute($DTD_DEFER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --multi \
+      --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
+      --bind "enter:execute-silent($DTD_ENTER {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:execute($DTD_DEFER {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-k:execute-silent($DTD_SKIP {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-k:execute-silent($DTD_SKIP {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")

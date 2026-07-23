@@ -1,26 +1,13 @@
 [
   {
     "property_name": "a210",
-    "unit": "3",
-    "unit_status": "Notice-Unrented",
-    "last_move_in": "2024-08-15",
-    "last_move_out": "2026-08-31",
-    "next_move_in": null,
-    "available_on": "2026-09-20",
-    "days_vacant": null,
-    "schd_rent": "999.00",
-    "advertised_rent": "999.00",
-    "rent_ready": "Yes"
-  },
-  {
-    "property_name": "a210",
     "unit": "4",
     "unit_status": "Vacant-Rented",
     "last_move_in": "2025-08-08",
     "last_move_out": "2026-06-14",
     "next_move_in": "2026-07-24",
-    "available_on": "2026-06-29",
-    "days_vacant": 36,
+    "available_on": null,
+    "days_vacant": 39,
     "schd_rent": "999.00",
     "advertised_rent": "999.00",
     "rent_ready": "Yes"
@@ -46,7 +33,7 @@
     "last_move_out": "2026-06-27",
     "next_move_in": null,
     "available_on": "2026-08-24",
-    "days_vacant": 23,
+    "days_vacant": 26,
     "schd_rent": "1128.00",
     "advertised_rent": "930.00",
     "rent_ready": "No"
@@ -61,18 +48,18 @@
     "available_on": "2026-09-17",
     "days_vacant": null,
     "schd_rent": "1033.00",
-    "advertised_rent": "870.00",
+    "advertised_rent": "1033.00",
     "rent_ready": "No"
   },
   {
     "property_name": "a916",
     "unit": "3",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2026-05-15",
     "last_move_out": "2026-05-26",
-    "next_move_in": null,
+    "next_move_in": "2026-07-28",
     "available_on": "2026-05-28",
-    "days_vacant": 55,
+    "days_vacant": 58,
     "schd_rent": "1033.00",
     "advertised_rent": "938.00",
     "rent_ready": "Yes"
@@ -85,7 +72,7 @@
     "last_move_out": "2026-06-26",
     "next_move_in": null,
     "available_on": "2026-09-15",
-    "days_vacant": 24,
+    "days_vacant": 27,
     "schd_rent": "870.00",
     "advertised_rent": "870.00",
     "rent_ready": "No"
@@ -111,7 +98,7 @@
     "last_move_out": "2026-07-08",
     "next_move_in": null,
     "available_on": "2026-09-17",
-    "days_vacant": 12,
+    "days_vacant": 15,
     "schd_rent": "870.00",
     "advertised_rent": "850.00",
     "rent_ready": "No"
@@ -124,7 +111,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-12",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1525.00",
     "advertised_rent": "1525.00",
     "rent_ready": "No"
@@ -137,7 +124,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-13",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1450.00",
     "advertised_rent": "1450.00",
     "rent_ready": "No"
@@ -150,7 +137,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-07-01",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1645.00",
     "advertised_rent": "1645.00",
     "rent_ready": "Yes"
@@ -166,7 +153,7 @@
     "days_vacant": null,
     "schd_rent": "1645.00",
     "advertised_rent": "1645.00",
-    "rent_ready": "Yes"
+    "rent_ready": "No"
   },
   {
     "property_name": "c313",
@@ -176,7 +163,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-05",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1695.00",
     "advertised_rent": "1695.00",
     "rent_ready": "No"
@@ -189,22 +176,9 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-05",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1220.00",
     "advertised_rent": "1100.00",
-    "rent_ready": "No"
-  },
-  {
-    "property_name": "c313",
-    "unit": "22",
-    "unit_status": "Notice-Unrented",
-    "last_move_in": "2025-03-01",
-    "last_move_out": "2026-07-31",
-    "next_move_in": null,
-    "available_on": "2026-08-20",
-    "days_vacant": null,
-    "schd_rent": "1525.00",
-    "advertised_rent": "1095.00",
     "rent_ready": "No"
   },
   {
@@ -215,7 +189,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-08-17",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1495.00",
     "advertised_rent": "1495.00",
     "rent_ready": "No"
@@ -223,12 +197,12 @@
   {
     "property_name": "c313",
     "unit": "27",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2025-05-09",
     "last_move_out": "2026-04-30",
-    "next_move_in": null,
+    "next_move_in": "2026-08-01",
     "available_on": "2026-06-23",
-    "days_vacant": 81,
+    "days_vacant": 84,
     "schd_rent": "1220.00",
     "advertised_rent": "1100.00",
     "rent_ready": "Yes"
@@ -267,7 +241,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-19",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1325.00",
     "advertised_rent": "1200.00",
     "rent_ready": "No"
@@ -280,7 +254,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-18",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1364.00",
     "advertised_rent": "1364.00",
     "rent_ready": "No"
@@ -327,12 +301,25 @@
   {
     "property_name": "k104- LeFevre",
     "unit": "101-1",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2022-05-17",
     "last_move_out": "2026-06-30",
-    "next_move_in": null,
+    "next_move_in": "2026-09-10",
     "available_on": "2026-09-10",
-    "days_vacant": 20,
+    "days_vacant": 23,
+    "schd_rent": "1334.00",
+    "advertised_rent": "1334.00",
+    "rent_ready": "No"
+  },
+  {
+    "property_name": "k104- LeFevre",
+    "unit": "101-3",
+    "unit_status": "Notice-Unrented",
+    "last_move_in": "2024-02-10",
+    "last_move_out": "2026-09-15",
+    "next_move_in": null,
+    "available_on": "2026-10-05",
+    "days_vacant": null,
     "schd_rent": "1334.00",
     "advertised_rent": "1334.00",
     "rent_ready": "No"
@@ -345,7 +332,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-09-14",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1334.00",
     "advertised_rent": "1334.00",
     "rent_ready": "No"
@@ -353,12 +340,12 @@
   {
     "property_name": "k104- LeFevre",
     "unit": "314-12",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2024-11-01",
     "last_move_out": "2026-05-04",
-    "next_move_in": null,
+    "next_move_in": "2026-08-15",
     "available_on": "2026-06-17",
-    "days_vacant": 77,
+    "days_vacant": 80,
     "schd_rent": "1334.00",
     "advertised_rent": "1239.00",
     "rent_ready": "Yes"
@@ -371,7 +358,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-07-16",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1267.00",
     "advertised_rent": "1172.00",
     "rent_ready": "Yes"
@@ -384,9 +371,22 @@
     "last_move_out": "2026-07-05",
     "next_move_in": "2026-08-26",
     "available_on": "2026-07-27",
-    "days_vacant": 15,
+    "days_vacant": 18,
     "schd_rent": "1087.00",
     "advertised_rent": "960.00",
+    "rent_ready": "No"
+  },
+  {
+    "property_name": "k104- LeFevre",
+    "unit": "507-4",
+    "unit_status": "Notice-Unrented",
+    "last_move_in": "2025-08-26",
+    "last_move_out": "2026-08-31",
+    "next_move_in": null,
+    "available_on": "2026-09-20",
+    "days_vacant": null,
+    "schd_rent": "1267.00",
+    "advertised_rent": "1035.00",
     "rent_ready": "No"
   },
   {
@@ -397,6 +397,19 @@
     "last_move_out": "2026-07-31",
     "next_move_in": null,
     "available_on": "2026-09-28",
+    "days_vacant": null,
+    "schd_rent": "1267.00",
+    "advertised_rent": "1135.00",
+    "rent_ready": "No"
+  },
+  {
+    "property_name": "k104- LeFevre",
+    "unit": "509-2",
+    "unit_status": "Notice-Unrented",
+    "last_move_in": "2025-08-04",
+    "last_move_out": "2026-07-31",
+    "next_move_in": null,
+    "available_on": "2026-08-20",
     "days_vacant": null,
     "schd_rent": "1267.00",
     "advertised_rent": "1135.00",
@@ -449,7 +462,7 @@
     "last_move_out": "2026-03-27",
     "next_move_in": null,
     "available_on": "2026-04-16",
-    "days_vacant": 115,
+    "days_vacant": 118,
     "schd_rent": "1362.00",
     "advertised_rent": "1362.00",
     "rent_ready": "Yes"
@@ -461,8 +474,8 @@
     "last_move_in": "2021-06-21",
     "last_move_out": "2026-03-27",
     "next_move_in": null,
-    "available_on": "2026-08-18",
-    "days_vacant": 115,
+    "available_on": "2026-09-04",
+    "days_vacant": 118,
     "schd_rent": "936.00",
     "advertised_rent": "936.00",
     "rent_ready": "No"
@@ -470,12 +483,12 @@
   {
     "property_name": "kn47 K1",
     "unit": "C206",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2025-03-07",
     "last_move_out": "2026-05-31",
-    "next_move_in": null,
+    "next_move_in": "2026-09-01",
     "available_on": "2026-07-11",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "Yes"
@@ -501,10 +514,23 @@
     "last_move_out": "2026-06-14",
     "next_move_in": null,
     "available_on": "2026-07-11",
-    "days_vacant": 36,
+    "days_vacant": 39,
     "schd_rent": "1362.00",
     "advertised_rent": "1362.00",
     "rent_ready": "Yes"
+  },
+  {
+    "property_name": "kn47 K1",
+    "unit": "G201",
+    "unit_status": "Notice-Unrented",
+    "last_move_in": "2024-09-10",
+    "last_move_out": "2026-08-01",
+    "next_move_in": null,
+    "available_on": "2026-09-15",
+    "days_vacant": null,
+    "schd_rent": "1362.00",
+    "advertised_rent": "1362.00",
+    "rent_ready": "No"
   },
   {
     "property_name": "kn47 K1",
@@ -514,7 +540,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "No"
@@ -527,7 +553,7 @@
     "last_move_out": "2025-11-15",
     "next_move_in": null,
     "available_on": "2026-01-19",
-    "days_vacant": 247,
+    "days_vacant": 250,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "Yes"
@@ -539,7 +565,7 @@
     "last_move_in": "2026-02-19",
     "last_move_out": "2026-08-02",
     "next_move_in": null,
-    "available_on": "2026-08-22",
+    "available_on": "2026-09-16",
     "days_vacant": null,
     "schd_rent": "936.00",
     "advertised_rent": "936.00",
@@ -553,7 +579,7 @@
     "last_move_out": "2025-11-30",
     "next_move_in": null,
     "available_on": "2026-01-09",
-    "days_vacant": 232,
+    "days_vacant": 235,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "Yes"
@@ -566,7 +592,7 @@
     "last_move_out": "2025-06-19",
     "next_move_in": null,
     "available_on": "2026-08-31",
-    "days_vacant": 396,
+    "days_vacant": 399,
     "schd_rent": "936.00",
     "advertised_rent": "936.00",
     "rent_ready": "No"
@@ -578,11 +604,11 @@
     "last_move_in": "2024-03-20",
     "last_move_out": "2026-07-23",
     "next_move_in": null,
-    "available_on": "2026-08-12",
+    "available_on": "2026-09-06",
     "days_vacant": null,
     "schd_rent": "936.00",
     "advertised_rent": "936.00",
-    "rent_ready": "Yes"
+    "rent_ready": "No"
   },
   {
     "property_name": "kn47 K1",
@@ -591,21 +617,21 @@
     "last_move_in": "2024-02-07",
     "last_move_out": "2026-06-30",
     "next_move_in": null,
-    "available_on": "2026-07-22",
-    "days_vacant": 20,
+    "available_on": "2026-07-21",
+    "days_vacant": 23,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "kn47 K1",
     "unit": "M201",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2014-09-24",
     "last_move_out": "2026-05-31",
-    "next_move_in": null,
+    "next_move_in": "2026-08-01",
     "available_on": "2026-07-11",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "936.00",
     "advertised_rent": "936.00",
     "rent_ready": "Yes"
@@ -618,7 +644,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-08-03",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "No"
@@ -656,11 +682,11 @@
     "last_move_in": "2026-03-20",
     "last_move_out": "2026-06-25",
     "next_move_in": null,
-    "available_on": "2026-07-18",
-    "days_vacant": 25,
+    "available_on": "2026-07-22",
+    "days_vacant": 28,
     "schd_rent": "936.00",
     "advertised_rent": "936.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "kn47 K2",
@@ -683,7 +709,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": "2026-08-28",
     "available_on": "2026-07-03",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "Yes"
@@ -708,8 +734,8 @@
     "last_move_in": "2024-11-26",
     "last_move_out": "2026-07-08",
     "next_move_in": null,
-    "available_on": "2026-08-14",
-    "days_vacant": 12,
+    "available_on": "2026-08-22",
+    "days_vacant": 15,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
     "rent_ready": "No"
@@ -747,24 +773,24 @@
     "last_move_in": "2025-03-13",
     "last_move_out": "2026-06-30",
     "next_move_in": "2026-08-01",
-    "available_on": "2026-07-25",
-    "days_vacant": 20,
+    "available_on": "2026-07-21",
+    "days_vacant": 23,
     "schd_rent": "1136.00",
     "advertised_rent": "1136.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "kn47-k3",
     "unit": "KL100",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2019-07-05",
     "last_move_out": "2026-06-17",
-    "next_move_in": null,
-    "available_on": "2026-07-16",
-    "days_vacant": 33,
+    "next_move_in": "2026-07-24",
+    "available_on": "2026-07-22",
+    "days_vacant": 36,
     "schd_rent": "1600.00",
     "advertised_rent": "1505.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "kn47-k3",
@@ -774,7 +800,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-07-01",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1430.00",
     "advertised_rent": "1335.00",
     "rent_ready": "Yes"
@@ -787,7 +813,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1430.00",
     "advertised_rent": "1430.00",
     "rent_ready": "No"
@@ -800,22 +826,9 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-09-16",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1695.00",
     "advertised_rent": "1695.00",
-    "rent_ready": "No"
-  },
-  {
-    "property_name": "m221",
-    "unit": "4",
-    "unit_status": "Notice-Unrented",
-    "last_move_in": "2025-09-06",
-    "last_move_out": "2026-08-31",
-    "next_move_in": null,
-    "available_on": "2026-09-20",
-    "days_vacant": null,
-    "schd_rent": "1095.00",
-    "advertised_rent": "1000.00",
     "rent_ready": "No"
   },
   {
@@ -826,9 +839,9 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-07-15",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1252.00",
-    "advertised_rent": "1265.00",
+    "advertised_rent": "1252.00",
     "rent_ready": "Yes"
   },
   {
@@ -836,12 +849,12 @@
     "unit": "33",
     "unit_status": "Notice-Unrented",
     "last_move_in": "2024-09-12",
-    "last_move_out": "2026-07-31",
+    "last_move_out": "2026-07-26",
     "next_move_in": null,
-    "available_on": "2026-09-29",
+    "available_on": "2026-08-15",
     "days_vacant": null,
     "schd_rent": "1235.00",
-    "advertised_rent": "870.00",
+    "advertised_rent": "1140.00",
     "rent_ready": "No"
   },
   {
@@ -868,7 +881,7 @@
     "days_vacant": null,
     "schd_rent": "1313.00",
     "advertised_rent": "1313.00",
-    "rent_ready": "Yes"
+    "rent_ready": "No"
   },
   {
     "property_name": "m608",
@@ -878,10 +891,23 @@
     "last_move_out": "2026-07-03",
     "next_move_in": "2026-08-14",
     "available_on": "2026-07-27",
-    "days_vacant": 17,
+    "days_vacant": 20,
     "schd_rent": "1181.00",
     "advertised_rent": "1181.00",
     "rent_ready": "No"
+  },
+  {
+    "property_name": "ms22",
+    "unit": "2256",
+    "unit_status": "Notice-Unrented",
+    "last_move_in": "2022-01-01",
+    "last_move_out": "2026-08-31",
+    "next_move_in": null,
+    "available_on": "2026-09-20",
+    "days_vacant": null,
+    "schd_rent": "973.00",
+    "advertised_rent": "973.00",
+    "rent_ready": "Yes"
   },
   {
     "property_name": "o155-Elm",
@@ -904,10 +930,10 @@
     "last_move_out": "2026-06-08",
     "next_move_in": "2026-07-27",
     "available_on": "2026-07-20",
-    "days_vacant": 42,
+    "days_vacant": 45,
     "schd_rent": "1125.00",
     "advertised_rent": "890.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "o155-Elm",
@@ -923,6 +949,19 @@
     "rent_ready": "No"
   },
   {
+    "property_name": "o155-Elm",
+    "unit": "U",
+    "unit_status": "Notice-Unrented",
+    "last_move_in": "2025-09-04",
+    "last_move_out": "2026-08-31",
+    "next_move_in": null,
+    "available_on": "2026-09-20",
+    "days_vacant": null,
+    "schd_rent": "1225.00",
+    "advertised_rent": "1225.00",
+    "rent_ready": "No"
+  },
+  {
     "property_name": "o155-Oak",
     "unit": "A4",
     "unit_status": "Vacant-Unrented",
@@ -930,23 +969,10 @@
     "last_move_out": "2026-07-15",
     "next_move_in": null,
     "available_on": "2026-09-02",
-    "days_vacant": 5,
+    "days_vacant": 8,
     "schd_rent": "1225.00",
     "advertised_rent": "1225.00",
     "rent_ready": "No"
-  },
-  {
-    "property_name": "o155-Oak",
-    "unit": "B6",
-    "unit_status": "Vacant-Rented",
-    "last_move_in": "2024-05-01",
-    "last_move_out": "2026-05-31",
-    "next_move_in": "2026-07-21",
-    "available_on": "2026-06-29",
-    "days_vacant": 50,
-    "schd_rent": "1075.00",
-    "advertised_rent": "1075.00",
-    "rent_ready": "Yes"
   },
   {
     "property_name": "o155-Oak",
@@ -956,7 +982,7 @@
     "last_move_out": "2026-07-17",
     "next_move_in": null,
     "available_on": "2026-09-07",
-    "days_vacant": 3,
+    "days_vacant": 6,
     "schd_rent": "895.00",
     "advertised_rent": "800.00",
     "rent_ready": "No"
@@ -969,7 +995,7 @@
     "last_move_out": "2026-06-01",
     "next_move_in": null,
     "available_on": "2026-10-19",
-    "days_vacant": 49,
+    "days_vacant": 52,
     "schd_rent": "1295.00",
     "advertised_rent": "1200.00",
     "rent_ready": "No"
@@ -995,7 +1021,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "956.00",
     "advertised_rent": "815.00",
     "rent_ready": "No"
@@ -1008,7 +1034,7 @@
     "last_move_out": "2026-03-31",
     "next_move_in": null,
     "available_on": "2026-05-01",
-    "days_vacant": 111,
+    "days_vacant": 114,
     "schd_rent": "956.00",
     "advertised_rent": "790.00",
     "rent_ready": "Yes"
@@ -1021,7 +1047,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-06-18",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "956.00",
     "advertised_rent": "815.00",
     "rent_ready": "Yes"
@@ -1034,7 +1060,7 @@
     "last_move_out": "2026-07-13",
     "next_move_in": null,
     "available_on": "2026-08-27",
-    "days_vacant": 7,
+    "days_vacant": 10,
     "schd_rent": "956.00",
     "advertised_rent": "815.00",
     "rent_ready": "No"
@@ -1046,7 +1072,7 @@
     "last_move_in": "2025-09-27",
     "last_move_out": "2026-08-31",
     "next_move_in": null,
-    "available_on": "2026-10-08",
+    "available_on": "2026-10-15",
     "days_vacant": null,
     "schd_rent": "956.00",
     "advertised_rent": "815.00",
@@ -1060,7 +1086,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "956.00",
     "advertised_rent": "956.00",
     "rent_ready": "No"
@@ -1073,7 +1099,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": "2026-08-01",
     "available_on": "2026-06-18",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "956.00",
     "advertised_rent": "790.00",
     "rent_ready": "Yes"
@@ -1112,7 +1138,7 @@
     "last_move_out": "2026-04-30",
     "next_move_in": null,
     "available_on": "2026-05-26",
-    "days_vacant": 81,
+    "days_vacant": 84,
     "schd_rent": "1395.00",
     "advertised_rent": "1295.00",
     "rent_ready": "Yes"
@@ -1125,7 +1151,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-06-30",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1395.00",
     "advertised_rent": "1295.00",
     "rent_ready": "Yes"
@@ -1137,8 +1163,8 @@
     "last_move_in": "2025-03-01",
     "last_move_out": "2026-07-01",
     "next_move_in": "2026-07-24",
-    "available_on": "2026-07-07",
-    "days_vacant": 19,
+    "available_on": null,
+    "days_vacant": 22,
     "schd_rent": "1162.00",
     "advertised_rent": "999.00",
     "rent_ready": "Yes"
@@ -1151,7 +1177,7 @@
     "last_move_out": "2026-06-12",
     "next_move_in": null,
     "available_on": "2026-07-13",
-    "days_vacant": 38,
+    "days_vacant": 41,
     "schd_rent": "1162.00",
     "advertised_rent": "1162.00",
     "rent_ready": "Yes"
@@ -1159,12 +1185,12 @@
   {
     "property_name": "ps25",
     "unit": "D23",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2022-04-01",
     "last_move_out": "2026-01-31",
-    "next_move_in": null,
+    "next_move_in": "2026-07-24",
     "available_on": "2026-03-27",
-    "days_vacant": 170,
+    "days_vacant": 173,
     "schd_rent": "1395.00",
     "advertised_rent": "1095.00",
     "rent_ready": "Yes"
@@ -1177,7 +1203,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-08-03",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1395.00",
     "advertised_rent": "1395.00",
     "rent_ready": "No"
@@ -1202,8 +1228,8 @@
     "last_move_in": "2025-11-01",
     "last_move_out": "2026-03-18",
     "next_move_in": "2026-08-01",
-    "available_on": "2026-04-07",
-    "days_vacant": 124,
+    "available_on": null,
+    "days_vacant": 127,
     "schd_rent": "1395.00",
     "advertised_rent": "1095.00",
     "rent_ready": "Yes"
@@ -1216,10 +1242,10 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-07-22",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1162.00",
     "advertised_rent": "1128.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "ps91",
@@ -1229,7 +1255,7 @@
     "last_move_out": "2026-05-14",
     "next_move_in": null,
     "available_on": "2026-06-10",
-    "days_vacant": 67,
+    "days_vacant": 70,
     "schd_rent": "1175.00",
     "advertised_rent": "936.00",
     "rent_ready": "Yes"
@@ -1242,7 +1268,7 @@
     "last_move_out": "2026-03-31",
     "next_move_in": null,
     "available_on": "2026-05-01",
-    "days_vacant": 111,
+    "days_vacant": 114,
     "schd_rent": "1129.00",
     "advertised_rent": "999.00",
     "rent_ready": "Yes"
@@ -1250,12 +1276,12 @@
   {
     "property_name": "rl16",
     "unit": "A03",
-    "unit_status": "Vacant-Rented",
+    "unit_status": "Vacant-Unrented",
     "last_move_in": "2025-05-09",
     "last_move_out": "2026-04-30",
-    "next_move_in": "2026-07-27",
+    "next_move_in": null,
     "available_on": "2026-05-20",
-    "days_vacant": 81,
+    "days_vacant": 84,
     "schd_rent": "1443.00",
     "advertised_rent": "1320.00",
     "rent_ready": "Yes"
@@ -1267,11 +1293,11 @@
     "last_move_in": "2024-02-16",
     "last_move_out": "2026-06-30",
     "next_move_in": null,
-    "available_on": "2026-07-27",
-    "days_vacant": 20,
+    "available_on": "2026-07-22",
+    "days_vacant": 23,
     "schd_rent": "1443.00",
     "advertised_rent": "1443.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "rl16",
@@ -1280,11 +1306,11 @@
     "last_move_in": "2024-08-21",
     "last_move_out": "2026-08-31",
     "next_move_in": null,
-    "available_on": "2026-09-20",
+    "available_on": "2026-10-15",
     "days_vacant": null,
     "schd_rent": "1627.00",
     "advertised_rent": "1627.00",
-    "rent_ready": "Yes"
+    "rent_ready": "No"
   },
   {
     "property_name": "rl16",
@@ -1294,7 +1320,7 @@
     "last_move_out": "2026-04-30",
     "next_move_in": null,
     "available_on": "2026-05-20",
-    "days_vacant": 81,
+    "days_vacant": 84,
     "schd_rent": "1443.00",
     "advertised_rent": "1320.00",
     "rent_ready": "Yes"
@@ -1306,7 +1332,7 @@
     "last_move_in": "2024-02-01",
     "last_move_out": "2026-07-31",
     "next_move_in": null,
-    "available_on": "2026-08-20",
+    "available_on": "2026-09-14",
     "days_vacant": null,
     "schd_rent": "1627.00",
     "advertised_rent": "1627.00",
@@ -1320,7 +1346,7 @@
     "last_move_out": "2026-04-22",
     "next_move_in": null,
     "available_on": "2026-05-13",
-    "days_vacant": 89,
+    "days_vacant": 92,
     "schd_rent": "1443.00",
     "advertised_rent": "1299.00",
     "rent_ready": "Yes"
@@ -1336,19 +1362,6 @@
     "days_vacant": null,
     "schd_rent": "1627.00",
     "advertised_rent": "1532.00",
-    "rent_ready": "No"
-  },
-  {
-    "property_name": "rl16",
-    "unit": "B03",
-    "unit_status": "Notice-Unrented",
-    "last_move_in": "2025-07-21",
-    "last_move_out": "2026-07-31",
-    "next_move_in": null,
-    "available_on": "2026-09-14",
-    "days_vacant": null,
-    "schd_rent": "1195.00",
-    "advertised_rent": "1180.00",
     "rent_ready": "No"
   },
   {
@@ -1372,7 +1385,7 @@
     "last_move_out": "2026-03-31",
     "next_move_in": null,
     "available_on": "2026-04-15",
-    "days_vacant": 111,
+    "days_vacant": 114,
     "schd_rent": "1423.00",
     "advertised_rent": "1299.00",
     "rent_ready": "Yes"
@@ -1384,11 +1397,11 @@
     "last_move_in": "2025-04-15",
     "last_move_out": "2026-06-06",
     "next_move_in": "2026-07-25",
-    "available_on": "2026-07-25",
-    "days_vacant": 44,
+    "available_on": null,
+    "days_vacant": 47,
     "schd_rent": "1627.00",
     "advertised_rent": "1395.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "rl16",
@@ -1397,24 +1410,11 @@
     "last_move_in": "2024-11-27",
     "last_move_out": "2026-08-31",
     "next_move_in": null,
-    "available_on": "2026-09-20",
+    "available_on": "2026-10-15",
     "days_vacant": null,
     "schd_rent": "1627.00",
     "advertised_rent": "1270.00",
-    "rent_ready": "Yes"
-  },
-  {
-    "property_name": "rl16",
-    "unit": "D10",
-    "unit_status": "Vacant-Unrented",
-    "last_move_in": "2025-05-10",
-    "last_move_out": "2026-01-12",
-    "next_move_in": null,
-    "available_on": "2026-06-01",
-    "days_vacant": 189,
-    "schd_rent": "1627.00",
-    "advertised_rent": "1345.00",
-    "rent_ready": "Yes"
+    "rent_ready": "No"
   },
   {
     "property_name": "rl16",
@@ -1423,7 +1423,7 @@
     "last_move_in": "2025-08-16",
     "last_move_out": "2026-08-31",
     "next_move_in": null,
-    "available_on": "2026-09-20",
+    "available_on": "2026-10-15",
     "days_vacant": null,
     "schd_rent": "1443.00",
     "advertised_rent": "1320.00",
@@ -1436,7 +1436,7 @@
     "last_move_in": "2025-06-15",
     "last_move_out": "2026-07-31",
     "next_move_in": "2026-09-04",
-    "available_on": "2026-08-20",
+    "available_on": "2026-09-14",
     "days_vacant": null,
     "schd_rent": "1443.00",
     "advertised_rent": "1443.00",
@@ -1450,7 +1450,7 @@
     "last_move_out": "2026-03-31",
     "next_move_in": "2026-08-22",
     "available_on": "2026-08-05",
-    "days_vacant": 111,
+    "days_vacant": 114,
     "schd_rent": "850.00",
     "advertised_rent": "850.00",
     "rent_ready": "No"
@@ -1463,7 +1463,7 @@
     "last_move_out": "2026-06-10",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 40,
+    "days_vacant": 43,
     "schd_rent": "850.00",
     "advertised_rent": "850.00",
     "rent_ready": "No"
@@ -1476,7 +1476,7 @@
     "last_move_out": "2026-07-12",
     "next_move_in": null,
     "available_on": "2026-08-27",
-    "days_vacant": 8,
+    "days_vacant": 11,
     "schd_rent": "1365.00",
     "advertised_rent": "1270.00",
     "rent_ready": "No"
@@ -1502,7 +1502,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": "2026-08-14",
     "available_on": "2026-07-31",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1365.00",
     "advertised_rent": "1270.00",
     "rent_ready": "No"
@@ -1515,7 +1515,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-06-30",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "966.00",
     "advertised_rent": "966.00",
     "rent_ready": "Yes"
@@ -1541,7 +1541,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-06-12",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1235.00",
     "advertised_rent": "1195.00",
     "rent_ready": "Yes"
@@ -1567,7 +1567,7 @@
     "last_move_out": "2026-03-18",
     "next_move_in": "2026-07-31",
     "available_on": "2026-07-22",
-    "days_vacant": 124,
+    "days_vacant": 127,
     "schd_rent": "1265.00",
     "advertised_rent": "1265.00",
     "rent_ready": "No"
@@ -1580,7 +1580,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1593,7 +1593,7 @@
     "last_move_out": "2026-07-12",
     "next_move_in": null,
     "available_on": "2026-08-01",
-    "days_vacant": 8,
+    "days_vacant": 11,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "Yes"
@@ -1605,11 +1605,11 @@
     "last_move_in": "2024-12-20",
     "last_move_out": "2026-04-23",
     "next_move_in": "2026-07-24",
-    "available_on": "2026-07-24",
-    "days_vacant": 88,
+    "available_on": null,
+    "days_vacant": 91,
     "schd_rent": "1595.00",
     "advertised_rent": "1495.00",
-    "rent_ready": "No"
+    "rent_ready": "Yes"
   },
   {
     "property_name": "tc68",
@@ -1645,7 +1645,7 @@
     "last_move_out": "2026-07-09",
     "next_move_in": null,
     "available_on": "2026-08-23",
-    "days_vacant": 11,
+    "days_vacant": 14,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1653,12 +1653,12 @@
   {
     "property_name": "tc68",
     "unit": "A30",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2025-02-28",
     "last_move_out": "2026-04-22",
-    "next_move_in": null,
+    "next_move_in": "2026-08-01",
     "available_on": "2026-05-13",
-    "days_vacant": 89,
+    "days_vacant": 92,
     "schd_rent": "1775.00",
     "advertised_rent": "1495.00",
     "rent_ready": "Yes"
@@ -1671,7 +1671,7 @@
     "last_move_out": "2026-07-03",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 17,
+    "days_vacant": 20,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1710,7 +1710,7 @@
     "last_move_out": "2026-07-15",
     "next_move_in": null,
     "available_on": "2026-08-29",
-    "days_vacant": 5,
+    "days_vacant": 8,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1736,7 +1736,7 @@
     "last_move_out": "2026-04-23",
     "next_move_in": null,
     "available_on": "2026-06-29",
-    "days_vacant": 88,
+    "days_vacant": 91,
     "schd_rent": "1775.00",
     "advertised_rent": "1665.00",
     "rent_ready": "Yes"
@@ -1749,7 +1749,7 @@
     "last_move_out": "2026-04-20",
     "next_move_in": null,
     "available_on": "2026-05-26",
-    "days_vacant": 91,
+    "days_vacant": 94,
     "schd_rent": "1775.00",
     "advertised_rent": "1525.00",
     "rent_ready": "Yes"
@@ -1762,7 +1762,7 @@
     "last_move_out": "2026-05-19",
     "next_move_in": null,
     "available_on": "2026-07-31",
-    "days_vacant": 62,
+    "days_vacant": 65,
     "schd_rent": "1795.00",
     "advertised_rent": "1795.00",
     "rent_ready": "No"
@@ -1788,7 +1788,7 @@
     "last_move_out": "2026-05-31",
     "next_move_in": null,
     "available_on": "2026-07-28",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1827,7 +1827,7 @@
     "last_move_out": "2026-07-11",
     "next_move_in": null,
     "available_on": "2026-07-31",
-    "days_vacant": 9,
+    "days_vacant": 12,
     "schd_rent": "1595.00",
     "advertised_rent": "1595.00",
     "rent_ready": "No"
@@ -1840,7 +1840,7 @@
     "last_move_out": "2026-03-29",
     "next_move_in": null,
     "available_on": "2026-07-09",
-    "days_vacant": 113,
+    "days_vacant": 116,
     "schd_rent": "1775.00",
     "advertised_rent": "1675.00",
     "rent_ready": "Yes"
@@ -1853,7 +1853,7 @@
     "last_move_out": "2026-06-18",
     "next_move_in": null,
     "available_on": "2026-08-14",
-    "days_vacant": 32,
+    "days_vacant": 35,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1866,7 +1866,7 @@
     "last_move_out": "2026-04-30",
     "next_move_in": null,
     "available_on": "2026-08-17",
-    "days_vacant": 81,
+    "days_vacant": 84,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1879,7 +1879,7 @@
     "last_move_out": "2026-06-28",
     "next_move_in": null,
     "available_on": "2026-08-07",
-    "days_vacant": 22,
+    "days_vacant": 25,
     "schd_rent": "1795.00",
     "advertised_rent": "1795.00",
     "rent_ready": "No"
@@ -1891,8 +1891,8 @@
     "last_move_in": "2019-07-08",
     "last_move_out": "2026-05-08",
     "next_move_in": null,
-    "available_on": "2026-07-25",
-    "days_vacant": 73,
+    "available_on": "2026-07-20",
+    "days_vacant": 76,
     "schd_rent": "1595.00",
     "advertised_rent": "1595.00",
     "rent_ready": "Yes"
@@ -1918,7 +1918,7 @@
     "last_move_out": "2026-06-15",
     "next_move_in": null,
     "available_on": "2026-08-06",
-    "days_vacant": 35,
+    "days_vacant": 38,
     "schd_rent": "1775.00",
     "advertised_rent": "1775.00",
     "rent_ready": "No"
@@ -1926,12 +1926,12 @@
   {
     "property_name": "v202",
     "unit": "2",
-    "unit_status": "Vacant-Unrented",
+    "unit_status": "Vacant-Rented",
     "last_move_in": "2024-06-01",
     "last_move_out": "2026-05-31",
-    "next_move_in": null,
+    "next_move_in": "2026-08-08",
     "available_on": "2026-07-13",
-    "days_vacant": 50,
+    "days_vacant": 53,
     "schd_rent": "1475.00",
     "advertised_rent": "1475.00",
     "rent_ready": "Yes"
@@ -1944,7 +1944,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": "2026-08-14",
     "available_on": "2026-07-30",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "925.00",
     "advertised_rent": "825.00",
     "rent_ready": "No"
@@ -1957,7 +1957,7 @@
     "last_move_out": "2026-06-30",
     "next_move_in": null,
     "available_on": "2026-07-30",
-    "days_vacant": 20,
+    "days_vacant": 23,
     "schd_rent": "895.00",
     "advertised_rent": "895.00",
     "rent_ready": "No"
@@ -1969,8 +1969,8 @@
     "last_move_in": "2025-06-01",
     "last_move_out": "2026-05-31",
     "next_move_in": "2026-08-01",
-    "available_on": "2026-06-22",
-    "days_vacant": 50,
+    "available_on": null,
+    "days_vacant": 53,
     "schd_rent": "1145.00",
     "advertised_rent": "1145.00",
     "rent_ready": "Yes"
@@ -1983,7 +1983,7 @@
     "last_move_out": "2026-01-30",
     "next_move_in": "2026-07-29",
     "available_on": null,
-    "days_vacant": 171,
+    "days_vacant": 174,
     "schd_rent": "1095.00",
     "advertised_rent": "885.00",
     "rent_ready": "Yes"

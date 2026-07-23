@@ -30,7 +30,9 @@ DIDFAST = (_HERE / "did-fast.py").read_text()
 # ── dtd.sh wiring: every action passes the id ────────────────────────────────
 
 def test_defer_passes_id():
-    assert r'"\$DEFER_FAST" --id "\$1"' in DTD
+    # Since 2026-07-23 the defer script loops over a {+2} batch; each worker
+    # still resolves by id (\$tid, one loop element), never by name.
+    assert r'"\$DEFER_FAST" --id "\$tid"' in DTD
 
 
 def test_points_passes_id():

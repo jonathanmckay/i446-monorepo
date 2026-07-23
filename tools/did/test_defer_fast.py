@@ -334,4 +334,6 @@ def test_dtd_defer_binding_passes_id_not_name():
     dtd = (_HERE / "dtd.sh").read_text()
     # dtd.sh's defer script lives in an unquoted heredoc, so the source keeps the
     # `\$` escaping (`\$DEFER_FAST`, `\$1`).
-    assert r'"\$DEFER_FAST" --id "\$1"' in dtd
+    # Since 2026-07-23 the defer script loops over a {+2} batch; each worker
+    # still resolves by id (\$tid, one loop element), never by name.
+    assert r'"\$DEFER_FAST" --id "\$tid"' in dtd
