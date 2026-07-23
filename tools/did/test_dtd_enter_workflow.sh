@@ -10,7 +10,7 @@ SCRIPT="$HOME/i446-monorepo/tools/did/dtd.sh"
 grep -q 'DTD_ENTER=' "$SCRIPT" \
   || { echo "FAIL: dtd must define a DTD_ENTER action script"; exit 1; }
 
-grep -q -- '--bind "enter:execute-silent($DTD_ENTER {2})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)"' "$SCRIPT" \
+grep -q -- '--bind "enter:execute-silent($DTD_ENTER {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)"' "$SCRIPT" \
   || { echo "FAIL: Enter must run DTD_ENTER (with the hidden id field {2}), reload, clear the query, refresh the status header, and keep fzf open"; exit 1; }
 
 grep -q 'printf.*> "\\$FIFO"' "$SCRIPT" \

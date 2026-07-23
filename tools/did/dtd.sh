@@ -541,6 +541,12 @@ DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
 # Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file
+# Live width: fzf exports FZF_COLUMNS to every bound/reload command — prefer
+# it over the launch-time $5 so rows re-truncate to the CURRENT window width
+# (bug 2026-07-23: the width was baked into the reload command string, so an
+# expanded window kept launch-width "…" truncation forever). $5 stays as the
+# cold-start fallback for the first pipe into fzf and scripted callers.
+[[ -n "$FZF_COLUMNS" ]] && argv[5]="$FZF_COLUMNS"
 python3 -c "
 import json, sys, re, time
 
@@ -1649,6 +1655,7 @@ while true; do
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first" \
+      --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
       --bind "enter:execute-silent($DTD_ENTER {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
