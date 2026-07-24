@@ -50,7 +50,9 @@ from zoneinfo import ZoneInfo  # noqa: E402
 from prompt_toolkit import Application  # noqa: E402
 from prompt_toolkit.buffer import Buffer  # noqa: E402
 from prompt_toolkit.filters import Condition  # noqa: E402
+from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES  # noqa: E402
 from prompt_toolkit.key_binding import KeyBindings  # noqa: E402
+from prompt_toolkit.keys import Keys  # noqa: E402
 from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
@@ -3004,9 +3006,18 @@ def _reload_day(app):
 # typing time ranges (`05:00-05:23`) or descriptions is never intercepted.
 _input_empty = Condition(lambda: not input_buffer.text)
 
+# cmux/Ghostty actually encode Ctrl+= and Ctrl+- as CSI-u ("fixterms")
+# sequences — ESC[61;5u / ESC[45;5u, verified with cat -v on 2026-07-24 —
+# which prompt_toolkit doesn't parse, so a real Ctrl press never reached the
+# plain-character bindings above (bug: "ctrl+= doesn't go forward one day").
+# Alias the two sequences onto spare function keys and bind those too.
+ANSI_SEQUENCES["\x1b[61;5u"] = Keys.F23  # Ctrl+=
+ANSI_SEQUENCES["\x1b[45;5u"] = Keys.F24  # Ctrl+-
+
 
 @kb.add("c-left")   # view the previous day (to fill in missed time entries)
 @kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
+@kb.add("f24")      # Ctrl+- via CSI-u (see ANSI_SEQUENCES alias above)
 @kb.add("-", filter=_input_empty)
 def _day_back(event):
     STATE.day_offset -= 1
@@ -3024,6 +3035,7 @@ def _day_back(event):
 
 @kb.add("c-right")  # view the next day, capped at today
 @kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
+@kb.add("f23")      # Ctrl+= via CSI-u (see ANSI_SEQUENCES alias above)
 @kb.add("=", filter=_input_empty)
 def _day_forward(event):
     if STATE.day_offset >= 0:
