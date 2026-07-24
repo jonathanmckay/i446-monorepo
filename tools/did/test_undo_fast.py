@@ -137,12 +137,17 @@ def test_journal_pop_and_reverse_passes_task_id_to_cleanup(tmp_path, monkeypatch
     captured = {}
     monkeypatch.setattr(
         uf, "clean_filter_files",
-        lambda names, session, removed, done_json, task_id=None:
-            captured.update(names=names, task_id=task_id))
+        lambda names, session, removed, done_json, task_id=None, task_ids=None:
+            captured.update(names=names, task_id=task_id, task_ids=task_ids))
     j = tmp_path / "journal"
     uf.journal_append(str(j), {"type": "defer", "names": ["AoS"], "task_id": "111"})
     uf.journal_pop_and_reverse(str(j), None, None, None)
     assert captured["task_id"] == "111"
+    # done records (id-hide since 2026-07-24) carry task_ids instead
+    uf.journal_append(str(j), {"type": "done", "names": ["AoS"],
+                               "task_ids": ["222"]})
+    uf.journal_pop_and_reverse(str(j), None, None, None)
+    assert captured["task_ids"] == ["222"]
 
 
 # ---------------------------------------------------------------------------

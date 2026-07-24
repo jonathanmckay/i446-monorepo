@@ -165,8 +165,10 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
       result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
     fi
     # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
-    # the pushed/processed counters, so the journal entry must land first)
-    echo "$result" | python3 "$UNDO_FAST" --journal-done "$DTD_JOURNAL" 2>/dev/null
+    # the pushed/processed counters, so the journal entry must land first).
+    # $task_id rides along so undo can strip the optimistic id-hide from
+    # $REMOVED.ids (completions hide by id since 2026-07-24).
+    echo "$result" | python3 "$UNDO_FAST" --journal-done "$DTD_JOURNAL" "$task_id" 2>/dev/null
     ok=$(echo "$result" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
     if [[ -n "$ok" ]]; then
       echo "✓ $ok" > "$DTD_HDR"
@@ -278,16 +280,19 @@ timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
 
 if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
   echo "\$clean_for_filter" >> "\$SESSION"
-  echo "\$clean_for_filter" >> "\$REMOVED"
-  # Optimistic id-hide, RITUAL cards only (name carries 😈): they are name-EXEMPT
-  # from the \$REMOVED hide (so a completed card can't suppress the next block's
-  # same-named card), so they'd otherwise linger visible for the full ~7s
-  # worker+refresh until the daemon overlay learns their id. Record the id (\$1 =
-  # the {2} id field) so the list builder hides the completed card at once.
-  # Gated to rituals: a normal task already hides instantly by name, and ctrl-z
-  # undo (which reopens by clearing \$REMOVED) can't clear this id file — but undo
-  # skips ritual entries anyway, so rituals never hit that path.
-  [[ "\$clean" == *😈* ]] && echo "\$1" >> "\$REMOVED.ids"
+  # Optimistic hide by ID, never by name (bug 2026-07-24: completing one of
+  # two same-named "AoS" one-off copies hid both — the name-based \$REMOVED
+  # hide matches every task sharing the name). \$1 is the fzf {2} id field
+  # (= the Todoist id), so the hide lands on exactly the completed task;
+  # a recurring habit keeps its id across the recurrence advance, so it
+  # stays hidden for the session just as the name-hide kept it. ctrl-z undo
+  # strips the id again via the journal's task_ids (undo-fast). Name-write
+  # remains only as a fallback for id-less rows.
+  if [[ -n "\$1" ]]; then
+    echo "\$1" >> "\$REMOVED.ids"
+  else
+    echo "\$clean_for_filter" >> "\$REMOVED"
+  fi
   echo "x" >> "\$PUSHED"
   : > "\$TIMER"
   echo "⏳ completing: \$clean_for_filter" > "\$HDR"
@@ -349,11 +354,14 @@ if [[ -n "\$_ip" && -r /dev/tty ]]; then
   [[ -n "\$_iv" ]] && clean="\$clean \$_iv"
 fi
 echo "\$clean_for_filter" >> "\$SESSION"
-echo "\$clean_for_filter" >> "\$REMOVED"
-# Optimistic id-hide (see enter.sh), RITUAL cards only (name carries 😈): they
-# are name-exempt from \$REMOVED, so record the id (\$1 = {2}) to hide the
-# completed card instantly instead of after the ~7s worker+refresh.
-[[ "\$clean" == *😈* ]] && echo "\$1" >> "\$REMOVED.ids"
+# Optimistic hide by ID, never by name (see enter.sh — bug 2026-07-24:
+# name-hide suppressed BOTH same-named "AoS" copies). Name-write only as
+# an id-less fallback.
+if [[ -n "\$1" ]]; then
+  echo "\$1" >> "\$REMOVED.ids"
+else
+  echo "\$clean_for_filter" >> "\$REMOVED"
+fi
 echo "x" >> "\$PUSHED"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"

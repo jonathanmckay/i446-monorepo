@@ -437,7 +437,8 @@ def _unmark_habit_deferred(task_id: str) -> None:
 
 def clean_filter_files(names: list[str], session: str | None,
                        removed: str | None, done_json: str | None,
-                       task_id: str | None = None) -> None:
+                       task_id: str | None = None,
+                       task_ids: list[str] | None = None) -> None:
     keys = {_dup_key(n) for n in names if _dup_key(n)}
     if keys:
         for fpath in (session, removed):
@@ -454,17 +455,20 @@ def clean_filter_files(names: list[str], session: str | None,
             except OSError:
                 pass
 
-    # id-keyed hide (dtd's $REMOVED.ids — defer/ritual completions hide by id,
-    # not name, so two same-named tasks can't suppress each other; see dtd.sh's
-    # defer binding). Strip ONLY this task's id, never by name, for the same
-    # collision-safety reason the hide itself exists.
-    if task_id and removed:
+    # id-keyed hide (dtd's $REMOVED.ids — completions/defers hide by id, not
+    # name, so two same-named tasks can't suppress each other; see dtd.sh's
+    # enter/done/defer bindings). Strip ONLY these tasks' ids, never by name,
+    # for the same collision-safety reason the hide itself exists.
+    strip_ids = {str(i) for i in (task_ids or [])}
+    if task_id:
+        strip_ids.add(str(task_id))
+    if strip_ids and removed:
         ids_path = removed + ".ids"
         if os.path.exists(ids_path):
             try:
                 with open(ids_path) as f:
                     lines = f.readlines()
-                kept = [l for l in lines if l.strip() != str(task_id)]
+                kept = [l for l in lines if l.strip() not in strip_ids]
                 tmp = ids_path + ".tmp"
                 with open(tmp, "w") as f:
                     f.writelines(kept)
@@ -544,7 +548,8 @@ def journal_pop_and_reverse(journal: str, session: str | None,
             reverse_record(record, errors)
             names = record.get("names", [])
             clean_filter_files(names, session, removed, done_json,
-                               task_id=record.get("task_id"))
+                               task_id=record.get("task_id"),
+                               task_ids=record.get("task_ids"))
 
             out = {
                 "ok": True,
@@ -577,7 +582,8 @@ def main() -> int:
 
     if mode == "--journal-done":
         if len(args) < 2:
-            print("usage: undo-fast.py --journal-done <journal>", file=sys.stderr)
+            print("usage: undo-fast.py --journal-done <journal> [task_id]",
+                  file=sys.stderr)
             return 2
         try:
             out = json.loads(sys.stdin.read())
@@ -586,9 +592,19 @@ def main() -> int:
         results = out.get("results") or []
         if not results:
             return 0
+        # Completions hide optimistically by id in dtd's $REMOVED.ids
+        # (2026-07-24: name-hide suppressed same-named duplicates). Record
+        # every id we know — the fzf row id the worker passed, plus any
+        # todoist ids did-fast matched — so --undo can strip the hide.
+        task_ids = [args[2]] if len(args) > 2 and args[2] else []
+        for r in results:
+            tid = (r.get("todoist") or {}).get("id")
+            if tid and str(tid) not in task_ids:
+                task_ids.append(str(tid))
         journal_append(args[1], {
             "type": "done",
             "names": [r.get("name", "") for r in results if r.get("name")],
+            "task_ids": task_ids,
             "output": out,
         })
         return 0

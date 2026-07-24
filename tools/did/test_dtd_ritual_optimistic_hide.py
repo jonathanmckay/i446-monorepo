@@ -12,10 +12,14 @@ worker runs run_ritual + a blocking refresh_task_queue (~7s). So every other
 task vanished instantly while a -1n card lingered ~7s before disappearing.
 
 Fix: enter.sh/done.sh write the completed card's id (the {2} id field) to
-$REMOVED.ids — gated to ritual cards (name carries 😈) so a normal task's ctrl-z
-undo (which reopens by clearing $REMOVED, not $REMOVED.ids) still works — and the
-list builder hides any cache row whose id is in that file, right alongside the
-daemon-overlay id hide.
+$REMOVED.ids and the list builder hides any cache row whose id is in that file,
+right alongside the daemon-overlay id hide.
+
+Update (2026-07-24): the id-write is no longer gated to ritual cards — EVERY
+completion hides by id (name-hide suppressed both same-named "AoS" copies).
+ctrl-z undo strips the id via the journal's task_ids (undo-fast --journal-done
+now receives the fzf row id), so the old "undo can't clear the id file" reason
+for the gate is gone. See test_dtd_done_id_hide.py.
 """
 import os
 import subprocess
@@ -29,15 +33,18 @@ DTD = DTD_PATH.read_text()
 
 # ── Structural: the write scripts record the id, gated to rituals ─────────────
 
-def test_enter_and_done_write_ritual_id_gated_on_marker():
-    # Both completion scripts must append the id to $REMOVED.ids, and ONLY for
-    # ritual cards (name carries 😈) — never for normal tasks (whose undo relies
-    # on $REMOVED name-clearing and can't clear the id file).
-    # dtd.sh's enter/done scripts live in unquoted heredocs, so the source keeps
-    # the `\$` escaping (`\$clean`, `\$1`, `\$REMOVED`).
-    assert DTD.count('*😈* ]] && echo "\\$1" >> "\\$REMOVED.ids"') == 2, (
-        "enter.sh (complete branch) and done.sh must each write the ritual id, "
-        "gated on the 😈 marker")
+def test_enter_and_done_write_completed_id():
+    # Both completion scripts must append the id to $REMOVED.ids for EVERY
+    # completion (rituals included) — ungated since 2026-07-24; the 😈 gate
+    # left normal completions on the name-hide, which suppressed same-named
+    # duplicates. dtd.sh's enter/done scripts live in unquoted heredocs, so
+    # the source keeps the `\$` escaping (`\$clean`, `\$1`, `\$REMOVED`).
+    assert DTD.count('echo "\\$1" >> "\\$REMOVED.ids"') == 2, (
+        "enter.sh (complete branch) and done.sh must each write the completed "
+        "task's id to $REMOVED.ids")
+    assert '*😈* ]] && echo "\\$1" >> "\\$REMOVED.ids"' not in DTD, (
+        "the ritual-only 😈 gate must stay gone — it re-introduces the "
+        "same-name suppression bug")
 
 
 def test_listgen_loads_and_applies_removed_ids():
