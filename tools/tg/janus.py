@@ -756,6 +756,15 @@ def fetch_points():
 end tell'''
             r = _sp.run([IX_OSA], input=script,
                         capture_output=True, text=True, timeout=15)
+            # Stale-view guard: day-nav spawns a _bg_fetch per settled press,
+            # and two presses ~1s apart leave two of these racing over ssh.
+            # Whichever finished LAST used to win, so day −1's numbers could
+            # land while day −2 was on screen (bug 2026-07-24: "going back
+            # two days, header doesn't fully update"). If the viewed day
+            # changed while we were reading, this result is for a day no
+            # longer shown — drop it; the newer fetch owns the header.
+            if view_now().date() != now.date():
+                return
             if r.returncode == 0 and r.stdout.strip() not in ("", "ERR"):
                 read_ok = True
                 raw_out = r.stdout.strip()
@@ -1263,6 +1272,11 @@ def fetch_habits_today():
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
+        # Stale-view guard (same race as fetch_points, 2026-07-24): if the
+        # user navigated to another day while this ssh read was in flight,
+        # committing would overwrite the newer day's strip with this one's.
+        if view_now().date() != now.date():
+            return
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
         raw, _, ytd_raw = proc.stdout.strip().partition("||")
