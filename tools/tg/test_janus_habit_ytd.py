@@ -32,14 +32,20 @@ def test_ytd_cells_match_dashboard_cards():
 
 
 def test_render_ytd_chips_signed_and_colored():
+    """Behind (≤0) chips render signed in their own purple; an above-zero
+    standing is HIDDEN entirely — the second line is a pure "what's left"
+    list (user request 2026-07-24: "if a queue is above zero, just don't
+    mention it")."""
     mod = _load_tui()
     mod.STATE.habits_today = [("0l", 1.0)]
-    mod.STATE.habits_ytd = {"o314": -107.0, "其他人": 1.0}
+    mod.STATE.habits_ytd = {"o314": -107.0, "其他人": 1.0, "冥想": 0.0}
     frags = mod.render_habits_today()
     behind = next((s, t) for s, t in frags if "o314" in t)
-    ahead = next((s, t) for s, t in frags if "其他人" in t)
+    at_zero = next((s, t) for s, t in frags if "冥想" in t)
     assert "-107" in behind[1] and mod.HABIT_YTD_COLORS["o314"] in behind[0]
-    assert "+1" in ahead[1] and mod.HABIT_YTD_COLORS["其他人"] in ahead[0]
+    assert "+0" in at_zero[1] and mod.HABIT_YTD_COLORS["冥想"] in at_zero[0]
+    assert not any("其他人" in t for _s, t in frags), \
+        "above-zero standing must not render a chip"
 
 
 def test_fetch_filter_drops_ytd_habits_from_daily_rows():

@@ -30,9 +30,11 @@ def test_start_script_writes_task_id_as_third_field():
     i = DTD.index('DTD_START="/tmp/dtd-$DTD_ID.start.sh"')
     j = DTD.index("\nSTARTEOF", i)  # the CLOSING heredoc marker, not "<< STARTEOF"
     block = DTD[i:j]
-    assert r'%s\t%s\t%s\n' in block, (
-        "DTD_START must write a 3-field (name/epoch/id) timer line")
-    assert '"\\$1" > "\\$TIMER"' in block, (
+    assert r'%s\t%s\t%s\t%s\n' in block, (
+        "DTD_START must write a 4-field (name/epoch/id/project) timer line — "
+        "field 3 = task id (running-row highlight), field 4 = project code "
+        "(footer color, 2026-07-24)")
+    assert '"\\$1" "\\$project" > "\\$TIMER"' in block, (
         "DTD_START must write the started task's id (the fzf row's resolved "
         "id, $1) as the timer file's 3rd field, or the list generator can't "
         "tell two same-named tasks apart")

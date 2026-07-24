@@ -75,12 +75,13 @@ def test_neon_score_chip_leads_done_row(monkeypatch):
 def test_ytd_chips_trail_pending_row_in_purples(monkeypatch):
     """User request 2026-07-21 (v3): the YTD standing chips sit on the SECOND
     line AFTER the pending 0neon names, each in its own purple (the dashboard
-    card hues), not standing-red/green."""
+    card hues), not standing-red/green. Since 2026-07-24 an above-zero
+    standing renders no chip at all, so all three here are ≤ 0."""
     mod = _load_tui()
     monkeypatch.setattr(mod, "_read_block_emojis", lambda: {})
     mod.STATE.day_offset = 0
     mod.STATE.habits_today = [("0l", 1.0), ("hiit", None)]
-    mod.STATE.habits_ytd = {"o314": -107.0, "冥想": -80.0, "其他人": 1.0}
+    mod.STATE.habits_ytd = {"o314": -107.0, "冥想": -80.0, "其他人": 0.0}
     frags = mod.render_habits_today()
     rows = "".join(t for _s, t in frags).rstrip("\n").split("\n")
     assert "o314" not in rows[0]

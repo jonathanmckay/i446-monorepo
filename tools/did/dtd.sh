@@ -248,7 +248,10 @@ python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
 # both matched the old name-only comparison, so starting either one flagged
 # BOTH as running (bug 2026-07-19: "I started one AoS task, and it marked
 # both as in progress").
-printf '%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" > "\$TIMER"
+# 4th field carries the resolved project code so the footer ticker can color
+# the running line in the project's palette color without waiting for (or
+# hitting) the Toggl poll (feature 2026-07-24).
+printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
 echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"

@@ -1387,13 +1387,16 @@ def render_habits_today() -> list[tuple[str, str]]:
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
     # as the jm dashboard "2026" header cards) on the second line AFTER the
     # pending 0neon names, each in its own purple (HABIT_YTD_COLORS —
-    # user-requested order + palette 2026-07-21).
+    # user-requested order + palette 2026-07-21). Only shown while the queue
+    # is at or below zero — a positive standing means nothing is owed, and
+    # hiding it keeps the second line a pure "what's left to do" list (user
+    # request 2026-07-24).
     pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today
                      if v is None and not _habit_deferred(name)]
     pending_chips += [(f"bold bg:{HABIT_YTD_COLORS.get(name, '#7c4dff')} #ffffff",
                        f"{name} {v:+g} ")
-                      for name, v in STATE.habits_ytd.items()]
+                      for name, v in STATE.habits_ytd.items() if v <= 0]
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:
