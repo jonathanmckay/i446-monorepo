@@ -10,10 +10,30 @@ set -u
 readonly QUEUE="${HOME}/.claude/ix-write-queue.jsonl"
 readonly DRY_RUN="${1:-}"
 
+# Concurrent drains replay every entry twice (2026-07-24: a manual drain raced
+# the watchdog's post-recovery drain and double-credited three 0分 writes).
+# mkdir is the atomic lock; a stale lock (>10 min) from a killed drain is broken.
+readonly LOCK="${HOME}/.claude/ix-drain-queue.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+    age=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) ))
+    if [ "$age" -lt 600 ]; then
+        echo "Another drain is running (lock ${age}s old). Skipping."
+        exit 0
+    fi
+    rmdir "$LOCK" 2>/dev/null
+    mkdir "$LOCK" 2>/dev/null || { echo "Lock contention. Skipping."; exit 0; }
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
 if [ ! -f "$QUEUE" ] || [ ! -s "$QUEUE" ]; then
     echo "No queued writes."
     exit 0
 fi
+
+# Claim the queue atomically: rename it so a racing drain (or a writer mid-
+# append) never sees the same entries. Failures are re-queued to $QUEUE.
+WORK="${QUEUE}.draining.$$"
+mv "$QUEUE" "$WORK" 2>/dev/null || { echo "No queued writes."; exit 0; }
 
 total=$(wc -l < "$QUEUE" | tr -d ' ')
 echo "Draining $total queued write(s)..."

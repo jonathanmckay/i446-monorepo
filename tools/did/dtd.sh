@@ -321,15 +321,17 @@ clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ 
 clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
 # Tasks that ask for a value on completion (like cpap). The typed number is
 # appended so did-fast writes it to the task's own 0n column: cpap = 1-3 sleep
-# quality; xk20/xk22/xk26 = minutes with Theo/Ren/Rori. Needs a tty, so the
-# router (below) sends these to execute, not execute-silent. Blank input just
-# completes with no number.
+# quality; xk20/xk22/xk26 = minutes with Theo/Ren/Rori; i444 = count, where an
+# explicit 0 records "none needed today" (blank would default to 1 in did-fast).
+# Needs a tty, so the router (below) sends these to execute, not
+# execute-silent. Blank input just completes with no number.
 _ip=""
 case "\$clean_lower" in
   cpap) _ip="CPAP quality (1-3)";;
   xk20) _ip="xk20 minutes (Theo)";;
   xk22) _ip="xk22 minutes (Ren)";;
   xk26) _ip="xk26 minutes (Rori)";;
+  i444) _ip="i444 count (0 = none today)";;
 esac
 if [[ -n "\$_ip" && -r /dev/tty ]]; then
   # fzf leaves the alternate screen for execute(), but what the terminal shows
@@ -360,7 +362,7 @@ DONEEOF
 chmod +x "$DTD_DONE"
 
 # --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
-# cpap + xk20/xk22/xk26 prompt for a value on completion and so need a tty —
+# cpap + xk20/xk22/xk26 + i444 prompt for a value on completion and so need a tty —
 # route them → execute (which gives the DONE script a terminal) and every other
 # task → execute-silent
 # (flicker-free, as before). The router emits ONLY the execute/execute-silent
@@ -374,7 +376,7 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 _id="\$1"
 _t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
-  cpap|xk20|xk22|xk26)
+  cpap|xk20|xk22|xk26|i444)
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
     printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
@@ -1703,10 +1705,11 @@ while true; do
   # Track original name for list filtering (strip {N} too for matching)
   clean_for_filter=$(echo "$clean" | sed -E 's/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
-  # Tasks that need args (e.g. cpap needs a score; xk20/xk22/xk26 need minutes)
+  # Tasks that need args (e.g. cpap needs a score; xk20/xk22/xk26 need
+  # minutes; i444 needs a count, 0 meaning "none needed today")
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444)
       # If a Toggl timer for this exact task is running, use its elapsed
       # minutes as the value instead of prompting. Stop it here to read the
       # duration; did-fast then sees the explicit number (clean + N) and the

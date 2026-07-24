@@ -81,23 +81,29 @@ if [ -z "$FIX" ]; then
   exit 0
 fi
 
+# `up` must re-state every non-default flag or it errors out and fixes
+# nothing ("changing settings via 'tailscale up' requires mentioning all
+# non-default flags") — this box runs with --accept-routes. That error is
+# exactly why the 2026-07-24 morning outage alarmed for 48 min unfixed.
+ts_up() { "$TS" up --timeout=15s --accept-routes >/dev/null 2>&1; }
+
 log "$FIX detected — remediating"
 case "$FIX" in
   stopped)
-    "$TS" up --timeout=15s >/dev/null 2>&1
+    ts_up
     sleep 3
     ;;
   wedge|probe_failed)
     # probe_failed with clean status: try the cheap `up` first, then the
     # full app restart that clears the MagicSock wedge.
-    "$TS" up --timeout=15s >/dev/null 2>&1
+    ts_up
     sleep 3
     if ! probe; then
       osascript -e 'quit app "Tailscale"' >/dev/null 2>&1
       sleep 2
       open -a "Tailscale" >/dev/null 2>&1
       sleep 8
-      "$TS" up --timeout=15s >/dev/null 2>&1
+      ts_up
       sleep 2
     fi
     ;;
