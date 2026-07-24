@@ -32,10 +32,14 @@ fi
 
 # Claim the queue atomically: rename it so a racing drain (or a writer mid-
 # append) never sees the same entries. Failures are re-queued to $QUEUE.
-WORK="${QUEUE}.draining.$$"
-mv "$QUEUE" "$WORK" 2>/dev/null || { echo "No queued writes."; exit 0; }
+if [ "$DRY_RUN" = "--dry-run" ]; then
+    WORK="$QUEUE"
+else
+    WORK="${QUEUE}.draining.$$"
+    mv "$QUEUE" "$WORK" 2>/dev/null || { echo "No queued writes."; exit 0; }
+fi
 
-total=$(wc -l < "$QUEUE" | tr -d ' ')
+total=$(wc -l < "$WORK" | tr -d ' ')
 echo "Draining $total queued write(s)..."
 
 success=0
@@ -75,15 +79,18 @@ while IFS= read -r line; do
         echo "    FAILED: AppleScript error (rc=$rc). Discarding."
         ((success++))  # don't retry broken scripts
     fi
-done < "$QUEUE"
+done < "$WORK"
 
 if [ "$DRY_RUN" != "--dry-run" ]; then
+    rm -f "$WORK"
     if [ -s "$remaining_file" ]; then
-        mv "$remaining_file" "$QUEUE"
+        # Append (not mv): new writes may have queued to $QUEUE mid-drain.
+        cat "$remaining_file" >> "$QUEUE"
+        rm -f "$remaining_file"
         remaining=$(wc -l < "$QUEUE" | tr -d ' ')
         echo "Done: $success replayed, $remaining still queued."
     else
-        rm -f "$QUEUE" "$remaining_file"
+        rm -f "$remaining_file"
         echo "Done: $success replayed, queue empty."
     fi
 else
