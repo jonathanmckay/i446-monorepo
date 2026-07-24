@@ -181,6 +181,45 @@ def header_normalize(s: str) -> str:
     return _re.sub(r"[\s\-—–]+", " ", s).strip().lower()
 
 
+_TOGGL_TODAY: Optional[list] = None  # one fetch per invocation
+
+
+def toggl_minutes_for(name: str) -> Optional[int]:
+    """Sum today's Toggl minutes for entries whose description matches `name`
+    (header-normalized equality), including the running entry's elapsed time.
+
+    Feature (2026-07-24): completing a 0₦ habit in dtd with no typed value
+    should record how long it actually took — the user usually has a Toggl
+    entry with the same name — instead of a flat 1. Returns None when Toggl
+    is unreachable or nothing matches (caller falls back to 1), so dtd keeps
+    working offline.
+    """
+    global _TOGGL_TODAY
+    try:
+        if _TOGGL_TODAY is None:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+            from mcp.toggl_server import toggl_api
+            today = date.today()
+            _TOGGL_TODAY = toggl_api.get_entries(
+                start_date=today.isoformat(),
+                end_date=(today + timedelta(days=1)).isoformat()) or []
+        target = header_normalize(name)
+        secs = 0.0
+        for e in _TOGGL_TODAY:
+            if header_normalize(e.get("description") or "") != target:
+                continue
+            dur = e.get("duration") or 0
+            if dur < 0:  # running entry: elapsed = now - start
+                st = datetime.fromisoformat(
+                    e["start"].replace("Z", "+00:00"))
+                dur = (datetime.now(st.tzinfo) - st).total_seconds()
+            secs += max(0, dur)
+        minutes = round(secs / 60)
+        return minutes if minutes > 0 else None
+    except Exception:
+        return None
+
+
 def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
     if not query_tokens:
         return 0.0
@@ -789,7 +828,9 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             elif item.time_value is not None:
                 val = item.time_value
             else:
-                val = 1
+                # No typed value: record how long the habit actually took,
+                # from today's same-named Toggl entries (2026-07-24).
+                val = toggl_minutes_for(item.name) or 1
             # Cumulative columns: add to existing (handled in AppleScript)
             is_cumulative = item.name in CUMULATIVE_0N
 

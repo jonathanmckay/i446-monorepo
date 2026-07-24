@@ -475,35 +475,91 @@ printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || 
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
-# --- Change-points script used by fzf ctrl-v binding ---
-# Prompts for a new [N] value (needs a tty, so the binding uses execute(), not
-# execute-silent), updates the task in Todoist, and patches the snapshot cache
-# ($DTD_CACHE_FILE) so the new value shows on reload. Todoist is the source of
-# truth; the live cache catches up on the next refresh.
-DTD_POINTS="/tmp/dtd-$DTD_ID.points.sh"
-cat > "$DTD_POINTS" << POINTSEOF
+# --- Block-delay script used by fzf ctrl-v binding (feature 2026-07-24) ---
+# Same-day delay: instead of pushing the task to the end of the list, HIDE it
+# until a chosen 地支 block starts today. An inner fzf picker lists the
+# remaining blocks (character + pinyin + hours) so the block is selectable by
+# arrows or by typing pinyin. Ids land in $STATE_DIR/dtd-block-snooze.json
+# ({date, snoozes: {id: start_hour}}); the list generator filters them until
+# the hour arrives, and the watcher's block-boundary refresh reloads the list,
+# so snoozed tasks reappear on their own. Points editing lives in ctrl-g.
+DTD_BLOCKDELAY="/tmp/dtd-$DTD_ID.blockdelay.sh"
+cat > "$DTD_BLOCKDELAY" << BLOCKEOF
 #!/bin/zsh
-POINTS_FAST="\$HOME/i446-monorepo/tools/did/points-fast.py"
 HDR="$DTD_HDR"
-CACHE="$CACHE"
-task="\$1"
+SNOOZE="$STATE_DIR/dtd-block-snooze.json"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-query="\$task"
-if [[ "\$clean" == *"…"* ]]; then
-  clean="\${clean%%…*}"
-  query="\$clean"
+[[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
+lbl="\$clean"
+[[ \$# -gt 1 ]] && lbl="\$clean +\$((\$# - 1)) more"
+# Options: blocks still ahead of us today, plus an un-delay row when any
+# selected id is currently snoozed.
+opts=\$(python3 - "\$SNOOZE" "\$@" <<'PYOPTS'
+import datetime, json, sys
+BLOCKS = [('卯','mao',4),('辰','chen',6),('巳','si',8),('午','wu',10),('未','wei',12),
+          ('申','shen',14),('酉','you',16),('戌','xu',18),('亥','hai',20)]
+now = datetime.datetime.now()
+for g, py, h in BLOCKS:
+    if h > now.hour:
+        print(g + '\t' + py + '\t' + str(h).zfill(2) + ':00-' + str(h + 2).zfill(2) + ':00')
+try:
+    data = json.load(open(sys.argv[1]))
+    sn = data.get('snoozes') or {}
+    if data.get('date') == now.date().isoformat() and any(str(t) in sn for t in sys.argv[2:]):
+        print('now\t(clear)\tun-delay, show again')
+except Exception:
+    pass
+PYOPTS
+)
+if [[ -z "\$opts" ]]; then
+  echo "no later block today — nothing to delay to" > "\$HDR"
+  exit 0
 fi
-printf "\nNew points for: %s\n[N]> " "\$clean" > /dev/tty
-read newpts < /dev/tty
-out=\$(python3 "\$POINTS_FAST" --id "\$1" "\$newpts" "$DTD_CACHE_FILE" 2>/dev/null)
-echo "\${out:-✗ points update failed}" > "\$HDR"
+choice=\$(print -r -- "\$opts" | fzf --height=13 --reverse --no-multi --no-info \
+  --delimiter="\$(printf '\t')" --prompt="delay \$lbl until> " < /dev/tty)
+if [[ -z "\$choice" ]]; then
+  echo "block delay cancelled" > "\$HDR"
+else
+  glyph=\$(printf '%s' "\$choice" | cut -f1)
+  msg=\$(python3 - "\$SNOOZE" "\$glyph" "\$@" <<'PYWRITE'
+import datetime, json, os, sys
+path, glyph = sys.argv[1], sys.argv[2]
+ids = [str(t) for t in sys.argv[3:]]
+HOURS = {'卯':4,'辰':6,'巳':8,'午':10,'未':12,'申':14,'酉':16,'戌':18,'亥':20}
+today = datetime.date.today().isoformat()
+try:
+    data = json.load(open(path))
+    if data.get('date') != today:
+        data = {}
+except Exception:
+    data = {}
+data['date'] = today
+sn = data.setdefault('snoozes', {})
+if glyph == 'now':
+    for i in ids:
+        sn.pop(i, None)
+    print('↩ shown again:')
+else:
+    h = HOURS[glyph]
+    for i in ids:
+        sn[i] = h
+    print('⏰ → ' + glyph + ' ' + str(h).zfill(2) + ':00:')
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp = path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(data, f)
+os.replace(tmp, path)
+PYWRITE
+)
+  echo "\${msg:-✗ block delay failed} \$lbl" > "\$HDR"
+fi
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
 # sequences type themselves into fzf's query (bug 2026-07-05).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 
-POINTSEOF
-chmod +x "$DTD_POINTS"
+BLOCKEOF
+chmod +x "$DTD_BLOCKDELAY"
 
 # --- Unified edit script used by fzf ctrl-g binding ---
 # One prompt edits name + domain + points from a single line (needs a tty, so
@@ -724,6 +780,21 @@ except OSError:
 zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
             if t.get('id') not in _deferred_ids
             and (t.get('recurring', True) or t['due'] <= today)]
+# Block-snooze (ctrl-v, 2026-07-24): ids hidden until their chosen 地支 block
+# starts. File is {date, snoozes: {id: start_hour}}; a stale date voids it.
+# Uses the CURRENT clock (not the session-start today arg) so an idle-open
+# dtd un-hides the task on the first reload after the block hour arrives
+# (the watcher refreshes at every block boundary).
+_snoozed = set()
+try:
+    with open(_os.path.expanduser('~/.local/state/jm/dtd-block-snooze.json')) as _sf:
+        _sn = json.load(_sf)
+    _nw = _dt.datetime.now()
+    if _sn.get('date') == _nw.date().isoformat():
+        _snoozed = {str(k) for k, v in (_sn.get('snoozes') or {}).items()
+                    if _nw.hour < int(v)}
+except Exception:
+    pass
 oneneon = _sec('1neon', today)
 # 0g: today's daily goals.
 zerog = [t for t in today_tasks if _has(t, '#0g') and not _has(t, '-1neon') and not _has(t, '#-1g')]
@@ -775,6 +846,9 @@ for t in unique:
     prefix = clean.split(' - ')[0]
     # Hide by id first: definitive, and immune to same-name collisions.
     if t.get('id') is not None and str(t['id']) in completed_ids:
+        continue
+    # Block-snoozed (ctrl-v): hidden until the chosen block's hour arrives.
+    if t.get('id') is not None and str(t['id']) in _snoozed:
         continue
     # Optimistic id-hide: a just-completed card (esp. a name-exempt ritual)
     # whose id was recorded by enter.sh/done.sh — hide it at once, not after
@@ -1400,7 +1474,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: pts | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v: ⏰block | ctrl-g: edit | ctrl-a: agent | ctrl-k: skip | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -1666,7 +1740,7 @@ while true; do
       --bind "ctrl-d:execute($DTD_DEFER {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:execute($DTD_POINTS {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:execute($DTD_BLOCKDELAY {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:execute-silent($DTD_SKIP {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
