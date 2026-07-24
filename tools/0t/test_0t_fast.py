@@ -65,29 +65,42 @@ def test_daemon_compute_toggl_totals_excludes_sleep_from_AX():
     assert totals.get("AX") == 25, f"daemon AX must exclude sleep; got {totals.get('AX')}"
 
 
-def test_mark_night_hcmc_targets_yesterday_row():
-    """night hcmc minutes must be logged to the date the entry occurred (yesterday),
-    not today. Otherwise sleep-bridging hcmc points land one row too late."""
+def test_mark_night_hcmc_targets_entry_day_row():
+    """night hcmc minutes must be logged to the date the entry occurred
+    (yesterday), not today. Rewritten 2026-07-24: the old version routed
+    through did-fast, whose 0n path refuses past dates — so the call site
+    passed `today`, and a backfill run (`0t-fast.py 2026-07-22`) stamped
+    7/22's detected minutes onto 7/24's row, clobbering a manual value.
+    Now it's a direct row-targeted write with an empty-cell guard."""
     captured = {}
 
-    class _FakeProc:
+    class _FakeRes:
         returncode = 0
-        stdout = '{"ok": true}'
+        stdout = "OK: night hcmc=35 row=180"
         stderr = ""
 
-    def _fake_run(cmd, capture_output, text, timeout):
-        captured["cmd"] = cmd
-        return _FakeProc()
+    def _fake_ix_run(script, timeout=30.0):
+        captured["script"] = script
+        return _FakeRes()
 
-    with patch.object(zerot_fast.subprocess, "run", side_effect=_fake_run):
-        zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
+    with patch.object(zerot_fast, "ix_run", side_effect=_fake_ix_run):
+        out = zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
 
-    arg = captured["cmd"][-1]
-    # The arg passed to did-fast must include the M/D of the entry's date,
-    # so did-fast routes the write to that row instead of today's.
-    assert arg == "night hcmc 35 5/6", (
-        f"expected explicit M/D for yesterday's row, got {arg!r}"
-    )
+    script = captured["script"]
+    assert "if m = 5 and d = 6 then" in script, (
+        "write must locate the ENTRY day's row, not today's")
+    # Manual /did values always win: only an empty/zero cell may be written.
+    assert 'if prev = "" or prev = "0" then' in script
+    assert "SKIPPED: manual value" in script
+    assert out == {"write": "OK: night hcmc=35 row=180"}
+
+
+def test_main_passes_yesterday_to_night_hcmc():
+    """The call site must hand mark_night_hcmc the entry's day (yesterday),
+    never `today` (the 2026-07-24 backfill clobber)."""
+    src = _PATH.read_text()
+    assert "mark_night_hcmc(night_hcmc, yesterday)" in src
+    assert "mark_night_hcmc(night_hcmc, today)" not in src
 
 
 def test_tag_and_project_minutes_only_count_target_day():
