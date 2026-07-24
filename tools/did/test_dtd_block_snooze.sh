@@ -19,6 +19,19 @@ for py in mao chen si wu wei shen you xu hai; do
 done
 grep -q "DTD_POINTS" "$DTD" && fail "old ctrl-v points binding should be gone"
 
+# Inner picker must paint reliably under cmux (bug 2026-07-24: an inline
+# --height=13 fzf lost its first draw — black screen until a keypress).
+# Full-screen fzf (no --height) owns the alternate screen like the outer
+# dtd fzf and always paints; the script also sanes the tty and clears the
+# stale execute() frame first (CPAP prompt precedent, 2026-07-21).
+BLOCKBODY=$(sed -n '/<< BLOCKEOF/,/^BLOCKEOF/p' "$DTD")
+printf '%s\n' "$BLOCKBODY" | grep 'fzf ' | grep -q -- '--height' \
+  && fail "inner block picker must be full-screen — --height loses its first paint under cmux"
+printf '%s\n' "$BLOCKBODY" | grep -q 'stty sane' \
+  || fail "inner block picker must force sane tty modes before fzf"
+printf '%s\n' "$BLOCKBODY" | grep -qF '\033[2J' \
+  || fail "inner block picker must clear the stale frame before fzf"
+
 # ── 2. Functional: generator hides snoozed ids until their hour ─────────────
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
 python3 - "$DTD" "$TMP/gen.py" <<'PY'

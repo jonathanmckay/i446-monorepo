@@ -239,6 +239,15 @@ def match_todoist_task(query: str, tasks: list[dict],
         for task in tasks:
             if str(task.get("id")) == str(preferred_id):
                 return task
+        # Not in this bucket (stale task-queue cache, or the row came from a
+        # different bucket): fetch the exact task rather than dropping to the
+        # name match below, which can pick a DIFFERENT same-named instance
+        # (2026-07-24: completing an overdue "AoS" one-off copy name-matched
+        # the recurring parent instead — wrong task, and its future due date
+        # then tripped the already-done-today close guard).
+        fetched = _fetch_task_by_id(preferred_id)
+        if fetched:
+            return fetched
     queries = [query]
     alias = ALIASES.get(query.strip().lower())
     if alias and alias != query.strip().lower():

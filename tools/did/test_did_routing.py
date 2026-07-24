@@ -925,6 +925,56 @@ class ExactMatchTiebreakTests(unittest.TestCase):
             self.assertEqual(got["id"], "m5x2")
 
 
+class PreferredIdMissingFromBucket(unittest.TestCase):
+    """Regression (2026-07-24): three tasks shared the content "AoS (15) [15]"
+    (recurring 1neon parent + two overdue one-off copies). dtd completed one
+    copy by id, but the task-queue's 1neon bucket didn't contain that id, so
+    match_todoist_task silently fell back to the NAME match and returned the
+    recurring parent — the wrong instance; its future due date then tripped
+    the already-done-today close guard and nothing was closed at all.
+
+    When preferred_id is given but absent from the bucket, the matcher must
+    fetch that exact task from Todoist, never name-match a different one.
+    """
+
+    AOS_TASKS = [
+        {"content": "AoS (15) [15]", "id": "parent",
+         "due": {"is_recurring": True, "date": "2026-07-26"}},
+        {"content": "AoS (15) [15]", "id": "copy21",
+         "due": {"is_recurring": False, "date": "2026-07-21"}},
+    ]
+
+    def setUp(self):
+        self._orig_fetch = _df_module._fetch_task_by_id
+
+    def tearDown(self):
+        _df_module._fetch_task_by_id = self._orig_fetch
+
+    def test_preferred_id_in_bucket_short_circuits(self):
+        _df_module._fetch_task_by_id = lambda tid: self.fail("no fetch needed")
+        got = _df_module.match_todoist_task("AoS", self.AOS_TASKS,
+                                            preferred_id="copy21")
+        self.assertEqual(got["id"], "copy21")
+
+    def test_missing_preferred_id_fetches_exact_task(self):
+        fetched = {"content": "AoS (15) [15]", "id": "copy20",
+                   "due": {"is_recurring": False, "date": "2026-07-20"}}
+        calls = []
+        _df_module._fetch_task_by_id = lambda tid: (calls.append(tid), fetched)[1]
+        got = _df_module.match_todoist_task("AoS", self.AOS_TASKS,
+                                            preferred_id="copy20")
+        self.assertEqual(calls, ["copy20"])
+        self.assertEqual(got["id"], "copy20",
+                         "must return the fetched exact task, not a "
+                         "same-named bucket task")
+
+    def test_fetch_failure_falls_back_to_name_match(self):
+        _df_module._fetch_task_by_id = lambda tid: None
+        got = _df_module.match_todoist_task("AoS", self.AOS_TASKS,
+                                            preferred_id="gone")
+        self.assertIsNotNone(got, "name match remains the last resort")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -949,6 +999,7 @@ def main() -> int:
         PastDatePreferredIdTests,
         VariableStepPosthocSkipsExistingTaskTests,
         BuildOrderCheckboxTests,
+        PreferredIdMissingFromBucket,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

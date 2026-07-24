@@ -524,7 +524,16 @@ if [[ -z "\$opts" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
   exit 0
 fi
-choice=\$(print -r -- "\$opts" | fzf --height=13 --reverse --no-multi --no-info \
+# cmux keeps the stale outer-fzf frame on screen after execute() leaves the
+# alternate screen (CPAP prompt bug 2026-07-21) — force sane tty modes first.
+# The picker must run FULL-SCREEN (no --height): an inline --height=13 fzf
+# paints relative to an unknown cursor position under cmux and its initial
+# draw is lost — the screen stays black until a keypress forces a redraw
+# (bug 2026-07-24). Full-screen fzf owns the alternate screen and always
+# paints, exactly like the outer dtd fzf.
+stty sane < /dev/tty 2>/dev/null
+printf '\033[2J\033[H' > /dev/tty
+choice=\$(print -r -- "\$opts" | fzf --reverse --no-multi --no-info \
   --delimiter="\$(printf '\t')" --prompt="delay \$lbl until> " < /dev/tty)
 if [[ -z "\$choice" ]]; then
   echo "block delay cancelled" > "\$HDR"
