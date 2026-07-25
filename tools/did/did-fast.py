@@ -64,8 +64,15 @@ CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻"}
-VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写"}
-VARIABLE_1N_DEFAULTS: dict[str, int] = {"一起饭": 30}  # default points when no arg given
+VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
+               "长冥想", "长o314", "aos"}
+# Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
+# Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
+# Keys are header_normalize()d (lowercase).
+VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
+# Default points when completed with no minutes at all (falls back to base).
+VARIABLE_1N_DEFAULTS: dict[str, int] = {}
 
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
 HABIT_PROJECT: dict[str, str] = {
@@ -104,6 +111,7 @@ ONENEON_ALIASES: dict[str, str] = {
     "家": "family",
     "relax": "relax {60}",
     "一起吃": "一起饭",
+    "long o314": "长o314",
 }
 
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")

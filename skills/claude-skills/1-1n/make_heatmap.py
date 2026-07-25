@@ -75,7 +75,23 @@ def add_toggl(grid, start, end):
 # (Until 2026-06-12 this read per-block 分 from the Neon sheet, which lit 🎯
 # for any block where points landed, regardless of whether a goal was set.)
 V_LOGS = '/Users/mckay/vault/g245/v_logs'
+# Since 2026-07-14 the nightly archive lands in archive/2026/<date>/ instead
+# of v_logs (v_logs stops at 07.13) — the 0% ☀️/🎯 week of Jul 18-24 was this
+# path going stale, not missing rituals. Try both, newest scheme first.
+ARCHIVE_ROOT = '/Users/mckay/vault/g245/archive'
 LIVE_BUILD_ORDER = '/Users/mckay/vault/g245/5e-1/build-order.md'
+
+
+def _snapshot_path(day):
+    stamp = day.strftime('%Y.%m.%d')
+    candidates = [
+        f"{ARCHIVE_ROOT}/{day.year}/{stamp}/build-order.md",
+        f"{V_LOGS}/{stamp}-build-order.md",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
 
 def _block_line_name(line):
     """First token after the bullet — headers carry variable annotations
@@ -87,9 +103,12 @@ def add_goals(grid, start, end):
     today = dt.datetime.now(PT).date()
     day = start
     while day <= end:
-        path = f"{V_LOGS}/{day.strftime('%Y.%m.%d')}-build-order.md"
-        if day == today and not os.path.exists(path):
+        path = _snapshot_path(day)
+        if path is None and day == today:
             path = LIVE_BUILD_ORDER
+        if path is None:
+            day += dt.timedelta(days=1)
+            continue
         try:
             text = open(path, encoding='utf-8').read()
         except OSError:
