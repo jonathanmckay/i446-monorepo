@@ -270,12 +270,18 @@ def main() -> int:
         return 0
 
     filled = sum(1 for k, _l, col, *_ in FIELDS if col and (answers.get(k) or "").strip())
+    # The Excel write runs over ssh to Ix and can take many seconds; after the
+    # full-screen form restores the shell, silence here reads as a frozen
+    # terminal (user report 2026-07-25). Say what's happening, immediately.
+    print("0s → writing %d fields to Neon %s (%s) …" % (filled, SHEET, target),
+          flush=True)
     result = write_answers(answers, target)
     msg = "0s → %s (%d fields) · %s" % (SHEET, filled, result)
 
     # "Points checked" is not a neon column: 1 marks 0l done via did-fast;
     # 0/blank leaves it alone.
     if (answers.get("points_checked") or "").strip() == "1":
+        print("0s → marking 0l done …", flush=True)
         try:
             subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
                            capture_output=True, text=True, timeout=60)

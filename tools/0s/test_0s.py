@@ -91,3 +91,18 @@ def test_points_checked_1_marks_0l_done():
     assert 'answers.get("points_checked")' in m
     assert '== "1"' in m
     assert 'str(DID_FAST), "0l"' in m, "points_checked=1 must run did-fast 0l"
+
+
+def test_progress_line_printed_before_slow_neon_write():
+    """User report 2026-07-25: after ^S the form restores the shell and the
+    ssh Excel write runs silently for seconds — it looked like a frozen
+    terminal. main() must announce the write (flushed) BEFORE write_answers
+    runs, and announce the 0l mark before its did-fast call."""
+    import pathlib
+    src = pathlib.Path(__file__).with_name("0s.py").read_text()
+    main_src = src[src.index("def main()"):]
+    announce = main_src.index("writing %d fields to Neon")
+    write = main_src.index("result = write_answers(")
+    assert announce < write, "progress line must precede the Excel write"
+    assert "flush=True" in main_src[:write]
+    assert main_src.index("marking 0l done") < main_src.index("subprocess.run")
