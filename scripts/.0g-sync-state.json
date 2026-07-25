@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-24T16:00:04.213237-07:00"
+  "tasks": {
+    "bball": {
+      "todoist_id": "6h84Hcr97f3xMQ3R",
+      "minutes": 30
+    },
+    "use the time to myself": {
+      "todoist_id": "6h84x3mmQrw2cMXR",
+      "minutes": 30
+    },
+    "tasks down to 60": {
+      "todoist_id": "6h84x4457FWRcFX2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-07-24T18:00:07.650367-07:00"
 }
