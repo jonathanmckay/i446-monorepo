@@ -40,13 +40,23 @@ DOMAINS = _dom.DOMAINS
 
 # One or more trailing (time)/[pts]/{bonus} annotation groups at end of content.
 _TRAIL_ANNOT = re.compile(r"(?:\s*[\(\[\{][^\)\]\}]*[\)\]\}])+\s*$")
+# A single annotation token of any bracket kind, anywhere.
+_ANNOT_TOK = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
 
 
 def set_name(content: str, new_name: str) -> str:
-    """Replace the leading name, preserving trailing (time)/[pts]/{bonus} annotations."""
+    """Replace the leading name, preserving trailing (time)/[pts]/{bonus}
+    annotations — EXCEPT the bracket kinds the new name itself carries, which
+    would otherwise duplicate (bug 2026-07-24: retyping the full line
+    "…photos (15) [20]" over "…photos (15) [15]" produced "(15) [20] (15)
+    [15]" — the typed annotations landed in the name and the old tail was
+    appended after them)."""
     m = _TRAIL_ANNOT.search(content)
     tail = content[m.start():].strip() if m else ""
     base = new_name.strip()
+    kinds = {t[0] for t in _ANNOT_TOK.findall(base)}
+    if kinds and tail:
+        tail = " ".join(t for t in _ANNOT_TOK.findall(tail) if t[0] not in kinds)
     return (base + (" " + tail if tail else "")).strip()
 
 
@@ -76,6 +86,13 @@ def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
             if points is not None:
                 name_tokens.append(str(points))  # demote the earlier number to name
             points = int(tok)
+        elif re.fullmatch(r"\[\d+\]", tok):
+            # "[20]" typed in display syntax means points, not name text —
+            # as a name token it duplicated next to the preserved [N] tail
+            # (bug 2026-07-24: "changed points and it doubled up").
+            if points is not None:
+                name_tokens.append(str(points))
+            points = int(tok[1:-1])
         else:
             name_tokens.append(tok)
     new_name = " ".join(name_tokens).strip() or None

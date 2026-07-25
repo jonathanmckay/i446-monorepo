@@ -53,6 +53,42 @@ def test_parse_empty():
     assert mod.parse_edits("   ") == (None, None, None)
 
 
+# ── bracketed points + retyped annotations must not duplicate ──
+# Bug 2026-07-24: ctrl-g "Matt Booty Instagram photos [20]" on a task
+# "…photos (15) [15]" produced "…photos [20] (15) [15]" — the display-syntax
+# [20] was treated as name text and the old tail appended after it.
+
+def test_parse_bracketed_points_token():
+    mod = _load()
+    assert mod.parse_edits("[20]") == (None, None, 20)
+
+
+def test_parse_name_with_bracketed_points():
+    mod = _load()
+    assert mod.parse_edits("Matt Booty Instagram photos [20]") == \
+        ("Matt Booty Instagram photos", None, 20)
+
+
+def test_full_line_retype_replaces_points_without_duplicating():
+    mod = _load()
+    orig = "see Matt booty Instagram photos (15) [15]"
+    name, _dom, pts = mod.parse_edits("Matt Booty Instagram photos [20]")
+    out = mod.set_name(orig, name)
+    out = mod._pf.set_points(out, pts)
+    assert out == "Matt Booty Instagram photos (15) [20]"
+
+
+def test_set_name_typed_annotation_overrides_same_kind_tail():
+    # Retyping the (N) inline replaces the preserved (N); other kinds survive.
+    mod = _load()
+    assert mod.set_name("call dad (5) [10]", "ring dad (30)") == "ring dad (30) [10]"
+
+
+def test_set_name_nonnumeric_tail_annotations_survive():
+    mod = _load()
+    assert mod.set_name("ship it (5) [0G]", "ship it now") == "ship it now (5) [0G]"
+
+
 # ── set_name preserves trailing annotations ──
 
 def test_set_name_keeps_annotations():
