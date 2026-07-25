@@ -212,7 +212,10 @@
       "category": "0n",
       "neon_header": "night hcmc",
       "domain": "hcmc",
-      "todoist_label": "夜neon"
+      "todoist_label": "夜neon",
+      "aliases": [
+        "evening hcmc"
+      ]
     },
     "0t": {
       "name": "0t",

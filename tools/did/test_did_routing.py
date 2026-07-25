@@ -338,6 +338,28 @@ class AliasTests(unittest.TestCase):
     def test_unknown_passthrough(self):
         self.assertEqual(expand_alias("some random habit"), ["some random habit"])
 
+    def test_evening_hcmc_aliases_night_hcmc_in_registry(self):
+        """Bug 2026-07-25: the daily 夜neon card is named "evening hcmc" but
+        the registry habit is "night hcmc" with no alias, so completing the
+        card in dtd routed step=unknown — the habit never landed in 0n col P
+        and the card's [15] was mislogged to 0分 as a one-off (double-count
+        once the 0n rollup fires). The registry must alias the card name."""
+        cfg = json.loads(
+            (_HERE.parent.parent / "config" / "tasks.json").read_text())
+        habit = cfg["habits"]["night-hcmc"]
+        self.assertIn("evening hcmc", habit.get("aliases", []))
+
+    def test_evening_hcmc_routes_to_0n_via_route_py(self):
+        """End-to-end through route.py against the live registry."""
+        import subprocess
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "route.py"), "evening hcmc"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["step"], "0n")
+        self.assertEqual(out.get("neon_col"), "P")
+
 
 class OverlapTests(unittest.TestCase):
     def test_full_overlap(self):
