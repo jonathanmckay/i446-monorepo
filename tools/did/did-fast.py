@@ -74,6 +74,13 @@ VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
 # Default points when completed with no minutes at all (falls back to base).
 VARIABLE_1N_DEFAULTS: dict[str, int] = {}
 
+
+def variable_1n_points(resolved_1n: str, minutes: int) -> int:
+    """Points for a variable 1n+ habit given minutes: base + rate×minutes."""
+    base = VARIABLE_1N_BASES.get(resolved_1n, 0)
+    rate = VARIABLE_1N_RATES.get(resolved_1n, 1.0)
+    return base + int(round(rate * minutes))
+
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
 HABIT_PROJECT: dict[str, str] = {
     "wake up": "hcb", "hiit": "hcb", "bio": "hcb",
@@ -894,10 +901,22 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             fen_col = ONENEON_TO_0FEN.get(resolved_1n)
             is_cumul = resolved_1n in CUMULATIVE_1N
             is_var = resolved_1n in VARIABLE_1N
-            # For variable 1n+ tasks, use user-provided value (points_override or time_value)
+            # Variable 1n+ points = base + rate×minutes (1n+ row 5 formulas,
+            # e.g. 业写 "1/m", 长冥想 ".5/m", 一起饭 "15+1/m"). An explicit
+            # [N] override wins; bare completion falls back to the base.
             var_val = None
             if is_var:
-                var_val = item.points_override or item.time_value or VARIABLE_1N_DEFAULTS.get(resolved_1n)
+                if item.points_override:
+                    var_val = item.points_override
+                else:
+                    minutes = item.time_value
+                    if item.time_range:
+                        minutes = time_range_minutes(*item.time_range)
+                    if minutes is not None:
+                        var_val = variable_1n_points(resolved_1n, minutes)
+                    else:
+                        var_val = (VARIABLE_1N_DEFAULTS.get(resolved_1n)
+                                   or VARIABLE_1N_BASES.get(resolved_1n) or None)
                 if var_val and item.bonus_points:
                     var_val += item.bonus_points
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
@@ -1355,7 +1374,13 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
             r.write_value = mins
             r.item.time_value = mins
         elif r.step == "1n" and getattr(r, "is_variable_1n", False):
-            r.variable_value = mins + (r.item.bonus_points or 0)
+            # Same base + rate×minutes formula as the routing path — raw
+            # minutes would over/under-credit rated habits (长冥想 .5/m,
+            # AoS 15+1/m).
+            resolved = header_normalize(
+                ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
+            r.variable_value = (variable_1n_points(resolved, mins)
+                                + (r.item.bonus_points or 0))
             r.item.time_value = mins
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).

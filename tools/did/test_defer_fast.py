@@ -164,6 +164,30 @@ def test_habit_defer_copy_carries_origin_date(df, monkeypatch):
     assert out["deferred_copy_content"] == "xk20 7.21 (20) [15]"
 
 
+def test_1neon_defer_copy_carries_origin_date(df, monkeypatch):
+    """Feature (2026-07-25): weekly (1neon) habits get dated defer copies too.
+    Undated copies are content-identical to the card the recurring parent
+    regenerates — two stale "AoS (15) [15]" copies caused the 2026-07-24
+    same-name dtd mess."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 20)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "AoS (15) [15]", "labels": ["1neon", "xk88"],
+            "due": {"is_recurring": True, "date": "2026-07-20",
+                    "string": "every Saturday"}}
+    out = df.handle_recurring(task, "2026-07-27", 2)
+    assert created[0] == "AoS 7.20 (15) [15]"
+    assert out["deferred_copy_content"] == "AoS 7.20 (15) [15]"
+
+
 def test_non_habit_recurring_copy_name_unchanged(df, monkeypatch):
     """Only daily habits get the date stamp — other recurring defers keep the
     copy's name identical to the parent."""

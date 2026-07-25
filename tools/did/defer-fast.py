@@ -46,7 +46,11 @@ DEFAULT_CLAIMED_POINTS = 2
 # regenerates — both sit in the queue together while travelling. The dated
 # name also stops the copy from matching the habit's 0n column on completion
 # (that day's own card owns the column); it completes as a regular task.
-HABIT_LABELS = {"0neon", "夜neon"}
+# 1neon (weekly) joined 2026-07-25: an undated deferred copy of a weekly habit
+# is IDENTICAL in content to the card its recurring parent regenerates — two
+# stale undated "AoS (15) [15]" copies caused the 2026-07-24 dtd same-name
+# mess. The date stamp keeps every deferred copy distinct.
+HABIT_LABELS = {"0neon", "夜neon", "1neon"}
 
 
 def deferred_marker_path(when: date | None = None) -> Path:
