@@ -2,21 +2,26 @@
 """Build the m5x2 weekly-reports accountability grid (local static HTML).
 
 One row per week (Sunday-anchored, last N weeks), one column per reporter.
-A cell links to that person's report Doc for that week if one exists in the
-"Weekly Reports" folder of the m5x2 Main shared drive; otherwise it shows
-missing (red) — or "due" (amber) for the current, still-open week.
+EMAIL is the primary source (per JM 2026-07-26): each cell links to the Gmail
+thread of that person's weekly update received that week. The "Weekly Reports"
+Drive folder (m5x2 Main) is a secondary source — a Doc dropped there with
+`YYYY-MM-DD First-name Topic` naming also fills the cell.
 
-Convention the team follows: drop ONE Google Doc per person per week into the
-folder, named  `YYYY-MM-DD <First name> <Topic>`  (e.g. "2026-07-26 Ian Ops").
-Matching is forgiving: any YYYY-MM-DD or M/D date anywhere in the name buckets
-the doc into that date's week (fallback: the doc's createdTime); the reporter
-is matched by first name, case-insensitive. One doc can satisfy only its own
-week — no doc, no checkmark.
+A report lands in the row of the week it was RECEIVED (Monday sends covering
+the prior week count for the week they arrive — delivery cadence is what's
+being tracked, not coverage windows).
 
-Auth: reuses the workspace-mcp OAuth store
-(~/.google_workspace_mcp/credentials/mckay@m5c7.com.json — full drive scope,
-refresh token) so no separate credential setup. Local page only, not
-published anywhere (per JM 2026-07-26).
+Email matchers (learned from 60d of real sends, 2026-07-26):
+  LX        lx@m5c7/m5x2         "m5x2 Weekly Update"
+  Ian       ian@m5c7             "Weekly Update — <date>" (delay notices excluded)
+  Andie     andrea@m5c7          "Leasing Weekly Update - <range>"
+  Stef      stefanie@m5c7        "TRS recap"
+  Leeroy    leeroy@ or dulce@    "Turns Weekly Update" / "Turn Operations Update"
+  Florencia florencia@m5c7       "Maintenance Service Weekly Update - <range>"
+  Lawrence  lawrence@m5c7        "Weekly Projects Update – <date>"
+
+Auth: reuses the workspace-mcp OAuth store (drive + gmail.readonly scopes).
+Local page only. Rebuilt every 2h by Straylight cron.
 
 Usage: build.py [--weeks N]   (default 5; writes index.html next to this file)
 """
@@ -35,19 +40,32 @@ DIR = Path(__file__).resolve().parent
 CREDS = Path.home() / ".google_workspace_mcp/credentials/mckay@m5c7.com.json"
 FOLDER_ID = "1UoUd5ql-CIAGaEAR_V8cY_idtIAj28MQ"   # m5x2 Main → "Weekly Reports"
 FOLDER_URL = f"https://drive.google.com/drive/folders/{FOLDER_ID}"
+DRIVE_ID = "0ALnip0aznECYUk9PVA"                   # m5x2 Main
 DEFAULT_WEEKS = 5
 
-# (display name, topic, name tokens that identify the reporter in a filename)
+# (display, topic, drive-name tokens, email senders, subject regex, subject veto regex)
 REPORTERS = [
-    ("LX",        "Portfolio",        ("lx", "louisa")),
-    ("Ian",       "Ops",              ("ian",)),
-    ("Andie",     "Leasing",          ("andie",)),
-    ("Stef",      "Tenant Relations", ("stef", "stefanie")),
-    ("Leeroy",    "Turns",            ("leeroy",)),
-    ("Florencia", "R&M",              ("florencia", "flo")),
-    ("Lawrence",  "Projects",         ("lawrence",)),
+    ("LX", "Portfolio", ("lx", "louisa"),
+     ("lx@m5c7.com", "lx@m5x2.com"), r"weekly\s+update", None),
+    ("Ian", "Ops", ("ian",),
+     ("ian@m5c7.com",), r"^weekly\s+update", r"delay"),
+    ("Andie", "Leasing", ("andie", "andrea"),
+     ("andrea@m5c7.com",), r"leasing\s+weekly\s+update", None),
+    ("Stef", "Tenant Relations", ("stef", "stefanie"),
+     ("stefanie@m5c7.com",), r"trs\s+recap", None),
+    ("Leeroy", "Turns", ("leeroy", "dulce"),
+     ("leeroy@m5c7.com", "dulce@m5c7.com"), r"turns?\s+(operations\s+)?(weekly\s+)?update", None),
+    ("Florencia", "R&M", ("florencia", "flo"),
+     ("florencia@m5c7.com",), r"(maintenance|service).*weekly\s+update", None),
+    ("Lawrence", "Projects", ("lawrence",),
+     ("lawrence@m5c7.com",), r"(weekly\s+)?projects\s+update", None),
 ]
+REPLY_PREFIXES = ("re:", "fwd:", "fw:", "accepted:", "declined:", "invitation")
 
+
+# ---------------------------------------------------------------------------
+# Google API plumbing (workspace-mcp token store)
+# ---------------------------------------------------------------------------
 
 def access_token() -> str:
     c = json.loads(CREDS.read_text())
@@ -59,83 +77,133 @@ def access_token() -> str:
     return json.loads(urllib.request.urlopen(req, timeout=20).read())["access_token"]
 
 
-def list_folder(tok: str) -> list[dict]:
-    files, page = [], None
-    while True:
-        q = urllib.parse.urlencode({
-            "q": f"'{FOLDER_ID}' in parents and trashed = false",
-            "fields": "nextPageToken,files(id,name,createdTime,modifiedTime,webViewLink,mimeType)",
-            "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
-            "corpora": "drive", "driveId": "0ALnip0aznECYUk9PVA",
-            "pageSize": "200", **({"pageToken": page} if page else {}),
-        })
-        req = urllib.request.Request(f"https://www.googleapis.com/drive/v3/files?{q}",
-                                     headers={"Authorization": f"Bearer {tok}"})
-        d = json.loads(urllib.request.urlopen(req, timeout=30).read())
-        files += d.get("files", [])
-        page = d.get("nextPageToken")
-        if not page:
-            return files
+def _get(tok: str, url: str, params: dict) -> dict:
+    q = urllib.parse.urlencode(params, doseq=True)
+    req = urllib.request.Request(f"{url}?{q}", headers={"Authorization": f"Bearer {tok}"})
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
 
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
 
 def week_start(d: dt.date) -> dt.date:
     """Sunday-anchored week (matches the M.W convention)."""
     return d - dt.timedelta(days=(d.weekday() + 1) % 7)
 
 
+# Gmail-side subject narrowing per reporter (regexes above still decide) —
+# one targeted query per reporter keeps this to a handful of metadata fetches
+# instead of paging every email seven chatty senders wrote.
+SUBJECT_QUERY = {
+    "LX": 'subject:"weekly update"', "Ian": 'subject:"weekly update"',
+    "Andie": 'subject:"leasing weekly update"', "Stef": "subject:trs",
+    "Leeroy": "subject:(turn OR turns)",
+    "Florencia": 'subject:"weekly update"', "Lawrence": 'subject:"projects update"',
+}
+
+
+def fetch_emails(tok: str, days: int) -> list[dict]:
+    """Original (non-reply) candidate messages per reporter in the window.
+    → [{date, sender, subject, thread}]"""
+    out, seen = [], set()
+    for disp, _t, _dtok, senders, _pat, _veto in REPORTERS:
+        q = (f"({' OR '.join('from:' + s for s in senders)}) "
+             f"{SUBJECT_QUERY[disp]} newer_than:{days}d")
+        res = _get(tok, "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                   {"q": q, "maxResults": 50})
+        for m in res.get("messages", []):
+            if m["id"] in seen:
+                continue
+            seen.add(m["id"])
+            d = _get(tok, f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m['id']}",
+                     {"format": "metadata", "metadataHeaders": ["From", "Subject"]})
+            hs = {h["name"]: h["value"] for h in d["payload"]["headers"]}
+            subj = (hs.get("Subject") or "").strip()
+            if subj.lower().startswith(REPLY_PREFIXES):
+                continue
+            out.append({
+                "date": dt.datetime.fromtimestamp(int(d["internalDate"]) / 1000).date(),
+                "sender": (hs.get("From") or "").split("<")[-1].rstrip(">").lower(),
+                "subject": subj,
+                "thread": d.get("threadId", m["id"]),
+            })
+    return out
+
+
+def fetch_drive_docs(tok: str) -> list[dict]:
+    files, page = [], None
+    while True:
+        params = {
+            "q": f"'{FOLDER_ID}' in parents and trashed = false",
+            "fields": "nextPageToken,files(id,name,createdTime,webViewLink)",
+            "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
+            "corpora": "drive", "driveId": DRIVE_ID, "pageSize": "200",
+            **({"pageToken": page} if page else {}),
+        }
+        d = _get(tok, "https://www.googleapis.com/drive/v3/files", params)
+        files += d.get("files", [])
+        page = d.get("nextPageToken")
+        if not page:
+            return files
+
+
 def doc_date(f: dict) -> dt.date:
-    """Date a doc belongs to: from its name if present, else createdTime."""
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", f["name"])
     if m:
         try:
             return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
-    m = re.search(r"\b(\d{1,2})[/.](\d{1,2})\b", f["name"])
-    if m:
-        today = dt.date.today()
-        try:
-            d = dt.date(today.year, int(m.group(1)), int(m.group(2)))
-            return d if d <= today + dt.timedelta(days=7) else d.replace(year=today.year - 1)
-        except ValueError:
-            pass
     return dt.datetime.fromisoformat(f["createdTime"].replace("Z", "+00:00")).date()
 
 
-def build_grid(files: list[dict], weeks: list[dt.date]) -> dict:
-    """{(week_start, reporter_display): [docs]}"""
+# ---------------------------------------------------------------------------
+# Grid
+# ---------------------------------------------------------------------------
+
+def build_grid(emails: list[dict], docs: list[dict]) -> dict:
+    """{(week_start, display): [{url, title, kind}]}"""
     grid: dict = {}
-    for f in files:
-        wk = week_start(doc_date(f))
+    for e in emails:
+        for disp, _t, _dtok, senders, pat, veto in REPORTERS:
+            if e["sender"] in senders and re.search(pat, e["subject"], re.I) \
+                    and not (veto and re.search(veto, e["subject"], re.I)):
+                grid.setdefault((week_start(e["date"]), disp), []).append({
+                    "url": f"https://mail.google.com/mail/u/0/#all/{e['thread']}",
+                    "title": f"{e['date'].isoformat()} · {e['subject']}", "kind": "mail"})
+                break
+    for f in docs:
         name_l = f["name"].lower()
-        for disp, _topic, tokens in REPORTERS:
-            if any(re.search(r"\b" + re.escape(t) + r"\b", name_l) for t in tokens):
-                grid.setdefault((wk, disp), []).append(f)
+        for disp, _t, dtok, *_ in REPORTERS:
+            if any(re.search(r"\b" + re.escape(t) + r"\b", name_l) for t in dtok):
+                grid.setdefault((week_start(doc_date(f)), disp), []).append({
+                    "url": f["webViewLink"], "title": f["name"], "kind": "doc"})
                 break
     return grid
 
 
-def render(grid: dict, weeks: list[dt.date], n_files: int) -> str:
+def render(grid: dict, weeks: list[dt.date], n_mail: int, n_docs: int) -> str:
     today = dt.date.today()
     cur_wk = week_start(today)
     head = "".join(f"<th>{html.escape(d)}<span class='topic'>{html.escape(t)}</span></th>"
-                   for d, t, _ in REPORTERS)
+                   for d, t, *_ in REPORTERS)
     rows = []
     for wk in weeks:
         cells = []
-        for disp, _t, _tok in REPORTERS:
-            docs = grid.get((wk, disp), [])
-            if docs:
+        for disp, *_ in REPORTERS:
+            hits = grid.get((wk, disp), [])
+            if hits:
                 links = " ".join(
-                    f"<a href='{html.escape(f['webViewLink'])}' title='{html.escape(f['name'])}'>✓</a>"
-                    for f in docs)
+                    f"<a href='{html.escape(h['url'])}' title='{html.escape(h['title'])}'>"
+                    f"{'✓' if h['kind'] == 'mail' else '📄'}</a>" for h in hits)
                 cells.append(f"<td class='ok'>{links}</td>")
             elif wk == cur_wk:
                 cells.append("<td class='due'>due</td>")
             else:
                 cells.append("<td class='miss'>—</td>")
         label = f"{wk.month}/{wk.day}" + (" (this wk)" if wk == cur_wk else "")
-        rows.append(f"<tr><td class='wk'>{label}</td>{cells and ''.join(cells)}</tr>")
+        rows.append(f"<tr><td class='wk'>{label}</td>{''.join(cells)}</tr>")
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>m5x2 Weekly Reports</title>
 <style>
@@ -153,14 +221,15 @@ td.due{{color:#ff8a3d;font-size:12px}}
 a.folder{{color:#2979ff}}
 </style></head><body>
 <h1>m5x2 Weekly Reports</h1>
-<div class="sub">As of {today.isoformat()} · scanning <a class="folder" href="{FOLDER_URL}">m5x2 Main / Weekly Reports</a> · {n_files} docs found</div>
+<div class="sub">As of {today.isoformat()} · {n_mail} update emails + {n_docs} docs in
+<a class="folder" href="{FOLDER_URL}">Weekly Reports</a> scanned</div>
 <table><tr><th style="text-align:left">Week of</th>{head}</tr>
 {''.join(rows)}
 </table>
-<div class="note">Convention: one Google Doc per person per week in the folder, named
-<b>YYYY-MM-DD First-name Topic</b> (e.g. "2026-07-26 Ian Ops"). A doc is bucketed into the
-Sunday-anchored week of the date in its name (falls back to its creation date). ✓ links to the doc;
-— is a missed week; the current week shows "due" until filed.</div>
+<div class="note">✓ links to the Gmail thread of that week's update email (hover for date + subject);
+📄 links to a Doc in the <a class="folder" href="{FOLDER_URL}">Weekly Reports folder</a>
+(named <b>YYYY-MM-DD First-name Topic</b>). A report counts for the Sunday-anchored week it was
+received. — is a missed week; the current week shows "due" until it arrives.</div>
 </body></html>"""
 
 
@@ -171,11 +240,13 @@ def main() -> int:
     cur = week_start(dt.date.today())
     weeks = [cur - dt.timedelta(weeks=i) for i in range(n)]
     tok = access_token()
-    files = list_folder(tok)
-    grid = build_grid(files, weeks)
+    emails = fetch_emails(tok, days=n * 7 + 7)
+    docs = fetch_drive_docs(tok)
+    grid = build_grid(emails, docs)
+    n_mail = sum(1 for v in grid.values() for h in v if h["kind"] == "mail")
     out = DIR / "index.html"
-    out.write_text(render(grid, weeks, len(files)))
-    print(f"wrote {out} ({len(files)} docs, {n} weeks)")
+    out.write_text(render(grid, weeks, n_mail, len(docs)))
+    print(f"wrote {out} ({len(emails)} originals scanned, {n_mail} update emails matched, {len(docs)} docs)")
     return 0
 
 
