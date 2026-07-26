@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-25T16:00:02.658063-07:00"
+  "tasks": {
+    "all colors": {
+      "todoist_id": "6h8GPqjmGw9cFPrR",
+      "minutes": 50
+    },
+    "task bulldozer when possible": {
+      "todoist_id": "6h8GPqrVgGc3Vcr2",
+      "minutes": 40
+    },
+    "bed early for early schedule": {
+      "todoist_id": "6h8FvpMpfFfH86FR",
+      "minutes": 60
+    },
+    "plan for the week": {
+      "todoist_id": "6h8FvpPR578MW982",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-07-25T18:00:06.862070-07:00"
 }
