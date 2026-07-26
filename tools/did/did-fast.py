@@ -65,7 +65,7 @@ CUMULATIVE_1N = {}  # fixed increment per occurrence
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻"}
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
-               "长冥想", "长o314", "aos"}
+               "长冥想", "长o314", "aos", "1 kids nature"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
@@ -132,6 +132,10 @@ def time_range_minutes(start: str, end: str) -> int:
 PUNCT_RE = re.compile(r"[^\w\s一-鿿]+", re.UNICODE)
 TIME_RANGE_RE = re.compile(r"(\d{4})-(\d{4})")
 POINTS_RE = re.compile(r"[\[\{](\d+)[\]\}]")
+# "[1/m]" / "[.5/m]" / "[15+1/m]" — display-only rate markers on variable 1n+
+# cards. Stripped before routing (the rates themselves live in
+# VARIABLE_1N_RATES/BASES, keyed by header).
+RATE_ANNOT_RE = re.compile(r"\s*\[[0-9.+]*/m\]")
 
 # 1n+ task name → 0分 column mapping (updated 2026.04.28 after 9-column removal)
 ONENEON_TO_0FEN: dict[str, str] = {
@@ -404,6 +408,10 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.points_override = int(bracket_match.group(1))
             chunk = chunk[:bracket_match.start()] + chunk[bracket_match.end():]
             chunk = chunk.strip()
+
+        # Drop display-only "[1/m]" rate markers so they can't ride into the
+        # habit name and break header matching (feature 2026-07-25).
+        chunk = RATE_ANNOT_RE.sub("", chunk).strip()
 
         # Extract +N bonus points
         bonus_match = re.search(r"\+(\d+)\b", chunk)

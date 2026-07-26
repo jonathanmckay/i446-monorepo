@@ -221,7 +221,7 @@ TIMER="$DTD_TIMER"
 task="\$1"
 # Strip ANSI codes first
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 # Ritual (-1neon) cards carry the 😈 marker; their Toggl project comes from the
 # ritual→domain map — the SAME source as their row color (keep in sync with
 # RITUAL_DOMAIN in the list generator) — NOT tg-fast, whose shortcodes differ
@@ -270,7 +270,7 @@ REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
 task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
 
@@ -320,7 +320,7 @@ REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
 task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 # Reinstated (2026-07-03): cpap asks for a 1-3 sleep-quality score on completion.
 # The number is appended so did-fast writes it to cpap's 0n column. Needs a tty,
@@ -385,7 +385,7 @@ DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
 _id="\$1"
-_t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
+_t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
   cpap|xk20|xk22|xk26|i444)
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
@@ -411,7 +411,7 @@ typeset -a ids names
 for _tid in "\$@"; do
   [[ -n "\$_tid" ]] || continue
   task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_tid")  # id (field 2) -> canonical content
-  clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+  clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
   # fzf middle-truncates long rows; keep the prefix before the ellipsis
   # (regression 2026-06-06: "defer failed: call dad" with two call-dad tasks)
   [[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
@@ -500,7 +500,7 @@ cat > "$DTD_BLOCKDELAY" << BLOCKEOF
 HDR="$DTD_HDR"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 [[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
 lbl="\$clean"
 [[ \$# -gt 1 ]] && lbl="\$clean +\$((\$# - 1)) more"
@@ -593,7 +593,7 @@ EDIT_FAST="\$HOME/i446-monorepo/tools/did/edit-fast.py"
 HDR="$DTD_HDR"
 task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 query="\$task"
 if [[ "\$clean" == *"…"* ]]; then
   clean="\${clean%%…*}"
@@ -724,14 +724,17 @@ def prank(p):
     return -(p or 1)
 
 def strip_ann(s):
-    return re.sub(r'  +', ' ', re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', s)).strip()
+    # [1/m]-style rate annotations strip like numeric [N] (variable 1n+ cards)
+    return re.sub(r'  +', ' ', re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}| *\[[0-9.+]*/m\]', '', s)).strip()
 
 # Right-justify trailing (N)/[N]/{N} estimates into a column. target = cols - 8
 # pulls the estimate column ~5 cols in from the edge (vs the old cols - 3): it
 # keeps fzf's pointer/gutter (2) + scrollbar (1) clear AND adds a 5-col right
 # margin so estimates stay visible in a narrow pane and the name→estimate gap
 # shrinks. If there is no room (long/truncated rows), leave inline.
-_EST_TOK = r'(?:\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\})'
+# [1/m]-style rate markers on variable 1n+ cards count as estimates too, so
+# they right-justify into the same column as numeric [N] (2026-07-25).
+_EST_TOK = r'(?:\(\(?\d+\)?\)|\[\d*G?\]|\[[0-9.+]*/m\]|\{\d+\})'
 _EST_TAIL = re.compile(r'(\s*(?:' + _EST_TOK + r'\s*)+)$')
 def rjust_est(s, cols):
     m = _EST_TAIL.search(s)
@@ -1024,7 +1027,7 @@ if (( \$# > 1 )); then
 fi
 task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "\$clean" | tr '[:upper:]' '[:lower:]' >> "\$SKIPPED"
 echo "⏭ \$clean" > "\$HDR"
 SKIPEOF
@@ -1046,7 +1049,7 @@ fi
 task="\$1"
 # Strip ANSI codes and recurring indicator
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 echo "⏳ deleting: \$clean" > "\$HDR"
 tid=\$(python3 -c "
 import json, re, sys
@@ -1173,7 +1176,7 @@ done_desc=$(/usr/bin/osascript -e 'display dialog "What did you do?" default ans
 # Dialog 3: what remains
 remaining_desc=$(/usr/bin/osascript -e 'display dialog "What remains?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
 
-clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 # Strip truncation: if fzf middle-truncated the name with …, search by the
 # prefix before it — otherwise the Todoist substring match fails with
 # "task not found" after the user already answered all three dialogs
@@ -1326,7 +1329,7 @@ CACHE_FILE="PLACEHOLDER_CACHE"
 
 task="$1"
 task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content
-clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
+clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 
 # Handle truncation
 if [[ "$clean" == *"…"* ]]; then
@@ -1793,7 +1796,7 @@ while true; do
   fi
 
   # Strip annotations — keep {N} for did-fast.py (0g bonus), strip for filter
-  clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/  +/ /g; s/ *$//')
+  clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/  +/ /g; s/ *$//')
 
   # --- DONE MODE (existing behavior) ---
   # Track original name for list filtering (strip {N} too for matching)

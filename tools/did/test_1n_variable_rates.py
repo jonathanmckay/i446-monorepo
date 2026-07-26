@@ -113,5 +113,51 @@ def test_apply_timer_minutes_respects_explicit_value(df):
     assert r.variable_value == 30, "explicit minutes must not be overwritten"
 
 
+# ── "[1/m]" display annotation (card contents, 2026-07-25) ───────────────────
+
+RATE_HEADERS = {"0n": {}, "1n": {"1 kids nature": "AL", "family": "W",
+                                 "s897": "X"}}
+
+
+# (N) durations never reach did-fast — dtd's sed cleaners strip them before
+# the FIFO — so the realistic inputs carry only the name + rate marker.
+@pytest.mark.parametrize("raw,name", [
+    ("1 kids nature [1/m]", "1 kids nature"),
+    ("family [1/m]", "family"),
+    ("s897 [.5/m]", "s897"),
+    ("一起饭 [15+1/m] 90", "一起饭"),
+])
+def test_parse_strips_rate_annotation(df, raw, name):
+    item = df.parse_input(raw)[0]
+    assert item.name == name
+    assert item.points_override is None, "[1/m] is not a points override"
+
+
+def test_rate_annotated_card_routes_and_computes(df):
+    items = df.parse_input("1 kids nature [1/m] 90")
+    r = df.route_items(items, RATE_HEADERS, TQ, skip_todoist=True)[0]
+    assert r.step == "1n" and r.is_variable_1n
+    assert r.variable_value == 90  # 1/m
+
+
+def test_dtd_cleaners_strip_rate_annotation():
+    """dtd's shell cleaners must eat ' [1/m]' like numeric [N]: it must never
+    reach the Toggl timer description or the completion FIFO name."""
+    src = (_HERE / "dtd.sh").read_text()
+    heredoc = r"s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g"
+    plain = r"s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g"
+    assert src.count(heredoc) == 9, "all heredoc cleaners must strip [1/m]"
+    assert src.count(plain) == 3, "all plain cleaners must strip [1/m]"
+    assert r"| *\[[0-9.+]*/m\]" in src, "list strip_ann must strip [1/m]"
+
+
+def test_dtd_rjust_treats_rate_marker_as_estimate():
+    """[1/m] must right-justify into the estimate column like numeric [N]
+    (bug 2026-07-25: rate-annotated cards rendered left-stuck)."""
+    src = (_HERE / "dtd.sh").read_text()
+    assert r"\[[0-9.+]*/m\]" in src.split("_EST_TOK = ")[1].split("\n")[0], (
+        "_EST_TOK must include the [1/m] rate marker")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
