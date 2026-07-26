@@ -33,7 +33,11 @@ from collections import Counter
 from pathlib import Path
 
 DIR = Path(__file__).parent
-BACK_DAYS, FWD_DAYS = 90, 60
+# FWD_DAYS=0 (2026-07-26, per JM): charts end at today — no forecast. The
+# compartment model below still runs (harmlessly, zero iterations) so the
+# calibrated pipeline rates stay available for the param note; bump FWD_DAYS
+# to re-enable projections.
+BACK_DAYS, FWD_DAYS = 90, 0
 LT_START = dt.date(2024, 1, 1)  # long-term % view start
 
 def load(name): return json.loads((DIR / "data" / name).read_text())
@@ -314,7 +318,9 @@ payload = {
                "weekly_signings": round(WEEKLY_SIGNINGS, 1)},
     "current": {"occ_stable": cur["occ_stable"], "nr": cur["nr"], "nu": cur["nu"],
                 "vr": cur["vr"], "vu": cur["vu"], "occ_pct": round(cur["occ"] / UNITS * 100, 1)},
-    "back": back, "forward": fwd, "longterm": longterm, "feed": feed,
+    # feed intentionally excluded — the newsfeed section was removed 2026-07-26
+    # (per JM); the event log still backs the leases-weekly actuals above.
+    "back": back, "forward": fwd, "longterm": longterm,
     "leases_weekly": leases_weekly, "occ_timeline": occ_timeline,
 }
 
@@ -353,38 +359,31 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 <div class="sub">As of __TODAY__ · __UNITS__ units · data: AppFolio occupancy_summary + unit_vacancy</div>
 <div class="kpis" id="kpis"></div>
 
-<h2>Action states — one column per day, 90d back → 60d forecast (units)</h2>
+<h2>Action states — one column per day, trailing 90d (units)</h2>
 <div class="card"><canvas id="unitsChart" height="110"></canvas>
 <div class="legend">
  <span><i class="sw" style="background:var(--vu)"></i>Vacant-Unrented</span>
  <span><i class="sw" style="background:var(--nu)"></i>Notice-Unrented</span>
  <span><i class="sw" style="background:var(--vr)"></i>Vacant-Rented</span>
- <span><i class="sw" style="background:var(--nr)"></i>Notice-Rented</span>
- <span style="margin-left:auto">dashed = forecast</span></div>
+ <span><i class="sw" style="background:var(--nr)"></i>Notice-Rented</span></div>
 <div class="note" id="paramNote"></div>
 <div class="note">Stable-occupied is omitted by design — this shows only the exposed/in-transition units.
-Backward is real daily AppFolio snapshots; forward is a compartment forecast calibrated to the current
-pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = covered.</div></div>
+Real daily AppFolio snapshots, ending today. Red = unrented exposure, green = covered.</div></div>
 
 <h2>Leases signed per week — last 12 weeks (actuals)</h2>
 <div class="card"><canvas id="leasesChart" height="86"></canvas>
 <div class="legend">
  <span><i class="sw" style="background:var(--blue)"></i>Leases signed (actual, by LeaseSignDate)</span></div>
 <div class="note" id="leaseNote"></div>
-<div class="note">First-pass lease model. <b>Predicted</b> = the forecast's weekly lease-up
-run-rate, anchored to trailing re-let demand (the rate units fall vacant-unrented and must be
-re-leased), not a stock-clearing rate. <b>Scheduled</b> = leases already signed in the pipeline,
-bucketed by their move-in week — committed, and fed into the forecast as real move-ins. On-notice
-units are assumed to lease only after going vacant (the observed m5x2 pattern), so they are not
-pre-leased in bulk.</div></div>
+<div class="note">Actual signed leases only, bucketed by AppFolio LeaseSignDate into Monday-anchored
+weeks. Current week is partial.</div></div>
 
-<h2>Occupancy % + covered pipeline — daily, 2024 → +60d forecast</h2>
+<h2>Occupancy % + covered pipeline — daily, 2024 → today</h2>
 <div class="card"><canvas id="occChart" height="90"></canvas>
 <div class="note" id="occNote"></div>
 <div class="note">Left axis = occupancy % (occupied ÷ units). Right axis = the covered pipeline: vacant-rented
 and notice-rented as % of portfolio, the units that lift occupancy next. History is the reliable
-point-in-time occupied, interpolated between snapshots (exact at each). Forward is the same compartment
-forecast as the first chart, so they line up. Solid = actual, dashed = forecast.</div></div>
+point-in-time occupied, interpolated between snapshots (exact at each), ending today.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
@@ -394,14 +393,6 @@ each unit's <b>current</b> rented flag to past dates, so historical vacant-unren
 occupied are reliable, so all four bands are <b>reconstructed</b>: vacancy = units − occupied (real),
 split by today's live unrented share from the unit-level report; notice is estimated off occupied when
 the raw figures are implausible.</div></div>
-
-<h2>Occupancy newsfeed — daily tenant tickler</h2>
-<div class="card"><ul class="feed" id="feed"></ul>
-<div class="note">Each row is dated by the real event date, newest first. Genuinely new notices and
-signings show their <b>detection date</b> (when our daily snapshot diff first saw them); rows marked
-<i>baseline (pre-tracking)</i> predate that diffing and have no detection date, so they are dated by
-their <b>move date</b> (effective) instead of all being stamped today. AppFolio exposes no signed/
-received timestamp, so the effective date is the most truthful anchor for the backfill.</div></div>
 
 <script>
 const D = __PAYLOAD__;
@@ -420,7 +411,7 @@ document.getElementById('kpis').innerHTML=kp.map(k=>
  `<div class="kpi ${k[2]}"><div class="v">${k[3]}</div><div class="l">${k[1]}</div></div>`).join('');
 const P=D.params;
 document.getElementById('paramNote').textContent=
- `Forecast rates (calibrated): ${P.lambda} new notices/day · notice→vacant ~${P.notice_days}d · `+
+ `Pipeline rates (calibrated): ${P.lambda} new notices/day · notice→vacant ~${P.notice_days}d · `+
  `lease-up velocity ~${P.weekly_signings}/wk · move-in lag ~${P.movein_lag}d.`;
 // ── units chart: daily back + daily forecast, 4 stacked bands ──
 const rows=[...D.back, ...D.forward.slice(1)];
@@ -477,8 +468,7 @@ new Chart(document.getElementById('occChart'),{type:'line',
    y2:{position:'right',beginAtZero:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{display:false},title:{display:true,text:'Rented pipeline',color:'#8b96a3'}}}}});
 {const a=ot.find(r=>r.date===D.today)||ot[ot.length-1];
  document.getElementById('occNote').innerHTML=
-  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}) · ${a.vr}% vacant-rented · ${a.nr}% notice-rented. `+
-  `Forward = ${D.params.weekly_signings} leases/week (shared with the first chart).`;}
+  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}) · ${a.vr}% vacant-rented · ${a.nr}% notice-rented.`;}
 // ── long-term % chart: weekly since 2024 ──
 const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
@@ -491,11 +481,6 @@ new Chart(document.getElementById('pctChart'),{type:'line',
   scales:{x:{stacked:true,grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:26,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
    y:{stacked:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
-// ── feed: date column = real event date (effective for baseline rows) ──
-document.getElementById('feed').innerHTML=D.feed.map(f=>
- `<li><span class="dt">${f.date}<span class="cap">${f.cap}</span></span>`+
- `<span class="ti">${f.title}<br><span class="su">${f.sub}</span></span>`+
- `<span class="tag t-${f.kind}">${f.kind}</span></li>`).join('');
 </script></body></html>"""
 
 out = (HTML.replace("__TODAY__", payload["today"])
@@ -503,6 +488,6 @@ out = (HTML.replace("__TODAY__", payload["today"])
            .replace("__PAYLOAD__", json.dumps(payload)))
 (DIR / "index.html").write_text(out)
 print("wrote", DIR / "index.html")
-print(f"  back days: {len(back)} | forecast days: {len(fwd)} | "
-      f"longterm weeks: {len(longterm)} | feed: {len(payload['feed'])}")
+print(f"  back days: {len(back)} | forward days: {len(fwd) - 1} (forecast off) | "
+      f"longterm weeks: {len(longterm)}")
 print(f"  params: λ={lam:.2f} notice_days={NOTICE_DAYS} lease_days={LEASE_DAYS} movein_lag={MOVEIN_LAG}")
