@@ -179,6 +179,24 @@ def main() -> None:
         if isinstance(v, (int, float)):
             pct_2n = v * 100
 
+    # --- 1n+ row 101: 3n (quarterly task) completion % for this quarter ---
+    # Y:AG is a running list of 3n tasks/category-subtotals (row 61 header:
+    # AD=weight/total, AF=Q1 actual, AG=Q2 actual, ...). No Q3/Q4 columns
+    # exist yet — extend QUARTER_COLS as the sheet grows. AC is blank
+    # throughout the table (verified); AD is the real "Total" column despite
+    # the original ask citing AC — likely an easy adjacent-letter slip.
+    QUARTER_COLS = {1: "AF", 2: "AG", 3: "AH", 4: "AI"}
+    row101 = load_sheet_rows(ws_1n, min_row=101, max_row=101)[0]
+    ad_idx = column_index_from_string("AD") - 1
+    total_3n = row101[ad_idx]
+    pct_3n = None
+    q_col_letter = QUARTER_COLS.get(q)
+    if not year_mismatch and q_col_letter:
+        q_idx = column_index_from_string(q_col_letter) - 1
+        actual_3n = row101[q_idx] if q_idx < len(row101) else None
+        if isinstance(actual_3n, (int, float)) and isinstance(total_3n, (int, float)) and total_3n:
+            pct_3n = actual_3n / total_3n * 100
+
     xlsx_path.unlink(missing_ok=True)
     xlsx_path.parent.rmdir()
 
@@ -200,6 +218,17 @@ def main() -> None:
         print(f"4. 2n efficiency:  {pct_2n:.1f}% (1n+ row88, month-{q_start_month} column)")
     else:
         print(f"4. 2n efficiency:  no row-88 column found for month {q_start_month}")
+    print(f"5. Goals set:      {days_goals_set}/{total_days} days (0分!Q >= 9) ({days_goals_set/total_days*100:.1f}%)" if total_days else "5. Goals set:      no data")
+    print(f"6. 100+ 0g pts:    {days_100_0g}/{total_days} days (0分!Q >= 100) ({days_100_0g/total_days*100:.1f}%)" if total_days else "6. 100+ 0g pts:    no data")
+    print(f"7. Neon <1000:     {days_complete_before_1000}/{total_days} days (0分!E < 1000) ({days_complete_before_1000/total_days*100:.1f}%)" if total_days else "7. Neon <1000:     no data")
+    if year_mismatch:
+        print(f"8. 3n completion:  skipped — 1n+ row101 total is untagged by year, sheet built for {int(sheet_year)}, not {year}")
+    elif q_col_letter is None:
+        print(f"8. 3n completion:  no column mapped for Q{q} yet")
+    elif pct_3n is not None:
+        print(f"8. 3n completion:  {pct_3n:.1f}% ({q_col_letter}101={row101[column_index_from_string(q_col_letter)-1]} / AD101(total)={total_3n})")
+    else:
+        print(f"8. 3n completion:  no data in 1n+ row101 for Q{q} ({q_col_letter}) yet")
 
 
 if __name__ == "__main__":

@@ -136,13 +136,13 @@ Collect into a structure: `{domain: [{goal, fen_target, focus_bonus, pct_done}]}
 
 ### Step 3: Pull Toggl time for the week
 
-Use the Toggl CLI:
+Use the toggl_server MCP tool `toggl_date` (the CLI has no `date` command):
 
-```bash
-python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py date YYYY-MM-DD
+```
+mcp__toggl_server__toggl_date  date=YYYY-MM-DD
 ```
 
-Run for each day Sun–Sat (7 calls). Parse output to get entries with project code and duration. Aggregate by domain (project code):
+Run for each day Sun–Sat (7 calls; they can be batched in parallel). Parse output to get entries with project code and duration. Aggregate by domain (project code):
 
 ```python
 time_by_domain = {
@@ -159,16 +159,20 @@ Also compute total tracked time and untracked time (24h × 7 - total - sleep).
 
 Read the `0分` sheet for each day in the week range. For each day's row (found by date in Col B, M/D format), read the domain columns:
 
+Column map per `vault/g245/CLAUDE.md` (9 columns were removed 2026-04-28;
+old Z–AH references are WRONG):
+
 | Column | Domain |
 |--------|--------|
-| Z | 0g (goals/planning) |
-| AA | i9 |
-| AB | m5x2 |
-| AC | 個 (g245) |
-| AD | 媒 (hcmc) |
-| AF | hcb |
-| AG | xk (xk87/xk88) |
-| AH | 社 (s897) |
+| Q | 0g (goals/planning) |
+| R | i9 |
+| S | m5x2 |
+| T | 个 (g245) |
+| U | 媒 (hcmc) |
+| V | 思 (hcm) |
+| W | hcb |
+| X | xk (xk87/xk88) |
+| Y | 社 (s897) |
 
 Sum each column across the 7 days to get weekly points per domain.
 
@@ -179,19 +183,14 @@ tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
     set s to sheet "0分" of wb
     set results to ""
-    -- For each day, find row by date, read Z through AH
+    -- For each day, find row by date, read Q through Y
     repeat with i from START_ROW to END_ROW
         set bVal to string value of range ("B" & i) of s
-        -- read Z, AA, AB, AC, AD, AF, AG, AH
-        set zVal to string value of range ("Z" & i) of s
-        set aaVal to string value of range ("AA" & i) of s
-        set abVal to string value of range ("AB" & i) of s
-        set acVal to string value of range ("AC" & i) of s
-        set adVal to string value of range ("AD" & i) of s
-        set afVal to string value of range ("AF" & i) of s
-        set agVal to string value of range ("AG" & i) of s
-        set ahVal to string value of range ("AH" & i) of s
-        set results to results & bVal & "|" & zVal & "|" & aaVal & "|" & abVal & "|" & acVal & "|" & adVal & "|" & afVal & "|" & agVal & "|" & ahVal & "\n"
+        set rowTxt to bVal
+        repeat with c in {"Q", "R", "S", "T", "U", "V", "W", "X", "Y"}
+            set rowTxt to rowTxt & "|" & (string value of range ((c as string) & i) of s)
+        end repeat
+        set results to results & rowTxt & "\n"
     end repeat
     return results
 end tell
