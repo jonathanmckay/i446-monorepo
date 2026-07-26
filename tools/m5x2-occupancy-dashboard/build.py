@@ -439,12 +439,11 @@ Real daily AppFolio snapshots, ending today. Red = unrented exposure, green = co
 <div class="note">Actual signed leases only, bucketed by AppFolio LeaseSignDate into Monday-anchored
 weeks. Current week is partial.</div></div>
 
-<h2>Occupancy % + covered pipeline — daily, 2024 → today</h2>
+<h2>Occupancy % — daily, 2024 → today</h2>
 <div class="card"><canvas id="occChart" height="90"></canvas>
 <div class="note" id="occNote"></div>
-<div class="note">Left axis = occupancy % (occupied ÷ units). Right axis = the covered pipeline: vacant-rented
-and notice-rented as % of portfolio, the units that lift occupancy next. History is the reliable
-point-in-time occupied, interpolated between snapshots (exact at each), ending today.</div></div>
+<div class="note">Occupancy % (occupied ÷ units). History is the reliable point-in-time occupied,
+interpolated between snapshots (exact at each), ending today.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
@@ -509,30 +508,23 @@ new Chart(document.getElementById('leasesChart'),{type:'bar',
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxRotation:90,minRotation:60,callback:fmtMD}},
    y:{beginAtZero:true,ticks:{color:'#8b96a3',precision:0},grid:{color:'#1e242b'}}}}});
-// ── occupancy % timeline + covered pipeline (vacant-rented, notice-rented) ──
+// ── occupancy % timeline ──
 const ot=D.occ_timeline, otLabels=ot.map(r=>r.date);
-const otSplit=ot.findIndex(r=>r.projected);
-const dash=key=>({borderDash:c=>otSplit>=0&&c.p0DataIndex>=otSplit-1?[5,4]:undefined});
 function ods(key,label,color,fill,axis){return {label,data:ot.map(r=>r[key]),yAxisID:axis,
-  borderColor:color,backgroundColor:fill,fill:!!fill,pointRadius:0,tension:.1,borderWidth:1.5,
-  segment:dash(key)};}
+  borderColor:color,backgroundColor:fill,fill:!!fill,pointRadius:0,tension:.1,borderWidth:1.5};}
 new Chart(document.getElementById('occChart'),{type:'line',
  data:{labels:otLabels,datasets:[
-   ods('pct','Occupancy %','#2faa4d','rgba(47,170,77,.10)','y'),
-   ods('vr','Vacant-Rented %',C.vr,null,'y2'),
-   ods('nr','Notice-Rented %',C.nr,null,'y2')]},
+   ods('pct','Occupancy %','#2faa4d','rgba(47,170,77,.10)','y')]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
-  plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}},
+  plugins:{legend:{display:false},
    tooltip:{callbacks:{label:i=>{const r=ot[i.dataIndex];
-     return i.datasetIndex===0?`Occupancy ${r.pct}% (${r.occ}/${r.units})`+(r.projected?' · proj':'')
-       :`${i.dataset.label} ${i.formattedValue}%`;}}}},
+     return `Occupancy ${r.pct}% (${r.occ}/${r.units})`;}}}},
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:24,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
-   y:{position:'left',ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'},title:{display:true,text:'Occupancy',color:'#8b96a3'}},
-   y2:{position:'right',beginAtZero:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{display:false},title:{display:true,text:'Rented pipeline',color:'#8b96a3'}}}}});
+   y:{position:'left',ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'},title:{display:true,text:'Occupancy',color:'#8b96a3'}}}}});
 {const a=ot.find(r=>r.date===D.today)||ot[ot.length-1];
  document.getElementById('occNote').innerHTML=
-  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}) · ${a.vr}% vacant-rented · ${a.nr}% notice-rented.`;}
+  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}).`;}
 // ── long-term % chart: weekly since 2024 ──
 const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
