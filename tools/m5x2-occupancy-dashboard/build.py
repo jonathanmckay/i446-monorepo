@@ -103,12 +103,16 @@ def trusted_bands(hist, vu_share):
             vu, vr = s["vu"], s["vr"]
         else:
             vu = round(V * vu_share); vr = V - vu
-        # notice split: same rule — trust only live-captured, plausible rows
-        if is_corrupt(s):
+        # notice: trust only live-captured, plausible rows. Pre-LIVE the TOTAL
+        # is fiction too, not just the split — as-of backfill accumulates
+        # notice retroactively (Dec 2025 claimed 163 units on notice, 17.9% of
+        # the portfolio, decaying smoothly into the live period; JM 2026-07-26:
+        # "notice unrented 12/25–5/26 looks wrong"). Rows before Dec 2025
+        # happened to trip is_corrupt and were already reconstructed; these
+        # sat just under its 8% threshold. So pre-LIVE rows are ALWAYS
+        # reconstructed off occupied at the live-calibrated notice rate.
+        if is_corrupt(s) or s["date"] < LIVE_START:
             N = round(O * notice_rate); nr = round(N * nr_frac); nu = N - nr
-        elif s["date"] < LIVE_START:
-            N = s["nu"] + s["nr"]        # total notice is real; the split is not
-            nr = round(N * nr_frac); nu = N - nr
         else:
             nu, nr = s["nu"], s["nr"]
         out[s["date"]] = {"date": s["date"], "units": U, "occ": O,
@@ -447,9 +451,9 @@ point-in-time occupied, interpolated between snapshots (exact at each), ending t
 <div class="note">AppFolio's rented/unrented split is not a true as-of-then snapshot — it back-applies
 each unit's <b>current</b> rented flag to past dates, so historical rented/unrented splits are fiction.
 Only units &amp; occupied are reliable, so bands before <b>2026-06-14</b> (when live daily capture began)
-are <b>reconstructed</b>: vacancy = units − occupied (real), split by today's live unrented share; the
-notice total is kept but its rented/unrented split uses the live-period median share. From 6/14 on,
-the splits are real point-in-time captures.</div></div>
+are <b>reconstructed</b>: vacancy = units − occupied (real), split by today's live unrented share;
+notice (total AND split) is rebuilt from occupied at the live-period rate — the as-of notice totals
+inflate retroactively and are not usable. From 6/14 on, everything is a real point-in-time capture.</div></div>
 
 <script>
 const D = __PAYLOAD__;
@@ -463,7 +467,8 @@ function fmtMYY(value){const s=this.getLabelForValue(value);const d=new Date(s+'
 // KPIs
 const c=D.current, kp=[['occ_pct','Occupied %','',c.occ_pct+'%'],
  ['vu','Vacant-Unrented','vu',c.vu],['vr','Vacant-Rented','vr',c.vr],
- ['nu','Notice-Unrented','nu',c.nu],['nr','Notice-Rented','nr',c.nr]];
+ ['nu28','Notice-Unrtd ≤28d','nu',c.nu28],['nu28p','Notice-Unrtd >28d','nu',c.nu-c.nu28],
+ ['nr','Notice-Rented','nr',c.nr]];
 document.getElementById('kpis').innerHTML=kp.map(k=>
  `<div class="kpi ${k[2]}"><div class="v">${k[3]}</div><div class="l">${k[1]}</div></div>`).join('');
 const P=D.params;
