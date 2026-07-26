@@ -5,6 +5,8 @@
 # to run by hand: `bash refresh.sh`.
 set -euo pipefail
 cd "$(dirname "$0")"
+# cron on Ix has a bare PATH; npx/node live in homebrew
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 echo "── refresh $(date '+%Y-%m-%d %H:%M:%S') ──"
 python3 fetch.py --daily 7
 python3 build.py
