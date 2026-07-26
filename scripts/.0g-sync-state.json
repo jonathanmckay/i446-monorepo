@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "all colors": {
-      "todoist_id": "6h8GPqjmGw9cFPrR",
-      "minutes": 50
-    },
-    "task bulldozer when possible": {
-      "todoist_id": "6h8GPqrVgGc3Vcr2",
-      "minutes": 40
-    },
-    "plan for the week": {
-      "todoist_id": "6h8FvpPR578MW982",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-07-26T03:55:01.384202-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-26T04:00:10.273590-07:00"
 }
