@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-26T05:30:03.439126-07:00"
+  "tasks": {
+    "roadmaps go well with followups": {
+      "todoist_id": "6h8Q8j4cgPwjXVX2",
+      "minutes": 100
+    },
+    "1:1 with ji || ashan": {
+      "todoist_id": "6h8Q8j6cwFJXMHRR",
+      "minutes": 45
+    },
+    "roles and responsibilities for reports": {
+      "todoist_id": "6h8Q8j9ggvcfPjC2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-07-26T10:00:03.988286-07:00"
 }
