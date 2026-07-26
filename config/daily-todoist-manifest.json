@@ -1,251 +1,262 @@
 {
-  "_comment": "Canonical daily Todoist habits. validate-daily-habits.py checks each appears as an open recurring task every day and recreates missing ones. Seeded 2026-06-14 from the live healthy set; curate freely (add/remove entries).",
-  "habits": {
-    "0g": {
-      "match": "0g",
-      "content": "0g (4) [8]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "g245"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "0l": {
-      "match": "0l",
-      "content": "0l (8) [20]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "g245"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "0t": {
-      "match": "0t",
-      "content": "0t (3) [10]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "0t",
-        "n156"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "1st-hci": {
-      "match": "1st hci",
-      "content": "1st hci (15) [15]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "hci"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5PmPjqrx4x"
-    },
-    "2nd-hci": {
-      "match": "2nd hci",
-      "content": "2nd hci (15) [15]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "hci"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5PmPjqrx4x"
-    },
-    "charge": {
-      "match": "charge",
-      "content": "charge [3] (15)",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "i447"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "cpap": {
-      "match": "CPAP",
-      "content": "CPAP (15) [15]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "hcb"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "evening-hcmc": {
-      "match": "evening hcmc",
-      "content": "evening hcmc (15) [15]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "hcmc"
-      ],
-      "priority": 2,
-      "project_id": "6PWgGPhJmxFp93Hf"
-    },
-    "hiit": {
-      "match": "hiit",
-      "content": "hiit (10) [23]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "hcbp"
-      ],
-      "priority": 3,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "i447": {
-      "match": "i447",
-      "content": "i447 [5] (15)",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "i447"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "ibx-i9": {
-      "match": "ibx i9",
-      "content": "ibx i9 (4) [20]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "i9"
-      ],
-      "priority": 4,
-      "project_id": "6XQ3GMQRVmPgPM4W"
-    },
-    "ibx-m5x2": {
-      "match": "ibx m5x2",
-      "content": "ibx m5x2 (4) [15]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "m5x2"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5Pjp462w3C"
-    },
-    "ibx-s897": {
-      "match": "ibx s897",
-      "content": "ibx s897 [6] (15)",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "s897"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5Pp27hV9qM"
-    },
-    "m5x2-stats": {
-      "match": "m5x2 stats",
-      "content": "m5x2 stats (4) [8]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "cc",
-        "m5x2"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5Pjp462w3C"
-    },
-    "notes": {
-      "match": "notes",
-      "content": "notes (3) [8]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "notes"
-      ],
-      "priority": 4,
-      "project_id": "6XQ3GMQRVmPgPM4W"
-    },
-    "push": {
-      "match": "push",
-      "content": "push (10) [30]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "g245",
-        "push"
-      ],
-      "priority": 3,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "slack-m5x2": {
-      "match": "slack m5x2",
-      "content": "slack m5x2 (2) [6]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "m5x2"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5Pjp462w3C"
-    },
-    "teams": {
-      "match": "teams",
-      "content": "teams [7] (15)",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "i9"
-      ],
-      "priority": 3,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "tmrw": {
-      "match": "tmrw",
-      "content": "tmrw (1) [5]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "g245"
-      ],
-      "priority": 4,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "wake-up": {
-      "match": "wake up",
-      "content": "wake up [6] (15)",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "infra"
-      ],
-      "priority": 2,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "早餐": {
-      "match": "早餐",
-      "content": "早餐 (15) [5]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "hcb",
-        "早餐"
-      ],
-      "priority": 3,
-      "project_id": "6Crfmq5PfP5VQ286"
-    },
-    "stats-i9": {
-      "match": "stats i9",
-      "content": "stats i9 (4) [8]",
-      "due_string": "every day",
-      "labels": [
-        "0neon",
-        "i9"
-      ],
-      "priority": 4,
-      "project_id": "6XQ3GMQRVmPgPM4W"
-    }
+ "_comment": "Canonical daily Todoist habits. validate-daily-habits.py checks each appears as an open recurring task every day and recreates missing ones. Seeded 2026-06-14 from the live healthy set; curate freely (add/remove entries). Deleting a daily habit card from dtd (ctrl-x) means N/A-for-today: dtd writes an explicit 0 to the habit's 0n Neon column (distinct from blank = not done yet) and records the name in ~/.cache/jm/habits-na-YYYY-MM-DD.json, which the validator honors so --fix does not resurrect the card the same day; the recurring card returns on the next day's validation.",
+ "habits": {
+  "0g": {
+   "match": "0g",
+   "content": "0g (4) [8]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "g245"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "0l": {
+   "match": "0l",
+   "content": "0l (8) [20]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "g245"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "0t": {
+   "match": "0t",
+   "content": "0t (3) [10]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "0t",
+    "n156"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "1st-hci": {
+   "match": "1st hci",
+   "content": "1st hci (15) [15]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "hci"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5PmPjqrx4x"
+  },
+  "2nd-hci": {
+   "match": "2nd hci",
+   "content": "2nd hci (15) [15]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "hci"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5PmPjqrx4x"
+  },
+  "charge": {
+   "match": "charge",
+   "content": "charge [3] (15)",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "i447"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "cpap": {
+   "match": "CPAP",
+   "content": "CPAP (15) [15]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "hcb"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "evening-hcmc": {
+   "match": "night hcmc",
+   "content": "night hcmc (15) [15]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "hcmc"
+   ],
+   "priority": 2,
+   "project_id": "6PWgGPhJmxFp93Hf"
+  },
+  "hiit": {
+   "match": "hiit",
+   "content": "hiit (10) [23]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "hcbp"
+   ],
+   "priority": 3,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "i444": {
+   "match": "i444",
+   "content": "i444 (15) [5]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "i444"
+   ],
+   "priority": 2,
+   "project_id": "6M6RxxQrj72pRcM7"
+  },
+  "i447": {
+   "match": "i447",
+   "content": "i447 [5] (15)",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "i447"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "ibx-i9": {
+   "match": "ibx i9",
+   "content": "ibx i9 (4) [20]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "i9"
+   ],
+   "priority": 4,
+   "project_id": "6XQ3GMQRVmPgPM4W"
+  },
+  "ibx-m5x2": {
+   "match": "ibx m5x2",
+   "content": "ibx m5x2 (4) [15]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "m5x2"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5Pjp462w3C"
+  },
+  "ibx-s897": {
+   "match": "ibx s897",
+   "content": "ibx s897 [6] (15)",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "s897"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5Pp27hV9qM"
+  },
+  "m5x2-stats": {
+   "match": "m5x2 stats",
+   "content": "m5x2 stats (4) [8]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "cc",
+    "m5x2"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5Pjp462w3C"
+  },
+  "notes": {
+   "match": "notes",
+   "content": "notes (3) [8]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "notes"
+   ],
+   "priority": 4,
+   "project_id": "6XQ3GMQRVmPgPM4W"
+  },
+  "push": {
+   "match": "push",
+   "content": "push (10) [30]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "g245",
+    "push"
+   ],
+   "priority": 3,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "slack-m5x2": {
+   "match": "slack m5x2",
+   "content": "slack m5x2 (2) [6]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "m5x2"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5Pjp462w3C"
+  },
+  "teams": {
+   "match": "teams",
+   "content": "teams [7] (15)",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "i9"
+   ],
+   "priority": 3,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "tmrw": {
+   "match": "tmrw",
+   "content": "tmrw (1) [5]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "g245"
+   ],
+   "priority": 4,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "wake-up": {
+   "match": "wake up",
+   "content": "wake up [6] (15)",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "infra"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "早餐": {
+   "match": "早餐",
+   "content": "早餐 (15) [5]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "hcb",
+    "早餐"
+   ],
+   "priority": 3,
+   "project_id": "6Crfmq5PfP5VQ286"
+  },
+  "stats-i9": {
+   "match": "stats i9",
+   "content": "stats i9 (4) [8]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "i9"
+   ],
+   "priority": 4,
+   "project_id": "6XQ3GMQRVmPgPM4W"
   }
+ }
 }
