@@ -78,12 +78,17 @@ def na_today(when=None) -> set[str]:
 
 
 def recreate_payload(habit: dict) -> dict:
-    """Pure: build the Todoist create-task body from a manifest entry. The 😈
-    auto-marker is prefixed so a habit Dream/this job rebuilt is visibly distinct
-    from one Todoist regenerated on its own (bare() strips it back off for
-    matching, and /did's query-in-task overlap is unaffected)."""
+    """Pure: build the Todoist create-task body from a manifest entry.
+
+    The content is created CLEAN — no 😈 auto-marker. The marker broke the
+    habit on completion (2026-07-26: "😈 1st hci" doesn't match the 0n header
+    "1st hci", so did-fast fell through to the generic Todoist step and the
+    habit's own column never got written). Provenance lives in the task
+    description instead; bare() still strips 😈 for matching legacy cards."""
+    from datetime import date as _date
     body = {
-        "content": f"{AUTO_MARK} {habit['content']}",
+        "content": habit["content"],
+        "description": f"auto-recreated by validate-daily-habits {_date.today().isoformat()}",
         "due_string": habit.get("due_string", "every day"),
         "labels": habit.get("labels", []),
         "priority": habit.get("priority", 1),

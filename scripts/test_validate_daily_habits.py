@@ -54,9 +54,14 @@ def test_short_name_not_falsely_matched_as_substring():
     assert "0g" in vdh.compute_missing(MANIFEST, present)
 
 
-def test_recreate_payload_carries_full_spec_and_auto_marks():
+def test_recreate_payload_carries_full_spec_with_clean_name():
+    # No 😈 in the content (2026-07-26: "😈 1st hci" missed the 0n header on
+    # completion, mis-routing the habit's write). Provenance lives in the
+    # description instead.
     body = vdh.recreate_payload(MANIFEST["habits"]["0g"])
-    assert body["content"] == "😈 0g (4) [8]"        # 😈 marks auto-generated
+    assert body["content"] == "0g (4) [8]"
+    assert "😈" not in body["content"]
+    assert body["description"].startswith("auto-recreated by validate-daily-habits")
     assert body["due_string"] == "every day"        # preserves recurrence
     assert body["labels"] == ["0neon", "g245"]
     assert body["priority"] == 4

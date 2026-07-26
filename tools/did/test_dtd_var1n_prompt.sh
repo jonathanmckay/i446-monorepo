@@ -16,7 +16,9 @@ grep -q 'ONENEON_ALIASES' "$DTD" || fail "pattern must include aliases pointing 
 # Both the router (chooses execute-with-tty) and done.sh (asks the question)
 # must carry the pattern branch.
 [[ $(grep -c '${DTD_VAR1N_PAT})' "$DTD") -ge 1 ]] || fail "done.sh must prompt on the variable-1n branch"
-grep -q 'cpap|xk20|xk22|xk26|i444|${DTD_VAR1N_PAT})' "$DTD" \
+# Don't pin the full alternation — other value-prompting names (新闻, …) may
+# join the list; only the variable-1n pattern's membership matters here.
+grep -q 'cpap|xk20.*${DTD_VAR1N_PAT})' "$DTD" \
   || fail "done router must send variable-1n cards to execute (tty)"
 grep -q '__no_variable_1n__' "$DTD" || fail "empty-pattern fallback missing (broken case syntax risk)"
 

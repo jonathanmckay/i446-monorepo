@@ -94,7 +94,7 @@ def main() -> None:
     today = date.today()
     q_days = []
     for r in fen_rows:
-        week, dt, e_val, f_val = r[0], r[1], r[4], r[5]
+        week, dt, e_val, f_val, q_val = r[0], r[1], r[4], r[5], r[16]
         if not isinstance(dt, date):
             continue
         d = dt.date() if hasattr(dt, "date") else dt
@@ -105,20 +105,35 @@ def main() -> None:
         # checking Sigma doesn't catch them. Filter on the calendar instead.
         if d > today:
             continue
-        q_days.append({"week": week, "date": d, "E": e_val, "F": f_val})
+        q_days.append({"week": week, "date": d, "E": e_val, "F": f_val, "Q": q_val})
 
     total_days = len(q_days)
     calendar_days = (end - start).days + 1
     is_partial_quarter = total_days < calendar_days
 
-    def is_positive(v):
+    def to_num(v):
         try:
-            return float(v) > 0
+            return float(v)
         except (TypeError, ValueError):
-            return False
+            return None
+
+    def is_positive(v):
+        n = to_num(v)
+        return n is not None and n > 0
+
+    def at_least(v, threshold):
+        n = to_num(v)
+        return n is not None and n >= threshold
+
+    def below(v, threshold):
+        n = to_num(v)
+        return n is not None and n < threshold
 
     days_all_colors = sum(1 for r in q_days if is_positive(r["F"]))
     days_basic_habits = sum(1 for r in q_days if is_positive(r["E"]))
+    days_goals_set = sum(1 for r in q_days if at_least(r["Q"], 9))
+    days_100_0g = sum(1 for r in q_days if at_least(r["Q"], 100))
+    days_complete_before_1000 = sum(1 for r in q_days if below(r["E"], 1000))
 
     # --- 1n+: weekly AN%, averaged over weeks whose date falls in the quarter ---
     q_weeks = sorted({round(r["week"], 1) for r in q_days if isinstance(r["week"], (int, float))})

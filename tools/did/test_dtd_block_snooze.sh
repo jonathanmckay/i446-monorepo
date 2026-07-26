@@ -19,25 +19,37 @@ for py in mao chen si wu wei shen you xu hai; do
 done
 grep -q "DTD_POINTS" "$DTD" && fail "old ctrl-v points binding should be gone"
 
-# Inner picker must paint reliably under cmux (bug 2026-07-24: an inline
-# --height=13 fzf lost its first draw — black screen until a keypress).
-# Full-screen fzf (no --height) owns the alternate screen like the outer
-# dtd fzf and always paints; the script also sanes the tty and clears the
-# stale execute() frame first (CPAP prompt precedent, 2026-07-21).
+# The picker must be a printf/read tty menu, NOT a nested fzf: a full-screen
+# fzf inside the outer fzf's execute() never painted under cmux — the script
+# ran but nothing appeared and the picker ate the next keypress blind
+# (reported twice 2026-07-26; both the --height and full-screen variants
+# failed). printf/read after stty sane + clear is the pattern the CPAP and
+# defer prompts already prove out in this exact context.
 BLOCKBODY=$(sed -n '/<< BLOCKEOF/,/^BLOCKEOF/p' "$DTD")
-printf '%s\n' "$BLOCKBODY" | grep 'fzf ' | grep -q -- '--height' \
-  && fail "inner block picker must be full-screen — --height loses its first paint under cmux"
+printf '%s\n' "$BLOCKBODY" | grep -v '^#' | grep -q 'fzf ' \
+  && fail "block picker must not nest an fzf inside execute() — it never paints under cmux"
 printf '%s\n' "$BLOCKBODY" | grep -q 'stty sane' \
-  || fail "inner block picker must force sane tty modes before fzf"
+  || fail "block picker must force sane tty modes before prompting"
 printf '%s\n' "$BLOCKBODY" | grep -qF '\033[2J' \
-  || fail "inner block picker must clear the stale frame before fzf"
-# The picker pipes the block list into fzf. Redirecting fzf's stdin from
-# /dev/tty OVERRIDES that pipe — fzf then treats stdin as interactive and
-# falls into its default file-walker instead of showing the blocks (bug
-# 2026-07-26: "ctrl+v didn't ask which block"). fzf opens /dev/tty for the
-# keyboard by itself; the inner fzf must NOT carry a stdin redirect.
-printf '%s\n' "$BLOCKBODY" | grep 'fzf ' | grep -q '< /dev/tty' \
-  && fail "inner fzf must not redirect stdin from /dev/tty — it starves the piped block list"
+  || fail "block picker must clear the stale frame before prompting"
+printf '%s\n' "$BLOCKBODY" | grep -q 'read answer < /dev/tty' \
+  || fail "block picker must read the answer from /dev/tty"
+
+# The answer resolver must accept a number, pinyin (incl. prefix), or 汉字.
+PICK=$(mktemp)
+python3 - "$DTD" "$PICK" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r"<<'PYPICK'\n(.*?)\nPYPICK", src, re.DOTALL)
+open(sys.argv[2], 'w').write(m.group(1))
+PY
+OPTS=$'未\twei\t12:00-14:00\n申\tshen\t14:00-16:00\nnow\t(clear)\tun-delay, show again'
+for pair in "2:申" "shen:申" "sh:申" "未:未" "now:now" ":"; do
+  ans="${pair%%:*}"; want="${pair#*:}"
+  got=$(python3 "$PICK" "$ans" "$OPTS")
+  [[ "$got" == "$want" ]] || fail "answer '$ans' resolved to '$got', wanted '$want'"
+done
+rm -f "$PICK"
 
 # ── 2. Functional: generator hides snoozed ids until their hour ─────────────
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT

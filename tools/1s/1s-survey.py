@@ -243,10 +243,16 @@ def _toggl_minutes_by_day(dates: list[_dt.date]) -> dict[_dt.date, int]:
     try:
         cj = json.loads((Path.home() / ".claude.json").read_text())
         key = cj["mcpServers"]["toggl_server"]["env"]["TOGGL_API_KEY"]
-        start = dates[0].isoformat()
-        end = (dates[-1] + _dt.timedelta(days=1)).isoformat()
+        # Bare dates are read as UTC midnights, which chops the last ~7h of
+        # the week's Saturday off in PDT — send local-tz RFC3339 boundaries.
+        from urllib.parse import quote
+        tz = _dt.datetime.now().astimezone().tzinfo
+        start = _dt.datetime.combine(dates[0], _dt.time.min, tzinfo=tz)
+        end = _dt.datetime.combine(dates[-1] + _dt.timedelta(days=1),
+                                   _dt.time.min, tzinfo=tz)
         url = ("https://api.track.toggl.com/api/v9/me/time_entries"
-               f"?start_date={start}&end_date={end}")
+               f"?start_date={quote(start.isoformat())}"
+               f"&end_date={quote(end.isoformat())}")
         req = urllib.request.Request(url)
         req.add_header("Authorization", "Basic " + base64.b64encode(
             f"{key}:api_token".encode()).decode())

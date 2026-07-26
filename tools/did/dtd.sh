@@ -514,9 +514,9 @@ chmod +x "$DTD_DEFER"
 
 # --- Block-delay script used by fzf ctrl-v binding (feature 2026-07-24) ---
 # Same-day delay: instead of pushing the task to the end of the list, HIDE it
-# until a chosen 地支 block starts today. An inner fzf picker lists the
-# remaining blocks (character + pinyin + hours) so the block is selectable by
-# arrows or by typing pinyin. Ids land in $STATE_DIR/dtd-block-snooze.json
+# until a chosen 地支 block starts today. A numbered tty menu lists the
+# remaining blocks (character + pinyin + hours), answered by number, pinyin,
+# or 汉字. Ids land in $STATE_DIR/dtd-block-snooze.json
 # ({date, snoozes: {id: start_hour}}); the list generator filters them until
 # the hour arrives, and the watcher's block-boundary refresh reloads the list,
 # so snoozed tasks reappear on their own. Points editing lives in ctrl-g.
@@ -553,21 +553,44 @@ if [[ -z "\$opts" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
   exit 0
 fi
-# cmux keeps the stale outer-fzf frame on screen after execute() leaves the
-# alternate screen (CPAP prompt bug 2026-07-21) — force sane tty modes first.
-# The picker must run FULL-SCREEN (no --height): an inline --height=13 fzf
-# paints relative to an unknown cursor position under cmux and its initial
-# draw is lost — the screen stays black until a keypress forces a redraw
-# (bug 2026-07-24). Full-screen fzf owns the alternate screen and always
-# paints, exactly like the outer dtd fzf.
+# NO inner fzf: nested full-screen fzf inside the outer fzf's execute() never
+# painted under cmux — the script ran but the user saw nothing and the picker
+# ate the next keypress blind (reported twice, 2026-07-26; the --height and
+# full-screen variants both failed the same way). Use the printf/read pattern
+# that the CPAP/defer prompts already prove out in this exact context: clear
+# the stale frame, print a numbered menu, read one answer (number, pinyin, or
+# 汉字 — Enter alone cancels).
 stty sane < /dev/tty 2>/dev/null
 printf '\033[2J\033[H' > /dev/tty
-choice=\$(print -r -- "\$opts" | fzf --reverse --no-multi --no-info \
-  --delimiter="\$(printf '\t')" --prompt="delay \$lbl until> ")
-if [[ -z "\$choice" ]]; then
+{
+  printf 'Delay %s until:\n\n' "\$lbl"
+  i=0
+  while IFS=\$'\t' read -r g py hrs; do
+    i=\$((i+1))
+    printf '  %d) %s  %-5s %s\n' "\$i" "\$g" "\$py" "\$hrs"
+  done <<< "\$opts"
+  printf '\nblock (number / pinyin / 汉字, blank = cancel)> '
+} > /dev/tty
+read answer < /dev/tty
+glyph=\$(python3 - "\$answer" "\$opts" <<'PYPICK'
+import sys
+answer = sys.argv[1].strip().lower()
+rows = [l.split('\t') for l in sys.argv[2].splitlines() if l.strip()]
+out = ''
+if answer:
+    if answer.isdigit() and 1 <= int(answer) <= len(rows):
+        out = rows[int(answer) - 1][0]
+    else:
+        for g, py, _hrs in rows:
+            if answer == g or answer == py or py.startswith(answer):
+                out = g
+                break
+print(out)
+PYPICK
+)
+if [[ -z "\$glyph" ]]; then
   echo "block delay cancelled" > "\$HDR"
 else
-  glyph=\$(printf '%s' "\$choice" | cut -f1)
   msg=\$(python3 - "\$SNOOZE" "\$glyph" "\$@" <<'PYWRITE'
 import datetime, json, os, sys
 path, glyph = sys.argv[1], sys.argv[2]

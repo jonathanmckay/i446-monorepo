@@ -119,6 +119,10 @@ ONENEON_ALIASES: dict[str, str] = {
     "relax": "relax {60}",
     "一起吃": "一起饭",
     "long o314": "长o314",
+    # Card is "1 groceries" but the 1n+ header is bare "groceries" — without
+    # this the completion closed the card and silently skipped the column
+    # write (found by neon-task-checksum's first run, 2026-07-26).
+    "1 groceries": "groceries",
 }
 
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
