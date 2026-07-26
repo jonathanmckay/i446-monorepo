@@ -33,7 +33,11 @@ from collections import Counter
 from pathlib import Path
 
 DIR = Path(__file__).parent
-BACK_DAYS, FWD_DAYS = 90, 60
+# FWD_DAYS=0 (2026-07-26, per JM): charts end at today — no forecast. The
+# compartment model below still runs (harmlessly, zero iterations) so the
+# calibrated pipeline rates stay available for the param note; bump FWD_DAYS
+# to re-enable projections.
+BACK_DAYS, FWD_DAYS = 90, 0
 LT_START = dt.date(2024, 1, 1)  # long-term % view start
 
 def load(name): return json.loads((DIR / "data" / name).read_text())
@@ -70,18 +74,44 @@ def is_corrupt(s):
     V = s["units"] - s["occ"]
     return (s["vu"] == 0 and V > 3) or (s["nr"] > 0.08 * s["units"])
 
+# First day of LIVE daily capture (tool went live 2026-06-14). Rows before this
+# were backfilled via as-of reports, where AppFolio back-applies each unit's
+# CURRENT rented flag — the historical notice-rented/unrented split is fiction
+# there (JM 2026-07-26: "I don't trust the 11/25–5/1 notice-rented numbers").
+# The notice TOTAL and occupied/units are still real; only the split is rebuilt.
+LIVE_START = "2026-06-14"
+
+
 def trusted_bands(hist, vu_share):
     clean = [s for s in hist if not is_corrupt(s)]
-    notice_rate = med([(s["nu"] + s["nr"]) / (s["occ"] or 1) for s in clean], 0.06)
-    nr_frac = med([s["nr"] / ((s["nu"] + s["nr"]) or 1) for s in clean
+    # Calibrate the split fractions from LIVE rows only — pre-tracking rows
+    # carry the back-applied-flag bias this exists to correct.
+    live = [s for s in clean if s["date"] >= LIVE_START] or clean
+    notice_rate = med([(s["nu"] + s["nr"]) / (s["occ"] or 1) for s in live], 0.06)
+    nr_frac = med([s["nr"] / ((s["nu"] + s["nr"]) or 1) for s in live
                    if s["nu"] + s["nr"] > 0], 0.1)
     out = {}
     for s in hist:
         U, O = s["units"], s["occ"]; V = max(0, U - O)
-        # vacant split: always reconstruct from the live (unbiased) unrented share
-        vu = round(V * vu_share); vr = V - vu
-        # notice split: trust the raw report unless it is implausible
-        if is_corrupt(s):
+        # vacant split: live-captured rows are real point-in-time — keep them.
+        # Reconstructing EVERY row from today's share (the old behavior) made
+        # history shift on every rebuild: 6/27 vacant-rented was captured as
+        # ~17 but re-rendered as ~22 once today's unrented share drifted
+        # (JM 2026-07-26: "this chart is overcounting"). Only the backfilled
+        # pre-LIVE_START rows carry the back-applied-flag bias.
+        if s["date"] >= LIVE_START and not is_corrupt(s):
+            vu, vr = s["vu"], s["vr"]
+        else:
+            vu = round(V * vu_share); vr = V - vu
+        # notice: trust only live-captured, plausible rows. Pre-LIVE the TOTAL
+        # is fiction too, not just the split — as-of backfill accumulates
+        # notice retroactively (Dec 2025 claimed 163 units on notice, 17.9% of
+        # the portfolio, decaying smoothly into the live period; JM 2026-07-26:
+        # "notice unrented 12/25–5/26 looks wrong"). Rows before Dec 2025
+        # happened to trip is_corrupt and were already reconstructed; these
+        # sat just under its 8% threshold. So pre-LIVE rows are ALWAYS
+        # reconstructed off occupied at the live-calibrated notice rate.
+        if is_corrupt(s) or s["date"] < LIVE_START:
             N = round(O * notice_rate); nr = round(N * nr_frac); nu = N - nr
         else:
             nu, nr = s["nu"], s["nr"]
@@ -107,11 +137,40 @@ def nearest(diso):
     return TB[le[-1]] if le else TB[hdates[0]]
 
 # ── Backward daily series (one column per day, -90d → today) ─────────────────
+# ── Notice-unrented urgency split: ≤28d vs >28d to scheduled vacate ──────────
+# (JM 2026-07-26.) The daily unit archive (data/unit-archive/YYYY-MM-DD.json,
+# live since 2026-06-14, some gaps) carries each unit's status + scheduled
+# move-out, so the split share is measured per archived day and applied to that
+# day's snapshot nu (keeping totals consistent with occupancy_summary). Days
+# without an archive use the nearest archive at-or-before them; days before the
+# first archive use the earliest one. A notice with NO vacate date counts as
+# ≤28d — unknown/imminent is actionable, not comfortable.
+_ARCH_DIR = DIR / "data" / "unit-archive"
+_arch_shares = {}   # date-iso → share of notice-unrented vacating within 28d
+for _p in sorted(_ARCH_DIR.glob("*.json")):
+    _aiso = _p.stem
+    _ad_ = pdate(_aiso)
+    _units_ = json.loads(_p.read_text()).values()
+    _nus = [u for u in _units_ if u.get("status") == "Notice-Unrented"]
+    if not _nus:
+        continue
+    _soon = sum(1 for u in _nus
+                if not pdate(u.get("mo")) or pdate(u["mo"]) <= _ad_ + dt.timedelta(days=28))
+    _arch_shares[_aiso] = _soon / len(_nus)
+_arch_dates = sorted(_arch_shares)
+
+def nu28_share(diso: str) -> float:
+    le = [a for a in _arch_dates if a <= diso]
+    key = le[-1] if le else (_arch_dates[0] if _arch_dates else None)
+    return _arch_shares.get(key, 1.0)
+
 back = []
 d = TODAY - dt.timedelta(days=BACK_DAYS)
 while d <= TODAY:
     s = nearest(d.isoformat())
+    nu28 = round(s["nu"] * nu28_share(d.isoformat()))
     back.append({"date": d.isoformat(), "nr": s["nr"], "nu": s["nu"],
+                 "nu28": nu28, "nu28p": s["nu"] - nu28,
                  "vr": s["vr"], "vu": s["vu"], "projected": False})
     d += dt.timedelta(days=1)
 
@@ -312,9 +371,16 @@ payload = {
     "params": {"notice_days": round(NOTICE_DAYS, 1), "lease_days": round(LEASE_DAYS, 1),
                "movein_lag": round(MOVEIN_LAG, 1), "lambda": round(lam, 2),
                "weekly_signings": round(WEEKLY_SIGNINGS, 1)},
+    # Today's ≤28d/> split counted EXACTLY from the live unit-level report
+    # (history uses the archived share; today needs no estimate).
     "current": {"occ_stable": cur["occ_stable"], "nr": cur["nr"], "nu": cur["nu"],
+                "nu28": sum(1 for u in vac if u.get("unit_status") == "Notice-Unrented"
+                            and (not pdate(u.get("last_move_out"))
+                                 or pdate(u["last_move_out"]) <= TODAY + dt.timedelta(days=28))),
                 "vr": cur["vr"], "vu": cur["vu"], "occ_pct": round(cur["occ"] / UNITS * 100, 1)},
-    "back": back, "forward": fwd, "longterm": longterm, "feed": feed,
+    # feed intentionally excluded — the newsfeed section was removed 2026-07-26
+    # (per JM); the event log still backs the leases-weekly actuals above.
+    "back": back, "forward": fwd, "longterm": longterm,
     "leases_weekly": leases_weekly, "occ_timeline": occ_timeline,
 }
 
@@ -324,7 +390,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 :root{--bg:#0d0f12;--card:#161a1f;--text:#e7ecf0;--muted:#8b96a3;--border:#242a31;
- --vu:#e23b3b;--vr:#2faa4d;--nu:#ff8a3d;--nr:#ff5fa2;--occ:#2a3340;--blue:#2979ff;}
+ --vu:#e23b3b;--vr:#8ce99a;--nu:#ff8a3d;--nu2:#ffc37d;--nr:#1b7a3a;--occ:#2a3340;--blue:#2979ff;}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);
  font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px;max-width:1180px;margin:auto}
 h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weight:600;
@@ -353,59 +419,44 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 <div class="sub">As of __TODAY__ · __UNITS__ units · data: AppFolio occupancy_summary + unit_vacancy</div>
 <div class="kpis" id="kpis"></div>
 
-<h2>Action states — one column per day, 90d back → 60d forecast (units)</h2>
+<h2>Action states — one column per day, trailing 90d (units)</h2>
 <div class="card"><canvas id="unitsChart" height="110"></canvas>
 <div class="legend">
- <span><i class="sw" style="background:var(--vu)"></i>Vacant-Unrented</span>
- <span><i class="sw" style="background:var(--nu)"></i>Notice-Unrented</span>
- <span><i class="sw" style="background:var(--vr)"></i>Vacant-Rented</span>
  <span><i class="sw" style="background:var(--nr)"></i>Notice-Rented</span>
- <span style="margin-left:auto">dashed = forecast</span></div>
+ <span><i class="sw" style="background:var(--nu)"></i>Notice-Unrented ≤28d</span>
+ <span><i class="sw" style="background:var(--nu2)"></i>Notice-Unrented &gt;28d</span>
+ <span><i class="sw" style="background:var(--vr)"></i>Vacant-Rented</span>
+ <span><i class="sw" style="background:var(--vu)"></i>Vacant-Unrented</span></div>
 <div class="note" id="paramNote"></div>
 <div class="note">Stable-occupied is omitted by design — this shows only the exposed/in-transition units.
-Backward is real daily AppFolio snapshots; forward is a compartment forecast calibrated to the current
-pipeline (notice→vacant→occupied flows). Red = unrented exposure, green = covered.</div></div>
+Real daily AppFolio snapshots, ending today. Red = unrented exposure, green = covered.</div></div>
 
 <h2>Leases signed per week — last 12 weeks (actuals)</h2>
 <div class="card"><canvas id="leasesChart" height="86"></canvas>
 <div class="legend">
  <span><i class="sw" style="background:var(--blue)"></i>Leases signed (actual, by LeaseSignDate)</span></div>
 <div class="note" id="leaseNote"></div>
-<div class="note">First-pass lease model. <b>Predicted</b> = the forecast's weekly lease-up
-run-rate, anchored to trailing re-let demand (the rate units fall vacant-unrented and must be
-re-leased), not a stock-clearing rate. <b>Scheduled</b> = leases already signed in the pipeline,
-bucketed by their move-in week — committed, and fed into the forecast as real move-ins. On-notice
-units are assumed to lease only after going vacant (the observed m5x2 pattern), so they are not
-pre-leased in bulk.</div></div>
+<div class="note">Actual signed leases only, bucketed by AppFolio LeaseSignDate into Monday-anchored
+weeks. Current week is partial.</div></div>
 
-<h2>Occupancy % + covered pipeline — daily, 2024 → +60d forecast</h2>
+<h2>Occupancy % — daily, 2024 → today</h2>
 <div class="card"><canvas id="occChart" height="90"></canvas>
 <div class="note" id="occNote"></div>
-<div class="note">Left axis = occupancy % (occupied ÷ units). Right axis = the covered pipeline: vacant-rented
-and notice-rented as % of portfolio, the units that lift occupancy next. History is the reliable
-point-in-time occupied, interpolated between snapshots (exact at each). Forward is the same compartment
-forecast as the first chart, so they line up. Solid = actual, dashed = forecast.</div></div>
+<div class="note">Occupancy % (occupied ÷ units). History is the reliable point-in-time occupied,
+interpolated between snapshots (exact at each), ending today.</div></div>
 
 <h2>Long-term — same four states as % of portfolio, weekly since 2024</h2>
 <div class="card"><canvas id="pctChart" height="90"></canvas>
 <div class="note">AppFolio's rented/unrented split is not a true as-of-then snapshot — it back-applies
-each unit's <b>current</b> rented flag to past dates, so historical vacant-unrented is undercounted
-(a unit vacant-unrented in April but leased since reads as vacant-rented in April). Only units &amp;
-occupied are reliable, so all four bands are <b>reconstructed</b>: vacancy = units − occupied (real),
-split by today's live unrented share from the unit-level report; notice is estimated off occupied when
-the raw figures are implausible.</div></div>
-
-<h2>Occupancy newsfeed — daily tenant tickler</h2>
-<div class="card"><ul class="feed" id="feed"></ul>
-<div class="note">Each row is dated by the real event date, newest first. Genuinely new notices and
-signings show their <b>detection date</b> (when our daily snapshot diff first saw them); rows marked
-<i>baseline (pre-tracking)</i> predate that diffing and have no detection date, so they are dated by
-their <b>move date</b> (effective) instead of all being stamped today. AppFolio exposes no signed/
-received timestamp, so the effective date is the most truthful anchor for the backfill.</div></div>
+each unit's <b>current</b> rented flag to past dates, so historical rented/unrented splits are fiction.
+Only units &amp; occupied are reliable, so bands before <b>2026-06-14</b> (when live daily capture began)
+are <b>reconstructed</b>: vacancy = units − occupied (real), split by today's live unrented share;
+notice (total AND split) is rebuilt from occupied at the live-period rate — the as-of notice totals
+inflate retroactively and are not usable. From 6/14 on, everything is a real point-in-time capture.</div></div>
 
 <script>
 const D = __PAYLOAD__;
-const C={nr:'#ff5fa2',nu:'#ff8a3d',vr:'#2faa4d',vu:'#e23b3b',blue:'#2979ff'};
+const C={nr:'#1b7a3a',nu:'#ff8a3d',nu2:'#ffc37d',vr:'#8ce99a',vu:'#e23b3b',blue:'#2979ff'};
 // Axis label formatters: drop the year for single-year spans (M/D), keep a compact
 // year for the multi-year long-term chart (M/YY). `this` is the Chart.js scale.
 function fmtMD(value){const s=this.getLabelForValue(value);const d=new Date(s+'T00:00');
@@ -415,12 +466,13 @@ function fmtMYY(value){const s=this.getLabelForValue(value);const d=new Date(s+'
 // KPIs
 const c=D.current, kp=[['occ_pct','Occupied %','',c.occ_pct+'%'],
  ['vu','Vacant-Unrented','vu',c.vu],['vr','Vacant-Rented','vr',c.vr],
- ['nu','Notice-Unrented','nu',c.nu],['nr','Notice-Rented','nr',c.nr]];
+ ['nu28','Notice-Unrtd ≤28d','nu',c.nu28],['nu28p','Notice-Unrtd >28d','nu',c.nu-c.nu28],
+ ['nr','Notice-Rented','nr',c.nr]];
 document.getElementById('kpis').innerHTML=kp.map(k=>
  `<div class="kpi ${k[2]}"><div class="v">${k[3]}</div><div class="l">${k[1]}</div></div>`).join('');
 const P=D.params;
 document.getElementById('paramNote').textContent=
- `Forecast rates (calibrated): ${P.lambda} new notices/day · notice→vacant ~${P.notice_days}d · `+
+ `Pipeline rates (calibrated): ${P.lambda} new notices/day · notice→vacant ~${P.notice_days}d · `+
  `lease-up velocity ~${P.weekly_signings}/wk · move-in lag ~${P.movein_lag}d.`;
 // ── units chart: daily back + daily forecast, 4 stacked bands ──
 const rows=[...D.back, ...D.forward.slice(1)];
@@ -431,15 +483,17 @@ function ds(key,label,color){
   fill:true,pointRadius:0,tension:.15,borderWidth:1,
   segment:{borderDash:ctx=>ctx.p0DataIndex>=splitIdx?[5,4]:undefined}};
 }
-const order=[['vu','Vacant-Unrented',C.vu],['nu','Notice-Unrented',C.nu],
- ['vr','Vacant-Rented',C.vr],['nr','Notice-Rented',C.nr]];
+// Stack bottom→top: notice-rented, notice ≤28d, notice >28d, vacant-rented, vacant-unrented
+const order=[['nr','Notice-Rented',C.nr],['nu28','Notice-Unrented ≤28d',C.nu],
+ ['nu28p','Notice-Unrented >28d',C.nu2],
+ ['vr','Vacant-Rented',C.vr],['vu','Vacant-Unrented',C.vu]];
 new Chart(document.getElementById('unitsChart'),{type:'line',
  data:{labels,datasets:order.map(o=>ds(o[0],o[1],o[2]))},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>i[0].label+(i[0].dataIndex>splitIdx?'  (forecast)':'')}}},
   scales:{x:{stacked:true,grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:30,autoSkip:true,maxRotation:90,minRotation:90,callback:fmtMD}},
-   y:{stacked:true,ticks:{color:'#8b96a3'},grid:{color:'#1e242b'}}}}});
+   y:{stacked:true,beginAtZero:true,ticks:{color:'#8b96a3'},grid:{color:'#1e242b'}}}}});
 // ── leases-per-week chart: actual signed leases, last 12 weeks ──
 const lwTotal=D.leases_weekly.reduce((a,r)=>a+r.signed,0);
 document.getElementById('leaseNote').textContent=
@@ -454,48 +508,35 @@ new Chart(document.getElementById('leasesChart'),{type:'bar',
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxRotation:90,minRotation:60,callback:fmtMD}},
    y:{beginAtZero:true,ticks:{color:'#8b96a3',precision:0},grid:{color:'#1e242b'}}}}});
-// ── occupancy % timeline + covered pipeline (vacant-rented, notice-rented) ──
+// ── occupancy % timeline ──
 const ot=D.occ_timeline, otLabels=ot.map(r=>r.date);
-const otSplit=ot.findIndex(r=>r.projected);
-const dash=key=>({borderDash:c=>otSplit>=0&&c.p0DataIndex>=otSplit-1?[5,4]:undefined});
 function ods(key,label,color,fill,axis){return {label,data:ot.map(r=>r[key]),yAxisID:axis,
-  borderColor:color,backgroundColor:fill,fill:!!fill,pointRadius:0,tension:.1,borderWidth:1.5,
-  segment:dash(key)};}
+  borderColor:color,backgroundColor:fill,fill:!!fill,pointRadius:0,tension:.1,borderWidth:1.5};}
 new Chart(document.getElementById('occChart'),{type:'line',
  data:{labels:otLabels,datasets:[
-   ods('pct','Occupancy %','#2faa4d','rgba(47,170,77,.10)','y'),
-   ods('vr','Vacant-Rented %',C.vr,null,'y2'),
-   ods('nr','Notice-Rented %',C.nr,null,'y2')]},
+   ods('pct','Occupancy %','#2faa4d','rgba(47,170,77,.10)','y')]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
-  plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}},
+  plugins:{legend:{display:false},
    tooltip:{callbacks:{label:i=>{const r=ot[i.dataIndex];
-     return i.datasetIndex===0?`Occupancy ${r.pct}% (${r.occ}/${r.units})`+(r.projected?' · proj':'')
-       :`${i.dataset.label} ${i.formattedValue}%`;}}}},
+     return `Occupancy ${r.pct}% (${r.occ}/${r.units})`;}}}},
   scales:{x:{grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:24,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
-   y:{position:'left',ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'},title:{display:true,text:'Occupancy',color:'#8b96a3'}},
-   y2:{position:'right',beginAtZero:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{display:false},title:{display:true,text:'Rented pipeline',color:'#8b96a3'}}}}});
+   y:{position:'left',ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'},title:{display:true,text:'Occupancy',color:'#8b96a3'}}}}});
 {const a=ot.find(r=>r.date===D.today)||ot[ot.length-1];
  document.getElementById('occNote').innerHTML=
-  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}) · ${a.vr}% vacant-rented · ${a.nr}% notice-rented. `+
-  `Forward = ${D.params.weekly_signings} leases/week (shared with the first chart).`;}
+  `Today: <b>${a.pct}%</b> occupied (${a.occ}/${a.units}).`;}
 // ── long-term % chart: weekly since 2024 ──
 const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
  backgroundColor:color,borderColor:color,fill:true,pointRadius:0,tension:.15,borderWidth:1};}
 new Chart(document.getElementById('pctChart'),{type:'line',
- data:{labels:ltLabels,datasets:[pds('vu','Vacant-Unrented %',C.vu),pds('nu','Notice-Unrented %',C.nu),
-  pds('vr','Vacant-Rented %',C.vr),pds('nr','Notice-Rented %',C.nr)]},
+ data:{labels:ltLabels,datasets:[pds('nr','Notice-Rented %',C.nr),pds('nu','Notice-Unrented %',C.nu),
+  pds('vr','Vacant-Rented %',C.vr),pds('vu','Vacant-Unrented %',C.vu)]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}}},
   scales:{x:{stacked:true,grid:{display:false},
     ticks:{color:'#8b96a3',maxTicksLimit:26,autoSkip:true,maxRotation:60,minRotation:60,callback:fmtMYY}},
    y:{stacked:true,ticks:{color:'#8b96a3',callback:v=>v+'%'},grid:{color:'#1e242b'}}}}});
-// ── feed: date column = real event date (effective for baseline rows) ──
-document.getElementById('feed').innerHTML=D.feed.map(f=>
- `<li><span class="dt">${f.date}<span class="cap">${f.cap}</span></span>`+
- `<span class="ti">${f.title}<br><span class="su">${f.sub}</span></span>`+
- `<span class="tag t-${f.kind}">${f.kind}</span></li>`).join('');
 </script></body></html>"""
 
 out = (HTML.replace("__TODAY__", payload["today"])
@@ -503,6 +544,6 @@ out = (HTML.replace("__TODAY__", payload["today"])
            .replace("__PAYLOAD__", json.dumps(payload)))
 (DIR / "index.html").write_text(out)
 print("wrote", DIR / "index.html")
-print(f"  back days: {len(back)} | forecast days: {len(fwd)} | "
-      f"longterm weeks: {len(longterm)} | feed: {len(payload['feed'])}")
+print(f"  back days: {len(back)} | forward days: {len(fwd) - 1} (forecast off) | "
+      f"longterm weeks: {len(longterm)}")
 print(f"  params: λ={lam:.2f} notice_days={NOTICE_DAYS} lease_days={LEASE_DAYS} movein_lag={MOVEIN_LAG}")
