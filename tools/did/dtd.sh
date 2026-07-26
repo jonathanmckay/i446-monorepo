@@ -306,6 +306,30 @@ fi
 ENTEREOF
 chmod +x "$DTD_ENTER"
 
+# Variable 1n+ habits must prompt for minutes on completion — their points
+# are base + rate×minutes, so a silent complete lands at base/zero (bug
+# 2026-07-26: s897 / family / "1 kids nature" never asked). The name list
+# lives in did-fast (VARIABLE_1N + the ONENEON_ALIASES that point at it);
+# import it at launch so dtd can't drift from the routing source of truth.
+# Emits a case-ready alternation of QUOTED, {N}-stripped, lowercase names
+# ('"1 kids nature"|"aos"|…' — quoting keeps multi-word names one pattern).
+DTD_VAR1N_PAT=$(python3 - "$DID_FAST" <<'VARPY'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("df_var", sys.argv[1])
+df = importlib.util.module_from_spec(spec)
+sys.modules["df_var"] = df
+spec.loader.exec_module(df)
+norm = {df.header_normalize(n) for n in df.VARIABLE_1N}
+names = {n.lower() for n in df.VARIABLE_1N}
+names |= {a.lower() for a, t in df.ONENEON_ALIASES.items()
+          if df.header_normalize(t) in norm}
+names = {re.sub(r"\s*\{\d+\}", "", n).strip() for n in names}
+print("|".join('"%s"' % n for n in sorted(names)))
+VARPY
+)
+# A failed import must not write a syntactically-broken `) ;;` case branch.
+[[ -z "$DTD_VAR1N_PAT" ]] && DTD_VAR1N_PAT='"__no_variable_1n__"'
+
 # --- Complete-now script used by fzf alt-enter binding (ctrl+enter via the
 # Ghostty keybind remap ctrl+enter -> ESC CR). Unlike enter, this never starts
 # a timer: it always completes the selected task via the /did worker. ---
@@ -340,6 +364,8 @@ case "\$clean_lower" in
   xk22) _ip="xk22 minutes (Ren)";;
   xk26) _ip="xk26 minutes (Rori)";;
   i444) _ip="i444 count (0 = none today)";;
+  新闻) _ip="新闻 minutes";;
+  ${DTD_VAR1N_PAT}) _ip="\$clean_lower minutes (blank = base points)";;
 esac
 if [[ -n "\$_ip" && -r /dev/tty ]]; then
   # fzf leaves the alternate screen for execute(), but what the terminal shows
@@ -387,7 +413,7 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 _id="\$1"
 _t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
-  cpap|xk20|xk22|xk26|i444)
+  cpap|xk20|xk22|xk26|i444|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
     printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
@@ -537,7 +563,7 @@ fi
 stty sane < /dev/tty 2>/dev/null
 printf '\033[2J\033[H' > /dev/tty
 choice=\$(print -r -- "\$opts" | fzf --reverse --no-multi --no-info \
-  --delimiter="\$(printf '\t')" --prompt="delay \$lbl until> " < /dev/tty)
+  --delimiter="\$(printf '\t')" --prompt="delay \$lbl until> ")
 if [[ -z "\$choice" ]]; then
   echo "block delay cancelled" > "\$HDR"
 else

@@ -31,6 +31,13 @@ printf '%s\n' "$BLOCKBODY" | grep -q 'stty sane' \
   || fail "inner block picker must force sane tty modes before fzf"
 printf '%s\n' "$BLOCKBODY" | grep -qF '\033[2J' \
   || fail "inner block picker must clear the stale frame before fzf"
+# The picker pipes the block list into fzf. Redirecting fzf's stdin from
+# /dev/tty OVERRIDES that pipe — fzf then treats stdin as interactive and
+# falls into its default file-walker instead of showing the blocks (bug
+# 2026-07-26: "ctrl+v didn't ask which block"). fzf opens /dev/tty for the
+# keyboard by itself; the inner fzf must NOT carry a stdin redirect.
+printf '%s\n' "$BLOCKBODY" | grep 'fzf ' | grep -q '< /dev/tty' \
+  && fail "inner fzf must not redirect stdin from /dev/tty — it starves the piped block list"
 
 # ── 2. Functional: generator hides snoozed ids until their hour ─────────────
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
