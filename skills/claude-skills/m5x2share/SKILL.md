@@ -60,6 +60,10 @@ Drive converts markdown natively (headings/lists/bold survive; `[[wikilinks]]`
 and `![[embeds]]` do not — warn if the source contains them, same rule as
 msftshare).
 
+**Staging (required):** workspace-mcp only reads files under
+`~/.workspace-mcp/attachments/` — `cp` the vault file there first, pass THAT
+path, and delete the staged copy after the import succeeds.
+
 ### 4. Link back into the vault doc
 
 - `mcp__workspace-mcp__get_drive_shareable_link` on the new doc id.
