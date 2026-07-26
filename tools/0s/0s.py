@@ -55,7 +55,7 @@ FIELDS = [
     ("learn_others", "Learnings (others)",          "T", "today",    "textml"),
     ("ceil2",        "⌈  ceiling (others)",         "V", "today",    "num"),
     ("floor2",       "⌊  floor (others)",           "W", "today",    "num"),
-    ("motivation",   "Motivation (for tomorrow)",   "D", "tomorrow", "text"),
+    ("motivation",   "Motivation (for today)",      "D", "tomorrow", "text"),
     # Not a neon column (col=None → never written to Excel). 1 marks 0l done via
     # did-fast; 0 or blank leaves it. Kept last so Enter/Tab on it saves.
     ("points_checked", "Points checked? (1 = mark 0l done)", None, None, "num"),

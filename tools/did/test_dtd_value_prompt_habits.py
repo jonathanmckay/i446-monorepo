@@ -22,7 +22,7 @@ def test_didfast_treats_kid_habits_as_variable_minutes():
 def test_done_script_prompts_for_kid_minutes():
     m = re.search(r"cat > \"\$DTD_DONE\" << DONEEOF\n(.*?)\nDONEEOF", SRC, re.S)
     body = m.group(1)
-    for h in ("xk20", "xk22", "xk26", "i444"):
+    for h in ("xk20", "xk22", "xk26", "i444", "新闻"):
         assert re.search(r'%s\) _ip=' % h, body), f"{h} must have a completion prompt"
     assert 'clean="\\$clean \\$_iv"' in body, "typed value must be appended to the completion"
 
@@ -30,12 +30,12 @@ def test_done_script_prompts_for_kid_minutes():
 def test_router_gives_kid_habits_a_tty():
     m = re.search(r"cat > \"\$DTD_DONE_ROUTER\" << ROUTEREOF\n(.*?)\nROUTEREOF", SRC, re.S)
     body = m.group(1)
-    assert re.search(r'cpap\|xk20\|xk22\|xk26\|i444\)', body), \
+    assert re.search(r'cpap\|xk20\|xk22\|xk26\|i444\|新闻\|', body), \
         "value-prompt habits must route to execute (tty)"
 
 
 def test_mainloop_arg_case_includes_kid_habits():
-    assert "cpap|ibx\\ s897|ibx\\ i9|ibx\\ m5x2|xk20|xk22|xk26|i444)" in SRC
+    assert "cpap|ibx\\ s897|ibx\\ i9|ibx\\ m5x2|xk20|xk22|xk26|i444|新闻)" in SRC
 
 
 def test_i444_zero_survives_done_script_sanitizer():

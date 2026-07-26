@@ -413,7 +413,7 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 _id="\$1"
 _t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
-  cpap|xk20|xk22|xk26|i444|${DTD_VAR1N_PAT})
+  cpap|xk20|xk22|xk26|i444|新闻|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
     printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
@@ -1832,7 +1832,7 @@ while true; do
   # minutes; i444 needs a count, 0 meaning "none needed today")
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444|新闻)
       # If a Toggl timer for this exact task is running, use its elapsed
       # minutes as the value instead of prompting. Stop it here to read the
       # duration; did-fast then sees the explicit number (clean + N) and the
