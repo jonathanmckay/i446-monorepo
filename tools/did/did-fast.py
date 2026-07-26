@@ -688,12 +688,25 @@ def _refresh_task_queue_inner() -> dict:
 
     # Atomic write: only update "today" if the fetch fully succeeded
     # Protect "today": if fetch returned empty/None but old cache had data, retry once then keep old
-    old_today = []
+    old_cache: dict = {}
     if TASK_QUEUE_PATH.exists():
         try:
-            old_today = json.loads(TASK_QUEUE_PATH.read_text()).get("today", [])
+            old_cache = json.loads(TASK_QUEUE_PATH.read_text())
         except Exception:
             pass
+    old_today = old_cache.get("today", [])
+
+    # Keep-old guard for the label buckets (2026-07-26): under rate limiting
+    # Todoist intermittently returns EMPTY results with a 200 — the exact
+    # failure mode fetch_today already guards. An empty label bucket written
+    # here wiped every row of that tier from dtd until the next refresh
+    # (user report: "complete one -1n task, the others disappear for ~10s" —
+    # same class, see the -1neon union guard below). An empty fetch with a
+    # non-empty old bucket is far more likely a flake than a real all-closed.
+    for _k in keys:
+        if not results.get(_k) and old_cache.get(_k):
+            print(f"WARN: {_k} fetch empty, keeping {len(old_cache[_k])} cached", file=sys.stderr)
+            results[_k] = old_cache[_k]
 
     if today_result and len(today_result) > 0:
         results["today"] = today_result
@@ -725,6 +738,17 @@ def _refresh_task_queue_inner() -> dict:
     try:
         today_iso = datetime.now().strftime("%Y-%m-%d")
         neg1 = fetch_label("-1neon")
+        if not neg1:
+            # Empty label fetch + lagging filter = every OTHER ritual card
+            # vanishes from dtd until the next refresh (bug 2026-07-26:
+            # completing one -1n hid the rest for ~10s). Rate limiting is the
+            # likely cause — the completion-time refresh follows a burst of
+            # close/stamp API calls. Carry the old cache's ritual cards
+            # forward instead; genuinely-closed ones stay hidden via the
+            # completed-today id overlay, and the next clean refresh prunes.
+            neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])]
+            if neg1:
+                print(f"WARN: -1neon fetch empty, carrying {len(neg1)} cached card(s)", file=sys.stderr)
         have = {t.get("id") for t in results["today"]}
         for t in neg1:
             if t.get("id") in have:
