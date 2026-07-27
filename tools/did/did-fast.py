@@ -936,28 +936,40 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         if resolved_1n in h1n_norm:
             col_letter = h1n_norm[resolved_1n]
             fen_col = ONENEON_TO_0FEN.get(resolved_1n)
+            if fen_col is None:
+                # Generic fallback (bug 2026-07-27: "1 m5x2" missing from the
+                # hand-kept map → its points never reached 0分): "1 <domain>"
+                # names resolve via the domain token, same as route.py does
+                # through the registry.
+                fen_col = LABEL_TO_0FEN.get(resolved_1n.split()[-1])
             is_cumul = resolved_1n in CUMULATIVE_1N
             is_var = resolved_1n in VARIABLE_1N
-            # Variable 1n+ points = base + rate×minutes (1n+ row 5 formulas,
-            # e.g. 业写 "1/m", 长冥想 ".5/m", 一起饭 "15+1/m"). An explicit
-            # [N] override wins; bare completion falls back to the base.
+            # 2026-07-27 redesign: the WEEK CELL records MINUTES (explicit
+            # value/range > today's matching Toggl entries > 1); the habit's
+            # POINTS go to today's 0分 domain column instead (row-5 expected
+            # points for standard habits, base+rate×minutes for variable).
+            minutes = None
+            if item.time_range:
+                minutes = time_range_minutes(*item.time_range)
+            elif item.time_value is not None:
+                minutes = item.time_value
+            else:
+                minutes = toggl_minutes_for(item.name)
+            cell_minutes = minutes if minutes else 1
             var_val = None
             if is_var:
                 if item.points_override:
                     var_val = item.points_override
+                elif minutes is not None:
+                    var_val = variable_1n_points(resolved_1n, minutes)
                 else:
-                    minutes = item.time_value
-                    if item.time_range:
-                        minutes = time_range_minutes(*item.time_range)
-                    if minutes is not None:
-                        var_val = variable_1n_points(resolved_1n, minutes)
-                    else:
-                        var_val = (VARIABLE_1N_DEFAULTS.get(resolved_1n)
-                                   or VARIABLE_1N_BASES.get(resolved_1n) or None)
+                    var_val = (VARIABLE_1N_DEFAULTS.get(resolved_1n)
+                               or VARIABLE_1N_BASES.get(resolved_1n) or None)
                 if var_val and item.bonus_points:
                     var_val += item.bonus_points
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
+                            write_value=cell_minutes,
                             is_cumulative_1n=is_cumul,
                             cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
                             is_variable_1n=is_var,
