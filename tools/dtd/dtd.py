@@ -153,6 +153,11 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     ordered = rituals + neg1g + zeroneon + oneneon + zerog + critical + rest
 
     completed_ids = _completed_ids()
+    # Block labels (地支 glyph from /todo, 2026-07-27): hidden until that
+    # block's hour arrives — mirrors the desktop dtd list generator.
+    block_hours = {"卯": 4, "辰": 6, "巳": 8, "午": 10, "未": 12,
+                   "申": 14, "酉": 16, "戌": 18, "亥": 20}
+    now_hour = _dt.datetime.now().hour
     seen = set()
     out = []
     for t in ordered:
@@ -161,6 +166,9 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             continue
         seen.add(tid)
         if tid is not None and str(tid) in completed_ids:
+            continue
+        blk = next((block_hours[l] for l in t.get("labels", []) if l in block_hours), None)
+        if blk is not None and now_hour < blk:
             continue
         # Cross-machine "done today": a recurring daily habit whose due date has
         # advanced past today was completed today (each /close bumps it +1 day).
