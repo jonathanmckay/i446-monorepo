@@ -35,7 +35,8 @@ All three modifiers are optional and can appear in any order within the input.
 1. Extract all `@word` tokens → these become Todoist labels. Strip them from the task content.
 2. Extract `(N)` where N is a number → this is the time estimate in minutes. Strip from content.
 3. Extract `[N]` where N is a number → this is the value. Keep `[N]` in the task content (Todoist task name includes it for the /did flow).
-4. Everything remaining (trimmed) is the task description.
+4. **Block glyph** — a standalone trailing 地支 character (`卯辰巳午未申酉戌亥`, e.g. `/todo charge phone 戌`) → add it as a Todoist **label** (alongside the domain label) and strip it from the content. dtd reads the label and hides the task until that block starts (卯 04:00 · 辰 06:00 · 巳 08:00 · 午 10:00 · 未 12:00 · 申 14:00 · 酉 16:00 · 戌 18:00 · 亥 20:00). Only treat it as a block when it is its own token — never pull the glyph out of a word like `睡觉` or a description that merely contains the character.
+5. Everything remaining (trimmed) is the task description.
 
 ## Inference
 

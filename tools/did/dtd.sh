@@ -880,6 +880,12 @@ try:
                     if _nw.hour < int(v)}
 except Exception:
     pass
+# Block LABELS (feature 2026-07-27): a task carrying a 地支 glyph label
+# (/todo ... 戌) hides until that block starts — the durable, task-level
+# analog of the ctrl-v snooze. Uses the current clock, same as above.
+_BLOCK_LABEL_HOURS = {'卯': 4, '辰': 6, '巳': 8, '午': 10, '未': 12,
+                      '申': 14, '酉': 16, '戌': 18, '亥': 20}
+_now_hour = _dt.datetime.now().hour
 
 # ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending
 # ids, the list IS the picker — block rows instead of tasks. Rendered by the
@@ -962,6 +968,11 @@ for t in unique:
         continue
     # Block-snoozed (ctrl-v): hidden until the chosen block's hour arrives.
     if t.get('id') is not None and str(t['id']) in _snoozed:
+        continue
+    # Block-labeled (地支 glyph label from /todo): hidden until its block.
+    _blk_h = next((_BLOCK_LABEL_HOURS[l] for l in t.get('labels', [])
+                   if l in _BLOCK_LABEL_HOURS), None)
+    if _blk_h is not None and _now_hour < _blk_h:
         continue
     # Optimistic id-hide: a just-completed card (esp. a name-exempt ritual)
     # whose id was recorded by enter.sh/done.sh — hide it at once, not after
