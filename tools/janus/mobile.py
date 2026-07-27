@@ -440,7 +440,7 @@ function makeRow(r){
   row.className = 'row';
   const track = document.createElement('div');
   track.className = 'track';
-  track.textContent = r.type==='gap' ? '+ fill' : '→ 分 log '+r.minutes+'m';
+  track.textContent = r.type==='gap' ? '+ fill' : 'neon log 分 ('+r.minutes+'m)';
   row.appendChild(track);
 
   const line = document.createElement('div');
