@@ -1,0 +1,545 @@
+#!/usr/bin/env python3
+"""
+janus mobile — iPhone-first mirror of the `janus` timeline TUI.
+
+Same data source (Toggl), same domain colors, same 地支 block structure — but
+as a swipeable web list of today's timeline. Two swipe actions:
+
+  · swipe an UNTRACKED GAP right  → dialog with start/end prefilled; saving
+    creates the Toggl entry (optional @code picks the project, like /tg).
+  · swipe a TIME ENTRY right      → logs its minutes through the real /did
+    (did-fast.py "<desc> <minutes> [@code]"), which routes exactly like the
+    desktop: 0n habit → minutes to its 0n column; variable/1n+ → base+rate;
+    Todoist word-overlap match → its [N]; otherwise the variable path writes
+    minutes-as-points to the inferred domain column + a posthoc task. A
+    per-day ledger prevents double-logging the same entry.
+
+Run:   python3 mobile.py           (binds 0.0.0.0:5561)
+Open:  http://ix:5561              (from the phone, same as dtd/dashboard)
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Toggl API key: env first, else the MCP config (same fallback toggl_cli uses —
+# a launchd agent has a bare environment).
+def _load_api_key() -> str:
+    try:
+        d = json.loads((Path.home() / ".claude.json").read_text())
+        return (d.get("mcpServers", {}).get("toggl_server", {})
+                 .get("env", {}).get("TOGGL_API_KEY", ""))
+    except Exception:
+        return ""
+
+if not os.environ.get("TOGGL_API_KEY"):
+    os.environ["TOGGL_API_KEY"] = _load_api_key()
+os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
+
+sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+
+from flask import Flask, jsonify, render_template_string, request  # noqa: E402
+
+from mcp.toggl_server import toggl_api  # noqa: E402
+from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
+
+PORT = 5561
+TZ = ZoneInfo("America/Los_Angeles")
+DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+STATE_DIR = Path.home() / ".local/state/jm"
+MIN_GAP_MIN = 5          # gaps shorter than this are not shown
+DAY_START_HOUR = 0       # timeline from midnight (睡觉 entries live there)
+
+# Neon domain palette — mirrors tools/dtd/dtd.py / tools/did/dtd.sh COLORS.
+COLORS = {
+    "g245": "#00e676", "epcn": "#00bfa5", "s897": "#1b5e20", "hcmc2": "#ffd600",
+    "xk87": "#fd6c1d", "xk88": "#e65100", "hci": "#63ede0", "i9": "#2979ff",
+    "n156": "#1249b4", "hcmc": "#0d3b66", "m5x2": "#d50032", "hcb": "#f81d78",
+    "hcbp": "#ff4081", "infra": "#9e9e9e", "i444": "#616161", "i447": "#a89c8a",
+    "hcm": "#aa00ff", "hcmp": "#7c4dff", "hcmr": "#bda6ff", "家": "#ff4136",
+    "睡觉": "#666666",
+}
+DEFAULT_COLOR = "#bdbdbd"
+
+BLOCKS = [(4, "卯"), (6, "辰"), (8, "巳"), (10, "午"), (12, "未"),
+          (14, "申"), (16, "酉"), (18, "戌"), (20, "亥"), (22, "子")]
+
+_AT = re.compile(r"\s*@(\S+)")
+
+
+def _ledger_path(day: _dt.date) -> Path:
+    return STATE_DIR / f"janus-mobile-logged-{day.isoformat()}.json"
+
+
+def _ledger(day: _dt.date) -> dict:
+    try:
+        return json.loads(_ledger_path(day).read_text())
+    except Exception:
+        return {}
+
+
+def _ledger_add(day: _dt.date, entry_id: str, note: str) -> None:
+    d = _ledger(day)
+    d[str(entry_id)] = note
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _ledger_path(day).with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False))
+    tmp.replace(_ledger_path(day))
+
+
+def _parse_iso(s: str) -> _dt.datetime:
+    return _dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(TZ)
+
+
+def _fetch_today() -> list[dict]:
+    today = _dt.datetime.now(TZ).date()
+    raw = toggl_api.get_entries(
+        start_date=(today - _dt.timedelta(days=1)).isoformat(),
+        end_date=(today + _dt.timedelta(days=1)).isoformat()) or []
+    now = _dt.datetime.now(TZ)
+    out = []
+    for e in raw:
+        try:
+            st = _parse_iso(e["start"])
+        except Exception:
+            continue
+        running = (e.get("duration") or 0) < 0 or not e.get("stop")
+        en = now if running else _parse_iso(e["stop"])
+        # keep the part that falls inside today
+        if en.date() < today or st.date() > today:
+            continue
+        day_start = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+        st_c, en_c = max(st, day_start), min(en, now)
+        if en_c <= st_c:
+            continue
+        code = PROJECT_NAMES.get(e.get("project_id") or 0, "")
+        out.append({
+            "id": str(e.get("id")),
+            "desc": e.get("description") or "(no description)",
+            "project": code,
+            "color": COLORS.get(code, DEFAULT_COLOR),
+            "start": st_c, "end": en_c, "running": running,
+        })
+    out.sort(key=lambda r: r["start"])
+    return out
+
+
+def build_timeline() -> dict:
+    today = _dt.datetime.now(TZ).date()
+    now = _dt.datetime.now(TZ)
+    entries = _fetch_today()
+    logged = _ledger(today)
+
+    rows: list[dict] = []
+    tracked_min = 0
+
+    def hhmm(dt: _dt.datetime) -> str:
+        return dt.strftime("%H:%M")
+
+    def add_dividers(upto: _dt.datetime, cursor_holder: list):
+        """Emit 地支 dividers for block starts crossed before `upto`."""
+        while cursor_holder[0] < len(BLOCKS):
+            h, name = BLOCKS[cursor_holder[0]]
+            bdt = _dt.datetime.combine(today, _dt.time(0, 0), TZ) + _dt.timedelta(hours=h)
+            if bdt > upto or bdt > now:
+                break
+            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
+            cursor_holder[0] += 1
+
+    bidx = [0]
+    day0 = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+
+    def emit_gap(a: _dt.datetime, b: _dt.datetime):
+        """Emit the untracked span (a, b), split at 地支 block boundaries so
+        dividers land inside long gaps instead of stacking above them."""
+        cur = a
+        while bidx[0] < len(BLOCKS):
+            h, name = BLOCKS[bidx[0]]
+            bdt = day0 + _dt.timedelta(hours=h)
+            if bdt >= b or bdt > now:
+                break
+            if (bdt - cur).total_seconds() >= MIN_GAP_MIN * 60:
+                rows.append({"type": "gap", "start": hhmm(cur), "end": hhmm(bdt),
+                             "minutes": int((bdt - cur).total_seconds() // 60)})
+            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
+            bidx[0] += 1
+            cur = max(cur, bdt)
+        if (b - cur).total_seconds() >= MIN_GAP_MIN * 60:
+            rows.append({"type": "gap", "start": hhmm(cur), "end": hhmm(b),
+                         "minutes": int((b - cur).total_seconds() // 60)})
+
+    cursor = _dt.datetime.combine(today, _dt.time(DAY_START_HOUR, 0), TZ)
+    for e in entries:
+        emit_gap(cursor, e["start"])
+        add_dividers(e["start"], bidx)
+        mins = int(round((e["end"] - e["start"]).total_seconds() / 60))
+        tracked_min += mins
+        rows.append({"type": "entry", "id": e["id"], "desc": e["desc"],
+                     "project": e["project"], "color": e["color"],
+                     "start": hhmm(e["start"]), "end": ("now" if e["running"] else hhmm(e["end"])),
+                     "minutes": mins, "running": e["running"],
+                     "logged": e["id"] in logged})
+        cursor = max(cursor, e["end"])
+    emit_gap(cursor, now)
+    add_dividers(now, bidx)
+
+    # Σ points for the header (same source as mobile dtd: 0分 col D on Ix).
+    points = None
+    try:
+        from neon import excel
+        r = excel.read("0分", "D", date="%d/%d" % (today.month, today.day))
+        if r.get("ok") and str(r.get("value") or "").strip():
+            points = int(float(r["value"]))
+    except Exception as e:
+        print("WARN points:", e, file=sys.stderr)
+
+    return {"rows": rows, "tracked_min": tracked_min, "points": points,
+            "date": today.isoformat()}
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
+    m = _AT.search(desc)
+    code = m.group(1) if m else ""
+    desc_clean = _AT.sub("", desc).strip()
+    pid = PROJECT_MAP.get(code)
+    today = _dt.datetime.now(TZ).date()
+    try:
+        st = _dt.datetime.combine(today, _dt.time(*map(int, start_hhmm.split(":"))), TZ)
+        en = _dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), TZ)
+    except Exception:
+        return {"ok": False, "error": "bad time format (HH:MM)"}
+    if en <= st:
+        return {"ok": False, "error": "end must be after start"}
+    dur = int((en - st).total_seconds())
+    fmt = "%Y-%m-%dT%H:%M:%S%z"
+    try:
+        r = toggl_api.create_entry(desc_clean, st.strftime(fmt), en.strftime(fmt), dur,
+                                   project_id=pid)
+        return {"ok": bool(r), "project": code}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def log_entry(entry_id: str, desc: str, minutes: int, project: str) -> dict:
+    today = _dt.datetime.now(TZ).date()
+    if str(entry_id) in _ledger(today):
+        return {"ok": True, "already": True}
+    text = f"{desc} {minutes}"
+    if project:
+        text += f" @{project}"
+    try:
+        proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
+                              capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "did-fast timeout"}
+    out = proc.stdout.strip()
+    data = None
+    brace = out.find("{")
+    if brace >= 0:
+        try:
+            data = json.loads(out[brace:])
+        except Exception:
+            data = None
+    step = None
+    if data and data.get("results"):
+        step = data["results"][0].get("step")
+    needs_agent = bool(data and data.get("agent_needed"))
+    ok = proc.returncode == 0 and step is not None
+    if ok:
+        _ledger_add(today, entry_id, f"{desc} {minutes} → {step}")
+    return {"ok": ok, "step": step, "needs_agent": needs_agent,
+            "stderr_tail": proc.stderr.strip()[-200:]}
+
+
+# ---------------------------------------------------------------------------
+# Flask
+# ---------------------------------------------------------------------------
+app = Flask(__name__)
+
+
+@app.route("/api/timeline")
+def api_timeline():
+    try:
+        return jsonify({"ok": True, **build_timeline()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/fill", methods=["POST"])
+def api_fill():
+    b = request.get_json(force=True, silent=True) or {}
+    desc = (b.get("desc") or "").strip()
+    if not desc:
+        return jsonify({"ok": False, "error": "no description"}), 400
+    return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or ""))
+
+
+@app.route("/api/log", methods=["POST"])
+def api_log():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("id") or not b.get("desc"):
+        return jsonify({"ok": False, "error": "id+desc required"}), 400
+    return jsonify(log_entry(str(b["id"]), b["desc"].strip(),
+                             int(b.get("minutes") or 0), (b.get("project") or "").strip()))
+
+
+@app.route("/")
+def index():
+    return render_template_string(PAGE)
+
+
+# ---------------------------------------------------------------------------
+# Frontend — same terminal styling as mobile dtd, single file, no deps
+# ---------------------------------------------------------------------------
+PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>janus</title>
+<style>
+  :root { --bg:#1b1b1b; --dim:#777; --go:#00e676; --gap:#555; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:#cfcfcf;
+    font:15px/1.2 ui-monospace,"SF Mono",Menlo,Monaco,"Cascadia Mono",monospace;
+    -webkit-font-smoothing:antialiased; }
+  header { position:sticky; top:0; z-index:5;
+    padding:calc(env(safe-area-inset-top) + 9px) 14px 8px;
+    background:#1b1b1bee; backdrop-filter:blur(6px);
+    display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid #2a2a2a; }
+  header .brand { font-weight:700; letter-spacing:1px; }
+  header .brand b { color:var(--go); }
+  .tally { color:var(--dim); font-variant-numeric:tabular-nums; }
+  .tally b { color:var(--go); }
+  #reload { background:none; border:1px solid #333; color:var(--dim);
+    border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
+  main { padding:2px 0 calc(env(safe-area-inset-bottom) + 60px); }
+  .div { color:var(--dim); padding:8px 14px 2px; font-size:12px; letter-spacing:1px;
+    border-top:1px solid #242424; }
+  .row { position:relative; overflow:hidden; }
+  .row .track { position:absolute; inset:0; background:var(--go); color:#003;
+    font-weight:800; display:flex; align-items:center; padding-left:16px; opacity:0; }
+  .line { position:relative; display:flex; align-items:center; gap:10px;
+    padding:9px 14px; background:var(--bg); min-height:38px;
+    transform:translateX(0); transition:transform .05s linear; will-change:transform;
+    touch-action:pan-y; }
+  .line.snap { transition:transform .22s cubic-bezier(.2,.7,.2,1); }
+  .ttl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .meta { white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--dim); }
+  .gaprow .ttl { color:var(--gap); font-style:italic; }
+  .logged .ttl::after { content:" ✓"; color:var(--go); }
+  .logged { opacity:.45; }
+  .running .ttl::before { content:"▶ "; color:var(--go); }
+  .empty,.loading { text-align:center; color:var(--dim); padding:60px 20px; }
+  .toast { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 20px);
+    transform:translateX(-50%) translateY(16px); background:var(--go); color:#003;
+    font-weight:700; padding:9px 18px; border-radius:8px; opacity:0; transition:.22s;
+    z-index:20; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  .toast.err { background:#ff4081; color:#2a0010; }
+  #dlg { position:fixed; inset:0; background:#000a; z-index:10; display:none;
+    align-items:flex-end; }
+  #dlg.show { display:flex; }
+  #dlg .card { background:#232323; width:100%; padding:16px 16px
+    calc(env(safe-area-inset-bottom) + 16px); border-radius:14px 14px 0 0; }
+  #dlg h3 { margin:0 0 12px; font-size:15px; color:#cfcfcf; font-weight:700; }
+  #dlg input { width:100%; background:#1b1b1b; border:1px solid #333; color:#cfcfcf;
+    font:15px ui-monospace,Menlo,monospace; border-radius:8px; padding:10px 12px;
+    margin-bottom:10px; }
+  #dlg .times { display:flex; gap:10px; }
+  #dlg .times input { flex:1; text-align:center; }
+  #dlg .btns { display:flex; gap:10px; margin-top:4px; }
+  #dlg button { flex:1; font:700 15px ui-monospace,Menlo,monospace; border:none;
+    border-radius:8px; padding:12px; }
+  #dlg .save { background:var(--go); color:#003; }
+  #dlg .cancel { background:#333; color:#aaa; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">jan<b>u</b>s</div>
+  <div class="tally"><b id="pts">–</b> 分 · <span id="trk">0:00</span></div>
+  <button id="reload">↻</button>
+</header>
+<main id="list"><div class="loading">loading…</div></main>
+
+<div id="dlg">
+  <div class="card">
+    <h3>fill gap</h3>
+    <input id="d-desc" placeholder="description (@code for project)" autocomplete="off">
+    <div class="times">
+      <input id="d-start" inputmode="numeric" placeholder="HH:MM">
+      <input id="d-end" inputmode="numeric" placeholder="HH:MM">
+    </div>
+    <div class="btns">
+      <button class="cancel" onclick="closeDlg()">cancel</button>
+      <button class="save" onclick="saveDlg()">save</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const list = document.getElementById('list');
+const toastEl = document.getElementById('toast');
+const dlg = document.getElementById('dlg');
+
+function toast(msg, err){
+  toastEl.textContent = msg;
+  toastEl.classList.toggle('err', !!err);
+  toastEl.classList.add('show');
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 1800);
+}
+
+async function load(){
+  list.innerHTML = '<div class="loading">loading…</div>';
+  try {
+    const r = await fetch('/api/timeline');
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error||'fetch failed');
+    document.getElementById('pts').textContent = (d.points==null?'–':d.points);
+    document.getElementById('trk').textContent =
+      Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
+    render(d.rows);
+  } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
+}
+
+function render(rows){
+  if(!rows.length){ list.innerHTML = '<div class="empty">no entries yet</div>'; return; }
+  list.innerHTML = '';
+  for(const r of rows){
+    if(r.type === 'divider'){
+      const d = document.createElement('div');
+      d.className = 'div'; d.textContent = r.label;
+      list.appendChild(d);
+    } else {
+      list.appendChild(makeRow(r));
+    }
+  }
+  list.scrollIntoView(false);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function makeRow(r){
+  const row = document.createElement('div');
+  row.className = 'row';
+  const track = document.createElement('div');
+  track.className = 'track';
+  track.textContent = r.type==='gap' ? '+ fill' : '→ 分 log '+r.minutes+'m';
+  row.appendChild(track);
+
+  const line = document.createElement('div');
+  line.className = 'line' + (r.type==='gap'?' gaprow':'') +
+    (r.logged?' logged':'') + (r.running?' running':'');
+  if(r.type==='entry') line.style.color = r.color;
+  const ttl = document.createElement('span');
+  ttl.className = 'ttl';
+  ttl.textContent = r.type==='gap' ? '· empty ·' : r.desc;
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = r.start+'–'+r.end+' · '+r.minutes+'m';
+  line.appendChild(ttl); line.appendChild(meta);
+  row.appendChild(line);
+  bindSwipe(row, line, track, r);
+  return row;
+}
+
+function bindSwipe(row, line, track, r){
+  let x0=null, dx=0, dragging=false;
+  const W = () => row.offsetWidth;
+  const start = x=>{ x0=x; dx=0; dragging=true; line.classList.remove('snap'); };
+  const move = x=>{
+    if(!dragging) return;
+    dx = Math.max(0, x - x0);
+    line.style.transform = 'translateX('+dx+'px)';
+    track.style.opacity = Math.min(1, dx/(W()*0.4));
+  };
+  const end = ()=>{
+    if(!dragging) return; dragging=false;
+    line.classList.add('snap');
+    line.style.transform='translateX(0)'; track.style.opacity=0;
+    if(dx > W()*0.42) act(row, line, r);
+  };
+  line.addEventListener('touchstart', e=>start(e.touches[0].clientX), {passive:true});
+  line.addEventListener('touchmove',  e=>move(e.touches[0].clientX),  {passive:true});
+  line.addEventListener('touchend', end);
+  line.addEventListener('mousedown', e=>{start(e.clientX);
+    const mm=ev=>move(ev.clientX), mu=()=>{end();
+      document.removeEventListener('mousemove',mm);document.removeEventListener('mouseup',mu);};
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);});
+}
+
+let gapCtx = null;
+function act(row, line, r){
+  if(r.type === 'gap'){
+    gapCtx = r;
+    document.getElementById('d-desc').value = '';
+    document.getElementById('d-start').value = r.start;
+    document.getElementById('d-end').value = r.end;
+    dlg.classList.add('show');
+    setTimeout(()=>document.getElementById('d-desc').focus(), 60);
+    return;
+  }
+  if(r.running){ toast('still running', true); return; }
+  if(r.logged){ toast('already logged', true); return; }
+  commitLog(line, r);
+}
+
+async function commitLog(line, r){
+  line.classList.add('logged');
+  try {
+    const resp = await fetch('/api/log', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:r.id, desc:r.desc, minutes:r.minutes, project:r.project})});
+    const d = await resp.json();
+    if(d.already){ toast('already logged'); return; }
+    if(!d.ok){
+      line.classList.remove('logged');
+      toast(d.needs_agent ? 'no route — use /did on desktop' : 'log failed', true);
+      return;
+    }
+    toast('+'+r.minutes+'m → '+(d.step||'neon')+' ✓');
+  } catch(e){ line.classList.remove('logged'); toast('offline', true); }
+}
+
+function closeDlg(){ dlg.classList.remove('show'); gapCtx=null; }
+async function saveDlg(){
+  const desc = document.getElementById('d-desc').value.trim();
+  const start = document.getElementById('d-start').value.trim();
+  const end = document.getElementById('d-end').value.trim();
+  if(!desc){ toast('need a description', true); return; }
+  closeDlg();
+  try {
+    const r = await fetch('/api/fill', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({desc, start, end})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'create failed', true); return; }
+    toast('tracked ✓' + (d.project?' → '+d.project:''));
+    load();
+  } catch(e){ toast('offline', true); }
+}
+
+document.getElementById('reload').onclick = load;
+load();
+</script>
+</body>
+</html>"""
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT, debug=False)
