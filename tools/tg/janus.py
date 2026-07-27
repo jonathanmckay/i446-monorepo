@@ -2498,7 +2498,14 @@ def _slot_label_gcal(slot_s, slot_e):
 def render_evening() -> list[tuple[str, str]]:
     """Future blocks (detail-band end → 22:00), gcal-filled, in the same
     compact format as the past (morning) view."""
-    _, end = detail_window()
+    start, end = detail_window()
+    # When the detail band already reaches midnight (子 is the current or
+    # next block, end_h=24 → end lands on the NEXT day), the day is fully
+    # rendered. The old `cutoff.hour` compare saw 0 there and re-rendered
+    # 卯–戌 after 子 as phantom next-day blocks (user report 2026-07-27:
+    # "one day should not bleed into the next").
+    if end.date() != start.date():
+        return []
     cutoff = end
     bo_emojis = _read_block_emojis()
     out: list[tuple[str, str]] = []
@@ -2640,6 +2647,18 @@ def render_focus_compact() -> list[tuple[str, str]]:
     nxt = next_block(now.hour)
     bo_emojis = _read_block_emojis()
     out: list[tuple[str, str]] = []
+    if cur and not nxt:
+        # Last block of the day (子): detail_window anchors the band at
+        # prev + current, and render_morning stops at the band start
+        # trusting the band to cover the rest — but only cur/nxt rendered
+        # here, so 亥 vanished entirely after 22:00 and on every past-day
+        # view (user report 2026-07-27). Render the fully-elapsed 亥 the
+        # same way as the current block; everything inside is clipped to
+        # `now`, which is past its end, so it reads as a plain past card.
+        prv = prev_block(now.hour)
+        if prv:
+            name, sh, eh = prv
+            out += _current_block_lines(name, sh, eh, now, bo_emojis.get(name, ""))
     if cur:
         name, sh, eh = cur
         out += _current_block_lines(name, sh, eh, now, bo_emojis.get(name, ""))
