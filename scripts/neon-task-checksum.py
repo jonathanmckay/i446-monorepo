@@ -70,6 +70,7 @@ ALIASES = {
     "一起吃": "一起饭",
     "long o314": "长o314",
     "1 groceries": "groceries",
+    "1 i447": "i447",
 }
 
 # 1=Sunday … 7=Saturday (1n+ row 3; verified against the live cards 2026-07-25)

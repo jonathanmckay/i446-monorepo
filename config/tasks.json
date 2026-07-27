@@ -212,7 +212,10 @@
       "category": "0n",
       "neon_header": "night hcmc",
       "domain": "hcmc",
-      "todoist_label": "夜neon"
+      "todoist_label": "夜neon",
+      "aliases": [
+        "evening hcmc"
+      ]
     },
     "0t": {
       "name": "0t",
@@ -443,6 +446,16 @@
       "domain": "m5x2",
       "todoist_label": "1neon"
     },
+    "1-i447": {
+      "name": "1 i447",
+      "category": "1n+",
+      "neon_header": "i447",
+      "domain": "i447",
+      "todoist_label": "1neon",
+      "aliases": [
+        "1 i447"
+      ]
+    },
     "1-cal": {
       "name": "1 cal",
       "category": "1n+",
@@ -659,6 +672,15 @@
       "neon_header": "2 hci",
       "domain": "hci",
       "todoist_label": "1neon"
+    },
+    "i444": {
+      "name": "i444",
+      "category": "0n",
+      "neon_header": "i444",
+      "domain": "i444",
+      "todoist_label": "0neon",
+      "points_default": 5,
+      "minutes_default": 15
     }
   }
 }
