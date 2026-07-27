@@ -414,6 +414,13 @@ echo "x" >> "\$PUSHED"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
+# Reset stray mouse-tracking modes AND drain tty input queued during the
+# prompt window — this was the ONLY interactive execute() script without the
+# defer/edit/split cleanup, so scroll/motion bursts buffered while the value
+# prompt was open dumped into fzf's query as literal ^[[<34;x;yM text on
+# resume (bug 2026-07-27: "input pane in dtd is a mess").
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 DONEEOF
 chmod +x "$DTD_DONE"
 

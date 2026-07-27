@@ -29,9 +29,14 @@ def test_split_drains_tty_input_buffer():
 
 
 def test_split_resets_mouse_modes_like_siblings():
+    # Current sequence (2026-07-15 design): motion OFF, click+SGR scroll ON —
+    # matching fzf's own subscription (this fzf build errors on --no-mouse,
+    # so all-off `1000l/1006l` is no longer the spec).
     body = _split_script()
-    assert "1000l" in body and "1006l" in body, (
-        "split must reset mouse modes like the defer/points/edit action scripts")
+    assert "1002l" in body and "1003l" in body, (
+        "split must strip motion modes like the defer/edit/done action scripts")
+    assert "1000h" in body and "1006h" in body, (
+        "split must restore fzf's click+scroll subscription")
 
 
 def test_drain_runs_after_the_dialogs():
