@@ -1546,6 +1546,23 @@ def _placeholder_style(now: dt.datetime | None = None) -> str:
     return "class:no_entry" if _gap_alarm_on(now) else "class:idle"
 
 
+def _gutter(hh: int, mm: int, slot_min: int) -> tuple[str, str]:
+    """1-char busy-bar cell for a row's slot: ▍ when an opaque calendar
+    event covers any of it, blank when meeting-free — the day's meeting load
+    as a scannable barcode down the left of every card (user request
+    2026-07-27, "suggestion 3"). Replaces the single space that always sat
+    between the time column and the row body, so no width budget changes."""
+    try:
+        s = view_now().replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except ValueError:
+        return ("class:time", " ")
+    e = s + dt.timedelta(minutes=slot_min)
+    busy = any(ev["start_dt"] < e and ev["end_dt"] > s
+               for ev in STATE.events
+               if not (ev.get("transparency") == "transparent" or ev.get("all_day")))
+    return ("class:gutter_busy", "▍") if busy else ("class:time", " ")
+
+
 def _abbrev_tcol(hh: int, mm: int, prev_hour: int | None) -> tuple[str, int]:
     """Time column for a body row, abbreviated. Full ``HH:MM`` when the hour
     differs from the row above; otherwise minutes-only ``  :MM`` indented two so
@@ -1580,11 +1597,18 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     drawn — empty marks render as just the time (per the block redesign).
     """
     out: list[tuple[str, str]] = []
+    # 15/30-min grid resolution — needed by the busy-bar gutter cells on the
+    # header rows too, so computed before either header branch.
+    slot_min = 15 if max_rows > 3 else 30
 
     # ── header: the block's :00 slot ──
-    if is_future and picks:
-        head = picks[0]
-        body_picks = picks[1:]
+    # Free rows never ride the header: the header's event slot belongs to the
+    # block's dominant MEETING; a fully-free future block keeps its bare
+    # header and shows its free stretch as an ordinary body row.
+    non_free = [p for p in picks if not p.get("is_free")] if is_future else []
+    if is_future and non_free:
+        head = non_free[0]
+        body_picks = [p for p in picks if p is not head]
         left = f"{blk_name}:00 "
         neon_tail = f" {emojis}" if emojis else ""
         dur = f"({head['dur_min']})"
@@ -1621,7 +1645,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # ₦N trails at the line's end in Radioactive — right side with the
         # numbers, not after the block name (user request 2026-07-21), and it
         # keeps its accent even under the selected-header styling.
-        out.append((left_sty, left))
+        # The gutter cell replaces the space after "巳:00" (budgeted via
+        # dwidth(left), which still includes it — same 1-char width).
+        out.append((left_sty, f"{blk_name}:00"))
+        out.append(_gutter(blk_sh, 0, slot_min))
         if tpfx:
             out.append((time_sty, tpfx))
         out.append((head_sty, label))
@@ -1638,7 +1665,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # header"): `辰:00              ₦9 73分`.
         right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
         trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
-        out.append(("class:dim", left + " " * trail))
+        out.append(("class:dim", left))
+        out.append(_gutter(blk_sh, 0, slot_min))
+        out.append(("class:dim", " " * max(0, trail - 1)))
         if emojis:
             out.append((NEON_PTS_STYLE, emojis))
             if pts_str:
@@ -1655,7 +1684,6 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     # before); max_rows > 3 (the focus band's wider cards) switches to 15-min
     # marks and includes :00 too — a real entry landing there no longer has
     # the header's bare-pts line to fall back on for visibility.
-    slot_min = 15 if max_rows > 3 else 30
     include_00 = max_rows > 3
 
     def _slot(p):
@@ -1717,7 +1745,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             if cont and (hh, mm) in cont:
                 # A meeting started earlier flows through this slot: keep the
                 # ◇ │ continuation rather than a bare time.
-                out.append(("class:time", tcol + " "))
+                out.append(("class:time", tcol))
+                out.append(_gutter(hh, mm, slot_min))
                 out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
             else:
                 # Genuinely empty: the time, then a faint "·" placeholder —
@@ -1726,7 +1755,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 # the lines for each of the blocks... not sure why you
                 # removed that"), so an empty row still reads as "checked,
                 # nothing here" rather than a bare, easy-to-miss timestamp.
-                out.append(("class:time", tcol + " "))
+                out.append(("class:time", tcol))
+                out.append(_gutter(hh, mm, slot_min))
                 out.append(("class:idle", "·\n"))
             continue
         if p.get("is_gap"):
@@ -1749,8 +1779,21 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
                 time_sty = "class:time"
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
-            out.append((time_sty, tcol + " "))
+            out.append((time_sty, tcol))
+            out.append(_gutter(hh, mm, slot_min))
             out.append((fill_cls, _gap_fill(label, space) + "\n"))
+            continue
+        if p.get("is_free"):
+            # Meeting-free future stretch: a calm green bar — the mirror of
+            # the red "empty" past-gap rows, making free time first-class ink
+            # instead of negative space (user request 2026-07-27: "at a
+            # glance it's hard to tell how much time I have free").
+            end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
+            label = f"free → {end:%H:%M} ({fmt_dur(p['dur_min'])})"
+            space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
+            out.append(("class:time", tcol))
+            out.append(_gutter(hh, mm, slot_min))
+            out.append(("class:free", _gap_fill(label, space) + "\n"))
             continue
         if p.get("is_running"):
             # The live task: same row shape as any entry, but a bold "▶ "
@@ -1772,7 +1815,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 sty = f"bold {p['style']}".strip() if p["style"] else "bold class:running"
                 time_sty = "class:time"
                 dur_sty = "class:dim"
-            out.append((time_sty, tcol + " "))
+            out.append((time_sty, tcol))
+            out.append(_gutter(hh, mm, slot_min))
             out.append((sty, prefix + pad(truncate(p["label"], space), space)))
             out.append((dur_sty, f" {dur}\n"))
             continue
@@ -1807,7 +1851,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
             time_sty = "class:time"
             dur_sty = "class:dim"
-        out.append((time_sty, tcol + " "))
+        out.append((time_sty, tcol))
+        out.append(_gutter(hh, mm, slot_min))
         out.append((sty, pad(truncate(p["label"], space), space)))
         out.append((dur_sty, f" {dur}\n"))
 
@@ -1940,6 +1985,46 @@ def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
             return items
     if (g := gap_item(pos, min(blk_end, cutoff))):
         items.append(g)
+    return items
+
+
+FREE_MIN = 15  # meeting-free stretches shorter than this aren't worth a row
+
+
+def _future_free_gaps(blk_sh, blk_eh, now) -> list[dict]:
+    """Meeting-free stretches >= FREE_MIN inside a block's NOT-yet-elapsed
+    window, chronological — _block_gaps' mirror for time that hasn't happened
+    yet (user request 2026-07-27: "at a glance it's hard to tell how much
+    time I have free"). Busy = opaque, non-all-day calendar events; the
+    window starts at max(block start, now) so the current block only counts
+    its remaining minutes, and a fully-elapsed block yields nothing."""
+    blk_start = now.replace(hour=blk_sh, minute=0, second=0, microsecond=0)
+    blk_end = blk_start + dt.timedelta(hours=blk_eh + 1 - blk_sh)
+    pos = max(blk_start, now)
+    if pos >= blk_end:
+        return []
+
+    def free_item(start, end):
+        mins = int((end - start).total_seconds() // 60)
+        if mins < FREE_MIN:
+            return None
+        return {"start_dt": start, "time_str": f"{start:%H:%M}", "label": "",
+                "style": "", "dur_min": mins, "is_free": True}
+
+    busy = sorted(
+        ((ev["start_dt"], ev["end_dt"]) for ev in STATE.events
+         if not (ev.get("transparency") == "transparent" or ev.get("all_day"))
+         and ev["end_dt"] > pos and ev["start_dt"] < blk_end),
+        key=lambda t: t[0])
+    items = []
+    for s, e in busy:
+        if s > pos and (f := free_item(pos, min(s, blk_end))):
+            items.append(f)
+        pos = max(pos, e)
+        if pos >= blk_end:
+            return items
+    if (f := free_item(pos, blk_end)):
+        items.append(f)
     return items
 
 
@@ -2516,7 +2601,10 @@ def render_evening() -> list[tuple[str, str]]:
             continue
         if sh >= 22:
             break
-        picks = _future_block_picks(name, STATE.events)
+        picks = sorted(
+            _future_block_picks(name, STATE.events)
+            + _future_free_gaps(sh, eh, view_now()),
+            key=lambda p: p["start_dt"])
         cont = _block_gcal_cont(sh, cutoff)
         out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
                                     cont=cont, is_future=True)
@@ -2615,7 +2703,10 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     ended_event_picks = _past_event_picks(blk_name, STATE.events, STATE.entries, now, limit=FOCUS_ROWS)
     gaps = _split_gaps_around_events(_block_gaps(blk_sh, blk_eh, now),
                                      [p["event"] for p in ended_event_picks])
-    body = picks + gaps + event_picks + ended_event_picks
+    # The block's REMAINING minutes get free rows too (window starts at now),
+    # so "how much of this block is still mine" reads directly off the card.
+    free_rows = _future_free_gaps(blk_sh, blk_eh, now)
+    body = picks + gaps + event_picks + ended_event_picks + free_rows
     body.sort(key=lambda x: x["start_dt"])
     cont = {**_block_sleep_cont(blk_sh, now, slot_min=15), **_block_gcal_cont(blk_sh, now, slot_min=15),
             **_block_toggl_cont(blk_sh, now, slot_min=15)}
@@ -2666,7 +2757,10 @@ def render_focus_compact() -> list[tuple[str, str]]:
         out += _current_block_lines(name, sh, eh, now, bo_emojis.get(name, ""))
     if nxt:
         name, sh, eh = nxt
-        picks = _future_block_picks(name, STATE.events, limit=FOCUS_ROWS)
+        picks = sorted(
+            _future_block_picks(name, STATE.events, limit=FOCUS_ROWS)
+            + _future_free_gaps(sh, eh, now),
+            key=lambda p: p["start_dt"])
         cont = _block_gcal_cont(sh, now, slot_min=15)
         out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
                                     cont=cont, is_future=True, max_rows=FOCUS_ROWS,
@@ -3334,6 +3428,8 @@ style = Style.from_dict({
     "now": "bold #ffffff",
     "no_entry": "bold #ff4444",
     "no_entry_bg": "bold bg:#ff4444 #000000",
+    "free": "#7cb87c",
+    "gutter_busy": "#5f87af",
     "selected_bg": "bg:#3a3a3a",
     "selected_accent": "bold bg:#3a3a3a #ff2d78",
     "flash": "bold yellow",
