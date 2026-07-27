@@ -27,7 +27,17 @@ plan shorter than 4 days).
    - Comments and outcome marks: `🟢🟡🔴`, `(x)`, `(missed)`, bold `**…**`
      day notes. Repeat what went 🟢, retry what was missed (say so in the
      note), drop or rework what went 🔴.
+   - The "Food actual" / "Drink actual" columns vs. the plan — where actuals
+     diverged repeatedly, plan the actual (it's the revealed preference) or
+     name the deviation deliberately.
    - The current table format and goal-line phrasing.
+2b. **Backfill the previous plan's actuals** before drafting: read the food
+   journal (`hcbi` sheet — the /ate 时辰 triads: 卯 AK-AM, 辰 AN-AP, 巳 AQ-AS,
+   午 AT-AV, 未 AW-AY, 申 AZ-BB, 戌 BC-BE; date in col B) for each planned
+   day and fill any empty "Food actual" / "Drink actual" cells with what was
+   actually logged (map 卯/辰 → Morning, 巳/未 → Snack, 午 → Lunch, 申/戌 →
+   Late; put drinks in Drink actual, food in Food actual, verbatim from the
+   journal). This is the plan-vs-actual record the weekly sync grades.
 3. **User notes** — anything after `/mealplan` (travel days, dinners out,
    weight goal changes) overrides the defaults.
 
@@ -45,16 +55,19 @@ shape to the previous plan file. Body:
 4. One `### <Day M/D>` section per day using the established table:
 
    ```
-   |         | Food | Drink | 一起  |
-   | ------- | ---- | ----- | --- |
-   | Morning |      |       | X   |
-   | Snack   |      |       |     |
-   | Lunch   |      |       |     |
-   | Late    |      |       | X   |
+   |         | Food | Drink | 一起  | Food actual | Drink actual |
+   | ------- | ---- | ----- | --- | ----------- | ------------ |
+   | Morning |      |       | X   |             |              |
+   | Snack   |      |       |     |             |              |
+   | Lunch   |      |       |     |             |              |
+   | Late    |      |       | X   |             |              |
    ```
 
-   `一起` = eaten with the kids (Morning and Late usually X). Bold one-line
-   errand/prep notes under the day header where needed (hummus run, orders).
+   `一起` = eaten with the kids (Morning and Late usually X). The two
+   "actual" columns start EMPTY — they're filled from the hcbi food journal
+   (step 2b) when the next plan is drafted, so the weekly sync can grade
+   plan vs. actual. Bold one-line errand/prep notes under the day header
+   where needed (hummus run, orders).
 5. Mark the previous plan's frontmatter `status: completed` (add
    `updated: <today>`) so only one plan is ever `active`.
 

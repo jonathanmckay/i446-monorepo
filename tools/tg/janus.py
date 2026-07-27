@@ -335,6 +335,10 @@ class State:
         # done/pending chips (user request 2026-07-21: "not about doing every
         # day per se, but holding up a minimum commitment").
         self.habits_ytd: dict[str, float] = {}
+        # Today's ص (prayer) count from the 0n row — rendered as its own
+        # labeled "ص N" counter chip, never a bare done/pending chip
+        # (user request 2026-07-27). None until a successful fetch.
+        self.prayer_count: float | None = None
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1061,6 +1065,9 @@ SHORT_NAMES: dict[str, str] = {}  # normalized cleaned content → cleaned short
 # are mostly domain codes ('i447' rides the charge card too), so a label
 # match would tie one habit's deferral to another habit's card.
 HABIT_DUES: dict[str, list[str]] = {}
+# Same 0neon cards keyed the same way, but carrying (todoist id, due) — the
+# id is what dtd-block-snooze.json is keyed by (same-day block delays).
+HABIT_CARDS: dict[str, list[tuple[str, str]]] = {}
 
 
 def _clean_annotations(s: str) -> str:
@@ -1107,12 +1114,17 @@ def fetch_short_names():
     # the habit strip). A card without a due date maps to "" so it can never
     # satisfy the strictly-after-today test — it blocks hiding instead.
     dues: dict[str, list[str]] = {}
+    cards: dict[str, list[tuple[str, str]]] = {}
     for t in data.get("0neon", []) or []:
         c = t.get("content")
         if c:
             dues.setdefault(_norm_key(c), []).append(t.get("due") or "")
+            cards.setdefault(_norm_key(c), []).append(
+                (str(t.get("id") or ""), t.get("due") or ""))
     HABIT_DUES.clear()
     HABIT_DUES.update(dues)
+    HABIT_CARDS.clear()
+    HABIT_CARDS.update(cards)
 
 
 def display_desc(desc: str) -> str:
@@ -1288,11 +1300,20 @@ end tell'''
                 pass
         STATE.habits_ytd = ytd
         habits = []
+        prayer: float | None = 0.0  # blank cell = 0 prayers so far, not "unknown"
         for chunk in raw.split("|"):
             if not chunk.strip():
                 continue
             name, _, val = chunk.partition("\t")
             name = name.strip()
+            # ص is a COUNTER (prayers so far today), not a done/pending
+            # habit: captured for its own labeled "ص N" chip instead.
+            if name == "ص":
+                try:
+                    prayer = float(val.strip())
+                except ValueError:
+                    pass
+                continue
             # YTD-standing habits render as ±N chips (render_habits_today),
             # never as daily done/pending chips.
             if not name or name.lower() in _HABIT_STRIP_SKIP or name.lower() in HABIT_YTD_CELLS:
@@ -1315,6 +1336,7 @@ end tell'''
                 continue
             habits.append((name, v))
         STATE.habits_today = habits
+        STATE.prayer_count = prayer
     except Exception:
         pass
 
@@ -1356,6 +1378,51 @@ def _habit_deferred(name: str) -> bool:
         return False
     today = dt.datetime.now(TZ).date().isoformat()
     return all(d[:10] > today for d in dues)
+
+
+BLOCK_SNOOZE = Path.home() / ".local/state/jm/dtd-block-snooze.json"
+_snooze_cache: dict = {"mtime": None, "map": {}}
+
+
+def _load_block_snoozes() -> dict[str, int]:
+    """dtd's same-day block delays: {todoist card id: block start hour},
+    date-gated to today. mtime-cached — this is read on every repaint."""
+    try:
+        mtime = BLOCK_SNOOZE.stat().st_mtime
+    except OSError:
+        return {}
+    if _snooze_cache["mtime"] != mtime:
+        try:
+            data = json.loads(BLOCK_SNOOZE.read_text())
+            ok = data.get("date") == dt.date.today().isoformat()
+            _snooze_cache["map"] = ({str(k): int(v) for k, v in
+                                     (data.get("snoozes") or {}).items()}
+                                    if ok else {})
+        except Exception:
+            _snooze_cache["map"] = {}
+        _snooze_cache["mtime"] = mtime
+    return _snooze_cache["map"]
+
+
+def _habit_block_snoozed(name: str) -> bool:
+    """True when every one of the habit's cards still due today has been
+    block-delayed (dtd ctrl-v) to a block that hasn't started yet — same
+    hide-until-the-hour-arrives rule dtd's own list applies, mirrored onto
+    the habit strip's pending row (user request 2026-07-27: "tasks that are
+    delayed for a different block don't show up in the 1st few rows").
+    Reappears on its own once the chosen block starts (now.hour >= hour)."""
+    if STATE.day_offset != 0:
+        return False
+    snoozes = _load_block_snoozes()
+    if not snoozes:
+        return False
+    today = dt.date.today().isoformat()
+    todays = [cid for cid, due in HABIT_CARDS.get(_norm_key(name), [])
+              if cid and (due or "")[:10] <= today]
+    if not todays:
+        return False
+    now_h = dt.datetime.now(TZ).hour
+    return all(cid in snoozes and now_h < snoozes[cid] for cid in todays)
 
 
 def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -1407,10 +1474,18 @@ def render_habits_today() -> list[tuple[str, str]]:
     # request 2026-07-24).
     pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today
-                     if v is None and not _habit_deferred(name)]
+                     if v is None and not _habit_deferred(name)
+                     and not _habit_block_snoozed(name)]
     pending_chips += [(f"bold bg:{HABIT_YTD_COLORS.get(name, '#7c4dff')} #ffffff",
                        f"{name} {v:+g} ")
                       for name, v in STATE.habits_ytd.items() if v <= 0]
+    # ص prayer counter: always-visible labeled chip ("ص 3") closing the
+    # second line, after the 其他人 YTD chip — a count toward 5, so the
+    # bare-number done-chip format (or disappearing into the pending names)
+    # never fit it (user request 2026-07-27; placement follow-up same day).
+    if STATE.prayer_count is not None:
+        pending_chips.append((_habit_chip_style("ص"),
+                              f"ص {STATE.prayer_count:g} "))
     out: list[tuple[str, str]] = []
     for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
         if chips:
