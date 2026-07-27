@@ -349,6 +349,20 @@ class AliasTests(unittest.TestCase):
         habit = cfg["habits"]["night-hcmc"]
         self.assertIn("evening hcmc", habit.get("aliases", []))
 
+    def test_1_i447_weekly_routes_to_1n_not_the_daily_habit(self):
+        """Bug 2026-07-27: the 1n+ sheet grew a bare "i447" column whose weekly
+        card collided with the DAILY 0n habit "i447" — routing always hit the
+        0n branch, so the weekly card could never be completed and reappeared
+        forever. The card is now named "1 i447" with a registry alias."""
+        import subprocess
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "route.py"), "1 i447"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["step"], "1n+")
+        self.assertEqual(out.get("neon_col"), "AI")
+
     def test_evening_hcmc_routes_to_0n_via_route_py(self):
         """End-to-end through route.py against the live registry."""
         import subprocess
