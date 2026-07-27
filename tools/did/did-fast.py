@@ -1260,9 +1260,11 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     else
         set formula of theCellCum to oldFormulaCum & "+{inc}"
     end if''')
-        elif w.is_variable_1n and w.variable_value:
-            # Variable 1n+ tasks: append to formula so history is preserved
-            val = w.variable_value
+        elif w.is_variable_1n:
+            # Variable 1n+ tasks: append MINUTES to the formula so a week of
+            # repeated sessions accumulates (2026-07-27 redesign — the cell
+            # records time; points go to 0分 separately).
+            val = w.write_value or 1
             write_lines.append(f'''    set theCell1n to range ("{col}" & weekRow) of ws1n
     set oldFormula1n to formula of theCell1n
     if oldFormula1n = "" or oldFormula1n = "0" then
@@ -1273,12 +1275,11 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         set formula of theCell1n to oldFormula1n & "+{val}"
     end if''')
         else:
-            # Row 5 = expected points since the 2026-07-25 restructure (row 2 =
-            # expected time, row 3 = recurrence WEEKDAY). Reading row 3 here
-            # wrote the weekday number as the week's score (bug found
-            # 2026-07-27: /1-2g logged "2 pts" — Monday — instead of [20]).
-            write_lines.append(f'''    set pts{col} to value of range ("{col}5") of ws1n
-    set value of range ("{col}" & weekRow) of ws1n to pts{col}''')
+            # 2026-07-27 redesign: the cell records the MINUTES the habit took
+            # (1 when unknown), never the points — those land on 0分 via the
+            # row-5 expected-points reference in build_1n_0fen_script.
+            write_lines.append(
+                f'''    set value of range ("{col}" & weekRow) of ws1n to {w.write_value or 1}''')
         verify_lines.append(
             f'    set v{col} to string value of range ("{col}" & weekRow) of ws1n\n'
             f'    set results to results & "{col}=" & v{col} & "|"'
@@ -1427,11 +1428,13 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
         elif r.step == "1n" and getattr(r, "is_variable_1n", False):
             # Same base + rate×minutes formula as the routing path — raw
             # minutes would over/under-credit rated habits (长冥想 .5/m,
-            # AoS 15+1/m).
+            # AoS 15+1/m). The week CELL takes the raw minutes (write_value,
+            # 2026-07-27 redesign); the computed points go to 0分.
             resolved = header_normalize(
                 ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
             r.variable_value = (variable_1n_points(resolved, mins)
                                 + (r.item.bonus_points or 0))
+            r.write_value = mins
             r.item.time_value = mins
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
@@ -2115,18 +2118,22 @@ end tell'''
                 if m:
                     week_row = m.group(1)
 
-    # 4c. Batch 1n+ → 0分 cell reference appends
-    # Variable 1n+ tasks write points directly to 0分 (not cell refs)
-    # to avoid over-counting on repeated weekly use
+    # 4c. Batch 1n+ → 0分 appends. The week cell holds MINUTES (2026-07-27
+    # redesign), so 0分 must NOT reference it: standard habits reference the
+    # column's ROW-5 expected points (a constant), variable habits and [N]
+    # overrides append literal points via step 5's fen_appends.
     one_n_fen_result = None
     if one_n_writes and week_row:
         refs = []
         for r in one_n_writes:
-            if r.is_variable_1n and r.variable_value and r.fen_col:
-                # Direct points append (handled in step 5 fen_appends below)
+            if not r.fen_col:
+                continue
+            if r.is_variable_1n and r.variable_value:
                 r.fen_points = r.variable_value
-            elif r.fen_col and r.col_letter:
-                refs.append((r.fen_col, r.col_letter, week_row))
+            elif r.item.points_override:
+                r.fen_points = r.item.points_override
+            elif r.col_letter:
+                refs.append((r.fen_col, r.col_letter, "5"))
         if refs:
             script = build_1n_0fen_script(refs, target_date)
             if script:

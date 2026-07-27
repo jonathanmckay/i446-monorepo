@@ -79,7 +79,11 @@ def test_non_matching_timer_ignored(df):
 def test_1n_variable_backfilled_with_bonus(df):
     r = _mk(df, "一起饭", "1n", variable_value=30, bonus_points=15)
     df.apply_timer_minutes([r], {"description": "一起饭", "minutes": 25})
-    assert r.variable_value == 40  # 25 min + 15 bonus
+    # 一起饭 rate formula is "15+1/m" (2026-07-25 restructure): base 15
+    # + 25 min + 15 typed bonus. The week CELL takes the raw minutes
+    # (write_value, 2026-07-27 redesign).
+    assert r.variable_value == 55
+    assert r.write_value == 25
     assert r.item.time_value == 25
 
 

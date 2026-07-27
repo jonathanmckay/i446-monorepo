@@ -80,16 +80,16 @@ def test_explicit_value_skips_toggl(df, monkeypatch):
         assert r.write_value == expected
 
 
-# ── 1n+ write script: points row + no wrong-week fallback (2026-07-27) ──────
+# ── 1n+ redesign (2026-07-27): cell = minutes, 0分 = points ─────────────────
 
-def test_1n_script_reads_points_from_row5_not_row3(df):
-    """Row 3 became the recurrence WEEKDAY in the 2026-07-25 restructure
-    (row 5 = expected points); reading row 3 wrote e.g. 2 (Monday) as the
-    week's score for /1-2g instead of [20]."""
+def test_1n_cell_write_is_minutes_not_points(df):
+    """The week cell records how long the habit took (1 if unknown) — never a
+    points row read. Points reach 0分 via the row-5 reference instead."""
     r = df.RouteResult(item=df.ParsedItem(raw="1 -2g", name="1 -2g"),
-                       step="1n", col_letter="K")
+                       step="1n", col_letter="K", write_value=25)
     script = df.build_1n_script([r], "7.4")
-    assert '"K5"' in script and '"K3"' not in script
+    assert 'to 25' in script
+    assert '"K3"' not in script and '"K5"' not in script
 
 
 def test_1n_script_has_no_same_month_week_fallback(df):
@@ -97,7 +97,31 @@ def test_1n_script_has_no_same_month_week_fallback(df):
     same month (a Sunday completion before the new week's row exists landed
     on LAST week's row)."""
     r = df.RouteResult(item=df.ParsedItem(raw="1 -2g", name="1 -2g"),
-                       step="1n", col_letter="K")
+                       step="1n", col_letter="K", write_value=1)
     script = df.build_1n_script([r], "7.4")
     assert "fallbackRow" not in script
     assert "ERROR: week 7.4 not found" in script
+
+
+def test_1n_fen_append_references_row5_expected_points(df):
+    script = df.build_1n_0fen_script([("S", "I", "5")], "7/27")
+    assert "+'1n+'!I5" in script
+
+
+H1N = {"0n": {}, "1n": {"1 m5x2": "I", "1 -2g": "K"}}
+
+
+def test_1n_route_minutes_from_toggl_and_fen_fallback(df, monkeypatch):
+    """Cell minutes come from today's matching Toggl entries when untyped, and
+    '1 m5x2' (absent from the hand-kept fen map — bug 2026-07-27: its points
+    never reached today) resolves its 0分 column from the domain token."""
+    monkeypatch.setattr(df, "toggl_minutes_for", lambda name: 42)
+    r = df.route_items([df.ParsedItem(raw="1 m5x2", name="1 m5x2")], H1N, TQ)[0]
+    assert r.step == "1n" and r.write_value == 42
+    assert r.fen_col == "S"
+
+
+def test_1n_route_minutes_default_1_when_unknown(df, monkeypatch):
+    monkeypatch.setattr(df, "toggl_minutes_for", lambda name: None)
+    r = df.route_items([df.ParsedItem(raw="1 -2g", name="1 -2g")], H1N, TQ)[0]
+    assert r.write_value == 1
