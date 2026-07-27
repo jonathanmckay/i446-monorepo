@@ -1738,6 +1738,41 @@ def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[
         return False, str(e)
 
 
+def _on_ix() -> bool:
+    """True when this process runs on Ix (the Mac Mini, hostname
+    Jonathans-Mac-mini.local) — the single writer for build-order stamps."""
+    import socket
+    return "mac-mini" in socket.gethostname().lower()
+
+
+def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
+    """Apply a block-header stamp on IX's build-order copy (single writer).
+    Returns True = freshly stamped, False = already present, None = ssh
+    failed (caller falls back to the local write)."""
+    py = (
+        "import sys; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
+        "import neon_blocks as nb\n"
+        "from pathlib import Path\n"
+        "bo = Path.home() / 'vault/g245/5e-1/build-order.md'\n"
+        "t = bo.read_text(encoding='utf-8')\n"
+        f"nt, ch = nb.stamp_emoji(t, {block!r}, {emoji!r})\n"
+        "if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "print('CH' if ch else 'NC')\n"
+    )
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "ix", "python3", "-"],
+            input=py, capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    outp = (r.stdout or "").strip().splitlines()
+    tokenized = outp[-1] if outp else ""
+    if r.returncode != 0 or tokenized not in ("CH", "NC"):
+        return None
+    return tokenized == "CH"
+
+
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
     stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
@@ -1812,10 +1847,29 @@ def run_ritual(tag: str) -> dict:
     if not bo.exists():
         out["error"] = "build-order.md not found"
         return out
+    # SINGLE-WRITER stamps (2026-07-27): completions run on both Straylight
+    # (dtd/skills) and Ix (mobile dtd/daemon), and each used to stamp its OWN
+    # build-order copy — Syncthing last-writer-wins then dropped whichever
+    # side synced second (bug: all 5 午 rituals completed across the two
+    # machines, header merged to ☀️📧✅, P showed 7/13). All stamps now land
+    # on Ix's copy (where the daemon reconciles); Syncthing brings them back.
+    # Ix unreachable → old local write as a loud, noted fallback.
     text = bo.read_text(encoding="utf-8")
     new_text, changed = nb.stamp_emoji(text, block, emoji)
-    if changed:
-        bo.write_text(new_text, encoding="utf-8")
+    if _on_ix():
+        if changed:
+            bo.write_text(new_text, encoding="utf-8")
+    else:
+        remote = _stamp_on_ix(block, emoji)
+        if remote is None:
+            out["stamp_fallback_local"] = True
+            if changed:
+                bo.write_text(new_text, encoding="utf-8")
+        else:
+            # Ix's copy is the truth: credit points only if IX stamped fresh
+            # (a local-stale "would change" must not double-credit a ritual
+            # another machine already stamped and credited).
+            changed = remote
     out["stamped"] = changed
     out["auto"] = is_auto
 
