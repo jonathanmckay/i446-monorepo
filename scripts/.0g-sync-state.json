@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "roadmaps go well with followups": {
-      "todoist_id": "6h8Q8j4cgPwjXVX2",
-      "minutes": 100
-    },
-    "roles and responsibilities for reports": {
-      "todoist_id": "6h8Q8j9ggvcfPjC2",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-07-27T03:55:02.600685-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-27T04:00:10.264643-07:00"
 }
