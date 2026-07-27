@@ -1706,7 +1706,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 STATE.visible_events.append({"kind": "entry", "start_dt": p["start_dt"],
                                              "entry_ids": p["entry_ids"],
                                              "raw_desc": p["raw_desc"],
-                                             "project_id": p["project_id"]})
+                                             "project_id": p["project_id"],
+                                             "dur_min": p.get("dur_min"),
+                                             "running": bool(p.get("is_running"))})
 
     prev_hour = blk_sh  # the header established this hour at its :00 slot
     for _, hh, mm, p in rows:
@@ -2559,7 +2561,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -2713,6 +2715,70 @@ def run_tg_fast(text: str) -> str:
         return f"err: {e}"
 
 
+_COMPLETED_TODAY = Path(os.environ.get("XDG_STATE_HOME")
+                        or (Path.home() / ".local" / "state")) / "jm" / "completed-today.json"
+_ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
+
+
+def _norm_done_name(s: str) -> str:
+    """Match completed-today names against a Toggl desc: annotations
+    ((N)/[N]/{N}) stripped, whitespace collapsed, lowercased — a Toggl desc
+    rarely equals the Todoist content byte-for-byte."""
+    return " ".join(_ANNOT_RE.sub(" ", s).split()).lower()
+
+
+def _points_recorded_today(desc: str) -> tuple[bool, int]:
+    """(recorded, 分) for a desc completed TODAY, from completed-today.json —
+    did-fast's own idempotency record. Only meaningful for today's view:
+    past days keep no completion record, so callers must treat (False, 0)
+    there as "unknown", not "not recorded"."""
+    try:
+        data = json.loads(_COMPLETED_TODAY.read_text())
+    except Exception:
+        return False, 0
+    if data.get("date") != dt.date.today().isoformat():
+        return False, 0
+    target = _norm_done_name(desc)
+    if not target:
+        return False, 0
+    for n in data.get("names", []):
+        if _norm_done_name(n) == target:
+            pts = data.get("points", {}).get(n, 0)
+            return True, int(pts) if isinstance(pts, (int, float)) else 0
+    return False, 0
+
+
+def _did_summary(stdout_text: str) -> str:
+    """One flash-able line from did-fast's JSON blob. The old last-line-of-
+    output flash literally showed "}" for every successful conversion; pull
+    out what the user actually cares about: points granted, agent-needed
+    reasons, already-done skips."""
+    try:
+        data = json.loads(stdout_text[stdout_text.index("{"):])
+    except Exception:
+        lines = stdout_text.strip().splitlines()
+        return lines[-1] if lines else "(no output)"
+    bits = []
+    for r in data.get("results", []):
+        name = r.get("name", "?")
+        fen = r.get("0fen") or {}
+        pts = fen.get("points", 0) or 0
+        pts += fen.get("bonus", 0) or 0
+        if not pts and r.get("variable_1n"):
+            pts = r.get("variable_value") or 0
+        td = r.get("todoist") or {}
+        closed = " · todoist ✓" if td.get("closed") else ""
+        if pts:
+            bits.append(f"✓ {name} +{pts}分{closed}")
+        else:
+            bits.append(f"✓ {name}{closed}")
+    for a in data.get("agent_needed", []):
+        bits.append(f"⚠ {a.get('name', '?')}: {a.get('reason', 'needs agent')}")
+    for fs in data.get("future_skipped", []):
+        bits.append(f"⚠ {fs.get('name', '?')}: {fs.get('warning', 'skipped')}")
+    return "  ".join(bits) if bits else "(no results)"
+
+
 def run_did_fast(text: str) -> str:
     """Like run_tg_fast, but for did-fast.py — used to convert an ALREADY-
     ENDED calendar event into a completed Toggl entry AND grant its points in
@@ -2725,6 +2791,8 @@ def run_did_fast(text: str) -> str:
             ["python3", DID_FAST, text],
             capture_output=True, text=True, timeout=45,
         )
+        if proc.stdout and "{" in proc.stdout:
+            return _did_summary(proc.stdout)
         out = (proc.stdout or proc.stderr or "").strip()
         return out.splitlines()[-1] if out else "(no output)"
     except subprocess.TimeoutExpired:
@@ -2910,6 +2978,10 @@ def _(event):
         now = view_now()
         is_past = ev["end_dt"] <= now
         cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
+        if is_past and STATE.day_offset != 0:
+            # Viewing a past day: did-fast's trailing M/D token targets the
+            # entry + points at the event's own day, not today.
+            cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
         STATE.event_sel = None
         flash(f"$ {'did' if is_past else 'tg'} {cmd}")
 
@@ -2944,6 +3016,23 @@ def _(event):
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
         return
+    if STATE.day_offset != 0:
+        # Viewing another day: typed commands apply to THAT day (user request
+        # 2026-07-27 — "tg calls go to yesterday if I'm viewing yesterday").
+        # Only completed HHMM-HHMM ranges can land on a past day; live-timer
+        # actions (stop/current/del) still act on now, and anything else
+        # would silently start a timer TODAY, so warn instead of running.
+        viewed = view_now().date()
+        low = text.lower()
+        live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
+        has_range = re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
+                              re.sub(r"\s@\S+\s*$", "", text))
+        if has_range:
+            text = f"{text} --date {viewed.isoformat()}"
+        elif not live_ok:
+            flash(f"viewing {viewed:%-m/%-d} — use '<desc> HHMM-HHMM' to log that day "
+                  "(start/stop act on today)", 6.0)
+            return
     flash(f"$ tg {text}")
 
     async def _run_and_refresh():
@@ -2962,6 +3051,61 @@ def _(event):
             event.app.invalidate()
 
     event.app.create_background_task(_run_and_refresh())
+
+
+@kb.add("escape", "enter")  # opt/alt+enter
+def _(event):
+    """opt+enter on a selected TRACKED entry: run /did for it — grant its
+    points and close the matching Todoist task (plain Enter on the same row
+    arms an edit instead). Pre-checked against completed-today.json: if the
+    points were already recorded today, say so and DON'T re-run — did-fast
+    has no double-append guard for 0分, so a second run would double-award
+    (user request 2026-07-27). On a past-day view there's no completion
+    record to check, so it runs unconditionally (that's the backfill case)."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not (isinstance(item, dict) and item.get("kind") == "entry"):
+        flash("opt+enter: select a tracked entry first", 3.0)
+        return
+    if item.get("running"):
+        flash("timer still running — stop it (^S) before granting points", 4.0)
+        return
+    if not item.get("dur_min"):
+        flash("no duration on this row", 3.0)
+        return
+    desc = item["raw_desc"]
+    if STATE.day_offset == 0:
+        recorded, pts = _points_recorded_today(desc)
+        if recorded:
+            flash(f"already recorded today: {desc} ({pts}分) — not re-running", 6.0)
+            return
+    if STATE.conversion_in_flight:
+        flash("still converting the last one…", 3.0)
+        return
+    start = item["start_dt"]
+    end = start + dt.timedelta(minutes=item["dur_min"])
+    code = proj_code(item.get("project_id"))
+    cmd = f"{desc} {start:%H%M}-{end:%H%M}"
+    if code:
+        cmd += f" @{code}"
+    if STATE.day_offset != 0:
+        cmd += f" {start.month}/{start.day}"
+    STATE.event_sel = None
+    flash(f"$ did {cmd}")
+
+    async def _run_did_and_refresh():
+        STATE.conversion_in_flight = True
+        try:
+            res = await asyncio.to_thread(run_did_fast, cmd)
+            flash(res, 8.0)
+            event.app.invalidate()
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_points)
+            event.app.invalidate()
+        finally:
+            STATE.conversion_in_flight = False
+
+    event.app.create_background_task(_run_did_and_refresh())
 
 
 @kb.add("c-q")
