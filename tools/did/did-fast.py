@@ -1261,7 +1261,11 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         set formula of theCell1n to oldFormula1n & "+{val}"
     end if''')
         else:
-            write_lines.append(f'''    set pts{col} to value of range ("{col}3") of ws1n
+            # Row 5 = expected points since the 2026-07-25 restructure (row 2 =
+            # expected time, row 3 = recurrence WEEKDAY). Reading row 3 here
+            # wrote the weekday number as the week's score (bug found
+            # 2026-07-27: /1-2g logged "2 pts" — Monday — instead of [20]).
+            write_lines.append(f'''    set pts{col} to value of range ("{col}5") of ws1n
     set value of range ("{col}" & weekRow) of ws1n to pts{col}''')
         verify_lines.append(
             f'    set v{col} to string value of range ("{col}" & weekRow) of ws1n\n'
@@ -1272,20 +1276,18 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     set wb to workbook "Neon分v12.2.xlsx"
     set ws1n to sheet "1n+" of wb
     set weekRow to 0
-    set fallbackRow to 0
     repeat with r from 4 to 100
         set bVal to string value of range ("B" & r) of ws1n
         if bVal = "{week_mw}" then
             set weekRow to r
             exit repeat
         end if
-        if bVal starts with "{week_mw.split('.')[0]}." then
-            set fallbackRow to r
-        end if
     end repeat
-    if weekRow = 0 and fallbackRow > 0 then
-        set weekRow to fallbackRow
-    end if
+    -- NO same-month fallback: when the new week's row doesn't exist yet
+    -- (Sunday, before the row is added), the old fallback silently credited
+    -- LAST week's row — backward-looking data corruption (2026-07-27: a
+    -- Sunday /1-2g landed on the 7.3 row). Failing loudly is recoverable;
+    -- a wrong-week write is invisible.
     if weekRow = 0 then return "ERROR: week {week_mw} not found"
     set preOut to ""
 {chr(10).join(pre_lines)}

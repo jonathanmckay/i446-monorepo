@@ -52,12 +52,18 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
         except Exception:
             pass
 
-    # Fetch from Agency
+    # Fetch from Agency. ListCalendarView, NOT ListEvents: Graph's /events
+    # returns recurring series as their master (whose original start falls
+    # outside the window), so every recurring meeting — standups, weekly
+    # 1:1s, holds — silently vanished from janus (user report 2026-07-27:
+    # "janus is missing a lot of the meetings on my calendar today").
+    # calendarView expands series into that day's actual instances. Offsets
+    # included per the tool's contract ("UTC or contain the offset").
     try:
-        raw = mcp.call_tool("calendar", "ListEvents", {
-            "startDateTime": day_start.strftime("%Y-%m-%dT00:00:00"),
-            "endDateTime": day_end.strftime("%Y-%m-%dT00:00:00"),
-            "top": "50",
+        raw = mcp.call_tool("calendar", "ListCalendarView", {
+            "startDateTime": day_start.isoformat(),
+            "endDateTime": day_end.isoformat(),
+            "top": 50,
         }, timeout=15)
     except Exception as exc:
         # Agency not available; return cached data if any

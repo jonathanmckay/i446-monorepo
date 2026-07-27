@@ -24,8 +24,10 @@ def test_fzf_multi_and_shift_binds():
 
 
 def test_batch_bindings_use_plus_placeholder_and_clear_marks():
+    # ctrl-k re-bound to the block picker 2026-07-27 (skip is keyless now);
+    # both picker keys must still batch the {+2} marked set.
     for key, script in (("ctrl-d", "$DTD_DEFER"), ("ctrl-x", "$DTD_DELETE"),
-                        ("ctrl-k", "$DTD_SKIP")):
+                        ("ctrl-k", "$DTD_BLOCKARM"), ("ctrl-v", "$DTD_BLOCKARM")):
         m = re.search(rf'--bind "{key}:execute(?:-silent)?\(({re.escape(script)}[^)]*)\)([^"]*)"', SRC)
         assert m, f"{key} binding not found"
         assert "{+2}" in m.group(1), f"{key} must pass all marked ids via {{+2}}"

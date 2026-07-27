@@ -1,6 +1,21 @@
 import datetime as dt
+import inspect
 
 import outlook_client
+
+
+def test_fetch_uses_calendar_view_not_list_events():
+    """Regression (user report 2026-07-27: "janus is missing a lot of the
+    meetings on my calendar today"): Graph's ListEvents returns recurring
+    series MASTERS (original start date, outside the day window), so every
+    recurring meeting — standups, weekly 1:1s, holds — vanished. Only
+    ListCalendarView expands series into the day's actual instances."""
+    src = inspect.getsource(outlook_client.list_events)
+    assert '"ListCalendarView"' in src
+    assert '"ListEvents"' not in src
+    # Datetimes must carry a UTC offset per the tool's contract — a naive
+    # local string is ambiguous server-side.
+    assert "isoformat()" in src
 
 
 def test_normalize_preserves_graph_windows_timezone():

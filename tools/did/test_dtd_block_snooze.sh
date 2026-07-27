@@ -15,6 +15,8 @@ fail() { echo "FAIL: $1"; exit 1; }
 # ── 1. Structural ────────────────────────────────────────────────────────────
 grep -q 'ctrl-v:execute-silent($DTD_BLOCKARM {+2})' "$DTD" \
   || fail "ctrl-v must ARM the picker via execute-silent (no terminal takeover)"
+grep -q 'ctrl-k:execute-silent($DTD_BLOCKARM {+2})' "$DTD" \
+  || fail "ctrl-k must arm the same picker (user request 2026-07-27; skip is keyless)"
 grep -q 'DTD_BLOCKARM=' "$DTD" || fail "arm script must be defined"
 grep -q 'DTD_BLOCKAPPLY=' "$DTD" || fail "apply script must be defined"
 grep -q 'dtd-block-snooze.json' "$DTD" || fail "snooze file path missing"

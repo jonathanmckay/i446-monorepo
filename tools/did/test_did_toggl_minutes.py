@@ -78,3 +78,26 @@ def test_explicit_value_skips_toggl(df, monkeypatch):
         item = df.ParsedItem(raw="新闻", name="新闻", time_value=typed)
         r = df.route_items([item], HEADERS, TQ)[0]
         assert r.write_value == expected
+
+
+# ── 1n+ write script: points row + no wrong-week fallback (2026-07-27) ──────
+
+def test_1n_script_reads_points_from_row5_not_row3(df):
+    """Row 3 became the recurrence WEEKDAY in the 2026-07-25 restructure
+    (row 5 = expected points); reading row 3 wrote e.g. 2 (Monday) as the
+    week's score for /1-2g instead of [20]."""
+    r = df.RouteResult(item=df.ParsedItem(raw="1 -2g", name="1 -2g"),
+                       step="1n", col_letter="K")
+    script = df.build_1n_script([r], "7.4")
+    assert '"K5"' in script and '"K3"' not in script
+
+
+def test_1n_script_has_no_same_month_week_fallback(df):
+    """A missing week row must ERROR, not silently credit the last row of the
+    same month (a Sunday completion before the new week's row exists landed
+    on LAST week's row)."""
+    r = df.RouteResult(item=df.ParsedItem(raw="1 -2g", name="1 -2g"),
+                       step="1n", col_letter="K")
+    script = df.build_1n_script([r], "7.4")
+    assert "fallbackRow" not in script
+    assert "ERROR: week 7.4 not found" in script
