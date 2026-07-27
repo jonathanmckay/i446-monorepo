@@ -63,9 +63,24 @@ CUMULATIVE_0N = {"问学"}
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
-VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻"}
-VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写"}
-VARIABLE_1N_DEFAULTS: dict[str, int] = {"一起饭": 30}  # default points when no arg given
+VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻",
+               "night hcmc"}
+VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
+               "长冥想", "长o314", "aos", "1 kids nature"}
+# Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
+# Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
+# Keys are header_normalize()d (lowercase).
+VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
+# Default points when completed with no minutes at all (falls back to base).
+VARIABLE_1N_DEFAULTS: dict[str, int] = {}
+
+
+def variable_1n_points(resolved_1n: str, minutes: int) -> int:
+    """Points for a variable 1n+ habit given minutes: base + rate×minutes."""
+    base = VARIABLE_1N_BASES.get(resolved_1n, 0)
+    rate = VARIABLE_1N_RATES.get(resolved_1n, 1.0)
+    return base + int(round(rate * minutes))
 
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
 HABIT_PROJECT: dict[str, str] = {
@@ -104,6 +119,11 @@ ONENEON_ALIASES: dict[str, str] = {
     "家": "family",
     "relax": "relax {60}",
     "一起吃": "一起饭",
+    "long o314": "长o314",
+    # Card is "1 groceries" but the 1n+ header is bare "groceries" — without
+    # this the completion closed the card and silently skipped the column
+    # write (found by neon-task-checksum's first run, 2026-07-26).
+    "1 groceries": "groceries",
 }
 
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
@@ -117,6 +137,10 @@ def time_range_minutes(start: str, end: str) -> int:
 PUNCT_RE = re.compile(r"[^\w\s一-鿿]+", re.UNICODE)
 TIME_RANGE_RE = re.compile(r"(\d{4})-(\d{4})")
 POINTS_RE = re.compile(r"[\[\{](\d+)[\]\}]")
+# "[1/m]" / "[.5/m]" / "[15+1/m]" — display-only rate markers on variable 1n+
+# cards. Stripped before routing (the rates themselves live in
+# VARIABLE_1N_RATES/BASES, keyed by header).
+RATE_ANNOT_RE = re.compile(r"\s*\[[0-9.+]*/m\]")
 
 # 1n+ task name → 0分 column mapping (updated 2026.04.28 after 9-column removal)
 ONENEON_TO_0FEN: dict[str, str] = {
@@ -181,6 +205,45 @@ def header_normalize(s: str) -> str:
     return _re.sub(r"[\s\-—–]+", " ", s).strip().lower()
 
 
+_TOGGL_TODAY: Optional[list] = None  # one fetch per invocation
+
+
+def toggl_minutes_for(name: str) -> Optional[int]:
+    """Sum today's Toggl minutes for entries whose description matches `name`
+    (header-normalized equality), including the running entry's elapsed time.
+
+    Feature (2026-07-24): completing a 0₦ habit in dtd with no typed value
+    should record how long it actually took — the user usually has a Toggl
+    entry with the same name — instead of a flat 1. Returns None when Toggl
+    is unreachable or nothing matches (caller falls back to 1), so dtd keeps
+    working offline.
+    """
+    global _TOGGL_TODAY
+    try:
+        if _TOGGL_TODAY is None:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+            from mcp.toggl_server import toggl_api
+            today = date.today()
+            _TOGGL_TODAY = toggl_api.get_entries(
+                start_date=today.isoformat(),
+                end_date=(today + timedelta(days=1)).isoformat()) or []
+        target = header_normalize(name)
+        secs = 0.0
+        for e in _TOGGL_TODAY:
+            if header_normalize(e.get("description") or "") != target:
+                continue
+            dur = e.get("duration") or 0
+            if dur < 0:  # running entry: elapsed = now - start
+                st = datetime.fromisoformat(
+                    e["start"].replace("Z", "+00:00"))
+                dur = (datetime.now(st.tzinfo) - st).total_seconds()
+            secs += max(0, dur)
+        minutes = round(secs / 60)
+        return minutes if minutes > 0 else None
+    except Exception:
+        return None
+
+
 def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
     if not query_tokens:
         return 0.0
@@ -200,6 +263,15 @@ def match_todoist_task(query: str, tasks: list[dict],
         for task in tasks:
             if str(task.get("id")) == str(preferred_id):
                 return task
+        # Not in this bucket (stale task-queue cache, or the row came from a
+        # different bucket): fetch the exact task rather than dropping to the
+        # name match below, which can pick a DIFFERENT same-named instance
+        # (2026-07-24: completing an overdue "AoS" one-off copy name-matched
+        # the recurring parent instead — wrong task, and its future due date
+        # then tripped the already-done-today close guard).
+        fetched = _fetch_task_by_id(preferred_id)
+        if fetched:
+            return fetched
     queries = [query]
     alias = ALIASES.get(query.strip().lower())
     if alias and alias != query.strip().lower():
@@ -341,6 +413,10 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.points_override = int(bracket_match.group(1))
             chunk = chunk[:bracket_match.start()] + chunk[bracket_match.end():]
             chunk = chunk.strip()
+
+        # Drop display-only "[1/m]" rate markers so they can't ride into the
+        # habit name and break header matching (feature 2026-07-25).
+        chunk = RATE_ANNOT_RE.sub("", chunk).strip()
 
         # Extract +N bonus points
         bonus_match = re.search(r"\+(\d+)\b", chunk)
@@ -617,12 +693,25 @@ def _refresh_task_queue_inner() -> dict:
 
     # Atomic write: only update "today" if the fetch fully succeeded
     # Protect "today": if fetch returned empty/None but old cache had data, retry once then keep old
-    old_today = []
+    old_cache: dict = {}
     if TASK_QUEUE_PATH.exists():
         try:
-            old_today = json.loads(TASK_QUEUE_PATH.read_text()).get("today", [])
+            old_cache = json.loads(TASK_QUEUE_PATH.read_text())
         except Exception:
             pass
+    old_today = old_cache.get("today", [])
+
+    # Keep-old guard for the label buckets (2026-07-26): under rate limiting
+    # Todoist intermittently returns EMPTY results with a 200 — the exact
+    # failure mode fetch_today already guards. An empty label bucket written
+    # here wiped every row of that tier from dtd until the next refresh
+    # (user report: "complete one -1n task, the others disappear for ~10s" —
+    # same class, see the -1neon union guard below). An empty fetch with a
+    # non-empty old bucket is far more likely a flake than a real all-closed.
+    for _k in keys:
+        if not results.get(_k) and old_cache.get(_k):
+            print(f"WARN: {_k} fetch empty, keeping {len(old_cache[_k])} cached", file=sys.stderr)
+            results[_k] = old_cache[_k]
 
     if today_result and len(today_result) > 0:
         results["today"] = today_result
@@ -654,6 +743,17 @@ def _refresh_task_queue_inner() -> dict:
     try:
         today_iso = datetime.now().strftime("%Y-%m-%d")
         neg1 = fetch_label("-1neon")
+        if not neg1:
+            # Empty label fetch + lagging filter = every OTHER ritual card
+            # vanishes from dtd until the next refresh (bug 2026-07-26:
+            # completing one -1n hid the rest for ~10s). Rate limiting is the
+            # likely cause — the completion-time refresh follows a burst of
+            # close/stamp API calls. Carry the old cache's ritual cards
+            # forward instead; genuinely-closed ones stay hidden via the
+            # completed-today id overlay, and the next clean refresh prunes.
+            neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])]
+            if neg1:
+                print(f"WARN: -1neon fetch empty, carrying {len(neg1)} cached card(s)", file=sys.stderr)
         have = {t.get("id") for t in results["today"]}
         for t in neg1:
             if t.get("id") in have:
@@ -789,7 +889,9 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             elif item.time_value is not None:
                 val = item.time_value
             else:
-                val = 1
+                # No typed value: record how long the habit actually took,
+                # from today's same-named Toggl entries (2026-07-24).
+                val = toggl_minutes_for(item.name) or 1
             # Cumulative columns: add to existing (handled in AppleScript)
             is_cumulative = item.name in CUMULATIVE_0N
 
@@ -834,16 +936,40 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         if resolved_1n in h1n_norm:
             col_letter = h1n_norm[resolved_1n]
             fen_col = ONENEON_TO_0FEN.get(resolved_1n)
+            if fen_col is None:
+                # Generic fallback (bug 2026-07-27: "1 m5x2" missing from the
+                # hand-kept map → its points never reached 0分): "1 <domain>"
+                # names resolve via the domain token, same as route.py does
+                # through the registry.
+                fen_col = LABEL_TO_0FEN.get(resolved_1n.split()[-1])
             is_cumul = resolved_1n in CUMULATIVE_1N
             is_var = resolved_1n in VARIABLE_1N
-            # For variable 1n+ tasks, use user-provided value (points_override or time_value)
+            # 2026-07-27 redesign: the WEEK CELL records MINUTES (explicit
+            # value/range > today's matching Toggl entries > 1); the habit's
+            # POINTS go to today's 0分 domain column instead (row-5 expected
+            # points for standard habits, base+rate×minutes for variable).
+            minutes = None
+            if item.time_range:
+                minutes = time_range_minutes(*item.time_range)
+            elif item.time_value is not None:
+                minutes = item.time_value
+            else:
+                minutes = toggl_minutes_for(item.name)
+            cell_minutes = minutes if minutes else 1
             var_val = None
             if is_var:
-                var_val = item.points_override or item.time_value or VARIABLE_1N_DEFAULTS.get(resolved_1n)
+                if item.points_override:
+                    var_val = item.points_override
+                elif minutes is not None:
+                    var_val = variable_1n_points(resolved_1n, minutes)
+                else:
+                    var_val = (VARIABLE_1N_DEFAULTS.get(resolved_1n)
+                               or VARIABLE_1N_BASES.get(resolved_1n) or None)
                 if var_val and item.bonus_points:
                     var_val += item.bonus_points
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
+                            write_value=cell_minutes,
                             is_cumulative_1n=is_cumul,
                             cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
                             is_variable_1n=is_var,
@@ -1058,7 +1184,7 @@ def build_0fen_script(appends: list[tuple[str, int]], target_date: str) -> Optio
     script = f'''tell application "Microsoft Excel"
     set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of range ("B" & i) of ws) = "{target_date}" then
             set todayRow to i
             exit repeat
@@ -1134,9 +1260,11 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     else
         set formula of theCellCum to oldFormulaCum & "+{inc}"
     end if''')
-        elif w.is_variable_1n and w.variable_value:
-            # Variable 1n+ tasks: append to formula so history is preserved
-            val = w.variable_value
+        elif w.is_variable_1n:
+            # Variable 1n+ tasks: append MINUTES to the formula so a week of
+            # repeated sessions accumulates (2026-07-27 redesign — the cell
+            # records time; points go to 0分 separately).
+            val = w.write_value or 1
             write_lines.append(f'''    set theCell1n to range ("{col}" & weekRow) of ws1n
     set oldFormula1n to formula of theCell1n
     if oldFormula1n = "" or oldFormula1n = "0" then
@@ -1147,8 +1275,11 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         set formula of theCell1n to oldFormula1n & "+{val}"
     end if''')
         else:
-            write_lines.append(f'''    set pts{col} to value of range ("{col}3") of ws1n
-    set value of range ("{col}" & weekRow) of ws1n to pts{col}''')
+            # 2026-07-27 redesign: the cell records the MINUTES the habit took
+            # (1 when unknown), never the points — those land on 0分 via the
+            # row-5 expected-points reference in build_1n_0fen_script.
+            write_lines.append(
+                f'''    set value of range ("{col}" & weekRow) of ws1n to {w.write_value or 1}''')
         verify_lines.append(
             f'    set v{col} to string value of range ("{col}" & weekRow) of ws1n\n'
             f'    set results to results & "{col}=" & v{col} & "|"'
@@ -1158,20 +1289,18 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     set wb to workbook "Neon分v12.2.xlsx"
     set ws1n to sheet "1n+" of wb
     set weekRow to 0
-    set fallbackRow to 0
     repeat with r from 4 to 100
         set bVal to string value of range ("B" & r) of ws1n
         if bVal = "{week_mw}" then
             set weekRow to r
             exit repeat
         end if
-        if bVal starts with "{week_mw.split('.')[0]}." then
-            set fallbackRow to r
-        end if
     end repeat
-    if weekRow = 0 and fallbackRow > 0 then
-        set weekRow to fallbackRow
-    end if
+    -- NO same-month fallback: when the new week's row doesn't exist yet
+    -- (Sunday, before the row is added), the old fallback silently credited
+    -- LAST week's row — backward-looking data corruption (2026-07-27: a
+    -- Sunday /1-2g landed on the 7.3 row). Failing loudly is recoverable;
+    -- a wrong-week write is invisible.
     if weekRow = 0 then return "ERROR: week {week_mw} not found"
     set preOut to ""
 {chr(10).join(pre_lines)}
@@ -1205,7 +1334,7 @@ def build_1n_0fen_script(refs: list[tuple[str, str, str]], target_date: str) -> 
     script = f'''tell application "Microsoft Excel"
     set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of range ("B" & i) of ws) = "{target_date}" then
             set todayRow to i
             exit repeat
@@ -1297,7 +1426,15 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
             r.write_value = mins
             r.item.time_value = mins
         elif r.step == "1n" and getattr(r, "is_variable_1n", False):
-            r.variable_value = mins + (r.item.bonus_points or 0)
+            # Same base + rate×minutes formula as the routing path — raw
+            # minutes would over/under-credit rated habits (长冥想 .5/m,
+            # AoS 15+1/m). The week CELL takes the raw minutes (write_value,
+            # 2026-07-27 redesign); the computed points go to 0分.
+            resolved = header_normalize(
+                ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
+            r.variable_value = (variable_1n_points(resolved, mins)
+                                + (r.item.bonus_points or 0))
+            r.write_value = mins
             r.item.time_value = mins
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
@@ -1981,18 +2118,22 @@ end tell'''
                 if m:
                     week_row = m.group(1)
 
-    # 4c. Batch 1n+ → 0分 cell reference appends
-    # Variable 1n+ tasks write points directly to 0分 (not cell refs)
-    # to avoid over-counting on repeated weekly use
+    # 4c. Batch 1n+ → 0分 appends. The week cell holds MINUTES (2026-07-27
+    # redesign), so 0分 must NOT reference it: standard habits reference the
+    # column's ROW-5 expected points (a constant), variable habits and [N]
+    # overrides append literal points via step 5's fen_appends.
     one_n_fen_result = None
     if one_n_writes and week_row:
         refs = []
         for r in one_n_writes:
-            if r.is_variable_1n and r.variable_value and r.fen_col:
-                # Direct points append (handled in step 5 fen_appends below)
+            if not r.fen_col:
+                continue
+            if r.is_variable_1n and r.variable_value:
                 r.fen_points = r.variable_value
-            elif r.fen_col and r.col_letter:
-                refs.append((r.fen_col, r.col_letter, week_row))
+            elif r.item.points_override:
+                r.fen_points = r.item.points_override
+            elif r.col_letter:
+                refs.append((r.fen_col, r.col_letter, "5"))
         if refs:
             script = build_1n_0fen_script(refs, target_date)
             if script:

@@ -495,7 +495,14 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     return 0
 
 
-def run_1n(d: dict, target_date: str) -> int:
+def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) -> int:
+    """2026-07-27 redesign: the 1n+ week cell records the MINUTES the habit
+    took (explicit > today's matching Toggl entries > 1); the habit's POINTS
+    (row-5 expected points, or the cumulative increment) are appended to
+    today's 0分 domain column as a literal. Previously the cell got the
+    points and 0分 got a reference to the cell — so a minutes-cell would have
+    double-counted, and habits missing from the fen map (bug 2026-07-27:
+    "1 m5x2") never credited today at all."""
     name = d["habit_name"]
     col = d["neon_col"]
     fen_col = d["fen_col"]
@@ -506,35 +513,39 @@ def run_1n(d: dict, target_date: str) -> int:
         print(f"  ✗ M.W lookup failed: {e}", file=sys.stderr)
         return 1
 
-    # Read points from row 3
+    toggl = d.get("toggl") or {}
+    minutes = explicit_minutes or _auto_detect_minutes(
+        toggl.get("desc", name), toggl.get("project", "")) or 1
+
     inc = d.get("cumulative_increment")
     if inc:
+        # Cumulative habits: minutes accumulate in the cell, the fixed
+        # increment is the per-occurrence points.
         cur = excel.read("1n+", col, row=week_row)
-        old = 0
         try:
             old = int(float(cur.get("value", 0) or 0))
         except (TypeError, ValueError):
             old = 0
-        points = old + inc
-        excel.write("1n+", col, row=week_row, value=str(points))
+        excel.write("1n+", col, row=week_row, value=str(old + minutes))
+        points = inc
     else:
-        row3 = excel.read("1n+", col, row=3)
+        excel.write("1n+", col, row=week_row, value=str(minutes))
+        row5 = excel.read("1n+", col, row=5)
         try:
-            points = int(float(row3.get("value", 0) or 0))
+            points = int(float(row5.get("value", 0) or 0))
         except (TypeError, ValueError):
             points = 0
-        excel.write("1n+", col, row=week_row, value=str(points))
 
-    # Append cell ref to 0分
-    if fen_col:
-        excel.append("0分", fen_col, date=target_date, value=f"+'1n+'!{col}{week_row}")
+    # Append the points to today's 0分 domain column
+    if fen_col and points:
+        excel.append("0分", fen_col, date=target_date, value=f"+{points}")
 
     # Close 1neon Todoist
     closed = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
 
     _append_completed(name)
     _fire_refresh()
-    print(f"  ✓ {name} → 1n+!{col}{week_row} ({points} pts), 0分!{fen_col} appended"
+    print(f"  ✓ {name} → 1n+!{col}{week_row} = {minutes}m, 0分!{fen_col} +{points}"
           + (" + todoist closed" if closed else ""))
     return 0
 
@@ -708,7 +719,7 @@ def main() -> int:
         if step == "0n":
             rc |= run_0n(d, item, target, time_range, explicit_minutes)
         elif step == "1n+":
-            rc |= run_1n(d, target)
+            rc |= run_1n(d, target, explicit_minutes)
         else:
             # Step 5: try one-off Todoist match before deferring to agent
             sub_rc = run_one_off(d.get("query_after_strip") or query, target, item)
