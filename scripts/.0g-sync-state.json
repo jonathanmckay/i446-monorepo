@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-27T05:30:08.844005-07:00"
+  "tasks": {
+    "write r&e for i9": {
+      "todoist_id": "6h8gR6xCq72FFJh2",
+      "minutes": 60
+    },
+    "happy and ptsmaxx meetings": {
+      "todoist_id": "6h8gR6xx48QgrwCR",
+      "minutes": 40
+    },
+    "honorable basketball": {
+      "todoist_id": "6h8gR6xxCGGrMm5R",
+      "minutes": 20
+    },
+    "follow meal plan": {
+      "todoist_id": "6h8gR75F2xxRGqWR",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-07-27T10:00:07.481727-07:00"
 }
