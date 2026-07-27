@@ -624,18 +624,6 @@
     "rent": "1195.00"
   },
   {
-    "unit_id": 206,
-    "property_name": "hl65",
-    "unit": "647",
-    "tenant_name": "Johnson, Jillian J.",
-    "status": "Pending",
-    "lease_sign_date": "2025-08-14",
-    "move_in": "2025-08-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "2100.00"
-  },
-  {
     "unit_id": 834,
     "property_name": "kn47 K1",
     "unit": "A204",
@@ -4173,6 +4161,6 @@
     "move_in": "2026-02-20",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "925.00"
+    "rent": "0.00"
   }
 ]
