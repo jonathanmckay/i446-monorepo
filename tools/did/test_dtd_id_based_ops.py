@@ -36,11 +36,12 @@ def test_defer_passes_id():
 
 
 def test_block_delay_passes_ids():
-    # ctrl-v (block delay since 2026-07-24; points editing moved to ctrl-g's
-    # edit-fast) forwards the whole {+2} id batch to its option builder and
-    # writer — never names.
-    assert 'ctrl-v:execute($DTD_BLOCKDELAY {+2})' in DTD
-    assert r'python3 - "\$SNOOZE" "\$glyph" "\$@"' in DTD
+    # ctrl-v (fzf-native picker since 2026-07-27) arms the whole {+2} id batch
+    # into $DTD_BLOCKPICK; blockapply reads those ids back for the writer —
+    # never names.
+    assert 'ctrl-v:execute-silent($DTD_BLOCKARM {+2})' in DTD
+    assert r"""printf '%s\n' "\$@" > "\$BLOCKPICK""" in DTD
+    assert r'python3 - "\$SNOOZE" "\$glyph" "\${ids[@]}"' in DTD
 
 
 def test_edit_passes_id():

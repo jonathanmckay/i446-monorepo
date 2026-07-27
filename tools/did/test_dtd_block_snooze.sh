@@ -1,57 +1,40 @@
 #!/bin/zsh
-# Feature test (2026-07-24): ctrl-v same-day block delay.
-# Instead of pushing a task to the end of the list (old skip-style behavior),
-# ctrl-v opens an inner fzf of the remaining 地支 blocks (character + pinyin +
-# hours) and HIDES the task until the chosen block's hour arrives, at which
-# point the watcher's block-boundary reload surfaces it again.
+# Feature test: ctrl-v same-day block delay — fzf-NATIVE picker (2026-07-27).
+#
+# History: every nested-UI picker failed under cmux (inner fzf never painted
+# 2026-07-26 ×2; the printf/read menu was invisible and blind keystrokes
+# skipped tasks instead 2026-07-27). The picker is now the outer fzf itself:
+# ctrl-v arms $DTD_BLOCKPICK via execute-silent (NO terminal takeover), the
+# list generator swaps task rows for block rows (BLOCK:<glyph> ids), and
+# enter/⌃⏎ on a block row applies the snooze via $DTD_BLOCKAPPLY.
 set -e
 cd "$(dirname "$0")"
 DTD=dtd.sh
 fail() { echo "FAIL: $1"; exit 1; }
 
 # ── 1. Structural ────────────────────────────────────────────────────────────
-grep -q 'ctrl-v:execute($DTD_BLOCKDELAY {+2})' "$DTD" \
-  || fail "ctrl-v must invoke the block-delay script with the {+2} batch"
-grep -q "DTD_BLOCKDELAY=" "$DTD" || fail "block-delay script must be defined"
-grep -q "dtd-block-snooze.json" "$DTD" || fail "snooze file path missing"
+grep -q 'ctrl-v:execute-silent($DTD_BLOCKARM {+2})' "$DTD" \
+  || fail "ctrl-v must ARM the picker via execute-silent (no terminal takeover)"
+grep -q 'DTD_BLOCKARM=' "$DTD" || fail "arm script must be defined"
+grep -q 'DTD_BLOCKAPPLY=' "$DTD" || fail "apply script must be defined"
+grep -q 'dtd-block-snooze.json' "$DTD" || fail "snooze file path missing"
 for py in mao chen si wu wei shen you xu hai; do
-  grep -q "'$py'" "$DTD" || fail "pinyin '$py' missing from block picker"
+  grep -q "'$py'" "$DTD" || fail "pinyin '$py' missing from picker rows"
 done
-grep -q "DTD_POINTS" "$DTD" && fail "old ctrl-v points binding should be gone"
+grep -q 'DTD_BLOCKDELAY' "$DTD" && fail "old nested-UI blockdelay script should be gone"
+# enter + ⌃⏎ route picker rows to blockapply
+[ "$(grep -c 'BLOCK:\* ]]; then' "$DTD")" -ge 2 ] \
+  || fail "enter.sh AND done.sh must route BLOCK:* rows to blockapply"
+# destructive bindings must ignore picker rows
+[ "$(grep -c 'picker rows are not tasks' "$DTD")" -ge 3 ] \
+  || fail "skip/delete/defer must guard against BLOCK:* ids"
+# every list invocation passes the blockpick path (payload arg 9)
+[ "$(grep -c "'\$DTD_VIEW' '\$DTD_BLOCKPICK'" "$DTD")" -ge 2 ] \
+  || fail "list invocations must pass \$DTD_BLOCKPICK"
+grep -q '"\$1" "\$2" "\$3" "\$4" "\$5" "\$6" "\$7" "\$8" "\$9"' "$DTD" \
+  || fail "list wrapper must forward the 9th (blockpick) arg"
 
-# The picker must be a printf/read tty menu, NOT a nested fzf: a full-screen
-# fzf inside the outer fzf's execute() never painted under cmux — the script
-# ran but nothing appeared and the picker ate the next keypress blind
-# (reported twice 2026-07-26; both the --height and full-screen variants
-# failed). printf/read after stty sane + clear is the pattern the CPAP and
-# defer prompts already prove out in this exact context.
-BLOCKBODY=$(sed -n '/<< BLOCKEOF/,/^BLOCKEOF/p' "$DTD")
-printf '%s\n' "$BLOCKBODY" | grep -v '^#' | grep -q 'fzf ' \
-  && fail "block picker must not nest an fzf inside execute() — it never paints under cmux"
-printf '%s\n' "$BLOCKBODY" | grep -q 'stty sane' \
-  || fail "block picker must force sane tty modes before prompting"
-printf '%s\n' "$BLOCKBODY" | grep -qF '\033[2J' \
-  || fail "block picker must clear the stale frame before prompting"
-printf '%s\n' "$BLOCKBODY" | grep -q 'read answer < /dev/tty' \
-  || fail "block picker must read the answer from /dev/tty"
-
-# The answer resolver must accept a number, pinyin (incl. prefix), or 汉字.
-PICK=$(mktemp)
-python3 - "$DTD" "$PICK" <<'PY'
-import re, sys
-src = open(sys.argv[1]).read()
-m = re.search(r"<<'PYPICK'\n(.*?)\nPYPICK", src, re.DOTALL)
-open(sys.argv[2], 'w').write(m.group(1))
-PY
-OPTS=$'未\twei\t12:00-14:00\n申\tshen\t14:00-16:00\nnow\t(clear)\tun-delay, show again'
-for pair in "2:申" "shen:申" "sh:申" "未:未" "now:now" ":"; do
-  ans="${pair%%:*}"; want="${pair#*:}"
-  got=$(python3 "$PICK" "$ans" "$OPTS")
-  [[ "$got" == "$want" ]] || fail "answer '$ans' resolved to '$got', wanted '$want'"
-done
-rm -f "$PICK"
-
-# ── 2. Functional: generator hides snoozed ids until their hour ─────────────
+# ── 2. Functional: generator becomes the picker when armed ───────────────────
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
 python3 - "$DTD" "$TMP/gen.py" <<'PY'
 import re, sys
@@ -75,28 +58,44 @@ JSON
 echo '{"date":"'$TODAY'","names":[]}' > "$TMP/done.json"
 : > "$TMP/rm"; : > "$TMP/sk"; : > "$TMP/tm"; echo default > "$TMP/v"
 
-gen() {
+gen() {  # $1 = optional blockpick file
   HOME="$TMP" python3 "$TMP/gen.py" "$TMP/c.json" "$TMP/done.json" "$TMP/rm" \
-    "$TODAY" 100 "$TMP/sk" "$TMP/tm" "$TMP/v" \
-    | sed -E 's/\x1b\[[0-9;]*m//g' | cut -f1
+    "$TODAY" 100 "$TMP/sk" "$TMP/tm" "$TMP/v" "${1:-$TMP/nope}" \
+    | sed -E 's/\x1b\[[0-9;]*m//g'
 }
 
-# snoozed → future hour: hidden. arrived → its hour has come: visible.
+# 2a. Not armed → normal task list, no picker rows
+out=$(gen)
+echo "$out" | grep -q "0t" || fail "normal list must render when not armed"
+echo "$out" | grep -q "BLOCK:" && fail "no picker rows when not armed"
+
+# 2b. Armed → ONLY picker rows: future blocks + cancel, ids BLOCK:<glyph>
+echo "plain" > "$TMP/armed"
+out=$(gen "$TMP/armed")
+echo "$out" | grep -q "0t" && fail "armed picker must replace the task list"
+echo "$out" | grep -q "BLOCK:cancel" || fail "picker must offer cancel"
+if [ "$NOW_H" -lt 18 ]; then
+  echo "$out" | grep -q "BLOCK:戌" || fail "future block 戌 row missing"
+fi
+echo "$out" | grep -q "BLOCK:now" && fail "un-delay row must not show for un-snoozed ids"
+
+# 2c. Armed with a currently-snoozed id → un-delay row appears
 cat > "$TMP/.local/state/jm/dtd-block-snooze.json" <<JSON
-{"date":"$TODAY","snoozes":{"snoozed":$((NOW_H + 2)),"arrived":$NOW_H}}
+{"date":"$TODAY","snoozes":{"snoozed":$((NOW_H + 2))}}
 JSON
+echo "snoozed" > "$TMP/armed"
+gen "$TMP/armed" | grep -q "BLOCK:now" || fail "un-delay row must show for snoozed ids"
+
+# 2d. Snoozed-id hiding in the NORMAL list (unchanged semantics)
 out=$(gen)
 echo "$out" | grep -q "xk22" && fail "snoozed task must be hidden before its block"
-echo "$out" | grep -q "xk20" || fail "task whose block has arrived must reappear"
-echo "$out" | grep -q "0t"   || fail "un-snoozed task must be unaffected"
-
-# Stale (yesterday's) snooze file must be ignored entirely.
+echo "$out" | grep -q "xk20" || fail "un-snoozed tasks must render"
 cat > "$TMP/.local/state/jm/dtd-block-snooze.json" <<JSON
 {"date":"2000-01-01","snoozes":{"snoozed":$((NOW_H + 2))}}
 JSON
 gen | grep -q "xk22" || fail "stale-dated snooze file must not hide tasks"
 
-# ── 3. Functional: the PYWRITE writer sets and clears snoozes ────────────────
+# ── 3. Functional: PYWRITE writer sets and clears snoozes ────────────────────
 python3 - "$DTD" "$TMP/writer.py" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
@@ -121,4 +120,4 @@ d = json.load(open(sys.argv[1]))
 assert d["snoozes"] == {"id2": 14}, d["snoozes"]
 PY
 
-echo "PASS: block-snooze hides until the chosen block and writer round-trips"
+echo "PASS: fzf-native block picker (arm → picker rows → apply) round-trips"

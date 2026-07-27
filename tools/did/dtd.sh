@@ -141,7 +141,7 @@ fi
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
       "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" \
-      "/tmp/dtd-$DTD_ID.removed.ids"
+      "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
@@ -189,6 +189,10 @@ exec 3>"$DTD_FIFO"
 # below so their heredocs expand to real paths, not empty strings) ---
 DTD_CACHE_FILE="/tmp/dtd-$DTD_ID.cache.json"
 DTD_REMOVED="/tmp/dtd-$DTD_ID.removed"
+# Block-picker state + apply script paths (scripts generated further down;
+# defined here so enter.sh/done.sh heredocs expand real paths).
+DTD_BLOCKPICK="/tmp/dtd-$DTD_ID.blockpick"
+DTD_BLOCKAPPLY="/tmp/dtd-$DTD_ID.blockapply.sh"
 # View mode (ctrl-t toggles): empty = default priority order, 'project' = grouped
 # by domain label. Per-session; the list generator reads it as its 8th arg.
 DTD_VIEW="/tmp/dtd-$DTD_ID.view"
@@ -269,6 +273,11 @@ PUSHED="$DTD_PUSHED"
 REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
 task="\$1"
+# Picker mode: enter on a block row applies the snooze (2026-07-27)
+if [[ "\$1" == BLOCK:* ]]; then
+  "$DTD_BLOCKAPPLY" "\$1"
+  exit 0
+fi
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
@@ -343,6 +352,16 @@ PUSHED="$DTD_PUSHED"
 REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
 task="\$1"
+# Picker mode: ⌃⏎ on a block row applies the snooze too (2026-07-27)
+if [[ "\$1" == BLOCK:* ]]; then
+  "$DTD_BLOCKAPPLY" "\$1"
+  exit 0
+fi
+# Picker mode: enter on a block row applies the snooze (2026-07-27)
+if [[ "\$1" == BLOCK:* ]]; then
+  "$DTD_BLOCKAPPLY" "\$1"
+  exit 0
+fi
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
@@ -436,6 +455,7 @@ REMOVED="$DTD_REMOVED"
 typeset -a ids names
 for _tid in "\$@"; do
   [[ -n "\$_tid" ]] || continue
+  [[ "\$_tid" == BLOCK:* ]] && continue   # picker rows are not tasks
   task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_tid")  # id (field 2) -> canonical content
   clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
   # fzf middle-truncates long rows; keep the prefix before the ellipsis
@@ -512,86 +532,75 @@ printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || 
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
-# --- Block-delay script used by fzf ctrl-v binding (feature 2026-07-24) ---
-# Same-day delay: instead of pushing the task to the end of the list, HIDE it
-# until a chosen 地支 block starts today. A numbered tty menu lists the
-# remaining blocks (character + pinyin + hours), answered by number, pinyin,
-# or 汉字. Ids land in $STATE_DIR/dtd-block-snooze.json
-# ({date, snoozes: {id: start_hour}}); the list generator filters them until
-# the hour arrives, and the watcher's block-boundary refresh reloads the list,
-# so snoozed tasks reappear on their own. Points editing lives in ctrl-g.
-DTD_BLOCKDELAY="/tmp/dtd-$DTD_ID.blockdelay.sh"
-cat > "$DTD_BLOCKDELAY" << BLOCKEOF
+# --- Block-delay (ctrl-v): fzf-NATIVE picker (rearchitected 2026-07-27) ---
+# Same-day delay: HIDE the task until a chosen 地支 block starts today. Ids
+# land in $STATE_DIR/dtd-block-snooze.json ({date, snoozes: {id: start_hour}});
+# the list generator filters them until the hour arrives and the watcher's
+# block-boundary refresh reloads, so snoozed tasks reappear on their own.
+#
+# Every nested-UI variant of the picker FAILED under cmux (inner fzf never
+# painted 2026-07-26 ×2; the printf/read menu was invisible and its blind
+# keystrokes skipped tasks 2026-07-27). So the picker now IS the outer fzf:
+# ctrl-v "arms" picker mode ($DTD_BLOCKPICK holds the pending ids) and the
+# list generator swaps the task rows for block rows (⏰ 申 shen 14:00–16:00,
+# searchable by pinyin/汉字). Enter (or ⌃⏎) on a block row applies the snooze
+# via $DTD_BLOCKAPPLY and restores the normal list. Nothing ever draws outside
+# fzf, so there is nothing cmux can fail to paint.
+DTD_BLOCKARM="/tmp/dtd-$DTD_ID.blockarm.sh"
+cat > "$DTD_BLOCKARM" << ARMEOF
 #!/bin/zsh
 HDR="$DTD_HDR"
+BLOCKPICK="$DTD_BLOCKPICK"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
+# ctrl-v on a picker row (already armed) = close the picker
+if [[ "\$1" == BLOCK:* ]]; then
+  rm -f "\$BLOCKPICK"
+  echo "↩ block picker closed" > "\$HDR"
+  exit 0
+fi
+# Nothing to pick after 亥 has begun (20:00) unless un-delay is on offer
+n=\$(python3 - "\$SNOOZE" "\$@" <<'PYCOUNT'
+import datetime, json, sys
+now = datetime.datetime.now()
+n = sum(1 for h in (4, 6, 8, 10, 12, 14, 16, 18, 20) if h > now.hour)
+try:
+    data = json.load(open(sys.argv[1]))
+    sn = data.get('snoozes') or {}
+    if data.get('date') == now.date().isoformat() and any(str(t) in sn for t in sys.argv[2:]):
+        n += 1
+except Exception:
+    pass
+print(n)
+PYCOUNT
+)
+if [[ "\$n" == "0" ]]; then
+  echo "no later block today — nothing to delay to" > "\$HDR"
+  exit 0
+fi
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 [[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
 lbl="\$clean"
 [[ \$# -gt 1 ]] && lbl="\$clean +\$((\$# - 1)) more"
-# Options: blocks still ahead of us today, plus an un-delay row when any
-# selected id is currently snoozed.
-opts=\$(python3 - "\$SNOOZE" "\$@" <<'PYOPTS'
-import datetime, json, sys
-BLOCKS = [('卯','mao',4),('辰','chen',6),('巳','si',8),('午','wu',10),('未','wei',12),
-          ('申','shen',14),('酉','you',16),('戌','xu',18),('亥','hai',20)]
-now = datetime.datetime.now()
-for g, py, h in BLOCKS:
-    if h > now.hour:
-        print(g + '\t' + py + '\t' + str(h).zfill(2) + ':00-' + str(h + 2).zfill(2) + ':00')
-try:
-    data = json.load(open(sys.argv[1]))
-    sn = data.get('snoozes') or {}
-    if data.get('date') == now.date().isoformat() and any(str(t) in sn for t in sys.argv[2:]):
-        print('now\t(clear)\tun-delay, show again')
-except Exception:
-    pass
-PYOPTS
-)
-if [[ -z "\$opts" ]]; then
-  echo "no later block today — nothing to delay to" > "\$HDR"
+printf '%s\n' "\$@" > "\$BLOCKPICK"
+echo "⏰ delay \$lbl until… (enter picks · ctrl-v or ↩-row cancels)" > "\$HDR"
+ARMEOF
+chmod +x "$DTD_BLOCKARM"
+
+# Applies the picked block (enter/⌃⏎ on a BLOCK:* row) to the armed ids.
+cat > "$DTD_BLOCKAPPLY" << APPLYEOF
+#!/bin/zsh
+HDR="$DTD_HDR"
+BLOCKPICK="$DTD_BLOCKPICK"
+SNOOZE="$STATE_DIR/dtd-block-snooze.json"
+glyph="\${1#BLOCK:}"
+ids=(\$(cat "\$BLOCKPICK" 2>/dev/null))
+rm -f "\$BLOCKPICK"
+if [[ "\$glyph" == "cancel" || \${#ids[@]} -eq 0 ]]; then
+  echo "block delay cancelled" > "\$HDR"
   exit 0
 fi
-# NO inner fzf: nested full-screen fzf inside the outer fzf's execute() never
-# painted under cmux — the script ran but the user saw nothing and the picker
-# ate the next keypress blind (reported twice, 2026-07-26; the --height and
-# full-screen variants both failed the same way). Use the printf/read pattern
-# that the CPAP/defer prompts already prove out in this exact context: clear
-# the stale frame, print a numbered menu, read one answer (number, pinyin, or
-# 汉字 — Enter alone cancels).
-stty sane < /dev/tty 2>/dev/null
-printf '\033[2J\033[H' > /dev/tty
-{
-  printf 'Delay %s until:\n\n' "\$lbl"
-  i=0
-  while IFS=\$'\t' read -r g py hrs; do
-    i=\$((i+1))
-    printf '  %d) %s  %-5s %s\n' "\$i" "\$g" "\$py" "\$hrs"
-  done <<< "\$opts"
-  printf '\nblock (number / pinyin / 汉字, blank = cancel)> '
-} > /dev/tty
-read answer < /dev/tty
-glyph=\$(python3 - "\$answer" "\$opts" <<'PYPICK'
-import sys
-answer = sys.argv[1].strip().lower()
-rows = [l.split('\t') for l in sys.argv[2].splitlines() if l.strip()]
-out = ''
-if answer:
-    if answer.isdigit() and 1 <= int(answer) <= len(rows):
-        out = rows[int(answer) - 1][0]
-    else:
-        for g, py, _hrs in rows:
-            if answer == g or answer == py or py.startswith(answer):
-                out = g
-                break
-print(out)
-PYPICK
-)
-if [[ -z "\$glyph" ]]; then
-  echo "block delay cancelled" > "\$HDR"
-else
-  msg=\$(python3 - "\$SNOOZE" "\$glyph" "\$@" <<'PYWRITE'
+msg=\$(python3 - "\$SNOOZE" "\$glyph" "\${ids[@]}" <<'PYWRITE'
 import datetime, json, os, sys
 path, glyph = sys.argv[1], sys.argv[2]
 ids = [str(t) for t in sys.argv[3:]]
@@ -608,12 +617,12 @@ sn = data.setdefault('snoozes', {})
 if glyph == 'now':
     for i in ids:
         sn.pop(i, None)
-    print('↩ shown again:')
+    print('↩ shown again')
 else:
     h = HOURS[glyph]
     for i in ids:
         sn[i] = h
-    print('⏰ → ' + glyph + ' ' + str(h).zfill(2) + ':00:')
+    print('⏰ → ' + glyph + ' ' + str(h).zfill(2) + ':00')
 os.makedirs(os.path.dirname(path), exist_ok=True)
 tmp = path + '.tmp'
 with open(tmp, 'w') as f:
@@ -621,14 +630,9 @@ with open(tmp, 'w') as f:
 os.replace(tmp, path)
 PYWRITE
 )
-  echo "\${msg:-✗ block delay failed} \$lbl" > "\$HDR"
-fi
-# Reset any mouse-tracking mode a child enabled — leaked SGR motion
-# sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-
-BLOCKEOF
-chmod +x "$DTD_BLOCKDELAY"
+echo "\${msg:-✗ block delay failed}" > "\$HDR"
+APPLYEOF
+chmod +x "$DTD_BLOCKAPPLY"
 
 # --- Unified edit script used by fzf ctrl-g binding ---
 # One prompt edits name + domain + points from a single line (needs a tty, so
@@ -858,15 +862,45 @@ zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
 # dtd un-hides the task on the first reload after the block hour arrives
 # (the watcher refreshes at every block boundary).
 _snoozed = set()
+_sn_all = {}
 try:
     with open(_os.path.expanduser('~/.local/state/jm/dtd-block-snooze.json')) as _sf:
         _sn = json.load(_sf)
     _nw = _dt.datetime.now()
     if _sn.get('date') == _nw.date().isoformat():
+        _sn_all = {str(k) for k in (_sn.get('snoozes') or {})}
         _snoozed = {str(k) for k, v in (_sn.get('snoozes') or {}).items()
                     if _nw.hour < int(v)}
 except Exception:
     pass
+
+# ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending
+# ids, the list IS the picker — block rows instead of tasks. Rendered by the
+# outer fzf itself, so cmux cannot fail to paint it (every nested-UI variant
+# did). Row id field carries BLOCK:<glyph>; enter.sh/done.sh route it to
+# blockapply. Searchable by pinyin or 汉字.
+_bp = sys.argv[9] if len(sys.argv) > 9 else ''
+_armed = []
+try:
+    with open(_bp) as _bf:
+        _armed = [l.strip() for l in _bf if l.strip()]
+except Exception:
+    pass
+if _armed:
+    _nw2 = _dt.datetime.now()
+    ORANGE = '\x1b[38;2;255;138;61m'
+    GREY = '\x1b[38;2;139;150;163m'
+    _R = '\x1b[0m'
+    for g, py, h in (('卯','mao',4),('辰','chen',6),('巳','si',8),('午','wu',10),
+                     ('未','wei',12),('申','shen',14),('酉','you',16),
+                     ('戌','xu',18),('亥','hai',20)):
+        if h > _nw2.hour:
+            print(f'{ORANGE}⏰ {g}  {py:<5} {h:02d}:00–{h+2:02d}:00{_R}\tBLOCK:{g}')
+    if any(i in _sn_all for i in _armed):
+        print(f'{GREY}↩ un-delay — show again now{_R}\tBLOCK:now')
+    print(f'{GREY}✗ cancel{_R}\tBLOCK:cancel')
+    sys.exit(0)
+
 oneneon = _sec('1neon', today)
 # 0g: today's daily goals.
 zerog = [t for t in today_tasks if _has(t, '#0g') and not _has(t, '-1neon') and not _has(t, '#-1g')]
@@ -1017,7 +1051,7 @@ for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
-" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
 LISTEOF
 chmod +x "$DTD_LIST"
 
@@ -1068,6 +1102,7 @@ cat > "$DTD_SKIP" << SKIPEOF
 #!/bin/zsh
 SKIPPED="$DTD_SKIPPED"
 HDR="$DTD_HDR"
+[[ "\$1" == BLOCK:* ]] && exit 0   # picker rows are not tasks
 # Multi-select fan-out (2026-07-23): ctrl-k passes {+2} (all marked ids, or
 # the cursor row's). Re-run self per id so the single-id body stays untouched.
 if (( \$# > 1 )); then
@@ -1089,6 +1124,7 @@ cat > "$DTD_DELETE" << DELETEEOF
 HDR="$DTD_HDR"
 CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
+[[ "\$1" == BLOCK:* ]] && exit 0   # picker rows are not tasks
 # Multi-select fan-out (2026-07-23): ctrl-x passes {+2} (all marked ids, or
 # the cursor row's). Re-run self per id so the single-id body stays untouched.
 if (( \$# > 1 )); then
@@ -1717,7 +1753,7 @@ TALLY_PID=$!
     [[ -z "$port" ]] && continue
     # Rebuild with the freshly-computed date so a post-midnight reload filters to
     # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
-    watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
+    watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
     if [[ -n "$FZF_API_KEY" ]]; then
       curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     else
@@ -1760,7 +1796,7 @@ while true; do
   # the live cache. This prevents tasks vanishing mid-session when an external
   # process (morning routine, /todo, other terminals) rewrites the live cache
   # after startup. Use ctrl-r to explicitly pull external changes.
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW'"
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
   DTD_RELOAD="${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
@@ -1812,7 +1848,7 @@ while true; do
       --bind "ctrl-d:execute($DTD_DEFER {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:execute($DTD_BLOCKDELAY {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:execute-silent($DTD_SKIP {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
@@ -1934,4 +1970,4 @@ kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 kill "$TALLY_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
