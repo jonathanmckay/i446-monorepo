@@ -15,37 +15,28 @@ Both writes are appended to the existing formula (`=<old>+30`, `=<old>+1`), not 
 
 ## Execution
 
-One AppleScript, one round-trip to Ix. Pipe through `~/.claude/skills/_lib/ix-osa.sh` so the write lands on Ix's Excel instance and never on a local copy that would later merge-conflict via OneDrive.
+Two writes, split by destination sheet.
+
+### 0分 write (daemon)
+
+Writes to the 0分 sheet MUST go through the excel-http daemon on Ix — daemon writes are journaled in an audit ledger with a `src` label and chain-checked. Never raw AppleScript/ix-osa.sh for 0分. Formula-append semantics are handled server-side (empty cell, bare number, existing formula chain all normalized automatically).
+
+```bash
+ssh ix "curl -s -X POST localhost:9876/append -H 'Content-Type: application/json' \
+    -d '{\"sheet\":\"0分\",\"col\":\"R\",\"date\":\"<M/D>\",\"value\":\"+30\",\"src\":\"push-more bonus\"}'"
+```
+
+`<M/D>` = today's date (e.g. `7/28`). The response includes `"chain": "ok"|"broken"|"new"`; if `"chain": "broken"` appears, report it to the user — the cell was edited outside the daemon.
+
+### 0n write (AppleScript)
+
+The 0n counter write stays AppleScript. Pipe through `~/.claude/skills/_lib/ix-osa.sh` so the write lands on Ix's Excel instance and never on a local copy that would later merge-conflict via OneDrive.
 
 ```bash
 ~/.claude/skills/_lib/ix-osa.sh <<'OSA'
 tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
-    set s0fen to sheet "0分" of wb
     set s0n to sheet "0n" of wb
-
-    -- Find today's row in 0分 (date in col B, M/D format)
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of cell ("B" & i) of s0fen) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: today not found in 0分 col B"
-
-    -- Append +30 to 0分!R{todayRow} (i9)
-    set rCell to cell ("R" & todayRow) of s0fen
-    set oldR to formula of rCell
-    if oldR = "" or oldR = "0" then
-        set formula of rCell to "=0+30"
-    else
-        set formula of rCell to oldR & "+30"
-    end if
-    set newR to value of rCell
 
     -- Append +1 to 0n!X370 (push counter)
     set xCell to cell "X370" of s0n
@@ -57,7 +48,7 @@ tell application "Microsoft Excel"
     end if
     set newX to value of xCell
 
-    return "OK: 0分.R" & todayRow & "=" & newR & " | 0n.X370=" & newX
+    return "OK: 0n.X370=" & newX
 end tell
 OSA
 ```
@@ -73,16 +64,16 @@ disown
 
 ## Response
 
-One line, terse — surface both new values from the AppleScript output:
+One line, terse — surface the new 0分 value from the daemon response and the counter from the AppleScript output:
 
 ```
 push-more → i9 +30 (0分.R<row>=<new>) · push +1 (0n.X370=<new>)
 ```
 
-If the helper exits non-zero (Ix unreachable), surface the error verbatim and do **not** fall back to local `osascript` — local writes cause OneDrive merge conflicts.
+If the daemon call fails or the helper exits non-zero (Ix unreachable), surface the error verbatim and do **not** fall back to local `osascript` — local writes cause OneDrive merge conflicts.
 
 ## Notes
 
 - No Toggl entry, no Todoist close, no points override. This is a pure two-cell write.
-- Both writes are atomic within one AppleScript call, so a partial failure can't leave one cell updated and the other not.
+- The two writes are separate calls (daemon for 0分, AppleScript for 0n). If one succeeds and the other fails, say exactly which cell was updated and which was not.
 - `0n!X370` is a fixed counter cell — does **not** look up today's row. Different from how `0₦` habit writes work.

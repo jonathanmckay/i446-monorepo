@@ -169,19 +169,12 @@ two days.
    done
    ```
 5. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
-6. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh. **CRITICAL: use `formula` not `value`** to preserve existing formula chains. Pattern:
-    ```applescript
-    set theCell to range (targetCol & todayRow) of theSheet
-    set oldFormula to formula of theCell
-    if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "=0+" & N
-    else if character 1 of oldFormula is not "=" then
-        set formula of theCell to "=" & oldFormula & "+" & N
-    else
-        set formula of theCell to oldFormula & "+" & N
-    end if
+6. **Log points to 0分**: Use the computed duration. Append to the appropriate column (i9→R, m5x2→S, etc.) via the excel-http daemon — NEVER raw AppleScript/ix-osa.sh (daemon writes are journaled in the neon audit ledger; raw writes trip the chain check). Always pass `src` naming the meeting:
+    ```bash
+    ssh ix "curl -s -X POST localhost:9876/append -H 'Content-Type: application/json' \
+        -d '{"sheet":"0分","col":"R","date":"M/D","value":"+N","src":"d357 <meeting name>"}'"
     ```
-    Never use `set value of range ... to oldVal & "+N"` as this destroys existing formulas.
+    The daemon handles formula-append semantics (empty cell, bare number, existing formula) itself. If the response contains `"chain": "broken"`, report it — the cell was edited outside the daemon since its last journaled write.
 7. Clear state.json (set `pid: null`).
 7b. **Emit prof stop event** (for professionalism daemon scoring):
     ```bash

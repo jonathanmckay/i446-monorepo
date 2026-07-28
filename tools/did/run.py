@@ -401,7 +401,7 @@ def apply_long_bonus(long_habit_id: str, pts: int, target_date: str) -> str | No
     excel.write("1n+", bonus_col, row=week_row, value=str(old + pts))
 
     if fen_col:
-        excel.append("0分", fen_col, date=target_date, value=f"+{pts}")
+        excel.append("0分", fen_col, date=target_date, value=f"+{pts}", src=f"1n {long_habit.name}")
 
     return (f"  ⤷ {long_habit.name} +{pts} → 1n+!{bonus_col}{week_row}"
             + (f", 0分!{fen_col} +{pts}" if fen_col else ""))
@@ -538,7 +538,7 @@ def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) ->
 
     # Append the points to today's 0分 domain column
     if fen_col and points:
-        excel.append("0分", fen_col, date=target_date, value=f"+{points}")
+        excel.append("0分", fen_col, date=target_date, value=f"+{points}", src=f"1n {name}")
 
     # Close 1neon Todoist
     closed = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
@@ -625,12 +625,12 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
                   file=sys.stderr)
             return 1
         fen_col = registry.resolve_fen_col(domain)
-        excel.append("0分", fen_col, date=target_date, value=f"+{points_sq}")
+        excel.append("0分", fen_col, date=target_date, value=f"+{points_sq}", src=f"did {content[:60]}")
         fen_writes.append(f"+{points_sq} → {fen_col}({domain})")
     if points_cu:
         from neon import cols
         ac_col = cols.col("0分", "0g")
-        excel.append("0分", ac_col, date=target_date, value=f"+{points_cu}")
+        excel.append("0分", ac_col, date=target_date, value=f"+{points_cu}", src=f"did {content[:60]}")
         fen_writes.append(f"+{points_cu} → {ac_col}(0g)")
 
     # Close Todoist

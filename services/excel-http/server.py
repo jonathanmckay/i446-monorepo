@@ -241,7 +241,7 @@ def do_ack(req: dict) -> dict:
     script = f'''
 tell application "Microsoft Excel"
     set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
-    return ((value of theCell) as string) & tab & (formula of theCell)
+    return ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
@@ -298,7 +298,7 @@ tell application "Microsoft Excel"
     else
         {nonempty_set}
     end if
-    return oldFormula & tab & ((value of theCell) as string) & tab & (formula of theCell)
+    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
@@ -323,7 +323,7 @@ tell application "Microsoft Excel"
     set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
     set oldFormula to formula of theCell
     set {setter} of theCell to "{val_esc}"
-    return oldFormula & tab & ((value of theCell) as string) & tab & (formula of theCell)
+    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)

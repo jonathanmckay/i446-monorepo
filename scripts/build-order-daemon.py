@@ -38,6 +38,11 @@ import zoneinfo
 from email.mime.text import MIMEText
 from pathlib import Path
 
+# excel-http client — journaled Neon writes. Running on ix it curls localhost
+# directly, and it carries its own ssh+osascript fallback if the daemon is down.
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+from neon import excel as neon_excel
+
 # --- Paths ---
 
 VAULT = Path.home() / "vault"
@@ -472,33 +477,37 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
     residual by the same amount (2026-06-12: 卯 locked at -46, 巳 showed
     173分 of a 127分 day). Locking 0 leaves the negative in the unlocked
     tail (=D-SUM(locked)), which self-corrects as the penalties clear."""
-    body = (
-        f'set theCell to cell ("{col}" & targetRow) of theSheet\n'
-        '    set f to formula of theCell\n'
-        '    if f is "" then return "EMPTY"\n'
-        '    if (character 1 of f) is not "=" then return "ALREADY_LOCKED " & f\n'
-        '    set v to value of theCell\n'
-        '    if v is missing value then set v to 0\n'
-        '    if (v as number) < 0 then set v to 0\n'
-        '    set value of theCell to v\n'
-        '    return "LOCKED " & v as text\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
     if dry_run:
         log(f"[DRY RUN] Would lock {NEON_SHEET}!{col} for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"lock {col}: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.read(NEON_SHEET, col, date=_date_str(target_date))
+        if not r.get("ok"):
+            log(f"lock {col}: FAILED {r.get('error', '')}")
             return "FAILED"
-        log(f"lock {col}: {out}")
-        return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        f = r.get("formula") or ""
+        if f == "":
+            log(f"lock {col}: EMPTY")
+            return "EMPTY"
+        if not f.startswith("="):
+            log(f"lock {col}: ALREADY_LOCKED {f}")
+            return f"ALREADY_LOCKED {f}"
+        try:
+            v = float(r.get("value") or 0)
+        except ValueError:
+            v = 0.0
+        if v < 0:
+            v = 0.0
+        if v == int(v):
+            v = int(v)
+        w = neon_excel.write(NEON_SHEET, col, row=r["row"], value=str(v),
+                             src=f"block-turnover lock {col}")
+        if not w.get("ok"):
+            log(f"lock {col}: FAILED {w.get('error', '')}")
+            return "FAILED"
+        log(f"lock {col}: LOCKED {v}")
+        return f"LOCKED {v}"
+    except Exception as e:
         log(f"lock {col}: ERROR {e}")
         return "ERROR"
 
@@ -506,63 +515,45 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
 def neon_set_marker(target_date: dt.date, col: str, dry_run: bool = False) -> str:
     """Set `col` cell for target_date to 1, but only if currently empty.
     Returns status string."""
-    body = (
-        f'set theCell to cell ("{col}" & targetRow) of theSheet\n'
-        '    set v to value of theCell\n'
-        '    if v is missing value or v is "" then\n'
-        '        set value of theCell to 1\n'
-        '        return "SET"\n'
-        '    else\n'
-        '        return "ALREADY " & (v as text)\n'
-        '    end if\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
     if dry_run:
         log(f"[DRY RUN] Would mark {NEON_SHEET}!{col} = 1 for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"mark {col}: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.read(NEON_SHEET, col, date=_date_str(target_date))
+        if not r.get("ok"):
+            log(f"mark {col}: FAILED {r.get('error', '')}")
             return "FAILED"
-        log(f"mark {col}: {out}")
-        return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        v = r.get("value") or ""
+        if v != "":
+            log(f"mark {col}: ALREADY {v}")
+            return f"ALREADY {v}"
+        w = neon_excel.write(NEON_SHEET, col, row=r["row"], value="1",
+                             src=f"block-turnover mark {col}")
+        if not w.get("ok"):
+            log(f"mark {col}: FAILED {w.get('error', '')}")
+            return "FAILED"
+        log(f"mark {col}: SET")
+        return "SET"
+    except Exception as e:
         log(f"mark {col}: ERROR {e}")
         return "ERROR"
 
 
 def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False) -> str:
     """Append score to -1₦ column (P) for target_date's row as =13+10+8 formula,
-    so the user can see a record of what was added at each block boundary."""
-    body = (
-        f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
-        '    set oldFormula to formula of yCell\n'
-        '    if oldFormula is "" or oldFormula is "0" then\n'
-        f'        set formula of yCell to "={score}"\n'
-        f'        return "P_SET ={score}"\n'
-        '    else\n'
-        f'        set formula of yCell to oldFormula & "+{score}"\n'
-        f'        return "P_APPEND " & oldFormula & "+{score}"\n'
-        '    end if\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
+    so the user can see a record of what was added at each block boundary.
+    The client's append handles the empty-cell / bare-number normalization."""
     if dry_run:
         log(f"[DRY RUN] Would add {score} to P for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"add_score_to_p: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.append(NEON_SHEET, NEON_NEG1_COL,
+                              date=_date_str(target_date), value=f"+{score}",
+                              src="block-turnover -1n score")
+        if not r.get("ok"):
+            log(f"add_score_to_p: FAILED {r.get('error', '')}")
             return "FAILED"
+        out = f"P_APPEND {r.get('formula', '')}"
         log(f"add_score_to_p: {out}")
         verify = neon_read_y(target_date)
         if verify == "ERROR" or verify == "" or verify == "0":
@@ -570,7 +561,7 @@ def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False)
             return "VERIFY_FAILED"
         log(f"add_score_to_p: verified={verify}")
         return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+    except Exception as e:
         log(f"add_score_to_p: ERROR {e}")
         return "ERROR"
 
@@ -619,24 +610,17 @@ def neon_set_p(target_date: dt.date, formula: str, total: int, dry_run: bool = F
     by the reconcile so the value is idempotent and self-healing (no double-count
     on re-fire). Verifies the write by reading the cell back, mirroring
     neon_add_score_to_p."""
-    body = (
-        f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
-        f'    set formula of yCell to "{formula}"\n'
-        f'    return "P_RECONCILE {formula}"\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
     if dry_run:
         log(f"[DRY RUN] Would set P={formula} ({total}) for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"reconcile_p: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.write(NEON_SHEET, NEON_NEG1_COL,
+                             date=_date_str(target_date), value=formula,
+                             src="block-turnover -1n reconcile")
+        if not r.get("ok"):
+            log(f"reconcile_p: FAILED {r.get('error', '')}")
             return "FAILED"
+        out = f"P_RECONCILE {formula}"
         log(f"reconcile_p: {out}")
         verify = neon_read_y(target_date)
         if verify in ("ERROR", "", "0"):
@@ -644,7 +628,7 @@ def neon_set_p(target_date: dt.date, formula: str, total: int, dry_run: bool = F
             return "VERIFY_FAILED"
         log(f"reconcile_p: verified={verify}")
         return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+    except Exception as e:
         log(f"reconcile_p: ERROR {e}")
         return "ERROR"
 

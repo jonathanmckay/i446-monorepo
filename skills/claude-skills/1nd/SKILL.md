@@ -78,36 +78,26 @@ For any task marked "low" confidence, confirm with the user before writing. Upda
 
 ### Step 4: Add points to today's 0分 row
 
-Find today's row in 0分 (date column B, M/D format), then **append** to the existing formula — do not replace the value.
+Writes to the 0分 sheet MUST go through the excel-http daemon on Ix — daemon writes are journaled in an audit ledger with a `src` label and chain-checked. Never raw AppleScript/ix-osa.sh for 0分. Formula-append semantics are handled server-side (empty cell, bare number, existing formula chain all normalized automatically) — do not replace the value.
 
-```applescript
-tell application "Microsoft Excel"
-    set theSheet to sheet "0分" of workbook "Neon分v12.2.xlsx"
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of cell ("B" & i) of theSheet) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow > 0 then
-        set theCell to range ("COL" & todayRow) of theSheet
-        set oldFormula to formula of theCell
-        -- Use cell reference if no override, otherwise hardcode
-        set formula of theCell to oldFormula & "+POINTS_EXPR"
-    end if
-end tell
+```bash
+ssh ix "curl -s -X POST localhost:9876/append -H 'Content-Type: application/json' \
+    -d '{\"sheet\":\"0分\",\"col\":\"<COL>\",\"date\":\"<M/D>\",\"value\":\"+POINTS_EXPR\",\"src\":\"1nd <task>\"}'"
 ```
 
-Run via `~/.claude/skills/_lib/ix-osa.sh` (pipe the AppleScript on
-stdin). Both AppleScript blocks in this skill go through the helper —
-do NOT call local `osascript`.
+- `<COL>` — the 0分 column from Step 3
+- `<M/D>` — today's date (e.g. `3/30`)
+- `<task>` — the task name, so the audit ledger records which 1₦+ task this was
+- If **no points override**: `POINTS_EXPR` = `'1n+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (found by scanning column A downward from row 4 for the last non-empty row). The `'` characters in that reference fight the nested ssh/curl quoting — use the Python client for this case:
 
-- If **no points override**: `POINTS_EXPR` = `'1n+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (found by scanning column A downward from row 4 for the last non-empty row)
+  ```python
+  import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+  from neon import excel
+  excel.append("0分", "<COL>", date="<M/D>", value="+'1n+'!{colLetter}{weekRow}", src="1nd <task>")
+  ```
 - If **points override provided**: `POINTS_EXPR` = the literal number (e.g. `+30`)
+
+The response includes `"chain": "ok"|"broken"|"new"`; if `"chain": "broken"` appears, report it to the user — the cell was edited outside the daemon.
 
 ### Step 5: Confirm
 
@@ -118,9 +108,12 @@ One line:
 
 ## Notes
 
-- All Excel writes go through `~/.claude/skills/_lib/ix-osa.sh`. The
-  helper hard-fails (exit 3) if Ix is unreachable; do NOT fall back
-  to local `osascript`. Local writes cause OneDrive merge conflicts.
+- The Step 2 lookup AppleScript goes through `~/.claude/skills/_lib/ix-osa.sh`
+  (pipe on stdin). The helper hard-fails (exit 3) if Ix is unreachable; do NOT
+  fall back to local `osascript`. Local writes cause OneDrive merge conflicts.
+- The 0分 write (Step 4) goes through the excel-http daemon, never ix-osa.sh —
+  daemon writes are journaled with a `src` label and chain-checked.
 - The 0分 sheet date column is **B** (M/D format, e.g. `3/30`)
-- Always **append** to existing formula (`oldFormula & "+N"`), never overwrite
+- Always **append**, never overwrite — the daemon's `/append` normalizes the
+  formula chain server-side, so repeated invocations stack
 - If the task maps to two columns (e.g. `社+hcbp` could be AH and AF), default to the primary one (AH) unless the user specifies otherwise

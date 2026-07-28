@@ -351,7 +351,7 @@ def _write_neon(target: date, sum_pts: int) -> None:
     value = f"{sign}{sum_pts}"
     date_str = f"{target.month}/{target.day}"
     try:
-        res = excel.append("0分", "Y", date=date_str, value=value)
+        res = excel.append("0分", "Y", date=date_str, value=value, src="prof-score")
         print(f"  → neon: 0分!Y {date_str} {value}  ({res})")
     except Exception as e:
         print(f"  ! neon write failed: {e}")

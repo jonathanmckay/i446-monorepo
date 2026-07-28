@@ -671,6 +671,16 @@
       "todoist_label": "0neon",
       "points_default": 5,
       "minutes_default": 15
+    },
+    "1-i447": {
+      "name": "1 i447",
+      "category": "1n+",
+      "neon_header": "i447",
+      "domain": "i447",
+      "todoist_label": "1neon",
+      "aliases": [
+        "1 i447"
+      ]
     }
   }
 }

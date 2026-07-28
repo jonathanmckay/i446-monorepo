@@ -10,6 +10,16 @@ is unreachable the helper exits with code 3 and a clear error; the
 calling /did step must propagate that failure (do not silently
 degrade).
 
+**0分 writes: daemon only.** Any write to the 0分 sheet MUST go through the
+excel-http daemon (`ssh ix curl localhost:9876/append|/write`, or the
+`lib/neon/excel.py` client) with a `src` label — never through the raw
+AppleScript templates below. Daemon writes are journaled in the neon audit
+ledger (`~/vault/g245/neon-ledger/`); a raw AppleScript write to 0分 is
+invisible to the ledger and trips the chain check as "cell modified outside
+the daemon". The templates below remain valid for the OTHER sheets (0n, 1n+,
+hcbi, review sheets). If you must bless a deliberate manual 0分 edit:
+`python3 ~/i446-monorepo/scripts/neon-ledger-audit.py --ack '0分!R' --date M/D --note '<why>'`.
+
 ## Substitution variables (all templates)
 
 - `TARGET_MONTH` → month integer from targetDate (e.g. `4`)

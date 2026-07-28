@@ -51,6 +51,11 @@ WORKBOOK = "Neon分v12.2.xlsx"
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 
+# excel-http client — journaled 0分/hcbi strip writes (curls localhost on ix,
+# ssh+osascript fallback built in)
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+from neon import excel
+
 # Import ix_osa (AppleScript-over-ssh transport, same pattern as did-fast)
 _IX_PATH = Path.home() / ".claude/skills/_lib/ix-osa.py"
 _IX_SPEC = importlib.util.spec_from_file_location("ix_osa", _IX_PATH)
@@ -151,27 +156,48 @@ def _strip_or_negate_lines(cell_expr: str, term: str, suffix: str) -> str:
     end if'''
 
 
-def build_fen_strip_script(strips: list[tuple[str, str]], target_md: str,
-                           sheet: str = "0分", max_row: int = 200) -> str:
-    """Strip/negate formula terms on a date-keyed sheet (0分 or hcbi).
-    strips = [(col_letter, term)] where term is the exact appended text."""
-    op_lines = [
-        _strip_or_negate_lines(f'range ("{col}" & todayRow) of ws', term, str(i))
-        for i, (col, term) in enumerate(strips)
-    ]
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "{sheet}" of workbook "{WORKBOOK}"
-    set todayRow to 0
-    repeat with i from 2 to {max_row}
-        if (string value of range ("B" & i) of ws) = "{target_md}" then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_md} not found in {sheet}"
-{chr(10).join(op_lines)}
-    return "OK:{sheet} row=" & todayRow
-end tell'''
+def _strip_or_negate(formula: str, term: str) -> str | None:
+    """Python port of _strip_or_negate_lines: remove a '+N' (or '+'1n+'!X12')
+    term from a formula — strip it if it is the exact tail, else append the
+    negation. Returns the new formula, or None when the cell is empty
+    (nothing to reverse)."""
+    neg = "-" + term[1:]
+    f = formula or ""
+    if f.endswith(term) and len(f) > len(term):
+        return f[: -len(term)]
+    if f != "":
+        return f + neg
+    return None
+
+
+def strip_fen_terms(strips: list[tuple[str, str]], target_md: str,
+                    sheet: str, errors: list[str], src: str) -> None:
+    """Strip/negate formula terms on a date-keyed sheet (0分 or hcbi) via the
+    excel-http client: read the current formula, strip/negate in Python,
+    write back (journaled). strips = [(col_letter, term)] where term is the
+    exact appended text."""
+    row = None
+    for col, term in strips:
+        try:
+            r = (excel.read(sheet, col, row=row) if row
+                 else excel.read(sheet, col, date=target_md))
+        except Exception as e:
+            errors.append(f"{sheet} {col}: read failed: {e}")
+            continue
+        if not r.get("ok"):
+            errors.append(f"{sheet} {col}: read failed: {r.get('error') or '?'}")
+            continue
+        row = r.get("row") or row
+        new_formula = _strip_or_negate(r.get("formula") or "", term)
+        if new_formula is None:
+            continue
+        try:
+            w = excel.write(sheet, col, row=row, value=new_formula, src=src)
+        except Exception as e:
+            errors.append(f"{sheet} {col}: write failed: {e}")
+            continue
+        if not w.get("ok"):
+            errors.append(f"{sheet} {col}: write failed: {w.get('error') or '?'}")
 
 
 def build_1n_undo_script(restores: list[tuple[str, str, str]],
@@ -291,10 +317,12 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
 
     if on_restores:
         _run_excel(build_0n_restore_script(on_restores, target_md), "0n", errors)
+    undo_names = [e.get("name") for e in results if e.get("name")]
+    undo_src = "undo " + (", ".join(undo_names) if undo_names else "?")
     if fen_strips:
-        _run_excel(build_fen_strip_script(fen_strips, target_md, "0分", 200), "0分", errors)
+        strip_fen_terms(fen_strips, target_md, "0分", errors, undo_src)
     if hcbi_strips:
-        _run_excel(build_fen_strip_script(hcbi_strips, target_md, "hcbi", 500), "hcbi", errors)
+        strip_fen_terms(hcbi_strips, target_md, "hcbi", errors, undo_src)
     if n1_restores or n1_strips:
         _run_excel(build_1n_undo_script(n1_restores, n1_strips), "1n+", errors)
 

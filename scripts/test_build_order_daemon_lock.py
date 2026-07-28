@@ -28,18 +28,18 @@ def test_script_is_parseable():
 
 
 def test_lock_clamps_negative_residual_before_writing():
-    """The AppleScript body must clamp v to 0 when negative, after reading the
-    formula value and before writing the literal back."""
+    """The lock must clamp v to 0 when negative, after reading the formula
+    value (via the excel-http client) and before writing the literal back."""
     import inspect
     mod = _load()
     src = inspect.getsource(mod.neon_lock_cell)
-    read_i = src.index("set v to value of theCell")
-    clamp_i = src.index('(v as number) < 0')
-    write_i = src.index("set value of theCell to v")
+    read_i = src.index("neon_excel.read(")
+    clamp_i = src.index("if v < 0")
+    write_i = src.index("neon_excel.write(")
     assert read_i < clamp_i < write_i, (
         "negative-residual clamp must sit between the read and the write"
     )
-    assert "set v to 0" in src
+    assert "v = 0" in src
 
 
 def test_lock_columns_follow_block_convention():

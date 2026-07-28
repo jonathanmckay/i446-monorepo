@@ -40,16 +40,17 @@ def test_add_12_logs_verify_result():
 
 
 def test_osascript_error_returns_failed():
-    """When osascript returns non-zero, neon_add_score_to_p must return FAILED."""
+    """When the excel client reports a failed write, neon_add_score_to_p must
+    return FAILED (it used to check osascript returncode directly)."""
     src = DAEMON.read_text(encoding="utf-8")
     idx = src.index("def neon_add_score_to_p")
     next_def = src.index("\ndef ", idx + 1)
     func_body = src[idx:next_def]
     assert "FAILED" in func_body, (
-        "neon_add_score_to_p must return FAILED on osascript error"
+        "neon_add_score_to_p must return FAILED on a failed client write"
     )
-    assert "returncode" in func_body, (
-        "neon_add_score_to_p must check osascript returncode"
+    assert 'get("ok")' in func_body, (
+        "neon_add_score_to_p must check the client response's ok flag"
     )
 
 
