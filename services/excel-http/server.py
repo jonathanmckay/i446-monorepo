@@ -8,34 +8,130 @@ warms up after a few hits).
 
 Endpoints (POST JSON bodies):
 
-  POST /append   {sheet, col, date, value}        # value like "+10" or "+'1n+'!S20"
-  POST /write    {sheet, col, date|row, value}    # set cell to value (literal or =formula)
+  POST /append   {sheet, col, date, value, src?}  # value like "+10" or "+'1n+'!S20"
+  POST /write    {sheet, col, date|row, value, src?}  # set cell to value (literal or =formula)
   POST /read     {sheet, col, date|row}           # → {value, formula}
   POST /lookup   {sheet, date}                    # → {row}
+  POST /ack      {sheet, col, date|row, note}     # bless the cell's CURRENT formula as the new ledger baseline
   GET  /health                                    # → {ok: true, version}
 
 Sheet date-column resolution is hardcoded to match neon-cols.json:
   0分 → B,  0n → C,  1n+ → B,  hcbi → B
 
 Bind to 127.0.0.1:9876 by default. Skills SSH to ix and curl localhost.
+
+Audit ledger: every successful /append and /write is journaled as one JSONL
+line in ~/vault/g245/neon-ledger/YYYY-MM.jsonl with the cell formula BEFORE
+and AFTER the write, plus the caller-supplied `src` label. Entries chain: a
+write whose observed before-formula doesn't match the ledger's last
+after-formula for that cell means something wrote to the cell outside the
+daemon (manual edit, stray osascript, sync clobber). The write still proceeds,
+but the response carries "chain": "broken" plus "chain_expected" so callers
+surface it immediately; scripts/neon-ledger-audit.py does the nightly replay.
+Cells are keyed (sheet, col, date) — never raw row — so row insertions don't
+poison history. /ack (with a mandatory note) blesses a deliberate manual edit.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
+import os
 import re
 import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
 WORKBOOK = "Neon分v12.2.xlsx"
 
 DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
+
+LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
+LEDGER_LOCK = threading.Lock()
+# (sheet, col, anchor) → last after_formula the ledger recorded for that cell.
+CHAIN_INDEX: dict[tuple[str, str, str], str] = {}
+
+
+# ── Ledger ────────────────────────────────────────────────────────────────────
+
+def chain_key(sheet: str, col: str, date: str | None, row: int | None) -> tuple[str, str, str]:
+    """Ledger identity of a cell. Date-addressed writes key on the date so a
+    row insertion in the sheet doesn't remap history; row-addressed writes
+    (1n+ week cells) fall back to the row number."""
+    anchor = date if date else f"r{row}"
+    return (sheet, col, str(anchor))
+
+
+def entry_key(e: dict) -> tuple[str, str, str]:
+    return chain_key(e.get("sheet", ""), e.get("col", ""), e.get("date"), e.get("row"))
+
+
+def ledger_path(when: datetime.datetime | None = None) -> str:
+    when = when or datetime.datetime.now()
+    return os.path.join(LEDGER_DIR, when.strftime("%Y-%m") + ".jsonl")
+
+
+def iter_ledger(path: str):
+    """Yield parsed entries, tolerating a torn/partial trailing line."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        return
+
+
+def seed_chain_index() -> None:
+    """Rebuild the in-memory chain index from the previous + current month
+    files (previous month covers restarts right after rollover)."""
+    now = datetime.datetime.now()
+    prev = (now.replace(day=1) - datetime.timedelta(days=1))
+    CHAIN_INDEX.clear()
+    for p in (ledger_path(prev), ledger_path(now)):
+        for e in iter_ledger(p):
+            after = e.get("after")
+            if after is not None:
+                CHAIN_INDEX[entry_key(e)] = after
+
+
+def check_chain(key: tuple[str, str, str], before: str) -> tuple[str, str | None]:
+    """→ (state, expected). state ∈ ok|broken|new. A miss rescans the current
+    month file first: a fallback write (daemon was unreachable, client
+    journaled directly) legitimately advances the chain behind our back."""
+    expected = CHAIN_INDEX.get(key)
+    if expected is None:
+        return "new", None
+    if before == expected:
+        return "ok", None
+    for e in iter_ledger(ledger_path()):
+        if entry_key(e) == key and e.get("after") is not None:
+            expected = e["after"]
+    CHAIN_INDEX[key] = expected
+    return ("ok", None) if before == expected else ("broken", expected)
+
+
+def journal(entry: dict) -> None:
+    """Append one ledger line and advance the chain index. Never raises."""
+    try:
+        with LEDGER_LOCK:
+            os.makedirs(LEDGER_DIR, exist_ok=True)
+            with open(ledger_path(), "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        if entry.get("after") is not None:
+            CHAIN_INDEX[entry_key(entry)] = entry["after"]
+    except Exception as e:
+        sys.stderr.write(f"ledger journal failed: {e}\n")
 
 
 def osascript(script: str) -> tuple[int, str, str]:
@@ -106,6 +202,65 @@ def cell_addr(req: dict) -> tuple[str, int] | None:
     return None
 
 
+def _journal_and_respond(kind: str, req: dict, row: int,
+                         before: str, value: str, formula: str) -> dict:
+    """Common post-write path: chain-check the observed before-formula,
+    journal the entry, and build the response."""
+    sheet, col = req["sheet"], req["col"]
+    date = req.get("date")
+    key = chain_key(sheet, col, date, row)
+    state, expected = check_chain(key, before)
+    entry = {
+        "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "kind": kind, "sheet": sheet, "col": col, "row": row, "date": date,
+        "value": str(req.get("value", "")), "before": before, "after": formula,
+        "after_value": value, "src": req.get("src"), "chain": state,
+    }
+    if state == "broken":
+        entry["chain_expected"] = expected
+    journal(entry)
+    resp = {"ok": True, "row": row, "col": col, "value": value,
+            "formula": formula, "chain": state}
+    if state == "broken":
+        resp["chain_expected"] = expected
+        resp["chain_hint"] = "cell was modified outside the daemon since its last ledger entry; if deliberate, POST /ack with a note"
+    return resp
+
+
+def do_ack(req: dict) -> dict:
+    """Bless the cell's current formula as the new chain baseline. `note` is
+    mandatory — an ack without a reason is how real corruption gets laundered."""
+    note = (req.get("note") or "").strip()
+    if not note:
+        return {"ok": False, "error": "ack_requires_note"}
+    addr = cell_addr(req)
+    if not addr:
+        return {"ok": False, "error": "date_not_found_or_missing_target"}
+    col, row = addr
+    sheet = req["sheet"]
+    script = f'''
+tell application "Microsoft Excel"
+    set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
+    return ((value of theCell) as string) & (character id 9) & (formula of theCell)
+end tell
+'''
+    rc, out, err = osascript(script)
+    if rc != 0:
+        return {"ok": False, "error": err}
+    value, formula = (out.split("\t", 1) + [""])[:2]
+    key = chain_key(sheet, col, req.get("date"), row)
+    entry = {
+        "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "kind": "ack", "sheet": sheet, "col": col, "row": row,
+        "date": req.get("date"), "value": None,
+        "before": CHAIN_INDEX.get(key), "after": formula,
+        "after_value": value, "src": req.get("src"), "note": note,
+    }
+    journal(entry)
+    return {"ok": True, "row": row, "col": col, "value": value,
+            "formula": formula, "superseded": entry["before"]}
+
+
 def do_append(req: dict) -> dict:
     addr = cell_addr(req)
     if not addr:
@@ -143,14 +298,14 @@ tell application "Microsoft Excel"
     else
         {nonempty_set}
     end if
-    return ((value of theCell) as string) & "|" & (formula of theCell)
+    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    value, formula = (out.split("|", 1) + [""])[:2]
-    return {"ok": True, "row": row, "col": col, "value": value, "formula": formula}
+    before, value, formula = (out.split("\t", 2) + ["", ""])[:3]
+    return _journal_and_respond("append", req, row, before, value, formula)
 
 
 def do_write(req: dict) -> dict:
@@ -166,15 +321,16 @@ def do_write(req: dict) -> dict:
     script = f'''
 tell application "Microsoft Excel"
     set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
+    set oldFormula to formula of theCell
     set {setter} of theCell to "{val_esc}"
-    return ((value of theCell) as string) & "|" & (formula of theCell)
+    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    value, formula = (out.split("|", 1) + [""])[:2]
-    return {"ok": True, "row": row, "col": col, "value": value, "formula": formula}
+    before, value, formula = (out.split("\t", 2) + ["", ""])[:3]
+    return _journal_and_respond("write", req, row, before, value, formula)
 
 
 def do_read(req: dict) -> dict:
@@ -210,6 +366,7 @@ ROUTES = {
     "/write":  do_write,
     "/read":   do_read,
     "/lookup": do_lookup,
+    "/ack":    do_ack,
 }
 
 
@@ -263,6 +420,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    seed_chain_index()
+    print(f"ledger chain index seeded: {len(CHAIN_INDEX)} cells", flush=True)
     # ThreadingHTTPServer so one stuck/slow request (a stalled client, a slow
     # Excel call) can't block every other request behind it — see Handler.timeout.
     srv = ThreadingHTTPServer(ADDR, Handler)

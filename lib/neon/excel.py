@@ -6,19 +6,30 @@ the legacy `ssh ix osascript ...` path if the daemon isn't reachable.
 
 from __future__ import annotations
 
+import datetime
 import json
 import shlex
+import socket
 import subprocess
 from typing import Any
 
 DAEMON_HOST = "ix"
 DAEMON_PORT = 9876
-DAEMON_TIMEOUT = 5
+# The daemon binds 127.0.0.1 on ix; when this client is already running ON ix
+# (build-order-daemon, janus-mobile, dtd-web) an ssh hop to ourselves is pure
+# waste and can wedge on a stale MagicSock — curl localhost directly instead.
+IS_IX = "mac-mini" in socket.gethostname().lower()
+LEDGER_DIR = "/Users/mckay/vault/g245/neon-ledger"
+# Covers a fresh ssh handshake on a congested tailnet path (~10s observed
+# 2026-07-20 at ~630ms RTT) plus curl's own -m 10. At 5s every call fell
+# through to the (then-broken) osascript fallback whenever no connection
+# was already warm.
+DAEMON_TIMEOUT = 25
 WORKBOOK = "Neon分v12.2.xlsx"
 
 
 def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict | None:
-    """Invoke the daemon over SSH. Returns parsed JSON, or None on failure."""
+    """Invoke the daemon (over SSH, or locally when already on ix). Returns parsed JSON, or None on failure."""
     if body is None:
         cmd = f"curl -sS -m 10 http://localhost:{DAEMON_PORT}{path}"
     else:
@@ -27,10 +38,12 @@ def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict 
             f"curl -sS -m 10 -X {method} -H 'Content-Type: application/json' "
             f"-d {shlex.quote(payload)} http://localhost:{DAEMON_PORT}{path}"
         )
+    argv = ["sh", "-c", cmd] if IS_IX else ["ssh", DAEMON_HOST, cmd]
     try:
         r = subprocess.run(
-            ["ssh", DAEMON_HOST, cmd],
-            capture_output=True, text=True, timeout=DAEMON_TIMEOUT,
+            argv,
+            capture_output=True, text=True,
+            timeout=15 if IS_IX else DAEMON_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         return None
@@ -50,33 +63,38 @@ def health() -> bool:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def append(sheet: str, col: str, *, date: str | None = None,
-           row: int | None = None, value: str) -> dict[str, Any]:
+           row: int | None = None, value: str, src: str | None = None) -> dict[str, Any]:
     """Append `value` (e.g. '+10', "+'1n+'!S20") to a cell formula.
 
     Pass either `date` (M/D) for date-row lookup, or `row` for direct addressing.
+    `src` labels the write in the neon ledger (who/what earned it).
     """
     body = {"sheet": sheet, "col": col, "value": value}
     if date is not None:
         body["date"] = date
     if row is not None:
         body["row"] = row
+    if src:
+        body["src"] = src
     out = _curl("/append", body)
     if out:
         return out
-    return _ssh_fallback("append", sheet, col, date, row, value)
+    return _ssh_fallback("append", sheet, col, date, row, value, src=src)
 
 
 def write(sheet: str, col: str, *, date: str | None = None,
-          row: int | None = None, value: str) -> dict[str, Any]:
+          row: int | None = None, value: str, src: str | None = None) -> dict[str, Any]:
     body = {"sheet": sheet, "col": col, "value": value}
     if date is not None:
         body["date"] = date
     if row is not None:
         body["row"] = row
+    if src:
+        body["src"] = src
     out = _curl("/write", body)
     if out:
         return out
-    return _ssh_fallback("write", sheet, col, date, row, value)
+    return _ssh_fallback("write", sheet, col, date, row, value, src=src)
 
 
 def read(sheet: str, col: str, *, date: str | None = None,
@@ -104,9 +122,35 @@ def lookup_row(sheet: str, date_str: str) -> int | None:
 _DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
 
 
+def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
+                      date: str | None, value: str | None,
+                      after_formula: str, src: str | None) -> None:
+    """Best-effort ledger entry for a write that bypassed the daemon.
+
+    The daemon couldn't journal it (it was down), so append the JSONL line
+    ourselves on ix. before_formula is unknown (null) — the audit treats
+    fallback entries as warn-only chain links, not breaks.
+    """
+    now = datetime.datetime.now()
+    entry = {
+        "ts": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "kind": op, "sheet": sheet, "col": col, "row": row, "date": date,
+        "value": value, "before": None, "after": after_formula,
+        "src": src, "fallback": True, "host": socket.gethostname(),
+    }
+    line = json.dumps(entry, ensure_ascii=False)
+    path = f"{LEDGER_DIR}/{now.strftime('%Y-%m')}.jsonl"
+    cmd = f"mkdir -p {shlex.quote(LEDGER_DIR)} && printf '%s\\n' {shlex.quote(line)} >> {shlex.quote(path)}"
+    argv = ["sh", "-c", cmd] if IS_IX else ["ssh", DAEMON_HOST, cmd]
+    try:
+        subprocess.run(argv, capture_output=True, text=True, timeout=20)
+    except Exception:
+        pass  # journaling must never fail the write it describes
+
+
 def _ssh_fallback(op: str, sheet: str, col: str,
                   date: str | None, row: int | None,
-                  value: str | None) -> dict[str, Any]:
+                  value: str | None, src: str | None = None) -> dict[str, Any]:
     """If the daemon is unreachable, fall back to one-shot ssh+osascript."""
     if row is None and date is not None:
         dc = _DATE_COL.get(sheet, "B")
@@ -129,9 +173,13 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'  return 0\n'
             f'end tell'
         )
+        # ssh joins argv with spaces for the remote shell — the script MUST be
+        # shell-quoted or the remote zsh parses its parens/quotes and dies
+        # ("parse error near ')'", found 2026-07-20: the fallback had never
+        # actually worked).
         r = subprocess.run(
-            ["ssh", DAEMON_HOST, "osascript", "-e", lookup_script],
-            capture_output=True, text=True, timeout=15,
+            ["ssh", DAEMON_HOST, f"osascript -e {shlex.quote(lookup_script)}"],
+            capture_output=True, text=True, timeout=45,
         )
         try:
             row = int(r.stdout.strip())
@@ -191,13 +239,16 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'  return ((value of theCell) as string) & "|" & (formula of theCell)\n'
             f'end tell'
         )
+    osa = f"osascript -e {shlex.quote(script)}"
     r = subprocess.run(
-        ["ssh", DAEMON_HOST, "osascript", "-e", script],
-        capture_output=True, text=True, timeout=15,
+        ["sh", "-c", osa] if IS_IX else ["ssh", DAEMON_HOST, osa],
+        capture_output=True, text=True, timeout=45,
     )
     if r.returncode != 0:
         return {"ok": False, "error": r.stderr.strip(), "fallback": True}
     parts = r.stdout.strip().split("|", 1)
     val, formula = (parts + [""])[:2]
+    if op in ("append", "write"):
+        _journal_fallback(op, sheet, col, row, date, value, formula, src)
     return {"ok": True, "row": row, "col": col, "value": val,
             "formula": formula, "fallback": True}
