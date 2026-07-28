@@ -1020,6 +1020,18 @@ for t in unique:
     # tasks keep their (N)/[N] estimates visible; fall back to full content.
     display = t.get('short') or raw
 
+    # Markdown links (/todo stores URLs as '[(link)](https://…)') collapse to
+    # their visible text for layout; the first one becomes an OSC 8 terminal
+    # hyperlink after padding so it stays clickable in cmux (feature
+    # 2026-07-28). Raw URLs would blow out truncation and read as noise.
+    link_url = None
+    _mdlink = re.search(r'\[([^\]]*)\]\((https?://[^)\s]+)\)', display)
+    if _mdlink:
+        link_url = _mdlink.group(2)
+        link_text = _mdlink.group(1) or '(link)'
+        display = re.sub(r'\[([^\]]*)\]\((https?://[^)\s]+)\)',
+                         lambda mm: mm.group(1) or '(link)', display)
+
     # Middle-truncate if needed (fallback; short names usually fit). cols - 7
     # keeps the whole row ~5 cols thinner, matching the estimate margin above.
     line = display
@@ -1053,6 +1065,14 @@ for t in unique:
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)
+    if link_url and link_text in body:
+        # OSC 8 wrap AFTER layout so the escape bytes never skew the padding.
+        # ST spelled with chr(92): this python lives in a zsh double-quoted
+        # string where a backslash pair would collapse and break the escape.
+        _st = '\x1b' + chr(92)
+        body = body.replace(
+            link_text,
+            '\x1b]8;;' + link_url + _st + link_text + '\x1b]8;;' + _st, 1)
     if is_running:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
