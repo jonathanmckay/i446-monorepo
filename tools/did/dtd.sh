@@ -234,7 +234,7 @@ clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\
 # Non-ritual tasks pass through unchanged and fall back to tg-fast below.
 _rr=\$(python3 -c "
 import sys
-RITUAL_DOMAIN = {'-1ibx':'i9','-1l':'g245','-1t':'n156','سمش':'hcm'}
+RITUAL_DOMAIN = {'-1ibx':'i9','-1g':'g245','-1l':'g245','-1t':'n156','سمش':'hcm'}
 c = sys.argv[1]; bare = c.replace('😈','').strip(); proj=''
 for tag,dom in RITUAL_DOMAIN.items():
     if bare == tag or tag in bare.split():
@@ -778,7 +778,7 @@ RESET = '\033[0m'
 
 # -1neon ritual cards carry only the '-1neon' label (no domain), so they render
 # colorless. Map each ritual tag to its natural domain color (user 2026-07-07).
-RITUAL_DOMAIN = {'-1ibx': 'i9', '-1l': 'g245', '-1t': 'n156', 'سمش': 'hcm'}
+RITUAL_DOMAIN = {'-1ibx': 'i9', '-1g': 'g245', '-1l': 'g245', '-1t': 'n156', 'سمش': 'hcm'}
 
 def prank(p):
     return -(p or 1)

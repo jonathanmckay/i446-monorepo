@@ -57,8 +57,10 @@ def test_jia_specifically_present():
 
 def test_ritual_cards_get_domain_colors():
     """-1neon cards carry no domain label; dtd maps the ritual tag to a domain
-    color (2026-07-07): -1ibx→i9, -1l→g245, -1t→n156, سمش→hcm."""
+    color (2026-07-07; -1g added 2026-07-27 — it was the one colorless
+    ritual): -1ibx→i9, -1g→g245, -1l→g245, -1t→n156, سمش→hcm."""
     src = DTD.read_text()
-    assert "RITUAL_DOMAIN = {'-1ibx': 'i9', '-1l': 'g245', '-1t': 'n156', 'سمش': 'hcm'}" in src
+    assert ("RITUAL_DOMAIN = {'-1ibx': 'i9', '-1g': 'g245', '-1l': 'g245', "
+            "'-1t': 'n156', 'سمش': 'hcm'}") in src
     assert "'-1neon' in t.get('labels', [])" in src, (
         "list builder must resolve ritual-card color from the tag name")
