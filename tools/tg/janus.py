@@ -620,16 +620,19 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     return (body or None), code, time_range, tags
 
 
-# ── Value-tag 媒分 credits (user request 2026-07-28) ────────────────────────
-# Media-tier Toggl tags earn 媒 (hcmc) 分 per minute: "-2 means I explicitly
-# want the points ... 0.1/m for -1, 1/m for -3, 0.5/m for -2". Credits fire
-# ONLY for tags added through janus's edit flow — /tg shortcodes auto-tag
-# some entries (睡觉 -3, hiit -2) and blanket-crediting every tagged entry
-# would hand sleep ~400分/day of 媒. A tag on a RUNNING entry queues until
-# the timer stops (minutes unknown until then); fetch_today resolves the
-# queue. Credited (id, tag) pairs are journaled date-gated so a re-edit
-# can't double-credit.
-TAG_POINTS = {"-1": 0.1, "-2": 0.5, "-3": 1.0}  # 分 per minute → 媒 column
+# ── Value-tag media-minute credits (user request 2026-07-28) ────────────────
+# Media-tier Toggl tags (-1/-2/-3) each have their OWN minutes column in the
+# 0n sheet (AV/AW/AX as of 2026-07-28) whose formulas apply the ratio
+# (0.1/m, 0.5/m, 1/m) to turn minutes into 分 — so janus writes MINUTES to
+# the tag's column, never points ("put the number of minutes in column AW,
+# which will then apply the multiplier"). Credits fire ONLY for tags added
+# through janus's edit flow — /tg shortcodes auto-tag some entries (睡觉 -3,
+# hiit -2) and blanket-crediting every tagged entry would hand sleep
+# ~400m/day of media minutes. A tag on a RUNNING entry queues until the
+# timer stops (minutes unknown until then); fetch_today resolves the queue.
+# Credited (id, tag) pairs are journaled date-gated so a re-edit can't
+# double-credit.
+VALUE_TAGS = ("-1", "-2", "-3")
 TAG_CREDITS = Path.home() / ".local/state/jm/janus-tag-credits.json"
 
 
@@ -651,22 +654,26 @@ def _tag_credit_save(d: dict) -> None:
         pass
 
 
-def tag_credit_points(tag: str, mins: int) -> float:
-    """分 a value tag earns for `mins` tracked minutes (0 for unknown tags)."""
-    return round(mins * TAG_POINTS.get(tag, 0), 1)
-
-
-def _apply_tag_credit(tag: str, mins: int, day: dt.date) -> float | None:
-    """Append mins×rate 媒分 to the entry's own day row in 0分. Column
-    letter via neon.cols (never hardcoded — the 2026-04-28 reshuffle rule)."""
-    pts = tag_credit_points(tag, mins)
-    if pts <= 0:
-        return None
+def _tag_col(tag: str) -> str:
+    """0n column letter for a value tag's minutes, via neon-cols (never
+    hardcoded — the 2026-04-28 reshuffle rule). Falls back to the
+    AppleScript-stringified key ("-2.0") for configs regenerated before the
+    numeric-header normalization landed in regen-neon-cols.py."""
     from neon import cols as neon_cols
-    col = neon_cols.domain_col("0分", "hcmc")
-    neon_excel.append("0分", col, date=f"{day.month}/{day.day}",
-                      value=f"+{pts:g}")
-    return pts
+    try:
+        return neon_cols.col("0n", tag)
+    except KeyError:
+        return neon_cols.col("0n", f"{tag}.0")
+
+
+def _apply_tag_credit(tag: str, mins: int, day: dt.date) -> int | None:
+    """Append the entry's MINUTES to the tag's own 0n column for the entry's
+    day — the sheet's formulas apply the tag ratio to produce the 分."""
+    if mins <= 0:
+        return None
+    neon_excel.append("0n", _tag_col(tag), date=f"{day.month}/{day.day}",
+                      value=f"+{mins}")
+    return mins
 
 
 def _find_entry(entry_ids: list) -> dict | None:
@@ -693,13 +700,13 @@ def _resolve_pending_tag_credits() -> None:
             continue
         mins = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
         try:
-            pts = _apply_tag_credit(p["tag"], mins, ent["start_dt"].date())
+            credited = _apply_tag_credit(p["tag"], mins, ent["start_dt"].date())
         except Exception:
             remaining.append(p)  # ix unreachable etc. — retry next fetch
             continue
-        if pts:
+        if credited:
             st["credited"].append(p["key"])
-            flash(f"#{p['tag']} +{pts:g}分 媒 ({display_desc(ent['desc'])})", 6.0)
+            flash(f"#{p['tag']} +{credited}m → 0n ({display_desc(ent['desc'])})", 6.0)
     st["pending"] = remaining
     _tag_credit_save(st)
 
@@ -3244,7 +3251,7 @@ def _(event):
             existing = list((ent or {}).get("tags") or [])
             fields["tags"] = sorted(set(existing) | set(tags))
             new_value_tags = [t for t in tags
-                              if t in TAG_POINTS and t not in existing]
+                              if t in VALUE_TAGS and t not in existing]
         if time_range:
             start_dt = _hhmm_to_dt(edit_date, time_range[0])
             end_dt = _hhmm_to_dt(edit_date, time_range[1])
@@ -3291,17 +3298,17 @@ def _(event):
                         if ent and not ent.get("running"):
                             mins = int((ent["end_dt"] - ent["start_dt"])
                                        .total_seconds() // 60)
-                            pts = await asyncio.to_thread(
+                            credited = await asyncio.to_thread(
                                 _apply_tag_credit, tag, mins,
                                 ent["start_dt"].date())
-                            if pts:
+                            if credited:
                                 st["credited"].append(key)
-                                flash(f"#{tag} +{pts:g}分 媒", 5.0)
+                                flash(f"#{tag} +{credited}m → 0n", 5.0)
                         else:
                             st["pending"].append(
                                 {"key": key, "id": ids[0], "tag": tag})
-                            flash(f"#{tag} queued — 媒分 credit when the "
-                                  "timer stops", 5.0)
+                            flash(f"#{tag} queued — minutes credit when "
+                                  "the timer stops", 5.0)
                     _tag_credit_save(st)
                 else:
                     flash("updated", 4.0)
