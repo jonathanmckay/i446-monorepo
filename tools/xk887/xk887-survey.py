@@ -141,14 +141,18 @@ def field_key(sheet: str, key: str) -> str:
 # ---------------------------------------------------------------------------
 
 def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
-    """One tell block, one sheet loop per config: find the review week's row
-    by col A's M.W label (string value, NOT value -- the label column is a
-    formula chain with float-precision display artifacts, same lesson as
-    0s.py's date matching); if the week isn't there yet, append a new row.
-    Only non-empty answers are written, so blanks never clobber existing
-    cells -- except xk26's age, which auto-continues from the previous row
-    on a newly appended row only. `sheets` restricts the write to a subset
-    of SHEETS (the paginated form writes one sheet per page)."""
+    """One tell block, one sheet loop per config: the review week's row is
+    only ever the sheet's current tail row (col A's M.W label there, read as
+    string value NOT value -- the label column is a formula chain with
+    float-precision display artifacts, same lesson as 0s.py's date
+    matching). The M.W label has no year component, so it is NOT safe to
+    scan the whole column for a string match -- that can re-hit an old
+    year's row with the same label well before the real tail. If the tail's
+    label isn't this week's, append a new row after it. Only non-empty
+    answers are written, so blanks never clobber existing cells -- except
+    xk26's age, which auto-continues from the previous row on a newly
+    appended row only. `sheets` restricts the write to a subset of SHEETS
+    (the paginated form writes one sheet per page)."""
     label = week_row_label(sunday)
     L = [
         'tell application "Microsoft Excel"',
@@ -161,22 +165,29 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
         v = sheet  # AppleScript variable prefix; sheet names are valid identifiers
         L += [
             '  set ws to worksheet "%s" of wb' % sheet,
-            '  set weekRow_%s to 0' % v,
             '  set lastRow_%s to 1' % v,
             '  repeat with r from 2 to 1000',
             '    set av to ""',
             '    try',
             '      set av to (string value of range ("A" & r) of ws)',
             '    end try',
-            '    if av is not "" then',
-            '      set lastRow_%s to r' % v,
-            '      if av = "%s" then set weekRow_%s to r' % (label, v),
-            '    end if',
+            '    if av is not "" then set lastRow_%s to r' % v,
             '  end repeat',
-            '  set isNew_%s to (weekRow_%s = 0)' % (v, v),
+            '  set tailLabel_%s to ""' % v,
+            '  try',
+            '    set tailLabel_%s to (string value of range ("A" & lastRow_%s) of ws)' % (v, v),
+            '  end try',
+            # Only the tail row can legitimately be "this week" -- the M.W
+            # label has no year component, so scanning the whole sheet for
+            # a string match risks re-hitting an old year's row with the
+            # same label (e.g. a prior year's "7.3") well before the real
+            # tail, silently overwriting stale history instead of appending.
+            '  set isNew_%s to (tailLabel_%s is not "%s")' % (v, v, label),
             '  if isNew_%s then' % v,
             '    set weekRow_%s to lastRow_%s + 1' % (v, v),
             '    set value of range ("A" & weekRow_%s) of ws to %s' % (v, label),
+            '  else',
+            '    set weekRow_%s to lastRow_%s' % (v, v),
             '  end if',
         ]
         for key, _label, col, kind in cfg["fields"]:

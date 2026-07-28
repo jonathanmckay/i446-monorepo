@@ -61,9 +61,24 @@ def test_applescript_targets_week_label_and_skips_blanks():
 def test_applescript_appends_new_row_when_week_missing():
     m = _load()
     script = m.build_applescript({}, dt.date(2026, 7, 19))
-    assert "set isNew_xk88 to (weekRow_xk88 = 0)" in script
+    assert 'set isNew_xk88 to (tailLabel_xk88 is not "7.3")' in script
     assert 'set weekRow_xk88 to lastRow_xk88 + 1' in script
     assert '("A" & weekRow_xk88) of ws to 7.3' in script
+
+
+def test_week_row_only_matches_the_tail_not_any_historical_row():
+    """The M.W label has no year component (e.g. "7.3" recurs every year),
+    so matching must be scoped to the sheet's tail row only -- scanning the
+    whole column for a string match risks landing on an old year's row with
+    the same label well before the real tail, silently overwriting stale
+    history instead of appending a new one."""
+    m = _load()
+    script = m.build_applescript({}, dt.date(2026, 7, 19))
+    for cfg in m.SHEETS:
+        v = cfg["sheet"]
+        assert 'set isNew_%s to (tailLabel_%s is not "7.3")' % (v, v) in script
+        # the old buggy pattern (match anywhere in rows 2-1000) must be gone
+        assert 'if av = "7.3" then set weekRow_%s to r' % v not in script
 
 
 def test_col_a_matched_via_string_value_not_value():

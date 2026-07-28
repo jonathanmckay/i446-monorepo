@@ -589,40 +589,26 @@ _DID_FAST = Path(__file__).parent / "did-fast.py"
 
 
 class FormulaAppendTests(unittest.TestCase):
-    """Regression: when a 0分 cell contains a literal number (e.g. '120')
-    instead of a formula (e.g. '=0+30+90'), the append logic produced
-    '120+15' which Excel treats as text, silently losing points.
-    Fix: prepend '=' when oldFormula doesn't start with '='."""
+    """2026-07-28: 0分 appends were migrated off raw AppleScript onto the
+    excel-http daemon (lib/neon/excel.batch_append via append_0fen_batch),
+    which normalizes the literal-cell / empty-cell / formula cases
+    server-side and journals every append in the audit ledger.
+    These tests pin the migration: the raw builders must not reappear
+    (test_no_raw_0fen_writes.py enforces the full ban)."""
 
     def setUp(self):
         self.src = _DID_FAST.read_text()
 
-    def _extract_func(self, name):
-        """Extract function body from source."""
-        start = self.src.index(f"def {name}(")
-        # Find next def at same indent level
-        rest = self.src[start:]
-        lines = rest.split("\n")
-        end = len(lines)
-        for i, line in enumerate(lines[1:], 1):
-            if line.startswith("def ") or (line.startswith("class ") and not line.startswith("    ")):
-                end = i
-                break
-        return "\n".join(lines[:end])
+    def test_raw_0fen_builders_removed(self):
+        self.assertNotIn("def build_0fen_script", self.src,
+                         "raw AppleScript 0分 batch builder must stay deleted")
+        self.assertNotIn("def build_1n_0fen_script", self.src,
+                         "raw AppleScript 1n+→0分 builder must stay deleted")
 
-    def test_0fen_script_handles_literal_cell(self):
-        func = self._extract_func("build_0fen_script")
-        self.assertIn('character 1 of oldFormula is not "="', func,
-                       "build_0fen_script must handle literal cell values (no = prefix)")
-        self.assertIn('"=" & oldFormula', func,
-                       "must prepend = when old value is a literal number")
-
-    def test_1n_0fen_script_handles_literal_cell(self):
-        func = self._extract_func("build_1n_0fen_script")
-        self.assertIn('character 1 of oldFormula is not "="', func,
-                       "build_1n_0fen_script must handle literal cell values (no = prefix)")
-        self.assertIn('"=" & oldFormula', func,
-                       "must prepend = when old value is a literal number")
+    def test_0fen_appends_go_through_daemon_batch(self):
+        self.assertIn("neon_excel.batch_append", self.src,
+                      "0分 appends must go through lib/neon/excel batch_append")
+        self.assertIn("def append_0fen_batch(", self.src)
 
 
 # ---------------------------------------------------------------------------

@@ -23,16 +23,17 @@ FILES = {
     "build-order-daemon": MONO / "scripts" / "build-order-daemon.py",
     "undo-fast": MONO / "tools" / "did" / "undo-fast.py",
     "neon-write": MONO / "scripts" / "neon-write.py",
+    "did-fast": MONO / "tools" / "did" / "did-fast.py",
 }
 # Files that, post-migration, must contain at least one client write call.
-MIGRATED = ("build-order-daemon", "undo-fast", "neon-write")
+MIGRATED = ("build-order-daemon", "undo-fast", "neon-write", "did-fast")
 
 WRITE_RE = re.compile(r"set\s+(formula|value)\s+of")
 EXCEL_TELL = 'tell application "Microsoft Excel"'
 # A script template whose target sheet is interpolated at runtime — a generic
 # writer like this can be pointed at 0分, so it counts as a raw 0分 write path.
 GENERIC_SHEET_RE = re.compile(r'sheet\s+"\{sheet\}"')
-CLIENT_CALL_RE = re.compile(r"excel\.(append|write)\(")
+CLIENT_CALL_RE = re.compile(r"excel\.(batch_append|append|write)\(")
 
 
 def _blocks(src):

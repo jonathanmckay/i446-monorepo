@@ -47,6 +47,14 @@ sys.modules["ix_osa"] = _ix_mod  # register so dataclass resolution works
 _IX_SPEC.loader.exec_module(_ix_mod)  # type: ignore[union-attr]
 ix_run = _ix_mod.run
 
+# All 0分 writes go through the excel-http daemon (localhost:9876 on ix) via
+# lib/neon/excel so they land in the audit ledger with a `src` label and get
+# chain-checked. Raw AppleScript 0分 writes are banned (2026-07-28 migration
+# after the batch AppleScript path wrote +15+10 to 0分!R invisibly on 7/27);
+# the no-raw-0fen regression test scans this file to enforce the ban. Reads
+# and other sheets (0n/1n+/hcbi) still use ix_run.
+from neon import excel as neon_excel  # noqa: E402 (path inserted above)
+
 # Import mark-completed
 _MC_PATH = Path(__file__).parent / "mark-completed.py"
 _MC_SPEC = importlib.util.spec_from_file_location("mark_completed", _MC_PATH)
@@ -1213,37 +1221,105 @@ end tell'''
     return script
 
 
-def build_0fen_script(appends: list[tuple[str, int]], target_date: str) -> Optional[str]:
-    """Build AppleScript for batch 0分 appends. appends = [(col_letter, points), ...]"""
-    if not appends:
-        return None
+def _did_src(names: list[str]) -> str:
+    """Ledger `src` label for a /did credit: the habit/task names earning it."""
+    uniq = list(dict.fromkeys(n for n in names if n))
+    if not uniq:
+        return "did"
+    if len(uniq) == 1:
+        return f"did {uniq[0]}"
+    return "did batch: " + ",".join(uniq)
 
-    append_lines = []
-    for col, pts in appends:
-        append_lines.append(f'''    set theCell to range ("{col}" & todayRow) of ws
-    set oldFormula to formula of theCell
-    if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "=0+{pts}"
-    else if character 1 of oldFormula is not "=" then
-        set formula of theCell to "=" & oldFormula & "+{pts}"
-    else
-        set formula of theCell to oldFormula & "+{pts}"
-    end if''')
 
-    script = f'''tell application "Microsoft Excel"
-    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
+def _warn_chain_broken(resp: dict, sheet: str = "0分") -> None:
+    """Warn-only chain feedback from the excel-http daemon: "broken" means the
+    cell was modified outside the daemon since its last ledger entry. Surface
+    it on stderr; never fail the write it accompanies."""
+    cols: list[str] = []
+    if resp.get("chain") == "broken" and resp.get("col"):
+        cols.append(resp["col"])
+    for c in resp.get("chain_broken_cols") or []:
+        if c not in cols:
+            cols.append(c)
+    for item in resp.get("results") or []:
+        if isinstance(item, dict) and item.get("chain") == "broken":
+            c = item.get("col")
+            if c and c not in cols:
+                cols.append(c)
+    for c in cols:
+        print(f"⚠ {sheet}!{c} chain broken — cell modified outside daemon",
+              file=sys.stderr)
+
+
+def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
+                      src_names: list[str], tag: str) -> subprocess.CompletedProcess:
+    """Batch 0分 appends via the excel-http daemon — ONE round-trip (the row
+    is resolved once server-side; each append is journaled + chain-checked).
+
+    `appends` = [(col, value)] where value is a numeric point count (→ "+N")
+    or a ready-made append string (e.g. "+'1n+'!K5"), passed through as-is.
+    Empty-cell / bare-number / formula normalization happens server-side.
+
+    Returns a CompletedProcess shaped like the old ix_run(osascript) result so
+    the output builder and error handling downstream stay unchanged:
+      rc 0, stdout "OK:<tag> row=N"                — all appends landed
+      rc 0, stdout "ERROR: date … not found in 0分" — same string the old
+                                                     AppleScript returned
+      rc 1, stderr <error>                          — daemon/transport failure
+    """
+    values = [(col, v if isinstance(v, str) else f"+{v}") for col, v in appends]
+    try:
+        resp = neon_excel.batch_append("0分", values, date=target_date,
+                                       src=_did_src(src_names))
+    except Exception as e:  # noqa: BLE001 — surface as the old rc!=0 path
+        return subprocess.CompletedProcess("excel-http", 1, stdout="", stderr=str(e))
+    _warn_chain_broken(resp)
+    sub_results = [r for r in resp.get("results") or [] if isinstance(r, dict)]
+    if resp.get("ok"):
+        row = resp.get("row")
+        if row is None:  # ssh fallback: per-cell results carry the row
+            row = next((r.get("row") for r in sub_results if r.get("row")), "?")
+        return subprocess.CompletedProcess("excel-http", 0,
+                                           stdout=f"OK:{tag} row={row}", stderr="")
+    err = str(resp.get("error")
+              or next((r.get("error") for r in sub_results if r.get("error")), "")
+              or "excel-http batch append failed")
+    if "date_not_found" in err:
+        return subprocess.CompletedProcess(
+            "excel-http", 0,
+            stdout=f"ERROR: date {target_date} not found in 0分", stderr="")
+    return subprocess.CompletedProcess("excel-http", 1, stdout="", stderr=err)
+
+
+def build_0l_time_script(target_date: str) -> str:
+    """0l special case: stamp the completion time (HHMM) into 0n's
+    "N Color" column (cell 32) for the target date's row. 0n write —
+    stays raw AppleScript (only 0fen writes are daemon-routed)."""
+    return f'''tell application "Microsoft Excel"
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set targetMonth to {target_date.split("/")[0]}
+    set targetDay to {target_date.split("/")[1]}
     set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of range ("B" & i) of ws) = "{target_date}" then
-            set todayRow to i
-            exit repeat
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of theSheet
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = targetMonth and d = targetDay then
+                    set todayRow to r
+                    exit repeat
+                end if
+            end try
         end if
     end repeat
-    if todayRow = 0 then return "ERROR: date {target_date} not found in 0分"
-{chr(10).join(append_lines)}
-    return "OK:0fen row=" & todayRow
+    if todayRow = 0 then return "SKIP: date not found"
+    set h to hours of (current date)
+    set mn to minutes of (current date)
+    set timeStr to (h * 100 + mn)
+    set value of cell 32 of row todayRow of theSheet to timeStr
+    return "OK: N Color=" & timeStr & " row=" & todayRow
 end tell'''
-    return script
 
 
 def build_hcbi_script(appends: list[tuple[str, int]], target_date: str) -> Optional[str]:
@@ -1312,7 +1388,7 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
         elif w.is_variable_1n:
             # Variable 1n+ tasks: append MINUTES to the formula so a week of
             # repeated sessions accumulates (2026-07-27 redesign — the cell
-            # records time; points go to 0分 separately).
+            # records time; points go to 0fen separately).
             val = w.write_value or 1
             write_lines.append(f'''    set theCell1n to range ("{col}" & weekRow) of ws1n
     set oldFormula1n to formula of theCell1n
@@ -1325,8 +1401,8 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     end if''')
         else:
             # 2026-07-27 redesign: the cell records the MINUTES the habit took
-            # (1 when unknown), never the points — those land on 0分 via the
-            # row-5 expected-points reference in build_1n_0fen_script.
+            # (1 when unknown), never the points — those land on 0fen via the
+            # row-5 expected-points reference (step 4c's append_0fen_batch).
             write_lines.append(
                 f'''    set value of range ("{col}" & weekRow) of ws1n to {w.write_value or 1}''')
         verify_lines.append(
@@ -1357,41 +1433,6 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     set results to "weekRow=" & weekRow & "|"
 {chr(10).join(verify_lines)}
     return "OK:" & results & linefeed & preOut
-end tell'''
-    return script
-
-
-def build_1n_0fen_script(refs: list[tuple[str, str, str]], target_date: str) -> Optional[str]:
-    """Build AppleScript to append 1n+ cell references to 0分.
-    refs = [(fen_col, 1n_col_letter, weekRow_placeholder), ...]
-    weekRow is unknown until the 1n script runs, so we pass it as a known value."""
-    if not refs:
-        return None
-
-    append_lines = []
-    for fen_col, one_col, week_row in refs:
-        append_lines.append(f'''    set theCell to range ("{fen_col}" & todayRow) of ws
-    set oldFormula to formula of theCell
-    if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "=0+'1n+'!{one_col}{week_row}"
-    else if character 1 of oldFormula is not "=" then
-        set formula of theCell to "=" & oldFormula & "+'1n+'!{one_col}{week_row}"
-    else
-        set formula of theCell to oldFormula & "+'1n+'!{one_col}{week_row}"
-    end if''')
-
-    script = f'''tell application "Microsoft Excel"
-    set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of range ("B" & i) of ws) = "{target_date}" then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_date} not found in 0分"
-{chr(10).join(append_lines)}
-    return "OK:1n_0fen row=" & todayRow
 end tell'''
     return script
 
@@ -1746,6 +1787,48 @@ def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None
     return results
 
 
+# ---------------------------------------------------------------------------
+# d359 outreach tasks: completing one via /did means contact happened.
+# ---------------------------------------------------------------------------
+
+S897_UPDATE = Path.home() / "i446-monorepo/tools/d359/s897_update.py"
+D359_AUTO_MARK = "😈"
+
+
+def d359_outreach_slug(task: dict) -> str | None:
+    """The d359/<slug> label on `task`, but ONLY if it's a daemon-created
+    outreach reminder (content starts with the same 😈 marker stale-contacts
+    uses) — a hand-written task that happens to carry the label is never
+    diverted. None when it isn't one of these."""
+    content = task.get("content") or ""
+    if not content.startswith(D359_AUTO_MARK):
+        return None
+    for lbl in task.get("labels") or []:
+        if lbl.startswith("d359/"):
+            return lbl[len("d359/"):]
+    return None
+
+
+def run_d359_met(item_name: str, slug: str) -> dict:
+    """Route a completed outreach task through the same 'met' flow /s897
+    uses: last_contact -> today, robot task DELETED (not completed — no
+    points claimed for a task a daemon invented, matching /s897's own
+    policy). slug -> name reconstruction is safe because both s897_update's
+    _slug() and _bare() collapse hyphens/spaces/underscores to the same
+    space-joined lowercase key before matching."""
+    name_guess = slug.replace("-", " ")
+    try:
+        proc = subprocess.run(
+            ["python3", str(S897_UPDATE), f"{name_guess} met"],
+            capture_output=True, text=True, timeout=30)
+        ok = proc.returncode == 0
+        out = (proc.stdout or proc.stderr or "").strip()
+    except Exception as e:  # noqa: BLE001
+        ok, out = False, str(e)
+    return {"name": item_name, "step": "d359_met",
+            "d359": {"slug": slug, "ok": ok, "output": out}}
+
+
 def _is_daily_recurrence(due_string: str) -> bool:
     """True for DAILY recurrences only, where the next occurrence == tomorrow.
     Weekly/monthly recurrences have their own next-occurrence math (next matching
@@ -1959,28 +2042,16 @@ def run_ritual(tag: str) -> dict:
         now = datetime.now()
         _, computed_total, computed_formula = nb.score_day(new_text)
 
-        read_script = (
-            'tell application "Microsoft Excel"\n'
-            '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
-            '    set rr to 0\n'
-            '    repeat with i from 2 to 400\n'
-            f'        if (string value of cell ("B" & i) of s) = "{now.month}/{now.day}" then\n'
-            '            set rr to i\n'
-            '            exit repeat\n'
-            '        end if\n'
-            '    end repeat\n'
-            '    if rr = 0 then return "ERR: no 0分 row"\n'
-            '    set f to (get formula of cell ("P" & rr) of s) as text\n'
-            '    set v to (get value of cell ("P" & rr) of s)\n'
-            '    return (rr as text) & "|" & f & "|" & (v as text)\n'
-            'end tell'
-        )
+        # Read + write via the excel-http daemon (audit ledger + chain check)
+        # — never raw AppleScript against 0分 (2026-07-28 migration).
         try:
-            read_res = ix_run(read_script)
-            raw = (read_res.stdout or "").strip()
-            if read_res.returncode != 0 or "|" not in raw:
-                raise RuntimeError((read_res.stderr or raw or "read failed")[:120])
-            row_s, f, v = raw.split("|", 2)
+            read_res = neon_excel.read("0分", "P", date=f"{now.month}/{now.day}")
+            if not read_res.get("ok") or not read_res.get("row"):
+                raise RuntimeError(
+                    str(read_res.get("error") or "ERR: no 0分 row")[:120])
+            p_row = int(read_res["row"])
+            f = str(read_res.get("formula") or "")
+            v = read_res.get("value")
             live_total = float(v or 0)
 
             if computed_total >= live_total:
@@ -2003,17 +2074,16 @@ def run_ritual(tag: str) -> dict:
                 new_formula = "=" + "+".join(terms)
                 regrouped = False
 
-            write_script = (
-                'tell application "Microsoft Excel"\n'
-                '    set s to sheet "0分" of workbook "Neon分v12.2.xlsx"\n'
-                f'    set formula of cell ("P" & {row_s}) of s to "{new_formula}"\n'
-                f'    return "P=" & (value of cell ("P" & {row_s}) of s)\n'
-                'end tell'
-            )
-            write_res = ix_run(write_script)
-            out["p_credit"] = {"points": pts, "ok": write_res.returncode == 0,
+            # SET the composed formula (recompute or safe append) on col P.
+            write_res = neon_excel.write("0分", "P", row=p_row,
+                                         value=new_formula,
+                                         src=f"ritual {block} -1n")
+            _warn_chain_broken(write_res)
+            out["p_credit"] = {"points": pts, "ok": bool(write_res.get("ok")),
                                "regrouped": regrouped,
-                               "excel": (write_res.stdout or write_res.stderr or "").strip()[:60]}
+                               "excel": (f"P={write_res.get('value')}"
+                                         if write_res.get("ok")
+                                         else str(write_res.get("error") or ""))[:60]}
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
             out["p_credit_error"] = str(e)
     return out
@@ -2157,6 +2227,30 @@ def main():
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
     agent_needed = [r for r in routes if r.step == "needs_agent"]
 
+    # 3a-ii. d359 outreach tasks (😈-labelled `d359/<slug>`): completing one
+    # via /did (and hence dtd) means contact happened — divert to the same
+    # 'met' flow /s897 uses (last_contact -> today, robot task DELETED) BEFORE
+    # the generic close/point-credit paths below ever see it. Points are
+    # deliberately never credited here, matching /s897's own policy ("no
+    # points are claimed for a task a daemon invented"). Gated on points_only
+    # for the same reason ritual cards are (see 1b. above): --points-only
+    # promises no Todoist side effects, and this is all side effects.
+    d359_met_entries: list[dict] = []
+    if not points_only:
+        remaining = []
+        for r in fast:
+            slug = d359_outreach_slug(r.todoist_task) if r.todoist_task else None
+            if slug:
+                d359_met_entries.append(run_d359_met(r.item.name, slug))
+            else:
+                remaining.append(r)
+        fast = remaining
+        if d359_met_entries:
+            try:
+                refresh_task_queue(block=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"cache refresh failed: {e}", file=sys.stderr)
+
     # 3b. Stop matching Toggl timer; backfill variable-task values from
     # the timer's elapsed minutes (dtd: no need to type the time when a
     # matching timer is running)
@@ -2176,32 +2270,7 @@ def main():
 
     # 4a-ii. 0l special case: write completion time to "N Color" column (AF)
     if any(r.item.name.lower() == "0l" for r in on_writes):
-        ol_script = f'''tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set targetMonth to {target_date.split("/")[0]}
-    set targetDay to {target_date.split("/")[1]}
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = targetMonth and d = targetDay then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "SKIP: date not found"
-    set h to hours of (current date)
-    set mn to minutes of (current date)
-    set timeStr to (h * 100 + mn)
-    set value of cell 32 of row todayRow of theSheet to timeStr
-    return "OK: N Color=" & timeStr & " row=" & todayRow
-end tell'''
-        ol_time_result = ix_run(ol_script, timeout=15.0)
+        ol_time_result = ix_run(build_0l_time_script(target_date), timeout=15.0)
         if ol_time_result.returncode == 0:
             print(f"0l completion: {ol_time_result.stdout.strip()}", file=sys.stderr)
 
@@ -2221,13 +2290,15 @@ end tell'''
                 if m:
                     week_row = m.group(1)
 
-    # 4c. Batch 1n+ → 0分 appends. The week cell holds MINUTES (2026-07-27
-    # redesign), so 0分 must NOT reference it: standard habits reference the
-    # column's ROW-5 expected points (a constant), variable habits and [N]
-    # overrides append literal points via step 5's fen_appends.
+    # 4c. Batch 1n+ → 0分 appends (via the excel-http daemon, one round-trip).
+    # The week cell holds MINUTES (2026-07-27 redesign), so 0分 must NOT
+    # reference it: standard habits reference the column's ROW-5 expected
+    # points (a constant), variable habits and [N] overrides append literal
+    # points via step 5's fen_appends.
     one_n_fen_result = None
     if one_n_writes and week_row:
-        refs = []
+        ref_appends = []
+        ref_names = []
         for r in one_n_writes:
             if not r.fen_col:
                 continue
@@ -2236,26 +2307,28 @@ end tell'''
             elif r.item.points_override:
                 r.fen_points = r.item.points_override
             elif r.col_letter:
-                refs.append((r.fen_col, r.col_letter, "5"))
-        if refs:
-            script = build_1n_0fen_script(refs, target_date)
-            if script:
-                one_n_fen_result = ix_run(script, timeout=30.0)
+                ref_appends.append((r.fen_col, f"+'1n+'!{r.col_letter}5"))
+                ref_names.append(r.item.name)
+        if ref_appends:
+            one_n_fen_result = append_0fen_batch(ref_appends, target_date,
+                                                 ref_names, "1n_0fen")
 
-    # 5. Batch 0分 appends (for 0n, todoist, and variable 1n+ items with direct points)
+    # 5. Batch 0分 appends via the excel-http daemon (for 0n, todoist, and
+    # variable 1n+ items with direct points)
     fen_appends = []
+    fen_names = []
     for r in fast:
         if r.fen_col and r.fen_points > 0 and not (r.step == "1n" and not r.is_variable_1n):
             fen_appends.append((r.fen_col, r.fen_points))
+            fen_names.append(r.item.name)
         # {N} curly points → 0分 column Q (0g bonus)
         if r.item.curly_points and r.item.curly_points > 0:
             fen_appends.append(("Q", r.item.curly_points))
+            fen_names.append(r.item.name)
 
     fen_result = None
     if fen_appends:
-        script = build_0fen_script(fen_appends, target_date)
-        if script:
-            fen_result = ix_run(script, timeout=30.0)
+        fen_result = append_0fen_batch(fen_appends, target_date, fen_names, "0fen")
 
     # 5b. hcbi writes (habits that log minutes to the hcbi sheet)
     hcbi_appends = []
@@ -2560,7 +2633,7 @@ end tell'''
                         ids=completed_ids or None)
 
     # 8. Build output (ritual-card entries from step 1b lead the list)
-    output = {"results": list(ritual_entries), "agent_needed": []}
+    output = {"results": list(ritual_entries) + d359_met_entries, "agent_needed": []}
 
     # Pre-image maps for undo (captured by the write scripts themselves)
     pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}

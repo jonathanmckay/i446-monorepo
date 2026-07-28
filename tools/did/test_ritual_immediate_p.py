@@ -77,7 +77,11 @@ def test_boundary_reconcile_is_the_sole_validating_p_writer():
 
 def test_run_ritual_credits_p_immediately():
     src = _func_src(DIDFAST, "run_ritual")
-    assert 'cell ("P" &' in src, "run_ritual must write column P (immediate credit)"
+    # 2026-07-28: the P write goes through the excel-http daemon client
+    # (journaled + chain-checked), no longer raw AppleScript.
+    assert 'neon_excel.write("0分", "P"' in src, (
+        "run_ritual must write column P (immediate credit) via the daemon")
+    assert "src=" in src, "the P write must carry a ledger src label"
     assert "computed_total >= live_total" in src, (
         "must guard the recompute against regressing the live P total")
 

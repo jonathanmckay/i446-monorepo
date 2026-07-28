@@ -62,3 +62,21 @@ def test_block_glyph():
     assert audit.block_glyph("2026-07-28T04:00:00") == "卯"
     assert audit.block_glyph("2026-07-28T23:30:00") == "亥"
     assert audit.block_glyph("2026-07-28T02:00:00") == "卯"
+
+
+def test_later_ack_downgrades_earlier_break_to_warning():
+    errors, warns, _ = audit.replay([
+        E(before="=1", after="=1+10"),
+        E(before="=999", after="=999+5"),  # break
+        E(kind="ack", value=None, before="=999+5", after="=999+5", note="explained"),
+    ])
+    assert errors == []
+    assert any("chain BREAK" in w and "acked" in w for w in warns)
+
+
+def test_unacked_break_still_errors():
+    errors, _, _ = audit.replay([
+        E(before="=1", after="=1+10"),
+        E(before="=999", after="=999+5"),
+    ])
+    assert len(errors) == 1

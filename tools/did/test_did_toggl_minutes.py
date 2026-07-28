@@ -104,8 +104,28 @@ def test_1n_script_has_no_same_month_week_fallback(df):
 
 
 def test_1n_fen_append_references_row5_expected_points(df):
-    script = df.build_1n_0fen_script([("S", "I", "5")], "7/27")
-    assert "+'1n+'!I5" in script
+    # 2026-07-28: the reference is now composed inline in main's step 4c and
+    # sent through the excel-http daemon (append_0fen_batch) — assert the
+    # composed value still targets the column's ROW-5 expected points.
+    import inspect
+    src = inspect.getsource(df.main)
+    assert "+'1n+'!{r.col_letter}5" in src
+    # And the daemon client passes cell-reference values through unchanged.
+    captured = {}
+
+    def fake_batch(sheet, appends, *, date=None, row=None, src=None):
+        captured.update(sheet=sheet, appends=appends, date=date, src=src)
+        return {"ok": True, "row": 210, "results": []}
+
+    orig = df.neon_excel.batch_append
+    df.neon_excel.batch_append = fake_batch
+    try:
+        res = df.append_0fen_batch([("S", "+'1n+'!I5")], "7/27",
+                                   ["1 m5x2"], "1n_0fen")
+    finally:
+        df.neon_excel.batch_append = orig
+    assert captured["appends"] == [("S", "+'1n+'!I5")]
+    assert res.returncode == 0 and "OK:1n_0fen row=210" in res.stdout
 
 
 H1N = {"0n": {}, "1n": {"1 m5x2": "I", "1 -2g": "K"}}

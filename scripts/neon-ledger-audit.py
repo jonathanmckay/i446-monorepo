@@ -82,24 +82,33 @@ def entry_key(e):
 
 
 def replay(entries):
-    """→ (errors, warns, last_after {key: (entry, after)})."""
+    """→ (errors, warns, last_after {key: (entry, after)}).
+
+    A break on a cell that a LATER ack blesses is downgraded to a warning —
+    the ack is the acknowledgment; without this every acked incident would
+    alarm on every audit run forever."""
     errors, warns = [], []
     last = {}
+    pending = {}  # key → break messages not yet covered by an ack
     for e in entries:
         key = entry_key(e)
         cell = f"{key[0]}!{key[1]} @{key[2]}"
         prev = last.get(key)
         if e.get("kind") == "ack":
+            for msg in pending.pop(key, []):
+                warns.append(f"{msg} [acked {e.get('ts')}: {e.get('note')}]")
             last[key] = (e, e.get("after"))
             continue
         if e.get("before") is None:  # fallback write, daemon was down
             warns.append(f"{e.get('ts')} {cell}: fallback write (before unknown), src={e.get('src')}")
         elif prev is not None and e["before"] != prev[1]:
-            errors.append(
+            pending.setdefault(key, []).append(
                 f"{e.get('ts')} {cell}: chain BREAK — expected before "
                 f"`{prev[1]}` but write saw `{e['before']}` (src={e.get('src')})")
         if e.get("after") is not None:
             last[key] = (e, e["after"])
+    for msgs in pending.values():
+        errors.extend(msgs)
     return errors, warns, last
 
 
