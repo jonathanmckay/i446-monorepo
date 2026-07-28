@@ -12,6 +12,7 @@ Endpoints (POST JSON bodies):
   POST /write    {sheet, col, date|row, value, src?}  # set cell to value (literal or =formula)
   POST /read     {sheet, col, date|row}           # → {value, formula}
   POST /lookup   {sheet, date}                    # → {row}
+  POST /batch    {sheet, date|row, appends:[{col,value,src?}], src?}  # N appends, one row lookup
   POST /ack      {sheet, col, date|row, note}     # bless the cell's CURRENT formula as the new ledger baseline
   GET  /health                                    # → {ok: true, version}
 
@@ -43,7 +44,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -227,6 +228,38 @@ def _journal_and_respond(kind: str, req: dict, row: int,
     return resp
 
 
+def do_batch(req: dict) -> dict:
+    """N appends to one sheet/date in one HTTP round-trip:
+    {sheet, date|row, appends: [{col, value, src?}], src?}. The row is
+    resolved once; each append is journaled and chain-checked individually.
+    Exists so did-fast's batch completion writes stay one network call."""
+    sheet = req.get("sheet")
+    appends = req.get("appends")
+    if not sheet or not isinstance(appends, list) or not appends:
+        return {"ok": False, "error": "missing_sheet_or_appends"}
+    if req.get("row"):
+        row = int(req["row"])
+    else:
+        row = lookup_row(sheet, req.get("date", ""))
+        if row is None:
+            return {"ok": False, "error": "date_not_found_or_missing_target"}
+    results = []
+    for item in appends:
+        sub = {"sheet": sheet, "col": item.get("col"), "row": row,
+               "date": req.get("date"), "value": item.get("value"),
+               "src": item.get("src") or req.get("src")}
+        if not sub["col"]:
+            results.append({"ok": False, "error": "missing_col"})
+            continue
+        results.append(do_append(sub))
+    ok = all(r.get("ok") for r in results)
+    broken = [r["col"] for r in results if r.get("chain") == "broken"]
+    out = {"ok": ok, "row": row, "results": results}
+    if broken:
+        out["chain_broken_cols"] = broken
+    return out
+
+
 def do_ack(req: dict) -> dict:
     """Bless the cell's current formula as the new chain baseline. `note` is
     mandatory — an ack without a reason is how real corruption gets laundered."""
@@ -366,6 +399,7 @@ ROUTES = {
     "/write":  do_write,
     "/read":   do_read,
     "/lookup": do_lookup,
+    "/batch":  do_batch,
     "/ack":    do_ack,
 }
 
