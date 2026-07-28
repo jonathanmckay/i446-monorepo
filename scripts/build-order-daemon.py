@@ -38,6 +38,11 @@ import zoneinfo
 from email.mime.text import MIMEText
 from pathlib import Path
 
+# excel-http client — journaled Neon writes. Running on ix it curls localhost
+# directly, and it carries its own ssh+osascript fallback if the daemon is down.
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+from neon import excel as neon_excel
+
 # --- Paths ---
 
 VAULT = Path.home() / "vault"
@@ -428,72 +433,18 @@ def run_link_meetings(dry_run=False, target_date=None):
 
 # --- Neon (Excel) write via AppleScript ---
 
-def _osascript(script: str, timeout: int = 320):
+def _osascript(script: str, timeout: int = 180):
     """Run AppleScript. Returns (stdout, stderr, returncode) or raises.
-    320s default so the subprocess outlives the inner `with timeout of 300`
-    guard that lets a cold Excel finish launching / opening the OneDrive
-    workbook; the actual cell op is fast once Excel is warm."""
+    180s default to survive Excel autosave / recalc; the actual cell op is fast."""
     return subprocess.run(
         ["osascript", "-e", script],
         capture_output=True, text=True, timeout=timeout,
     )
 
 
-def _ensure_excel_ready(timeout: int = 300) -> bool:
-    """Guarantee Microsoft Excel is running with the Neon workbook open before
-    any cell read/write.
-
-    After an overnight reboot nothing reopens Excel, so a bare
-    `tell application "Microsoft Excel"` cold-launches it and opening the 3.4 MB
-    OneDrive workbook overruns Excel's default AppleEvent budget → -1712
-    (observed 2026-07-19/20, when nightly software-update reboots broke a
-    7-week uptime and every morning fire failed until Excel was opened by hand).
-    This launches Excel, opens the workbook by POSIX path if absent, then polls
-    until it's loaded — all inside an explicit `with timeout` so the open itself
-    can't abort early. Idempotent. Returns True when the workbook is available.
-    Non-fatal on failure: logs and returns False so the caller still attempts
-    its op (which then self-reports FAILED as before)."""
-    script = f'''
-set wbName to "{NEON_XLSX.name}"
-set ok to false
-with timeout of {timeout} seconds
-    tell application "Microsoft Excel"
-        launch
-        delay 1
-        if not (exists workbook wbName) then
-            open (POSIX file "{NEON_XLSX}")
-        end if
-        repeat 120 times
-            if (exists workbook wbName) then
-                set ok to true
-                exit repeat
-            end if
-            delay 1
-        end repeat
-    end tell
-end timeout
-if ok then
-    return "READY"
-end if
-return "ERROR: " & wbName & " did not open"
-'''
-    try:
-        r = _osascript(script, timeout=timeout + 20)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"ensure-excel: FAILED {out or r.stderr.strip()}")
-            return False
-        log(f"ensure-excel: {out}")
-        return True
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log(f"ensure-excel: ERROR {e}")
-        return False
-
-
 # AppleScript that finds the row for a given M/D date string, then runs an
 # inline cell-op subscript and returns its result.
 NEON_FIND_ROW_TEMPLATE = r'''
-with timeout of 300 seconds
 tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of workbook "Neon分v12.2.xlsx"
     set targetDate to "{date_str}"
@@ -509,7 +460,6 @@ tell application "Microsoft Excel"
     end if
     {body}
 end tell
-end timeout
 '''
 
 
@@ -527,33 +477,37 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
     residual by the same amount (2026-06-12: 卯 locked at -46, 巳 showed
     173分 of a 127分 day). Locking 0 leaves the negative in the unlocked
     tail (=D-SUM(locked)), which self-corrects as the penalties clear."""
-    body = (
-        f'set theCell to cell ("{col}" & targetRow) of theSheet\n'
-        '    set f to formula of theCell\n'
-        '    if f is "" then return "EMPTY"\n'
-        '    if (character 1 of f) is not "=" then return "ALREADY_LOCKED " & f\n'
-        '    set v to value of theCell\n'
-        '    if v is missing value then set v to 0\n'
-        '    if (v as number) < 0 then set v to 0\n'
-        '    set value of theCell to v\n'
-        '    return "LOCKED " & v as text\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
     if dry_run:
         log(f"[DRY RUN] Would lock {NEON_SHEET}!{col} for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"lock {col}: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.read(NEON_SHEET, col, date=_date_str(target_date))
+        if not r.get("ok"):
+            log(f"lock {col}: FAILED {r.get('error', '')}")
             return "FAILED"
-        log(f"lock {col}: {out}")
-        return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        f = r.get("formula") or ""
+        if f == "":
+            log(f"lock {col}: EMPTY")
+            return "EMPTY"
+        if not f.startswith("="):
+            log(f"lock {col}: ALREADY_LOCKED {f}")
+            return f"ALREADY_LOCKED {f}"
+        try:
+            v = float(r.get("value") or 0)
+        except ValueError:
+            v = 0.0
+        if v < 0:
+            v = 0.0
+        if v == int(v):
+            v = int(v)
+        w = neon_excel.write(NEON_SHEET, col, row=r["row"], value=str(v),
+                             src=f"block-turnover lock {col}")
+        if not w.get("ok"):
+            log(f"lock {col}: FAILED {w.get('error', '')}")
+            return "FAILED"
+        log(f"lock {col}: LOCKED {v}")
+        return f"LOCKED {v}"
+    except Exception as e:
         log(f"lock {col}: ERROR {e}")
         return "ERROR"
 
@@ -561,63 +515,45 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
 def neon_set_marker(target_date: dt.date, col: str, dry_run: bool = False) -> str:
     """Set `col` cell for target_date to 1, but only if currently empty.
     Returns status string."""
-    body = (
-        f'set theCell to cell ("{col}" & targetRow) of theSheet\n'
-        '    set v to value of theCell\n'
-        '    if v is missing value or v is "" then\n'
-        '        set value of theCell to 1\n'
-        '        return "SET"\n'
-        '    else\n'
-        '        return "ALREADY " & (v as text)\n'
-        '    end if\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
     if dry_run:
         log(f"[DRY RUN] Would mark {NEON_SHEET}!{col} = 1 for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"mark {col}: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.read(NEON_SHEET, col, date=_date_str(target_date))
+        if not r.get("ok"):
+            log(f"mark {col}: FAILED {r.get('error', '')}")
             return "FAILED"
-        log(f"mark {col}: {out}")
-        return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        v = r.get("value") or ""
+        if v != "":
+            log(f"mark {col}: ALREADY {v}")
+            return f"ALREADY {v}"
+        w = neon_excel.write(NEON_SHEET, col, row=r["row"], value="1",
+                             src=f"block-turnover mark {col}")
+        if not w.get("ok"):
+            log(f"mark {col}: FAILED {w.get('error', '')}")
+            return "FAILED"
+        log(f"mark {col}: SET")
+        return "SET"
+    except Exception as e:
         log(f"mark {col}: ERROR {e}")
         return "ERROR"
 
 
 def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False) -> str:
     """Append score to -1₦ column (P) for target_date's row as =13+10+8 formula,
-    so the user can see a record of what was added at each block boundary."""
-    body = (
-        f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
-        '    set oldFormula to formula of yCell\n'
-        '    if oldFormula is "" or oldFormula is "0" then\n'
-        f'        set formula of yCell to "={score}"\n'
-        f'        return "P_SET ={score}"\n'
-        '    else\n'
-        f'        set formula of yCell to oldFormula & "+{score}"\n'
-        f'        return "P_APPEND " & oldFormula & "+{score}"\n'
-        '    end if\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
+    so the user can see a record of what was added at each block boundary.
+    The client's append handles the empty-cell / bare-number normalization."""
     if dry_run:
         log(f"[DRY RUN] Would add {score} to P for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"add_score_to_p: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.append(NEON_SHEET, NEON_NEG1_COL,
+                              date=_date_str(target_date), value=f"+{score}",
+                              src="block-turnover -1n score")
+        if not r.get("ok"):
+            log(f"add_score_to_p: FAILED {r.get('error', '')}")
             return "FAILED"
+        out = f"P_APPEND {r.get('formula', '')}"
         log(f"add_score_to_p: {out}")
         verify = neon_read_y(target_date)
         if verify == "ERROR" or verify == "" or verify == "0":
@@ -625,7 +561,7 @@ def neon_add_score_to_p(target_date: dt.date, score: int, dry_run: bool = False)
             return "VERIFY_FAILED"
         log(f"add_score_to_p: verified={verify}")
         return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+    except Exception as e:
         log(f"add_score_to_p: ERROR {e}")
         return "ERROR"
 
@@ -674,24 +610,17 @@ def neon_set_p(target_date: dt.date, formula: str, total: int, dry_run: bool = F
     by the reconcile so the value is idempotent and self-healing (no double-count
     on re-fire). Verifies the write by reading the cell back, mirroring
     neon_add_score_to_p."""
-    body = (
-        f'set yCell to range ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
-        f'    set formula of yCell to "{formula}"\n'
-        f'    return "P_RECONCILE {formula}"\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
     if dry_run:
         log(f"[DRY RUN] Would set P={formula} ({total}) for {_date_str(target_date)}")
         return "DRY_RUN"
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"reconcile_p: FAILED {out or r.stderr.strip()}")
+        r = neon_excel.write(NEON_SHEET, NEON_NEG1_COL,
+                             date=_date_str(target_date), value=formula,
+                             src="block-turnover -1n reconcile")
+        if not r.get("ok"):
+            log(f"reconcile_p: FAILED {r.get('error', '')}")
             return "FAILED"
+        out = f"P_RECONCILE {formula}"
         log(f"reconcile_p: {out}")
         verify = neon_read_y(target_date)
         if verify in ("ERROR", "", "0"):
@@ -699,7 +628,7 @@ def neon_set_p(target_date: dt.date, formula: str, total: int, dry_run: bool = F
             return "VERIFY_FAILED"
         log(f"reconcile_p: verified={verify}")
         return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+    except Exception as e:
         log(f"reconcile_p: ERROR {e}")
         return "ERROR"
 
@@ -1339,9 +1268,6 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
         log(f"lock-and-mark: hour {hour} is not a fire time — nothing to do")
         return
 
-    if not dry_run:
-        _ensure_excel_ready()
-
     block_name = HOUR_TO_BRANCH_BLOCK.get(hour)
     log(f"lock-and-mark: hour={hour:02d}, block={block_name}")
 
@@ -1501,9 +1427,6 @@ def run_archive(dry_run=False):
     if not BUILD_ORDER.exists():
         log("archive: ERROR build order not found — aborting")
         return
-
-    if not dry_run:
-        _ensure_excel_ready()
 
     # --- Step 0a: enrich build order with time entries, completed tasks ---
     # build-order-enrich.py populates time entries and completed tasks into
@@ -1781,8 +1704,7 @@ def write_toggl_totals_to_0n(col_totals: dict[str, int], target_date: dt.date,
     month = target_date.month
     day = target_date.day
 
-    script = f'''with timeout of 300 seconds
-tell application "Microsoft Excel"
+    script = f'''tell application "Microsoft Excel"
     set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set targetRow to 0
     repeat with r from 3 to 500
@@ -1801,8 +1723,7 @@ tell application "Microsoft Excel"
     if targetRow = 0 then return "ERROR: date {month}/{day} not found"
 {set_block}
     return "OK: toggl-sync row=" & targetRow
-end tell
-end timeout'''
+end tell'''
 
     if dry_run:
         log(f"[DRY RUN] Would write to 0n for {month}/{day}: {col_totals}")
@@ -1831,8 +1752,6 @@ def run_toggl_sync(dry_run=False):
     if not totals:
         log("toggl-sync: no tagged/project entries for today")
         return
-    if not dry_run:
-        _ensure_excel_ready()
     result = write_toggl_totals_to_0n(totals, today, dry_run=dry_run)
     log(f"toggl-sync: {result} — {totals}")
 
@@ -1842,7 +1761,7 @@ def run_toggl_sync(dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description="Build-order daemon")
     parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive",
-                                         "toggl-sync", "compute-p", "ensure-open"])
+                                         "toggl-sync", "compute-p"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hour", type=int, default=None,
                         help="(lock-and-mark/compute-p only) override current hour for testing")
@@ -1862,10 +1781,6 @@ def main():
         cur = _branch_for_hour(h)
         formula, total, _parts = compute_p_formula(dt.date.today(), h, current_block=cur)
         print(f"P_RESULT\t{formula}\t{total}")
-    elif args.mode == "ensure-open":
-        # Idempotent: launch Excel + open the Neon workbook so later fires land
-        # on a warm instance. Driven by com.jm.neon-open (login + 05:55 daily).
-        _ensure_excel_ready()
     else:
         run_archive(dry_run=args.dry_run)
 

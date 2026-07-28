@@ -51,6 +51,11 @@ WORKBOOK = "Neon分v12.2.xlsx"
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 
+# excel-http client — journaled 0分/hcbi strip writes (curls localhost on ix,
+# ssh+osascript fallback built in)
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+from neon import excel
+
 # Import ix_osa (AppleScript-over-ssh transport, same pattern as did-fast)
 _IX_PATH = Path.home() / ".claude/skills/_lib/ix-osa.py"
 _IX_SPEC = importlib.util.spec_from_file_location("ix_osa", _IX_PATH)
@@ -151,27 +156,48 @@ def _strip_or_negate_lines(cell_expr: str, term: str, suffix: str) -> str:
     end if'''
 
 
-def build_fen_strip_script(strips: list[tuple[str, str]], target_md: str,
-                           sheet: str = "0分", max_row: int = 200) -> str:
-    """Strip/negate formula terms on a date-keyed sheet (0分 or hcbi).
-    strips = [(col_letter, term)] where term is the exact appended text."""
-    op_lines = [
-        _strip_or_negate_lines(f'range ("{col}" & todayRow) of ws', term, str(i))
-        for i, (col, term) in enumerate(strips)
-    ]
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "{sheet}" of workbook "{WORKBOOK}"
-    set todayRow to 0
-    repeat with i from 2 to {max_row}
-        if (string value of range ("B" & i) of ws) = "{target_md}" then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_md} not found in {sheet}"
-{chr(10).join(op_lines)}
-    return "OK:{sheet} row=" & todayRow
-end tell'''
+def _strip_or_negate(formula: str, term: str) -> str | None:
+    """Python port of _strip_or_negate_lines: remove a '+N' (or '+'1n+'!X12')
+    term from a formula — strip it if it is the exact tail, else append the
+    negation. Returns the new formula, or None when the cell is empty
+    (nothing to reverse)."""
+    neg = "-" + term[1:]
+    f = formula or ""
+    if f.endswith(term) and len(f) > len(term):
+        return f[: -len(term)]
+    if f != "":
+        return f + neg
+    return None
+
+
+def strip_fen_terms(strips: list[tuple[str, str]], target_md: str,
+                    sheet: str, errors: list[str], src: str) -> None:
+    """Strip/negate formula terms on a date-keyed sheet (0分 or hcbi) via the
+    excel-http client: read the current formula, strip/negate in Python,
+    write back (journaled). strips = [(col_letter, term)] where term is the
+    exact appended text."""
+    row = None
+    for col, term in strips:
+        try:
+            r = (excel.read(sheet, col, row=row) if row
+                 else excel.read(sheet, col, date=target_md))
+        except Exception as e:
+            errors.append(f"{sheet} {col}: read failed: {e}")
+            continue
+        if not r.get("ok"):
+            errors.append(f"{sheet} {col}: read failed: {r.get('error') or '?'}")
+            continue
+        row = r.get("row") or row
+        new_formula = _strip_or_negate(r.get("formula") or "", term)
+        if new_formula is None:
+            continue
+        try:
+            w = excel.write(sheet, col, row=row, value=new_formula, src=src)
+        except Exception as e:
+            errors.append(f"{sheet} {col}: write failed: {e}")
+            continue
+        if not w.get("ok"):
+            errors.append(f"{sheet} {col}: write failed: {w.get('error') or '?'}")
 
 
 def build_1n_undo_script(restores: list[tuple[str, str, str]],
@@ -291,10 +317,12 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
 
     if on_restores:
         _run_excel(build_0n_restore_script(on_restores, target_md), "0n", errors)
+    undo_names = [e.get("name") for e in results if e.get("name")]
+    undo_src = "undo " + (", ".join(undo_names) if undo_names else "?")
     if fen_strips:
-        _run_excel(build_fen_strip_script(fen_strips, target_md, "0分", 200), "0分", errors)
+        strip_fen_terms(fen_strips, target_md, "0分", errors, undo_src)
     if hcbi_strips:
-        _run_excel(build_fen_strip_script(hcbi_strips, target_md, "hcbi", 500), "hcbi", errors)
+        strip_fen_terms(hcbi_strips, target_md, "hcbi", errors, undo_src)
     if n1_restores or n1_strips:
         _run_excel(build_1n_undo_script(n1_restores, n1_strips), "1n+", errors)
 
@@ -328,6 +356,10 @@ def reverse_record(record: dict, errors: list[str]) -> None:
     elif rtype == "defer":
         tid = record.get("task_id")
         if tid:
+            # Unhide from today's deferred-habit marker FIRST (defer-fast's
+            # mark_habit_deferred) — even if the API reschedule below fails,
+            # the card should reappear in dtd rather than stay hidden all day.
+            _unmark_habit_deferred(tid)
             body = {"due_date": record.get("prev_due") or today_iso}
             # Recurring parent: a bare due_date write silently strips the
             # recurrence, so restore the cadence too (anchor stripped — the
@@ -409,9 +441,32 @@ def _dup_key(name: str) -> str:
     return mc._dup_key(name)
 
 
+def _unmark_habit_deferred(task_id: str) -> None:
+    """Remove a parent id from today's habits-deferred marker (written by
+    defer-fast.mark_habit_deferred; read by dtd's list builder). Best-effort:
+    a missing file or lost race just means the card stays hidden until the
+    next day's marker file takes over."""
+    from datetime import date as _date
+    p = os.path.expanduser(f"~/.cache/jm/habits-deferred-{_date.today().isoformat()}.ids")
+    if not os.path.exists(p):
+        return
+    try:
+        with open(p) as f:
+            lines = f.readlines()
+        kept = [l for l in lines if l.strip() != str(task_id)]
+        if len(kept) != len(lines):
+            tmp = p + ".tmp"
+            with open(tmp, "w") as f:
+                f.writelines(kept)
+            os.replace(tmp, p)
+    except OSError:
+        pass
+
+
 def clean_filter_files(names: list[str], session: str | None,
                        removed: str | None, done_json: str | None,
-                       task_id: str | None = None) -> None:
+                       task_id: str | None = None,
+                       task_ids: list[str] | None = None) -> None:
     keys = {_dup_key(n) for n in names if _dup_key(n)}
     if keys:
         for fpath in (session, removed):
@@ -428,17 +483,20 @@ def clean_filter_files(names: list[str], session: str | None,
             except OSError:
                 pass
 
-    # id-keyed hide (dtd's $REMOVED.ids — defer/ritual completions hide by id,
-    # not name, so two same-named tasks can't suppress each other; see dtd.sh's
-    # defer binding). Strip ONLY this task's id, never by name, for the same
-    # collision-safety reason the hide itself exists.
-    if task_id and removed:
+    # id-keyed hide (dtd's $REMOVED.ids — completions/defers hide by id, not
+    # name, so two same-named tasks can't suppress each other; see dtd.sh's
+    # enter/done/defer bindings). Strip ONLY these tasks' ids, never by name,
+    # for the same collision-safety reason the hide itself exists.
+    strip_ids = {str(i) for i in (task_ids or [])}
+    if task_id:
+        strip_ids.add(str(task_id))
+    if strip_ids and removed:
         ids_path = removed + ".ids"
         if os.path.exists(ids_path):
             try:
                 with open(ids_path) as f:
                     lines = f.readlines()
-                kept = [l for l in lines if l.strip() != str(task_id)]
+                kept = [l for l in lines if l.strip() not in strip_ids]
                 tmp = ids_path + ".tmp"
                 with open(tmp, "w") as f:
                     f.writelines(kept)
@@ -518,7 +576,8 @@ def journal_pop_and_reverse(journal: str, session: str | None,
             reverse_record(record, errors)
             names = record.get("names", [])
             clean_filter_files(names, session, removed, done_json,
-                               task_id=record.get("task_id"))
+                               task_id=record.get("task_id"),
+                               task_ids=record.get("task_ids"))
 
             out = {
                 "ok": True,
@@ -551,7 +610,8 @@ def main() -> int:
 
     if mode == "--journal-done":
         if len(args) < 2:
-            print("usage: undo-fast.py --journal-done <journal>", file=sys.stderr)
+            print("usage: undo-fast.py --journal-done <journal> [task_id]",
+                  file=sys.stderr)
             return 2
         try:
             out = json.loads(sys.stdin.read())
@@ -560,9 +620,19 @@ def main() -> int:
         results = out.get("results") or []
         if not results:
             return 0
+        # Completions hide optimistically by id in dtd's $REMOVED.ids
+        # (2026-07-24: name-hide suppressed same-named duplicates). Record
+        # every id we know — the fzf row id the worker passed, plus any
+        # todoist ids did-fast matched — so --undo can strip the hide.
+        task_ids = [args[2]] if len(args) > 2 and args[2] else []
+        for r in results:
+            tid = (r.get("todoist") or {}).get("id")
+            if tid and str(tid) not in task_ids:
+                task_ids.append(str(tid))
         journal_append(args[1], {
             "type": "done",
             "names": [r.get("name", "") for r in results if r.get("name")],
+            "task_ids": task_ids,
             "output": out,
         })
         return 0
