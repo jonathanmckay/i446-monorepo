@@ -35,6 +35,7 @@ def _load(mod_name: str, filename: str):
 _dom = _load("domain_fast", "domain-fast.py")  # DOMAINS, swap_domain, patch_cache_labels
 _pf = _load("points_fast", "points-fast.py")   # set_points, resolve_from_cache, patch_cache
 _df = _pf._df                                   # Todoist _api transport
+_short = _load("shorten_mod", "shorten.py")     # shorten_tasks — same fn the cache refresh uses
 
 DOMAINS = _dom.DOMAINS
 
@@ -60,14 +61,24 @@ def set_name(content: str, new_name: str) -> str:
     return (base + (" " + tail if tail else "")).strip()
 
 
-def _clear_short(cache: dict, task_id: str) -> None:
-    """Drop the cached Haiku `short` name so a rename shows on reload (the dtd
-    list prefers `short` over the content-derived name)."""
+def _resync_short(cache: dict, task_id: str, new_content: str) -> None:
+    """Drop the cached Haiku `short` name for the OLD content, then
+    regenerate one for the NEW content immediately (via the same
+    shorten_tasks() the periodic cache refresh uses) if it's long enough to
+    need one. Without this, a rename that crosses PROSE_CAP just fell back to
+    fzf's raw middle-truncation — eating the trailing (N)/[N] estimate —
+    until whenever the next full --refresh-cache happened to run (bug
+    2026-07-28: an edited task stayed unshortened, unlike every other long
+    task, which gets shortened by that same refresh pass)."""
+    short = _short.shorten_tasks([{"id": task_id, "content": new_content}]).get(task_id)
     for v in cache.values():
         if isinstance(v, list):
             for t in v:
                 if isinstance(t, dict) and t.get("id") == task_id:
-                    t.pop("short", None)
+                    if short:
+                        t["short"] = short
+                    else:
+                        t.pop("short", None)
 
 
 def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
@@ -151,7 +162,7 @@ def main() -> int:
             return 1
         _pf.patch_cache(cache, task["id"], new_content)
         if new_name is not None:
-            _clear_short(cache, task["id"])  # else the row keeps the stale Haiku short name
+            _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
             summary.append(f'name→"{new_name}"')
         if points is not None:
             summary.append(f"[{points}]")

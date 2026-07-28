@@ -124,6 +124,48 @@ def test_main_rename_clears_stale_short(tmp_path, monkeypatch):
     assert "short" not in task, "stale Haiku short name must be cleared on rename"
 
 
+def test_main_rename_to_long_name_regenerates_short(tmp_path, monkeypatch):
+    # Bug 2026-07-28: renaming a task to something too long for dtd (e.g. "JY
+    # and Florencia...") dropped the stale short but never generated a NEW
+    # one — the row just fell back to fzf's raw middle-truncation until
+    # whenever the next full --refresh-cache happened to run, unlike every
+    # other long task, which gets shortened by that same refresh pass.
+    mod = _load()
+    cf = _cache(tmp_path, content="call dad [10]", labels=("i9",))
+    mod._df._api = lambda *a, **k: None
+    long_name = "JY and Florencia sync on the Q3 roadmap and staffing plan"
+    calls = []
+
+    def fake_shorten_tasks(tasks):
+        calls.append(tasks)
+        return {t["id"]: "JY/Florencia Q3 sync" for t in tasks}
+
+    monkeypatch.setattr(mod._short, "shorten_tasks", fake_shorten_tasks)
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "call dad", long_name, str(cf)])
+    assert mod.main() == 0
+
+    # shorten_tasks was called with the task's NEW (post-rename) content.
+    assert calls and calls[0][0]["id"] == "42"
+    assert long_name in calls[0][0]["content"]
+
+    task = json.loads(cf.read_text())["0neon"][0]
+    assert task.get("short") == "JY/Florencia Q3 sync", (
+        "a rename that crosses the length cap must get a fresh short immediately")
+
+
+def test_main_rename_to_short_name_still_clears_old_short(tmp_path, monkeypatch):
+    # Companion case: renaming to something short must still drop the stale
+    # short (shorten_tasks correctly returns nothing for short-enough prose).
+    mod = _load()
+    cf = _cache(tmp_path, content="old long name [10]", labels=("i9",), short="old shrt")
+    mod._df._api = lambda *a, **k: None
+    monkeypatch.setattr(mod._short, "shorten_tasks", lambda tasks: {})
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "old long name", "brand new name", str(cf)])
+    assert mod.main() == 0
+    task = json.loads(cf.read_text())["0neon"][0]
+    assert "short" not in task
+
+
 def test_main_applies_name_domain_points(tmp_path, monkeypatch):
     mod = _load()
     cf = _cache(tmp_path, content="old name (5) [10]", labels=("i9", "0neon"))

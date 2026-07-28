@@ -82,7 +82,7 @@ DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday",
 # Domain label per 1n+ header (from the 2026-07-25 audit). Unknown → 1neon only.
 WEEKLY_DOMAIN = {
     "1s": "g245", "1g": "g245", "1 hpm": "hcm", "s+hcbp": "hcbp",
-    "1 f692": "m5x2", "1 f693": "f693", "1 m5x2": "m5x2", "1 i9": "i9",
+    "1 f692": "m5x2", "1 f693": "i9", "1 m5x2": "m5x2", "1 i9": "i9",
     "1 -2g": "g245", "1 vm+li+msgr": "i9", "1 -1n": "g245", "1 f694": "f694",
     "1 xk88": "xk88", "1 xk87": "xk87", "1 xk87 wknd": "xk87", "1 cal": "g245",
     "1 s897": "s897", "1 hcm": "hcm", "1 hcb": "hcb", "长o314": "hcm",
