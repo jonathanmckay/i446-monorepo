@@ -110,3 +110,31 @@ def test_print_script_from_json(tmp_path):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_applescript_sheets_subset_writes_only_that_sheet():
+    """Paginated form writes one sheet per page via sheets=[cfg]."""
+    m = _load()
+    cfg = next(c for c in m.SHEETS if c["sheet"] == "xk20")
+    script = m.build_applescript({"xk20_is": "curious"}, dt.date(2026, 7, 19), sheets=[cfg])
+    assert 'worksheet "xk20"' in script
+    for other in ("xk88", "xk22", "xk26"):
+        assert 'worksheet "%s"' % other not in script
+
+
+def test_applescript_default_still_covers_all_sheets():
+    m = _load()
+    script = m.build_applescript({}, dt.date(2026, 7, 19))
+    for s in ("xk88", "xk20", "xk22", "xk26"):
+        assert 'worksheet "%s"' % s in script
+
+
+def test_paginated_entrypoint_exists_and_form_is_paged():
+    """The interactive path pages per sheet and writes at each page boundary."""
+    import inspect
+    m = _load()
+    assert callable(m.run_paginated)
+    src = inspect.getsource(m.run_paginated)
+    assert "write_answers" in src and "sheets=[cfg]" in src
+    page_src = inspect.getsource(m.run_page)
+    assert "Dimension(min=1" in page_src  # compact rows: no reserved blank height

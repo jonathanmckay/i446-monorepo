@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """xk887 — weekly family/marriage review.
 
-A full-screen form (prompt_toolkit), same pattern as 0s.py / 1s-survey.py, that
-asks all questions for FOUR sheets of xk887.xlsx at once: xk88 (marriage /
-social), xk20 (Theo), xk22 (Ren), xk26 (Rori). On save it writes each sheet's
-answers to that sheet's row for the review week.
+A full-screen PAGINATED form (prompt_toolkit), same interaction grammar as
+0s.py / 1s-survey.py, covering FOUR sheets of xk887.xlsx — one page per
+sheet/person: xk88 (marriage/social), xk20 (Theo), xk22 (Ren), xk26 (Rori).
+Each page is written to Excel the moment it's submitted (last-field Enter/Tab
+or ^S), so later pages can't lose earlier ones. S-Tab from a page's first
+field goes back; blanks never clobber, so re-submitting a page is safe.
 
 Rows are keyed by col A's M.W label (Sunday-anchored: M = sunday.month,
 W = which Sunday of M), the same convention as Neon's 1分+1s tab. UNLIKE
@@ -138,14 +140,15 @@ def field_key(sheet: str, key: str) -> str:
 # Write to xk887.xlsx
 # ---------------------------------------------------------------------------
 
-def build_applescript(answers: dict, sunday: _dt.date) -> str:
+def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
     """One tell block, one sheet loop per config: find the review week's row
     by col A's M.W label (string value, NOT value -- the label column is a
     formula chain with float-precision display artifacts, same lesson as
     0s.py's date matching); if the week isn't there yet, append a new row.
     Only non-empty answers are written, so blanks never clobber existing
     cells -- except xk26's age, which auto-continues from the previous row
-    on a newly appended row only."""
+    on a newly appended row only. `sheets` restricts the write to a subset
+    of SHEETS (the paginated form writes one sheet per page)."""
     label = week_row_label(sunday)
     L = [
         'tell application "Microsoft Excel"',
@@ -153,7 +156,7 @@ def build_applescript(answers: dict, sunday: _dt.date) -> str:
         '  set totalWrote to 0',
         '  set report to ""',
     ]
-    for cfg in SHEETS:
+    for cfg in (sheets if sheets is not None else SHEETS):
         sheet = cfg["sheet"]
         v = sheet  # AppleScript variable prefix; sheet names are valid identifiers
         L += [
@@ -207,8 +210,8 @@ def build_applescript(answers: dict, sunday: _dt.date) -> str:
     return "\n".join(L)
 
 
-def write_answers(answers: dict, sunday: _dt.date) -> str:
-    script = build_applescript(answers, sunday)
+def write_answers(answers: dict, sunday: _dt.date, sheets=None) -> str:
+    script = build_applescript(answers, sunday, sheets=sheets)
     proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
                           text=True, timeout=60)
     out = (proc.stdout or "").strip()
@@ -221,41 +224,48 @@ def write_answers(answers: dict, sunday: _dt.date) -> str:
 # Full-screen form (prompt_toolkit) -- same interaction grammar as 0s.py/1s
 # ---------------------------------------------------------------------------
 
-def run_form(sunday: _dt.date, saturday: _dt.date) -> dict | None:
+def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
+             page_no: int, total: int, initial: dict) -> tuple[str | None, dict]:
+    """One full-screen page for one sheet/person. Returns (action, answers):
+    action 'submit' (write this page, go forward), 'back' (previous page,
+    nothing written), or None (cancelled). Fields sit on adjacent lines with
+    no blank rows between them — multiline boxes start at one line and grow
+    with their content instead of reserving empty height."""
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import HSplit, Layout, ScrollablePane, VSplit, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.dimension import Dimension
     from prompt_toolkit.styles import Style
     from prompt_toolkit.widgets import Frame, TextArea
 
     areas = {}
     ordered_keys = []
     rows = []
-    for cfg in SHEETS:
-        rows.append(Window(FormattedTextControl(cfg["title"]), height=1,
-                           style="class:section"))
-        for key, label, _col, kind in cfg["fields"]:
-            fkey = field_key(cfg["sheet"], key)
-            ml = kind == "textml"
-            area = TextArea(multiline=ml, height=(3 if ml else 1), wrap_lines=True,
-                            style="class:input", scrollbar=ml)
-            areas[fkey] = (area, kind, label)
-            ordered_keys.append(fkey)
-            tag = " #" if kind in ("num", "num_auto") else ""
-            lbl = Window(FormattedTextControl(label + tag), width=32,
-                        style="class:label", dont_extend_width=True, wrap_lines=True)
-            rows.append(VSplit([lbl, Window(width=1, char=" "), area]))
+    for key, label, _col, kind in cfg["fields"]:
+        fkey = field_key(cfg["sheet"], key)
+        ml = kind == "textml"
+        area = TextArea(multiline=ml,
+                        height=Dimension(min=1, max=6) if ml else 1,
+                        wrap_lines=True, style="class:input", scrollbar=False,
+                        text=initial.get(fkey, ""))
+        areas[fkey] = (area, kind, label)
+        ordered_keys.append(fkey)
+        tag = " #" if kind in ("num", "num_auto") else ""
+        lbl = Window(FormattedTextControl(label + tag), width=32,
+                    style="class:label", dont_extend_width=True, wrap_lines=True)
+        rows.append(VSplit([lbl, Window(width=1, char=" "), area]))
 
     msg = {"text": ""}
+    nav = "Enter/Tab next · last field saves page" + (" →" if page_no < total else " + finish")
     status = Window(FormattedTextControl(
-        lambda: msg["text"] or "Enter/Tab next · Enter/Tab on last field saves · S-Tab back · ^S save · ^Q cancel"),
+        lambda: msg["text"] or nav + " · S-Tab back · ^S save page · ^Q cancel"),
         height=1, style="class:status")
 
-    body = HSplit(rows, padding=0)
-    root = HSplit([Frame(ScrollablePane(body),
-                         title="xk887 · week %s (%s–%s)" % (
-                             week_row_label(sunday), sunday.isoformat(), saturday.isoformat())),
+    root = HSplit([Frame(ScrollablePane(HSplit(rows, padding=0)),
+                         title="xk887 %d/%d · %s · week %s (%s–%s)" % (
+                             page_no, total, cfg["title"], week_row_label(sunday),
+                             sunday.isoformat(), saturday.isoformat())),
                    status])
 
     ordered = [(k, areas[k][0], areas[k][1]) for k in ordered_keys]
@@ -287,7 +297,10 @@ def run_form(sunday: _dt.date, saturday: _dt.date) -> dict | None:
 
     @kb.add("s-tab", eager=True)
     def _(e):
-        e.app.layout.focus_previous()
+        if _focused_idx(e.app) == 0 and page_no > 1:
+            e.app.exit(result="back")
+        else:
+            e.app.layout.focus_previous()
 
     @kb.add("enter", eager=True)
     def _(e):
@@ -322,9 +335,41 @@ def run_form(sunday: _dt.date, saturday: _dt.date) -> dict | None:
     app = Application(layout=Layout(root, focused_element=areas[ordered_keys[0]][0]),
                       key_bindings=kb, full_screen=True, style=style,
                       mouse_support=True)
-    if app.run() != "submit":
-        return None
-    return {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
+    action = app.run()
+    return action, {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
+
+
+def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
+    """One page per sheet/person; each page is WRITTEN to Excel as soon as it
+    is submitted, so a crash or cancel on page 3 never loses pages 1-2.
+    S-Tab from a page's first field goes back (already-written pages can be
+    edited and re-submitted; blanks never clobber, so re-writes are safe)."""
+    answers: dict = {}
+    total = len(SHEETS)
+    written = []
+    i = 0
+    while i < total:
+        cfg = SHEETS[i]
+        action, page = run_page(cfg, sunday, saturday, i + 1, total, answers)
+        answers.update(page)
+        if action is None:
+            print("xk887 cancelled on page %d/%d%s." % (
+                i + 1, total,
+                "; already written: " + ", ".join(written) if written else ""))
+            return 1
+        if action == "back":
+            i -= 1
+            continue
+        filled = sum(1 for key, _l, _c, _k in cfg["fields"]
+                     if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
+        print("xk887 → %s: writing %d fields …" % (cfg["sheet"], filled), flush=True)
+        result = write_answers(answers, sunday, sheets=[cfg])
+        print("xk887 → %s ✓ %s" % (cfg["sheet"], result), flush=True)
+        if cfg["sheet"] not in written:
+            written.append(cfg["sheet"])
+        i += 1
+    print("xk887 → week %s done (%s)" % (week_row_label(sunday), ", ".join(written)))
+    return 0
 
 
 def main() -> int:
@@ -338,23 +383,19 @@ def main() -> int:
 
     if args.from_json:
         answers = json.loads(Path(args.from_json).read_text())
-    else:
-        answers = run_form(sunday, saturday)
-        if answers is None:
-            print("xk887 survey cancelled.")
-            return 1
-
-    if args.print_script:
-        print(build_applescript(answers, sunday))
+        if args.print_script:
+            print(build_applescript(answers, sunday))
+            return 0
+        filled = sum(1 for cfg in SHEETS for key, _l, _c, _kind in cfg["fields"]
+                     if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
+        print("xk887 → writing %d fields to xk887.xlsx week %s …" % (filled, week_row_label(sunday)),
+              flush=True)
+        result = write_answers(answers, sunday)
+        print("xk887 → %s (%d fields) · %s" % (week_row_label(sunday), filled, result))
         return 0
 
-    filled = sum(1 for cfg in SHEETS for key, _l, _c, _kind in cfg["fields"]
-                 if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
-    print("xk887 → writing %d fields to xk887.xlsx week %s …" % (filled, week_row_label(sunday)),
-          flush=True)
-    result = write_answers(answers, sunday)
-    print("xk887 → %s (%d fields) · %s" % (week_row_label(sunday), filled, result))
-    return 0
+    # Interactive: one page per person, written as each page is submitted.
+    return run_paginated(sunday, saturday)
 
 
 if __name__ == "__main__":

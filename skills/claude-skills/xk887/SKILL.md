@@ -1,18 +1,20 @@
 ---
 name: "xk887"
-description: "Weekly family/marriage review, similar to /0s. Opens a full-screen form (all questions at once) covering the xk88 (marriage/social), xk20 (Theo), xk22 (Ren), and xk26 (Rori) tabs of xk887.xlsx, then writes each answer to the review week's row. Usage: /xk887 [YYYY-MM-DD]"
+description: "Weekly family/marriage review, similar to /0s. Opens a full-screen paginated form (one page per person) covering the xk88 (marriage/social), xk20 (Theo), xk22 (Ren), and xk26 (Rori) tabs of xk887.xlsx; each page is written to the review week's row as it is submitted. Usage: /xk887 [YYYY-MM-DD]"
 user-invocable: true
 ---
 
 # Weekly Family Review (/xk887)
 
 A full-screen TUI form for the weekly xk887 review — same interaction
-pattern as `/0s`, but weekly instead of daily and spanning **four sheets**
-in one form: `xk88` (marriage/social), `xk20` (Theo), `xk22` (Ren), `xk26`
-(Rori), all in `xk887.xlsx`. All questions across all four sheets are on
-screen at once; on submit (`^S`) each sheet's answers are written to that
-sheet's row for the **review week** (default: the last completed Sun–Sat
-week, same convention as `/1s`).
+pattern as `/0s`, but weekly instead of daily and spanning **four sheets**,
+one page per person: `xk88` (marriage/social), `xk20` (Theo), `xk22` (Ren),
+`xk26` (Rori), all in `xk887.xlsx`. Each page is **written to Excel the
+moment it's submitted** (Enter/Tab past the last field, or `^S`), so a
+cancel or crash on a later page never loses earlier pages. Rows target the
+**review week** (default: the last completed Sun–Sat week, same convention
+as `/1s`). Fields sit on adjacent lines with no blank rows; multiline boxes
+grow with content instead of reserving empty height.
 
 ## Field → sheet/column map
 
@@ -98,10 +100,13 @@ If cmux is unavailable, tell the user to run it themselves:
 
 ## Keys (inside the form)
 
-- **Tab / Shift-Tab** — move between fields (flows through all four
-  sheets' sections in order: xk88, xk20, xk22, xk26)
-- **^S** — save (validates Age is numeric, then writes Excel on Ix)
-- **^Q / ^C** — cancel without writing
+- **Tab / Enter** — next field; on a page's **last** field, saves the page
+  (writes that sheet to Excel on Ix) and advances to the next person
+- **Shift-Tab** — previous field; on a page's **first** field, back one page
+  (nothing written; re-submitting an already-written page is safe — blanks
+  never clobber)
+- **^S** — save the current page now (validates Age is numeric) and advance
+- **^Q / ^C** — cancel; pages already submitted stay written
 
 ## Notes
 
