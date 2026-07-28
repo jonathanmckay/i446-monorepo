@@ -56,7 +56,13 @@ _TIME = re.compile(r"\((\d+)\)")
 _VAL = re.compile(r"\[(\d+)G?\]")
 _BONUS = re.compile(r"\{(\d+)\}")
 
+_MDLINK = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
+
+
 def strip_ann(s: str) -> str:
+    # Markdown links (/todo stores URLs as "[(link)](https://…)") collapse to
+    # their visible text so the card shows "(link)" instead of the raw URL.
+    s = _MDLINK.sub(lambda m: m.group(1) or "(link)", s)
     return re.sub(r"  +", " ", _ANN.sub("", s)).strip()
 
 def parse_est(content: str) -> tuple[str, int]:
