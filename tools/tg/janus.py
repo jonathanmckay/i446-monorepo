@@ -1771,7 +1771,18 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         ((p["start_dt"].hour * 60 + p["start_dt"].minute,
           p["start_dt"].hour, p["start_dt"].minute, p) for p in body_picks),
         key=lambda r: r[0])
-    rows = entry_rows[:max_rows]
+    if len(entry_rows) > max_rows:
+        # Over-full block: keep the IMPORTANT rows (running first, then by
+        # duration), not the chronologically-first ones — the old [:max_rows]
+        # slice dropped a 23m run in favor of two sub-10m entries because it
+        # started latest (user report 2026-07-27). Chronological order is
+        # restored after the cut.
+        keep = sorted(entry_rows,
+                      key=lambda r: (not r[3].get("is_running"),
+                                     -(r[3].get("dur_min") or 0)))[:max_rows]
+        rows = sorted(keep, key=lambda r: r[0])
+    else:
+        rows = entry_rows
     if len(rows) < max_rows:
         occupied = {_slot(p) for p in body_picks}
         offsets = range(0 if include_00 else slot_min, 120, slot_min)
@@ -2014,6 +2025,42 @@ def _block_sleep_item(blk_sh, blk_eh, cutoff) -> dict | None:
                         "label": "睡觉", "style": project_style(e["project_id"]),
                         "dur_min": mins}
     return None
+
+
+def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
+    """Non-sleep entries that STARTED in an earlier block and flow across
+    this block's start, clipped to the block window as synthetic picks —
+    the general case of _block_sleep_item, which only ever handled 睡觉.
+    Without this the spilled portion renders as anonymous ◇ │ continuation
+    marks with no title (user report 2026-07-27: a 19:59-21:00 run showed
+    NOTHING in 亥 — "the title is missing"). Carries the real entry id, so
+    the row is selectable and ⌥↵ can grant the spilled portion's points."""
+    blk_start = cutoff.replace(hour=blk_sh, minute=0, second=0, microsecond=0)
+    blk_end = blk_start + dt.timedelta(hours=blk_eh + 1 - blk_sh)
+    out = []
+    for e in STATE.entries:
+        if (e["desc"] or "").strip() == "睡觉":
+            continue  # _block_sleep_item's job
+        if not (e["start_dt"] < blk_start < e["end_dt"]):
+            continue
+        end = min(e["end_dt"], blk_end, cutoff)
+        mins = int((end - blk_start).total_seconds() // 60)
+        if mins < 1:
+            continue
+        code = proj_code(e["project_id"])
+        label = (display_desc(e["desc"]) or "(blank)") + (f" · {code}" if code else "")
+        out.append({
+            "start_dt": blk_start,
+            "time_str": f"{blk_start:%H:%M}",
+            "label": label,
+            "style": project_style(e["project_id"]),
+            "dur_min": mins,
+            "is_running": bool(e.get("running")),
+            "entry_ids": [e["id"]],
+            "raw_desc": e["desc"],
+            "project_id": e["project_id"],
+        })
+    return out
 
 
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
@@ -2343,6 +2390,9 @@ def render_morning() -> list[tuple[str, str]]:
                 out += _mao_line(bo_emojis.get(blk_name, ""))
                 continue
         picks = _past_block_picks(blk_name, merged)
+        # Entries that started in an EARLIER block and flow into this one
+        # get a clipped, titled row here too — not just anonymous ◇ │ marks.
+        picks = _block_spill_items(blk_sh, blk_eh, cutoff) + picks
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
         if sleep:
             picks = ([sleep] + picks)[:4]
@@ -2780,6 +2830,10 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
                            "project_id": e["project_id"], "running": e.get("running", False),
                            "ids": [e["id"]]})
     picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
+    # A still-relevant entry that STARTED in the previous block (e.g. a run
+    # crossing 20:00 into 亥) gets a clipped, titled, selectable row — not
+    # just anonymous ◇ │ continuation marks (user report 2026-07-27).
+    picks = _block_spill_items(blk_sh, blk_eh, now) + picks
     sleep = _block_sleep_item(blk_sh, blk_eh, now)
     if sleep:
         picks = ([sleep] + picks)[:FOCUS_ROWS]

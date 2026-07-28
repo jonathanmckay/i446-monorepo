@@ -125,3 +125,21 @@ def test_1n_route_minutes_default_1_when_unknown(df, monkeypatch):
     monkeypatch.setattr(df, "toggl_minutes_for", lambda name: None)
     r = df.route_items([df.ParsedItem(raw="1 -2g", name="1 -2g")], H1N, TQ)[0]
     assert r.write_value == 1
+
+
+# ── {N} goals must not double-credit the domain column (2026-07-27) ─────────
+
+def test_curly_only_task_yields_zero_domain_points(df):
+    """POINTS_RE matched {N} as well as [N], so a completed {N} goal credited
+    its domain column IN ADDITION to the Q (0g) credit from curly_points —
+    e.g. hcb got +20+20+10 duplicates of three goals' Q credits."""
+    assert df.POINTS_RE.search("follow meal plan {20}") is None
+    assert df.POINTS_RE.search("Elliot ES R&R (20) [60]").group(1) == "60"
+    goal = {"id": "g1", "content": "follow meal plan {20}",
+            "labels": ["#0g", "hcb"], "recurring": False}
+    tq = {"0neon": [goal], "夜neon": [], "1neon": []}
+    item = df.ParsedItem(raw="follow meal plan {20}", name="follow meal plan",
+                         curly_points=20)
+    r = df.route_items([item], {"0n": {}, "1n": {}}, tq)[0]
+    assert r.step == "todoist"
+    assert r.fen_points == 0, "{N} must flow ONLY via curly_points → Q"
