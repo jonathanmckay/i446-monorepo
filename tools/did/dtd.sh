@@ -384,6 +384,7 @@ case "\$clean_lower" in
   xk26) _ip="xk26 minutes (Rori)";;
   i444) _ip="i444 count (0 = none today)";;
   新闻) _ip="新闻 minutes";;
+  "evening hcmc"|"night hcmc") _ip="night hcmc minutes";;
   ${DTD_VAR1N_PAT}) _ip="\$clean_lower minutes (blank = base points)";;
 esac
 if [[ -n "\$_ip" && -r /dev/tty ]]; then
@@ -439,7 +440,7 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 _id="\$1"
 _t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
-  cpap|xk20|xk22|xk26|i444|新闻|${DTD_VAR1N_PAT})
+  cpap|xk20|xk22|xk26|i444|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
     printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;

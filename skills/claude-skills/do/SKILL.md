@@ -17,7 +17,7 @@ One entry point for starting work. Two modes, decided by the task name:
 
 Check the input (case-insensitive, after stripping `(N)`, `[N]`, `@tag` annotations) against the Variable Task Set:
 
-**0n (daily):** xk20, xk22, xk26, xk88, 冥想, o314, 其他人, hiit, bball, night hcmc
+**0n (daily):** xk20, xk22, xk26, xk88, 冥想, o314, 其他人, hiit, bball, night hcmc (alias: evening hcmc), night hcmc
 
 **1n+ (weekly):** s897, 家 (alias for family), relax, s+hcbp
 

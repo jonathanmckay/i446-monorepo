@@ -143,3 +143,17 @@ def test_curly_only_task_yields_zero_domain_points(df):
     r = df.route_items([item], {"0n": {}, "1n": {}}, tq)[0]
     assert r.step == "todoist"
     assert r.fen_points == 0, "{N} must flow ONLY via curly_points → Q"
+
+
+# ── night hcmc as a variable-input habit (2026-07-28) ───────────────────────
+
+def test_evening_hcmc_alias_and_variable_minutes(df):
+    """"evening hcmc 35" (the card's name + typed minutes) must resolve the
+    alias to the "night hcmc" header and write 35 as minutes — night hcmc is
+    a variable-input habit now, like xk20/新闻."""
+    assert "night hcmc" in df.VARIABLE_0N and "evening hcmc" in df.VARIABLE_0N
+    assert df.ALIASES.get("evening hcmc") == "night hcmc"
+    items = df.parse_input("evening hcmc 35")
+    assert items[0].name == "night hcmc" and items[0].time_value == 35
+    r = df.route_items(items, {"0n": {"night hcmc": 16}, "1n": {}}, TQ)[0]
+    assert r.step == "0n" and r.write_value == 35
