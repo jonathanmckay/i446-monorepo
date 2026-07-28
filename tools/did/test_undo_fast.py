@@ -163,8 +163,15 @@ class FakeRes:
 def test_reverse_done_collects_ops(monkeypatch):
     scripts = []
     api_calls = []
+    excel_writes = []
     monkeypatch.setattr(uf, "ix_run", lambda s, timeout=30.0: (scripts.append(s), FakeRes())[1])
     monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    monkeypatch.setattr(uf.excel, "read",
+                        lambda sheet, col, **kw: {"ok": True, "row": 7, "col": col,
+                                                  "value": "3", "formula": "=1+2"})
+    monkeypatch.setattr(
+        uf.excel, "write",
+        lambda sheet, col, **kw: (excel_writes.append((sheet, col, kw)), {"ok": True})[1])
 
     out = {
         "results": [
@@ -208,9 +215,14 @@ def test_reverse_done_collects_ops(monkeypatch):
     joined = "\n".join(scripts)
     # 0n pre-image restore
     assert 'sheet "0n"' in joined and "cell 8 of row todayRow" in joined
-    # 0分 strips: +40 (U), +20 (X), +15 (W), +10 (Q), +'1n+'!D12 (T)
-    for term in ('"+40"', '"+20"', '"+15"', '"+10"', "+'1n+'!D12"):
-        assert term in joined, f"missing strip term {term}"
+    # 0分 strips (via excel client): +40 (U), +20 (X), +15 (W), +10 (Q),
+    # +'1n+'!D12 (T) — read formula "=1+2" never tails a term → negation
+    fen = {(s, c): kw["value"] for s, c, kw in excel_writes}
+    for col, term in (("U", "+40"), ("X", "+20"), ("W", "+15"),
+                      ("Q", "+10"), ("T", "+'1n+'!D12")):
+        assert fen[("0分", col)] == "=1+2-" + term[1:], f"missing strip term {term}"
+    # Every strip write must carry an "undo ..." ledger label
+    assert all(kw.get("src", "").startswith("undo ") for _, _, kw in excel_writes)
     # 1n+ pre-image restore (empty → clear cell)
     assert 'range ("D12") of ws1n to ""' in joined
 
@@ -252,6 +264,10 @@ def test_reverse_split_record(monkeypatch, tmp_path):
     api_calls = []
     monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
     monkeypatch.setattr(uf, "ix_run", lambda s, timeout=30.0: FakeRes())
+    monkeypatch.setattr(uf.excel, "read",
+                        lambda sheet, col, **kw: {"ok": True, "row": 7, "col": col,
+                                                  "value": "", "formula": "=5+15"})
+    monkeypatch.setattr(uf.excel, "write", lambda sheet, col, **kw: {"ok": True})
     monkeypatch.setattr(uf.mc, "COMPLETED", tmp_path / "completed.json")
     errors = []
     uf.reverse_record({
@@ -353,7 +369,7 @@ def test_dtd_delete_script_journals_after_successful_delete():
 
 
 # ---------------------------------------------------------------------------
-# Strip-or-negate AppleScript shape
+# Strip-or-negate — AppleScript shape (1n+) and Python port (0分/hcbi)
 # ---------------------------------------------------------------------------
 
 def test_strip_or_negate_negation_term():
@@ -361,6 +377,69 @@ def test_strip_or_negate_negation_term():
     assert '"+15"' in src and '"-15"' in src
     src2 = uf._strip_or_negate_lines('range ("T" & todayRow) of ws', "+'1n+'!D12", "1")
     assert "\"+'1n+'!D12\"" in src2 and "\"-'1n+'!D12\"" in src2
+
+
+def test_strip_or_negate_python_port():
+    """The 0分/hcbi strip logic ported from _strip_or_negate_lines must keep
+    its exact semantics: strip an exact-tail term, negate otherwise, no-op
+    on an empty cell."""
+    # exact tail → stripped
+    assert uf._strip_or_negate("=10+5", "+5") == "=10"
+    # later writes interleaved → negation appended (numerically correct)
+    assert uf._strip_or_negate("=10+5+3", "+5") == "=10+5+3-5"
+    # sheet-ref terms
+    assert uf._strip_or_negate("=2+'1n+'!D12", "+'1n+'!D12") == "=2"
+    assert (uf._strip_or_negate("=2+'1n+'!D12+4", "+'1n+'!D12")
+            == "=2+'1n+'!D12+4-'1n+'!D12")
+    # empty cell → nothing to reverse
+    assert uf._strip_or_negate("", "+5") is None
+    assert uf._strip_or_negate(None, "+5") is None
+    # formula == term (stripping would empty the cell) → negate, like the AS
+    assert uf._strip_or_negate("+5", "+5") == "+5-5"
+    # bare value cell (formula reads back as its text) → negation appended
+    assert uf._strip_or_negate("13", "+5") == "13-5"
+
+
+def test_strip_fen_terms_reads_then_writes(monkeypatch):
+    reads = []
+    writes = []
+
+    def fake_read(sheet, col, **kw):
+        reads.append((sheet, col, kw))
+        return {"ok": True, "row": 42, "col": col, "value": "15", "formula": "=10+5"}
+
+    monkeypatch.setattr(uf.excel, "read", fake_read)
+    monkeypatch.setattr(
+        uf.excel, "write",
+        lambda sheet, col, **kw: (writes.append((sheet, col, kw)), {"ok": True})[1])
+    errors = []
+    uf.strip_fen_terms([("U", "+5"), ("X", "+40")], "6/4", "0分", errors, "undo test")
+    assert errors == []
+    # First read resolves the row by date; the second reuses it directly
+    assert "date" in reads[0][2]
+    assert reads[1][2].get("row") == 42
+    assert writes[0][:2] == ("0分", "U") and writes[0][2]["value"] == "=10"
+    assert writes[1][:2] == ("0分", "X") and writes[1][2]["value"] == "=10+5-40"
+    assert all(w[2].get("src") == "undo test" for w in writes)
+
+
+def test_strip_fen_terms_skips_empty_and_records_errors(monkeypatch):
+    writes = []
+    monkeypatch.setattr(uf.excel, "read",
+                        lambda sheet, col, **kw: {"ok": True, "row": 9, "col": col,
+                                                  "value": "", "formula": ""})
+    monkeypatch.setattr(
+        uf.excel, "write",
+        lambda sheet, col, **kw: (writes.append(col), {"ok": True})[1])
+    errors = []
+    uf.strip_fen_terms([("U", "+5")], "6/4", "0分", errors, "undo x")
+    assert writes == [] and errors == []  # empty cell: nothing to reverse
+
+    monkeypatch.setattr(uf.excel, "read",
+                        lambda sheet, col, **kw: {"ok": False, "error": "date_not_found"})
+    errors2 = []
+    uf.strip_fen_terms([("U", "+5")], "6/4", "0分", errors2, "undo x")
+    assert errors2 and "date_not_found" in errors2[0]
 
 
 if __name__ == "__main__":
