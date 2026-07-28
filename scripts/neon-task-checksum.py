@@ -16,9 +16,11 @@ checks BOTH cadences and, with --fix, recreates what's missing:
                  recurring 1neon task whose bare name matches the header
                  (did-fast aliases respected). Row 2 = (time), row 5 = [pts]
                  (a rate formula like "1/m" / ".5/m" / "15+1/m" means variable
-                 points → the card gets no [N]). Wrong-weekday recurrences are
-                 WARNED about, never auto-moved ("2 "-prefixed headers are
-                 monthly by the time-order notation and exempt).
+                 points → the card gets no [N]). Wrong-weekday recurrences and
+                 a present card whose [N] no longer matches row 5 are WARNED
+                 about, never auto-corrected — the fix (card vs. sheet) is a
+                 human decision ("2 "-prefixed headers are monthly by the
+                 time-order notation and exempt from the weekday check).
 
 Runs on IX (Excel lives there; hostname Jonathans-Mac-mini*) via local
 osascript; anywhere else it transparently wraps the read through `ssh ix` so
@@ -208,6 +210,36 @@ def weekday_warnings(expected: list[dict], tasks: list[dict]) -> list[str]:
                 warnings.append(
                     f"{e['header']}: sheet says {want} (row 3 = {e['day']}), "
                     f"card recurs '{ds}'")
+    return warnings
+
+
+def points_mismatches(expected: list[dict], tasks: list[dict]) -> list[str]:
+    """Warn when a present card's [N] doesn't match the sheet's row-5
+    expected points. Variable-rate columns (row 5 = a rate formula, e['pts']
+    is None) are skipped — their points are computed from duration at
+    completion, not fixed. Warn-only, same as weekday_warnings: a mismatch
+    could mean either side is stale, so the fix is a human decision
+    (regression 2026-07-28: '1 xk87' sheet said [45], card silently drifted
+    to [20] weeks earlier and nothing noticed — existence-only matching
+    never compares the bracketed number)."""
+    by_norm: dict[str, list[str]] = {}
+    for t in tasks:
+        n = norm_name(t.get("content", ""))
+        n = norm_name(ALIASES.get(n, n))
+        by_norm.setdefault(n, []).append(t.get("content", ""))
+    warnings = []
+    for e in expected:
+        if e["pts"] is None:
+            continue
+        for content in by_norm.get(norm_name(e["header"]), []):
+            m = re.search(r"\[(\d+(?:\.\d+)?)\]", content)
+            if not m:
+                continue
+            card_pts = float(m.group(1))
+            if card_pts != e["pts"]:
+                warnings.append(
+                    f"{e['header']}: sheet expects [{e['pts']:g}], "
+                    f"card has [{card_pts:g}] ({content!r})")
     return warnings
 
 
@@ -411,6 +443,7 @@ def main() -> int:
         contents = [t["content"] for t in weekly_tasks]
         present, missing_w = match_weekly(expected, contents)
         warnings = weekday_warnings(expected, weekly_tasks)
+        pts_warnings = points_mismatches(expected, weekly_tasks)
         dupes = find_duplicates(contents)
         recreated_w = []
         skip_weekly = recreate_guard("weekly", len(weekly_tasks),
@@ -429,6 +462,7 @@ def main() -> int:
             "checked": len(expected), "present": len(present),
             "missing": [e["header"] for e in missing_w],
             "recreated": recreated_w, "weekday_warnings": warnings,
+            "points_mismatches": pts_warnings,
             "duplicates": dupes,
         }
         if dupes:
@@ -439,6 +473,8 @@ def main() -> int:
                        + (" (recreated)" if recreated_w else ""))
         for w in warnings:
             emit_alert("weekly_weekday_mismatch", w)
+        for w in pts_warnings:
+            emit_alert("weekly_points_mismatch", w)
 
     try:
         REPORT.parent.mkdir(parents=True, exist_ok=True)
@@ -453,6 +489,8 @@ def main() -> int:
         print(f"weekly: {w.get('checked', '-')} checked, "
               f"missing: {w.get('missing') or 'none'}")
         for warn in w.get("weekday_warnings", []):
+            print(f"  ⚠ {warn}")
+        for warn in w.get("points_mismatches", []):
             print(f"  ⚠ {warn}")
     else:
         print(json.dumps(report, ensure_ascii=False))

@@ -204,6 +204,48 @@ def test_find_duplicates_counts_alias_variants_as_one_name(cs):
     assert cs.find_duplicates(contents) == [cs.norm_name("一起饭")]
 
 
+# ─── points_mismatches (2026-07-28) ──────────────────────────────────────────
+# Regression: "1 xk87" sheet row 5 said [45]; the live card silently drifted
+# to [20] and nothing noticed for weeks — match_weekly only checks existence
+# (norm_name strips [N]/(N)/{N} entirely before comparing).
+
+def test_points_mismatch_flagged(cs):
+    exp = cs.parse_1n_expectations(["1 xk87"], ["20.0"], ["3.0"], ["45.0"])
+    warns = cs.points_mismatches(exp, [{"content": "1 xk87 (20) [20]"}])
+    assert len(warns) == 1
+    assert "[45]" in warns[0] and "[20]" in warns[0] and "1 xk87" in warns[0]
+
+
+def test_points_match_no_warning(cs):
+    exp = cs.parse_1n_expectations(["1 xk87"], ["20.0"], ["3.0"], ["45.0"])
+    warns = cs.points_mismatches(exp, [{"content": "1 xk87 (20) [45]"}])
+    assert warns == []
+
+
+def test_points_mismatch_skips_variable_rate_columns(cs):
+    # row 5 is a rate formula (pts is None) → nothing to compare against.
+    exp = cs.parse_1n_expectations(["长冥想"], ["60.0"], ["6.0"], [".5/m"])
+    warns = cs.points_mismatches(exp, [{"content": "长冥想 (60) [15]"}])
+    assert warns == []
+
+
+def test_points_mismatch_uses_aliases(cs):
+    # Card carries the alias name ("1 groceries"), header is the bare form.
+    exp = cs.parse_1n_expectations(["groceries"], ["30.0"], ["5.0"], ["15.0"])
+    warns = cs.points_mismatches(exp, [{"content": "1 groceries (30) [10]"}])
+    assert len(warns) == 1 and "groceries" in warns[0]
+
+
+def test_points_mismatch_wired_into_main(cs):
+    """Structural: main() must compute, report, and alert on points_mismatches
+    (same treatment as weekday_warnings), not just weekday drift."""
+    import inspect
+    src = inspect.getsource(cs)
+    assert "pts_warnings = points_mismatches(expected, weekly_tasks)" in src
+    assert '"points_mismatches": pts_warnings' in src
+    assert 'emit_alert("weekly_points_mismatch", w)' in src
+
+
 def test_driver_gates_fix_on_guard(cs):
     """Structural: both --fix recreate loops must be gated on the guard, and
     a skip must be alerted — never a silent no-op."""
