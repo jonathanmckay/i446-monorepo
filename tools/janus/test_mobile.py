@@ -104,3 +104,30 @@ def test_log_entry_passes_minutes_and_project(jm, monkeypatch):
 def test_fill_gap_rejects_bad_times(jm):
     assert jm.fill_gap("x", "10:00", "09:00")["ok"] is False
     assert jm.fill_gap("x", "junk", "09:00")["ok"] is False
+
+
+def test_habit_tags_filters_to_known_habits(jm):
+    """Only tags naming real habits get secondary logs; Toggl meta tags and
+    junk resolve to nothing (feature 2026-07-27: run tagged 其他人 credits
+    both ledgers)."""
+    got = jm.habit_tags(["其他人", "-3", "冥想", "not-a-habit"])
+    assert "其他人" in got and "冥想" in got
+    assert "-3" not in got and "not-a-habit" not in got
+
+
+def test_log_entry_appends_habit_tag_items(jm, monkeypatch):
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = __import__("json").dumps({"results": [
+                {"name": "run", "step": "variable"},
+                {"name": "其他人", "step": "0n"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    monkeypatch.setattr(jm, "habit_tags", lambda tags: [t for t in tags if t == "其他人"])
+    r = jm.log_entry("e2", "run", 61, "hcbp", tags=["其他人", "-3"])
+    assert seen["text"] == "run 61 @hcbp, 其他人 61"
+    assert r["ok"] and r["tag_steps"] == ["其他人→0n"]

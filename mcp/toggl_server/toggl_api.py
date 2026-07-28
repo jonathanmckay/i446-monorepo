@@ -238,9 +238,15 @@ def trim_range(start_dt, end_dt, exclude_ids=None):
     tz = start_dt.tzinfo
     results = []
     day = start_dt.date()
+    # Toggl's start_date/end_date filter is UTC-based: a [day, day+1) local
+    # window drops every evening-PT entry AND the running entry (both land on
+    # the next UTC day), which made the running special-case below dead code
+    # after ~17:00 (bug 2026-07-27: "2101-2115 snack" didn't split the
+    # running run timer). Fetch a ±1-day window — the datetime overlap check
+    # below filters precisely, so the extra entries are harmless.
     entries = get_entries(
-        start_date=day.isoformat(),
-        end_date=(day + timedelta(days=1)).isoformat(),
+        start_date=(day - timedelta(days=1)).isoformat(),
+        end_date=(day + timedelta(days=2)).isoformat(),
     ) or []
     for e in entries:
         if e.get("id") in exclude_ids:

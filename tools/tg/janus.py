@@ -474,6 +474,7 @@ def fetch_today(force=False):
                 "project_id": e.get("project_id"),
                 "running": stop_raw is None,
                 "id": e.get("id"),
+                "tags": e.get("tags") or [],
             })
         out.sort(key=lambda x: x["start_dt"])
         STATE.entries = out
@@ -1854,8 +1855,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
                 time_sty = "class:time"
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
+            gsty, gch = _gutter(hh, mm, slot_min)
+            if gap_selected:
+                gsty = f"{gsty} bg:#3a3a3a"
             out.append((time_sty, tcol))
-            out.append(_gutter(hh, mm, slot_min))
+            out.append((gsty, gch))
             out.append((fill_cls, _gap_fill(label, space) + "\n"))
             continue
         if p.get("is_free"):
@@ -1890,8 +1894,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 sty = f"bold {p['style']}".strip() if p["style"] else "bold class:running"
                 time_sty = "class:time"
                 dur_sty = "class:dim"
+            gsty, gch = _gutter(hh, mm, slot_min)
+            if running_selected:
+                gsty = f"{gsty} bg:#3a3a3a"
             out.append((time_sty, tcol))
-            out.append(_gutter(hh, mm, slot_min))
+            out.append((gsty, gch))
             out.append((sty, prefix + pad(truncate(p["label"], space), space)))
             out.append((dur_sty, f" {dur}\n"))
             continue
@@ -1926,8 +1933,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             sty = _placeholder_style() if _is_placeholder(p["label"]) else p["style"]
             time_sty = "class:time"
             dur_sty = "class:dim"
+        gsty, gch = _gutter(hh, mm, slot_min)
+        if is_selected:
+            gsty = f"{gsty} bg:#3a3a3a"
         out.append((time_sty, tcol))
-        out.append(_gutter(hh, mm, slot_min))
+        out.append((gsty, gch))
         out.append((sty, pad(truncate(p["label"], space), space)))
         out.append((dur_sty, f" {dur}\n"))
 
@@ -3222,6 +3232,34 @@ def _(event):
     event.app.create_background_task(_run_and_refresh())
 
 
+_DF_TAGS_MOD = None  # lazy did-fast module, habit-name lookups only
+
+
+def _habit_tags(tags: list) -> list:
+    """Subset of a Toggl entry's tags that name known habits (0n/1n+ headers
+    or aliases). Mirrors tools/janus/mobile.py habit_tags — meta tags (-3, 2,
+    project codes…) resolve to nothing. Best-effort: failures return []."""
+    global _DF_TAGS_MOD
+    if not tags:
+        return []
+    try:
+        if _DF_TAGS_MOD is None:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location("df_tags", DID_FAST)
+            _mod = _ilu.module_from_spec(_spec)
+            sys.modules["df_tags"] = _mod
+            _spec.loader.exec_module(_mod)
+            _DF_TAGS_MOD = _mod
+        df = _DF_TAGS_MOD
+        h = df.load_headers()
+        known = {df.header_normalize(k)
+                 for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
+        known |= {df.header_normalize(a) for a in df.ONENEON_ALIASES}
+        return [t for t in tags if df.header_normalize(str(t)) in known]
+    except Exception:
+        return []
+
+
 @kb.add("escape", "enter")  # opt/alt+enter
 def _(event):
     """opt+enter on a selected TRACKED entry: run /did for it — grant its
@@ -3254,11 +3292,22 @@ def _(event):
     start = item["start_dt"]
     end = start + dt.timedelta(minutes=item["dur_min"])
     code = proj_code(item.get("project_id"))
+    date_sfx = f" {start.month}/{start.day}" if STATE.day_offset != 0 else ""
     cmd = f"{desc} {start:%H%M}-{end:%H%M}"
     if code:
         cmd += f" @{code}"
-    if STATE.day_offset != 0:
-        cmd += f" {start.month}/{start.day}"
+    cmd += date_sfx
+    # Habit TAGS on the Toggl entry (其他人, 冥想, …) ride along as extra
+    # comma-separated /did items so both ledgers get the minutes (user
+    # request 2026-07-27: a run tagged 其他人 credits hcbp points AND 其他人
+    # minutes). Meta tags that aren't habit names are filtered out.
+    entry_tags: list = []
+    for _e in STATE.entries:
+        if _e.get("id") in (item.get("entry_ids") or []):
+            entry_tags = _e.get("tags") or []
+            break
+    for _t in _habit_tags(entry_tags):
+        cmd += f", {_t} {item['dur_min']}{date_sfx}"
     STATE.event_sel = None
     flash(f"$ did {cmd}")
 
@@ -3407,24 +3456,43 @@ def _(event):
     screen and selectable — calendar events, real tracked entries, and
     untracked gaps alike (user request 2026-07-17: "select toggl time
     entries as well" / "select empty components"). Tab/↓ to arm one, Enter
-    to act on it (see the enter handler above)."""
+    to act on it (see the enter handler above).
+
+    A FRESH selection starts at the most recent item (latest start <= now),
+    not the day's first: starting at index 0 put the cursor on a 6 AM entry
+    at the far top of the screen — ~20 presses from tonight's entries, which
+    read as "can't select them at all" (user report 2026-07-27: "two
+    meaningful entries in this block and last, but I can't select either")."""
     items = STATE.visible_events
     if not items:
         return
     keys = [_sel_key(it) for it in items]
-    i = (keys.index(STATE.event_sel) + 1) % len(keys) if STATE.event_sel in keys else 0
+    if STATE.event_sel in keys:
+        i = (keys.index(STATE.event_sel) + 1) % len(keys)
+    else:
+        now = view_now()
+        past = [j for j, it in enumerate(items)
+                if it.get("start_dt") and it["start_dt"] <= now]
+        i = past[-1] if past else 0
     STATE.event_sel = keys[i]
 
 
 @kb.add("s-tab", filter=_input_empty)
 @kb.add("up", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the selection cursor backward. See the "tab" binding above."""
+    """Cycle the selection cursor backward. See the "tab" binding above —
+    same nearest-to-now start for a fresh selection."""
     items = STATE.visible_events
     if not items:
         return
     keys = [_sel_key(it) for it in items]
-    i = (keys.index(STATE.event_sel) - 1) % len(keys) if STATE.event_sel in keys else len(keys) - 1
+    if STATE.event_sel in keys:
+        i = (keys.index(STATE.event_sel) - 1) % len(keys)
+    else:
+        now = view_now()
+        past = [j for j, it in enumerate(items)
+                if it.get("start_dt") and it["start_dt"] <= now]
+        i = past[-1] if past else len(keys) - 1
     STATE.event_sel = keys[i]
 
 

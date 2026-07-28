@@ -126,6 +126,7 @@ def _fetch_today() -> list[dict]:
             "desc": e.get("description") or "(no description)",
             "project": code,
             "color": COLORS.get(code, DEFAULT_COLOR),
+            "tags": e.get("tags") or [],
             "start": st_c, "end": en_c, "running": running,
         })
     out.sort(key=lambda r: r["start"])
@@ -184,6 +185,7 @@ def build_timeline() -> dict:
         tracked_min += mins
         rows.append({"type": "entry", "id": e["id"], "desc": e["desc"],
                      "project": e["project"], "color": e["color"],
+                     "tags": e.get("tags") or [],
                      "start": hhmm(e["start"]), "end": ("now" if e["running"] else hhmm(e["end"])),
                      "minutes": mins, "running": e["running"],
                      "logged": e["id"] in logged})
@@ -231,13 +233,50 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
         return {"ok": False, "error": str(e)[:200]}
 
 
-def log_entry(entry_id: str, desc: str, minutes: int, project: str) -> dict:
+_DF_MOD = None  # lazy did-fast module (for habit-name lookups only)
+
+
+def habit_tags(tags: list[str]) -> list[str]:
+    """The subset of a Toggl entry's tags that name known habits (0n or 1n+
+    headers/aliases) — those get a secondary minutes log on swipe (user
+    request 2026-07-27: a run tagged 其他人 should credit both ledgers).
+    Meta tags (-1/-2/-3/2, project codes, …) resolve to nothing and are
+    ignored. Best-effort: an import failure just skips secondaries."""
+    global _DF_MOD
+    if not tags:
+        return []
+    try:
+        if _DF_MOD is None:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("df_tags", DID_FAST)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["df_tags"] = mod
+            spec.loader.exec_module(mod)
+            _DF_MOD = mod
+        df = _DF_MOD
+        h = df.load_headers()
+        known = {df.header_normalize(k)
+                 for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
+        known |= {df.header_normalize(a) for a in df.ONENEON_ALIASES}
+        return [t for t in tags if df.header_normalize(str(t)) in known]
+    except Exception as e:
+        print("WARN habit_tags:", e, file=sys.stderr)
+        return []
+
+
+def log_entry(entry_id: str, desc: str, minutes: int, project: str,
+              tags: list[str] | None = None) -> dict:
     today = _dt.datetime.now(TZ).date()
     if str(entry_id) in _ledger(today):
         return {"ok": True, "already": True}
     text = f"{desc} {minutes}"
     if project:
         text += f" @{project}"
+    # Habit tags ride along as extra comma-separated /did items — did-fast
+    # processes each independently (其他人 61 → 其他人 0n column, etc.).
+    extra = habit_tags(tags or [])
+    for t in extra:
+        text += f", {t} {minutes}"
     try:
         proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
                               capture_output=True, text=True, timeout=90)
@@ -252,13 +291,20 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str) -> dict:
         except Exception:
             data = None
     step = None
+    tag_steps = []
     if data and data.get("results"):
         step = data["results"][0].get("step")
+        tag_steps = [f"{r.get('name')}→{r.get('step')}"
+                     for r in data["results"][1:]]
     needs_agent = bool(data and data.get("agent_needed"))
     ok = proc.returncode == 0 and step is not None
     if ok:
-        _ledger_add(today, entry_id, f"{desc} {minutes} → {step}")
-    return {"ok": ok, "step": step, "needs_agent": needs_agent,
+        note = f"{desc} {minutes} → {step}"
+        if tag_steps:
+            note += " + " + ", ".join(tag_steps)
+        _ledger_add(today, entry_id, note)
+    return {"ok": ok, "step": step, "tag_steps": tag_steps,
+            "needs_agent": needs_agent,
             "stderr_tail": proc.stderr.strip()[-200:]}
 
 
@@ -291,7 +337,8 @@ def api_log():
     if not b.get("id") or not b.get("desc"):
         return jsonify({"ok": False, "error": "id+desc required"}), 400
     return jsonify(log_entry(str(b["id"]), b["desc"].strip(),
-                             int(b.get("minutes") or 0), (b.get("project") or "").strip()))
+                             int(b.get("minutes") or 0), (b.get("project") or "").strip(),
+                             tags=b.get("tags") or []))
 
 
 @app.route("/")
@@ -505,7 +552,7 @@ async function commitLog(line, r){
   try {
     const resp = await fetch('/api/log', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id:r.id, desc:r.desc, minutes:r.minutes, project:r.project})});
+      body: JSON.stringify({id:r.id, desc:r.desc, minutes:r.minutes, project:r.project, tags:r.tags||[]})});
     const d = await resp.json();
     if(d.already){ toast('already logged'); return; }
     if(!d.ok){
@@ -513,7 +560,9 @@ async function commitLog(line, r){
       toast(d.needs_agent ? 'no route — use /did on desktop' : 'log failed', true);
       return;
     }
-    toast('+'+r.minutes+'m → '+(d.step||'neon')+' ✓');
+    let msg = '+'+r.minutes+'m → '+(d.step||'neon');
+    if(d.tag_steps && d.tag_steps.length) msg += ' + '+d.tag_steps.join(', ');
+    toast(msg+' ✓');
   } catch(e){ line.classList.remove('logged'); toast('offline', true); }
 }
 

@@ -367,9 +367,7 @@ def test_down_up_arrows_cycle_the_same_as_tab_shift_tab():
     evs = [_gcal_event(str(i), today.replace(hour=9, minute=i * 10),
                        today.replace(hour=9, minute=i * 10 + 5)) for i in range(3)]
     mod.STATE.visible_events = evs
-    mod.STATE.event_sel = None
-    _binding(mod, "down").handler(_FakeEvent())
-    assert mod.STATE.event_sel == mod._event_key(evs[0])
+    mod.STATE.event_sel = mod._event_key(evs[0])
     _binding(mod, "down").handler(_FakeEvent())
     assert mod.STATE.event_sel == mod._event_key(evs[1])
     _binding(mod, "up").handler(_FakeEvent())
@@ -384,9 +382,28 @@ def test_tab_with_no_visible_events_is_a_noop():
     assert mod.STATE.event_sel is None
 
 
-def test_tab_arms_first_event_when_nothing_selected():
+def test_tab_arms_most_recent_item_when_nothing_selected():
+    """A fresh Tab seeds at the LATEST item with start <= now — near where
+    the user is looking — not the day's first (changed 2026-07-27; index-0
+    seeding put the cursor on a 6 AM row ~20 presses from tonight's
+    entries, which read as "can't select them at all")."""
     mod = _load_tui()
     today = _midnight()
+    mod.view_now = lambda: today.replace(hour=23, minute=59)
+    ev1 = _gcal_event("a", today.replace(hour=9), today.replace(hour=9, minute=15))
+    ev2 = _gcal_event("b", today.replace(hour=9, minute=30), today.replace(hour=9, minute=45))
+    mod.STATE.visible_events = [ev1, ev2]
+    mod.STATE.event_sel = None
+    _binding(mod, "tab").handler(_FakeEvent())
+    assert mod.STATE.event_sel == mod._event_key(ev2)
+
+
+def test_tab_arms_first_item_when_everything_is_in_the_future():
+    """With nothing started yet (early morning), the old index-0 seed is
+    still the right fallback."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.view_now = lambda: today.replace(hour=5)
     ev1 = _gcal_event("a", today.replace(hour=9), today.replace(hour=9, minute=15))
     ev2 = _gcal_event("b", today.replace(hour=9, minute=30), today.replace(hour=9, minute=45))
     mod.STATE.visible_events = [ev1, ev2]
@@ -417,18 +434,20 @@ def test_shift_tab_cycles_backward_and_wraps():
     assert mod.STATE.event_sel == mod._event_key(evs[2]), "must wrap to the last"
 
 
-def test_selection_surviving_list_change_falls_back_to_first_on_next_tab():
+def test_selection_surviving_list_change_reseeds_near_now_on_next_tab():
     """A stale key (list resized since it was armed) simply reads as 'not
-    found' — Tab from there re-arms at index 0 rather than erroring or
-    silently pointing at the wrong event."""
+    found' — Tab from there re-seeds at the most recent item (same fresh-
+    selection rule) rather than erroring or silently pointing at the wrong
+    event."""
     mod = _load_tui()
     today = _midnight()
+    mod.view_now = lambda: today.replace(hour=23, minute=59)
     evs = [_gcal_event(str(i), today.replace(hour=9, minute=i * 10),
                        today.replace(hour=9, minute=i * 10 + 5)) for i in range(2)]
     mod.STATE.event_sel = ("stale-key-not-in-list", "x")
     mod.STATE.visible_events = evs
     _binding(mod, "tab").handler(_FakeEvent())
-    assert mod.STATE.event_sel == mod._event_key(evs[0])
+    assert mod.STATE.event_sel == mod._event_key(evs[1])
 
 
 # ─── Enter handler: convert-selected-event branch ──────────────────────────
