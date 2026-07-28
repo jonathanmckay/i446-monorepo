@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-28T08:00:06.485028-07:00"
+  "tasks": {
+    "write +2 r&e": {
+      "todoist_id": "6h8vvhjX68Rgrj5R",
+      "minutes": 50
+    },
+    "no youtube or aggregators": {
+      "todoist_id": "6h8vvhm7p9wgWhqR",
+      "minutes": 30
+    },
+    "weight hiit + legs": {
+      "todoist_id": "6h8vvhrvMVw4mMfR",
+      "minutes": 45
+    },
+    "1 habits cleared out": {
+      "todoist_id": "6h8vvhvrWMHHcF3R",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-07-28T10:00:04.001575-07:00"
 }
