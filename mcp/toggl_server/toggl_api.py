@@ -5,33 +5,35 @@ import signal
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import throttle
 from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
 BASE_URL = "https://api.track.toggl.com/api/v9"
 
-# tg-tui polls the running timer only every 30s; signalling it after a
+# janus polls the running timer only every 30s; signalling it after a
 # timer-state change makes it refresh immediately. This lives in toggl_api
 # (the shared HTTP layer) so EVERY caller benefits — the MCP server and
 # /d357, not just the toggl_cli path that previously had its own nudge.
-TG_TUI_PID = Path.home() / ".cache" / "tg-tui.pid"
+JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 # Shared running-timer cache. Toggl is a ~1 req/sec leaky bucket, and several
-# processes poll /current independently (tg-tui every 30s, every open dtd picker
+# processes poll /current independently (janus every 30s, every open dtd picker
 # via dtd-ticker, …). Each live get_current() write-throughs here; pollers read
 # this file within CURRENT_CACHE_TTL instead of each hitting the API — collapsing
 # N independent pollers into ~one network read per window. Load scales with UI
 # activity (idle → zero), which a standalone 24/7 daemon would not give.
 CURRENT_CACHE = Path.home() / ".cache" / "toggl-current.json"
-CURRENT_CACHE_TTL = 30.0  # seconds; matches tg-tui's steady-state poll cadence
+CURRENT_CACHE_TTL = 30.0  # seconds; matches janus's steady-state poll cadence
 
 
 def _notify_tui():
-    """SIGUSR1 the running tg-tui so it refreshes now instead of on its poll.
+    """SIGUSR1 the running janus so it refreshes now instead of on its poll.
     Best-effort: a missing/stale pid file or dead process is ignored."""
     try:
-        os.kill(int(TG_TUI_PID.read_text().strip()), signal.SIGUSR1)
+        os.kill(int(JANUS_PID.read_text().strip()), signal.SIGUSR1)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
 
@@ -79,6 +81,7 @@ def _request(method, path, body=None):
     # to the UI and the next poll re-trips it — the same pattern ibx/slack.py
     # and ibx/sync_external_replies.py already use for their APIs.
     for attempt in range(_MAX_429_RETRIES):
+        throttle.acquire()  # client-side pacing, shared across all processes
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", _auth_header())
         req.add_header("Content-Type", "application/json")
@@ -86,12 +89,16 @@ def _request(method, path, body=None):
             with urllib.request.urlopen(req) as resp:
                 if resp.status == 200:
                     result = json.loads(resp.read())
-                    if method != "GET":  # a mutation succeeded → wake tg-tui now
+                    if method != "GET":  # a mutation succeeded → wake janus now
                         _invalidate_current_cache()  # running state may have changed
                         _notify_tui()
                     return result
                 return None
         except urllib.error.HTTPError as e:
+            # 402 (free-tier cap) and 429 both mean "slow down": arm the shared
+            # cooldown so every process — not just this one — backs off.
+            if e.code in (402, 429):
+                throttle.note_rate_limit()
             if e.code == 429 and attempt < _MAX_429_RETRIES - 1:
                 retry_after = e.headers.get("Retry-After")
                 delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
@@ -190,6 +197,7 @@ def update_entry(entry_id, **fields):
 
 def delete_entry(entry_id):
     url = f"{BASE_URL}/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
+    throttle.acquire()  # same client-side pacing as _request()
     req = urllib.request.Request(url, method="DELETE")
     req.add_header("Authorization", _auth_header())
     try:
@@ -200,4 +208,84 @@ def delete_entry(entry_id):
                 _notify_tui()
             return ok
     except urllib.error.HTTPError as e:
+        if e.code in (402, 429):
+            throttle.note_rate_limit()
         raise RuntimeError(f"Toggl API DELETE -> {e.code}: {e.read().decode()}")
+
+
+def trim_range(start_dt, end_dt, exclude_ids=None):
+    """Ensure no existing Toggl entry -- completed or the currently-running
+    one -- keeps covering [start_dt, end_dt) once a new or retimed entry
+    claims it. Split/trim/delete whatever overlaps, except any id in
+    exclude_ids (the entry itself, when this is a RETIME rather than a plain
+    create -- it shouldn't try to trim itself out from under its own edit).
+
+    Shared by every caller that creates or moves a definite time range:
+    tg-fast.py's "<desc> <start>-<end>" range creation, did-fast.py's
+    time-range /did items, and janus.py's entry-edit-to-a-new-time path
+    (2026-07-19: "if I edit an event with a new time... MECE -- shorten [an
+    overlapping entry] to make room, or delete the old one if full overlap").
+    Originally did-fast-only (as `_trim_toggl_range`, fixing the 2026-07-16
+    "asha"/"asha prep" double-count); promoted here once a third caller
+    needed the identical logic rather than a third copy of it.
+
+    The running entry is special-cased: it has no fixed end, so its portion
+    AFTER the range isn't trimmed to a stop -- it's RESUMED as a new running
+    entry starting right after, so live tracking keeps going instead of
+    silently vanishing. Returns human-readable log lines, one per entry
+    trimmed/split/resumed."""
+    exclude_ids = exclude_ids or set()
+    tz = start_dt.tzinfo
+    results = []
+    day = start_dt.date()
+    # Toggl's start_date/end_date filter is UTC-based: a [day, day+1) local
+    # window drops every evening-PT entry AND the running entry (both land on
+    # the next UTC day), which made the running special-case below dead code
+    # after ~17:00 (bug 2026-07-27: "2101-2115 snack" didn't split the
+    # running run timer). Fetch a ±1-day window — the datetime overlap check
+    # below filters precisely, so the extra entries are harmless.
+    entries = get_entries(
+        start_date=(day - timedelta(days=1)).isoformat(),
+        end_date=(day + timedelta(days=2)).isoformat(),
+    ) or []
+    for e in entries:
+        if e.get("id") in exclude_ids:
+            continue
+        try:
+            e_start = datetime.fromisoformat(e["start"]).astimezone(tz)
+        except (KeyError, ValueError, TypeError):
+            continue
+        is_running = (e.get("duration") or 0) < 0
+        if is_running:
+            e_end = datetime.now(tz)
+        else:
+            stop = e.get("stop")
+            if not stop:
+                continue
+            try:
+                e_end = datetime.fromisoformat(stop).astimezone(tz)
+            except (ValueError, TypeError):
+                continue
+        if e_end <= start_dt or e_start >= end_dt:
+            continue  # no overlap
+        desc = e.get("description") or ""
+        proj_id = e.get("project_id")
+        tags = e.get("tags") or None
+        if e_start < start_dt:
+            pre_end = start_dt - timedelta(minutes=1)
+            if pre_end > e_start:
+                create_entry(desc, e_start.isoformat(), pre_end.isoformat(),
+                              int((pre_end - e_start).total_seconds()), proj_id, tags)
+                results.append(f"Trimmed: {desc} {e_start:%H:%M}-{pre_end:%H:%M}")
+        if is_running:
+            post_start = end_dt + timedelta(minutes=1)
+            start_timer(desc, proj_id, tags, start_time=post_start.isoformat())
+            results.append(f"Resumed: {desc} from {post_start:%H:%M}")
+        elif e_end > end_dt:
+            post_start = end_dt + timedelta(minutes=1)
+            if e_end > post_start:
+                create_entry(desc, post_start.isoformat(), e_end.isoformat(),
+                              int((e_end - post_start).total_seconds()), proj_id, tags)
+                results.append(f"Trimmed: {desc} {post_start:%H:%M}-{e_end:%H:%M}")
+        delete_entry(e["id"])
+    return results
