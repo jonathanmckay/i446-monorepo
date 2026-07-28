@@ -152,6 +152,42 @@ def match_weekly(expected: list[dict], open_contents: list[str]):
     return present, missing
 
 
+def recreate_guard(kind: str, fetched_count: int, expected_count: int,
+                   missing_count: int) -> str | None:
+    """Why this run's --fix recreate pass must be SKIPPED, or None when
+    recreation is safe.
+
+    A rate-limited Todoist intermittently returns 200-with-empty (and
+    sometimes a partial page) — did-fast.py guards this exact class in its
+    cache refresh (did-fast.py keep-old guards, 2026-07-26), but the
+    checksum didn't: an empty/partial 1neon fetch declared the whole sheet
+    "missing" and --fix recreated it wholesale (2026-07-25 23:38Z: 13 cards
+    in 7 seconds; daily strays every run after — user report 2026-07-28).
+    The legitimate case this script exists for is 1-2 rotted cards, so a
+    run where EVERYTHING (empty fetch) or a large fraction (>2 and >30%)
+    reads as missing is an API flake, not mass deletion — report + alert,
+    never recreate."""
+    if expected_count and fetched_count == 0:
+        return f"{kind} fetch returned 0 open tasks — rate-limit flake suspected"
+    if missing_count > 2 and missing_count > 0.3 * expected_count:
+        return (f"{missing_count}/{expected_count} {kind} habits 'missing' in "
+                "one run — API flake suspected, not mass deletion")
+    return None
+
+
+def find_duplicates(open_contents: list[str]) -> list[str]:
+    """Normalized names carried by MORE than one open card. The checksum
+    could never see duplicates (any one match counts a habit present), so
+    recreation-burst leftovers accumulated silently. Warn-only."""
+    counts: dict[str, int] = {}
+    for c in open_contents:
+        n = norm_name(c)
+        n = norm_name(ALIASES.get(n, n))
+        if n:
+            counts[n] = counts.get(n, 0) + 1
+    return sorted(n for n, k in counts.items() if k >= 2)
+
+
 def weekday_warnings(expected: list[dict], tasks: list[dict]) -> list[str]:
     """Warn when a card's recurrence day contradicts the sheet's row-3 day.
     tasks: [{content, due_string}]. "2 "-prefixed headers are monthly-notation
@@ -347,7 +383,12 @@ def main() -> int:
         daily_tasks = fetch_label_tasks(token, "0neon") + fetch_label_tasks(token, "夜neon")
         missing = vdh.compute_missing(manifest, [t["content"] for t in daily_tasks])
         recreated = []
-        if args.fix:
+        skip_daily = recreate_guard("daily", len(daily_tasks),
+                                    len(manifest["habits"]), len(missing))
+        if skip_daily:
+            emit_alert("checksum_recreate_skipped", skip_daily)
+            report.setdefault("recreate_skipped", {})["daily"] = skip_daily
+        if args.fix and not skip_daily:
             for key in missing:
                 try:
                     create_task(token, vdh.recreate_payload(manifest["habits"][key]))
@@ -370,8 +411,14 @@ def main() -> int:
         contents = [t["content"] for t in weekly_tasks]
         present, missing_w = match_weekly(expected, contents)
         warnings = weekday_warnings(expected, weekly_tasks)
+        dupes = find_duplicates(contents)
         recreated_w = []
-        if args.fix:
+        skip_weekly = recreate_guard("weekly", len(weekly_tasks),
+                                     len(expected), len(missing_w))
+        if skip_weekly:
+            emit_alert("checksum_recreate_skipped", skip_weekly)
+            report.setdefault("recreate_skipped", {})["weekly"] = skip_weekly
+        if args.fix and not skip_weekly:
             for e in missing_w:
                 try:
                     create_task(token, weekly_create_payload(e))
@@ -382,7 +429,10 @@ def main() -> int:
             "checked": len(expected), "present": len(present),
             "missing": [e["header"] for e in missing_w],
             "recreated": recreated_w, "weekday_warnings": warnings,
+            "duplicates": dupes,
         }
+        if dupes:
+            emit_alert("weekly_habit_duplicate", ", ".join(dupes))
         if missing_w:
             emit_alert("weekly_habit_missing",
                        f"{', '.join(e['header'] for e in missing_w)}"

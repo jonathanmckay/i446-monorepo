@@ -156,3 +156,61 @@ def test_validate_daily_habits_creates_clean_names():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ─── recreate_guard / find_duplicates (2026-07-28) ──────────────────────────
+# User report: "dtd does not show things like 1 f694 ... but they are showing
+# up on my todoist list." The strays were checksum-recreated cards: a
+# rate-limited empty/partial 1neon fetch declared the whole sheet missing and
+# --fix recreated it wholesale (2026-07-25 23:38Z: 13 cards in 7 seconds).
+
+def test_recreate_guard_blocks_empty_fetch(cs):
+    reason = cs.recreate_guard("weekly", 0, 36, 36)
+    assert reason and "0 open tasks" in reason
+
+
+def test_recreate_guard_blocks_mass_missing(cs):
+    reason = cs.recreate_guard("weekly", 22, 36, 14)  # ~40% missing
+    assert reason and "API flake" in reason
+
+
+def test_recreate_guard_allows_the_legitimate_case(cs):
+    assert cs.recreate_guard("weekly", 35, 36, 1) is None
+    assert cs.recreate_guard("weekly", 34, 36, 2) is None
+    assert cs.recreate_guard("daily", 30, 33, 0) is None
+
+
+def test_recreate_guard_small_sheet_edges(cs):
+    # 3 of 5 missing → blocked (>2 and >30%); 2 of 5 → allowed (never block
+    # the 1-2 rotted-card case this script exists for).
+    assert cs.recreate_guard("weekly", 2, 5, 3) is not None
+    assert cs.recreate_guard("weekly", 3, 5, 2) is None
+
+
+def test_recreate_guard_empty_expectations_never_blocks(cs):
+    assert cs.recreate_guard("weekly", 0, 0, 0) is None
+
+
+def test_find_duplicates_reports_normalized_name_carried_twice(cs):
+    contents = ["1 groceries (15) [20]", "1 groceries (15) [20]",
+                "1 hpm (60) [60]"]
+    # ALIASES maps "1 groceries" → the bare "groceries" header.
+    assert cs.find_duplicates(contents) == ["groceries"]
+
+
+def test_find_duplicates_counts_alias_variants_as_one_name(cs):
+    # "一起吃" aliases to "一起饭" — two cards, one habit → duplicate.
+    contents = ["一起饭 (90)", "一起吃 (90)"]
+    assert cs.find_duplicates(contents) == [cs.norm_name("一起饭")]
+
+
+def test_driver_gates_fix_on_guard(cs):
+    """Structural: both --fix recreate loops must be gated on the guard, and
+    a skip must be alerted — never a silent no-op."""
+    import inspect
+    src = inspect.getsource(cs)
+    assert src.count("recreate_guard(") >= 3  # def + daily + weekly call sites
+    assert "args.fix and not skip_daily" in src
+    assert "args.fix and not skip_weekly" in src
+    assert 'emit_alert("checksum_recreate_skipped"' in src
+    assert 'emit_alert("weekly_habit_duplicate"' in src

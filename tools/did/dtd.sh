@@ -305,6 +305,11 @@ if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; t
   else
     echo "\$clean_for_filter" >> "\$REMOVED"
   fi
+  # Immediate Todoist close for NON-recurring tasks — same rationale and
+  # recurring-skip as done.sh (2026-07-28, "player retention" lag).
+  if [[ -n "\$1" ]]; then
+    (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
+  fi
   echo "x" >> "\$PUSHED"
   : > "\$TIMER"
   echo "⏳ completing: \$clean_for_filter" > "\$HDR"
@@ -410,6 +415,16 @@ if [[ -n "\$1" ]]; then
   echo "\$1" >> "\$REMOVED.ids"
 else
   echo "\$clean_for_filter" >> "\$REMOVED"
+fi
+# Immediate Todoist close for NON-recurring tasks (2026-07-28): the serial
+# FIFO worker runs a full did-fast per completion (Excel over ssh, 5-45s
+# each) with the Todoist close LAST, so a completion burst left the later
+# cards open in Todoist for minutes ("player retention still in todoist but
+# not in dtd"). Fire-and-forget; did-fast's later close is idempotent.
+# Recurring cards are skipped inside quick-close (double-close would
+# double-advance the recurrence — the 2026-06-27 drift class).
+if [[ -n "\$1" ]]; then
+  (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
 fi
 echo "x" >> "\$PUSHED"
 : > "\$TIMER"

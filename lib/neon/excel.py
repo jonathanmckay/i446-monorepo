@@ -97,6 +97,27 @@ def write(sheet: str, col: str, *, date: str | None = None,
     return _ssh_fallback("write", sheet, col, date, row, value, src=src)
 
 
+def batch_append(sheet: str, appends: list, *, date: str | None = None,
+                 row: int | None = None, src: str | None = None) -> dict[str, Any]:
+    """N formula-appends to one sheet/date in a single daemon round-trip.
+    `appends` = [(col, value), ...] or [{"col":…, "value":…, "src":…}, …].
+    Falls back to per-cell ssh appends when the daemon is down."""
+    items = [a if isinstance(a, dict) else {"col": a[0], "value": a[1]} for a in appends]
+    body = {"sheet": sheet, "appends": items}
+    if date is not None:
+        body["date"] = date
+    if row is not None:
+        body["row"] = row
+    if src:
+        body["src"] = src
+    out = _curl("/batch", body)
+    if out:
+        return out
+    results = [_ssh_fallback("append", sheet, it["col"], date, row, it["value"],
+                             src=it.get("src") or src) for it in items]
+    return {"ok": all(r.get("ok") for r in results), "results": results, "fallback": True}
+
+
 def read(sheet: str, col: str, *, date: str | None = None,
          row: int | None = None) -> dict[str, Any]:
     body = {"sheet": sheet, "col": col}
