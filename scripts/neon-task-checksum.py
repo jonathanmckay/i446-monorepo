@@ -16,9 +16,11 @@ checks BOTH cadences and, with --fix, recreates what's missing:
                  recurring 1neon task whose bare name matches the header
                  (did-fast aliases respected). Row 2 = (time), row 5 = [pts]
                  (a rate formula like "1/m" / ".5/m" / "15+1/m" means variable
-                 points → the card gets no [N]). Wrong-weekday recurrences are
-                 WARNED about, never auto-moved ("2 "-prefixed headers are
-                 monthly by the time-order notation and exempt).
+                 points → the card gets no [N]). Wrong-weekday recurrences and
+                 a present card whose [N] no longer matches row 5 are WARNED
+                 about, never auto-corrected — the fix (card vs. sheet) is a
+                 human decision ("2 "-prefixed headers are monthly by the
+                 time-order notation and exempt from the weekday check).
 
 Runs on IX (Excel lives there; hostname Jonathans-Mac-mini*) via local
 osascript; anywhere else it transparently wraps the read through `ssh ix` so
@@ -80,7 +82,7 @@ DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday",
 # Domain label per 1n+ header (from the 2026-07-25 audit). Unknown → 1neon only.
 WEEKLY_DOMAIN = {
     "1s": "g245", "1g": "g245", "1 hpm": "hcm", "s+hcbp": "hcbp",
-    "1 f692": "m5x2", "1 f693": "f693", "1 m5x2": "m5x2", "1 i9": "i9",
+    "1 f692": "m5x2", "1 f693": "i9", "1 m5x2": "m5x2", "1 i9": "i9",
     "1 -2g": "g245", "1 vm+li+msgr": "i9", "1 -1n": "g245", "1 f694": "f694",
     "1 xk88": "xk88", "1 xk87": "xk87", "1 xk87 wknd": "xk87", "1 cal": "g245",
     "1 s897": "s897", "1 hcm": "hcm", "1 hcb": "hcb", "长o314": "hcm",
@@ -152,6 +154,42 @@ def match_weekly(expected: list[dict], open_contents: list[str]):
     return present, missing
 
 
+def recreate_guard(kind: str, fetched_count: int, expected_count: int,
+                   missing_count: int) -> str | None:
+    """Why this run's --fix recreate pass must be SKIPPED, or None when
+    recreation is safe.
+
+    A rate-limited Todoist intermittently returns 200-with-empty (and
+    sometimes a partial page) — did-fast.py guards this exact class in its
+    cache refresh (did-fast.py keep-old guards, 2026-07-26), but the
+    checksum didn't: an empty/partial 1neon fetch declared the whole sheet
+    "missing" and --fix recreated it wholesale (2026-07-25 23:38Z: 13 cards
+    in 7 seconds; daily strays every run after — user report 2026-07-28).
+    The legitimate case this script exists for is 1-2 rotted cards, so a
+    run where EVERYTHING (empty fetch) or a large fraction (>2 and >30%)
+    reads as missing is an API flake, not mass deletion — report + alert,
+    never recreate."""
+    if expected_count and fetched_count == 0:
+        return f"{kind} fetch returned 0 open tasks — rate-limit flake suspected"
+    if missing_count > 2 and missing_count > 0.3 * expected_count:
+        return (f"{missing_count}/{expected_count} {kind} habits 'missing' in "
+                "one run — API flake suspected, not mass deletion")
+    return None
+
+
+def find_duplicates(open_contents: list[str]) -> list[str]:
+    """Normalized names carried by MORE than one open card. The checksum
+    could never see duplicates (any one match counts a habit present), so
+    recreation-burst leftovers accumulated silently. Warn-only."""
+    counts: dict[str, int] = {}
+    for c in open_contents:
+        n = norm_name(c)
+        n = norm_name(ALIASES.get(n, n))
+        if n:
+            counts[n] = counts.get(n, 0) + 1
+    return sorted(n for n, k in counts.items() if k >= 2)
+
+
 def weekday_warnings(expected: list[dict], tasks: list[dict]) -> list[str]:
     """Warn when a card's recurrence day contradicts the sheet's row-3 day.
     tasks: [{content, due_string}]. "2 "-prefixed headers are monthly-notation
@@ -172,6 +210,36 @@ def weekday_warnings(expected: list[dict], tasks: list[dict]) -> list[str]:
                 warnings.append(
                     f"{e['header']}: sheet says {want} (row 3 = {e['day']}), "
                     f"card recurs '{ds}'")
+    return warnings
+
+
+def points_mismatches(expected: list[dict], tasks: list[dict]) -> list[str]:
+    """Warn when a present card's [N] doesn't match the sheet's row-5
+    expected points. Variable-rate columns (row 5 = a rate formula, e['pts']
+    is None) are skipped — their points are computed from duration at
+    completion, not fixed. Warn-only, same as weekday_warnings: a mismatch
+    could mean either side is stale, so the fix is a human decision
+    (regression 2026-07-28: '1 xk87' sheet said [45], card silently drifted
+    to [20] weeks earlier and nothing noticed — existence-only matching
+    never compares the bracketed number)."""
+    by_norm: dict[str, list[str]] = {}
+    for t in tasks:
+        n = norm_name(t.get("content", ""))
+        n = norm_name(ALIASES.get(n, n))
+        by_norm.setdefault(n, []).append(t.get("content", ""))
+    warnings = []
+    for e in expected:
+        if e["pts"] is None:
+            continue
+        for content in by_norm.get(norm_name(e["header"]), []):
+            m = re.search(r"\[(\d+(?:\.\d+)?)\]", content)
+            if not m:
+                continue
+            card_pts = float(m.group(1))
+            if card_pts != e["pts"]:
+                warnings.append(
+                    f"{e['header']}: sheet expects [{e['pts']:g}], "
+                    f"card has [{card_pts:g}] ({content!r})")
     return warnings
 
 
@@ -347,7 +415,12 @@ def main() -> int:
         daily_tasks = fetch_label_tasks(token, "0neon") + fetch_label_tasks(token, "夜neon")
         missing = vdh.compute_missing(manifest, [t["content"] for t in daily_tasks])
         recreated = []
-        if args.fix:
+        skip_daily = recreate_guard("daily", len(daily_tasks),
+                                    len(manifest["habits"]), len(missing))
+        if skip_daily:
+            emit_alert("checksum_recreate_skipped", skip_daily)
+            report.setdefault("recreate_skipped", {})["daily"] = skip_daily
+        if args.fix and not skip_daily:
             for key in missing:
                 try:
                     create_task(token, vdh.recreate_payload(manifest["habits"][key]))
@@ -370,8 +443,15 @@ def main() -> int:
         contents = [t["content"] for t in weekly_tasks]
         present, missing_w = match_weekly(expected, contents)
         warnings = weekday_warnings(expected, weekly_tasks)
+        pts_warnings = points_mismatches(expected, weekly_tasks)
+        dupes = find_duplicates(contents)
         recreated_w = []
-        if args.fix:
+        skip_weekly = recreate_guard("weekly", len(weekly_tasks),
+                                     len(expected), len(missing_w))
+        if skip_weekly:
+            emit_alert("checksum_recreate_skipped", skip_weekly)
+            report.setdefault("recreate_skipped", {})["weekly"] = skip_weekly
+        if args.fix and not skip_weekly:
             for e in missing_w:
                 try:
                     create_task(token, weekly_create_payload(e))
@@ -382,13 +462,19 @@ def main() -> int:
             "checked": len(expected), "present": len(present),
             "missing": [e["header"] for e in missing_w],
             "recreated": recreated_w, "weekday_warnings": warnings,
+            "points_mismatches": pts_warnings,
+            "duplicates": dupes,
         }
+        if dupes:
+            emit_alert("weekly_habit_duplicate", ", ".join(dupes))
         if missing_w:
             emit_alert("weekly_habit_missing",
                        f"{', '.join(e['header'] for e in missing_w)}"
                        + (" (recreated)" if recreated_w else ""))
         for w in warnings:
             emit_alert("weekly_weekday_mismatch", w)
+        for w in pts_warnings:
+            emit_alert("weekly_points_mismatch", w)
 
     try:
         REPORT.parent.mkdir(parents=True, exist_ok=True)
@@ -403,6 +489,8 @@ def main() -> int:
         print(f"weekly: {w.get('checked', '-')} checked, "
               f"missing: {w.get('missing') or 'none'}")
         for warn in w.get("weekday_warnings", []):
+            print(f"  ⚠ {warn}")
+        for warn in w.get("points_mismatches", []):
             print(f"  ⚠ {warn}")
     else:
         print(json.dumps(report, ensure_ascii=False))

@@ -54,9 +54,14 @@ def test_short_name_not_falsely_matched_as_substring():
     assert "0g" in vdh.compute_missing(MANIFEST, present)
 
 
-def test_recreate_payload_carries_full_spec_and_auto_marks():
+def test_recreate_payload_carries_full_spec_with_clean_name():
+    # No 😈 in the content (2026-07-26: "😈 1st hci" missed the 0n header on
+    # completion, mis-routing the habit's write). Provenance lives in the
+    # description instead.
     body = vdh.recreate_payload(MANIFEST["habits"]["0g"])
-    assert body["content"] == "😈 0g (4) [8]"        # 😈 marks auto-generated
+    assert body["content"] == "0g (4) [8]"
+    assert "😈" not in body["content"]
+    assert body["description"].startswith("auto-recreated by validate-daily-habits")
     assert body["due_string"] == "every day"        # preserves recurrence
     assert body["labels"] == ["0neon", "g245"]
     assert body["priority"] == 4
@@ -99,3 +104,18 @@ def test_live_manifest_is_valid_and_nonempty():
         assert h.get("match"), f"{key} missing 'match'"
         assert h.get("content"), f"{key} missing 'content'"
         assert h.get("due_string"), f"{key} missing 'due_string' (recurrence)"
+
+
+def test_na_today_reads_dtd_deleted_names(tmp_path, monkeypatch):
+    """A habit deleted from dtd (= N/A for today) lands in the day's NA file;
+    na_today() returns its bare name so --fix won't resurrect the card the
+    same day. Missing file → empty set (the common case)."""
+    import datetime
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert vdh.na_today() == set()
+    na_dir = tmp_path / ".cache/jm"
+    na_dir.mkdir(parents=True)
+    today = datetime.date.today().isoformat()
+    (na_dir / f"habits-na-{today}.json").write_text(
+        json.dumps(["cpap", "ibx s897"]))
+    assert vdh.na_today() == {"cpap", "ibx s897"}

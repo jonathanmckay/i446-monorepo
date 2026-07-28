@@ -26,7 +26,7 @@ Usage:
     nohup python3 meeting-daemon.py &      # background
     launchctl load ~/Library/LaunchAgents/com.mckay.meeting-daemon.plist
 
-State: ~/.claude/skills/d357/state.json (shared with /d357 skill)
+State: ~/.local/state/jm/d357-state.json (shared with /d357 skill)
 Log:   /tmp/meeting-daemon.log
 """
 
@@ -45,8 +45,14 @@ from pathlib import Path
 POLL_INTERVAL = 60  # seconds
 CANCEL_TIMEOUT = 5  # seconds
 MEETING_DIR = Path(__file__).parent
-STATE_FILE = Path.home() / ".claude/skills/d357/state.json"
-PENDING_FILE = Path.home() / ".claude/skills/d357/pending-files.jsonl"
+# Canonical /d357 state path — MUST match the path the /d357 skill reads/writes
+# (~/.local/state/jm/d357-state.json). They diverged (daemon still used the old
+# ~/.claude/skills/d357/state.json), so the daemon's is_recording() check never
+# saw a skill-started recording and would launch a DUPLICATE meet.py + Toggl
+# timer for a meeting the skill was already recording — competing timers, the
+# "d357 toggl timer doesn't stick" symptom (2026-07-12).
+STATE_FILE = Path.home() / ".local/state/jm/d357-state.json"
+PENDING_FILE = Path.home() / ".local/state/jm/d357-pending-files.jsonl"
 LOG_FILE = Path("/tmp/meeting-daemon.log")
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 AUDIO_SWITCH = Path.home() / "i446-monorepo/scripts/audio-switch.sh"

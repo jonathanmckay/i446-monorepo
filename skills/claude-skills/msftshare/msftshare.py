@@ -39,6 +39,9 @@ ONEDRIVE = Path(os.environ.get(
     str(Path.home() / "Library/CloudStorage/OneDrive-Microsoft")))
 SHARED_ROOT = ONEDRIVE / "vault-shared"
 STUB_MARKER = "msft-onedrive"
+# Sentinel that marks the auto-inserted "open the .docx" link line so re-runs
+# replace it in place instead of stacking duplicates.
+DOCX_LINK_SENTINEL = "<!-- msftshare:docx-link -->"
 # dirs not worth walking when resolving a bare name
 PRUNE = {".git", ".stversions", ".obsidian", ".trash", "node_modules",
          "i446-monorepo", "drive-main", "drive-fundraising-legal",
@@ -169,10 +172,33 @@ def fidelity_warnings(md_text: str):
 
 # --- pandoc ---------------------------------------------------------------
 
-def to_docx(src_md: Path, out_docx: Path):
+def strip_docx_link_line(body: str) -> str:
+    """Drop the auto-inserted 'Shared Word copy' banner line (and the blank
+    line it leaves behind) so it never round-trips into the .docx itself —
+    it's vault-navigation furniture, not document content. Idempotent/no-op
+    if the sentinel isn't present."""
+    lines = body.split("\n")
+    kept = [ln for ln in lines if DOCX_LINK_SENTINEL not in ln]
+    if len(kept) == len(lines):
+        return body
+    return "\n".join(kept).lstrip("\n")
+
+
+def to_docx_text(text: str, out_docx: Path):
+    """Convert markdown TEXT (not necessarily what's on disk) to docx via a
+    scratch temp file. Used so the banner-stripped version, not whatever the
+    vault file currently contains, is always what pandoc sees."""
+    import tempfile
     out_docx.parent.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(["pandoc", str(src_md), "-o", str(out_docx)],
-                       capture_output=True, text=True)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False,
+                                      encoding="utf-8") as tf:
+        tf.write(text)
+        tmp_path = tf.name
+    try:
+        r = subprocess.run(["pandoc", tmp_path, "-o", str(out_docx)],
+                           capture_output=True, text=True)
+    finally:
+        os.unlink(tmp_path)
     if r.returncode != 0:
         die(f"pandoc failed: {r.stderr.strip()}")
     if not out_docx.exists() or out_docx.stat().st_size == 0:
@@ -181,6 +207,21 @@ def to_docx(src_md: Path, out_docx: Path):
 
 def file_uri(p: Path) -> str:
     return "file://" + urllib.parse.quote(str(p))
+
+
+def ensure_body_docx_link(body: str, docx_path: Path, stem: str) -> str:
+    """Idempotently place a clickable link to the local .docx at the top of the
+    body, so the shared Word doc is findable from Obsidian (default mode records
+    only a frontmatter path otherwise, which you can't click). Replaces an
+    existing sentinel-marked line in place; else inserts at the top."""
+    link_line = (f"> 📄 **Shared Word copy:** [{stem}.docx]({file_uri(docx_path)})"
+                 f" · right-click in OneDrive → Copy link to share. {DOCX_LINK_SENTINEL}")
+    lines = body.split("\n")
+    for i, ln in enumerate(lines):
+        if DOCX_LINK_SENTINEL in ln:
+            lines[i] = link_line
+            return "\n".join(lines)
+    return link_line + "\n\n" + body.lstrip("\n")
 
 
 def update_index(doc: Path, name: str):
@@ -260,18 +301,27 @@ def main():
         return
 
     # ── Vault is the source of truth: (re)build the .docx shadow from it ─────
-    warns = fidelity_warnings(text)
-    to_docx(doc, docx_path)
+    # Build the docx from a banner-stripped copy so the "Shared Word copy"
+    # link line never round-trips into the Word doc, regardless of whether
+    # a prior run already baked it into the vault file on disk.
+    docx_body = strip_docx_link_line(body)
+    docx_source_text = assemble(fm, docx_body) if had_fm else docx_body
+    warns = fidelity_warnings(docx_source_text)
+    to_docx_text(docx_source_text, docx_path)
     out = [f"✓ shadow: {shadow_rel}  ({docx_path.stat().st_size // 1024} KB)"]
     for w in warns:
         out.append(f"  ⚠ {w}")
 
     if not msft:
-        # Default mode: vault stays source of truth; record the shadow pointer.
+        # Default mode: vault stays source of truth; record the shadow pointer
+        # AND inject a clickable link to the .docx into the body (frontmatter
+        # alone isn't clickable, so the Word doc would otherwise be unfindable).
         fm2 = list(fm)
         fm_set(fm2, "msft_shadow", shadow_rel)
-        doc.write_text(assemble(fm2, body), encoding="utf-8")
+        body2 = ensure_body_docx_link(body, docx_path, stem)
+        doc.write_text(assemble(fm2, body2), encoding="utf-8")
         out.append("  source of truth: vault (this file)")
+        out.append("  ↪ clickable link to the .docx added at the top of the doc")
         out.append("  → in OneDrive, right-click the .docx → Copy link to share "
                    "(wait for the cloud-sync badge to clear first)")
         print("\n".join(out))

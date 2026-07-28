@@ -53,6 +53,42 @@ def test_parse_empty():
     assert mod.parse_edits("   ") == (None, None, None)
 
 
+# ── bracketed points + retyped annotations must not duplicate ──
+# Bug 2026-07-24: ctrl-g "Matt Booty Instagram photos [20]" on a task
+# "…photos (15) [15]" produced "…photos [20] (15) [15]" — the display-syntax
+# [20] was treated as name text and the old tail appended after it.
+
+def test_parse_bracketed_points_token():
+    mod = _load()
+    assert mod.parse_edits("[20]") == (None, None, 20)
+
+
+def test_parse_name_with_bracketed_points():
+    mod = _load()
+    assert mod.parse_edits("Matt Booty Instagram photos [20]") == \
+        ("Matt Booty Instagram photos", None, 20)
+
+
+def test_full_line_retype_replaces_points_without_duplicating():
+    mod = _load()
+    orig = "see Matt booty Instagram photos (15) [15]"
+    name, _dom, pts = mod.parse_edits("Matt Booty Instagram photos [20]")
+    out = mod.set_name(orig, name)
+    out = mod._pf.set_points(out, pts)
+    assert out == "Matt Booty Instagram photos (15) [20]"
+
+
+def test_set_name_typed_annotation_overrides_same_kind_tail():
+    # Retyping the (N) inline replaces the preserved (N); other kinds survive.
+    mod = _load()
+    assert mod.set_name("call dad (5) [10]", "ring dad (30)") == "ring dad (30) [10]"
+
+
+def test_set_name_nonnumeric_tail_annotations_survive():
+    mod = _load()
+    assert mod.set_name("ship it (5) [0G]", "ship it now") == "ship it now (5) [0G]"
+
+
 # ── set_name preserves trailing annotations ──
 
 def test_set_name_keeps_annotations():
@@ -86,6 +122,48 @@ def test_main_rename_clears_stale_short(tmp_path, monkeypatch):
     task = json.loads(cf.read_text())["0neon"][0]
     assert task["content"] == "brand new name [10]"
     assert "short" not in task, "stale Haiku short name must be cleared on rename"
+
+
+def test_main_rename_to_long_name_regenerates_short(tmp_path, monkeypatch):
+    # Bug 2026-07-28: renaming a task to something too long for dtd (e.g. "JY
+    # and Florencia...") dropped the stale short but never generated a NEW
+    # one — the row just fell back to fzf's raw middle-truncation until
+    # whenever the next full --refresh-cache happened to run, unlike every
+    # other long task, which gets shortened by that same refresh pass.
+    mod = _load()
+    cf = _cache(tmp_path, content="call dad [10]", labels=("i9",))
+    mod._df._api = lambda *a, **k: None
+    long_name = "JY and Florencia sync on the Q3 roadmap and staffing plan"
+    calls = []
+
+    def fake_shorten_tasks(tasks):
+        calls.append(tasks)
+        return {t["id"]: "JY/Florencia Q3 sync" for t in tasks}
+
+    monkeypatch.setattr(mod._short, "shorten_tasks", fake_shorten_tasks)
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "call dad", long_name, str(cf)])
+    assert mod.main() == 0
+
+    # shorten_tasks was called with the task's NEW (post-rename) content.
+    assert calls and calls[0][0]["id"] == "42"
+    assert long_name in calls[0][0]["content"]
+
+    task = json.loads(cf.read_text())["0neon"][0]
+    assert task.get("short") == "JY/Florencia Q3 sync", (
+        "a rename that crosses the length cap must get a fresh short immediately")
+
+
+def test_main_rename_to_short_name_still_clears_old_short(tmp_path, monkeypatch):
+    # Companion case: renaming to something short must still drop the stale
+    # short (shorten_tasks correctly returns nothing for short-enough prose).
+    mod = _load()
+    cf = _cache(tmp_path, content="old long name [10]", labels=("i9",), short="old shrt")
+    mod._df._api = lambda *a, **k: None
+    monkeypatch.setattr(mod._short, "shorten_tasks", lambda tasks: {})
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "old long name", "brand new name", str(cf)])
+    assert mod.main() == 0
+    task = json.loads(cf.read_text())["0neon"][0]
+    assert "short" not in task
 
 
 def test_main_applies_name_domain_points(tmp_path, monkeypatch):

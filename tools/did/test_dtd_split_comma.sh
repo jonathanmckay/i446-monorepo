@@ -29,8 +29,11 @@ else
   exit 1
 fi
 
-# 2. The did-fast --points-only call must use the sanitized name, not clean
-if echo "$SPLIT_BLOCK" | grep -q "f'{safe_name} \[{pts_today}\] {label_arg}'"; then
+# 2. The did-fast --points-only call must use the sanitized name, not clean.
+# Points are wrapped in open_b/close_b (not a hardcoded [N]) since 2026-07-28
+# so a split preserves {N} (0g) vs [N] (domain) style — see
+# test_dtd_split_curly_points.sh for that half of the contract.
+if echo "$SPLIT_BLOCK" | grep -qF "f'{safe_name} {open_b}{pts_today}{close_b} {label_arg}'"; then
   echo "PASS: did-fast call uses the sanitized name"
 else
   echo "FAIL: did-fast --points-only call must use safe_name"

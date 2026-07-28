@@ -76,7 +76,7 @@ Daily ritual review not done. Run now? (y/skip)
 
 ### Step 3: Check -1g for current block
 
-Read the build order file (`~/vault/g245/build-order.md`). Find the `## -1₲` section. Determine the current 2h block from wall clock time:
+Read the build order file (`~/vault/g245/5e-1/build-order.md`). Find the `## -1₲` section. Determine the current 2h block from wall clock time:
 
 | Block | Local Time | 地支 |
 |-------|-----------|------|

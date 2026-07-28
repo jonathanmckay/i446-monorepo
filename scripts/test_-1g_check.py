@@ -95,11 +95,11 @@ def test_goals_found_under_enriched_header(tmp_path):
     trailing decoration and must still parse."""
     body = """## -1₲
 
-- 巳 ☀️ ✅ 🎯 📧 (158min) ⏱️ ⏰ (105min)
+- 巳 ☀️ ✅ 🎯 📧 (158min) ⏱️ 😈 (105min)
     - [x] tasks down a bit {5}
     **Time**
     - 08:20-08:53 xk20 @xk87
-- 午 (129min) 🎯 ⏰
+- 午 (129min) 🎯 😈
     - [ ] enjoy the meetings {5}
 """
     p = _write_build_order(tmp_path, body)

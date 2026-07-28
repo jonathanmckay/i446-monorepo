@@ -139,6 +139,108 @@ def test_recurring_skip_mode_advances_without_copy(df, monkeypatch):
     assert "claimed_points" in out and "remaining_points" in out
 
 
+# ── dated copies for daily habits (0neon/夜neon) ───────────────────────────
+
+def test_habit_defer_copy_carries_origin_date(df, monkeypatch):
+    """Feature (2026-07-21): deferring a 0neon/夜neon habit stamps the deferred
+    occurrence's date into the one-off copy ("xk20 7.21 (20) [15]") so it stays
+    visibly distinct from the daily card the recurring parent regenerates."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 21)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "xk20 (20) [15]", "labels": ["0neon", "xk88"],
+            "due": {"is_recurring": True, "date": "2026-07-21",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, "2026-07-28", 2)
+    assert created[0] == "xk20 7.21 (20) [15]"
+    assert out["deferred_copy_content"] == "xk20 7.21 (20) [15]"
+
+
+def test_1neon_defer_copy_carries_origin_date(df, monkeypatch):
+    """Feature (2026-07-25): weekly (1neon) habits get dated defer copies too.
+    Undated copies are content-identical to the card the recurring parent
+    regenerates — two stale "AoS (15) [15]" copies caused the 2026-07-24
+    same-name dtd mess."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 20)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "AoS (15) [15]", "labels": ["1neon", "xk88"],
+            "due": {"is_recurring": True, "date": "2026-07-20",
+                    "string": "every Saturday"}}
+    out = df.handle_recurring(task, "2026-07-27", 2)
+    assert created[0] == "AoS 7.20 (15) [15]"
+    assert out["deferred_copy_content"] == "AoS 7.20 (15) [15]"
+
+
+def test_non_habit_recurring_copy_name_unchanged(df, monkeypatch):
+    """Only daily habits get the date stamp — other recurring defers keep the
+    copy's name identical to the parent."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return FRI
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "hcmr (15) [10]", "labels": ["g245"],
+            "due": {"is_recurring": True, "date": "2026-06-05",
+                    "string": "every Friday"}}
+    out = df.handle_recurring(task, "2026-06-08", 2)
+    assert created[0] == "hcmr (15) [10]"
+    assert out["deferred_copy_content"] == "hcmr (15) [10]"
+
+
+def test_habit_skip_mode_creates_no_dated_copy(df, monkeypatch):
+    """Skip mode ('0'/blank) on a habit still creates no copy at all."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 21)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "xk22 (20) [15]", "labels": ["0neon"],
+            "due": {"is_recurring": True, "date": "2026-07-21",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, "ignored", 2, skip_copy=True)
+    assert len(created) == 1 and created[0].startswith("deferred:")
+    assert out["deferred_copy_content"] is None
+
+
+@pytest.mark.parametrize("content,expected", [
+    ("xk20 (20) [15]", "xk20 7.21 (20) [15]"),      # date before annotations
+    ("xk20 [15] (20)", "xk20 7.21 [15] (20)"),      # order-agnostic
+    ("早起 {5}", "早起 7.21 {5}"),                    # {N} annotation
+    ("xk20", "xk20 7.21"),                           # bare name → append
+])
+def test_dated_copy_content_insertion(df, content, expected):
+    assert df._dated_copy_content(content, date(2026, 7, 21)) == expected
+
+
 def test_auto_sentinel_never_reaches_resolve_target(df):
     """main() must strip the dtd 'auto' sentinel before resolve_target, which
     passes unknown strings through — Todoist would get due_date='auto'."""
@@ -190,3 +292,72 @@ def test_find_task_single_substring_match_unchanged(df, monkeypatch):
     tasks = [{"id": "9", "content": "call dad (20) [20]"}]
     monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
     assert df.find_task("call dad")["id"] == "9"
+
+
+# ── exact DUPLICATES (same content) must not fail the defer ──────────────────
+# Regression (2026-07-12): "give kids allowance" existed twice — a recurring
+# "every friday" parent + a stale non-recurring one-off copy, both overdue and
+# IDENTICAL in content. find_task found two EXACT matches and sys.exit'd
+# ("multiple matches"), so the defer failed, dtd rolled back its optimistic
+# hide, and the task kept reappearing. find_task must now resolve rather than
+# bail, preferring the recurring series.
+
+def test_find_task_exact_duplicates_resolve_to_recurring(df, monkeypatch):
+    tasks = [
+        {"id": "copy", "content": "give kids allowance (5) [10]",
+         "due": {"is_recurring": False}},
+        {"id": "series", "content": "give kids allowance (5) [10]",
+         "due": {"is_recurring": True, "string": "every friday"}},
+    ]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    t = df.find_task("give kids allowance (5) [10]")
+    assert t["id"] == "series"  # prefer the recurring parent, don't sys.exit
+
+
+def test_find_task_exact_duplicates_all_nonrecurring_take_first(df, monkeypatch):
+    tasks = [
+        {"id": "a", "content": "give kids allowance (5) [10]", "due": {}},
+        {"id": "b", "content": "give kids allowance (5) [10]", "due": {}},
+    ]
+    monkeypatch.setattr(df, "_fetch_tasks", lambda filt: tasks)
+    assert df.find_task("give kids allowance (5) [10]")["id"] == "a"
+
+
+# ── id-based resolution (dtd's collision-proof path) ─────────────────────────
+
+def test_find_task_by_id_fetches_exact_task_via_get(df, monkeypatch):
+    calls = {}
+    def fake_api(method, path, body=None, timeout=15.0):
+        calls["method"], calls["path"] = method, path
+        return {"id": "6h33w6W83VJG5wMw",
+                "content": "give kids allowance (5) [10]", "due": {}}
+    monkeypatch.setattr(df, "_api", fake_api)
+    t = df.find_task_by_id("6h33w6W83VJG5wMw")
+    assert t["id"] == "6h33w6W83VJG5wMw"
+    assert calls["method"] == "GET"
+    assert "/tasks/6h33w6W83VJG5wMw" in calls["path"]
+
+
+def test_find_task_by_id_exits_when_missing(df, monkeypatch):
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    with pytest.raises(SystemExit):
+        df.find_task_by_id("nope")
+
+
+def test_main_id_flag_routes_to_find_task_by_id(df):
+    import inspect
+    src = inspect.getsource(df.main)
+    assert '"--id"' in src, "main must accept an --id form"
+    assert "find_task_by_id(task_id)" in src, "main must resolve --id via find_task_by_id"
+
+
+def test_dtd_defer_binding_passes_id_not_name():
+    # The dtd ctrl-d binding must invoke defer-fast with --id "$1" (the fzf id
+    # field), not the name query — otherwise duplicate names re-introduce the
+    # ambiguity this whole change fixes.
+    dtd = (_HERE / "dtd.sh").read_text()
+    # dtd.sh's defer script lives in an unquoted heredoc, so the source keeps the
+    # `\$` escaping (`\$DEFER_FAST`, `\$1`).
+    # Since 2026-07-23 the defer script loops over a {+2} batch; each worker
+    # still resolves by id (\$tid, one loop element), never by name.
+    assert r'"\$DEFER_FAST" --id "\$tid"' in dtd

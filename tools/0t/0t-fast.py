@@ -242,15 +242,50 @@ def detect_night_hcmc(yesterday: date) -> int | None:
 
 
 def mark_night_hcmc(minutes: int, target_date: date) -> dict:
-    """Run did-fast.py to log night hcmc on the date the entry occurred (yesterday)."""
-    arg = f"night hcmc {minutes} {target_date.month}/{target_date.day}"
-    proc = subprocess.run(
-        ["python3", str(DID_FAST), arg],
-        capture_output=True, text=True, timeout=45,
-    )
-    if proc.returncode == 0:
-        return json.loads(proc.stdout)
-    return {"error": proc.stderr.strip()}
+    """Write auto-detected pre-sleep hcmc minutes to 0n "night hcmc" on the day
+    the entry OCCURRED, and only into an EMPTY cell.
+
+    Direct row-targeted write, not did-fast: did-fast's 0n path refuses past
+    dates ("posthoc flow"), which is why the old call routed through `today` —
+    and on 2026-07-24 a backfill run (`0t-fast.py 2026-07-22`) therefore
+    stamped 7/22's detected 30min onto 7/24's row, clobbering a manual 1.
+    The detection is a fallback; a manual /did night hcmc value always wins.
+    """
+    try:
+        sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+        from lib.neon import cols
+        col = cols.maybe_col("0n", "night hcmc") or "P"
+    except Exception:
+        col = "P"
+    script = f'''tell application "Microsoft Excel"
+    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
+    set targetRow to 0
+    repeat with r from 3 to 500
+        set cellDate to value of cell 3 of row r of theSheet
+        if cellDate is not missing value then
+            try
+                set m to (month of (cellDate as date)) as integer
+                set d to day of (cellDate as date)
+                if m = {target_date.month} and d = {target_date.day} then
+                    set targetRow to r
+                    exit repeat
+                end if
+            end try
+        end if
+    end repeat
+    if targetRow = 0 then return "ERROR: date {target_date.month}/{target_date.day} not found"
+    set prev to string value of range ("{col}" & targetRow) of theSheet
+    if prev = "" or prev = "0" then
+        set value of range ("{col}" & targetRow) of theSheet to {minutes}
+        return "OK: night hcmc={minutes} row=" & targetRow
+    end if
+    return "SKIPPED: manual value " & prev & " kept, row=" & targetRow
+end tell'''
+    res = ix_run(script, timeout=30.0)
+    out = res.stdout.strip()
+    if res.returncode != 0 or not out or out.startswith("ERROR"):
+        return {"error": out or res.stderr.strip()}
+    return {"write": out}
 
 
 def compute_sleep(yesterday: date, today: date) -> int:
@@ -447,7 +482,9 @@ def main():
     # 4. Detect hcmc right before sleep → /did night hcmc
     night_hcmc = detect_night_hcmc(yesterday)
     if night_hcmc and night_hcmc > 0:
-        nhcmc_result = mark_night_hcmc(night_hcmc, today)
+        # The detected entry happened on `yesterday` evening — record it there,
+        # never on today's row (backfill clobber, 2026-07-24).
+        nhcmc_result = mark_night_hcmc(night_hcmc, yesterday)
         output["night_hcmc"] = {"minutes": night_hcmc, "did": nhcmc_result}
         if "error" in nhcmc_result:
             failed = True

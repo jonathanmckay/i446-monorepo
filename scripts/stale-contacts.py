@@ -28,6 +28,7 @@ D359 = Path.home() / "vault/d359"
 REFRESH = Path.home() / "i446-monorepo/tools/d359/refresh_last_contact.py"
 API = "https://api.todoist.com/api/v1"
 AUTO_MARK = "😈"  # prefixes every auto-generated task
+DEFAULT_POINTS = 10  # [N] value on the default "Reach out to <name>" body
 
 # Days since last_contact before a contact is flagged overdue.
 THRESHOLDS = {
@@ -106,9 +107,10 @@ def overdue_contacts(today: date, d359_dir: Path = D359) -> list[dict]:
 def task_content(c: dict) -> str:
     """Build the task body. Custom `outreach_task` wins; else the default."""
     if c.get("outreach_task"):
-        body = c["outreach_task"]
+        body = c["outreach_task"]  # custom body sets its own points; left as-is
     else:
-        body = f"Reach out to {c['name']} (overdue {c['cadence']}: last contact {c['last_contact']})"
+        body = (f"Reach out to {c['name']} (overdue {c['cadence']}: "
+                f"last contact {c['last_contact']}) [{DEFAULT_POINTS}]")
     return f"{AUTO_MARK} {body}"
 
 

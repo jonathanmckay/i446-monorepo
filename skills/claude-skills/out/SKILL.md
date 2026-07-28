@@ -48,7 +48,7 @@ tell application "Microsoft Excel"
     -- find today's row
     set today to "M/D"
     set todayRow to 0
-    repeat with i from 2 to 200
+    repeat with i from 2 to 500
         if (string value of range ("B" & i) of ws) = today then
             set todayRow to i
             exit repeat

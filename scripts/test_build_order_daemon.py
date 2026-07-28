@@ -40,16 +40,17 @@ def test_add_12_logs_verify_result():
 
 
 def test_osascript_error_returns_failed():
-    """When osascript returns non-zero, neon_add_score_to_p must return FAILED."""
+    """When the excel client reports a failed write, neon_add_score_to_p must
+    return FAILED (it used to check osascript returncode directly)."""
     src = DAEMON.read_text(encoding="utf-8")
     idx = src.index("def neon_add_score_to_p")
     next_def = src.index("\ndef ", idx + 1)
     func_body = src[idx:next_def]
     assert "FAILED" in func_body, (
-        "neon_add_score_to_p must return FAILED on osascript error"
+        "neon_add_score_to_p must return FAILED on a failed client write"
     )
-    assert "returncode" in func_body, (
-        "neon_add_score_to_p must check osascript returncode"
+    assert 'get("ok")' in func_body, (
+        "neon_add_score_to_p must check the client response's ok flag"
     )
 
 
@@ -128,7 +129,7 @@ def _load_daemon():
 
 def test_marker_earned_rejects_stale_daemon_marker():
     mod = _load_daemon()
-    line = "- 巳 🎯 ⏰"
+    line = "- 巳 🎯 😈"
     # Live says no goals today → stale 🎯 must not earn
     assert mod._marker_earned("🎯", line, {"🎯": False}) is False
     # Live confirms goals → earns
@@ -156,7 +157,7 @@ def test_marker_earned_legacy_trust_when_live_none():
 def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
     mod = _load_daemon()
     build = tmp_path / "build.md"
-    # ⏰ (fired stamp) is written in Phase 3, after scoring, so the header has
+    # 😈 (fired stamp) is written in Phase 3, after scoring, so the header has
     # only the sub-habit markers at score time.
     build.write_text(
         "## -1₲\n\n"
@@ -192,10 +193,10 @@ def test_block_has_goals_rejects_whitespace_only_bullet(tmp_path, monkeypatch):
     assert mod._block_has_goals("辰") is True
 
 
-def test_strip_unearned_markers_removes_phantom_but_guards_none(tmp_path, monkeypatch):
-    """_strip_unearned_markers drops a daemon-owned marker the live data says
-    wasn't earned (e.g. a phantom ✅), never touches ☀️/📧, and is a no-op when
-    live is None (an API failure must not destroy a genuinely-earned mark)."""
+def test_strip_unearned_markers_removes_phantom_goal_but_guards_none(tmp_path, monkeypatch):
+    """_strip_unearned_markers drops GOAL_MARKER (🎯) when the live data says it
+    wasn't earned, never touches ☀️/📧, and is a no-op when live is None (an API
+    failure must not destroy a genuinely-earned mark)."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     original = (
@@ -210,31 +211,60 @@ def test_strip_unearned_markers_removes_phantom_but_guards_none(tmp_path, monkey
     mod._strip_unearned_markers("辰", None)
     assert build.read_text(encoding="utf-8") == original
 
-    # ✅ not earned, 🎯 earned → strip ✅ only; keep ☀️ (no validator) + 🎯
-    mod._strip_unearned_markers("辰", {"🎯": True, "⏱️": False, "✅": False})
+    # 🎯 not earned → strip 🎯 only; ✅ stays even though its own live check is
+    # False too (2026-07-13 OR redesign: ⏱️/✅ are no longer daemon-strippable —
+    # a manual completion may have earned them independently of the auto-check,
+    # so a failing auto-check must never erase them). ☀️ has no validator either.
+    mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False})
     line = next(l for l in build.read_text(encoding="utf-8").split("\n")
                 if l.startswith("- 辰"))
-    assert "✅" not in line and "☀️" in line and "🎯" in line
+    assert "🎯" not in line and "☀️" in line and "✅" in line
 
     # dry_run leaves the file untouched
     build.write_text(original, encoding="utf-8")
-    mod._strip_unearned_markers("辰", {"🎯": True, "⏱️": False, "✅": False},
+    mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False},
                                 dry_run=True)
     assert build.read_text(encoding="utf-8") == original
 
 
+# ── OR redesign: ⏱️/✅ are earned by manual completion OR the auto-check ─────
+# Bug: -1t/-1l were "auto"-only — completing their card did nothing (no stamp,
+# no P credit); the daemon's Toggl/Todoist auto-check was the sole path. Users
+# who genuinely did the work but whose real tasks lacked [N]/{N} (or whose
+# Toggl categorization missed the threshold) never earned the marker even
+# though they manually confirmed it. Fix: header presence alone earns ⏱️/✅
+# (like ☀️/📧 always have) — the daemon's auto-check still WRITES the marker
+# when it independently passes, but a failing auto-check no longer strips a
+# marker manual completion already wrote. Only 🎯 (GOAL_MARKER) keeps the old
+# live-gated/strippable behavior.
+
+def test_marker_earned_ors_manual_completion_with_failing_auto_check():
+    mod = _load_daemon()
+    # ✅ manually stamped, but the daemon's own auto-check for this block fails
+    # (e.g. no [N]/{N}-pointed task completed in the window) — must still earn.
+    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
+    assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is True
+    # Absent marker never earns regardless of live.
+    assert mod._marker_earned("✅", "- 巳", {"✅": True}) is False
+
+
+def test_daemon_owned_markers_excludes_toggl_and_todoist():
+    mod = _load_daemon()
+    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER}
+
+
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     """Regression (2026-06-12): enrich writes mid-line annotations on block
-    headers (`- 辰 (25min)   (32min) ⏰`, `(15分, 163min)`). The old matcher
+    headers (`- 辰 (25min)   (32min) 😈`, `(15分, 163min)`). The old matcher
     stripped only one trailing `(Nmin)`, so name comparison failed and blocks
     scored 0/13 even with every ritual earned — -1₦ points never reached Neon."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     build.write_text(
         "## -1₲\n\n"
-        "- 卯 🎯 ⏱️ ⏰\n"
+        "- 卯 🎯 ⏱️ 😈\n"
         "    - [ ] wake up well\n"
-        "- 辰 (25min)   (32min) ⏰ ⏱️\n"
+        "- 辰 (25min)   (32min) 😈 ⏱️\n"
         "    - [ ] morning goal\n"
         "- 巳     (15分, 119min)  (15分, 163min) ☀️ ✅ 📧 🎯\n"
         "    - [x] grind list\n",
@@ -243,7 +273,7 @@ def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "BUILD_ORDER", build)
 
     # Name extraction is the first token, annotations ignored
-    assert mod._block_line_name("- 辰 (25min)   (32min) ⏰") == "辰"
+    assert mod._block_line_name("- 辰 (25min)   (32min) 😈") == "辰"
     assert mod._block_line_name("- 巳     (15分, 119min)  (15分, 163min) ☀️") == "巳"
 
     # Scoring matches annotated headers (was 0 before the fix)
@@ -254,7 +284,7 @@ def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
     # Goal lookup and marker write also match annotated headers
     assert mod._block_has_goals("辰") is True
     assert mod._write_block_marker("辰", "🎯") is True
-    assert "- 辰 (25min)   (32min) ⏰ ⏱️ 🎯" in build.read_text(encoding="utf-8")
+    assert "- 辰 (25min)   (32min) 😈 ⏱️ 🎯" in build.read_text(encoding="utf-8")
 
 
 # ── Reconcile: P must self-heal late markers, not drift below the header ──────
@@ -284,7 +314,7 @@ def test_reconcile_sets_total_over_all_fired_blocks(tmp_path, monkeypatch):
     # upto_hour=8 → fire hours {4,6,8}; 4 has no block, 6→卯(3), 8→辰(🎯+⏱️=6)
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)
     assert captured["total"] == 9, captured           # 3 + 6, not just one block
-    assert captured["formula"] == "=0+3+6"
+    assert captured["formula"] == "=3+6"
 
 
 def test_reconcile_is_idempotent(tmp_path, monkeypatch):
@@ -300,7 +330,7 @@ def test_reconcile_is_idempotent(tmp_path, monkeypatch):
     import datetime as dt
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 6)
     mod.reconcile_p_for_day(dt.date(2026, 6, 14), 6)
-    assert seen[0] == seen[1] == ("=0+6", 6)          # identical, no accumulation
+    assert seen[0] == seen[1] == ("=6", 6)          # identical, no accumulation
 
 
 def test_reconcile_picks_up_late_prayer(tmp_path, monkeypatch):
@@ -329,40 +359,63 @@ def test_reconcile_picks_up_late_prayer(tmp_path, monkeypatch):
     assert totals == [6, 7], totals                    # late ☀️ picked up (+1)
 
 
-def test_reconcile_preserves_goal_marker_on_past_blocks(tmp_path, monkeypatch):
-    """Regression (v52 code-review): if a user (or a next-day clear) removes a
-    checkbox line from an already-fired block, the reconcile's strip-phase
-    would revoke that block's 🎯 — silently erasing a legitimately-earned
-    marker. Past blocks must never have 🎯 revoked; the current in-progress
-    block is the only one where 🎯 freshness matches the file's goal freshness."""
-    mod = _load_daemon()
-    build = tmp_path / "build.md"
-    # 卯 fired at 06:00 with 🎯 (goal existed at fire time). Later the goal
-    # bullet was deleted (e.g. user tidied the file, or next-day clear).
-    build.write_text(
-        "## -1₲\n\n"
-        "- 卯 🎯 ☀️\n"     # 🎯 earned at 06:00
-        # NOTE: goal bullet removed
-        "- 辰 🎯\n"
-        "    - [ ] current goal\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(mod, "BUILD_ORDER", build)
-    # live for past 卯 returns 🎯=False (no goal in file anymore) but 🎯 was
-    # legitimately earned earlier — must not be stripped.
-    def fake_live(bn, fh, td):
-        return {mod.GOAL_MARKER: mod._block_has_goals(bn),
-                mod.TOGGL_MARKER: False, mod.TODOIST_MARKER: False}
-    monkeypatch.setattr(mod, "_live_for_block", fake_live)
-    monkeypatch.setattr(mod, "neon_set_p",
-                        lambda d, f, t, dry_run=False: "OK")
+# ── 2026-07-12 redesign: -1t/-1l measure the PREVIOUS block ──────────────────
+# Block X's ⏱️/✅ reward having RECORDED block X-1 (e.g. 戌's ⏱️ ⇔ 酉 fully
+# recorded), so both validators use the [fire-4, fire-2] window, not the block's
+# own [fire-2, fire]. 🎯 stays current-block (goals are set for X itself).
+
+def _func_body(src: str, name: str) -> str:
+    idx = src.index(f"def {name}")
+    nxt = src.index("\ndef ", idx + 1)
+    return src[idx:nxt]
+
+
+def test_auto_rituals_measure_previous_block_window():
+    src = DAEMON.read_text(encoding="utf-8")
+    for fn in ("evaluate_and_mark_block", "_live_for_block"):
+        body = _func_body(src, fn)
+        assert "_prev_block_window(hour, target_date)" in body, (
+            f"{fn} must derive the previous-block window via _prev_block_window "
+            f"(centralizes the 卯/sleep-gap wraparound exception)")
+        assert "_toggl_covers_block(prev_date, prev" in body, (
+            f"{fn} must pass the previous-block's own date to _toggl_covers_block")
+        assert "_todoist_l_satisfied(prev_date, prev" in body, (
+            f"{fn} must pass the previous-block's own date to _todoist_l_satisfied")
+
+
+def test_prev_block_window_is_the_prior_days_hai_for_mao():
+    # Regression (2026-07-19): 卯 fires at 06, and the generic hour-4/hour-2
+    # arithmetic landed on [02,04] — inside the unscored overnight sleep gap
+    # (22:00-04:00), always trivially "covered" by one sleep Toggl entry, so
+    # ⏱️/✅ for 卯 never signaled anything real (credited while asleep, having
+    # done nothing). 卯's real previous block is 亥 (20:00-22:00) of the PRIOR
+    # calendar day.
     import datetime as dt
-    # upto_hour=8 → 卯 is a past block (fired at 06); 辰 is the current one.
-    mod.reconcile_p_for_day(dt.date(2026, 6, 14), 8)
-    text = build.read_text(encoding="utf-8")
-    # Past 卯: 🎯 preserved despite live saying not-earned
-    line_mao = next(l for l in text.split("\n") if l.startswith("- 卯"))
-    assert "🎯" in line_mao, line_mao
-    # Current 辰: 🎯 also preserved (goal exists)
-    line_chen = next(l for l in text.split("\n") if l.startswith("- 辰"))
-    assert "🎯" in line_chen, line_chen
+    mod = _load_daemon()
+    today = dt.date(2026, 7, 19)
+    start, end, date = mod._prev_block_window(6, today)
+    assert (start, end, date) == (20, 22, dt.date(2026, 7, 18)), (
+        "卯's previous-block window must be 亥 (20-22) of the PRIOR day, "
+        f"got start={start} end={end} date={date}"
+    )
+
+
+def test_prev_block_window_is_unchanged_for_every_other_block():
+    # Every other fire hour must keep the plain same-day [hour-4, hour-2]
+    # window — only 卯 (hour=6) is the wraparound special case.
+    import datetime as dt
+    mod = _load_daemon()
+    today = dt.date(2026, 7, 19)
+    for fh in (8, 10, 12, 14, 16, 18, 20, 22):
+        start, end, date = mod._prev_block_window(fh, today)
+        assert (start, end, date) == (fh - 4, fh - 2, today), (
+            f"fire hour {fh} must use the plain same-day window"
+        )
+
+
+def test_goal_marker_stays_current_block():
+    # 🎯 (-1g) is a current-block ritual — validated on THIS block's goals, not
+    # the previous block's coverage.
+    src = DAEMON.read_text(encoding="utf-8")
+    body = _func_body(src, "_live_for_block")
+    assert "GOAL_MARKER: _block_has_goals(block_name)" in body

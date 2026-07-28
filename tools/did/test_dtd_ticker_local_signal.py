@@ -40,27 +40,28 @@ def test_read_timer_file_parses_running_entry(tmp_path):
     f = tmp_path / "dtd.timer"
     started = time.time() - 90
     f.write_text(f"work\t{started}\n")
-    start, desc, mtime = mod._read_timer_file(f)
+    start, desc, mtime, proj = mod._read_timer_file(f)
     assert abs(start - started) < 1
     assert desc == "work"
     assert mtime is not None
+    assert proj == ""  # 2-field legacy line → no project code
 
 
 def test_read_timer_file_empty_means_idle(tmp_path):
     mod = _load_ticker()
     f = tmp_path / "dtd.timer"
     f.write_text("")  # dtd clears the file on complete/stop
-    start, desc, mtime = mod._read_timer_file(f)
-    assert start is None and desc == ""
+    start, desc, mtime, proj = mod._read_timer_file(f)
+    assert start is None and desc == "" and proj == ""
     assert mtime is not None  # file exists, so a change is still detectable
 
 
 def test_read_timer_file_missing_is_safe(tmp_path):
     mod = _load_ticker()
-    start, desc, mtime = mod._read_timer_file(tmp_path / "nope.timer")
-    assert (start, desc, mtime) == (None, "", None)
+    start, desc, mtime, proj = mod._read_timer_file(tmp_path / "nope.timer")
+    assert (start, desc, mtime, proj) == (None, "", None, "")
     # None path (back-compat: no timer file arg) must not raise either.
-    assert mod._read_timer_file(None) == (None, "", None)
+    assert mod._read_timer_file(None) == (None, "", None, "")
 
 
 def test_read_timer_file_strips_parens(tmp_path):
@@ -68,7 +69,7 @@ def test_read_timer_file_strips_parens(tmp_path):
     mod = _load_ticker()
     f = tmp_path / "dtd.timer"
     f.write_text(f"call mom (家)\t{time.time()}\n")
-    _, desc, _ = mod._read_timer_file(f)
+    _, desc, _, _ = mod._read_timer_file(f)
     assert "(" not in desc and ")" not in desc
 
 

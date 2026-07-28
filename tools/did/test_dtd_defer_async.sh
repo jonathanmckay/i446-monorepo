@@ -18,6 +18,8 @@ tmp = tempfile.mkdtemp()
 paths = {k: os.path.join(tmp, k) for k in ("hdr", "removed", "pushed", "processed", "journal")}
 for p in paths.values():
     open(p, "w").close()
+removed_ids_path = paths["removed"] + ".ids"
+open(removed_ids_path, "w").close()
 
 # Simulate heredoc expansion (creation-time vars + \$ -> $)
 body = body.replace("$DTD_HDR", paths["hdr"]).replace("$DTD_REMOVED", paths["removed"])
@@ -43,11 +45,17 @@ open(script, "w").write(body)
 os.chmod(script, 0o755)
 
 # 1. Wrapper must NOT block on the 2s network stub
+# $1 is the fzf row's id in real usage (dtd passes {2}, the id field) — the
+# optimistic hide must key off THIS id, not the resolved task name, so two
+# tasks sharing a name can't hide each other (2026-07-13 regression: two
+# identical "AoS (15) [10]" tasks — deferring one hid both).
 t0 = time.time()
-subprocess.run([script, "test task (5) [10]"], timeout=10)
+subprocess.run([script, "test-task-id-1"], timeout=10)
 elapsed = time.time() - t0
 assert elapsed < 1.0, f"defer wrapper blocked for {elapsed:.1f}s — must be async"
-assert "test task" in open(paths["removed"]).read(), "optimistic hide missing"
+assert "test-task-id-1" in open(removed_ids_path).read(), "id-keyed optimistic hide missing"
+assert open(paths["removed"]).read() == "", (
+    "defer must not hide by name — a same-named sibling task would vanish too")
 assert "⏳" in open(paths["hdr"]).read(), "immediate status missing"
 assert open(paths["pushed"]).read().strip() == "x", "in-flight counter missing"
 
@@ -58,11 +66,12 @@ assert open(paths["processed"]).read().strip() == "x", "processed counter missin
 
 # 3. Failure rolls back the optimistic hide
 open(stub, "w").write('print("not json")\n')
-for p in (paths["hdr"], paths["removed"], paths["processed"]):
+for p in (paths["hdr"], paths["processed"]):
     open(p, "w").close()
-subprocess.run([script, "failing task (5) [10]"], timeout=10)
+open(removed_ids_path, "w").close()
+subprocess.run([script, "failing-task-id"], timeout=10)
 time.sleep(1.5)
-assert "failing task" not in open(paths["removed"]).read(), "failed defer left task hidden"
+assert "failing-task-id" not in open(removed_ids_path).read(), "failed defer left task hidden"
 assert "restored" in open(paths["hdr"]).read(), "failure header missing"
 
 print("PASS: defer is async (instant return, bg completion, failure rollback)")

@@ -58,10 +58,14 @@ def test_block_index_formula_uses_offset_4():
 
 
 def _extract_allowed_tools(func_name):
-    """Extract the --allowedTools string from a subprocess.run call in a function."""
+    """Extract the --allowedTools CSV from a function. Handles both the list-arg
+    form (["--allowedTools", "<tools>"], run_1g/run_did) and the shell-command
+    form where the tools are assigned to a variable and interpolated into a
+    `bash -c` string (spawn_1g_background, which chains claude → refresh-cache)."""
     tree = ast.parse(SRC.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            # Form 1: "--allowedTools" as a list element; value is the next elt.
             for child in ast.walk(node):
                 if isinstance(child, ast.List):
                     elts = [
@@ -72,6 +76,12 @@ def _extract_allowed_tools(func_name):
                         idx = elts.index("--allowedTools")
                         if idx + 1 < len(elts):
                             return elts[idx + 1]
+            # Form 2: the tools CSV assigned to a variable / interpolated into a
+            # shell string — return the string literal that holds the tool list.
+            for child in ast.walk(node):
+                if (isinstance(child, ast.Constant) and isinstance(child.value, str)
+                        and "mcp__todoist__add-tasks" in child.value):
+                    return child.value
     raise AssertionError(f"--allowedTools not found in {func_name}")
 
 
@@ -717,13 +727,13 @@ def test_snapshot_archives_yesterday_not_today():
 
 def test_block_name_strips_duration_suffix(tmp_path):
     """Regression: block headers with (Nmin) duration suffix caused goal lookup
-    to miss existing goals. _block_name_from_header('- 午 ☀️ 📧 ⏰ (134min)')
+    to miss existing goals. _block_name_from_header('- 午 ☀️ 📧 😈 (134min)')
     returned '午    (134min)' instead of '午', so goals_set was False even when
     goals were written under that block."""
     m = _load_two_n()
     # Direct function test
-    assert m._block_name_from_header("- 辰 ☀️ 📧 ⏰ (134min)") == "辰"
-    assert m._block_name_from_header("- 午 ☀️ 📧 ⏰ (90min)") == "午"
+    assert m._block_name_from_header("- 辰 ☀️ 📧 😈 (134min)") == "辰"
+    assert m._block_name_from_header("- 午 ☀️ 📧 😈 (90min)") == "午"
     assert m._block_name_from_header("- 申") == "申"
     assert m._block_name_from_header("- 亥 📧") == "亥"
 
@@ -731,12 +741,12 @@ def test_block_name_strips_duration_suffix(tmp_path):
     fake_bo = tmp_path / "bo.md"
     fake_bo.write_text(
         "## -1₲\n\n"
-        "- 辰 ☀️ 📧 ⏰ (134min)\n"
+        "- 辰 ☀️ 📧 😈 (134min)\n"
         "    - [ ] morning goal\n"
-        "- 巳 ☀️ 📧 ⏰ (124min)\n"
+        "- 巳 ☀️ 📧 😈 (124min)\n"
         "    - [x] done goal\n"
         "    - [ ] open goal\n"
-        "- 午 ☀️ 📧 ⏰\n"
+        "- 午 ☀️ 📧 😈\n"
         "    - [ ] afternoon goal\n"
     )
     with patch.object(m, "BUILD_ORDER", fake_bo):
@@ -748,20 +758,20 @@ def test_block_name_strips_duration_suffix(tmp_path):
 
 def test_block_name_strips_status_focus_timer_markers(tmp_path):
     """Regression: block headers can carry ✅ (done), 🎯 (focus), and ⏱️ (timer)
-    markers in addition to ☀️ 📧 ⏰. _block_name_from_header only stripped the
+    markers in addition to ☀️ 📧 😈. _block_name_from_header only stripped the
     latter three, so '- 午 ✅ 🎯' resolved to '午 ✅ 🎯' instead of '午'. That
     made write_block_goals fail to match the current block and report
     'failed to write goals to build order' even though the block existed."""
     m = _load_two_n()
     assert m._block_name_from_header("- 午 ✅ 🎯") == "午"
-    assert m._block_name_from_header("- 巳 ✅ 🎯 ⏱️ ⏰") == "巳"
-    assert m._block_name_from_header("- 辰 🎯 ⏰") == "辰"
+    assert m._block_name_from_header("- 巳 ✅ 🎯 ⏱️ 😈") == "巳"
+    assert m._block_name_from_header("- 辰 🎯 😈") == "辰"
 
     # End-to-end: writing goals to a block whose header has ✅/🎯 must succeed.
     fake_bo = tmp_path / "bo.md"
     fake_bo.write_text(
         "## -1₲\n\n"
-        "- 巳 ✅ 🎯 ⏱️ ⏰\n    - [ ] \n"
+        "- 巳 ✅ 🎯 ⏱️ 😈\n    - [ ] \n"
         "- 午 ✅ 🎯\n    - [ ] \n"
         "- 未\n    - [ ] \n"
     )
@@ -936,16 +946,23 @@ def test_1g_card_suppressed_when_asleep():
     """Structural: the -1g card (count + guard) must be gated on `not sleep_block`
     so a goal prompt never fires for a block the user slept through (overnight
     block-watcher restarts make the current block a sleep block, e.g. 卯 at
-    midnight)."""
+    midnight). The gate also admits `skip_comms` (rituals-only /inbound) so the
+    goal card still surfaces there when goals aren't set yet."""
     src = SRC.read_text()
     assert "sleep_block = is_asleep_now()" in src, (
         "main() must compute sleep_block from is_asleep_now()"
     )
     # Both the card-count and the card-guard conditions must include the gate.
-    assert src.count("if not goals_set and not sleep_block:") == 2, (
-        "both the -1g card count and the -1g card guard must check `not sleep_block`"
+    gate = "if not sleep_block and (not goals_set or skip_comms):"
+    assert src.count(gate) == 2, (
+        f"both the -1g card count and the -1g card guard must gate on `not "
+        f"sleep_block`; found {src.count(gate)} occurrence(s) of the gate"
     )
-    # The ungated form must be gone from those two sites.
-    assert "if not goals_set:\n            cards_needed.append" not in src, (
-        "ungated -1g card-count condition reintroduced"
+    # The card-count site must append -1g only behind that gate.
+    assert f'{gate}\n        cards_needed.append("-1g")' in src, (
+        "the -1g card-count append must sit directly under the sleep gate"
+    )
+    # The ungated pre-refactor form must be gone (it must admit skip_comms too).
+    assert "if not goals_set and not sleep_block:" not in src, (
+        "pre-skip_comms -1g gate reintroduced"
     )

@@ -31,6 +31,34 @@ m = _load()
 
 # ── append_block_goals: preserves existing goals + done state ───────────────
 
+def test_spawn_1g_background_refreshes_dtd_cache(monkeypatch):
+    """Regression (2026-07-01): a -1g goal set via inbound created the Todoist
+    task but never refreshed the dtd cache, so it didn't surface in dtd. The
+    spawned `claude -p /-1g` runs headless in an untrusted workspace, which
+    suppresses its Bash tool calls, so the skill's own Step-5 refresh never ran.
+    spawn_1g_background must therefore run `did-fast --refresh-cache` itself,
+    AFTER creating the goal, so dtd's cache-mtime watcher reloads it in."""
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, args, **kw):
+            captured["args"] = args
+            captured["kw"] = kw
+
+    monkeypatch.setattr(m.subprocess, "Popen", FakePopen)
+    m.spawn_1g_background("plan the day {10}")
+
+    args = captured["args"]
+    # spawn wraps the work in a shell so it can chain claude → refresh-cache.
+    cmd = args[-1] if isinstance(args, (list, tuple)) else str(args)
+    assert "/-1g" in cmd, "must still invoke the /-1g skill"
+    assert "--refresh-cache" in cmd, "must refresh the dtd cache after setting the goal"
+    assert cmd.index("--refresh-cache") > cmd.index("/-1g"), \
+        "refresh-cache must run AFTER the goal is created, not before"
+    assert captured["kw"].get("start_new_session") is True, \
+        "background job must stay detached so it survives the TUI exiting"
+
+
 def test_append_block_goals_preserves_existing_and_done_state(tmp_path, monkeypatch):
     bo = tmp_path / "build-order.md"
     bo.write_text(

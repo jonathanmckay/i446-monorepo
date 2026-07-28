@@ -338,6 +338,42 @@ class AliasTests(unittest.TestCase):
     def test_unknown_passthrough(self):
         self.assertEqual(expand_alias("some random habit"), ["some random habit"])
 
+    def test_evening_hcmc_aliases_night_hcmc_in_registry(self):
+        """Bug 2026-07-25: the daily 夜neon card is named "evening hcmc" but
+        the registry habit is "night hcmc" with no alias, so completing the
+        card in dtd routed step=unknown — the habit never landed in 0n col P
+        and the card's [15] was mislogged to 0分 as a one-off (double-count
+        once the 0n rollup fires). The registry must alias the card name."""
+        cfg = json.loads(
+            (_HERE.parent.parent / "config" / "tasks.json").read_text())
+        habit = cfg["habits"]["night-hcmc"]
+        self.assertIn("evening hcmc", habit.get("aliases", []))
+
+    def test_1_i447_weekly_routes_to_1n_not_the_daily_habit(self):
+        """Bug 2026-07-27: the 1n+ sheet grew a bare "i447" column whose weekly
+        card collided with the DAILY 0n habit "i447" — routing always hit the
+        0n branch, so the weekly card could never be completed and reappeared
+        forever. The card is now named "1 i447" with a registry alias."""
+        import subprocess
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "route.py"), "1 i447"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["step"], "1n+")
+        self.assertEqual(out.get("neon_col"), "AI")
+
+    def test_evening_hcmc_routes_to_0n_via_route_py(self):
+        """End-to-end through route.py against the live registry."""
+        import subprocess
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "route.py"), "evening hcmc"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["step"], "0n")
+        self.assertEqual(out.get("neon_col"), "P")
+
 
 class OverlapTests(unittest.TestCase):
     def test_full_overlap(self):
@@ -553,40 +589,26 @@ _DID_FAST = Path(__file__).parent / "did-fast.py"
 
 
 class FormulaAppendTests(unittest.TestCase):
-    """Regression: when a 0分 cell contains a literal number (e.g. '120')
-    instead of a formula (e.g. '=0+30+90'), the append logic produced
-    '120+15' which Excel treats as text, silently losing points.
-    Fix: prepend '=' when oldFormula doesn't start with '='."""
+    """2026-07-28: 0分 appends were migrated off raw AppleScript onto the
+    excel-http daemon (lib/neon/excel.batch_append via append_0fen_batch),
+    which normalizes the literal-cell / empty-cell / formula cases
+    server-side and journals every append in the audit ledger.
+    These tests pin the migration: the raw builders must not reappear
+    (test_no_raw_0fen_writes.py enforces the full ban)."""
 
     def setUp(self):
         self.src = _DID_FAST.read_text()
 
-    def _extract_func(self, name):
-        """Extract function body from source."""
-        start = self.src.index(f"def {name}(")
-        # Find next def at same indent level
-        rest = self.src[start:]
-        lines = rest.split("\n")
-        end = len(lines)
-        for i, line in enumerate(lines[1:], 1):
-            if line.startswith("def ") or (line.startswith("class ") and not line.startswith("    ")):
-                end = i
-                break
-        return "\n".join(lines[:end])
+    def test_raw_0fen_builders_removed(self):
+        self.assertNotIn("def build_0fen_script", self.src,
+                         "raw AppleScript 0分 batch builder must stay deleted")
+        self.assertNotIn("def build_1n_0fen_script", self.src,
+                         "raw AppleScript 1n+→0分 builder must stay deleted")
 
-    def test_0fen_script_handles_literal_cell(self):
-        func = self._extract_func("build_0fen_script")
-        self.assertIn('character 1 of oldFormula is not "="', func,
-                       "build_0fen_script must handle literal cell values (no = prefix)")
-        self.assertIn('"=" & oldFormula', func,
-                       "must prepend = when old value is a literal number")
-
-    def test_1n_0fen_script_handles_literal_cell(self):
-        func = self._extract_func("build_1n_0fen_script")
-        self.assertIn('character 1 of oldFormula is not "="', func,
-                       "build_1n_0fen_script must handle literal cell values (no = prefix)")
-        self.assertIn('"=" & oldFormula', func,
-                       "must prepend = when old value is a literal number")
+    def test_0fen_appends_go_through_daemon_batch(self):
+        self.assertIn("neon_excel.batch_append", self.src,
+                      "0分 appends must go through lib/neon/excel batch_append")
+        self.assertIn("def append_0fen_batch(", self.src)
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +794,96 @@ class HciLabelMapping(unittest.TestCase):
         self.assertEqual(r.fen_points, 26)
 
 
+class PastDatePreferredIdTests(unittest.TestCase):
+    """Regression (2026-07-19): "I've marked the ibx i9 tasks done twice but
+    they are still here."
+
+    A 0₦ habit match whose parsed target_date isn't today (e.g. dtd resolves
+    a stray "ibx i9 7/8 (10) [0]" Todoist task, and parse_input strips the
+    trailing "7/8" into target_date, leaving name="ibx i9" which matches the
+    0₦ header) used to ALWAYS route to needs_agent ("past date requires
+    posthoc flow") — no exceptions. That's fine for a live chat session (a
+    Claude agent catches agent_needed and runs the Step 6b posthoc flow by
+    hand), but dtd's background worker calls did-fast.py --task-id directly
+    with no agent watching: it just prints "?" and drops the item forever.
+    The user could complete the same stray task a hundred times and it would
+    never close, because the CLI path had no way to act on agent_needed.
+
+    Fix: when dtd passes a specific preferred_id, resolve that exact task and
+    close it directly (step="variable", fen_col=None so no Neon write) instead
+    of bailing to needs_agent. Only the preferred_id case changes; a bare
+    chat-session call (no preferred_id) must still get needs_agent so the
+    existing agent-fallback flow is untouched.
+    """
+
+    def setUp(self):
+        self.headers = {"0n": {"ibx i9": 23}, "1n": {}}
+        self.tq = {"0neon": [], "夜neon": [], "1neon": []}
+
+    def test_past_date_with_resolvable_preferred_id_closes_directly(self):
+        fake_task = {
+            "id": "STRAY1", "content": "ibx i9 7/8 (10) [0]",
+            "labels": ["i9"], "due": "2026-07-15",
+            "due_string": "2026-07-08", "recurring": False,
+        }
+        orig = _df_module._fetch_task_by_id
+        _df_module._fetch_task_by_id = lambda tid: fake_task if tid == "STRAY1" else None
+        try:
+            item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
+            results = _df_module.route_items(
+                [item], self.headers, self.tq, preferred_id="STRAY1")
+        finally:
+            _df_module._fetch_task_by_id = orig
+
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertNotEqual(r.step, "needs_agent",
+            "a resolvable preferred_id must not fall through to needs_agent — "
+            "dtd's worker has no agent to catch it and the task lingers forever")
+        self.assertIsNotNone(r.todoist_task)
+        self.assertEqual(r.todoist_task["id"], "STRAY1")
+        self.assertIsNone(r.fen_col, "past-date completion must not write Neon points")
+
+    def test_past_date_without_preferred_id_still_needs_agent(self):
+        # Unchanged behavior: a plain chat-session /did call with no task_id
+        # must still defer to the agent fallback.
+        item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
+        results = _df_module.route_items([item], self.headers, self.tq, preferred_id=None)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "needs_agent")
+
+    def test_past_date_with_unresolvable_preferred_id_falls_back_to_agent(self):
+        # preferred_id given but the fetch fails (task gone/network error) —
+        # must fail safe to needs_agent, not crash or silently no-op.
+        orig = _df_module._fetch_task_by_id
+        _df_module._fetch_task_by_id = lambda tid: None
+        try:
+            item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
+            results = _df_module.route_items(
+                [item], self.headers, self.tq, preferred_id="GHOST")
+        finally:
+            _df_module._fetch_task_by_id = orig
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "needs_agent")
+
+
+class VariableStepPosthocSkipsExistingTaskTests(unittest.TestCase):
+    """Step 6c must not fabricate a duplicate posthoc record for a "variable"
+    RouteResult that already carries a real todoist_task (the preferred_id
+    fast-close path above) — that item means "close this exact existing
+    task", not "log a brand-new posthoc for an activity with no task"."""
+
+    def test_variable_items_filter_excludes_todoist_task_set(self):
+        src = (Path(__file__).parent / "did-fast.py").read_text()
+        i = src.index("# 6c. Create posthoc Todoist tasks for variable items")
+        j = src.index("if variable_items:", i)
+        block = src[i:j]
+        self.assertIn('r.step == "variable" and r.todoist_task is None', block,
+            "the 6c variable_items filter must exclude items that already "
+            "carry a real todoist_task, or a resolved preferred_id closure "
+            "gets a spurious duplicate posthoc record on top of it")
+
+
 class BuildOrderCheckboxTests(unittest.TestCase):
     """Step 5e: completing a -1g goal should flip its build order checkbox."""
 
@@ -835,6 +947,56 @@ class ExactMatchTiebreakTests(unittest.TestCase):
             self.assertEqual(got["id"], "m5x2")
 
 
+class PreferredIdMissingFromBucket(unittest.TestCase):
+    """Regression (2026-07-24): three tasks shared the content "AoS (15) [15]"
+    (recurring 1neon parent + two overdue one-off copies). dtd completed one
+    copy by id, but the task-queue's 1neon bucket didn't contain that id, so
+    match_todoist_task silently fell back to the NAME match and returned the
+    recurring parent — the wrong instance; its future due date then tripped
+    the already-done-today close guard and nothing was closed at all.
+
+    When preferred_id is given but absent from the bucket, the matcher must
+    fetch that exact task from Todoist, never name-match a different one.
+    """
+
+    AOS_TASKS = [
+        {"content": "AoS (15) [15]", "id": "parent",
+         "due": {"is_recurring": True, "date": "2026-07-26"}},
+        {"content": "AoS (15) [15]", "id": "copy21",
+         "due": {"is_recurring": False, "date": "2026-07-21"}},
+    ]
+
+    def setUp(self):
+        self._orig_fetch = _df_module._fetch_task_by_id
+
+    def tearDown(self):
+        _df_module._fetch_task_by_id = self._orig_fetch
+
+    def test_preferred_id_in_bucket_short_circuits(self):
+        _df_module._fetch_task_by_id = lambda tid: self.fail("no fetch needed")
+        got = _df_module.match_todoist_task("AoS", self.AOS_TASKS,
+                                            preferred_id="copy21")
+        self.assertEqual(got["id"], "copy21")
+
+    def test_missing_preferred_id_fetches_exact_task(self):
+        fetched = {"content": "AoS (15) [15]", "id": "copy20",
+                   "due": {"is_recurring": False, "date": "2026-07-20"}}
+        calls = []
+        _df_module._fetch_task_by_id = lambda tid: (calls.append(tid), fetched)[1]
+        got = _df_module.match_todoist_task("AoS", self.AOS_TASKS,
+                                            preferred_id="copy20")
+        self.assertEqual(calls, ["copy20"])
+        self.assertEqual(got["id"], "copy20",
+                         "must return the fetched exact task, not a "
+                         "same-named bucket task")
+
+    def test_fetch_failure_falls_back_to_name_match(self):
+        _df_module._fetch_task_by_id = lambda tid: None
+        got = _df_module.match_todoist_task("AoS", self.AOS_TASKS,
+                                            preferred_id="gone")
+        self.assertIsNotNone(got, "name match remains the last resort")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -856,7 +1018,10 @@ def main() -> int:
         ExactMatchTiebreakTests,
         HciLabelMapping,
         DeferFlagParsingTests,
+        PastDatePreferredIdTests,
+        VariableStepPosthocSkipsExistingTaskTests,
         BuildOrderCheckboxTests,
+        PreferredIdMissingFromBucket,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

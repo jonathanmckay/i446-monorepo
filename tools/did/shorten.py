@@ -51,6 +51,21 @@ def split_estimates(content: str) -> tuple[str, str]:
     return prose, " ".join(tokens)
 
 
+AUTO_MARK = "😈"  # created-by-a-robot marker (see stale-contacts.py)
+
+
+def keep_auto_mark(content: str, display: str) -> str:
+    """A task whose content carries the 😈 automation marker must keep it in
+    the short display too — the whole point of the marker is that the USER can
+    tell a robot-made task at a glance (user 2026-07-21: 'Reach out to Jessica
+    Allen' rendered bare in dtd while the raw content had 😈). Haiku drops the
+    emoji when rewriting, and pre-fix sidecar/comment caches stored bare
+    shorts, so re-prefix at every lookup rather than only at generation."""
+    if content.startswith(AUTO_MARK) and not display.startswith(AUTO_MARK):
+        return f"{AUTO_MARK} {display}"
+    return display
+
+
 def _hash(content: str) -> str:
     # Fold PROSE_CAP into the key so changing the cap invalidates every cached
     # short (sidecar + Todoist comment) and names regenerate at the new width.
@@ -166,7 +181,7 @@ def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
         h = _hash(content)
         cached = sidecar.get(tid)
         if cached and cached.get("h") == h and cached.get("short"):
-            out[tid] = cached["short"]  # fast path, no network
+            out[tid] = keep_auto_mark(content, cached["short"])  # fast path, no network
         else:
             candidates.append((tid, prose, est, h))
 
@@ -177,12 +192,14 @@ def shorten_tasks(tasks: list[dict], max_new: int = 12) -> dict:
         # Use it verbatim — do NOT re-append `est` or the estimates double up.
         cached_display = _comment_lookup(tid, h)
         if cached_display:
-            return tid, h, cached_display, False
+            # prose (not content) carries the 😈 here — split_estimates only
+            # strips trailing estimate tokens, never the leading marker.
+            return tid, h, keep_auto_mark(prose, cached_display), False
         short_prose = _haiku_shorten(prose)
         if not short_prose:
             return None
         display = f"{short_prose} {est}".strip() if est else short_prose
-        return tid, h, display, True
+        return tid, h, keep_auto_mark(prose, display), True
 
     # Bound generation per run so a big first batch never stalls a post-/did
     # refresh; the rest fill in on later cycles. Run the network work in parallel.

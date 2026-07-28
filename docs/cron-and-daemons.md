@@ -34,7 +34,7 @@ Crontabs are per-machine: `crontab -e` on Straylight edits Straylight's, `ssh ix
 
 | Label | Schedule | Purpose |
 |---|---|---|
-| `com.jm.neon-lock-and-mark` | 2h (04-22 even) | Add +12 to -1₦ col P, mark block with ⏰ |
+| `com.jm.neon-lock-and-mark` | 2h (04-22 even) | Add +12 to -1₦ col P, mark block with 😈 |
 | `com.jm.build-order-archive` | daily | Archive yesterday's build order |
 | `com.jm.build-order-link` | periodic | Link d357 meetings into build order |
 | `com.jm.cc-bus` | event-driven | Claude Code event bus |

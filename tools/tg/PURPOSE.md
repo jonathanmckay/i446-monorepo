@@ -1,10 +1,10 @@
-# tg-tui: Purpose & Direction
+# janus: Purpose & Direction
 
 **One-line:** The single pane that answers "what is my state right now?" so I never have to open Chrome, Excel, or any other status app.
 
 ## Core question
 
-tg-tui should answer, at a glance: **am I on track right now?**
+janus should answer, at a glance: **am I on track right now?**
 
 That breaks into:
 
@@ -56,11 +56,11 @@ Once P1-P4 ship, evaluate what's still missing to fully replace opening Chrome/E
 - **Toggl hours total** for the day vs. waking hours elapsed
 - **Build order progress**: how many -1g blocks are done vs. planned
 
-The goal is zero app-switching for status. Content creation (writing emails, editing docs) still happens in other apps; tg-tui is read-only status + timer control.
+The goal is zero app-switching for status. Content creation (writing emails, editing docs) still happens in other apps; janus is read-only status + timer control.
 
 ## Ritual integration
 
-Completion events trigger spiritual prompts. When SIGUSR1 fires (task completed externally via `/did`), tg-tui flashes ☀️ in purple (`#aa00ff`) for 6 seconds. This reinforces the habit loop: **work → complete → pause → pray → next**. The flash is the cue to stop, breathe, and reconnect before picking up the next task.
+Completion events trigger spiritual prompts. When SIGUSR1 fires (task completed externally via `/did`), janus flashes ☀️ in purple (`#aa00ff`) for 6 seconds. This reinforces the habit loop: **work → complete → pause → pray → next**. The flash is the cue to stop, breathe, and reconnect before picking up the next task.
 
 ## Evolving toward task-centric
 
@@ -70,7 +70,7 @@ The 60-100 task daily inventory is the real bottleneck, not time tracking. The T
 - **Points accumulator**: Show today's total 分 in the header. Seeing the number climb is motivating.
 - **Smart next suggestion**: After stopping a timer, briefly flash the highest-value unstarted task. One key to accept.
 
-The end state: tg-tui is both the cockpit (status) and the control stick (task switching). dtd remains available for deep browsing/filtering, but the common path (pick next, start, complete, pick next) lives entirely in tg-tui.
+The end state: janus is both the cockpit (status) and the control stick (task switching). dtd remains available for deep browsing/filtering, but the common path (pick next, start, complete, pick next) lives entirely in janus.
 
 ## Non-goals
 

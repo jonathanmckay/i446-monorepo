@@ -47,7 +47,9 @@ def test_ritual_dispatch_refreshes_cache():
     i = body.find('"--ritual"')
     assert i != -1, "--ritual branch not found"
     # within the --ritual branch region, refresh_task_queue must be called
-    assert "refresh_task_queue()" in body[i:i + 600], \
+    # (block=True since 2026-06-30 so the cache write completes before return —
+    # a backgrounded refresh is torn down and dtd never reloads).
+    assert "refresh_task_queue(" in body[i:i + 600], \
         "--ritual must call refresh_task_queue() so dtd auto-reloads"
 
 

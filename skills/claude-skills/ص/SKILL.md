@@ -1,110 +1,34 @@
 ---
 name: "ص"
-description: "Log prayers to Neon 0n tab (AP column). No args: +1. With number: set total. Usage: /ص [count]"
+description: "Log prayers to Neon 0n tab (ص column). No args: +1. With number: set total. Usage: /ص [count]"
 user-invocable: true
 ---
 
 # Prayer Counter (/ص)
 
-Log salah count to Neon spreadsheet, column AP (ص) in the 0n sheet.
-
-## Behavior
-
-- **No arguments** (`/ص`): Increment today's value by 1.
-- **With a number** (`/ص 3`): Set today's value to that number (overwrites).
-
-## Argument parsing
-
-Before substituting `N` into the AppleScript, **normalize non-Latin numerals to ASCII digits**. AppleScript's `as number` only coerces `0-9`; passing `٨` (Arabic-Indic) or `八` (CJK) silently fails the write.
-
-| Script | Mapping |
-|---|---|
-| Arabic-Indic | `٠١٢٣٤٥٦٧٨٩` → `0123456789` |
-| Eastern Arabic-Indic (Persian) | `۰۱۲۳۴۵۶۷۸۹` → `0123456789` |
-| CJK | `零一二三四五六七八九` → `0123456789`; `十` → `10` |
-
-After normalization, validate with Python `int()` before passing to AppleScript. If parsing fails, abort with `ص: cannot parse <arg> as a number`.
+Log salah count to the ص column of the 0n sheet in Neon, then stamp the ☀️
+marker on the current 地支 block.
 
 ## Execution
 
-**Run on Ix via SSH heredoc** — the Neon workbook is open on Ix. Sheet name is `0n` (not `0₦`). Date column is C (M/D format).
-
-### Increment (+1)
-
-```bash
-ssh ix 'osascript <<EOF
-tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of active workbook
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
-    set todayRow to 0
-    repeat with i from 2 to 200
-        if (string value of cell ("C" & i) of theSheet) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow > 0 then
-        set theCell to cell ("AP" & todayRow) of theSheet
-        set oldVal to string value of theCell
-        if oldVal is "" or oldVal is missing value then
-            set val to 0
-        else
-            set val to oldVal as number
-        end if
-        set value of theCell to (val + 1)
-        save active workbook
-        return (val + 1) as text
-    else
-        return "no row for " & today
-    end if
-end tell
-EOF'
-```
-
-### Set to N
+**Always run the fast script.** Do NOT write AppleScript or reason about
+numerals/rows yourself; the script handles everything (non-Latin numeral
+normalization — Arabic-Indic `٠١٢٣٤٥٦٧٨٩`, Persian `۰۱۲۳۴۵۶۷۸۹`, CJK
+`零一二三四五六七八九`/`十` → `0123456789`, validated with `int()` — the
+excel-http daemon on ix with ssh fallback, date-row lookup, column resolution
+via neon-cols.json, and the local build-order ☀️ prayer marker):
 
 ```bash
-ssh ix 'osascript <<EOF
-tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of active workbook
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
-    set todayRow to 0
-    repeat with i from 2 to 200
-        if (string value of cell ("C" & i) of theSheet) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow > 0 then
-        set value of cell ("AP" & todayRow) of theSheet to N
-        save active workbook
-        return "N"
-    else
-        return "no row for " & today
-    end if
-end tell
-EOF'
+python3 ~/i446-monorepo/tools/did/salat-fast.py [count]
 ```
 
-Replace `N` with the user's argument.
+- **No arguments** (`/ص`): pass no args — increments today's value by 1.
+- **With a number** (`/ص 3`, `/ص ٣`): pass it verbatim — sets today's value.
 
-## Build-order prayer marker (always run after the AP write)
+Echo the script's one-line output (`ص: N`). Done. If it reports a failure
+(`ص: write failed — ...`), relay the error; if it notes the prayer marker
+failed, the count still landed — say so.
 
-After the Neon write succeeds, stamp the ☀️ صلاة marker on the current 地支 block
-in the build order so the prayer shows up in tg-tui, -2n/inbound, wakeup, and the
-1-1n heatmap (all of which read ☀️ from the build order, not from Neon AP):
+## Response Style
 
-```bash
-python3 ~/i446-monorepo/tools/did/prayer_marker.py
-```
-
-Run this **locally** (build-order.md lives in the local vault, not on Ix). It is
-idempotent — a second prayer in the same block won't duplicate the marker.
-
-## Output
-
-One line: `ص: N` (the new value after write).
+Minimal. One line. Do NOT explain. Do NOT ask for confirmation.

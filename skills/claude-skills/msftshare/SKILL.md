@@ -25,8 +25,8 @@ The helper does everything (resolve, convert, place, stub, index). Report its st
 - Converts the markdown to `.docx` via pandoc.
 - Writes it to `~/Library/CloudStorage/OneDrive-Microsoft/vault-shared/<vault-dir>/<name>.docx` (mirrors the vault folder path by default).
 - **Work-friendly destination:** set `msft_dest:` in the doc's frontmatter to a clean relative path under `vault-shared/` so personal vault codes (e.g. `h335/i9`) don't leak into the shared OneDrive tree. The last path segment becomes the Word doc name, the rest are folders. Example: `msft_dest: "Xbox Analytics/Analytics Deep Dives"` → `vault-shared/Xbox Analytics/Analytics Deep Dives.docx`. Must be relative (no leading `/` or `..`).
-- Records `msft_shadow:` in the vault doc's frontmatter.
-- Re-running refreshes the shadow.
+- Records `msft_shadow:` in the vault doc's frontmatter **and injects a clickable `file://` link to the `.docx` at the top of the doc body** (frontmatter alone isn't clickable, so the Word doc would otherwise be unfindable from Obsidian). The link line is marked with a `<!-- msftshare:docx-link -->` sentinel so re-runs replace it in place instead of duplicating.
+- Re-running refreshes the shadow and the link.
 - To actually share: in OneDrive, right-click the `.docx` → **Copy link** (wait for the sync badge to clear first). No Graph/enterprise access needed.
 
 **`/msftshare <doc> msft`** — flip source of truth to OneDrive.
@@ -41,6 +41,21 @@ The helper does everything (resolve, convert, place, stub, index). Report its st
 - **The sidecar is written and size-checked before the vault file is truncated** — the markdown is never lost in one step.
 - **Fidelity:** pandoc drops `![[embeds]]`, renders `[[wikilinks]]` as dead text, and can't resolve relative images. The helper warns when the source contains these; fix the source or accept the lossy share.
 - **Machine guard:** only runs on Straylight (where OneDrive-Microsoft is synced); errors clearly elsewhere.
+
+## Weekly pull + edit report (msftpull.py)
+
+`python3 ~/i446-monorepo/skills/claude-skills/msftshare/msftpull.py` — runs as
+Step 0-pre of `/1s` (weekly, interactive; launchd can't read CloudStorage due to
+TCC). For every `vault-shared/*.docx` it:
+- measures **coworker edit volume** (word-level diff vs last pull's snapshot),
+- **refreshes the `.md` sidecar** on flipped docs so AI always has a current
+  markdown mirror (flip-time original preserved once as `<name>.orig.md`),
+- **flags clobber risk** on vault-truth docs whose `.docx` diverged from the
+  vault source, with attribution (docx moved → coworker edits, don't re-share;
+  vault moved → stale shadow, re-share to refresh).
+
+Rolling report: `~/vault/i447/msftshare-pull-report.md` (newest first).
+State: `~/.local/state/jm/msftpull/`.
 
 ## To share the link with coworkers
 

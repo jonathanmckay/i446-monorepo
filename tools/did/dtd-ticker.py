@@ -8,10 +8,11 @@ over an HTTP server (`--listen`); we POST `change-footer(...)` with a locally
 computed elapsed time so nothing in the list is touched.
 
 dtd's own start/complete bindings write the running entry to a local timer file
-(`desc<TAB>start_epoch`, emptied on stop) the instant they fire. The ticker
+(`desc<TAB>start_epoch<TAB>task_id<TAB>project_code`, emptied on stop) the
+instant they fire. The ticker
 watches that file every tick (a cheap stat, no network) so a dtd-initiated
 start/switch/stop shows in the footer within ~0.1s. The Toggl API poll is kept
-only to RECONCILE externally-started timers (e.g. /tg, /do, tg-tui) when the
+only to RECONCILE externally-started timers (e.g. /tg, /do, janus) when the
 local file is idle; on its own it lagged dtd-initiated changes by up to POLL.
 
 Best-effort: every error is swallowed — the timer is non-critical eye-candy and
@@ -36,7 +37,7 @@ sys.path.insert(0, str(Path("~/i446-monorepo").expanduser()))
 os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
 
 # config.py reads TOGGL_API_KEY from the env at import time, so seed it from
-# ~/.claude.json (same source as tg-tui) BEFORE toggl_api is imported.
+# ~/.claude.json (same source as janus) BEFORE toggl_api is imported.
 if not os.environ.get("TOGGL_API_KEY"):
     try:
         cj = json.loads(Path("~/.claude.json").expanduser().read_text())
@@ -53,6 +54,51 @@ TICK = 0.1   # seconds between footer repaints
 # imperceptible for a footer and cuts this source ~75%.
 POLL = 12.0  # seconds between Toggl API reads (to catch a changed timer)
 
+# Footer line color by project (feature 2026-07-24). COPY of janus.py's
+# PROJECT_COLORS, which is the color SOURCE (vault/i447/neon-color-pallette.md)
+# — keep in sync (test_dtd_ticker_project_color.py cross-checks the two).
+# fzf renders ANSI in the footer even without --ansi (man fzf, FOOTER).
+PROJECT_COLORS = {
+    "g245": "#00e676",   # Matrix
+    "epcn": "#00bfa5",   # Miami Vice
+    "s897": "#1b5e20",   # Emerald Shadow
+    "hcmc2": "#ffd600",  # Lightning
+    "xk87": "#fd6c1d",   # Tangerine Dream
+    "xk88": "#e65100",   # Molten
+    "hci":  "#63ede0",   # Vaporwave
+    "i9":   "#2979ff",   # Electric Blue
+    "n156": "#1249b4",   # Sapphire
+    "hcmc": "#0d3b66",   # Deep Sea
+    "m5x2": "#d50032",   # Crimson
+    "hcb":  "#f81d78",   # Bubblegum Shock
+    "hcbp": "#ff4081",   # Flamingo
+    "infra": "#9e9e9e",  # Concrete
+    "i444": "#616161",   # Graphite
+    "i447": "#a89c8a",   # Shadow (lightened from #303030 for readability on dark)
+    "睡觉": "#666666",    # Abyss (lightened from #0a0a0a)
+    "hcm":  "#aa00ff",   # Purple Haze (no map entry; reasonable fit for hcm parent)
+    "hcmp": "#7c4dff",   # Lavender Lightning
+    "hcmr": "#bda6ff",   # Weak-sauce Purple
+    "家":   "#00b8d4",    # Pool Party (family)
+}
+
+# Toggl project id → code, for coloring externally-started timers found by the
+# API poll (dtd-started ones carry their code in the timer file's 4th field).
+try:
+    from mcp.toggl_server.config import PROJECT_MAP  # type: ignore
+    ID_TO_CODE = {v: k for k, v in PROJECT_MAP.items()}
+except Exception:
+    ID_TO_CODE = {}
+
+
+def project_ansi(code: str) -> str:
+    """Truecolor fg escape for a project code, or '' when unknown."""
+    hexv = PROJECT_COLORS.get((code or "").strip())
+    if not hexv:
+        return ""
+    r, g, b = int(hexv[1:3], 16), int(hexv[3:5], 16), int(hexv[5:7], 16)
+    return f"\033[38;2;{r};{g};{b}m"
+
 
 def _toggl_api():
     try:
@@ -63,7 +109,7 @@ def _toggl_api():
 
 
 def fmt(elapsed: float) -> str:
-    """Match tg-tui's running clock: 12m05.3s."""
+    """Match janus's running clock: 12m05.3s."""
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)
     return f"{m}m{s:02d}.{frac}s"
@@ -77,30 +123,32 @@ def _read_port(port_file: Path):
 
 
 def _read_timer_file(timer_file: Path):
-    """Read dtd's $DTD_TIMER. Returns (start_epoch|None, desc, mtime|None).
+    """Read dtd's $DTD_TIMER. Returns (start_epoch|None, desc, mtime|None, proj).
 
-    Format is `desc<TAB>start_epoch`; an empty file means dtd is idle (stopped).
-    mtime lets the caller detect a change cheaply without re-parsing every tick.
+    Format is `desc<TAB>start_epoch[<TAB>task_id[<TAB>project_code]]`; an empty
+    file means dtd is idle (stopped). mtime lets the caller detect a change
+    cheaply without re-parsing every tick.
     """
     if timer_file is None:
-        return None, "", None
+        return None, "", None, ""
     try:
         mtime = timer_file.stat().st_mtime
     except Exception:
-        return None, "", None
+        return None, "", None, ""
     try:
         raw = timer_file.read_text().strip()
     except Exception:
-        return None, "", mtime
+        return None, "", mtime, ""
     if not raw:
-        return None, "", mtime
+        return None, "", mtime, ""
     parts = raw.split("\t")
     desc = parts[0].replace("(", "").replace(")", "")
     try:
         start = float(parts[1]) if len(parts) > 1 else None
     except Exception:
         start = None
-    return start, desc, mtime
+    proj = parts[3].strip() if len(parts) > 3 else ""
+    return start, desc, mtime, proj
 
 
 def _post(port: int, action: str) -> bool:
@@ -131,6 +179,7 @@ def main() -> None:
 
     start = None      # epoch seconds of the running entry, or None when idle
     desc = ""
+    proj = ""         # project code of the running entry, for the footer color
     last_poll = 0.0
     last_timer_mtime = None
     fails = 0
@@ -144,15 +193,15 @@ def main() -> None:
         # Fast local signal: dtd's start/complete bindings write $DTD_TIMER the
         # instant they fire, so a dtd-initiated change shows within one TICK
         # instead of waiting on the Toggl poll below.
-        fstart, fdesc, fmtime = _read_timer_file(timer_file)
+        fstart, fdesc, fmtime, fproj = _read_timer_file(timer_file)
         if fmtime is not None and fmtime != last_timer_mtime:
             last_timer_mtime = fmtime
-            start, desc = fstart, fdesc   # fstart None => dtd is idle
+            start, desc, proj = fstart, fdesc, fproj   # fstart None => dtd is idle
 
         if api and now - last_poll >= POLL:
             last_poll = now
             try:
-                # Shared cache: ride tg-tui's (or any other poller's) fetch
+                # Shared cache: ride janus's (or any other poller's) fetch
                 # instead of hitting Toggl every POLL. The elapsed clock is
                 # extrapolated locally, so a cache up to TTL old still renders an
                 # exact footer; a started/stopped timer invalidates it at once.
@@ -167,17 +216,21 @@ def main() -> None:
                     start = None
                 # Strip parens so they can't terminate the change-footer() action.
                 desc = (cur.get("description") or "").replace("(", "").replace(")", "")
+                proj = ID_TO_CODE.get(cur.get("project_id") or 0, "")
             elif start is None or now - start > POLL:
                 # Toggl says idle. Only clear if there's no FRESH local timer:
                 # right after a dtd start the shared cache can still be stale
                 # (up to its TTL), and we must not clobber the just-applied
                 # local start. A timer older than POLL is safe to reconcile.
-                start, desc = None, ""
+                start, desc, proj = None, "", ""
 
         if start is not None:
             body = f"▶ {fmt(time.time() - start)}"
             if desc:
                 body += f" · {desc}"
+            ansi = project_ansi(proj)
+            if ansi:
+                body = f"{ansi}{body}\033[0m"
         else:
             body = "▶ (idle)"
 

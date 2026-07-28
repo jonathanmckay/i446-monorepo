@@ -42,7 +42,7 @@ Optionally append a short Commentary section (phase shifts, weakest rituals, wee
 
 ## Blocks (地支, 04:00 wake)
 
-`卯` 04-06, `辰` 06-08, `巳` 08-10, `午` 10-12, `未` 12-14, `申` 14-16, `酉` 16-18, `戌` 18-20, `亥` 20-22. Sleep blocks (子/丑/寅, 22:00-04:00) are omitted. This is the convention the build order and the 0分 sheet's G:O columns are written with (build-order-daemon, tg-tui, -2n all share it).
+`卯` 04-06, `辰` 06-08, `巳` 08-10, `午` 10-12, `未` 12-14, `申` 14-16, `酉` 16-18, `戌` 18-20, `亥` 20-22. Sleep blocks (子/丑/寅, 22:00-04:00) are omitted. This is the convention the build order and the 0分 sheet's G:O columns are written with (build-order-daemon, janus, -2n all share it).
 
 ## Notes
 

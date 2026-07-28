@@ -19,11 +19,13 @@ scheduled occurrence (recurrence preserved, cadence unchanged).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
 from datetime import date, timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 # ---------------------------------------------------------------------------
@@ -37,6 +39,49 @@ POINTS_RE = re.compile(r"\[(\d+)\]")
 DURATION_RE = re.compile(r"\((\d+)\)")
 
 DEFAULT_CLAIMED_POINTS = 2
+
+# Daily-habit labels. A deferred occurrence of one of these gets its origin
+# date stamped into the one-off copy's name ("xk20 7.21 (20) [15]") so the
+# catch-up copy is visibly distinct from the daily card the recurring parent
+# regenerates — both sit in the queue together while travelling. The dated
+# name also stops the copy from matching the habit's 0n column on completion
+# (that day's own card owns the column); it completes as a regular task.
+# 1neon (weekly) joined 2026-07-25: an undated deferred copy of a weekly habit
+# is IDENTICAL in content to the card its recurring parent regenerates — two
+# stale undated "AoS (15) [15]" copies caused the 2026-07-24 dtd same-name
+# mess. The date stamp keeps every deferred copy distinct.
+HABIT_LABELS = {"0neon", "夜neon", "1neon"}
+
+
+def deferred_marker_path(when: date | None = None) -> Path:
+    """Per-day marker of DEFERRED daily-habit parent ids (one id per line).
+
+    dtd's daily sections deliberately show recurring cards due tomorrow (the
+    2026-06-27 over-advance drift guard), which is indistinguishable in cache
+    state from a parent that was just deliberately deferred — so a deferred
+    habit popped straight back into today's queue and needed a second defer
+    (bug 2026-07-21). Id-keyed, NOT name-keyed: hiding by name suppressed
+    unrelated same-name tasks once before (2026-07-13). Appended with O_APPEND
+    so concurrent detached defers can't lose entries; dtd reads it fresh each
+    list reload and undo-fast removes the id on ctrl-z."""
+    return (Path.home() / ".cache/jm"
+            / f"habits-deferred-{(when or date.today()).isoformat()}.ids")
+
+
+def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
+    """Record a deferred daily habit's parent id for today (best-effort)."""
+    if not HABIT_LABELS & set(labels):
+        return
+    try:
+        p = deferred_marker_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, f"{task_id}\n".encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # marker is a display nicety; never fail the defer over it
 
 WEEKDAYS = {
     "monday": 0, "mon": 0,
@@ -202,8 +247,19 @@ def find_task(query: str) -> dict:
             # so duplicate names differing only in annotations resolve cleanly
             exact = [m for m in matches
                      if m.get("content", "").lower().strip() == query_lower.strip()]
-            if len(exact) == 1:
+            if exact:
+                # Exact-content DUPLICATES (e.g. a recurring task + a stale
+                # one-off copy of the same occurrence, both overdue) used to
+                # error here, which failed the whole defer — dtd then rolled
+                # back its optimistic hide and the task kept reappearing
+                # (2026-07-12: "give kids allowance" x2). Resolve
+                # deterministically instead of bailing: prefer the recurring
+                # series (the canonical one), else the first. The collision-proof
+                # path is --id (dtd passes the row's id); this is the name-based
+                # fallback.
+                exact.sort(key=lambda m: 0 if (m.get("due") or {}).get("is_recurring") else 1)
                 return exact[0]
+            # Substring matches with NO exact hit → genuinely different tasks.
             print(json.dumps({
                 "error": "multiple matches",
                 "matches": [{"id": m["id"], "content": m["content"]}
@@ -213,6 +269,25 @@ def find_task(query: str) -> dict:
 
     print(json.dumps({"error": "task not found"}))
     sys.exit(1)
+
+
+def find_task_by_id(task_id: str) -> dict:
+    """Fetch a single task by its Todoist id — the collision-proof path dtd uses.
+
+    The dtd list row carries the task id in its 2nd tab field, so passing --id
+    defers the EXACT task the user selected even when several open tasks share
+    the same name (name search can't disambiguate those). Bypasses find_task's
+    content search entirely.
+    """
+    try:
+        t = _api("GET", f"/tasks/{quote(str(task_id))}")
+    except Exception as e:
+        print(json.dumps({"error": f"task id {task_id} fetch failed: {e}"}))
+        sys.exit(1)
+    if not t or not t.get("id"):
+        print(json.dumps({"error": f"task id {task_id} not found"}))
+        sys.exit(1)
+    return t
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +362,16 @@ def handle_non_recurring(task: dict, target_date: str,
 _ANCHOR_RE = re.compile(r"\s+(starting|start|from|beginning|begins?|since)\b.*$", re.I)
 
 
+def _dated_copy_content(content: str, occurrence: date) -> str:
+    """Stamp the deferred occurrence's date (M.D) into a copy's name, after
+    the name and before any (N)/[N]/{N} annotations."""
+    tag = f"{occurrence.month}.{occurrence.day}"
+    m = re.search(r"\s*[\(\[\{]", content)
+    if m:
+        return f"{content[:m.start()]} {tag}{content[m.start():]}"
+    return f"{content} {tag}"
+
+
 def _recurrence_pattern(due_string: str) -> str:
     """Strip any 'starting <date>' / 'from <date>' anchor off a recurrence
     string, leaving the bare cadence ('every day', 'every friday', ...).
@@ -335,17 +420,25 @@ def handle_recurring(task: dict, target_date: str,
 
     # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
     #    Skip mode carries nothing — the occurrence is simply skipped.
+    #    Daily habits (0neon/夜neon) get the origin date stamped into the copy
+    #    so it stays distinct from the daily card (see HABIT_LABELS).
     copy = None
+    copy_content = content
     if skip_copy:
         target_date = next_date
     else:
-        copy = create_task(content, labels, project_id, target_date, priority)
+        if HABIT_LABELS & set(labels):
+            copy_content = _dated_copy_content(content, current_due)
+        copy = create_task(copy_content, labels, project_id, target_date, priority)
 
     # 2. Advance the parent to its next occurrence, recurrence preserved.
     body = {"due_date": next_date}
     if pattern:
         body["due_string"] = pattern
     _api("POST", f"/tasks/{task_id}", body)
+    # Daily habit: record the parent id so dtd hides it for the rest of today
+    # (the due-tomorrow drift guard would otherwise keep showing it).
+    mark_habit_deferred(task_id, labels)
 
     # 3. Posthoc eval record (due today, immediately closed).
     today_iso = date.today().isoformat()
@@ -370,6 +463,7 @@ def handle_recurring(task: dict, target_date: str,
         "claimed_points": claimed_points,
         "remaining_points": total_points,
         "closed": False,
+        "deferred_copy_content": copy_content if copy else None,
         "stubs": {"today": posthoc["id"],
                   "deferred_copy": copy["id"] if copy else None,
                   "future": task_id},
@@ -386,9 +480,24 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    task_name = sys.argv[1]
-    explicit_target = sys.argv[2] if len(sys.argv) > 2 else None
-    claimed_points = (int(sys.argv[3]) if len(sys.argv) > 3
+    # Two invocation forms:
+    #   defer-fast --id <task_id> [days] [claimed_points]   ← dtd (collision-proof)
+    #   defer-fast <task_name>     [days] [claimed_points]   ← name-based fallback
+    argv = sys.argv[1:]
+    task_id = None
+    if argv and argv[0] == "--id":
+        if len(argv) < 2:
+            print("usage: defer-fast.py --id <task_id> [days|YYYY-MM-DD] [claimed_points]",
+                  file=sys.stderr)
+            sys.exit(1)
+        task_id = argv[1]
+        argv = argv[2:]           # remaining: [days?, claimed_points?]
+        task_name = None
+    else:
+        task_name = argv[0]
+        argv = argv[1:]
+    explicit_target = argv[0] if len(argv) > 0 else None
+    claimed_points = (int(argv[1]) if len(argv) > 1
                       else DEFAULT_CLAIMED_POINTS)
 
     # "0" or "auto" (dtd's blank-prompt sentinel): a recurring task skips to
@@ -399,8 +508,8 @@ def main():
     if raw == "auto":
         explicit_target = None  # never let the sentinel reach resolve_target
 
-    # Find the task
-    task = find_task(task_name)
+    # Resolve the task: by id (exact, collision-proof) or by name (fallback).
+    task = find_task_by_id(task_id) if task_id else find_task(task_name)
 
     # Target = today+1 (default), today+N (bare integer), or an absolute date.
     target_date = resolve_target(explicit_target)

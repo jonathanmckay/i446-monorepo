@@ -1,6 +1,6 @@
 ---
 name: "1s"
-description: "Weekly strategic review. Runs /1n donuts, copies 1g summary, opens survey tabs, then compares goals vs time vs points. Usage: /1s"
+description: "Weekly strategic review. Runs /1n donuts, copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
 user-invocable: true
 ---
 
@@ -20,9 +20,39 @@ Compare what you planned (1g goals) vs what you spent time on (Toggl) vs what yo
 
 ## Steps
 
+### Step -1: Week-completeness gate (BLOCKING)
+
+The weekly review may not run on an incomplete week. Check first:
+
+```bash
+python3 ~/i446-monorepo/tools/1s/1s-survey.py --check-week [YYYY-MM-DD]
+```
+
+Exit 0 = clear, proceed. Exit 3 = blockers: missing daily 0s surveys, days
+with 0l unmarked, or days with under 20h of Toggl recording. Present the
+tool's blocker list verbatim (it names the exact backfill commands — `/0s
+<date>`, `/did 0l <M/D>`, `/tg`) and **STOP — do not run any further step**
+until the user has backfilled and the check passes. The survey tool enforces
+the same gate itself (`--force` is the deliberate escape hatch; use it only
+if the user explicitly says to skip backfilling).
+
 ### Step 0: Prep — donuts, 1g summary, open tabs
 
 Run these three prep steps before the analysis.
+
+#### Step 0-pre: MSFT share pull (weekly, must run interactively)
+
+```bash
+python3 ~/i446-monorepo/skills/claude-skills/msftshare/msftpull.py
+```
+
+Pulls every OneDrive `vault-shared/*.docx`, measures coworker edit volume since
+last week, refreshes `.md` sidecars on flipped docs, and flags vault-truth
+shadows whose `.docx` has diverged (re-running `/msftshare` on those clobbers
+coworker edits). Report: `~/vault/i447/msftshare-pull-report.md`. Echo the
+one-line summary; surface any ⚠ clobber flags to the user. This step lives here
+(not launchd) deliberately: macOS TCC blocks CloudStorage for launchd-spawned
+python3, and /1s already runs weekly in a terminal with full access.
 
 #### Step 0a: Run /1n (weekly donut charts)
 
@@ -46,22 +76,44 @@ end tell
 
 Replace `WEEK_ROW` with the ISO week number for the review week.
 
-#### Step 0c: Open tabs side-by-side
+#### Step 0c: Launch the weekly survey form
 
-Use AppleScript to activate the `0s897` sheet in one window and `1分+1s` in another, so the user can fill in the manual survey.
+Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
+the manual questions of the `1分+1s` row (Title for the Week, Biggest Win,
+Biggest missed opportunity, Proud/Regret w/others, Notes). Rating and
+High/Low/Avg are NOT asked: those cells hold live formulas computed from the
+week's daily surveys (P pulls `'i9'!B{row}`; W/X/Y aggregate `0s897` ⌈/⌊/x̄)
+and must never be written. Above each question the form surfaces the week's
+DAILY answers from `0s897` (titles, wins, learnings, proud/regret) so
+answering is selecting/condensing rather than composing de novo — typing a
+day digit (`3`, or `2,5`) as the whole answer expands to that day's text on
+save. On `^S` it writes the answers to the review week's row (col A M.W
+label), saves, and **marks the weekly 1s task done** (survey completion IS
+task completion; `--no-mark` suppresses that for reruns).
 
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    -- Activate 1分+1s in the current window
-    set active sheet of active window to sheet "1分+1s" of wb
-    -- Open a new window for the same workbook and show 0s897
-    make new window at wb
-    set active sheet of active window to sheet "0s897" of wb
-end tell
-```
+It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 
-After opening both tabs, **pause and tell the user** the tabs are ready for manual survey entry. Wait for them to confirm before continuing to Step 1.
+1. ```bash
+   cmux new-surface --type terminal
+   ```
+   Parse the surface and pane refs from the output.
+2. ```bash
+   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
+   ```
+   Pass the review-week date through only if the user gave one (`MM/DD` →
+   convert to `YYYY-MM-DD`); no arg reviews the last completed Sun–Sat week.
+3. ```bash
+   cmux focus-pane --pane pane:<N>
+   ```
+4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, ^S saves.`
+
+Do NOT block on the form — continue with Step 1 while the user fills it. If
+cmux is unavailable, tell the user to run it themselves:
+`! python3 ~/i446-monorepo/tools/1s/1s-survey.py`
+
+Non-interactive paths (scripting/tests): `--from-json <file>` writes answers
+directly; `--print-script` prints the AppleScript without writing;
+`--print-context` dumps the fetched daily answers.
 
 ### Step 1: Determine the review week
 
@@ -84,13 +136,13 @@ Collect into a structure: `{domain: [{goal, fen_target, focus_bonus, pct_done}]}
 
 ### Step 3: Pull Toggl time for the week
 
-Use the Toggl CLI:
+Use the toggl_server MCP tool `toggl_date` (the CLI has no `date` command):
 
-```bash
-python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py date YYYY-MM-DD
+```
+mcp__toggl_server__toggl_date  date=YYYY-MM-DD
 ```
 
-Run for each day Sun–Sat (7 calls). Parse output to get entries with project code and duration. Aggregate by domain (project code):
+Run for each day Sun–Sat (7 calls; they can be batched in parallel). Parse output to get entries with project code and duration. Aggregate by domain (project code):
 
 ```python
 time_by_domain = {
@@ -107,16 +159,20 @@ Also compute total tracked time and untracked time (24h × 7 - total - sleep).
 
 Read the `0分` sheet for each day in the week range. For each day's row (found by date in Col B, M/D format), read the domain columns:
 
+Column map per `vault/g245/CLAUDE.md` (9 columns were removed 2026-04-28;
+old Z–AH references are WRONG):
+
 | Column | Domain |
 |--------|--------|
-| Z | 0g (goals/planning) |
-| AA | i9 |
-| AB | m5x2 |
-| AC | 個 (g245) |
-| AD | 媒 (hcmc) |
-| AF | hcb |
-| AG | xk (xk87/xk88) |
-| AH | 社 (s897) |
+| Q | 0g (goals/planning) |
+| R | i9 |
+| S | m5x2 |
+| T | 个 (g245) |
+| U | 媒 (hcmc) |
+| V | 思 (hcm) |
+| W | hcb |
+| X | xk (xk87/xk88) |
+| Y | 社 (s897) |
 
 Sum each column across the 7 days to get weekly points per domain.
 
@@ -127,19 +183,14 @@ tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
     set s to sheet "0分" of wb
     set results to ""
-    -- For each day, find row by date, read Z through AH
+    -- For each day, find row by date, read Q through Y
     repeat with i from START_ROW to END_ROW
         set bVal to string value of range ("B" & i) of s
-        -- read Z, AA, AB, AC, AD, AF, AG, AH
-        set zVal to string value of range ("Z" & i) of s
-        set aaVal to string value of range ("AA" & i) of s
-        set abVal to string value of range ("AB" & i) of s
-        set acVal to string value of range ("AC" & i) of s
-        set adVal to string value of range ("AD" & i) of s
-        set afVal to string value of range ("AF" & i) of s
-        set agVal to string value of range ("AG" & i) of s
-        set ahVal to string value of range ("AH" & i) of s
-        set results to results & bVal & "|" & zVal & "|" & aaVal & "|" & abVal & "|" & acVal & "|" & adVal & "|" & afVal & "|" & agVal & "|" & ahVal & "\n"
+        set rowTxt to bVal
+        repeat with c in {"Q", "R", "S", "T", "U", "V", "W", "X", "Y"}
+            set rowTxt to rowTxt & "|" & (string value of range ((c as string) & i) of s)
+        end repeat
+        set results to results & rowTxt & "\n"
     end repeat
     return results
 end tell
@@ -245,9 +296,13 @@ For each stale memory, either:
 
 Ask the user which action to take for each stale entry.
 
-### Step 8: Report + mark done
+### Step 8: Report
 
-Show the comparison table and narrative to the user. Then execute `/did 1s` to mark the weekly task complete.
+Show the comparison table and narrative to the user. Do NOT run `/did 1s`
+here — the weekly 1s task is marked done by the survey form on `^S` (the
+task is not complete until the survey is; user decision 2026-07-21). If the
+survey is still open, say so; if it was cancelled, the task stays open until
+the user submits it (rerun `1s-survey.py` directly if needed).
 
 ## Notes
 

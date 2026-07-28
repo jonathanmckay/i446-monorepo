@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Google Calendar helper for tg-tui.
+"""Google Calendar helper for janus.
 
 Reads OAuth credentials saved by google-calendar-mcp at
 ~/.config/google-calendar-mcp/{tokens.json,gcp-oauth.keys.json} and lists
 events across every calendar visible on the m5c7 account.
 
-5-minute file cache at ~/.cache/tg-tui/gcal-YYYY-MM-DD.json.
+5-minute file cache at ~/.cache/janus/gcal-YYYY-MM-DD.json.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo  # noqa: E402
 TZ = ZoneInfo("America/Los_Angeles")
 TOKENS_PATH = Path("~/.config/google-calendar-mcp/tokens.json").expanduser()
 KEYS_PATH = Path("~/.config/google-calendar-mcp/gcp-oauth.keys.json").expanduser()
-CACHE_DIR = Path("~/.cache/tg-tui").expanduser()
+CACHE_DIR = Path("~/.cache/janus").expanduser()
 CACHE_TTL = 300  # seconds
 ACCOUNT = "m5c7"
 
@@ -69,6 +69,35 @@ def _cache_path(day: dt.date) -> Path:
     return CACHE_DIR / f"gcal-{day.isoformat()}.json"
 
 
+# lx@m5c7.com is Louisa's calendar, visible on the m5c7 account — it carries
+# her personal solo events (call nanny, dentist, ...), m5x2 business meetings
+# Jonathan is actually part of (m5x2 Strat, m5x2 People), AND meetings that
+# are purely between her and someone else on the m5x2 team (HZ/LX 1:1, her
+# 1:1 with Han Zhao). Only the middle category belongs in janus — filter the
+# rest at fetch time rather than hiding the whole calendar, which would also
+# hide the meetings Jonathan actually needs to see.
+PERSONAL_CALENDARS_FILTERED = {"lx@m5c7.com"}
+JONATHAN_EMAILS = {"mckay@m5c7.com"}
+
+
+def _should_hide_lx_event(cal_summary: str, title: str, attendees: list | None) -> bool:
+    """True for an lx@m5c7.com event that shouldn't surface in janus.
+
+    A literal "m5x2" in the title is an unambiguous business signal (same
+    rule janus.py's gcal_project_code uses) and always wins, in case attendee
+    data is ever missing/incomplete. Otherwise: hide anything Jonathan isn't
+    actually an attendee of. The 2026-07-13 fix only dropped her SOLO events
+    (no attendees besides herself — "call nanny"); meetings between her and
+    someone else, with Jonathan not invited, still leaked through (user
+    report 2026-07-15: "can we not show the lx events")."""
+    if cal_summary not in PERSONAL_CALENDARS_FILTERED:
+        return False
+    if "m5x2" in title.lower():
+        return False
+    attendee_emails = {(a.get("email") or "").lower() for a in (attendees or [])}
+    return not (attendee_emails & JONATHAN_EMAILS)
+
+
 def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) -> list[dict]:
     """Return events overlapping [start, end). Times are tz-aware."""
     cache = _cache_path(start.astimezone(TZ).date())
@@ -100,11 +129,15 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
             e = ev["end"].get("dateTime") or ev["end"].get("date")
             if not s or not e:
                 continue
+            title = ev.get("summary", "(no title)")
+            cal_summary = cal.get("summary", cid)
+            if _should_hide_lx_event(cal_summary, title, ev.get("attendees")):
+                continue
             out.append({
-                "title": ev.get("summary", "(no title)"),
+                "title": title,
                 "start": s,
                 "end": e,
-                "calendar": cal.get("summary", cid),
+                "calendar": cal_summary,
                 "all_day": "date" in ev["start"],
                 "transparency": ev.get("transparency", "opaque"),
             })

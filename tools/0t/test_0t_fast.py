@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,29 +65,42 @@ def test_daemon_compute_toggl_totals_excludes_sleep_from_AX():
     assert totals.get("AX") == 25, f"daemon AX must exclude sleep; got {totals.get('AX')}"
 
 
-def test_mark_night_hcmc_targets_yesterday_row():
-    """night hcmc minutes must be logged to the date the entry occurred (yesterday),
-    not today. Otherwise sleep-bridging hcmc points land one row too late."""
+def test_mark_night_hcmc_targets_entry_day_row():
+    """night hcmc minutes must be logged to the date the entry occurred
+    (yesterday), not today. Rewritten 2026-07-24: the old version routed
+    through did-fast, whose 0n path refuses past dates — so the call site
+    passed `today`, and a backfill run (`0t-fast.py 2026-07-22`) stamped
+    7/22's detected minutes onto 7/24's row, clobbering a manual value.
+    Now it's a direct row-targeted write with an empty-cell guard."""
     captured = {}
 
-    class _FakeProc:
+    class _FakeRes:
         returncode = 0
-        stdout = '{"ok": true}'
+        stdout = "OK: night hcmc=35 row=180"
         stderr = ""
 
-    def _fake_run(cmd, capture_output, text, timeout):
-        captured["cmd"] = cmd
-        return _FakeProc()
+    def _fake_ix_run(script, timeout=30.0):
+        captured["script"] = script
+        return _FakeRes()
 
-    with patch.object(zerot_fast.subprocess, "run", side_effect=_fake_run):
-        zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
+    with patch.object(zerot_fast, "ix_run", side_effect=_fake_ix_run):
+        out = zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
 
-    arg = captured["cmd"][-1]
-    # The arg passed to did-fast must include the M/D of the entry's date,
-    # so did-fast routes the write to that row instead of today's.
-    assert arg == "night hcmc 35 5/6", (
-        f"expected explicit M/D for yesterday's row, got {arg!r}"
-    )
+    script = captured["script"]
+    assert "if m = 5 and d = 6 then" in script, (
+        "write must locate the ENTRY day's row, not today's")
+    # Manual /did values always win: only an empty/zero cell may be written.
+    assert 'if prev = "" or prev = "0" then' in script
+    assert "SKIPPED: manual value" in script
+    assert out == {"write": "OK: night hcmc=35 row=180"}
+
+
+def test_main_passes_yesterday_to_night_hcmc():
+    """The call site must hand mark_night_hcmc the entry's day (yesterday),
+    never `today` (the 2026-07-24 backfill clobber)."""
+    src = _PATH.read_text()
+    assert "mark_night_hcmc(night_hcmc, yesterday)" in src
+    assert "mark_night_hcmc(night_hcmc, today)" not in src
 
 
 def test_tag_and_project_minutes_only_count_target_day():
@@ -137,3 +150,69 @@ def test_write_tag_minutes_uses_absolute_overwrite():
             )
             return
     raise AssertionError("write_tag_minutes function not found")
+
+
+def test_refresh_points_cache_includes_block_data(tmp_path):
+    """Regression (2026-07-19): refresh_points_cache() only read the P:Y domain
+    -total columns (COLS), never the G:O per-block (地支 卯..亥) columns, and
+    never wrote a "__block__" key. dashboard.py's load_points_all() reads this
+    SAME .points-cache.json file, and _build_block_chart_data() needs the
+    "__block__" sub-dict to render Points/Block at all — so every /0t run (it
+    calls refresh_points_cache() every morning) silently wiped block data,
+    making Points/Block show empty even though the daemon writes real values
+    to G:O in Neon. Fix: also read G:O into a "__block__" sub-dict, matching
+    the shape dashboard.py's own xlwings fallback path already produces."""
+    import json as _json
+    import openpyxl as _openpyxl
+    import time as _time
+
+    yesterday = date.today() - timedelta(days=1)
+
+    # Row layout (0-indexed): [0]=A, [1]=B(date), [6]=G(卯) .. [14]=O(亥),
+    # [15]=P(-1₦) .. [24]=Y(社) — matches COLS/BLOCK_COLS' 1-indexed offsets.
+    row = [None] * 25
+    row[1] = yesterday
+    row[6] = 6     # G — 卯
+    row[9] = 13    # J — 午
+    row[15] = 10   # P — -1₦ (a domain total, sanity check COLS still works)
+
+    class _FakeSheet:
+        def iter_rows(self, min_row, values_only):
+            yield tuple(row)
+
+    class _FakeWorkbook:
+        def __getitem__(self, name):
+            assert name == "0分"
+            return _FakeSheet()
+
+        def close(self):
+            pass
+
+    fake_cache = tmp_path / ".points-cache.json"
+    with patch.object(_openpyxl, "load_workbook", return_value=_FakeWorkbook()), \
+         patch.object(zerot_fast, "ix_run", return_value=None), \
+         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
+         patch.object(_time, "sleep", return_value=None):
+        zerot_fast.refresh_points_cache()
+
+    cache = _json.loads(fake_cache.read_text())
+    day = cache[yesterday.isoformat()]
+    assert day.get("__block__") == {"卯": 6, "午": 13}, (
+        f"expected __block__ with 卯/午 values, got {day.get('__block__')}"
+    )
+    assert day.get("-1₦") == 10, "domain-total columns (COLS) must still work"
+
+
+def test_marks_done_then_refreshes_dtd_cache():
+    """/0t records 0t in completed-today via mark_done(), but dtd only reloads on a
+    cache mtime change — so 0t-fast must run did-fast --refresh-cache after marking
+    done, else 0t lingers on the dtd list (regression 2026-06-30)."""
+    import ast
+    src = (Path(__file__).parent / "0t-fast.py").read_text()
+    main = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    body = ast.get_source_segment(src, main)
+    assert '"--refresh-cache"' in body, "0t-fast main() must refresh the dtd cache"
+    # and it must come AFTER mark_done() so completed-today is already written
+    assert body.index("mark_done()") < body.index('"--refresh-cache"'), \
+        "refresh must follow mark_done()"

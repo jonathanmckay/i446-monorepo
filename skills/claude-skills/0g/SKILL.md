@@ -10,7 +10,7 @@ Manage daily goals in the `## 0₲` section of the build order file and sync to 
 
 ## Files
 
-- **Build order**: `~/vault/g245/build-order.md`
+- **Build order**: `~/vault/g245/5e-1/build-order.md`
 - **Section**: `## 0₲` (stop at the next `##` or `###` heading)
 - **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
 - **Todoist labels**: `#0g` on every task (plus the `@code` domain label if present)
@@ -89,6 +89,11 @@ Each line/item becomes one goal. Strip leading `-`, `*`, `[ ]`, `[x]` markers. P
 - `@code` → domain label (remove from content)
 - `{N}` → bonus points (keep in content)
 
+**Point-bracket normalization (default to `{N}`).** A 0g goal's completion points belong in the **0g column**, which `/did` credits only from `{N}` (curly). `[N]` routes to the goal's *domain* column instead, so it silently misfiles the points (bug 2026-07-11: a `/0g` run wrote `[100]`/`[60]`/`[40]` and those goals would have credited hcbp/xk rather than 0g). Therefore:
+- If a goal carries neither `{N}` nor `[N]`, **auto-estimate and append `{N}`** (same scale as `/-1g`: quick/routine `{5}`, medium `{8}`–`{12}`, ambitious `{15}`–`{20}`). Never leave a 0g goal without a point bracket.
+- If the user typed `[N]` with no `{N}`, treat it as `{N}` (convert to curly) unless they *explicitly* want the points on the domain column. Daily 0g goals should carry `{N}`.
+- Never default un-annotated 0g goals to `[N]`.
+
 **Step 2: Update build order**
 
 Read the build order file. Find `## 0₲`. Replace the existing goal items (lines matching `  - [ ]` or `  - [x]`) with the new goals formatted as:
@@ -124,12 +129,15 @@ For each **new** goal (no existing match), create a Todoist task:
 Run `did-fast.py` directly (do NOT spawn an agent or invoke `/did`):
 ```bash
 python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
-# Refresh the dtd task cache so the new 0g goals show up in dtd. The #0g goals
-# ride in the cache's 'today' bucket; without this refresh they won't appear in
-# dtd until something else rebuilds the cache (no refresh daemon runs locally).
-python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &
+# Refresh the dtd task cache FOREGROUND so the new #0g goals show up in dtd. Run
+# it foreground (NOT backgrounded with `&`): a backgrounded job gets torn down
+# when the shell/tool call returns before the ~2s refresh finishes, so the goals
+# never reach the cache and dtd never updates (regression 2026-06-30). The
+# did-refresh-cache daemon also picks up #0g within ~3min as a fallback, but the
+# foreground run makes /0g trigger the refresh immediately.
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
 ```
-This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The background `--refresh-cache` rebuilds `task-queue.json` so dtd surfaces the goals immediately.
+This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The foreground `--refresh-cache` rebuilds `task-queue.json` (with the new #0g goals) so dtd's watcher reloads and surfaces them immediately.
 
 **Step 5: Confirm**
 
@@ -164,12 +172,15 @@ First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) usi
 Run `did-fast.py` directly (do NOT spawn an agent or invoke `/did`):
 ```bash
 python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
-# Refresh the dtd task cache so the new 0g goals show up in dtd. The #0g goals
-# ride in the cache's 'today' bucket; without this refresh they won't appear in
-# dtd until something else rebuilds the cache (no refresh daemon runs locally).
-python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &
+# Refresh the dtd task cache FOREGROUND so the new #0g goals show up in dtd. Run
+# it foreground (NOT backgrounded with `&`): a backgrounded job gets torn down
+# when the shell/tool call returns before the ~2s refresh finishes, so the goals
+# never reach the cache and dtd never updates (regression 2026-06-30). The
+# did-refresh-cache daemon also picks up #0g within ~3min as a fallback, but the
+# foreground run makes /0g trigger the refresh immediately.
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
 ```
-This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The background `--refresh-cache` rebuilds `task-queue.json` so dtd surfaces the goals immediately.
+This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The foreground `--refresh-cache` rebuilds `task-queue.json` (with the new #0g goals) so dtd's watcher reloads and surfaces them immediately.
 
 **Step 4: Confirm**
 

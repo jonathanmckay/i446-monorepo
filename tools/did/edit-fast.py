@@ -35,29 +35,50 @@ def _load(mod_name: str, filename: str):
 _dom = _load("domain_fast", "domain-fast.py")  # DOMAINS, swap_domain, patch_cache_labels
 _pf = _load("points_fast", "points-fast.py")   # set_points, resolve_from_cache, patch_cache
 _df = _pf._df                                   # Todoist _api transport
+_short = _load("shorten_mod", "shorten.py")     # shorten_tasks — same fn the cache refresh uses
 
 DOMAINS = _dom.DOMAINS
 
 # One or more trailing (time)/[pts]/{bonus} annotation groups at end of content.
 _TRAIL_ANNOT = re.compile(r"(?:\s*[\(\[\{][^\)\]\}]*[\)\]\}])+\s*$")
+# A single annotation token of any bracket kind, anywhere.
+_ANNOT_TOK = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
 
 
 def set_name(content: str, new_name: str) -> str:
-    """Replace the leading name, preserving trailing (time)/[pts]/{bonus} annotations."""
+    """Replace the leading name, preserving trailing (time)/[pts]/{bonus}
+    annotations — EXCEPT the bracket kinds the new name itself carries, which
+    would otherwise duplicate (bug 2026-07-24: retyping the full line
+    "…photos (15) [20]" over "…photos (15) [15]" produced "(15) [20] (15)
+    [15]" — the typed annotations landed in the name and the old tail was
+    appended after them)."""
     m = _TRAIL_ANNOT.search(content)
     tail = content[m.start():].strip() if m else ""
     base = new_name.strip()
+    kinds = {t[0] for t in _ANNOT_TOK.findall(base)}
+    if kinds and tail:
+        tail = " ".join(t for t in _ANNOT_TOK.findall(tail) if t[0] not in kinds)
     return (base + (" " + tail if tail else "")).strip()
 
 
-def _clear_short(cache: dict, task_id: str) -> None:
-    """Drop the cached Haiku `short` name so a rename shows on reload (the dtd
-    list prefers `short` over the content-derived name)."""
+def _resync_short(cache: dict, task_id: str, new_content: str) -> None:
+    """Drop the cached Haiku `short` name for the OLD content, then
+    regenerate one for the NEW content immediately (via the same
+    shorten_tasks() the periodic cache refresh uses) if it's long enough to
+    need one. Without this, a rename that crosses PROSE_CAP just fell back to
+    fzf's raw middle-truncation — eating the trailing (N)/[N] estimate —
+    until whenever the next full --refresh-cache happened to run (bug
+    2026-07-28: an edited task stayed unshortened, unlike every other long
+    task, which gets shortened by that same refresh pass)."""
+    short = _short.shorten_tasks([{"id": task_id, "content": new_content}]).get(task_id)
     for v in cache.values():
         if isinstance(v, list):
             for t in v:
                 if isinstance(t, dict) and t.get("id") == task_id:
-                    t.pop("short", None)
+                    if short:
+                        t["short"] = short
+                    else:
+                        t.pop("short", None)
 
 
 def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
@@ -76,6 +97,13 @@ def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
             if points is not None:
                 name_tokens.append(str(points))  # demote the earlier number to name
             points = int(tok)
+        elif re.fullmatch(r"\[\d+\]", tok):
+            # "[20]" typed in display syntax means points, not name text —
+            # as a name token it duplicated next to the preserved [N] tail
+            # (bug 2026-07-24: "changed points and it doubled up").
+            if points is not None:
+                name_tokens.append(str(points))
+            points = int(tok[1:-1])
         else:
             name_tokens.append(tok)
     new_name = " ".join(name_tokens).strip() or None
@@ -83,10 +111,20 @@ def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
-        print("✗ usage: edit-fast.py <query> <edits> <cache_file>")
+    # Forms:  edit-fast.py --id <id> <edits> <cache_file>   ← dtd
+    #         edit-fast.py <query>   <edits> <cache_file>   ← fallback
+    argv = sys.argv[1:]
+    task_id = None
+    if argv and argv[0] == "--id":
+        task_id = argv[1] if len(argv) > 1 else None
+        argv = argv[2:]
+    if (task_id is None and len(argv) < 3) or (task_id is not None and len(argv) < 2):
+        print("✗ usage: edit-fast.py [--id <id>] <query> <edits> <cache_file>")
         return 2
-    query, edits, cache_file = sys.argv[1], sys.argv[2], sys.argv[3]
+    if task_id is not None:
+        query, edits, cache_file = None, argv[0], argv[1]
+    else:
+        query, edits, cache_file = argv[0], argv[1], argv[2]
     new_name, domain, points = parse_edits(edits)
     if new_name is None and domain is None and points is None:
         print("✗ nothing to change")
@@ -101,9 +139,9 @@ def main() -> int:
         print(f"✗ cache unreadable: {e}")
         return 1
 
-    task = _pf.resolve_from_cache(cache, query)
+    task = _pf.resolve_by_id(cache, task_id) if task_id else _pf.resolve_from_cache(cache, query)
     if not task:
-        print(f"✗ no task matched: {query}")
+        print(f"✗ no task matched: {task_id or query}")
         return 1
 
     orig_content = task["content"]
@@ -124,7 +162,7 @@ def main() -> int:
             return 1
         _pf.patch_cache(cache, task["id"], new_content)
         if new_name is not None:
-            _clear_short(cache, task["id"])  # else the row keeps the stale Haiku short name
+            _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
             summary.append(f'name→"{new_name}"')
         if points is not None:
             summary.append(f"[{points}]")
