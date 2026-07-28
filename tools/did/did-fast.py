@@ -141,7 +141,12 @@ def time_range_minutes(start: str, end: str) -> int:
     return (eh * 60 + em) - (sh * 60 + sm)
 PUNCT_RE = re.compile(r"[^\w\s一-鿿]+", re.UNICODE)
 TIME_RANGE_RE = re.compile(r"(\d{4})-(\d{4})")
-POINTS_RE = re.compile(r"[\[\{](\d+)[\]\}]")
+# SQUARE brackets only. {N} is the 0g bonus and flows via item.curly_points →
+# column Q; matching braces here made every completed {N} goal credit its
+# DOMAIN column too — a silent double-count on top of the Q credit (bug
+# 2026-07-27: "what earned me the +30+20+20+10 in hcb?" — three of the four
+# were {N} duplicates).
+POINTS_RE = re.compile(r"\[(\d+)\]")
 # "[1/m]" / "[.5/m]" / "[15+1/m]" — display-only rate markers on variable 1n+
 # cards. Stripped before routing (the rates themselves live in
 # VARIABLE_1N_RATES/BASES, keyed by header).
