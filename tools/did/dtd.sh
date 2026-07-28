@@ -1300,13 +1300,25 @@ DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 task_id="$1"
 task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content (display/clean only)
 
-# Extract [N] and (N) from task
+# Extract points and (N) duration from task. Points come in TWO mutually
+# exclusive styles (did-fast.py: "SQUARE brackets only. {N} is the 0g bonus"):
+# [N] = domain points (routed via Todoist label), {N} = 0g bonus (routed to
+# 0分 col Q regardless of label). Splitting a {N} task must preserve the
+# curly style throughout — treating it as [N] silently loses the total
+# (regression 2026-07-28: a {50} task's total came back "?", forcing
+# remaining_pts to 0 and wiping the {N} marker off both halves entirely).
+bracket='['
+close=']'
 total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
+if [[ -z "$total" ]]; then
+  total=$(echo "$task" | grep -oE '\{[0-9]+\}' | head -1 | tr -d '{}')
+  [[ -n "$total" ]] && { bracket='{'; close='}'; }
+fi
 duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 [[ -z "$total" ]] && total="?"
 
 # Dialog 1: points
-pts_today=$(/usr/bin/osascript -e 'display dialog "Split: points done today? (total: ['"$total"'])" default answer "" buttons {"Cancel","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+pts_today=$(/usr/bin/osascript -e 'display dialog "Split: points done today? (total: '"$bracket$total$close"')" default answer "" buttons {"Cancel","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "cancelled" > "$HDR"; exit 0; }
 
 # Dialog 2: what you did
@@ -1343,6 +1355,7 @@ duration = sys.argv[6]
 hdr_file = sys.argv[7]
 removed_file = sys.argv[8]
 task_id = sys.argv[9]
+open_b, close_b = sys.argv[10], sys.argv[11]  # '[' ']' or '{' '}' -- preserve the original's point style
 
 remaining_pts = max(0, total - pts_today) if total > 0 else 0
 
@@ -1375,7 +1388,7 @@ prev_due = (task.get('due') or {}).get('date', '')
 
 # 1. Create completed posthoc for today's portion
 today_label = done_desc if done_desc else clean
-posthoc_content = f'{today_label} ({duration or pts_today}) [{pts_today}]'
+posthoc_content = f'{today_label} ({duration or pts_today}) {open_b}{pts_today}{close_b}'
 from datetime import date
 today_iso = date.today().isoformat()
 posthoc = api('POST', '/tasks', {
@@ -1390,21 +1403,26 @@ if posthoc:
 # 2. Update original task: new content with remaining description + reschedule
 from datetime import timedelta
 tomorrow = (date.today() + timedelta(days=1)).isoformat()
-new_content = f'{remaining_desc or clean} ({duration}) [{remaining_pts}]' if remaining_pts > 0 else f'{remaining_desc or clean}'
+new_content = f'{remaining_desc or clean} ({duration}) {open_b}{remaining_pts}{close_b}' if remaining_pts > 0 else f'{remaining_desc or clean}'
 api('POST', f'/tasks/{tid}', {
     'content': new_content,
     'due_date': tomorrow,
 })
 
-# 3. Log points to 0分 via did-fast (use original task's labels for column
-#    mapping). --points-only skips Todoist matching: without it did-fast
-#    re-finds the just-renamed remainder task and closes it.
+# 3. Log points to 0分 via did-fast. {N} (0g bonus) routes to column Q from
+#    the curly marker alone, regardless of label -- did-fast.py: 'SQUARE
+#    brackets only. {N} is the 0g bonus'; giving it a domain label too would
+#    double-credit (bug 2026-07-27). [N] (domain points) needs the label for
+#    column mapping, so only look one up for the square-bracket case.
+#    --points-only skips Todoist matching: without it did-fast re-finds the
+#    just-renamed remainder task and closes it.
 import subprocess
 label_arg = ''
-for l in labels:
-    if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','s897'):
-        label_arg = f'@{l}'
-        break
+if open_b == '[':
+    for l in labels:
+        if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','s897'):
+            label_arg = f'@{l}'
+            break
 # did-fast splits its input on commas/semicolons — a task name containing
 # one would be parsed as multiple items, detaching [pts]/@label from the
 # name and scattering the points (regression 2026-06-06: a name like
@@ -1413,7 +1431,7 @@ for l in labels:
 # python -c string and silently break the whole split (see line ~551).
 safe_name = re.sub(r'[,;]+', ' ', clean)
 df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
-                '--points-only', f'{safe_name} [{pts_today}] {label_arg}'],
+                '--points-only', f'{safe_name} {open_b}{pts_today}{close_b} {label_arg}'],
                capture_output=True, text=True, timeout=30)
 try:
     didfast_out = json.loads(df.stdout)
@@ -1437,9 +1455,9 @@ subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
 
 # Write results
 with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
-msg = f'✂ +{pts_today} today / [{remaining_pts}] deferred to {tomorrow}'
+msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close"
 
 # Flush tty input buffered while the osascript GUI dialogs held focus. With the
 # terminal idle behind the dialogs, two-finger touchpad scroll emits ESC[A/ESC[B
