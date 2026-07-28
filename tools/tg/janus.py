@@ -481,6 +481,10 @@ def fetch_today(force=False):
         STATE.entries_known = True
         STATE.entries_yday = yout
         STATE.last_toggl_fetch = time.monotonic()
+        try:
+            _resolve_pending_tag_credits()
+        except Exception:  # noqa: BLE001 — credits never break the fetch
+            pass
     except Exception as e:
         # Fetch failed → we no longer know today's entries are current. Leave
         # STATE.entries as-is (last known) but mark it unconfirmed so gap
@@ -552,13 +556,21 @@ def _sel_key(item: dict):
 
 def _entry_edit_prefill(item: dict) -> str:
     """The editable text Enter loads into the input line for a selected real
-    entry: "<desc> @<code>" (or bare desc when no project), matching what the
-    user would type to recreate it via the ordinary typed-command path — so
-    re-submitting after a plain retype "just works" through the SAME
-    shortcode/@override parsing tg-fast already does."""
+    entry: "<desc> @<code> HHMM-HHMM" (range only for a single completed
+    entry — a merged row can't retime and a running one has no end yet),
+    matching what the user would type to recreate it via the ordinary
+    typed-command path. Having the CURRENT times in the line makes retiming
+    a matter of editing digits (user request 2026-07-28: "change the start /
+    end times of a task"); resubmitting unchanged re-applies the same range,
+    which is a harmless no-op (trim excludes the entry's own ids)."""
     code = proj_code(item.get("project_id"))
     suffix = f" @{code}" if code else ""
-    return f"{item['raw_desc']}{suffix}"
+    rng = ""
+    if (len(item.get("entry_ids") or []) == 1 and not item.get("running")
+            and item.get("dur_min")):
+        end = item["start_dt"] + dt.timedelta(minutes=item["dur_min"])
+        rng = f" {item['start_dt']:%H%M}-{end:%H%M}"
+    return f"{item['raw_desc']}{suffix}{rng}"
 
 
 def _empty_gap_prefill(item: dict) -> str:
@@ -575,29 +587,121 @@ def _empty_gap_prefill(item: dict) -> str:
 _TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 
 
-def _parse_edit_text(text: str) -> tuple[str | None, str | None, tuple[str, str] | None]:
-    """Parse retyped edit text into (description, project_code, time_range) —
-    any of the three can be None, meaning "leave that field alone" (user
-    request 2026-07-18: "if I edit an event with a new time series [HHMM-HHMM]
-    it updates the time not the description" — a bare time range must NOT get
-    swallowed into the description text).
+def _parse_edit_text(text: str) -> tuple[str | None, str | None,
+                                         tuple[str, str] | None, list[str]]:
+    """Parse retyped edit text into (description, project_code, time_range,
+    tags) — the first three can be None, meaning "leave that field alone"
+    (user request 2026-07-18: "if I edit an event with a new time series
+    [HHMM-HHMM] it updates the time not the description" — a bare time range
+    must NOT get swallowed into the description text).
 
-    A trailing "@code" is stripped first (only ever the last token — an entry
-    edit doesn't need tg-fast's fuller shortcode grammar, just desc/project/
-    time). An embedded "HHMM-HHMM" is then pulled out of whatever remains,
-    from anywhere in the string (not just a prefix/suffix), since the natural
-    retype is either "0930-1000" alone (time only) or "new desc 0930-1000"
-    (both). Whatever text is left after removing both is the new description
-    — empty means "unchanged", not "clear the description"."""
+    "#tag" tokens are pulled out first (user request 2026-07-28: "add -2 tag
+    ... to the current 'eat' entry" — value tags -1/-2/-3 also trigger the
+    媒分 credit, see TAG_POINTS). A trailing "@code" is stripped next (only
+    ever the last token — an entry edit doesn't need tg-fast's fuller
+    shortcode grammar). An embedded "HHMM-HHMM" is then pulled out of
+    whatever remains, from anywhere in the string, since the natural retype
+    is either "0930-1000" alone (time only) or "new desc 0930-1000" (both).
+    Whatever text is left is the new description — empty means "unchanged",
+    not "clear the description"."""
+    tags = re.findall(r"(?:^|\s)#(\S+)", text)
+    text = re.sub(r"(?:^|\s)#\S+", "", text).strip()
+    # Range BEFORE the trailing-@code match: the retime prefill is
+    # "desc @code HHMM-HHMM", which leaves @code mid-string — matching the
+    # code first would swallow it into the description.
+    time_range = None
+    m_time = _TIME_RANGE_RE.search(text)
+    if m_time:
+        time_range = (m_time.group(1), m_time.group(2))
+        text = (text[:m_time.start()] + " " + text[m_time.end():]).strip()
     m_code = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
     body = (m_code.group(1) or "").strip() if m_code else text.strip()
     code = m_code.group(2) if m_code else None
-    time_range = None
-    m_time = _TIME_RANGE_RE.search(body)
-    if m_time:
-        time_range = (m_time.group(1), m_time.group(2))
-        body = (body[:m_time.start()] + body[m_time.end():]).strip()
-    return (body or None), code, time_range
+    return (body or None), code, time_range, tags
+
+
+# ── Value-tag 媒分 credits (user request 2026-07-28) ────────────────────────
+# Media-tier Toggl tags earn 媒 (hcmc) 分 per minute: "-2 means I explicitly
+# want the points ... 0.1/m for -1, 1/m for -3, 0.5/m for -2". Credits fire
+# ONLY for tags added through janus's edit flow — /tg shortcodes auto-tag
+# some entries (睡觉 -3, hiit -2) and blanket-crediting every tagged entry
+# would hand sleep ~400分/day of 媒. A tag on a RUNNING entry queues until
+# the timer stops (minutes unknown until then); fetch_today resolves the
+# queue. Credited (id, tag) pairs are journaled date-gated so a re-edit
+# can't double-credit.
+TAG_POINTS = {"-1": 0.1, "-2": 0.5, "-3": 1.0}  # 分 per minute → 媒 column
+TAG_CREDITS = Path.home() / ".local/state/jm/janus-tag-credits.json"
+
+
+def _tag_credit_load() -> dict:
+    try:
+        d = json.loads(TAG_CREDITS.read_text())
+        if d.get("date") == dt.date.today().isoformat():
+            return d
+    except Exception:
+        pass
+    return {"date": dt.date.today().isoformat(), "credited": [], "pending": []}
+
+
+def _tag_credit_save(d: dict) -> None:
+    try:
+        TAG_CREDITS.parent.mkdir(parents=True, exist_ok=True)
+        TAG_CREDITS.write_text(json.dumps(d, ensure_ascii=False))
+    except OSError:
+        pass
+
+
+def tag_credit_points(tag: str, mins: int) -> float:
+    """分 a value tag earns for `mins` tracked minutes (0 for unknown tags)."""
+    return round(mins * TAG_POINTS.get(tag, 0), 1)
+
+
+def _apply_tag_credit(tag: str, mins: int, day: dt.date) -> float | None:
+    """Append mins×rate 媒分 to the entry's own day row in 0分. Column
+    letter via neon.cols (never hardcoded — the 2026-04-28 reshuffle rule)."""
+    pts = tag_credit_points(tag, mins)
+    if pts <= 0:
+        return None
+    from neon import cols as neon_cols
+    col = neon_cols.domain_col("0分", "hcmc")
+    neon_excel.append("0分", col, date=f"{day.month}/{day.day}",
+                      value=f"+{pts:g}")
+    return pts
+
+
+def _find_entry(entry_ids: list) -> dict | None:
+    for e in STATE.entries + STATE.entries_yday:
+        if e.get("id") in entry_ids:
+            return e
+    return None
+
+
+def _resolve_pending_tag_credits() -> None:
+    """Credit queued value tags whose entry has since stopped. Runs at the
+    tail of fetch_today (already off the event loop). An entry that vanished
+    (deleted) drops its pending credit; a still-running one stays queued."""
+    st = _tag_credit_load()
+    if not st.get("pending"):
+        return
+    remaining = []
+    for p in st["pending"]:
+        ent = _find_entry([p.get("id")])
+        if ent is None:
+            continue
+        if ent.get("running"):
+            remaining.append(p)
+            continue
+        mins = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
+        try:
+            pts = _apply_tag_credit(p["tag"], mins, ent["start_dt"].date())
+        except Exception:
+            remaining.append(p)  # ix unreachable etc. — retry next fetch
+            continue
+        if pts:
+            st["credited"].append(p["key"])
+            flash(f"#{p['tag']} +{pts:g}分 媒 ({display_desc(ent['desc'])})", 6.0)
+    st["pending"] = remaining
+    _tag_credit_save(st)
 
 
 def _hhmm_to_dt(ref_date: dt.date, hhmm: str) -> dt.datetime:
@@ -1725,6 +1829,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # dwidth(left), which still includes it — same 1-char width).
         out.append((left_sty, f"{blk_name}:00"))
         out.append(_gutter(blk_sh, 0, slot_min))
+        # Header-riding events right-justify like every other calendar row
+        # (user request 2026-07-28): block name left, event at the right edge.
+        out.append(("class:selected_bg" if head_selected else "",
+                    " " * max(0, avail - dwidth(label))))
         if tpfx:
             out.append((time_sty, tpfx))
         out.append((head_sty, label))
@@ -1949,7 +2057,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty = f"{gsty} bg:#3a3a3a"
         out.append((time_sty, tcol))
         out.append((gsty, gch))
-        out.append((sty, pad(truncate(p["label"], space), space)))
+        body_txt = truncate(p["label"], space)
+        if p.get("is_event"):
+            # Calendar entries right-justified, Toggl entries left (user
+            # request 2026-07-28) — the two sources read as separate columns
+            # at a glance instead of interleaving mid-line.
+            out.append((sty, " " * max(0, space - dwidth(body_txt)) + body_txt))
+        else:
+            out.append((sty, pad(body_txt, space)))
         out.append((dur_sty, f" {dur}\n"))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
@@ -3105,7 +3220,7 @@ def _(event):
         if not text:
             flash("edit cancelled")
             return
-        desc, code, time_range = _parse_edit_text(text)
+        desc, code, time_range, tags = _parse_edit_text(text)
         pid = PROJECT_MAP.get(code) if code else None
         if code and pid is None:
             flash(f"unknown project code: {code}", 4.0)
@@ -3122,6 +3237,14 @@ def _(event):
             fields["description"] = desc
         if pid is not None:
             fields["project_id"] = pid
+        new_value_tags: list[str] = []
+        if tags:
+            # Merge with the entry's existing tags (update_entry REPLACES).
+            ent = _find_entry(ids)
+            existing = list((ent or {}).get("tags") or [])
+            fields["tags"] = sorted(set(existing) | set(tags))
+            new_value_tags = [t for t in tags
+                              if t in TAG_POINTS and t not in existing]
         if time_range:
             start_dt = _hhmm_to_dt(edit_date, time_range[0])
             end_dt = _hhmm_to_dt(edit_date, time_range[1])
@@ -3138,6 +3261,7 @@ def _(event):
             parts.append(f"@{code}")
         if time_range:
             parts.append(f"{time_range[0]}-{time_range[1]}")
+        parts += [f"#{t}" for t in tags]
         flash("$ edit " + " ".join(parts))
 
         async def _apply_edit_and_refresh():
@@ -3152,7 +3276,35 @@ def _(event):
                     await asyncio.to_thread(toggl_api.trim_range, start_dt, end_dt, set(ids))
                 for eid in ids:
                     await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
-                flash("updated", 4.0)
+                # Value-tag 媒分 credit — completed entry credits at once
+                # (minutes known); a running one queues until it stops
+                # (fetch_today resolves). Journaled so re-edits can't
+                # double-credit.
+                if new_value_tags:
+                    st = _tag_credit_load()
+                    ent = _find_entry(ids)
+                    for tag in new_value_tags:
+                        key = f"{ids[0]}:{tag}"
+                        if (key in st["credited"]
+                                or any(p.get("key") == key for p in st["pending"])):
+                            continue
+                        if ent and not ent.get("running"):
+                            mins = int((ent["end_dt"] - ent["start_dt"])
+                                       .total_seconds() // 60)
+                            pts = await asyncio.to_thread(
+                                _apply_tag_credit, tag, mins,
+                                ent["start_dt"].date())
+                            if pts:
+                                st["credited"].append(key)
+                                flash(f"#{tag} +{pts:g}分 媒", 5.0)
+                        else:
+                            st["pending"].append(
+                                {"key": key, "id": ids[0], "tag": tag})
+                            flash(f"#{tag} queued — 媒分 credit when the "
+                                  "timer stops", 5.0)
+                    _tag_credit_save(st)
+                else:
+                    flash("updated", 4.0)
             except Exception as e:  # noqa: BLE001 — a stale/deleted id (e.g. trimmed
                 # by did-fast's overlap handling since this row rendered) must flash,
                 # not crash the app

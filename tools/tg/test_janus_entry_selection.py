@@ -122,12 +122,12 @@ def test_empty_gap_prefill_is_time_range_with_trailing_space():
 
 def test_parse_edit_text_splits_trailing_code():
     mod = _load_tui()
-    assert mod._parse_edit_text("carolina 1:1 sync @i9") == ("carolina 1:1 sync", "i9", None)
+    assert mod._parse_edit_text("carolina 1:1 sync @i9") == ("carolina 1:1 sync", "i9", None, [])
 
 
 def test_parse_edit_text_no_code():
     mod = _load_tui()
-    assert mod._parse_edit_text("just a rename") == ("just a rename", None, None)
+    assert mod._parse_edit_text("just a rename") == ("just a rename", None, None, [])
 
 
 # ─── Registration: real entries + gaps become selectable ───────────────────
@@ -314,7 +314,7 @@ def test_enter_with_armed_edit_and_valid_text_flashes_edit_command():
 
 def test_parse_edit_text_extracts_bare_time_range_leaves_desc_none():
     mod = _load_tui()
-    desc, code, time_range = mod._parse_edit_text("0930-1000")
+    desc, code, time_range, _tags = mod._parse_edit_text("0930-1000")
     assert desc is None, "a bare time range must not become the new description"
     assert code is None
     assert time_range == ("0930", "1000")
@@ -322,7 +322,7 @@ def test_parse_edit_text_extracts_bare_time_range_leaves_desc_none():
 
 def test_parse_edit_text_extracts_time_range_alongside_desc_and_code():
     mod = _load_tui()
-    desc, code, time_range = mod._parse_edit_text("carolina sync 0930-1000 @i9")
+    desc, code, time_range, _tags = mod._parse_edit_text("carolina sync 0930-1000 @i9")
     assert desc == "carolina sync"
     assert code == "i9"
     assert time_range == ("0930", "1000")
