@@ -768,6 +768,41 @@ def _refresh_task_queue_inner() -> dict:
             neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])]
             if neg1:
                 print(f"WARN: -1neon fetch empty, carrying {len(neg1)} cached card(s)", file=sys.stderr)
+        else:
+            # Partial-fetch erosion guard (2026-07-28): a 5xx/rate storm can
+            # also return a strict SUBSET with a 200, which sails past the
+            # empty-only guard above and shrinks the cached ritual set on
+            # every refresh (this morning's storm eroded it to 1 card —
+            # "-1n tasks disappeared from dtd after completing a task").
+            # Union the old cache's ritual cards back in (dedup by id),
+            # pruning ids recorded closed in completed-today (run_ritual
+            # records them on a successful close) — but only while the old
+            # cache was written in the SAME 2h block, so cards the daemon
+            # retired at a boundary never outlive their block.
+            _now = datetime.now()
+            try:
+                _upd = datetime.fromisoformat(old_cache.get("updated", ""))
+                same_block = (_upd.date() == _now.date()
+                              and _upd.hour // 2 == _now.hour // 2)
+            except (ValueError, TypeError):
+                same_block = False
+            if same_block:
+                closed_ids: set = set()
+                try:
+                    _ctj = mc._load(mc.COMPLETED)
+                    if _ctj.get("date") == today_iso:
+                        closed_ids = {str(v) for v in (_ctj.get("ids") or {}).values()}
+                except Exception:
+                    pass
+                _have_neg1 = {t.get("id") for t in neg1}
+                carried = [t for t in old_today
+                           if "-1neon" in (t.get("labels") or [])
+                           and t.get("id") not in _have_neg1
+                           and str(t.get("id")) not in closed_ids]
+                if carried:
+                    print(f"WARN: -1neon fetch partial ({len(neg1)}), carrying "
+                          f"{len(carried)} more cached card(s)", file=sys.stderr)
+                    neg1 = neg1 + carried
         have = {t.get("id") for t in results["today"]}
         for t in neg1:
             if t.get("id") in have:

@@ -53,3 +53,25 @@ def test_neg1neon_not_a_static_bucket():
 if __name__ == "__main__":
     import subprocess, sys
     sys.exit(subprocess.call(["python3", "-m", "pytest", __file__, "-v"]))
+
+
+def test_refresh_guards_partial_neg1neon_fetch_against_erosion():
+    """Regression (2026-07-28): "-1n tasks disappeared from dtd after
+    completing a task." A 5xx/rate storm can return a strict SUBSET of the
+    -1neon cards with a 200 — that sails past the empty-only guard, and the
+    cache's ritual set shrank on every completion-time refresh (log:
+    "carrying 1 cached card(s)" ×4). The union must carry the old cache's
+    ritual cards back in (dedup by id), pruning ids recorded closed in
+    completed-today, scoped to a same-2h-block old cache so retired cards
+    never outlive their block."""
+    inner = next(
+        n for n in ast.walk(ast.parse(SRC))
+        if isinstance(n, ast.FunctionDef) and n.name == "_refresh_task_queue_inner"
+    )
+    body = ast.get_source_segment(SRC, inner)
+    assert "same_block" in body, "partial guard must scope carries to the current 2h block"
+    assert "closed_ids" in body, "carried cards must prune completed-today's closed ids"
+    assert "fetch partial" in body, "a partial carry must be logged, not silent"
+    # The carry must hinge on the old cache's updated timestamp sharing the
+    # 2h block (even-hour blocks → hour // 2 buckets).
+    assert "_upd.hour // 2 == _now.hour // 2" in body

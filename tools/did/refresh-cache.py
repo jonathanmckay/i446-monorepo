@@ -81,13 +81,14 @@ def main() -> int:
     # The "today" bucket is populated by did-fast.py --refresh-cache (which
     # fetches all tasks due today/overdue). This lightweight refresh only
     # updates neon-labeled buckets and must not drop the broader task list.
+    old_cache: dict = {}
     if CACHE.exists():
         try:
-            old = json.loads(CACHE.read_text())
-            if "today" in old and "today" not in data:
-                data["today"] = old["today"]
+            old_cache = json.loads(CACHE.read_text())
+            if "today" in old_cache and "today" not in data:
+                data["today"] = old_cache["today"]
         except (json.JSONDecodeError, OSError):
-            pass
+            old_cache = {}
     # Refresh the dynamic subset of "today" (rituals + #0g/#-1g goals) so newly-set
     # goals and a new block's rituals appear (the rest of "today" is left as
     # did-fast --refresh-cache last wrote it). Drop stale entries for these labels,
@@ -105,11 +106,42 @@ def main() -> int:
     # under it, trust the old data instead of wiping still-open cards — the
     # unconditional splice below otherwise drops them from "today" outright, not
     # just leaves them un-refreshed.
+    # Partial-fetch erosion guard (2026-07-28): under a Todoist 5xx/rate storm
+    # the label index can return a strict SUBSET with a 200 — the empty-only
+    # guard below passes it through, and the splice then REPLACES the block's
+    # full ritual set with the subset. Each refresh eroded further, down to
+    # did-fast's "carrying 1 cached card(s)" (user report: "-1n tasks
+    # disappeared from dtd after completing a task"). Union the old cache's
+    # entries for the label back in (dedup by id), pruning ids recorded closed
+    # in completed-today (run_ritual and regular closes record them) — but
+    # only while the old cache was written in the SAME 2h block, so cards the
+    # daemon retired at a boundary never outlive their block.
+    _now = datetime.now()
+    try:
+        _upd = datetime.fromisoformat(old_cache.get("updated", ""))
+        same_block = (_upd.date() == _now.date()
+                      and _upd.hour // 2 == _now.hour // 2)
+    except (ValueError, TypeError):
+        same_block = False
+    closed_ids: set = set()
+    if same_block:
+        try:
+            _ct = json.loads(_sp.COMPLETED_TODAY.read_text())
+            if _ct.get("date") == _now.strftime("%Y-%m-%d"):
+                closed_ids = {str(v) for v in (_ct.get("ids") or {}).values()}
+        except Exception:
+            pass
     fresh_dynamic, _seen = [], set()
     for lbl in DYNAMIC_TODAY_LABELS:
         fetched = todoist.find_tasks(labels=[lbl], limit=200)
         if not fetched:
             fetched = [t for t in data.get("today", []) if lbl in t.get("labels", [])]
+        if same_block:
+            have = {t.get("id") for t in fetched}
+            fetched = fetched + [t for t in data.get("today", [])
+                                 if lbl in t.get("labels", [])
+                                 and t.get("id") not in have
+                                 and str(t.get("id")) not in closed_ids]
         for t in fetched:
             if t.get("id") not in _seen:
                 _seen.add(t.get("id"))
