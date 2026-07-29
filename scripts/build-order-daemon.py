@@ -1292,6 +1292,23 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
         log(f"lock-and-mark: hour {hour} is not a fire time — nothing to do")
         return
 
+    # Heal Syncthing-conflict stamp losses BEFORE reconciling: Straylight
+    # stamps rituals at completion time while this daemon rewrites the same
+    # file, and the race's loser survives only as a LOCAL .sync-conflict
+    # copy. reconcile_p_for_day SETs 0分!P from the header stamps, so an
+    # unhealed loss becomes a permanent points loss (2026-07-29: 辰 scored
+    # 7/13 — 🎯/✅ lived only in the conflict copy). Union-merge is safe:
+    # the validation/strip pass below still removes stamps that don't hold.
+    if not dry_run:
+        try:
+            import build_order_heal
+            healed = build_order_heal.heal(BUILD_ORDER)
+            for m in healed.get("merged", []):
+                if m["added"]:
+                    log(f"lock-and-mark: healed conflict stamps {m['added']} from {m['file']}")
+        except Exception as e:  # noqa: BLE001 — healing must never block the fire
+            log(f"lock-and-mark: heal skipped: {e}")
+
     block_name = HOUR_TO_BRANCH_BLOCK.get(hour)
     log(f"lock-and-mark: hour={hour:02d}, block={block_name}")
 

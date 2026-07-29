@@ -1969,6 +1969,18 @@ def run_ritual(tag: str) -> dict:
     #    manual credit on the wrong header vs. what the user — and the
     #    daemon — actually see as "this block's" ⏱️/✅.)
     bo = Path.home() / "vault/g245/5e-1/build-order.md"
+    # Heal Syncthing-conflict stamp losses BEFORE stamping: Ix's daemon
+    # rewrites this file on its own schedule and the losing side of a race
+    # lands in a local .sync-conflict copy — without this, a fresh stamp
+    # writes onto a file that just lost earlier stamps (2026-07-29: 辰
+    # earned 7/13 because 🎯/✅ lived only in a conflict copy).
+    try:
+        import build_order_heal
+        healed = build_order_heal.heal(bo)
+        if any(m["added"] for m in healed.get("merged", [])):
+            out["healed_stamps"] = healed["merged"]
+    except Exception as e:  # noqa: BLE001 — healing must never block a ritual
+        out["heal_error"] = str(e)
     block = nb.current_block(datetime.now().hour)
     out["block"] = block
     if not bo.exists():
