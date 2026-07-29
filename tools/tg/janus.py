@@ -2933,7 +2933,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -3738,10 +3738,14 @@ ANSI_SEQUENCES["\x1b[61;5u"] = Keys.F23  # Ctrl+=
 ANSI_SEQUENCES["\x1b[45;5u"] = Keys.F24  # Ctrl+-
 
 
+# Bare "-"/"=" are NOT bound: even gated on an empty command line they
+# swallowed the FIRST keystroke of any "-"-leading description — typing
+# "-1l" or "#-2" into an idle janus navigated a day back instead (user
+# report 2026-07-29). Day nav keeps Ctrl+←/→, [ / ], and real Ctrl+-/=
+# (the CSI-u aliases below); plain characters always type.
 @kb.add("c-left")   # view the previous day (to fill in missed time entries)
 @kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 @kb.add("f24")      # Ctrl+- via CSI-u (see ANSI_SEQUENCES alias above)
-@kb.add("-", filter=_input_empty)
 def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
@@ -3760,7 +3764,6 @@ def _day_back(event):
 @kb.add("c-right")  # view the next day, capped at today
 @kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 @kb.add("f23")      # Ctrl+= via CSI-u (see ANSI_SEQUENCES alias above)
-@kb.add("=", filter=_input_empty)
 def _day_forward(event):
     if STATE.day_offset >= 0:
         flash("already on today")
