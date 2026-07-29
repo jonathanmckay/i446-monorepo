@@ -1,0 +1,137 @@
+"""User request 2026-07-29: "if there is any toggl entry (even a clock I
+didn't turn off) then the calendar events disappear ... let me still select
+calendar events so I can bring the meetings into toggl and get the credit."
+
+_past_event_picks used to hide any ended event with ANY overlapping Toggl
+entry. A runaway clock (one long undifferentiated entry spanning several
+meetings) therefore made every meeting unselectable — and unconvertible.
+_event_reclaimable lets a covered event through when the covering entry is
+>60m AND ≥30m longer than the event (a meeting deliberately tracked as its
+own entry stays hidden — no double-credit bait). No recency or same-day cut
+("often the stale toggl entry is from the previous day"); yesterday-started
+overnight clocks count as covering candidates."""
+import datetime as dtm
+import importlib.util
+import sys
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+HERE = Path(__file__).parent
+TZ = ZoneInfo("America/Los_Angeles")
+
+
+def _load_tui():
+    spec = importlib.util.spec_from_file_location("janus_reclaim", HERE / "janus.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["janus_reclaim"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _midnight():
+    return dtm.datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _entry(start, end, desc="work", eid=1):
+    return {"start_dt": start, "end_dt": end, "desc": desc,
+            "project_id": 1, "running": False, "id": eid, "tags": []}
+
+
+def _event(title, start, end):
+    return {"start_dt": start, "end_dt": end, "title": title, "calendar": "Outlook",
+            "all_day": False, "transparency": "opaque"}
+
+
+def test_runaway_clock_meeting_is_reclaimable():
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    today = _midnight()
+    now = today.replace(hour=13)
+    clock = _entry(today.replace(hour=9), today.replace(hour=13))  # 4h runaway
+    standup = _event("XCORE Standup", today.replace(hour=10, minute=30),
+                     today.replace(hour=11))
+    assert mod._event_reclaimable(standup, [clock], now) is True
+
+
+def test_deliberately_tracked_meeting_stays_hidden():
+    """Entry ≈ meeting length → it IS the meeting's tracking; resurfacing it
+    would invite double-booking + double points."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    today = _midnight()
+    now = today.replace(hour=15)
+    mtg_entry = _entry(today.replace(hour=13), today.replace(hour=14),
+                       desc="martech understanding")
+    mtg = _event("Martech Understanding", today.replace(hour=13),
+                 today.replace(hour=14))
+    assert mod._event_reclaimable(mtg, [mtg_entry], now) is False
+
+
+def test_short_covering_entry_not_reclaim_bait():
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    today = _midnight()
+    now = today.replace(hour=11)
+    halfhour = _entry(today.replace(hour=10), today.replace(hour=10, minute=45))
+    mtg = _event("1:1", today.replace(hour=10), today.replace(hour=10, minute=30))
+    assert mod._event_reclaimable(mtg, [halfhour], now) is False, \
+        "covering entry must exceed 60m to smell like a runaway clock"
+
+
+def test_no_recency_cut_and_yesterday_clock_counts():
+    """User: "I want it to span days, because often the stale toggl entry is
+    from the previous day." A morning meeting covered only by an overnight
+    clock STARTED YESTERDAY (which lives in entries_yday, not entries) must
+    still be reclaimable, and an old same-day meeting stays reclaimable —
+    no recency window."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    today = _midnight()
+    now = today.replace(hour=20)
+    # Old same-day meeting under a same-day runaway clock: still reclaimable.
+    clock = _entry(today.replace(hour=8), today.replace(hour=14))
+    old_mtg = _event("morning sync", today.replace(hour=9), today.replace(hour=9, minute=30))
+    mod.STATE.entries_yday = []
+    assert mod._event_reclaimable(old_mtg, [clock], now) is True
+    # Overnight clock from YESTERDAY covering a 05:30 meeting today.
+    overnight = _entry(today - dtm.timedelta(hours=4), today.replace(hour=6, minute=49),
+                       desc="fall asleep")
+    dawn_mtg = _event("APAC sync", today.replace(hour=5, minute=30), today.replace(hour=6))
+    mod.STATE.entries_yday = [overnight]
+    assert mod._event_reclaimable(dawn_mtg, [], now) is True, \
+        "yesterday-started clocks must count as covering candidates"
+    mod.STATE.entries_yday = []
+
+
+def test_past_event_picks_includes_reclaimable_covered_meeting():
+    """End-to-end through the pick pipeline: the covered standup must come
+    back as a selectable is_event pick despite the runaway clock."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    today = _midnight()
+    now = today.replace(hour=12, minute=30)
+    clock = _entry(today.replace(hour=9), today.replace(hour=12, minute=15))
+    standup = _event("XCORE Standup", today.replace(hour=10, minute=30),
+                     today.replace(hour=11))
+    picks = mod._past_event_picks("午", [standup], [clock], now)
+    assert [p["label"] for p in picks] == ["XCORE Standup"]
+    assert picks[0]["is_event"] and picks[0]["event"] is standup, \
+        "carries the raw event so Enter-conversion (did-fast trim) works"
+
+
+if __name__ == "__main__":
+    import pytest
+    sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_alt_enter_on_calendar_event_runs_shared_conversion():
+    """User request 2026-07-29 follow-up: ⌥↵ on a calendar event must run
+    the SAME convert-and-credit path as Enter (did-fast for ended events =
+    Toggl entry + points), not flash "select a tracked entry first"."""
+    src = (HERE / "janus.py").read_text()
+    i = src.index('kb.add("escape", "enter")')
+    body = src[i:src.index('def _run_did_and_refresh', i)]
+    assert "_convert_selected_event" in body, "⌥↵ must route raw events to the shared conversion"
+    assert body.index("_convert_selected_event") < body.index("select a tracked entry first")
+    # And Enter's event branch uses the same helper — one conversion path.
+    assert src.count("_convert_selected_event(item, event.app)") == 2

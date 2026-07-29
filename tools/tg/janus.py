@@ -2378,14 +2378,44 @@ def _event_covered(ev: dict, entries: list[dict]) -> bool:
                for e in entries)
 
 
+RECLAIM_MIN_ENTRY_MIN = 60  # a covering entry this long smells like a runaway clock
+RECLAIM_SLACK_MIN = 30      # ...and must exceed the event by this much
+
+
+def _event_reclaimable(ev, entries, now) -> bool:
+    """A COVERED ended event that should still show and be selectable —
+    the "clock I didn't turn off swallowed my meetings" case (user request
+    2026-07-29): converting it via Enter carves the runaway entry around
+    the meeting (did-fast's MECE trim) and grants its points.
+
+    Guard: the covering entry must be >60m AND at least 30m longer than
+    the event itself — a meeting deliberately tracked as its own entry is
+    about the meeting's length and stays hidden (no double-credit bait).
+    No recency or same-day cut ("I want it to span days, because often the
+    stale toggl entry is from the previous day"): yesterday-started
+    overnight clocks count as covering candidates too."""
+    ev_min = (ev["end_dt"] - ev["start_dt"]).total_seconds() / 60
+    for e in list(entries) + list(getattr(STATE, "entries_yday", [])):
+        if not (e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]):
+            continue
+        ent_min = (e["end_dt"] - e["start_dt"]).total_seconds() / 60
+        if ent_min > RECLAIM_MIN_ENTRY_MIN and ent_min >= ev_min + RECLAIM_SLACK_MIN:
+            return True
+    return False
+
+
 def _past_event_picks(blk_name, events, entries, now, limit: int = 4) -> list[dict]:
-    """Ended gcal events in this block with NO overlapping Toggl entry -- the
-    "I had three meetings but Toggl shows nothing/one giant blob" case (user
-    report 2026-07-17). Shares _future_block_picks' item shape (is_event=True,
-    raw event carried) so the existing event-cursor/Enter-conversion plumbing
-    treats an uncovered past meeting identically to an upcoming one; only the
-    Enter handler's did-fast-vs-tg-fast branch cares about past vs. future."""
-    ended = [ev for ev in events if ev["end_dt"] <= now and not _event_covered(ev, entries)]
+    """Ended gcal events in this block that are either uncovered by any
+    Toggl entry (the "Toggl shows nothing/one giant blob" case, 2026-07-17)
+    or covered only by a runaway long entry (_event_reclaimable,
+    2026-07-29). Shares _future_block_picks' item shape (is_event=True,
+    raw event carried) so the existing event-cursor/Enter-conversion
+    plumbing treats an uncovered past meeting identically to an upcoming
+    one; only the Enter handler's did-fast-vs-tg-fast branch cares about
+    past vs. future."""
+    ended = [ev for ev in events if ev["end_dt"] <= now
+             and (not _event_covered(ev, entries)
+                  or _event_reclaimable(ev, entries, now))]
     return _future_block_picks(blk_name, ended, limit=limit)
 
 
@@ -3238,6 +3268,60 @@ def _event_to_did_command(ev: dict) -> str:
     return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}"
 
 
+def _convert_selected_event(ev: dict, app) -> None:
+    """Convert a selected calendar event into Toggl — an ENDED event runs
+    did-fast (completed entry + its points in one shot, carving any runaway
+    covering entry via the MECE trim); a not-yet-ended one starts a tg-fast
+    timer backdated to the event's start. Shared by plain Enter and ⌥↵
+    (user request 2026-07-29: "opt+enter a calendar event ... both change
+    toggl, but also give me points for completed meetings")."""
+    if STATE.conversion_in_flight:
+        # did-fast is a ~10-45s Excel write; a double-press mid-flight
+        # would double-create the entry AND double-grant points, plus
+        # race two ix-osa writes against the same sheet. tg-fast's plain
+        # timer-start doesn't need this guard (idempotent enough), but
+        # this path does.
+        flash("still converting the last one…", 3.0)
+        return
+    now = view_now()
+    is_past = ev["end_dt"] <= now
+    cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
+    if is_past and STATE.day_offset != 0:
+        # Viewing a past day: did-fast's trailing M/D token targets the
+        # entry + points at the event's own day, not today.
+        cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
+    STATE.event_sel = None
+    flash(f"$ {'did' if is_past else 'tg'} {cmd}")
+
+    async def _run_event_and_refresh():
+        STATE.conversion_in_flight = True
+        try:
+            runner = run_did_fast if is_past else run_tg_fast
+            res = await asyncio.to_thread(runner, cmd)
+            flash(res, 6.0)
+            app.invalidate()
+            if is_past:
+                # did-fast's own Excel write + Toggl create has already
+                # landed by the time the subprocess returns — no need for
+                # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
+                # propagation lag, just one forced re-read of both.
+                await asyncio.to_thread(fetch_today, True)
+                await asyncio.to_thread(fetch_points)
+                app.invalidate()
+            else:
+                polls = (0.4, 0.8, 1.5)
+                for i, delay in enumerate(polls):
+                    await asyncio.sleep(delay)
+                    await asyncio.to_thread(fetch_current)
+                    if i == len(polls) - 1:
+                        await asyncio.to_thread(fetch_today, True)
+                    app.invalidate()
+        finally:
+            STATE.conversion_in_flight = False
+
+    app.create_background_task(_run_event_and_refresh())
+
+
 @kb.add("enter")
 def _(event):
     if STATE.split_target is not None:
@@ -3430,53 +3514,8 @@ def _(event):
             input_buffer.cursor_position = len(input_buffer.text)
             return
         # Anything else is a raw gcal event dict (kind absent) — the
-        # existing convert-to-Toggl-entry path, unchanged.
-        ev = item
-        if STATE.conversion_in_flight:
-            # did-fast is a ~10-45s Excel write; a double-Enter mid-flight
-            # would double-create the entry AND double-grant points, plus
-            # race two ix-osa writes against the same sheet. tg-fast's plain
-            # timer-start doesn't need this guard (idempotent enough), but
-            # this path does.
-            flash("still converting the last one…", 3.0)
-            return
-        now = view_now()
-        is_past = ev["end_dt"] <= now
-        cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
-        if is_past and STATE.day_offset != 0:
-            # Viewing a past day: did-fast's trailing M/D token targets the
-            # entry + points at the event's own day, not today.
-            cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
-        STATE.event_sel = None
-        flash(f"$ {'did' if is_past else 'tg'} {cmd}")
-
-        async def _run_event_and_refresh():
-            STATE.conversion_in_flight = True
-            try:
-                runner = run_did_fast if is_past else run_tg_fast
-                res = await asyncio.to_thread(runner, cmd)
-                flash(res, 6.0)
-                event.app.invalidate()
-                if is_past:
-                    # did-fast's own Excel write + Toggl create has already
-                    # landed by the time the subprocess returns — no need for
-                    # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
-                    # propagation lag, just one forced re-read of both.
-                    await asyncio.to_thread(fetch_today, True)
-                    await asyncio.to_thread(fetch_points)
-                    event.app.invalidate()
-                else:
-                    polls = (0.4, 0.8, 1.5)
-                    for i, delay in enumerate(polls):
-                        await asyncio.sleep(delay)
-                        await asyncio.to_thread(fetch_current)
-                        if i == len(polls) - 1:
-                            await asyncio.to_thread(fetch_today, True)
-                        event.app.invalidate()
-            finally:
-                STATE.conversion_in_flight = False
-
-        event.app.create_background_task(_run_event_and_refresh())
+        # convert-to-Toggl-entry path, shared with ⌥↵ (2026-07-29).
+        _convert_selected_event(item, event.app)
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
@@ -3557,6 +3596,14 @@ def _(event):
     record to check, so it runs unconditionally (that's the backfill case)."""
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if isinstance(item, dict) and item.get("kind") is None and item.get("end_dt"):
+        # A raw calendar event: ⌥↵ = "did this meeting" — same conversion
+        # as plain Enter (an ended event did-fasts: Toggl entry + points in
+        # one shot; a live one starts a backdated timer). One gesture for
+        # "give me credit" whether the row is an entry or a meeting
+        # (user request 2026-07-29).
+        _convert_selected_event(item, event.app)
+        return
     if not (isinstance(item, dict) and item.get("kind") == "entry"):
         flash("opt+enter: select a tracked entry first", 3.0)
         return
