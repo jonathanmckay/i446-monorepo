@@ -76,7 +76,7 @@ CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻",
-               "night hcmc", "evening hcmc"}  # evening hcmc = the card's name
+               "night hcmc", "evening hcmc", "hiit"}  # evening hcmc = the card's name
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
                "长冥想", "长o314", "aos", "1 kids nature"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.

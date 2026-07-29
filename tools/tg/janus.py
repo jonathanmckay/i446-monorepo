@@ -378,6 +378,10 @@ class State:
         # unrelated later submission (cancel via empty text, Escape, or a
         # day-nav all clear it the same way event_sel already does).
         self.edit_target: dict | None = None
+        # Armed by ^P on a selected completed entry: {"id", "date", "desc",
+        # "project_id", "tags", "start_dt", "end_dt"}. The next Enter reads
+        # the input line as the HHMM split point and cuts the entry in two.
+        self.split_target: dict | None = None
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
@@ -1998,7 +2002,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
             out.append(("class:time", tcol))
             out.append(_gutter(hh, mm, slot_min))
-            out.append(("class:free", _gap_fill(label, space) + "\n"))
+            # Right-justified like calendar rows (user request 2026-07-28) —
+            # free time and the plan share the right column; tracked reality
+            # keeps the left. The ┄ texture leads instead of trailing.
+            ft = truncate(label, space)
+            rem = space - dwidth(ft)
+            fill = ("┄" * (rem - 1) + " ") if rem > 1 else " " * max(0, rem)
+            out.append(("class:free", fill + ft + "\n"))
             continue
         if p.get("is_running"):
             # The live task: same row shape as any entry, but a bold "▶ "
@@ -2009,7 +2019,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # description/project doesn't require stopping it first.
             dur = fmt_dur(p["dur_min"])
             prefix = "▶ "
-            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1)
+            vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
+                             if t in VALUE_TAGS)
+            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
+                        - (dwidth(vtags) + 1 if vtags else 0))
             running_selected = bool(p.get("entry_ids")) and STATE.event_sel == _sel_key(
                 {"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
             if running_selected:
@@ -2026,6 +2039,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append((time_sty, tcol))
             out.append((gsty, gch))
             out.append((sty, prefix + pad(truncate(p["label"], space), space)))
+            if vtags:
+                out.append((dur_sty, f" {vtags}"))
             out.append((dur_sty, f" {dur}\n"))
             continue
         # A gcal event mixed into a non-future (current-block) card via its own
@@ -2033,7 +2048,12 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # not "tracked" (fmt_dur) — the block-level is_future flag alone can't
         # express "elapsed portion is real, remaining portion is a plan".
         dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
-        space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
+        # Value tags (#-1/#-2/#-3 — the ones worth points) ride the right
+        # edge just before the minutes (user request 2026-07-28).
+        vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
+                         if t in VALUE_TAGS)
+        space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1
+                    - (dwidth(vtags) + 1 if vtags else 0))
         if p.get("is_event"):
             my_key = _sel_key(p["event"])
         elif p.get("entry_ids"):
@@ -2072,6 +2092,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append((sty, " " * max(0, space - dwidth(body_txt)) + body_txt))
         else:
             out.append((sty, pad(body_txt, space)))
+        if vtags:
+            out.append((dur_sty, f" {vtags}"))
         out.append((dur_sty, f" {dur}\n"))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
@@ -2112,6 +2134,7 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
             # so an edit (rename/reproject) applies to every entry behind it,
             # not an arbitrarily-chosen first/last one.
             "entry_ids": m.get("ids", []),
+            "tags": m.get("tags") or [],
             # Raw (undecorated) description + project id — for the entry-edit
             # prefill, which must retype the actual editable value, not the
             # Haiku-shortened/code-suffixed display `label` above.
@@ -2178,6 +2201,7 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
             "style": project_style(e["project_id"]),
             "dur_min": mins,
             "is_running": bool(e.get("running")),
+            "tags": list(e.get("tags") or []),
             "entry_ids": [e["id"]],
             "raw_desc": e["desc"],
             "project_id": e["project_id"],
@@ -2489,9 +2513,12 @@ def render_morning() -> list[tuple[str, str]]:
         if merged and merged[-1]["desc"] == e["desc"]:
             merged[-1]["end_dt"] = end
             merged[-1]["ids"].append(e["id"])
+            merged[-1]["tags"] = sorted(set(merged[-1].get("tags") or [])
+                                        | set(e.get("tags") or []))
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end,
                            "desc": e["desc"], "project_id": e["project_id"],
+                           "tags": list(e.get("tags") or []),
                            "ids": [e["id"]]})
 
     bo_emojis = _read_block_emojis()
@@ -2906,7 +2933,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -2947,9 +2974,12 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
             merged[-1]["end_dt"] = end
             merged[-1]["running"] = merged[-1].get("running") or e.get("running")
             merged[-1]["ids"].append(e["id"])
+            merged[-1]["tags"] = sorted(set(merged[-1].get("tags") or [])
+                                        | set(e.get("tags") or []))
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"],
                            "project_id": e["project_id"], "running": e.get("running", False),
+                           "tags": list(e.get("tags") or []),
                            "ids": [e["id"]]})
     picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
     # A still-relevant entry that STARTED in the previous block (e.g. a run
@@ -3210,6 +3240,49 @@ def _event_to_did_command(ev: dict) -> str:
 
 @kb.add("enter")
 def _(event):
+    if STATE.split_target is not None:
+        # Same chokepoint discipline as edit_target below: consumed first,
+        # empty submission = cancel. The input line holds the HHMM split
+        # point (^P prefills the midpoint — editing digits is the whole UX).
+        sp = STATE.split_target
+        STATE.split_target = None
+        text = input_buffer.text.strip()
+        input_buffer.reset()
+        m = re.fullmatch(r"(\d{2})(\d{2})", text) if text else None
+        if not m:
+            flash("split cancelled" if not text else f"not an HHMM time: {text}", 4.0)
+            return
+        cut = _hhmm_to_dt(sp["date"], text)
+        if not (sp["start_dt"] < cut < sp["end_dt"]):
+            flash(f"split point must be inside {sp['start_dt']:%H%M}-{sp['end_dt']:%H%M}", 5.0)
+            return
+        flash(f"$ split {sp['desc']} at {cut:%H:%M}")
+
+        async def _split_and_refresh():
+            try:
+                # First half: shorten the original in place (id, tags, project
+                # untouched). Second half: a fresh identical entry from the
+                # cut to the original end.
+                await asyncio.to_thread(
+                    toggl_api.update_entry, sp["id"],
+                    stop=cut.isoformat(),
+                    duration=int((cut - sp["start_dt"]).total_seconds()))
+                await asyncio.to_thread(
+                    toggl_api.create_entry, sp["desc"], cut.isoformat(),
+                    sp["end_dt"].isoformat(),
+                    int((sp["end_dt"] - cut).total_seconds()),
+                    sp["project_id"], sp["tags"] or None)
+                flash(f"split: {sp['desc']} → {sp['start_dt']:%H:%M}-{cut:%H:%M} + "
+                      f"{cut:%H:%M}-{sp['end_dt']:%H:%M}", 6.0)
+            except Exception as e:  # noqa: BLE001 — surface, never crash the app
+                flash(f"split failed: {e}", 6.0)
+            event.app.invalidate()
+            await asyncio.to_thread(fetch_today, True)
+            event.app.invalidate()
+
+        event.app.create_background_task(_split_and_refresh())
+        return
+
     if STATE.edit_target is not None:
         # Consumed FIRST, unconditionally, before anything else about this
         # keypress is inspected — the chokepoint that stops a stale edit
@@ -3539,6 +3612,45 @@ def _(event):
     event.app.create_background_task(_run_did_and_refresh())
 
 
+@kb.add("c-p")
+def _(event):
+    """Split the selected tracked entry in two at a chosen point — ^P to
+    match dtd's split binding (user request 2026-07-28). Arms split_target
+    and prefills the MIDPOINT HHMM in the input line; edit the digits and
+    Enter cuts (first half keeps the entry id; second half is a fresh
+    identical entry). v1 scope: single completed entries — a merged row has
+    no single well-defined timeline and a running one has no end yet."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not (isinstance(item, dict) and item.get("kind") == "entry"):
+        flash("^P split: select a tracked entry first", 3.0)
+        return
+    if item.get("running"):
+        flash("can't split a running timer — stop it first", 4.0)
+        return
+    if len(item.get("entry_ids") or []) != 1 or not item.get("dur_min"):
+        flash("can't split a merged multi-entry row", 4.0)
+        return
+    if item["dur_min"] < 2:
+        flash("nothing to split — entry is under 2 minutes", 4.0)
+        return
+    ent = _find_entry(item["entry_ids"])
+    start = item["start_dt"]
+    end = start + dt.timedelta(minutes=item["dur_min"])
+    mid = start + (end - start) / 2
+    STATE.event_sel = None
+    STATE.split_target = {
+        "id": item["entry_ids"][0], "date": start.date(),
+        "desc": item["raw_desc"], "project_id": item.get("project_id"),
+        "tags": list((ent or {}).get("tags") or []),
+        "start_dt": start, "end_dt": end,
+    }
+    input_buffer.text = f"{mid:%H%M}"
+    input_buffer.cursor_position = len(input_buffer.text)
+    flash(f"split {item['raw_desc']} ({start:%H%M}-{end:%H%M}) — edit the "
+          "cut point, ⏎ to split", 8.0)
+
+
 @kb.add("c-q")
 @kb.add("c-c")
 def _(event):
@@ -3634,11 +3746,12 @@ def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
     STATE.event_sel = None  # a different day has different (or no) events
-    if STATE.edit_target is not None:
-        # A different day's rows are about to render — an armed edit +
+    if STATE.edit_target is not None or STATE.split_target is not None:
+        # A different day's rows are about to render — an armed edit/split +
         # prefilled input text from THIS day would otherwise survive the
         # nav and silently update the wrong entries on the next Enter.
         STATE.edit_target = None
+        STATE.split_target = None
         input_buffer.reset()
     flash(f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
@@ -3655,8 +3768,9 @@ def _day_forward(event):
     STATE.day_offset += 1
     STATE.scroll_min = 0
     STATE.event_sel = None
-    if STATE.edit_target is not None:
+    if STATE.edit_target is not None or STATE.split_target is not None:
         STATE.edit_target = None
+        STATE.split_target = None
         input_buffer.reset()
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
@@ -3712,8 +3826,10 @@ def _(event):
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;
                     # cancel an armed edit/selection
 def _(event):
-    if STATE.edit_target is not None or STATE.event_sel is not None:
+    if (STATE.edit_target is not None or STATE.split_target is not None
+            or STATE.event_sel is not None):
         STATE.edit_target = None
+        STATE.split_target = None
         STATE.event_sel = None
         input_buffer.reset()
         flash("cancelled")

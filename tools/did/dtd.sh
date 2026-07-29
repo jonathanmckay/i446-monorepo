@@ -388,6 +388,7 @@ case "\$clean_lower" in
   xk22) _ip="xk22 minutes (Ren)";;
   xk26) _ip="xk26 minutes (Rori)";;
   i444) _ip="i444 count (0 = none today)";;
+  hiit) _ip="hiit minutes";;
   新闻) _ip="新闻 minutes";;
   "evening hcmc"|"night hcmc") _ip="night hcmc minutes";;
   ${DTD_VAR1N_PAT}) _ip="\$clean_lower minutes (blank = base points)";;
@@ -455,7 +456,7 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 _id="\$1"
 _t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
-  cpap|xk20|xk22|xk26|i444|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
+  cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
     printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
@@ -1963,7 +1964,7 @@ while true; do
   # minutes; i444 needs a count, 0 meaning "none needed today")
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444|新闻)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444|hiit|新闻)
       # If a Toggl timer for this exact task is running, use its elapsed
       # minutes as the value instead of prompting. Stop it here to read the
       # duration; did-fast then sees the explicit number (clean + N) and the
