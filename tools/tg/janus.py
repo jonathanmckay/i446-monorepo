@@ -514,7 +514,19 @@ def fetch_gcal(force=False):
         # Merge and sort by start time
         combined = gcal_events + outlook_events
         combined.sort(key=lambda e: e["start_dt"])
-        STATE.events = combined
+        # Dedupe cross-calendar copies: the same meeting arrives from BOTH
+        # Outlook (Agency) and the "MSFT (Slow Sync)" Google import. Hidden
+        # while covered events were suppressed; the reclaim feature surfaced
+        # them as triple rows (2026-07-29: "Potrero PT" ×3 filled 巳's card).
+        seen_ev = set()
+        deduped = []
+        for e in combined:
+            k = ((e.get("title") or "").strip().lower(), e["start_dt"], e["end_dt"])
+            if k in seen_ev:
+                continue
+            seen_ev.add(k)
+            deduped.append(e)
+        STATE.events = deduped
         STATE.last_gcal_fetch = time.monotonic()
         _shorten_events(combined)
     except Exception as e:
@@ -1898,6 +1910,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # restored after the cut.
         keep = sorted(entry_rows,
                       key=lambda r: (not r[3].get("is_running"),
+                                     bool(r[3].get("is_event")),
                                      -(r[3].get("dur_min") or 0)))[:max_rows]
         rows = sorted(keep, key=lambda r: r[0])
     else:
@@ -2118,8 +2131,9 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
         if mins < 1 and not is_running:
             continue
         is_sleep = (m["desc"] or "").strip() == "睡觉"
-        code = proj_code(m["project_id"])
-        label = (display_desc(m["desc"]) or "(blank)") + (f" · {code}" if code else "")
+        # Project shows via row COLOR alone (user 2026-07-29: "I use colors
+        # to show project, so you don't need to include project names").
+        label = display_desc(m["desc"]) or "(blank)"
         items.append({
             "start_dt": m["start_dt"],
             "time_str": f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}",
@@ -2192,8 +2206,7 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
         mins = int((end - blk_start).total_seconds() // 60)
         if mins < 1:
             continue
-        code = proj_code(e["project_id"])
-        label = (display_desc(e["desc"]) or "(blank)") + (f" · {code}" if code else "")
+        label = display_desc(e["desc"]) or "(blank)"  # color carries the project
         out.append({
             "start_dt": blk_start,
             "time_str": f"{blk_start:%H:%M}",
@@ -2382,24 +2395,50 @@ RECLAIM_MIN_ENTRY_MIN = 60  # a covering entry this long smells like a runaway c
 RECLAIM_SLACK_MIN = 30      # ...and must exceed the event by this much
 
 
+def _same_day_dup(e, pool) -> bool:
+    """The covering entry RESTARTS a description already used earlier the
+    same day (an earlier ≥1m entry with the same desc that ended before it
+    started) — the "resumed my reading timer and it ran through the
+    meeting" pattern (user request 2026-07-29: a 57m `read fy2027
+    priorities` dup fell under the 60m runaway floor and hid the CosmosDB
+    meeting). A dup is its own overrun signal: nobody names a meeting's
+    dedicated entry after an activity they already timed that morning, so
+    no size guard applies on this path."""
+    d = (e.get("desc") or "").strip().lower()
+    if not d:
+        return False
+    for o in pool:
+        if o is e or (o.get("desc") or "").strip().lower() != d:
+            continue
+        if (o["end_dt"] <= e["start_dt"]
+                and o["start_dt"].date() == e["start_dt"].date()
+                and (o["end_dt"] - o["start_dt"]).total_seconds() >= 60):
+            return True
+    return False
+
+
 def _event_reclaimable(ev, entries, now) -> bool:
     """A COVERED ended event that should still show and be selectable —
     the "clock I didn't turn off swallowed my meetings" case (user request
-    2026-07-29): converting it via Enter carves the runaway entry around
-    the meeting (did-fast's MECE trim) and grants its points.
+    2026-07-29): converting it via Enter/⌥↵ carves the covering entry
+    around the meeting (did-fast's MECE trim) and grants its points.
 
-    Guard: the covering entry must be >60m AND at least 30m longer than
-    the event itself — a meeting deliberately tracked as its own entry is
-    about the meeting's length and stays hidden (no double-credit bait).
+    A covering entry counts as overrun when EITHER it is >60m AND at least
+    30m longer than the event (runaway clock — a meeting deliberately
+    tracked as its own entry is about the meeting's length and stays
+    hidden), OR it duplicates an earlier same-day entry (_same_day_dup).
     No recency or same-day cut ("I want it to span days, because often the
     stale toggl entry is from the previous day"): yesterday-started
     overnight clocks count as covering candidates too."""
     ev_min = (ev["end_dt"] - ev["start_dt"]).total_seconds() / 60
-    for e in list(entries) + list(getattr(STATE, "entries_yday", [])):
+    pool = list(entries) + list(getattr(STATE, "entries_yday", []))
+    for e in pool:
         if not (e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]):
             continue
         ent_min = (e["end_dt"] - e["start_dt"]).total_seconds() / 60
         if ent_min > RECLAIM_MIN_ENTRY_MIN and ent_min >= ev_min + RECLAIM_SLACK_MIN:
+            return True
+        if _same_day_dup(e, pool):
             return True
     return False
 
@@ -3237,6 +3276,15 @@ def _boot_grace_active(window: float = 2.0) -> bool:
     return time.monotonic() - STATE.boot_time < window
 
 
+def _safe_event_title(title: str) -> str:
+    """Conversion commands ride through tg-fast/did-fast, which SPLIT
+    multi-item input on [,;，；] — a comma inside an event title
+    ("CosmosDB Deprecation, Part 3") therefore became TWO items and created
+    a Toggl entry literally named "Part" (2026-07-29). Separators collapse
+    to spaces before the title enters a command string."""
+    return re.sub(r"\s+", " ", re.sub(r"[,;，；]", " ", title or "")).strip()
+
+
 def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
     """The /tg-style command string that converts a calendar event into a
     Toggl entry: backdated to the event's own start if it already began
@@ -3244,7 +3292,7 @@ def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
     meeting), otherwise a plain start (it hasn't happened yet). Reuses
     tg-fast.py's own self-contained backdated-start handling (stop-current +
     trim-overlap + start) — nothing about that is reimplemented here."""
-    title = ev.get("title") or ""
+    title = _safe_event_title(ev.get("title"))
     code = gcal_project_code(ev)
     suffix = f" @{code}" if code else ""
     if ev["start_dt"] <= now:
@@ -3262,7 +3310,7 @@ def _event_to_did_command(ev: dict) -> str:
     backfill). Never used for a still-in-progress/future event — the enter
     handler only calls this when the event has actually ended (ev["end_dt"]
     <= now); an unfinished meeting has no real end time to encode."""
-    title = ev.get("title") or ""
+    title = _safe_event_title(ev.get("title"))
     code = gcal_project_code(ev)
     suffix = f" @{code}" if code else ""
     return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}"

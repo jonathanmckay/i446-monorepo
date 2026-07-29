@@ -135,3 +135,51 @@ def test_alt_enter_on_calendar_event_runs_shared_conversion():
     assert body.index("_convert_selected_event") < body.index("select a tracked entry first")
     # And Enter's event branch uses the same helper — one conversion path.
     assert src.count("_convert_selected_event(item, event.app)") == 2
+
+
+def test_same_day_duplicate_entry_reclaims_covered_meeting():
+    """The CosmosDB case (2026-07-29): `read fy2027 priorities` 14:31-15:28
+    (57m — under the 60m runaway floor) covered the 45m CosmosDB meeting,
+    but the desc duplicates the 13:37-13:59 entry — a restarted activity
+    timer that ran through the meeting. The dup is the overrun signal."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    mod.STATE.entries_yday = []
+    today = _midnight()
+    now = today.replace(hour=15, minute=30)
+    first = _entry(today.replace(hour=13, minute=37), today.replace(hour=13, minute=59),
+                   desc="read fy2027 priorities", eid=1)
+    resumed = _entry(today.replace(hour=14, minute=31), today.replace(hour=15, minute=28),
+                     desc="read fy2027 priorities", eid=2)
+    cosmos = _event("CosmosDB Deprecation, Part 3", today.replace(hour=14, minute=30),
+                    today.replace(hour=15, minute=15))
+    assert mod._event_reclaimable(cosmos, [first, resumed], now) is True
+
+
+def test_unique_meeting_sized_entry_still_hidden():
+    """No dup + under the runaway floor → still treated as the meeting's own
+    deliberate tracking."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    mod.STATE.entries_yday = []
+    today = _midnight()
+    now = today.replace(hour=16)
+    only = _entry(today.replace(hour=14, minute=31), today.replace(hour=15, minute=28),
+                  desc="read fy2027 priorities", eid=2)
+    cosmos = _event("CosmosDB Deprecation, Part 3", today.replace(hour=14, minute=30),
+                    today.replace(hour=15, minute=15))
+    assert mod._event_reclaimable(cosmos, [only], now) is False
+
+
+def test_zero_minute_earlier_entry_is_not_a_dup_basis():
+    """0m artifacts (double-taps) must not mark every later same-name entry
+    as overrun."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    mod.STATE.entries_yday = []
+    today = _midnight()
+    blip = _entry(today.replace(hour=13, minute=36), today.replace(hour=13, minute=36),
+                  desc="tasks", eid=1)
+    later = _entry(today.replace(hour=14), today.replace(hour=14, minute=40),
+                   desc="tasks", eid=2)
+    assert mod._same_day_dup(later, [blip, later]) is False
