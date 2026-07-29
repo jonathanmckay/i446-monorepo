@@ -1364,7 +1364,7 @@ def _open_weekly_1g(domain_hint: str = ""):
                 if eVal is not missing value then set fen to eVal as text
                 set pct to ""
                 if gVal is not missing value then set pct to gVal as text
-                set out to out & currentDomain & tab & (dVal as text) & tab & fen & tab & pct & linefeed
+                set out to out & currentDomain & (character id 9) & (dVal as text) & (character id 9) & fen & (character id 9) & pct & linefeed
             end if
         end repeat
         return out

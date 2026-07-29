@@ -413,6 +413,70 @@ def test_prev_block_window_is_unchanged_for_every_other_block():
         )
 
 
+# ── Ritual card dedup/earned must tolerate annotated content ───────────────
+# Bug (2026-07-29): "seeing a lot of extra -1n" + uniform bogus (15)[15] on
+# every ritual card (real ritual cards never carry [N] -- their points come
+# from 0分!P via the block header). The instant a ritual card picked up ANY
+# trailing annotation, create_block_rituals' dedup check (`tag in open_bare`,
+# exact string match) stopped recognizing it as already open and created a
+# duplicate every 2h fire, while delete_block_rituals' earned check (`bare in
+# auto_emoji`) stopped recognizing an EARNED auto card, silently deleting it
+# (no credit) instead of closing it. lib/neon_blocks.ritual_card_tag() already
+# handles this correctly (whole-token comparison) for dtd's completion path;
+# _ritual_bare_tag() is the same logic, now shared by both daemon functions.
+
+def test_ritual_bare_tag_tolerates_trailing_annotations():
+    mod = _load_daemon()
+    tags = ["سمش", "-1g", "-1ibx", "-1t", "-1l"]
+    assert mod._ritual_bare_tag("😈 -1g (15) [15]", "😈", tags) == "-1g"
+    assert mod._ritual_bare_tag("😈 -1g", "😈", tags) == "-1g"
+    assert mod._ritual_bare_tag("😈 -1t (30)", "😈", tags) == "-1t"
+
+
+def test_ritual_bare_tag_none_for_unrelated_task():
+    # Unlike neon_blocks.ritual_card_tag() (which gatekeeps arbitrary dtd task
+    # names and fails closed with no marker), _ritual_bare_tag() is only ever
+    # called on tasks already filtered by the -1neon LABEL
+    # (_todoist_open_rituals), so it doesn't need that guard -- it's purely
+    # tag-matching, not "is this a ritual card at all" classification.
+    mod = _load_daemon()
+    tags = ["سمش", "-1g", "-1ibx", "-1t", "-1l"]
+    assert mod._ritual_bare_tag("😈 unrelated task (15) [15]", "😈", tags) is None
+
+
+def test_create_block_rituals_skips_annotated_duplicate(monkeypatch):
+    """Functional: an already-open '-1g' card annotated with (15) [15] must
+    stop create_block_rituals from creating a second one."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals",
+                        lambda token: [{"id": "1", "content": "😈 -1g (15) [15]"}])
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write",
+                        lambda path, payload, token, method="POST": created.append(payload))
+    mod.create_block_rituals()
+    created_tags = [p["content"].replace("😈", "").strip() for p in created]
+    assert "-1g" not in created_tags, "annotated '-1g' must be recognized as already open"
+    # The other 4 rituals (not open at all) still get created.
+    assert {"سمش", "-1ibx", "-1t", "-1l"} <= set(created_tags)
+
+
+def test_delete_block_rituals_closes_annotated_earned_auto_card(monkeypatch):
+    """Functional: an EARNED auto card ('-1t') annotated with (15) [15] must
+    still be CLOSED (credited), not deleted, at block turnover."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals",
+                        lambda token: [{"id": "1", "content": "😈 -1t (15) [15]"}])
+    calls = []
+    monkeypatch.setattr(
+        mod, "_todoist_write",
+        lambda path, payload, token, method="POST": calls.append((path, method)))
+    mod.delete_block_rituals(live={"⏱️": True})
+    assert calls == [("/tasks/1/close", "POST")], (
+        "annotated but earned auto card must be closed, not deleted")
+
+
 def test_goal_marker_stays_current_block():
     # 🎯 (-1g) is a current-block ritual — validated on THIS block's goals, not
     # the previous block's coverage.

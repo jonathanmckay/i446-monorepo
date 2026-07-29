@@ -1125,6 +1125,28 @@ def _load_block_rituals() -> dict:
     return json.loads(BLOCK_RITUALS_CONFIG.read_text(encoding="utf-8"))
 
 
+def _ritual_bare_tag(content: str, marker: str, tags: list[str]) -> str | None:
+    """The ritual tag a card's bare (marker-stripped) content matches, tolerating
+    trailing annotations like `(15) [15]` — same whole-token comparison as
+    lib/neon_blocks.ritual_card_tag() (kept as a local copy here: this module
+    doesn't import neon_blocks). None if it matches no known tag.
+
+    Exact-string bare matching (the previous behavior of both callers below)
+    broke the instant a ritual card picked up ANY suffix: create_block_rituals'
+    dedup check (`tag in open_bare`) stopped recognizing the card as already
+    open and created a duplicate every 2h fire, while delete_block_rituals'
+    earned-check (`bare in auto_emoji`) stopped recognizing an EARNED auto
+    card, silently deleting it (no credit) instead of closing it (bug
+    2026-07-29: "seeing a lot of extra -1n" + uniform bogus (15)[15] on every
+    ritual card, which real ritual cards never carry -- their points come from
+    0分!P via the block header, never from [N])."""
+    bare = (content or "").replace(marker, "").strip()
+    for tag in tags:
+        if bare == tag or tag in bare.split():
+            return tag
+    return None
+
+
 def _todoist_open_rituals(token: str) -> list:
     """All currently-open tasks carrying the -1neon label."""
     from urllib.parse import quote
@@ -1167,11 +1189,12 @@ def create_block_rituals(dry_run: bool = False) -> None:
         return
     cfg = _load_block_rituals()
     marker, label = cfg.get("auto_marker", "😈"), cfg["label"]
-    open_bare = {(t.get("content") or "").replace(marker, "").strip()
+    tags = [r["tag"] for r in cfg["rituals"]]
+    open_tags = {_ritual_bare_tag(t.get("content") or "", marker, tags)
                  for t in _todoist_open_rituals(token)}
     for r in cfg["rituals"]:
         tag = r["tag"]
-        if tag in open_bare:
+        if tag in open_tags:
             log(f"rituals: {tag} already open — skip")
             continue
         content = f"{marker} {tag}"
@@ -1200,13 +1223,14 @@ def delete_block_rituals(dry_run: bool = False, live: dict | None = None) -> Non
         return
     cfg = _load_block_rituals()
     marker = cfg.get("auto_marker", "😈")
+    tags = [r["tag"] for r in cfg["rituals"]]
     auto_emoji = {r["tag"]: r["emoji"] for r in cfg["rituals"]
                   if r.get("mode") == "auto"}
     for t in _todoist_open_rituals(token):
         tid, content = t.get("id"), t.get("content", "")
-        bare = (content or "").replace(marker, "").strip()
-        earned = (bare in auto_emoji and live is not None
-                  and bool(live.get(auto_emoji[bare])))
+        tag = _ritual_bare_tag(content, marker, tags)
+        earned = (tag in auto_emoji and live is not None
+                  and bool(live.get(auto_emoji[tag])))
         verb = "close (earned)" if earned else "delete"
         if dry_run:
             log(f"[DRY RUN] {verb} leftover card {content!r}")

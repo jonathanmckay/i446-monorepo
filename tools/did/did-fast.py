@@ -1176,9 +1176,9 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
         # Pre-image capture (for ctrl-z undo): read the cell BEFORE writing.
         pre_lines.append(f'''    set pv{col} to value of cell {col} of row todayRow of ws
     if pv{col} is missing value then
-        set preOut to preOut & "PRE" & tab & "{col}" & tab & linefeed
+        set preOut to preOut & "PRE" & (character id 9) & "{col}" & (character id 9) & linefeed
     else
-        set preOut to preOut & "PRE" & tab & "{col}" & tab & (pv{col} as text) & linefeed
+        set preOut to preOut & "PRE" & (character id 9) & "{col}" & (character id 9) & (pv{col} as text) & linefeed
     end if''')
         if is_cumulative:
             set_lines.append(f'''    set oldVal to value of cell {col} of row todayRow of ws
@@ -1373,7 +1373,7 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     on error
         set pf{col} to ""
     end try
-    set preOut to preOut & "PRE" & tab & "{col}" & tab & pf{col} & linefeed''')
+    set preOut to preOut & "PRE" & (character id 9) & "{col}" & (character id 9) & pf{col} & linefeed''')
         if w.is_cumulative_1n:
             inc = w.cumulative_increment
             write_lines.append(f'''    set theCellCum to range ("{col}" & weekRow) of ws1n
