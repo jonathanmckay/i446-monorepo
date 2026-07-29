@@ -246,6 +246,34 @@ def test_points_mismatch_wired_into_main(cs):
     assert 'emit_alert("weekly_points_mismatch", w)' in src
 
 
+# ─── daily NA-suppression (2026-07-28) ───────────────────────────────────────
+# Regression: "cleared out 1st hci from dtd... but I see it here again." This
+# script re-implements validate-daily-habits.py's missing/recreate logic (its
+# own main() already checks na_today() before recreating) but had skipped the
+# na_today() filter entirely, so a habit deleted from dtd today (ctrl-x ->
+# explicit 0 + NA marker) got silently resurrected by --fix — including via
+# the unattended 04:15 launchd run, with no user action involved at all.
+
+def test_main_filters_na_habits_before_recreating(cs):
+    """Structural: na_today() must gate `missing` BEFORE the --fix recreate
+    loop runs, not just get computed and ignored."""
+    import inspect
+    src = inspect.getsource(cs.main)
+    i_missing = src.index("missing = vdh.compute_missing(")
+    i_na = src.index("na_today()", i_missing)
+    i_filter = src.index("missing = [k for k in missing if k not in skipped_na]", i_na)
+    i_fix_loop = src.index("if args.fix and not skip_daily:", i_filter)
+    assert i_missing < i_na < i_filter < i_fix_loop, (
+        "na_today() must filter `missing` before the recreate loop, "
+        "same as validate-daily-habits.py's own main()")
+
+
+def test_main_reports_skipped_na_habits(cs):
+    import inspect
+    src = inspect.getsource(cs.main)
+    assert '"skipped_na": skipped_na' in src
+
+
 def test_driver_gates_fix_on_guard(cs):
     """Structural: both --fix recreate loops must be gated on the guard, and
     a skip must be alerted — never a silent no-op."""

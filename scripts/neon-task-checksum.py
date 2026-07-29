@@ -414,6 +414,16 @@ def main() -> int:
         manifest = json.loads(vdh.MANIFEST.read_text())
         daily_tasks = fetch_label_tasks(token, "0neon") + fetch_label_tasks(token, "夜neon")
         missing = vdh.compute_missing(manifest, [t["content"] for t in daily_tasks])
+        # Habits the user deleted from dtd TODAY (ctrl-x -> explicit 0 + NA
+        # marker) must not be resurrected same-day — validate-daily-habits.py's
+        # own main() already honors this; this script re-implements the same
+        # missing/recreate logic and had skipped the check entirely, so its
+        # --fix pass (and the 04:15 launchd run) silently recreated habits the
+        # user had just deleted (regression 2026-07-28: "cleared out 1st hci
+        # from dtd... but I see it here again").
+        na = vdh.na_today()
+        skipped_na = [k for k in missing if vdh.bare(manifest["habits"][k]["match"]) in na]
+        missing = [k for k in missing if k not in skipped_na]
         recreated = []
         skip_daily = recreate_guard("daily", len(daily_tasks),
                                     len(manifest["habits"]), len(missing))
@@ -429,7 +439,8 @@ def main() -> int:
                     report.setdefault("errors", []).append(f"daily {key}: {e}")
         drift = manifest_drift(manifest, headers_0n)
         report["daily"] = {"checked": len(manifest["habits"]), "missing": missing,
-                           "recreated": recreated, "manifest_drift": drift}
+                           "recreated": recreated, "manifest_drift": drift,
+                           "skipped_na": skipped_na}
         if missing:
             emit_alert("daily_habit_missing",
                        f"{', '.join(missing)}" + (" (recreated)" if recreated else ""))
