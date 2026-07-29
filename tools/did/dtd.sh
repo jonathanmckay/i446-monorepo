@@ -290,7 +290,19 @@ if [[ "\$cur" == Running:* ]]; then
 fi
 timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
 
-if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
+# -1neon ritual cards (😈-prefixed) must always complete on Enter, never
+# fall to the "start a timer" branch below (bug 2026-07-29: "-1l, -1t marked
+# done, didn't get the -1n points" -- a passive auto-check like -1t/-1l has
+# no natural corresponding activity to time, so a plain Enter almost never
+# finds a pre-existing matching timer and silently starts one instead of
+# completing, e.g. a real orphaned "-1t @n156 (10min)" Toggl entry from an
+# Enter press that was never followed up. Manual rituals (-1g/-1ibx/سمش)
+# hit the same branch but happen to often coincide with an already-running
+# matching timer from other usage, masking the bug for them.
+is_ritual_card=0
+[[ "\$clean" == 😈* ]] && is_ritual_card=1
+
+if [[ "\$is_ritual_card" == "1" || "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
   echo "\$clean_for_filter" >> "\$SESSION"
   # Optimistic hide by ID, never by name (bug 2026-07-24: completing one of
   # two same-named "AoS" one-off copies hid both — the name-based \$REMOVED
