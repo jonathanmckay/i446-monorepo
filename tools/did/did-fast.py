@@ -1875,15 +1875,30 @@ def _on_ix() -> bool:
 def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
     """Apply a block-header stamp on IX's build-order copy (single writer).
     Returns True = freshly stamped, False = already present, None = ssh
-    failed (caller falls back to the local write)."""
+    failed (caller falls back to the local write).
+
+    Multiple rituals are routinely completed within seconds of each other
+    (dtd batch-completions), each spawning its OWN ssh call here. Without a
+    lock, concurrent read-modify-write cycles race: each reads the same
+    pre-stamp text, and whichever call's write lands last silently discards
+    every other call's stamp (2026-07-29: 4 of 申's 5 rituals were completed
+    within a 4-second window and only one -- the one call that happened to
+    run in isolation -- survived). flock serializes the read-modify-write so
+    concurrent stamps queue and accumulate instead of clobbering each other."""
     py = (
-        "import sys; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
+        "import sys, fcntl; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
         "import neon_blocks as nb\n"
         "from pathlib import Path\n"
         "bo = Path.home() / 'vault/g245/5e-1/build-order.md'\n"
-        "t = bo.read_text(encoding='utf-8')\n"
-        f"nt, ch = nb.stamp_emoji(t, {block!r}, {emoji!r})\n"
-        "if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "lock_path = bo.with_suffix('.lock')\n"
+        "with open(lock_path, 'a') as lf:\n"
+        "    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)\n"
+        "    try:\n"
+        "        t = bo.read_text(encoding='utf-8')\n"
+        f"        nt, ch = nb.stamp_emoji(t, {block!r}, {emoji!r})\n"
+        "        if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "    finally:\n"
+        "        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)\n"
         "print('CH' if ch else 'NC')\n"
     )
     try:

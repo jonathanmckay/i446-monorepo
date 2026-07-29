@@ -10,12 +10,14 @@ local write only as a noted fallback when Ix is unreachable — and a remote
 "already stamped" must not double-credit points.
 """
 import importlib.util
+import multiprocessing
 import sys
 from pathlib import Path
 
 import pytest
 
 _HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent.parent / "lib"))
 
 
 def _load():
@@ -69,6 +71,124 @@ def test_run_ritual_routes_stamps_through_ix():
     # Remote truth gates the credit: a remote NC must zero `changed` so the
     # P credit can't double-fire for a ritual another machine already stamped.
     assert "changed = remote" in body
+
+
+def test_stamp_on_ix_remote_script_uses_a_lock():
+    """Regression (2026-07-29): "did all the -1n for 申 and 午 but it's still
+    wrong". Even with a single writer (Ix), rituals are routinely completed
+    within seconds of each other (dtd batch-completions) -- 4 of 申's 5
+    rituals were completed within a 4-second window and only one survived.
+    Each completion spawns its own ssh call, and without a lock, concurrent
+    read-modify-write cycles on Ix's build-order.md race: every call reads
+    the same pre-stamp text, and whichever write lands last silently
+    discards every other call's stamp. The remote script must serialize the
+    read-modify-write with an exclusive file lock."""
+    df = _load()
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("input", "")))
+        return _P("CH\n")
+    df.subprocess.run = fake_run
+    df._stamp_on_ix("申", "☀️")
+    _, payload = calls[0]
+    assert "fcntl" in payload and "flock" in payload, (
+        "the remote read-modify-write must be lock-protected, or concurrent "
+        "ritual completions silently clobber each other's stamps"
+    )
+    # The read (bo.read_text) must happen AFTER acquiring the lock, and the
+    # write (bo.write_text) before releasing it, or the lock protects nothing.
+    lock_idx = payload.index("LOCK_EX")
+    unlock_idx = payload.index("LOCK_UN")
+    read_idx = payload.index("read_text")
+    write_idx = payload.index("write_text")
+    assert lock_idx < read_idx < write_idx < unlock_idx, (
+        "read and write must both happen strictly between acquiring and "
+        "releasing the lock"
+    )
+
+
+def _locked_stamp_worker(build_order_path: str, emoji: str) -> None:
+    """Standalone (picklable) reproduction of _stamp_on_ix's locked
+    read-modify-write, run in a separate OS process so real flock semantics
+    apply -- a same-process thread wouldn't reproduce the race two separate
+    ssh-spawned processes hit on Ix."""
+    import fcntl
+    import neon_blocks as nb
+
+    bo = Path(build_order_path)
+    lock_path = bo.with_suffix(".lock")
+    with open(lock_path, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            t = bo.read_text(encoding="utf-8")
+            nt, _ = nb.stamp_emoji(t, "申", emoji)
+            bo.write_text(nt, encoding="utf-8")
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
+def _unlocked_stamp_worker(build_order_path: str, emoji: str) -> None:
+    """Same as above, minus the lock -- reproduces the pre-fix race."""
+    import neon_blocks as nb
+
+    bo = Path(build_order_path)
+    t = bo.read_text(encoding="utf-8")
+    nt, _ = nb.stamp_emoji(t, "申", emoji)
+    bo.write_text(nt, encoding="utf-8")
+
+
+def test_concurrent_ritual_completions_all_survive_with_lock(tmp_path):
+    """The actual regression, reproduced: 5 rituals completed within
+    seconds of each other must all land on the header -- not just whichever
+    process's write happens to run last."""
+    build_order = tmp_path / "build-order.md"
+    build_order.write_text("## -1₲\n\n- 申\n    - [ ] some goal\n", encoding="utf-8")
+
+    emojis = ["☀️", "🎯", "📧", "⏱️", "✅"]
+    procs = [multiprocessing.Process(target=_locked_stamp_worker,
+                                     args=(str(build_order), e))
+             for e in emojis]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=10)
+
+    final = build_order.read_text(encoding="utf-8")
+    header = next(l for l in final.split("\n") if l.startswith("- 申"))
+    missing = [e for e in emojis if e not in header]
+    assert not missing, f"lock failed to prevent lost updates: {missing} missing from {header!r}"
+
+
+def test_concurrent_ritual_completions_lose_stamps_without_lock(tmp_path):
+    """Sanity check for the test above: WITHOUT the lock, the same
+    concurrent scenario is expected to lose at least one stamp most of the
+    time, confirming the lock (not some unrelated factor) is what fixes it.
+    Flaky-by-nature (races aren't guaranteed), so this only asserts across
+    several repetitions that losses happen at least once -- if this stops
+    failing, the race stopped being reproducible and the test above may be
+    passing for the wrong reason."""
+    losses_observed = 0
+    for _ in range(5):
+        build_order = tmp_path / f"build-order-{_}.md"
+        build_order.write_text("## -1₲\n\n- 申\n    - [ ] some goal\n", encoding="utf-8")
+        emojis = ["☀️", "🎯", "📧", "⏱️", "✅"]
+        procs = [multiprocessing.Process(target=_unlocked_stamp_worker,
+                                         args=(str(build_order), e))
+                 for e in emojis]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=10)
+        final = build_order.read_text(encoding="utf-8")
+        header = next(l for l in final.split("\n") if l.startswith("- 申"))
+        if any(e not in header for e in emojis):
+            losses_observed += 1
+    assert losses_observed > 0, (
+        "expected the unlocked path to lose at least one stamp across 5 runs -- "
+        "if it never does, this environment can't reproduce the race and the "
+        "locked test isn't proving much"
+    )
 
 
 def test_on_ix_hostname_detection(monkeypatch):
