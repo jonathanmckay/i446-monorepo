@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-07-29T08:00:06.033894-07:00"
+  "tasks": {
+    "offsite agenda": {
+      "todoist_id": "6h97HV4v6MX4Q5w2",
+      "minutes": 50
+    },
+    "send out two more r&e": {
+      "todoist_id": "6h97HV5vcwQG78w2",
+      "minutes": 50
+    },
+    "figure out the candle equivalent for daily": {
+      "todoist_id": "6h97HVC574Wrr2J2",
+      "minutes": 50
+    },
+    "hiit with bball": {
+      "todoist_id": "6h97HVGXhMpG6gMR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-07-29T10:00:03.189428-07:00"
 }
