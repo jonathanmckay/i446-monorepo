@@ -648,6 +648,18 @@
     "rent": "1304.00"
   },
   {
+    "unit_id": 990,
+    "property_name": "kn47 K1",
+    "unit": "M207",
+    "tenant_name": "Gallagher, Jordan A.",
+    "status": "Pending",
+    "lease_sign_date": "2025-07-30",
+    "move_in": "2025-08-01",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "1089.00"
+  },
+  {
     "unit_id": 1061,
     "property_name": "kn47 K2",
     "unit": "E106",
@@ -2980,7 +2992,7 @@
     "property_name": "a210",
     "unit": "9",
     "tenant_name": "Blankenship, Matthew H.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-02",
     "move_in": "2025-12-09",
     "renewal_start_date": null,
