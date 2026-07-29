@@ -183,3 +183,80 @@ def test_zero_minute_earlier_entry_is_not_a_dup_basis():
     later = _entry(today.replace(hour=14), today.replace(hour=14, minute=40),
                    desc="tasks", eid=2)
     assert mod._same_day_dup(later, [blip, later]) is False
+
+
+def test_partial_overlap_dup_does_not_resurface_event():
+    """巳 regression (2026-07-29): a 13m 冥想 (dup of an earlier 冥想)
+    brushing the tail of a 45m PT session resurfaced the whole event even
+    though the window was tracked granularly. The suspect must cover ≥80%
+    of the meeting by itself."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    mod.STATE.entries_yday = []
+    today = _midnight()
+    now = today.replace(hour=11)
+    med1 = _entry(today.replace(hour=9, minute=10), today.replace(hour=9, minute=19),
+                  desc="冥想", eid=1)
+    hiit = _entry(today.replace(hour=9, minute=20), today.replace(hour=9, minute=46),
+                  desc="hiit", eid=2)
+    med2 = _entry(today.replace(hour=9, minute=47), today.replace(hour=10, minute=1),
+                  desc="冥想", eid=3)
+    pt = _event("Potrero PT", today.replace(hour=9, minute=15), today.replace(hour=10))
+    assert mod._event_reclaimable(pt, [med1, hiit, med2], now) is False
+
+
+def test_conversion_command_strips_commas_from_title():
+    """"CosmosDB Deprecation, Part 3" split on the comma inside did-fast and
+    created a Toggl entry literally named "Part" (2026-07-29). Separators
+    must never survive into the command string."""
+    mod = _load_tui()
+    today = _midnight()
+    ev = _event("CosmosDB Deprecation, Part 3", today.replace(hour=14, minute=30),
+                today.replace(hour=15, minute=15))
+    cmd = mod._event_to_did_command(ev)
+    assert "," not in cmd and ";" not in cmd
+    assert cmd.startswith("CosmosDB Deprecation Part 3 1430-1515")
+
+
+def test_fetch_gcal_shape_dedupes_cross_calendar_copies():
+    """The same meeting arrives from Outlook AND the MSFT-import calendar;
+    reclaim surfaced it as triple rows ("Potrero PT" ×3). fetch_gcal must
+    keep one copy per (title, start, end)."""
+    src = (HERE / "janus.py").read_text()
+    i = src.index("def fetch_gcal")
+    body = src[i:src.index("\ndef ", i + 10)]
+    assert "seen_ev" in body and "deduped" in body
+
+
+def test_row_cap_prefers_tracked_entries_over_event_picks():
+    """"if there are good toggl entries, then toggl should be the default":
+    a big reclaimed event pick must not crowd real entries out of the card."""
+    mod = _load_tui()
+    mod.STATE.events = []
+    today = _midnight()
+    picks = [
+        {"start_dt": today.replace(hour=8, minute=48), "time_str": "", "label": "asha sync",
+         "style": "", "dur_min": 22, "entry_ids": [1], "raw_desc": "asha sync", "project_id": None},
+        {"start_dt": today.replace(hour=9, minute=10), "time_str": "", "label": "冥想",
+         "style": "", "dur_min": 8, "entry_ids": [2], "raw_desc": "冥想", "project_id": None},
+        {"start_dt": today.replace(hour=9, minute=20), "time_str": "", "label": "hiit",
+         "style": "", "dur_min": 26, "entry_ids": [3], "raw_desc": "hiit", "project_id": None},
+        {"start_dt": today.replace(hour=9, minute=15), "time_str": "", "label": "Potrero PT",
+         "style": "", "dur_min": 45, "is_event": True,
+         "event": _event("Potrero PT", today.replace(hour=9, minute=15), today.replace(hour=10))},
+    ]
+    text = "".join(t for _, t in mod._compact_block_lines("巳", 8, picks, 0, ""))
+    for name in ("asha sync", "冥想", "hiit"):
+        assert name in text, f"tracked entry {name!r} must survive the cap"
+
+
+def test_entry_rows_show_no_project_code_suffix():
+    """Colors carry the project — labels drop the " · code" suffix
+    (user 2026-07-29)."""
+    src = (HERE / "janus.py").read_text()
+    i = src.index("def _past_block_picks")
+    body = src[i:src.index("\ndef ", i + 10)]
+    assert '· {code}' not in body
+    i = src.index("def _block_spill_items")
+    body = src[i:src.index("\ndef ", i + 10)]
+    assert '· {code}' not in body

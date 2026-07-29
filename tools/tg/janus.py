@@ -2431,9 +2431,23 @@ def _event_reclaimable(ev, entries, now) -> bool:
     stale toggl entry is from the previous day"): yesterday-started
     overnight clocks count as covering candidates too."""
     ev_min = (ev["end_dt"] - ev["start_dt"]).total_seconds() / 60
+    if ev_min <= 0:
+        return False
     pool = list(entries) + list(getattr(STATE, "entries_yday", []))
     for e in pool:
         if not (e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]):
+            continue
+        # The suspect must cover ≥80% of the meeting BY ITSELF. Granular,
+        # deliberate tracking (several distinct entries across the window)
+        # never produces a single dominating suspect, so good Toggl data
+        # stays the default and the event stays hidden (user 2026-07-29:
+        # "if there are good toggl entries, then toggl should be the
+        # default, it's only hanger time entries that I want to suppress" —
+        # a 13-minute 冥想 dup brushing the tail of a 45m PT session was
+        # resurfacing the whole event).
+        overlap = ((min(e["end_dt"], ev["end_dt"])
+                    - max(e["start_dt"], ev["start_dt"])).total_seconds() / 60)
+        if overlap < 0.8 * ev_min:
             continue
         ent_min = (e["end_dt"] - e["start_dt"]).total_seconds() / 60
         if ent_min > RECLAIM_MIN_ENTRY_MIN and ent_min >= ev_min + RECLAIM_SLACK_MIN:
