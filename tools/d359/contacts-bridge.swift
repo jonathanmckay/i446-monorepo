@@ -156,15 +156,47 @@ func applyUpdates(from path: String) {
     }
 }
 
+func deleteContacts(ids: [String]) {
+    guard requestAccessSync() else {
+        FileHandle.standardError.write("ERROR: Contacts access not granted\n".data(using: .utf8)!)
+        exit(1)
+    }
+    let store = CNContactStore()
+    let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor]
+    var results: [ApplyResult] = []
+    for id in ids {
+        let saveRequest = CNSaveRequest()
+        guard let existing = try? store.unifiedContact(withIdentifier: id, keysToFetch: keys),
+              let mutable = existing.mutableCopy() as? CNMutableContact else {
+            results.append(ApplyResult(id: id, created: false, ok: false, error: "not found"))
+            continue
+        }
+        saveRequest.delete(mutable)
+        do {
+            try store.execute(saveRequest)
+            results.append(ApplyResult(id: id, created: false, ok: true, error: nil))
+        } catch {
+            results.append(ApplyResult(id: id, created: false, ok: false, error: "\(error)"))
+        }
+    }
+    let enc = JSONEncoder()
+    enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let outData = try? enc.encode(results) {
+        FileHandle.standardOutput.write(outData)
+    }
+}
+
 let args = CommandLine.arguments
 if args.count >= 2 && args[1] == "dump" {
     dumpContacts()
 } else if args.count >= 3 && args[1] == "apply" {
     applyUpdates(from: args[2])
+} else if args.count >= 3 && args[1] == "delete" {
+    deleteContacts(ids: Array(args[2...]))
 } else if args.count >= 2 && args[1] == "check-auth" {
     let status = CNContactStore.authorizationStatus(for: .contacts)
     print(status.rawValue)
 } else {
-    FileHandle.standardError.write("usage: contacts-bridge dump | apply <updates.json> | check-auth\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: contacts-bridge dump | apply <updates.json> | delete <id> [id...] | check-auth\n".data(using: .utf8)!)
     exit(1)
 }
