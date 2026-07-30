@@ -1147,8 +1147,12 @@ def _ritual_bare_tag(content: str, marker: str, tags: list[str]) -> str | None:
     return None
 
 
-def _todoist_open_rituals(token: str) -> list:
-    """All currently-open tasks carrying the -1neon label."""
+def _todoist_open_rituals(token: str) -> list | None:
+    """All currently-open tasks carrying the -1neon label. None on fetch
+    failure — distinct from an empty list (genuinely nothing open) — so
+    callers fail closed instead of treating an API hiccup as license to
+    duplicate (bug 2026-07-30: a 503 here made create_block_rituals think
+    nothing was open and create a full second set of cards)."""
     from urllib.parse import quote
     url = f"https://api.todoist.com/api/v1/tasks?label={quote('-1neon')}&limit=200"
     req = urllib.request.Request(url)
@@ -1159,7 +1163,7 @@ def _todoist_open_rituals(token: str) -> list:
         return data.get("results", data) if isinstance(data, dict) else data
     except Exception as e:
         log(f"rituals: fetch open ERROR {e}")
-        return []
+        return None
 
 
 def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> int:
@@ -1190,8 +1194,12 @@ def create_block_rituals(dry_run: bool = False) -> None:
     cfg = _load_block_rituals()
     marker, label = cfg.get("auto_marker", "😈"), cfg["label"]
     tags = [r["tag"] for r in cfg["rituals"]]
+    open_rituals = _todoist_open_rituals(token)
+    if open_rituals is None:
+        log("rituals: could not verify open cards — skipping creation this fire")
+        return
     open_tags = {_ritual_bare_tag(t.get("content") or "", marker, tags)
-                 for t in _todoist_open_rituals(token)}
+                 for t in open_rituals}
     for r in cfg["rituals"]:
         tag = r["tag"]
         if tag in open_tags:
@@ -1226,7 +1234,11 @@ def delete_block_rituals(dry_run: bool = False, live: dict | None = None) -> Non
     tags = [r["tag"] for r in cfg["rituals"]]
     auto_emoji = {r["tag"]: r["emoji"] for r in cfg["rituals"]
                   if r.get("mode") == "auto"}
-    for t in _todoist_open_rituals(token):
+    open_rituals = _todoist_open_rituals(token)
+    if open_rituals is None:
+        log("rituals: could not verify open cards — skipping retirement this fire")
+        return
+    for t in open_rituals:
         tid, content = t.get("id"), t.get("content", "")
         tag = _ritual_bare_tag(content, marker, tags)
         earned = (tag in auto_emoji and live is not None

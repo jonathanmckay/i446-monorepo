@@ -196,6 +196,17 @@ class TodoistTriager:
         task_id = task["id"]
         content = task["content"]
 
+        # -1neon ritual cards (سمش/-1g/-1ibx/-1t/-1l) live in this same inbox
+        # project but are owned by build-order-daemon.py, whose dedup check
+        # only recognizes their bare "😈 <tag>" content. Appending (15)[15]
+        # here doesn't just mislabel them (their points come from 0分!P, never
+        # from [N]) -- it also fed a duplicate-card bug (2026-07-29/07-30) by
+        # constantly mutating the exact content the dedup check matches on.
+        if "-1neon" in (task.get("labels") or []):
+            if self.verbose:
+                print(f"\n⏭️  Skipping ritual card: {content}")
+            return
+
         self.stats["processed"] += 1
 
         if self.verbose:

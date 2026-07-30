@@ -236,7 +236,15 @@ def main():
                     resolved[field] = d_val
                 elif a_val and d_val and a_key != d_key:
                     review.append(f"- **{p['title']}** (`{p['slug']}`): pre-existing mismatch on `{field}` — d359=`{d_val}` vs Apple=`{a_val}` (first sync, not auto-resolving)")
-                    resolved[field] = d_val  # keep d359's value in snapshot; don't overwrite either side
+                    # Deliberately omit `field` from `resolved`: an unresolved
+                    # mismatch must NOT get a snapshot baseline. Writing either
+                    # side's value here would make the next run's 3-way diff
+                    # see Apple's still-different value as "changed since
+                    # baseline" and silently force-fill it into d359 — this
+                    # exact bug clobbered a real phone number on 2026-07-30.
+                    # Leaving the field out of `resolved` keeps it re-entering
+                    # this fill-only/review branch every run until a human
+                    # edits one side to actually match.
                 else:
                     resolved[field] = a_val or d_val
                 continue

@@ -477,6 +477,64 @@ def test_delete_block_rituals_closes_annotated_earned_auto_card(monkeypatch):
         "annotated but earned auto card must be closed, not deleted")
 
 
+# ── Ritual fetch failure must fail closed, not open ─────────────────────────
+# Bug (2026-07-30): -1t and -1l (and the other three -1neon cards) were
+# double created. _todoist_open_rituals() caught any fetch exception (e.g. an
+# HTTP 503) and returned [], indistinguishable from "genuinely nothing open".
+# create_block_rituals() then created a full second set of cards on top of
+# whatever was already open. Confirmed in /tmp/neon-lock-and-mark.log on Ix at
+# 2026-07-30T04:00:06-0700: "rituals: fetch open ERROR HTTP Error 503: Service
+# Unavailable" immediately followed by five "rituals: + ..." creation lines.
+# Fix: _todoist_open_rituals() now returns None on failure (vs. [] for a
+# genuinely empty result), and both create_block_rituals/delete_block_rituals
+# abort instead of proceeding as if nothing were open.
+
+def test_todoist_open_rituals_returns_none_on_fetch_error(monkeypatch):
+    mod = _load_daemon()
+
+    def raise_error(*a, **k):
+        raise OSError("HTTP Error 503: Service Unavailable")
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", raise_error)
+    assert mod._todoist_open_rituals("tok") is None
+
+
+def test_create_block_rituals_skips_when_fetch_fails(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: None)
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write",
+                        lambda path, payload, token, method="POST": created.append(payload))
+    mod.create_block_rituals()
+    assert created == [], "a failed fetch must not be treated as license to create a duplicate set"
+
+
+def test_delete_block_rituals_skips_when_fetch_fails(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: None)
+    calls = []
+    monkeypatch.setattr(
+        mod, "_todoist_write",
+        lambda path, payload, token, method="POST": calls.append((path, method)))
+    mod.delete_block_rituals(live={"⏱️": True})
+    assert calls == [], "a failed fetch must not be treated as an empty leftover set"
+
+
+def test_create_block_rituals_still_creates_on_genuinely_empty_fetch(monkeypatch):
+    """Sanity check the fix distinguishes failure (None) from a genuinely
+    empty result ([]) -- the latter must still allow creation as before."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write",
+                        lambda path, payload, token, method="POST": created.append(payload))
+    mod.create_block_rituals()
+    assert len(created) == 5
+
+
 def test_goal_marker_stays_current_block():
     # 🎯 (-1g) is a current-block ritual — validated on THIS block's goals, not
     # the previous block's coverage.
