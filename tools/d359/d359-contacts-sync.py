@@ -261,9 +261,14 @@ def main():
         state["contacts"][aid] = {"d359_path": str(p["path"]), "last_synced": resolved}
 
     # --- unlinked Apple contacts -> registry candidates ---
+    # Narrowed to "has an email" only (not just a phone): 1191 of 1854 Apple
+    # contacts are phone-only with no email, which skews heavily toward
+    # one-off saves from a call/text rather than someone worth tracking.
+    # Having an email is a much more deliberate signal. Cuts candidates from
+    # ~1809 to ~635 (per the 2026-07-29 dry-run analysis).
     linked_ids = {c.get("apple_contact_id") for c in profiles if c.get("apple_contact_id")}
     unlinked_apple = [c for c in apple_contacts if c["id"] not in linked_ids
-                       and (c["phones"] or c["emails"])]
+                       and c["emails"]]
 
     # --- report ---
     print(f"d359 profiles: {len(profiles)} | Apple contacts: {len(apple_contacts)}")
