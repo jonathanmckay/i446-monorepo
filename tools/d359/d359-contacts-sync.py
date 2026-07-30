@@ -267,8 +267,18 @@ def main():
                 fills_to_d359.append((p, field, a_val))
                 resolved[field] = a_val
             elif d_changed and not a_changed:
-                fills_to_apple.append((p, contact, field, d_val))
-                resolved[field] = d_val
+                if d_val is not None:
+                    fills_to_apple.append((p, contact, field, d_val))
+                    resolved[field] = d_val
+                else:
+                    # d359 lost a value Apple still holds (field cleared,
+                    # or a parsing bug got fixed and a garbage value
+                    # stopped being read as real — see 2026-07-30 incident).
+                    # Never propagate a d359-side deletion to Apple; Apple's
+                    # unchanged value is authoritative, so restore it into
+                    # d359 instead of pushing the deletion outward.
+                    fills_to_d359.append((p, field, a_val))
+                    resolved[field] = a_val
             elif a_key == d_key:
                 resolved[field] = a_val
             else:
@@ -370,6 +380,12 @@ def main():
     if fills_to_apple:
         updates_json = []
         for p, contact, field, val in fills_to_apple:
+            if val is None:
+                # contacts-bridge's Swift schema takes non-optional String
+                # values in setPhones/setEmails — a null here fails JSON
+                # decoding for the WHOLE batch, silently dropping every
+                # other pending update too. Never let one reach this point.
+                continue
             label_map = {"phone": ("mobile", "setPhones"), "email": ("home", "setEmails"), "work_email": ("work", "setEmails")}
             label, key = label_map[field]
             existing = next((u for u in updates_json if u["id"] == contact["id"]), None)
