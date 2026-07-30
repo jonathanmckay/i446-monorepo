@@ -85,7 +85,7 @@ WEEKLY_DOMAIN = {
     "1 f692": "m5x2", "1 f693": "i9", "1 m5x2": "m5x2", "1 i9": "i9",
     "1 -2g": "g245", "1 vm+li+msgr": "i9", "1 -1n": "g245", "1 f694": "f694",
     "1 xk88": "xk88", "1 xk87": "xk87", "1 xk87 wknd": "xk87", "1 cal": "g245",
-    "1 s897": "s897", "1 hcm": "hcm", "1 hcb": "hcb", "长o314": "hcm",
+    "1 s897": "s897", "1 hcm": "hcmc", "1 hcmc": "hcmc", "1 hcb": "hcb", "长o314": "hcm",
     "groceries": "hcb", "1 hcme": "hcm", "1 sunset": "hcm", "2 hci": "hci",
     "长冥想": "hcm", "业写": "h335", "一起饭": "xk87", "nails": "hci",
     "aos": "xk88", "family": "家", "s897": "s897", "relax {60}": "hcm",

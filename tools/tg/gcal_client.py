@@ -138,11 +138,25 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
                 "start": s,
                 "end": e,
                 "calendar": cal_summary,
+                # id + calendar_id make the event API-addressable (janus ^X
+                # delete, 2026-07-30). Import calendars (the MSFT Slow Sync
+                # ICS mirror) are read-only — janus checks the id suffix.
+                "id": ev.get("id"),
+                "calendar_id": cid,
                 "all_day": "date" in ev["start"],
                 "transparency": ev.get("transparency", "opaque"),
             })
     cache.write_text(json.dumps(out))
     return _hydrate(out, start, end)
+
+
+def delete_event(calendar_id: str, event_id: str) -> None:
+    """Delete an event from a Google-hosted calendar. sendUpdates='none' so
+    removing an invite never emails the organizer. Raises on failure (janus
+    catches and falls back to a local hide)."""
+    svc, _ = _service()
+    svc.events().delete(calendarId=calendar_id, eventId=event_id,
+                        sendUpdates="none").execute()
 
 
 def _hydrate(raw: Iterable[dict], start: dt.datetime, end: dt.datetime) -> list[dict]:

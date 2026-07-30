@@ -500,6 +500,61 @@ def fetch_today(force=False):
             flash(f"toggl today err: {e}")
 
 
+# ── ^X event delete / hide (user request 2026-07-30) ───────────────────────
+# Google-hosted events (m5x2/m5c7 calendars) are really deleted via the API;
+# Outlook-sourced rows (Agency fetch, or the read-only "MSFT (Slow Sync)"
+# ICS import) can't be — they're hidden locally instead, keyed the same way
+# fetch_gcal's cross-calendar dedupe is so both copies of a mirrored meeting
+# stay gone.
+
+HIDDEN_EVENTS = Path.home() / ".local/state/jm/janus-hidden-events.json"
+HIDDEN_EVENTS_KEEP_DAYS = 30
+_hidden_ev_cache: dict = {"mtime": None, "keys": set()}
+
+
+def _hidden_event_key(ev: dict) -> tuple[str, str, str]:
+    return ((ev.get("title") or "").strip().lower(),
+            ev["start_dt"].isoformat(), ev["end_dt"].isoformat())
+
+
+def _load_hidden_events() -> set:
+    """mtime-cached — checked on every fetch_gcal."""
+    try:
+        mtime = HIDDEN_EVENTS.stat().st_mtime
+    except OSError:
+        return set()
+    if _hidden_ev_cache["mtime"] != mtime:
+        try:
+            data = json.loads(HIDDEN_EVENTS.read_text())
+            _hidden_ev_cache["keys"] = {tuple(k) for k in data.get("hidden", [])
+                                        if isinstance(k, list) and len(k) == 3}
+        except Exception:
+            _hidden_ev_cache["keys"] = set()
+        _hidden_ev_cache["mtime"] = mtime
+    return _hidden_ev_cache["keys"]
+
+
+def _hide_event(ev: dict) -> None:
+    """Persist the event's hide key; prunes entries older than
+    HIDDEN_EVENTS_KEEP_DAYS so the file can't grow without bound."""
+    keys = set(_load_hidden_events())
+    keys.add(_hidden_event_key(ev))
+    cutoff = (dt.date.today() - dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
+    keep = [list(k) for k in sorted(keys) if k[1] >= cutoff]
+    HIDDEN_EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    HIDDEN_EVENTS.write_text(json.dumps({"hidden": keep}))
+    _hidden_ev_cache["mtime"] = None  # force reload next read
+
+
+def _event_gcal_deletable(ev: dict) -> bool:
+    """True when the event lives on a Google calendar the API can delete
+    from: it carries an id (fresh fetch — pre-2026-07-30 caches don't), and
+    its calendar isn't a read-only ICS import (the Outlook mirror)."""
+    cid = ev.get("calendar_id") or ""
+    return bool(ev.get("id")) and bool(cid) and \
+        not cid.endswith("@import.calendar.google.com")
+
+
 def fetch_gcal(force=False):
     try:
         now = view_now()  # viewed day's calendar
@@ -526,6 +581,8 @@ def fetch_gcal(force=False):
                 continue
             seen_ev.add(k)
             deduped.append(e)
+        hidden = _load_hidden_events()
+        deduped = [e for e in deduped if _hidden_event_key(e) not in hidden]
         STATE.events = deduped
         STATE.last_gcal_fetch = time.monotonic()
         _shorten_events(combined)
@@ -803,6 +860,16 @@ def _fill_event_shorts(by_hash: dict[str, list[dict]], max_new: int = 6) -> None
         pass
 
 
+# Module-level so tests can monkeypatch it to a tmp_path instead of appending
+# to the real shared file (bug 2026-07-30: test_janus_points_total_guard.py's
+# torn-read fixtures -- literally D=-46/4351/1523 -- wrote straight into this
+# hardcoded path, so every test run polluted live diagnostics with fake
+# "rejected read" entries indistinguishable from genuine production torn
+# reads, e.g. three lines at the SAME wall-clock second with wildly different
+# candidates).
+POINTS_REJECTED_LOG = Path("/tmp/janus-points-rejected.log")
+
+
 def fetch_points():
     """Read today's 分 from Neon 0分: Σ total (col D) + per-block points (G:O).
 
@@ -987,7 +1054,7 @@ end tell'''
                 # Torn read (implausible total, or daemon lock / did-fast append
                 # in flight): keep last good values and leave evidence for diagnosis.
                 try:
-                    with open("/tmp/janus-points-rejected.log", "a") as fh:
+                    with open(POINTS_REJECTED_LOG, "a") as fh:
                         fh.write(f"{dt.datetime.now(TZ):%F %T} total_ok={total_ok} "
                                  f"cand={candidate} D={STATE.today_points} "
                                  f"bp={bp_excel} raw={raw_out!r}\n")
@@ -3056,7 +3123,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -3798,6 +3865,45 @@ def _(event):
     input_buffer.cursor_position = len(input_buffer.text)
     flash(f"split {item['raw_desc']} ({start:%H%M}-{end:%H%M}) — edit the "
           "cut point, ⏎ to split", 8.0)
+
+
+@kb.add("c-x")
+def _(event):
+    """^X on a selected calendar event: delete it — ctrl+x to match dtd's
+    delete binding (user request 2026-07-30). Google-hosted events (m5x2 /
+    m5c7 calendars) are deleted for real via the Calendar API; Outlook rows
+    (Agency fetch or the read-only MSFT Slow Sync import) only get a local
+    hide — "won't affect the calendar for outlook, but will for m5x2". The
+    hide is written first either way, so the row vanishes immediately and a
+    mirrored copy on the other source can't resurface it."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not (isinstance(item, dict) and item.get("kind") is None and item.get("end_dt")):
+        flash("^X delete: select a calendar event first", 3.0)
+        return
+    ev = item
+    title = event_title(ev)
+    _hide_event(ev)
+    STATE.events = [e for e in STATE.events
+                    if _hidden_event_key(e) != _hidden_event_key(ev)]
+    STATE.event_sel = None
+    if _event_gcal_deletable(ev):
+        flash(f"deleting {title}…", 3.0)
+
+        async def _delete_and_refresh():
+            try:
+                await asyncio.to_thread(gcal_client.delete_event,
+                                        ev["calendar_id"], ev["id"])
+                flash(f"deleted from {ev.get('calendar')}: {title}", 6.0)
+                await asyncio.to_thread(fetch_gcal, True)
+            except Exception as e:
+                flash(f"calendar delete failed ({e}) — hidden locally", 8.0)
+            event.app.invalidate()
+
+        event.app.create_background_task(_delete_and_refresh())
+    else:
+        flash(f"hidden in janus (Outlook calendar untouched): {title}", 6.0)
+    event.app.invalidate()
 
 
 @kb.add("c-q")
