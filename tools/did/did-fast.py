@@ -86,6 +86,17 @@ VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
 VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
 # Default points when completed with no minutes at all (falls back to base).
 VARIABLE_1N_DEFAULTS: dict[str, int] = {}
+# 长 ("long") habits: duration-based with a MINIMUM THRESHOLD (2026-07-30).
+# Minutes come from today's Toggl entries for the BASE activity (o314 / 冥想,
+# not the 长-name). Below `min` minutes the habit does not credit at all
+# (result step "skipped"). At/above it, points = rate×minutes (the .5/m in
+# VARIABLE_1N_RATES → minutes/2) and the POINTS append to BOTH the 1n+ week
+# cell (unlike other variable habits, which record minutes there) and the
+# 0分 domain column.
+THRESHOLD_1N: dict[str, dict] = {
+    "长o314": {"toggl": "o314", "min": 30},
+    "长冥想": {"toggl": "冥想", "min": 30},
+}
 
 
 def variable_1n_points(resolved_1n: str, minutes: int) -> int:
@@ -173,6 +184,7 @@ ONENEON_TO_0FEN: dict[str, str] = {
     "1 xk87 wknd": "X", "1 s897": "Y", "1 hcbc": "W",
     "一起饭": "X", "family": "X", "s897": "Y",
     "relax {60}": "W", "业写": "R",
+    "长冥想": "V", "长o314": "V",
 }
 
 
@@ -230,6 +242,28 @@ def header_normalize(s: str) -> str:
 _TOGGL_TODAY: Optional[list] = None  # one fetch per invocation
 
 
+def _ensure_toggl_key() -> None:
+    """toggl_api reads TOGGL_API_KEY from env at import; only toggl_cli.py
+    self-loads it from ~/.claude.json. When did-fast imports toggl_api
+    directly in a shell without the env var (Claude sessions, launchd), every
+    request 403s and toggl_minutes_for silently returns None (found
+    2026-07-30 — 长o314 read as 0m despite 36m of entries). Replicate the
+    CLI's loader before the import."""
+    import os
+    if os.environ.get("TOGGL_API_KEY"):
+        return
+    try:
+        import json as _json
+        cfg = _json.load(open(os.path.expanduser("~/.claude.json")))
+        key = (cfg.get("mcpServers", {}).get("toggl_server", {})
+               .get("env", {}).get("TOGGL_API_KEY", ""))
+        if key:
+            os.environ["TOGGL_API_KEY"] = key
+        os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
+    except Exception:
+        pass
+
+
 def toggl_minutes_for(name: str) -> Optional[int]:
     """Sum today's Toggl minutes for entries whose description matches `name`
     (header-normalized equality), including the running entry's elapsed time.
@@ -244,6 +278,7 @@ def toggl_minutes_for(name: str) -> Optional[int]:
     try:
         if _TOGGL_TODAY is None:
             sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+            _ensure_toggl_key()
             from mcp.toggl_server import toggl_api
             today = date.today()
             _TOGGL_TODAY = toggl_api.get_entries(
@@ -1041,13 +1076,29 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # value/range > today's matching Toggl entries > 1); the habit's
             # POINTS go to today's 0分 domain column instead (row-5 expected
             # points for standard habits, base+rate×minutes for variable).
+            threshold = THRESHOLD_1N.get(resolved_1n)
             minutes = None
             if item.time_range:
                 minutes = time_range_minutes(*item.time_range)
             elif item.time_value is not None:
                 minutes = item.time_value
+            elif threshold:
+                # 长 habits: minutes live under the BASE activity's Toggl name
+                minutes = toggl_minutes_for(threshold["toggl"])
             else:
                 minutes = toggl_minutes_for(item.name)
+            # On the dtd split/timer path (skip_todoist) Toggl minutes arrive
+            # later via apply_timer_minutes, which re-checks the threshold
+            # there — but explicit user-typed minutes are checked right here.
+            explicit_time = (item.time_range is not None
+                             or item.time_value is not None)
+            if threshold and (explicit_time or not skip_todoist) \
+                    and (minutes or 0) < threshold["min"]:
+                results.append(RouteResult(
+                    item=item, step="skipped",
+                    error=f"{item.name}: {minutes or 0}m today < "
+                          f"{threshold['min']}m threshold — no credit"))
+                continue
             cell_minutes = minutes if minutes else 1
             var_val = None
             if is_var:
@@ -1062,7 +1113,9 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                     var_val += item.bonus_points
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
-                            write_value=cell_minutes,
+                            # threshold habits append POINTS to the week cell,
+                            # not minutes (the one exception to the redesign)
+                            write_value=(var_val or 1) if threshold else cell_minutes,
                             is_cumulative_1n=is_cumul,
                             cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
                             is_variable_1n=is_var,
@@ -1559,9 +1612,16 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
             # 2026-07-27 redesign); the computed points go to 0分.
             resolved = header_normalize(
                 ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
+            if resolved in THRESHOLD_1N and mins < THRESHOLD_1N[resolved]["min"]:
+                # 长 habits: timer below the minimum → no credit at all
+                r.step = "skipped"
+                r.error = (f"{r.item.name}: {mins}m < "
+                           f"{THRESHOLD_1N[resolved]['min']}m threshold — no credit")
+                continue
             r.variable_value = (variable_1n_points(resolved, mins)
                                 + (r.item.bonus_points or 0))
-            r.write_value = mins
+            # Threshold (长) habits append POINTS to the week cell, not minutes
+            r.write_value = (r.variable_value or 1) if resolved in THRESHOLD_1N else mins
             r.item.time_value = mins
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
@@ -2290,6 +2350,7 @@ def main():
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
     agent_needed = [r for r in routes if r.step == "needs_agent"]
+    threshold_skipped = [r for r in routes if r.step == "skipped"]
 
     # 3a-ii. d359 outreach tasks (😈-labelled `d359/<slug>`): completing one
     # via /did (and hence dtd) means contact happened — divert to the same
@@ -2768,6 +2829,11 @@ def main():
         if r.item.time_range and r.item.name in toggl_created:
             entry["toggl"] = toggl_created[r.item.name]
         output["results"].append(entry)
+
+    for r in threshold_skipped:
+        output["results"].append({
+            "name": r.item.name, "step": "skipped", "reason": r.error})
+        print(f"  ⏸ {r.error}", file=sys.stderr)
 
     for r in agent_needed:
         output["agent_needed"].append({
