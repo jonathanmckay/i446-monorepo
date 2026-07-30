@@ -48,18 +48,6 @@
     "rent": "1695.00"
   },
   {
-    "unit_id": 332,
-    "property_name": "k104- LeFevre",
-    "unit": "509-4",
-    "tenant_name": "Polk, Dylan A.",
-    "status": "Eligible",
-    "lease_sign_date": "2024-06-24",
-    "move_in": "2024-07-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-07-01",
-    "rent": "1230.00"
-  },
-  {
     "unit_id": 358,
     "property_name": "k104- LeFevre",
     "unit": "Storage 3",
@@ -564,18 +552,6 @@
     "rent": "1595.00"
   },
   {
-    "unit_id": 1019,
-    "property_name": "kn47 K2",
-    "unit": "B204",
-    "tenant_name": "Khudro, Aysha",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-10-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 1062,
     "property_name": "kn47 K2",
     "unit": "E107",
@@ -583,18 +559,6 @@
     "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2016-04-05",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 1063,
-    "property_name": "kn47 K2",
-    "unit": "E108",
-    "tenant_name": "Willis, Michelle",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2009-04-24",
     "renewal_start_date": null,
     "last_lease_renewal": "2026-02-01",
     "rent": "1089.00"
@@ -646,18 +610,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-03-01",
     "rent": "1304.00"
-  },
-  {
-    "unit_id": 990,
-    "property_name": "kn47 K1",
-    "unit": "M207",
-    "tenant_name": "Gallagher, Jordan A.",
-    "status": "Pending",
-    "lease_sign_date": "2025-07-30",
-    "move_in": "2025-08-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
   },
   {
     "unit_id": 1061,
@@ -2832,18 +2784,6 @@
     "rent": "1340.00"
   },
   {
-    "unit_id": 227,
-    "property_name": "p705",
-    "unit": "11",
-    "tenant_name": "King, Grace A.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-10-26",
-    "move_in": "2025-11-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-22",
-    "rent": "1295.00"
-  },
-  {
     "unit_id": 601,
     "property_name": "rl16",
     "unit": "D16",
@@ -2986,18 +2926,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-12-01",
     "rent": "1310.00"
-  },
-  {
-    "unit_id": 128,
-    "property_name": "a210",
-    "unit": "9",
-    "tenant_name": "Blankenship, Matthew H.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-02",
-    "move_in": "2025-12-09",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1055.00"
   },
   {
     "unit_id": 786,
