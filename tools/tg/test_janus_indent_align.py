@@ -33,7 +33,7 @@ def test_compact_full_time_rows_have_no_leading_space():
     # 辰 (06-08): deep work 06:00, quick task 07:30. The 07:30 row rolls the hour
     # over, so it renders as a full `07:30` at column 0.
     mod.STATE.entries = [
-        _entry("deep work", today.replace(hour=6), today.replace(hour=7, minute=30)),
+        _entry("deep work", today.replace(hour=6, minute=1), today.replace(hour=7, minute=30)),
         _entry("quick task", today.replace(hour=7, minute=30), today.replace(hour=7, minute=50)),
     ]
     mod.STATE.entries_yday = []

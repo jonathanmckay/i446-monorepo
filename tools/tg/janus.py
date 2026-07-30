@@ -1938,17 +1938,18 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # name (user request 2026-07-21: "in the block lines... not in the
         # header"): `辰:00              ₦9 73分`.
         right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
-        # A real item occupying the block's :00 slot rides the header line
-        # instead of duplicating a "  :00" body row right under it (user
+        # A real item starting EXACTLY at the block's :00 rides the header
+        # line instead of duplicating a "  :00" body row right under it (user
         # request 2026-07-30: "Shouldn't XBOX Developer be on the 未 line
         # rather than repeating it? I'm seeing the :00 line get duplicated").
+        # Exact only — a 12:18 entry renders "  :18", which never duplicated
+        # anything (and block-clipped spills/sleep land exactly on :00).
         # Free/gap bars keep their own body rows — the header's slot belongs
         # to a tracked entry, a meeting, or the sleep-spillover item.
         head0 = next(
             (p for p in picks
              if not p.get("is_free") and not p.get("is_gap")
-             and p["start_dt"].hour == blk_sh
-             and (p["start_dt"].minute // slot_min) * slot_min == 0), None)
+             and (p["start_dt"].hour, p["start_dt"].minute) == (blk_sh, 0)), None)
         if head0 is not None:
             body_picks = [p for p in picks if p is not head0]
             running = bool(head0.get("is_running"))
@@ -2692,7 +2693,7 @@ def _block_gcal_cont(blk_sh, ref, slot_min: int = 30) -> dict[tuple[int, int], s
             if ev.get("transparency") == "transparent" or ev.get("all_day"):
                 continue
             if ev["start_dt"] <= t < ev["end_dt"]:
-                out[(hh, mm)] = project_style(gcal_project_code(ev))
+                out[(hh, mm)] = (project_style(gcal_project_code(ev)), True)
                 break
     return out
 
@@ -3168,8 +3169,14 @@ def render_evening() -> list[tuple[str, str]]:
             + _future_free_gaps(sh, eh, view_now()),
             key=lambda p: p["start_dt"])
         cont = _block_gcal_cont(sh, cutoff)
+        # track_selection: evening blocks were the one stretch of the day the
+        # event cursor could not reach (render_all's reset + EXTEND contract
+        # covers morning and the focus band) — Tab stopped dead after the
+        # next block (user report 2026-07-30: "I can't select anything after
+        # 申"), which also put late-day meetings out of ⌥↵/^X's reach.
         out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
-                                    cont=cont, is_future=True)
+                                    cont=cont, is_future=True,
+                                    track_selection=True)
     return out
 
 

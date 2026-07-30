@@ -274,12 +274,28 @@ def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
 
 
 def match_todoist_task(query: str, tasks: list[dict],
-                       preferred_id: str | None = None) -> Optional[dict]:
+                       preferred_id: str | None = None,
+                       require_labels: set[str] | None = None) -> Optional[dict]:
     """Find best Todoist task match using word overlap.
 
     preferred_id (dtd's collision-proof path): if given and a task in `tasks`
     carries that id, return it directly — the EXACT row the user selected, so a
     duplicate task name can't complete the wrong instance (2026-07-12).
+
+    require_labels: when preferred_id isn't in `tasks` (stale cache, or a
+    different bucket), the fetched-by-id fallback below only counts as a
+    match if it actually carries one of these labels. Without this check, a
+    caller searching a NARROW bucket (e.g. Step 0.2's 1neon-only tasks) would
+    accept ANY task with that id as "found" — including one from a totally
+    unrelated bucket. That happened for real (2026-07-30): completing a
+    one-off `/-1g` goal card literally named "1 s897 {5}" (project 0g, label
+    `#-1g`) also matched the 1n+ habit header "1 s897" by name; Step 0.2 asked
+    match_todoist_task to find the matching *1neon* card to close, the
+    goal-card id wasn't in that bucket, and the unconditional id-fetch
+    fallback returned the goal card anyway — so did-fast believed it had
+    found and closed the weekly 1neon card and never searched for the real
+    one, which sat open/overdue forever. Falling through to the name search
+    below (instead of trusting an out-of-bucket id) finds the real one.
     """
     if preferred_id:
         for task in tasks:
@@ -292,7 +308,8 @@ def match_todoist_task(query: str, tasks: list[dict],
         # the recurring parent instead — wrong task, and its future due date
         # then tripped the already-done-today close guard).
         fetched = _fetch_task_by_id(preferred_id)
-        if fetched:
+        if fetched and (require_labels is None
+                        or set(fetched.get("labels") or []) & require_labels):
             return fetched
     queries = [query]
     alias = ALIASES.get(query.strip().lower())
@@ -974,7 +991,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
             # Find matching Todoist task to close
             neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
-            matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id)
+            matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id,
+                                        require_labels={"0neon", "夜neon"})
             if matched:
                 r.todoist_task = matched
                 # By default, 0n habits do NOT write to 0分: Excel's own
@@ -1051,7 +1069,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                             variable_value=var_val)
             # Find matching Todoist 1neon task to close
             neon_1n_tasks = tq.get("1neon", [])
-            matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id)
+            matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id,
+                                        require_labels={"1neon"})
             if matched:
                 r.todoist_task = matched
             results.append(r)

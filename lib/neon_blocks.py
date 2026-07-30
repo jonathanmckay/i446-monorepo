@@ -63,7 +63,11 @@ def ritual_card_tag(name: str, cfg: Optional[dict] = None) -> Optional[str]:
     match, auto ones (-1t/-1l) included — the daemon creates cards for the full
     set since 2026-07-05, and a bare `-1t`/`-1l` falling through to the generic
     /did path would mis-route to the unrelated 0₦ habits of the same name.
-    run_ritual branches on mode (auto = close card only, no stamp/points).
+    run_ritual does NOT branch on mode (2026-07-13 redesign): every tag, auto
+    included, gets the header stamp + immediate -1₦ credit. `mode` still
+    exists in config for the daemon's own auto-check wiring, and the daemon's
+    reconcile audits -1t/-1l's stamp against that check regardless of which
+    path wrote it (2026-07-30 correction — see vault/g245/CLAUDE.md).
     """
     if cfg is None:
         cfg = load_config()

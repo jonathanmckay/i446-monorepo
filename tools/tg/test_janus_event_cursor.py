@@ -202,7 +202,11 @@ def test_visible_events_excludes_rows_trimmed_by_max_rows():
              "label": e["title"], "style": "", "dur_min": 4, "is_event": True, "event": e}
             for e in events]
     mod._compact_block_lines("巳", 8, picks, 0, "", max_rows=3, track_selection=True)
-    assert len(mod.STATE.visible_events) <= 3
+    # ev0 starts exactly at :00 so it rides the HEADER line (2026-07-30) —
+    # on screen and selectable — plus the 3 body rows the cap keeps: 4 total.
+    # The 5th (trimmed, invisible) event must not be selectable.
+    assert len(mod.STATE.visible_events) == 4
+    assert events[0] in mod.STATE.visible_events, "header-riding event selectable"
     assert all(ev in events for ev in mod.STATE.visible_events)
 
 

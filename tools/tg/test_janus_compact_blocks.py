@@ -29,21 +29,38 @@ def _pick(mod, label, start, dur=30):
             "style": "", "dur_min": dur}
 
 
-def test_header_is_bare_block_stamp_entry_in_body():
-    """Non-focus PAST block: header is the bare `午:00` :00 slot with the
-    ritual points label at the RIGHT edge (user request 2026-07-21: "in the
-    block lines... not in the header"); the entry sits in the body (no
-    longer riding the header rule)."""
+def test_zero_slot_entry_rides_header_no_duplicate_row():
+    """Non-focus PAST block: an entry occupying the :00 slot rides the header
+    line itself — `午:00 Blizz ... 30m ₦4` — instead of duplicating a `  :00`
+    body row right under a bare header (user request 2026-07-30: "Shouldn't
+    XBOX Developer be on the 未 line rather than repeating it?"). The ₦ label
+    keeps the right edge."""
+    mod = _load_tui()
+    start = _midnight().replace(hour=12, minute=0)
+    frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "₦4")
+    text = "".join(t for _, t in frags)
+    lines = text.split("\n")
+    header = lines[0]
+    assert header.startswith("午:00"), f"header starts with block:00, got: {header!r}"
+    assert header.endswith("₦4"), f"pts label right-aligned, got: {header!r}"
+    assert "Blizz" in header, "the :00 entry rides the header"
+    assert not any("Blizz" in ln for ln in lines[1:]), "no duplicated body row"
+    assert not any(ln.startswith("  :00") for ln in lines[1:]), \
+        "the vacated :00 slot must not grow a grid-mark row"
+
+
+def test_mid_block_entry_keeps_header_bare():
+    """An entry that does NOT start exactly at :00 stays in the body (a 12:01
+    entry renders "  :01", which never duplicated the header) and the header
+    keeps the bare 2026-07-21 layout (pts at the right edge)."""
     mod = _load_tui()
     start = _midnight().replace(hour=12, minute=1)
     frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "₦4")
     text = "".join(t for _, t in frags)
     header = text.split("\n")[0]
-    assert header.startswith("午:00"), f"header starts with block:00, got: {header!r}"
-    assert header.endswith("₦4"), f"pts label right-aligned, got: {header!r}"
-    assert "Blizz" not in header, "entry must not ride the header"
+    assert header.endswith("₦4")
+    assert "Blizz" not in header, "a mid-block entry must not ride the header"
     assert "Blizz" in text, "entry shows in the body"
-    assert not header.startswith("─"), "no dashed rule header anymore"
 
 
 def test_future_block_header_carries_event_with_minute_duration():
@@ -124,7 +141,8 @@ def test_through_event_draws_continuation_in_empty_block():
     assert set(cont) == {(12, 0), (12, 30), (13, 0), (13, 30)}
     frags = mod._compact_block_lines("未", 12, [], 0, "", cont=cont)
     text = "".join(t for _, t in frags)
-    assert text.count("◇ │") == 3  # 12:30 / 13:00 / 13:30; 12:00 is the header
+    assert text.count("│ ◇") == 3  # 12:30 / 13:00 / 13:30; 12:00 is the header
+    assert "◇ │" not in text  # gcal continuation right-justifies (2026-07-30)
     assert "┄" not in text
 
 
@@ -139,7 +157,7 @@ def test_partial_coverage_mixes_grid_and_continuation():
     assert set(cont) == {(12, 0), (12, 30)}
     frags = mod._compact_block_lines("未", 12, [], 0, "", cont=cont)
     text = "".join(t for _, t in frags)
-    assert text.count("◇ │") == 1  # only 12:30 covered (12:00 is the header slot)
+    assert text.count("│ ◇") == 1  # only 12:30 covered (12:00 is the header slot)
     assert "┄" not in text          # empty marks render as just the time now
     assert "13:00" in text          # uncovered marks: just the time
 
@@ -158,7 +176,7 @@ def test_future_header_event_spans_block_marks_continue():
         cont=cont, is_future=True)
     text = "".join(t for _, t in frags)
     assert "Strategy (120)" in text.split("\n")[0]
-    assert text.count("◇ │") == 3  # 14:30 / 15:00 / 15:30
+    assert text.count("│ ◇") == 3  # 14:30 / 15:00 / 15:30
 
 
 def test_past_block_continues_finished_event_to_its_end():
@@ -181,8 +199,10 @@ def test_past_block_continues_finished_event_to_its_end():
     text = "".join(t for _, t in mod.render_morning())
     wu = [ln for ln in text.split("\n")]
     block = "\n".join(wu[wu.index(next(l for l in wu if l.startswith("午:00"))):][:4])
-    assert "blizz" in block, "toggl entry takes a body row"
-    # blizz@10:01 + the two fill marks 10:30/11:00 (both covered) → 2 ◇ │.
+    assert "blizz" in block, "toggl entry takes a body row (10:01 ≠ exact :00)"
+    # blizz@10:01 + the two fill marks 10:30/11:00 — the marks are covered by
+    # BOTH the event and the blizz entry; the toggl cont wins (tracked
+    # reality beats the plan), so the glyphs stay LEFT-justified.
     assert block.count("◇ │") == 2
 
 

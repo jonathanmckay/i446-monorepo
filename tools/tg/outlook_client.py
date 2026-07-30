@@ -97,6 +97,17 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
             except (json.JSONDecodeError, TypeError):
                 pass
 
+    # Empty-fetch guard (2026-07-30): an Agency flake can return a successful
+    # but EMPTY calendar view. Overwriting a non-empty same-day cache with it
+    # blanked every meeting in janus for the cache TTL (and 2-byte poisoned
+    # caches litter ~/.cache/janus from past occurrences). A day that really
+    # has no meetings also has an empty/absent cache, so the guard never
+    # suppresses a legitimate empty.
+    if not events and cache_file.exists():
+        prior = _parse_cache(cache_file)
+        if prior:
+            return prior
+
     # Write cache
     try:
         cache_file.write_text(json.dumps(events, ensure_ascii=False))
