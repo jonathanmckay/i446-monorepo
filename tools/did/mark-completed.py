@@ -169,6 +169,16 @@ def append_names(new_names: list[str], *, today: str | None = None,
                     data["ids"][k] = str(tid)
 
         _atomic_write(path, data)
+        # Cross-machine mirror (2026-07-30): completed-today is machine-local,
+        # so a completion recorded on ix (janus-mobile swipe → did-fast) never
+        # hid the card in Straylight's dtd until the ~3min cache daemon
+        # re-pulled Todoist. Mirror this host's record to a per-host file in
+        # the synced vault (single WRITER per file — never write another
+        # host's; Syncthing last-writer-wins clobbers are this week's lesson).
+        # dtd's watcher absorbs remote hosts' files via absorb_remote().
+        # Real COMPLETED path only, so tests with tmp paths stay isolated.
+        if path == COMPLETED:
+            _mirror_to_vault(data)
         return data
     finally:
         try:
@@ -247,7 +257,64 @@ def is_duplicate_today(name: str, *, today: str | None = None, path: Path | None
     return None
 
 
+MIRROR_DIR = Path.home() / "vault" / "z_ibx"
+
+
+def _host_slug() -> str:
+    import socket
+    return re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+
+
+def _mirror_path() -> Path:
+    return MIRROR_DIR / f"completed-today-{_host_slug()}.json"
+
+
+def _mirror_to_vault(data: dict) -> None:
+    """Best-effort write of this host's completed-today record to the synced
+    vault. Never raises — a sync mirror must not fail the completion."""
+    try:
+        MIRROR_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(_mirror_path(), data)
+    except Exception:
+        pass
+
+
+def absorb_remote(today: str | None = None) -> int:
+    """Merge OTHER hosts' synced completed-today-*.json into the local file.
+
+    Returns how many names were newly absorbed. Date-gated: a remote file
+    from a previous day is ignored. Called by dtd's watcher when a remote
+    mirror's mtime advances (a completion on another machine just synced in).
+    """
+    today = today or date.today().isoformat()
+    own = _mirror_path().name
+    absorbed = 0
+    for p in sorted(MIRROR_DIR.glob("completed-today-*.json")):
+        if p.name == own:
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                remote = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(remote, dict) or remote.get("date") != today:
+            continue
+        names = [n for n in remote.get("names", []) if n]
+        if not names:
+            continue
+        before = len(_load(COMPLETED).get("names", []))
+        merged = append_names(names, today=today,
+                              points=remote.get("points") or None,
+                              ids=remote.get("ids") or None)
+        absorbed += max(0, len(merged.get("names", [])) - before)
+    return absorbed
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) >= 2 and argv[1] == "--absorb-remote":
+        n = absorb_remote()
+        print(f"absorbed={n}")
+        return 0
     if len(argv) >= 2 and argv[1] == "--check":
         if len(argv) < 3:
             print("usage: mark-completed.py --check <name>", file=sys.stderr)

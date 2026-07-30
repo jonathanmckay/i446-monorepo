@@ -1813,6 +1813,18 @@ TALLY_PID=$!
       # session, not only on the next ~3min did-refresh-cache daemon cycle.
       ( for _s in 20 25 45 60 120; do sleep "$_s"; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; done ) &
     fi
+    # Cross-machine completions (2026-07-30): another host's did-fast (e.g. a
+    # janus-mobile swipe on ix) mirrors its completed-today record to the
+    # synced vault as z_ibx/completed-today-<host>.json. When any remote
+    # mirror's mtime advances, fold it into the local completed-today
+    # ($DONE) and touch $CACHE so the reload branch below rebuilds the
+    # overlay and the just-completed card disappears from this dtd too.
+    cur_rm=$(stat -f %m "$HOME"/vault/z_ibx/completed-today-*.json 2>/dev/null | sort -rn | head -1)
+    if [[ -n "$cur_rm" && "$cur_rm" != "${last_rm:-}" ]]; then
+      last_rm="$cur_rm"
+      python3 "$HOME/i446-monorepo/tools/did/mark-completed.py" --absorb-remote >/dev/null 2>&1
+      touch "$CACHE" 2>/dev/null
+    fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
     last_m="$cur_m"
