@@ -323,6 +323,12 @@ if [[ "\$is_ritual_card" == "1" || "\$cur_desc" == "\$clean_lower" || "\$timer_d
     (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
   fi
   echo "x" >> "\$PUSHED"
+  # Push audit trail (2026-07-30): 申's -1t/-1l closed in Todoist (quick-close
+  # above) but never reached the FIFO worker — no stamp, no -1₦ credit, and
+  # the bare x-counters couldn't say which items were lost. Log every push
+  # with a timestamp; the worker's log names what arrived, this names what
+  # was SENT.
+  printf '%s\tenter\t%s\t%s\n' "\$(date +%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
   : > "\$TIMER"
   echo "⏳ completing: \$clean_for_filter" > "\$HDR"
   printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
@@ -440,6 +446,8 @@ if [[ -n "\$1" ]]; then
   (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
 fi
 echo "x" >> "\$PUSHED"
+# Push audit trail — see enter.sh's twin line (2026-07-30 lost -1t/-1l).
+printf '%s\tdone\t%s\t%s\n' "\$(date +%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
