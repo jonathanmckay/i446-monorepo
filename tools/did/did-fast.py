@@ -764,6 +764,24 @@ def _refresh_task_queue_inner() -> dict:
     # `today`), so union rather than add a bucket.
     try:
         today_iso = datetime.now().strftime("%Y-%m-%d")
+        # Block-boundary gate for BOTH carry-forward paths below (empty and
+        # partial fetch): cards the daemon retired at a boundary must never
+        # outlive their block, no matter how the flaky fetch failed. Originally
+        # added 2026-07-28 for the partial-fetch branch only; the empty-fetch
+        # branch below stayed ungated and could resurrect an already
+        # deleted/closed previous-block card indefinitely (each refresh's
+        # carry-forward becomes the next refresh's old_cache) — the
+        # "dupe -1n tasks in dtd" bug (2026-07-30), where a fully empty
+        # -1neon fetch right after a boundary carried the just-retired
+        # (and separately auto-triage-mangled) previous block's -1g/-1ibx/-1l
+        # forward alongside the new block's freshly created bare cards.
+        _now = datetime.now()
+        try:
+            _upd = datetime.fromisoformat(old_cache.get("updated", ""))
+            same_block = (_upd.date() == _now.date()
+                          and _upd.hour // 2 == _now.hour // 2)
+        except (ValueError, TypeError):
+            same_block = False
         neg1 = fetch_label("-1neon")
         if not neg1:
             # Empty label fetch + lagging filter = every OTHER ritual card
@@ -773,7 +791,7 @@ def _refresh_task_queue_inner() -> dict:
             # close/stamp API calls. Carry the old cache's ritual cards
             # forward instead; genuinely-closed ones stay hidden via the
             # completed-today id overlay, and the next clean refresh prunes.
-            neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])]
+            neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])] if same_block else []
             if neg1:
                 print(f"WARN: -1neon fetch empty, carrying {len(neg1)} cached card(s)", file=sys.stderr)
         else:
@@ -787,13 +805,6 @@ def _refresh_task_queue_inner() -> dict:
             # records them on a successful close) — but only while the old
             # cache was written in the SAME 2h block, so cards the daemon
             # retired at a boundary never outlive their block.
-            _now = datetime.now()
-            try:
-                _upd = datetime.fromisoformat(old_cache.get("updated", ""))
-                same_block = (_upd.date() == _now.date()
-                              and _upd.hour // 2 == _now.hour // 2)
-            except (ValueError, TypeError):
-                same_block = False
             if same_block:
                 closed_ids: set = set()
                 try:
