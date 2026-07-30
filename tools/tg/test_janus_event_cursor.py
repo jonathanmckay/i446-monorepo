@@ -8,6 +8,7 @@ an index would silently point at a different event once the list resizes);
 Enter, on an empty input line with something armed, converts the selected
 event into a running Toggl timer via tg-fast.py's own backdated-start
 handling. No selection is armed by default, so a bare Enter never surprises."""
+import asyncio
 import datetime as dtm
 import importlib.util
 import sys
@@ -475,7 +476,9 @@ def test_enter_with_armed_selection_clears_it_and_flashes():
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=5)
-    _binding(mod, "enter").handler(_FakeEvent())
+    async def _amain():
+        _binding(mod, "enter").handler(_FakeEvent())
+    asyncio.run(_amain())
     assert mod.STATE.event_sel is None, "selection must clear once converted"
     assert "standup" in mod.STATE.flash
 
@@ -491,7 +494,9 @@ def test_enter_on_in_progress_event_still_uses_tg_path():
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=5)  # mid-meeting
-    _binding(mod, "enter").handler(_FakeEvent())
+    async def _amain():
+        _binding(mod, "enter").handler(_FakeEvent())
+    asyncio.run(_amain())
     assert mod.STATE.flash.startswith("$ tg "), f"in-progress event must use tg-fast: {mod.STATE.flash!r}"
 
 
@@ -506,26 +511,38 @@ def test_enter_on_ended_event_uses_did_fast_path():
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=30)  # after it ended
-    _binding(mod, "enter").handler(_FakeEvent())
+    async def _amain():
+        _binding(mod, "enter").handler(_FakeEvent())
+    asyncio.run(_amain())
     assert mod.STATE.event_sel is None
     assert mod.STATE.flash.startswith("$ did "), f"ended event must convert via did-fast: {mod.STATE.flash!r}"
     assert "0900-0915" in mod.STATE.flash
 
 
-def test_enter_ignores_armed_selection_while_conversion_in_flight():
-    """A did-fast conversion is a ~10-45s Excel write — a double-Enter mid-
-    flight must not fire a second one (double entry + double points + a
-    race on the same ix-osa write)."""
+def test_enter_mid_flight_enqueues_instead_of_rejecting():
+    """Superseded 2026-07-30 ("I want it to be able to enqueue tasks"): a
+    conversion arriving while another is mid-flight used to be REJECTED with
+    the selection left armed. Now it's consumed and queued — the serial work
+    queue still runs one did-fast at a time (the double-write race the old
+    gate guarded), but waiting replaced bouncing."""
     mod = _load_tui()
     today = _midnight()
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     mod.STATE.visible_events = [ev]
     mod.STATE.event_sel = mod._event_key(ev)
     mod.STATE.conversion_in_flight = True
+    mod.STATE.work_q = None
+    mod.STATE.queued_cmds = set()
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=30)
-    _binding(mod, "enter").handler(_FakeEvent())
-    assert mod.STATE.event_sel == mod._event_key(ev), "must not consume the selection while one is already in flight"
+
+    async def main():
+        _binding(mod, "enter").handler(_FakeEvent())
+
+    asyncio.run(main())
+    assert mod.STATE.event_sel is None, "selection is consumed — the job is queued, not dropped"
+    assert mod.STATE.work_q is not None and mod.STATE.work_q.qsize() == 1
+    assert "queued" in mod.STATE.flash
 
 
 if __name__ == "__main__":

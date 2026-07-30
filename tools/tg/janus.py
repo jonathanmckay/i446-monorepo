@@ -386,9 +386,17 @@ class State:
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
         # concurrent invocation could double-create the entry/points and race
-        # on the same ix-osa Excel write. Gates re-entry from a double-tap and
-        # tells ticker_points to skip a beat so it doesn't read Neon mid-write.
+        # on the same ix-osa Excel write. True while the serial work queue's
+        # consumer is mid-job; tells ticker_points to skip a beat so it
+        # doesn't read Neon mid-write.
         self.conversion_in_flight = False
+        # Serial FIFO queue for did/tg jobs (user request 2026-07-30: "I want
+        # it to be able to enqueue tasks" — pressing ⌥↵ on a second row used
+        # to bounce with "still converting the last one"). Jobs still run one
+        # at a time (the Excel-write race the old gate guarded against is
+        # real); they just wait their turn instead of being rejected.
+        self.work_q = None          # asyncio.Queue, created on first use
+        self.queued_cmds = set()    # dedupe keys of queued + running jobs
 
 
 STATE = State()
@@ -3532,6 +3540,54 @@ def _event_to_did_command(ev: dict) -> str:
     return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}"
 
 
+def _enqueue_work(app, label: str, job, key: str | None = None) -> bool:
+    """Add a did/tg job to the serial work queue (user request 2026-07-30:
+    enqueue instead of the old "still converting the last one…" rejection).
+
+    Jobs are async callables, run strictly one at a time in FIFO order by a
+    single consumer — the one-at-a-time discipline the old gate enforced
+    (concurrent did-fast runs race ix-osa writes on the same sheet and can
+    double-grant points) is kept; only the rejection is gone. `key` dedupes:
+    an identical command already queued or running is refused, since running
+    it twice is exactly the double-grant the old gate existed to stop."""
+    key = key or label
+    if key in STATE.queued_cmds:
+        flash(f"already queued: {label}", 3.0)
+        return False
+    if STATE.work_q is None:
+        STATE.work_q = asyncio.Queue()
+        app.create_background_task(_work_consumer(app))
+    STATE.queued_cmds.add(key)
+    STATE.work_q.put_nowait((label, key, job))
+    waiting = STATE.work_q.qsize() - (0 if STATE.conversion_in_flight else 1)
+    if waiting > 0:
+        flash(f"queued (#{waiting + 1}): {label}", 3.0)
+    else:
+        # Idle queue: the job starts on the next loop tick — flash the command
+        # NOW so the press feels immediate (the job re-flashes on start, which
+        # is what a QUEUED job's turn looks like).
+        flash(f"$ {label}")
+    return True
+
+
+async def _work_consumer(app):
+    """Single consumer for STATE.work_q — the serialization point for every
+    did/tg job janus fires. Lives as one background task for the app's whole
+    lifetime (created lazily by the first _enqueue_work)."""
+    while True:
+        label, key, job = await STATE.work_q.get()
+        STATE.conversion_in_flight = True
+        try:
+            await job()
+        except Exception as e:  # noqa: BLE001 — a failed job must not kill the consumer
+            flash(f"{label}: {e}", 8.0)
+        finally:
+            STATE.conversion_in_flight = False
+            STATE.queued_cmds.discard(key)
+            STATE.work_q.task_done()
+            app.invalidate()
+
+
 def _convert_selected_event(ev: dict, app) -> None:
     """Convert a selected calendar event into Toggl — an ENDED event runs
     did-fast (completed entry + its points in one shot, carving any runaway
@@ -3539,14 +3595,6 @@ def _convert_selected_event(ev: dict, app) -> None:
     timer backdated to the event's start. Shared by plain Enter and ⌥↵
     (user request 2026-07-29: "opt+enter a calendar event ... both change
     toggl, but also give me points for completed meetings")."""
-    if STATE.conversion_in_flight:
-        # did-fast is a ~10-45s Excel write; a double-press mid-flight
-        # would double-create the entry AND double-grant points, plus
-        # race two ix-osa writes against the same sheet. tg-fast's plain
-        # timer-start doesn't need this guard (idempotent enough), but
-        # this path does.
-        flash("still converting the last one…", 3.0)
-        return
     now = view_now()
     is_past = ev["end_dt"] <= now
     cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
@@ -3555,35 +3603,33 @@ def _convert_selected_event(ev: dict, app) -> None:
         # entry + points at the event's own day, not today.
         cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
     STATE.event_sel = None
-    flash(f"$ {'did' if is_past else 'tg'} {cmd}")
+    label = f"{'did' if is_past else 'tg'} {cmd}"
 
     async def _run_event_and_refresh():
-        STATE.conversion_in_flight = True
-        try:
-            runner = run_did_fast if is_past else run_tg_fast
-            res = await asyncio.to_thread(runner, cmd)
-            flash(res, 6.0)
+        flash(f"$ {label}")
+        app.invalidate()
+        runner = run_did_fast if is_past else run_tg_fast
+        res = await asyncio.to_thread(runner, cmd)
+        flash(res, 6.0)
+        app.invalidate()
+        if is_past:
+            # did-fast's own Excel write + Toggl create has already
+            # landed by the time the subprocess returns — no need for
+            # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
+            # propagation lag, just one forced re-read of both.
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_points)
             app.invalidate()
-            if is_past:
-                # did-fast's own Excel write + Toggl create has already
-                # landed by the time the subprocess returns — no need for
-                # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
-                # propagation lag, just one forced re-read of both.
-                await asyncio.to_thread(fetch_today, True)
-                await asyncio.to_thread(fetch_points)
+        else:
+            polls = (0.4, 0.8, 1.5)
+            for i, delay in enumerate(polls):
+                await asyncio.sleep(delay)
+                await asyncio.to_thread(fetch_current)
+                if i == len(polls) - 1:
+                    await asyncio.to_thread(fetch_today, True)
                 app.invalidate()
-            else:
-                polls = (0.4, 0.8, 1.5)
-                for i, delay in enumerate(polls):
-                    await asyncio.sleep(delay)
-                    await asyncio.to_thread(fetch_current)
-                    if i == len(polls) - 1:
-                        await asyncio.to_thread(fetch_today, True)
-                    app.invalidate()
-        finally:
-            STATE.conversion_in_flight = False
 
-    app.create_background_task(_run_event_and_refresh())
+    _enqueue_work(app, label, _run_event_and_refresh, key=cmd)
 
 
 @kb.add("enter")
@@ -3883,9 +3929,6 @@ def _(event):
         if recorded:
             flash(f"already recorded today: {desc} ({pts}分) — not re-running", 6.0)
             return
-    if STATE.conversion_in_flight:
-        flash("still converting the last one…", 3.0)
-        return
     start = item["start_dt"]
     end = start + dt.timedelta(minutes=item["dur_min"])
     code = proj_code(item.get("project_id"))
@@ -3906,21 +3949,18 @@ def _(event):
     for _t in _habit_tags(entry_tags):
         cmd += f", {_t} {item['dur_min']}{date_sfx}"
     STATE.event_sel = None
-    flash(f"$ did {cmd}")
 
     async def _run_did_and_refresh():
-        STATE.conversion_in_flight = True
-        try:
-            res = await asyncio.to_thread(run_did_fast, cmd)
-            flash(res, 8.0)
-            event.app.invalidate()
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
-            event.app.invalidate()
-        finally:
-            STATE.conversion_in_flight = False
+        flash(f"$ did {cmd}")
+        event.app.invalidate()
+        res = await asyncio.to_thread(run_did_fast, cmd)
+        flash(res, 8.0)
+        event.app.invalidate()
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+        event.app.invalidate()
 
-    event.app.create_background_task(_run_did_and_refresh())
+    _enqueue_work(event.app, f"did {cmd}", _run_did_and_refresh, key=cmd)
 
 
 @kb.add("c-p")
