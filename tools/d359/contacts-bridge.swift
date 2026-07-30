@@ -115,11 +115,13 @@ func applyUpdates(from path: String) {
             }
             var phones = mutable.phoneNumbers
             for (label, value) in (u.setPhones ?? [:]) {
+                phones.removeAll { $0.label == label }
                 phones.append(CNLabeledValue(label: label, value: CNPhoneNumber(stringValue: value)))
             }
             mutable.phoneNumbers = phones
             var emails = mutable.emailAddresses
             for (label, value) in (u.setEmails ?? [:]) {
+                emails.removeAll { $0.label == label }
                 emails.append(CNLabeledValue(label: label, value: value as NSString))
             }
             mutable.emailAddresses = emails

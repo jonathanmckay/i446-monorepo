@@ -53,7 +53,16 @@ def parse_channels_block(fm_lines: list[str]) -> dict:
         if in_block:
             m = re.match(r"^\s+([a-z_]+)\s*:\s*(.*)$", ln)
             if m:
-                out[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+                val = m.group(2).strip().strip('"').strip("'")
+                # Guard against literal placeholder text ("None"/"null"/"n/a")
+                # ending up in a frontmatter value (e.g. from a bad manual
+                # edit or an earlier bug) and being treated as real contact
+                # data — this exact bug got a duplicate "None" email appended
+                # to a live Apple Contacts record on every sync run until
+                # caught on 2026-07-30.
+                if val.lower() in ("none", "null", "n/a", "nil", ""):
+                    continue
+                out[m.group(1)] = val
                 continue
             if ln.strip() == "" or re.match(r"^\S", ln):
                 in_block = False
