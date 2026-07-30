@@ -1175,8 +1175,8 @@ def _todoist_open_rituals(token: str) -> list | None:
         return None
 
 
-def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> int:
-    """POST/DELETE against the Todoist v1 API. Returns HTTP status."""
+def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> tuple[int, bytes]:
+    """POST/DELETE against the Todoist v1 API. Returns (HTTP status, body)."""
     url = f"https://api.todoist.com/api/v1{path}"
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=body, method=method)
@@ -1184,7 +1184,7 @@ def _todoist_write(path: str, payload: dict | None, token: str, method: str = "P
     if body is not None:
         req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return resp.status
+        return resp.status, resp.read()
 
 
 def create_block_rituals(dry_run: bool = False) -> None:
@@ -1219,9 +1219,25 @@ def create_block_rituals(dry_run: bool = False) -> None:
             log(f"[DRY RUN] create card {content!r} @{label}")
             continue
         try:
-            _todoist_write("/tasks", {"content": content, "labels": [label],
+            status, body = _todoist_write("/tasks", {"content": content, "labels": [label],
                                       "due_string": "today"}, token)
             log(f"rituals: + {content}")
+            # Verify the label actually persisted (bug 2026-07-30: 3 of 5
+            # cards created in the same batch came back with labels=[] --
+            # a Todoist-side write flake on rapid-fire creates. An
+            # unlabeled card is invisible to _todoist_open_rituals'
+            # label-filtered fetch, so it never gets retired by
+            # delete_block_rituals and just orphans in the inbox forever,
+            # each recurring fire creating another duplicate on top since
+            # the dedup check can't see it either).
+            try:
+                created = json.loads(body)
+                if label not in (created.get("labels") or []):
+                    tid = created.get("id")
+                    log(f"rituals: {content!r} created without {label!r} label — repairing")
+                    _todoist_write(f"/tasks/{tid}", {"labels": [label]}, token)
+            except Exception as e:
+                log(f"rituals: label verify/repair for {content!r} ERROR {e}")
         except Exception as e:
             log(f"rituals: create {content!r} ERROR {e}")
 

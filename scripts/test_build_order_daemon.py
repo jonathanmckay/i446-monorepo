@@ -7,6 +7,7 @@ leaving the -1₦ cell empty.
 Fix: Added a read-back verification step that calls neon_read_y after writing
 and logs VERIFY_FAILED if the cell is empty/zero.
 """
+import json
 from pathlib import Path
 
 DAEMON = Path(__file__).parent / "build-order-daemon.py"
@@ -444,6 +445,17 @@ def test_ritual_bare_tag_none_for_unrelated_task():
     assert mod._ritual_bare_tag("😈 unrelated task (15) [15]", "😈", tags) is None
 
 
+def _fake_todoist_write(created):
+    """Records created/mutated payloads and returns a (status, body) reply
+    that echoes back the same labels sent in -- i.e. a successful, non-flaky
+    write, so tests aren't exercising the label-repair path by accident."""
+    def _write(path, payload, token, method="POST"):
+        created.append(payload)
+        body = json.dumps({"id": "created", "labels": (payload or {}).get("labels", [])}).encode()
+        return 200, body
+    return _write
+
+
 def test_create_block_rituals_skips_annotated_duplicate(monkeypatch):
     """Functional: an already-open '-1g' card annotated with (15) [15] must
     stop create_block_rituals from creating a second one."""
@@ -452,8 +464,7 @@ def test_create_block_rituals_skips_annotated_duplicate(monkeypatch):
     monkeypatch.setattr(mod, "_todoist_open_rituals",
                         lambda token: [{"id": "1", "content": "😈 -1g (15) [15]"}])
     created = []
-    monkeypatch.setattr(mod, "_todoist_write",
-                        lambda path, payload, token, method="POST": created.append(payload))
+    monkeypatch.setattr(mod, "_todoist_write", _fake_todoist_write(created))
     mod.create_block_rituals()
     created_tags = [p["content"].replace("😈", "").strip() for p in created]
     assert "-1g" not in created_tags, "annotated '-1g' must be recognized as already open"
@@ -529,9 +540,51 @@ def test_create_block_rituals_still_creates_on_genuinely_empty_fetch(monkeypatch
     monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
     monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
     created = []
-    monkeypatch.setattr(mod, "_todoist_write",
-                        lambda path, payload, token, method="POST": created.append(payload))
+    monkeypatch.setattr(mod, "_todoist_write", _fake_todoist_write(created))
     mod.create_block_rituals()
+    assert len(created) == 5
+
+
+# ── Created ritual card must have its label verified, and repaired if the
+# creation write dropped it (bug 2026-07-30: 3 of 5 cards created in the same
+# batch came back from Todoist with labels=[] -- an apparent write flake on
+# rapid-fire creates. An unlabeled card is invisible to the label-filtered
+# open-rituals fetch, so it's never retired and just orphans in the inbox,
+# with the dedup check also blind to it -- each subsequent fire creates
+# another one on top since it can't see the orphan as "already open" either).
+
+def test_create_block_rituals_repairs_dropped_label(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    calls = []
+
+    def flaky_write(path, payload, token, method="POST"):
+        if path == "/tasks":
+            calls.append(("create", path, payload))
+            # Simulate Todoist dropping the label on write, regardless of
+            # what was sent.
+            return 200, json.dumps({"id": "created-1", "labels": []}).encode()
+        calls.append(("repair", path, payload))
+        return 200, json.dumps({"id": "created-1", "labels": payload["labels"]}).encode()
+
+    monkeypatch.setattr(mod, "_todoist_write", flaky_write)
+    mod.create_block_rituals()
+
+    repairs = [c for c in calls if c[0] == "repair"]
+    assert len(repairs) == 5, "every card that came back unlabeled must get a corrective PATCH"
+    assert all(c[1] == "/tasks/created-1" and c[2] == {"labels": ["-1neon"]} for c in repairs)
+
+
+def test_create_block_rituals_no_repair_when_label_persists(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write", _fake_todoist_write(created))
+    mod.create_block_rituals()
+    # _fake_todoist_write echoes the sent labels back, so every create is
+    # already correctly labeled -- no repair call (a 6th write) should fire.
     assert len(created) == 5
 
 
