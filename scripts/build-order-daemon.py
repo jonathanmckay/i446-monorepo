@@ -98,8 +98,11 @@ BLOCK_RITUALS_CONFIG = Path.home() / "i446-monorepo" / "config" / "block-rituals
 # Labels that mark a completed item as NOT a real one-off task, for -1l. Recurring
 # habits (0neon/1neon/夜neon) don't even appear in the completed API (completion
 # advances the due date), so the live noise to strip is the -1neon rituals
-# themselves and @posthoc defer-eval records.
-NON_TASK_LABELS = {"0neon", "1neon", "夜neon", "-1neon", "posthoc"}
+# themselves. @posthoc is NOT blanket-excluded (2026-07-30): a posthoc meeting
+# completion that carries [N] is a real, pointed piece of work and should count
+# toward -1l — only posthoc *defer-tracking* records ("deferred: X → Y", logged
+# by the reschedule flow, not by doing anything) are noise. See _is_defer_noise.
+NON_TASK_LABELS = {"0neon", "1neon", "夜neon", "-1neon"}
 
 # Map fire-hour → 地支 block (just-ended) in the build order. Used to drop a
 # "fired" emoji on the block header so the user can see at a glance which
@@ -910,11 +913,20 @@ def _has_points(content: str) -> bool:
     return any(int(n) > 0 for n in nums)
 
 
+def _is_defer_noise(content: str) -> bool:
+    """Posthoc defer-tracking records ("deferred: X [N] (M) [N] → date [N]")
+    log a reschedule, not accomplished work — never count toward -1l even
+    though they're posthoc and often carry a stray [N] from the before/after
+    state they track."""
+    return content.strip().lower().startswith("deferred:")
+
+
 def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
     """-1l: every real (non-habit) Todoist task completed in the block window
     carries [N] points. Empty (no real completions) = not satisfied. Recurring
-    habits don't surface in the completed API; the only noise to strip is the
-    -1neon rituals and @posthoc eval records (NON_TASK_LABELS)."""
+    habits don't surface in the completed API; the noise to strip is the
+    -1neon rituals (NON_TASK_LABELS) and posthoc defer records (_is_defer_noise)
+    — a pointed posthoc *meeting* completion is real work and counts."""
     token = _todoist_token()
     if not token:
         log("-1l: no API token in env or keychain")
@@ -939,7 +951,8 @@ def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -
         return False
 
     real = [it for it in items
-            if not (_at_labels(it.get("content", "")) & NON_TASK_LABELS)]
+            if not (_at_labels(it.get("content", "")) & NON_TASK_LABELS)
+            and not _is_defer_noise(it.get("content", ""))]
     if not real:
         log(f"-1l: {start_hour:02d}-{end_hour:02d} no real task completions → fail")
         return False
@@ -991,36 +1004,51 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
 def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     """Decide whether a marker earns its points for a block header `line`.
 
-    The emoji must be present on the header. GOAL_MARKER/TOGGL_MARKER/
-    TODOIST_MARKER (🎯/⏱️/✅) are all live-gated: `live` must confirm the
-    underlying condition actually held, stripping a stale or optimistic stamp
-    regardless of how it got there. ☀️/📧 are written by /inbound with no
-    daemon-side validator, so header presence alone is trusted for those two.
+    The emoji must be present on the header. GOAL_MARKER/TOGGL_MARKER (🎯/⏱️)
+    are live-gated: `live` must confirm the underlying condition actually
+    held, stripping a stale or optimistic stamp regardless of how it got
+    there. ☀️/📧/✅ are trusted on header presence alone, no daemon-side audit.
 
-    ⏱️/✅ are audited the same way as 🎯 (2026-07-30 redesign, reversing the
-    2026-07-13 "OR" model): did-fast's run_ritual stamps them immediately on
-    manual completion (a provisional claim — "credit now, verify at close"),
-    and the daemon's reconcile is the checksum that strips it if `live`
-    disagrees, exactly like a stale 🎯. The daemon's OWN auto-check stamping
-    a marker before this runs is equally subject to the same audit — there is
-    no path that bypasses it. When `live` is None (e.g. a re-score with no
-    evaluation pass), all markers are trusted, preserving legacy behavior."""
+    🎯/⏱️ audit model (2026-07-30 redesign, reversing the 2026-07-13 "OR"
+    model): did-fast's run_ritual stamps them immediately on manual completion
+    (a provisional claim — "credit now, verify at close"), and the daemon's
+    reconcile is the checksum that strips it if `live` disagrees, exactly like
+    a stale claim. The daemon's OWN auto-check stamping a marker before this
+    runs is equally subject to the same audit.
+
+    ✅ is deliberately NOT in that audit (2026-07-30, same day, reverted after
+    one round of use): completing -1l is a direct first-person attestation
+    ("I did the real work in that block"), not an inference from Toggl/Todoist
+    data the way ⏱️'s minute-coverage or 🎯's goal-presence are — and the
+    -1l live check (_todoist_l_satisfied) is necessarily a narrow proxy for
+    that attestation (real, [N]-pointed Todoist completions in the window)
+    that can legitimately be False on a genuine, fully-worked meeting-heavy
+    block. Treating it as authoritative-enough to strip a manual claim proved
+    too aggressive in practice; ✅ now behaves like ☀️/📧 — trusted once
+    stamped, by whichever path stamped it (manual completion or the daemon's
+    own passing auto-check), and never clawed back. The daemon still only
+    *auto*-stamps ✅ when its own live check passes; only the strip/audit side
+    is gone. When `live` is None (e.g. a re-score with no evaluation pass),
+    all markers are trusted, preserving legacy behavior."""
     if emoji not in line:
         return False
     if LOCK_MARKER in line:
+        return True
+    if emoji == TODOIST_MARKER:
         return True
     if live is not None and emoji in live and not live[emoji]:
         return False
     return True
 
 
-# All three daemon-evaluated rituals are audited: a live check that comes back
-# False strips the marker (and its points) even if it was stamped by a manual
-# completion. Manual completion is a provisional claim, not a permanent
+# Only 🎯/⏱️ are audited: a live check that comes back False strips the
+# marker (and its points) even if it was stamped by a manual completion.
+# Manual completion is a provisional claim for these two, not a permanent
 # override — the daemon's reconcile is the checksum, not the awarder (see
-# _marker_earned). ☀️/📧 have no daemon-side validator and are never in this
-# set.
-DAEMON_OWNED_MARKERS = {GOAL_MARKER, TOGGL_MARKER, TODOIST_MARKER}
+# _marker_earned). ☀️/📧 have no daemon-side validator; ✅ has one
+# (_todoist_l_satisfied) but is deliberately excluded from stripping (see
+# _marker_earned) — none of the three are in this set.
+DAEMON_OWNED_MARKERS = {GOAL_MARKER, TOGGL_MARKER}
 
 
 def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
