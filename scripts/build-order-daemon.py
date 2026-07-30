@@ -82,6 +82,11 @@ SCORE_EMOJI_MAP = {
 GOAL_MARKER = "🎯"
 TOGGL_MARKER = "⏱️"
 TODOIST_MARKER = "✅"
+# 🔒 on a block header = user-attested full credit: every stamp on that line is
+# trusted verbatim (including 🎯) and never stripped. Set manually when the
+# user vouches for a block the validators can't confirm (2026-07-30: 辰 rituals
+# done but no goal text on file, so 🎯 kept getting stripped by the reconcile).
+LOCK_MARKER = "🔒"
 TODOIST_KEYCHAIN_SERVICE = "todoist-api-key"
 # -1t: minutes of the 120-min block that must be *categorized* (a Toggl entry
 # with a project assigned). Stricter than the old 0.8 coverage of any tracked
@@ -1002,6 +1007,8 @@ def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     behavior."""
     if emoji not in line:
         return False
+    if LOCK_MARKER in line:
+        return True
     if emoji == GOAL_MARKER and live is not None and emoji in live and not live[emoji]:
         return False
     return True
@@ -1072,6 +1079,8 @@ def _strip_unearned_markers(block_name: str, live: dict | None,
             continue
         if (line.startswith("- ") and not line.startswith("    ")
                 and _block_line_name(line) == block_name):
+            if LOCK_MARKER in line:
+                return  # user-attested block: stamps are never stripped
             present = [m for m in unearned if m in line]
             if present:
                 new_line = line

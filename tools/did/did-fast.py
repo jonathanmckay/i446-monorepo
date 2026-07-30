@@ -783,45 +783,52 @@ def _refresh_task_queue_inner() -> dict:
         except (ValueError, TypeError):
             same_block = False
         neg1 = fetch_label("-1neon")
-        if not neg1:
-            # Empty label fetch + lagging filter = every OTHER ritual card
-            # vanishes from dtd until the next refresh (bug 2026-07-26:
-            # completing one -1n hid the rest for ~10s). Rate limiting is the
-            # likely cause — the completion-time refresh follows a burst of
-            # close/stamp API calls. Carry the old cache's ritual cards
-            # forward instead; genuinely-closed ones stay hidden via the
-            # completed-today id overlay, and the next clean refresh prunes.
-            neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])] if same_block else []
-            if neg1:
-                print(f"WARN: -1neon fetch empty, carrying {len(neg1)} cached card(s)", file=sys.stderr)
-        else:
-            # Partial-fetch erosion guard (2026-07-28): a 5xx/rate storm can
-            # also return a strict SUBSET with a 200, which sails past the
-            # empty-only guard above and shrinks the cached ritual set on
-            # every refresh (this morning's storm eroded it to 1 card —
-            # "-1n tasks disappeared from dtd after completing a task").
-            # Union the old cache's ritual cards back in (dedup by id),
-            # pruning ids recorded closed in completed-today (run_ritual
-            # records them on a successful close) — but only while the old
-            # cache was written in the SAME 2h block, so cards the daemon
-            # retired at a boundary never outlive their block.
-            if same_block:
-                closed_ids: set = set()
+        missing_reason = "empty" if not neg1 else "partial"
+        # A card in old_today but absent from a fresh fetch is ambiguous: a
+        # genuine 5xx/rate flake (undercounted, still open) or a card the
+        # daemon legitimately deleted/closed at this block's boundary. Blindly
+        # trusting "missing = flake" (the pre-2026-07-30 behavior of both
+        # branches below) meant a single flaky fetch right after a boundary
+        # permanently resurrected an already-retired card: every subsequent
+        # refresh's carry-forward became the NEXT refresh's old_cache, so the
+        # duplicate never healed for the rest of the block ("dupe -1n tasks in
+        # dtd" bug, 2026-07-30 — screenshot showed bare current-block -1g/
+        # -1ibx/-1t alongside stale, auto-triage-mangled previous-block -1g/
+        # -1ibx/-1l that Todoist itself had already deleted). Resolve the
+        # ambiguity directly with a per-card re-GET instead of guessing from
+        # the aggregate count, and only within the same 2h block (a retired
+        # card must never outlive its block regardless of verification).
+        if same_block and old_today:
+            closed_ids: set = set()
+            try:
+                _ctj = mc._load(mc.COMPLETED)
+                if _ctj.get("date") == today_iso:
+                    closed_ids = {str(v) for v in (_ctj.get("ids") or {}).values()}
+            except Exception:
+                pass
+            _have_neg1 = {t.get("id") for t in neg1}
+            candidates = [t for t in old_today
+                          if "-1neon" in (t.get("labels") or [])
+                          and t.get("id") not in _have_neg1
+                          and str(t.get("id")) not in closed_ids]
+            carried = []
+            for t in candidates:
                 try:
-                    _ctj = mc._load(mc.COMPLETED)
-                    if _ctj.get("date") == today_iso:
-                        closed_ids = {str(v) for v in (_ctj.get("ids") or {}).values()}
+                    status, body = _todoist_request(f"{TODOIST_BASE}/tasks/{t['id']}", "GET")
+                    live = json.loads(body) if status == 200 else {}
+                    # Missing from the label fetch is also what a task looks
+                    # like once something strips its -1neon label (observed
+                    # live 2026-07-30: 3 auto-triage-mangled cards were still
+                    # OPEN but had labels=[] on re-GET) -- unchecked alone
+                    # isn't ritual-card proof, the label has to still be there.
+                    if status == 200 and not live.get("checked") and "-1neon" in (live.get("labels") or []):
+                        carried.append(t)
                 except Exception:
-                    pass
-                _have_neg1 = {t.get("id") for t in neg1}
-                carried = [t for t in old_today
-                           if "-1neon" in (t.get("labels") or [])
-                           and t.get("id") not in _have_neg1
-                           and str(t.get("id")) not in closed_ids]
-                if carried:
-                    print(f"WARN: -1neon fetch partial ({len(neg1)}), carrying "
-                          f"{len(carried)} more cached card(s)", file=sys.stderr)
-                    neg1 = neg1 + carried
+                    pass  # gone, closed, unlabeled, or unreachable — don't resurrect on ambiguity
+            if carried:
+                print(f"WARN: -1neon fetch {missing_reason} ({len(neg1)}), carrying "
+                      f"{len(carried)} more cached card(s) (verified still open)", file=sys.stderr)
+                neg1 = neg1 + carried
         have = {t.get("id") for t in results["today"]}
         for t in neg1:
             if t.get("id") in have:
