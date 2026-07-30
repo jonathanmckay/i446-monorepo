@@ -2364,6 +2364,8 @@ def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
             continue
         if ev.get("transparency") == "transparent" or ev.get("all_day"):
             continue
+        if _event_tracked(ev, STATE.entries):
+            continue
         mins = max(1, int((ev["end_dt"] - ev["start_dt"]).total_seconds() // 60))
         items.append({
             "start_dt": ev["start_dt"],
@@ -2393,6 +2395,44 @@ def _event_covered(ev: dict, entries: list[dict]) -> bool:
 
 RECLAIM_MIN_ENTRY_MIN = 60  # a covering entry this long smells like a runaway clock
 RECLAIM_SLACK_MIN = 30      # ...and must exceed the event by this much
+TRACKED_EARLY_START_MIN = 15  # running same-title entry this early = tracking the meeting
+
+
+def _norm_meeting_title(s: str) -> str:
+    """Comparison key for entry-desc vs event-title matching. Routed through
+    _safe_event_title on BOTH sides: a converted entry's desc already had its
+    commas/whitespace collapsed at creation, and calendar copies of the same
+    meeting can differ by stray double spaces (2026-07-30: running entry
+    'Huddle: XBOX Developer' vs event 'Huddle:  XBOX Developer' rendered as
+    a dup pair)."""
+    return _safe_event_title(s).lower()
+
+
+def _event_tracked(ev: dict, entries: list[dict]) -> bool:
+    """A same-titled Toggl entry is already tracking THIS event instance, so
+    its calendar row is a duplicate and stays hidden. Title match (normalized)
+    plus time proximity: the entry overlaps the event window, or is running
+    and started up to TRACKED_EARLY_START_MIN before the event starts (timers
+    are usually started a few minutes early). Scoped to the instance, never
+    the title globally — a recurring meeting later in the day still shows.
+
+    Keyed on title-match rather than looser overlap so it composes with
+    _event_reclaimable instead of fighting it: hanger entries with unrelated
+    names still surface their swallowed meetings."""
+    t = _norm_meeting_title(ev.get("title") or "")
+    if not t:
+        return False
+    pool = list(entries) + list(getattr(STATE, "entries_yday", []))
+    for e in pool:
+        if _norm_meeting_title(e.get("desc") or "") != t:
+            continue
+        if e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]:
+            return True
+        if (e.get("running")
+                and 0 <= (ev["start_dt"] - e["start_dt"]).total_seconds()
+                <= TRACKED_EARLY_START_MIN * 60):
+            return True
+    return False
 
 
 def _same_day_dup(e, pool) -> bool:
