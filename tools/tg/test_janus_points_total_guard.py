@@ -42,6 +42,26 @@ def _run(monkeypatch, m, out, tmp_path=None):
     m.fetch_points()
 
 
+def test_rejected_read_logs_to_configurable_path_not_hardcoded_shared_file(monkeypatch, tmp_path):
+    """Bug 2026-07-30: fetch_points hardcoded open("/tmp/janus-points-rejected.log",
+    "a") inline, so every test run of a torn-read fixture (this file's whole
+    purpose) appended fake entries to the real, shared, production log --
+    indistinguishable from genuine torn reads and actively hindering live
+    diagnosis of a real "stale points" bug report. fetch_points must write to
+    the module-level POINTS_REJECTED_LOG so tests can redirect it."""
+    m = _load_tui()
+    m.STATE.today_points = 606
+    m.STATE.block_points = {}
+    real_log = Path("/tmp/janus-points-rejected.log")
+    before = real_log.stat().st_size if real_log.exists() else None
+    fake_log = tmp_path / "rejected.log"
+    _run(monkeypatch, m, "-46|=D|=D-G|=D-SUM(G,H)|=D-SUM(G,H,I)|=D|=D|=D|=D|=D", tmp_path)
+    assert fake_log.exists() and "cand=-46" in fake_log.read_text(), \
+        "the rejected read must be logged to the configured path"
+    after = real_log.stat().st_size if real_log.exists() else None
+    assert before == after, "the real shared log must be untouched by a test run"
+
+
 def test_negative_torn_total_is_rejected(monkeypatch, tmp_path):
     m = _load_tui()
     m.STATE.today_points = 606

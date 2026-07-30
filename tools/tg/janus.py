@@ -1938,17 +1938,91 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # name (user request 2026-07-21: "in the block lines... not in the
         # header"): `辰:00              ₦9 73分`.
         right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
-        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
-        out.append(("class:dim", left))
-        out.append(_gutter(blk_sh, 0, slot_min))
-        out.append(("class:dim", " " * max(0, trail - 1)))
-        if emojis:
-            out.append((NEON_PTS_STYLE, emojis))
-            if pts_str:
+        # A real item occupying the block's :00 slot rides the header line
+        # instead of duplicating a "  :00" body row right under it (user
+        # request 2026-07-30: "Shouldn't XBOX Developer be on the 未 line
+        # rather than repeating it? I'm seeing the :00 line get duplicated").
+        # Free/gap bars keep their own body rows — the header's slot belongs
+        # to a tracked entry, a meeting, or the sleep-spillover item.
+        head0 = next(
+            (p for p in picks
+             if not p.get("is_free") and not p.get("is_gap")
+             and p["start_dt"].hour == blk_sh
+             and (p["start_dt"].minute // slot_min) * slot_min == 0), None)
+        if head0 is not None:
+            body_picks = [p for p in picks if p is not head0]
+            running = bool(head0.get("is_running"))
+            if head0.get("is_event"):
+                my_key = _sel_key(head0["event"])
+                if track_selection:
+                    STATE.visible_events.append(head0["event"])
+            elif head0.get("entry_ids"):
+                reg = {"kind": "entry", "start_dt": head0["start_dt"],
+                       "entry_ids": head0["entry_ids"],
+                       "raw_desc": head0["raw_desc"],
+                       "project_id": head0["project_id"],
+                       "dur_min": head0.get("dur_min"), "running": running}
+                my_key = _sel_key(reg)
+                if track_selection:
+                    STATE.visible_events.append(reg)
+            else:
+                my_key = None  # synthetic pick (sleep spillover) — unselectable
+            is_sel = my_key is not None and STATE.event_sel == my_key
+            dur = f"({head0['dur_min']})" if head0.get("is_event") else fmt_dur(head0["dur_min"])
+            prefix = "▶ " if running else ""
+            vtags = " ".join(f"#{t}" for t in (head0.get("tags") or [])
+                             if t in VALUE_TAGS)
+            base_sty = head0.get("style") or ""
+            if running:
+                base_sty = f"bold {base_sty}".strip() if base_sty else "bold class:running"
+            elif _is_placeholder(head0["label"]):
+                base_sty = _placeholder_style()
+            if is_sel:
+                sty = f"{base_sty} bg:#3a3a3a".strip() if base_sty else "class:selected_bg"
+                left_sty = "class:selected_accent"
+                dur_sty = "class:selected_bg"
+            else:
+                sty = base_sty
+                left_sty = "class:dim"
+                dur_sty = "class:dim"
+            gsty, gch = _gutter(blk_sh, 0, slot_min)
+            if is_sel:
+                gsty = f"{gsty} bg:#3a3a3a"
+            tail_w = (dwidth(right) + 1) if right else 0
+            space = max(1, WIDTH_HINT - dwidth(left) - 1 - dwidth(prefix)
+                        - dwidth(dur) - 1 - (dwidth(vtags) + 1 if vtags else 0)
+                        - tail_w)
+            out.append((left_sty, left))
+            out.append((gsty, gch))
+            txt = truncate(head0["label"], space)
+            if head0.get("is_event"):
+                out.append((sty, " " * max(0, space - dwidth(txt)) + txt))
+            else:
+                out.append((sty, prefix + pad(txt, space)))
+            if vtags:
+                out.append((dur_sty, f" {vtags}"))
+            out.append((dur_sty, f" {dur}"))
+            if right:
                 out.append(("class:dim", " "))
-        if pts_str:
-            out.append(("bold #ffffff", pts_str))
-        out.append(("class:dim", "\n"))
+                if emojis:
+                    out.append((NEON_PTS_STYLE, emojis))
+                    if pts_str:
+                        out.append(("class:dim", " "))
+                if pts_str:
+                    out.append(("bold #ffffff", pts_str))
+            out.append(("class:dim", "\n"))
+        else:
+            trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
+            out.append(("class:dim", left))
+            out.append(_gutter(blk_sh, 0, slot_min))
+            out.append(("class:dim", " " * max(0, trail - 1)))
+            if emojis:
+                out.append((NEON_PTS_STYLE, emojis))
+                if pts_str:
+                    out.append(("class:dim", " "))
+            if pts_str:
+                out.append(("bold #ffffff", pts_str))
+            out.append(("class:dim", "\n"))
 
     # ── body: later slot marks after :00, entries on their slots ──
     # Empty marks always render (this is what fixes a future block like 午
@@ -1983,7 +2057,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     else:
         rows = entry_rows
     if len(rows) < max_rows:
-        occupied = {_slot(p) for p in body_picks}
+        # Occupied slots come from ALL picks (not just body_picks): a pick
+        # that moved up to ride the header must not leave a grid mark (·/◇ │)
+        # re-materializing in the :00 row it vacated (user report 2026-07-30:
+        # "the :00 line gets duplicated in a lot of places").
+        occupied = {_slot(p) for p in picks}
         offsets = range(0 if include_00 else slot_min, 120, slot_min)
         mark_slots = [(blk_sh + off // 60, off % 60) for off in offsets]
         marks = [(hh * 60 + mm, hh, mm, None)
@@ -2030,10 +2108,20 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         if p is None:
             if cont and (hh, mm) in cont:
                 # A meeting started earlier flows through this slot: keep the
-                # ◇ │ continuation rather than a bare time.
+                # ◇ │ continuation rather than a bare time. Calendar coverage
+                # renders at the RIGHT edge, matching the right-justified
+                # event rows it continues; Toggl/sleep coverage stays left
+                # (user request 2026-07-30).
+                csty = cont[(hh, mm)]
+                csty, c_event = csty if isinstance(csty, tuple) else (csty, False)
                 out.append(("class:time", tcol))
                 out.append(_gutter(hh, mm, slot_min))
-                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
+                glyph = "◇ │"
+                if c_event:
+                    space = max(0, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(glyph))
+                    out.append((csty or "class:future", " " * space + "│ ◇\n"))
+                else:
+                    out.append((csty or "class:future", glyph + "\n"))
             else:
                 # Genuinely empty: the time, then a faint "·" placeholder —
                 # restoring the marker the old detail-band gcal-preview grid

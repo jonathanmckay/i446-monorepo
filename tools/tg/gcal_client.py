@@ -69,33 +69,22 @@ def _cache_path(day: dt.date) -> Path:
     return CACHE_DIR / f"gcal-{day.isoformat()}.json"
 
 
-# lx@m5c7.com is Louisa's calendar, visible on the m5c7 account — it carries
-# her personal solo events (call nanny, dentist, ...), m5x2 business meetings
-# Jonathan is actually part of (m5x2 Strat, m5x2 People), AND meetings that
-# are purely between her and someone else on the m5x2 team (HZ/LX 1:1, her
-# 1:1 with Han Zhao). Only the middle category belongs in janus — filter the
-# rest at fetch time rather than hiding the whole calendar, which would also
-# hide the meetings Jonathan actually needs to see.
-PERSONAL_CALENDARS_FILTERED = {"lx@m5c7.com"}
-JONATHAN_EMAILS = {"mckay@m5c7.com"}
+# lx@m5c7.com is Louisa's calendar, visible on the m5c7 account. It was
+# first filtered per-event (2026-07-13/15: hide her solo events and meetings
+# Jonathan isn't invited to, keep shared m5x2 meetings). 2026-07-30 the user
+# asked to not show it at all — safe, because any meeting Jonathan is
+# actually part of also lives on his own calendar (he's an attendee) and the
+# cross-calendar dedupe was already collapsing the copies.
+# Both of Louisa's calendars: her m5c7 work calendar AND her personal gmail
+# (subscribed on this account as "lxu888") — the 2026-07-30 "it's still
+# showing" leak came from the second one.
+PERSONAL_CALENDARS_FILTERED = {"lx@m5c7.com", "lxu888@gmail.com", "lxu888"}
 
 
-def _should_hide_lx_event(cal_summary: str, title: str, attendees: list | None) -> bool:
-    """True for an lx@m5c7.com event that shouldn't surface in janus.
-
-    A literal "m5x2" in the title is an unambiguous business signal (same
-    rule janus.py's gcal_project_code uses) and always wins, in case attendee
-    data is ever missing/incomplete. Otherwise: hide anything Jonathan isn't
-    actually an attendee of. The 2026-07-13 fix only dropped her SOLO events
-    (no attendees besides herself — "call nanny"); meetings between her and
-    someone else, with Jonathan not invited, still leaked through (user
-    report 2026-07-15: "can we not show the lx events")."""
-    if cal_summary not in PERSONAL_CALENDARS_FILTERED:
-        return False
-    if "m5x2" in title.lower():
-        return False
-    attendee_emails = {(a.get("email") or "").lower() for a in (attendees or [])}
-    return not (attendee_emails & JONATHAN_EMAILS)
+def _calendar_filtered(cal_summary: str, cal_id: str) -> bool:
+    """True for calendars janus never shows (skipped before fetch)."""
+    return (cal_summary in PERSONAL_CALENDARS_FILTERED
+            or cal_id in PERSONAL_CALENDARS_FILTERED)
 
 
 def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) -> list[dict]:
@@ -113,6 +102,8 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
     out: list[dict] = []
     for cal in cal_list:
         cid = cal["id"]
+        if _calendar_filtered(cal.get("summary", cid), cid):
+            continue
         try:
             resp = svc.events().list(
                 calendarId=cid,
@@ -131,8 +122,6 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
                 continue
             title = ev.get("summary", "(no title)")
             cal_summary = cal.get("summary", cid)
-            if _should_hide_lx_event(cal_summary, title, ev.get("attendees")):
-                continue
             out.append({
                 "title": title,
                 "start": s,
