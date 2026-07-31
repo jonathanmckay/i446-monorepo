@@ -148,6 +148,38 @@ def stamp_emoji(text: str, block: str, emoji: str) -> tuple[str, bool]:
     return "\n".join(out), changed
 
 
+def unstamp_emoji(text: str, block: str, emoji: str) -> tuple[str, bool]:
+    """Remove `emoji` from `block`'s header line if present. Inverse of
+    stamp_emoji, for reversing a ritual completion (undo-fast.py) — only ever
+    called when the completion being undone is the one that stamped it
+    (caller checks run_ritual's own `stamped` flag), never as a general
+    "does this block deserve this marker" edit.
+
+    Idempotent: (text, False) if the emoji wasn't there. Only touches header
+    lines inside the -1₲ section, matching stamp_emoji's scope.
+    """
+    if NEG1_SECTION not in text:
+        return text, False
+    out: list[str] = []
+    changed = False
+    in_section = False
+    for line in text.split("\n"):
+        if line.startswith(NEG1_SECTION):
+            in_section = True
+        elif line.startswith("## ") and in_section:
+            in_section = False
+        if (in_section and line.startswith("- ") and not line.startswith("    ")
+                and _block_line_name(line) == block and emoji in line):
+            new_line = line.replace(f" {emoji}", "", 1)
+            if emoji in new_line:  # emoji wasn't space-prefixed (e.g. leads the markers)
+                new_line = new_line.replace(emoji, "", 1)
+            out.append(" ".join(new_line.split()) if new_line.strip() else new_line.rstrip())
+            changed = True
+        else:
+            out.append(line)
+    return "\n".join(out), changed
+
+
 def score_day(
     text: str,
     emoji_pts: Optional[dict[str, int]] = None,
