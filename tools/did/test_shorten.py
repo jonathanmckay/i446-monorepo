@@ -1,6 +1,7 @@
 """Unit tests for shorten.split_estimates — the pure parsing that keeps (N)/[N]
 estimates out of the prose so they can be re-appended after Haiku shortening."""
 import importlib
+import json
 
 shorten = importlib.import_module("shorten")
 
@@ -140,3 +141,35 @@ def test_prose_cap_fits_narrow_dtd_pane():
     p_long, _ = shorten.split_estimates(long_prose + " (10) [20]")
     p_short, _ = shorten.split_estimates(short_prose + " (10) [20]")
     assert len(p_long) > shorten.PROSE_CAP and len(p_short) <= shorten.PROSE_CAP
+
+
+def test_edited_estimate_invalidates_cached_short(tmp_path, monkeypatch):
+    """2026-07-31: user edited '[30]' → '[10]' on the LinkedIn task and dtd
+    kept rendering the old (30) [30] short. That turned out to be refresh
+    LATENCY, but it must never become PERMANENT: an edit changes the content
+    hash, so the sidecar entry must miss, and when regeneration is
+    unavailable the stale short must be POPPED (full content, with the new
+    estimates, becomes the display) rather than served."""
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location("shorten_edit", "shorten.py")
+    m = importlib.util.module_from_spec(spec)
+    sys.modules["shorten_edit"] = m
+    spec.loader.exec_module(m)
+
+    old = 'Change LinkedIn title to be "Player of Games" (30) [30]'
+    new = 'Change LinkedIn title to be "Player of Games" (30) [10]'
+    assert m._hash(old) != m._hash(new), "an estimate edit must change the cache key"
+
+    sidecar = tmp_path / "task-shortnames.json"
+    sidecar.write_text(json.dumps(
+        {"t1": {"h": m._hash(old), "short": "Change LinkedIn title to Player of (30) [30]"}}))
+    monkeypatch.setattr(m, "SIDECAR", sidecar)
+    monkeypatch.setattr(m, "_haiku_shorten", lambda prose: None)   # regen unavailable
+    monkeypatch.setattr(m, "_comment_lookup", lambda tid, h: None)
+
+    cache = {"today": [{"id": "t1", "content": new,
+                        "short": "Change LinkedIn title to Player of (30) [30]"}]}
+    m.attach_to_cache(cache)
+    t = cache["today"][0]
+    assert "short" not in t, "stale short must be popped, never served for edited content"
+    assert "[10]" in t["content"]
