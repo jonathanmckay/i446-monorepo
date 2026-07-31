@@ -227,6 +227,108 @@ def test_reverse_done_collects_ops(monkeypatch):
     assert 'range ("D12") of ws1n to ""' in joined
 
 
+# ---------------------------------------------------------------------------
+# Ritual completion undo (bug 2026-07-31: "ctrl+z didn't work after I
+# completed -1l"). run_ritual's own return value is journaled verbatim under
+# entry["ritual"]; the top-level entry["todoist"] deliberately omits the
+# task id so the GENERIC reversal loop can never half-undo a ritual (reopen
+# the card without also un-stamping the header / reversing the P credit).
+# ---------------------------------------------------------------------------
+
+def _ritual_result_entry(**overrides):
+    base = {
+        "name": "😈 -1l", "step": "ritual",
+        "todoist": {"closed": True, "content": "😈 -1l"},  # no "id" — see above
+        "ritual": {
+            "ritual": "-1l", "emoji": "✅", "points": 3,
+            "todoist": {"id": "t9", "content": "😈 -1l", "closed": True},
+            "block": "未", "stamped": True, "auto": True,
+            "completed_today": True,
+            "p_credit": {"points": 3, "ok": True, "regrouped": True, "excel": "P=43.0"},
+        },
+    }
+    base["ritual"].update(overrides)
+    return base
+
+
+def test_reverse_ritual_entry_does_full_undo(monkeypatch):
+    api_calls = []
+    unstamp_calls = []
+    excel_writes = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    monkeypatch.setattr(uf, "_unstamp_ritual", lambda block, emoji: (
+        unstamp_calls.append((block, emoji)),
+        {"changed": True, "formula": "=1+3+3"})[1])
+    monkeypatch.setattr(
+        uf.excel, "write",
+        lambda sheet, col, **kw: (excel_writes.append((sheet, col, kw)), {"ok": True})[1])
+
+    out = {"results": [_ritual_result_entry()]}
+    errors = []
+    uf.reverse_didfast_output(out, "7/30", "2026-07-30", errors)
+
+    assert errors == []
+    # Reopened via the id inside entry["ritual"]["todoist"], not the
+    # deliberately id-less top-level entry["todoist"].
+    assert ("POST", "/tasks/t9/reopen", None) in api_calls
+    assert len(api_calls) == 1, "must reopen exactly once, not double-reopen"
+    assert unstamp_calls == [("未", "✅")]
+    assert excel_writes == [("0分", "P", {"date": "7/30", "value": "=1+3+3",
+                                          "src": "undo ritual 未 -1l"})]
+
+
+def test_reverse_ritual_entry_skips_unstamp_when_not_stamped(monkeypatch):
+    """This particular completion didn't change the header (e.g. the daemon
+    had already stamped it first) — nothing to unstamp, no P write, but the
+    card still gets reopened."""
+    api_calls = []
+    unstamp_calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))
+    monkeypatch.setattr(uf, "_unstamp_ritual", lambda block, emoji: unstamp_calls.append((block, emoji)))
+    monkeypatch.setattr(uf.excel, "write", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("must not write P when nothing was unstamped")))
+
+    out = {"results": [_ritual_result_entry(stamped=False)]}
+    errors = []
+    uf.reverse_didfast_output(out, "7/30", "2026-07-30", errors)
+
+    assert errors == []
+    assert ("POST", "/tasks/t9/reopen", None) in api_calls
+    assert unstamp_calls == []
+
+
+def test_reverse_ritual_entry_skips_p_write_when_not_credited(monkeypatch):
+    """The header stamp is reversed even if points were never actually
+    credited (e.g. the write failed) -- but P itself must not be touched."""
+    unstamp_calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: None)
+    monkeypatch.setattr(uf, "_unstamp_ritual", lambda block, emoji: (
+        unstamp_calls.append((block, emoji)),
+        {"changed": True, "formula": "=1+3"})[1])
+    monkeypatch.setattr(uf.excel, "write", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("must not write P when p_credit was never ok")))
+
+    out = {"results": [_ritual_result_entry(p_credit={"ok": False})]}
+    errors = []
+    uf.reverse_didfast_output(out, "7/30", "2026-07-30", errors)
+
+    assert errors == []
+    assert unstamp_calls == [("未", "✅")]
+
+
+def test_reverse_ritual_entry_unstamp_failure_is_reported(monkeypatch):
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: None)
+    monkeypatch.setattr(uf, "_unstamp_ritual", lambda block, emoji: None)  # ssh failure
+    monkeypatch.setattr(uf.excel, "write", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("must not write P after an unstamp failure")))
+
+    out = {"results": [_ritual_result_entry()]}
+    errors = []
+    uf.reverse_didfast_output(out, "7/30", "2026-07-30", errors)
+
+    assert errors and "ritual" in errors[0]
+
+
 def test_reverse_defer_record(monkeypatch):
     api_calls = []
     monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: api_calls.append((m, p, b)))

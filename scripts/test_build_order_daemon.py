@@ -194,11 +194,13 @@ def test_block_has_goals_rejects_whitespace_only_bullet(tmp_path, monkeypatch):
     assert mod._block_has_goals("辰") is True
 
 
-def test_strip_unearned_markers_removes_phantom_goal_and_auto_markers(tmp_path, monkeypatch):
-    """_strip_unearned_markers drops GOAL_MARKER/TOGGL_MARKER/TODOIST_MARKER
-    (🎯/⏱️/✅) when the live data says they weren't earned, never touches
-    ☀️/📧 (no daemon validator), and is a no-op when live is None (an API
-    failure must not destroy a genuinely-earned mark)."""
+def test_strip_unearned_markers_removes_phantom_goal_and_toggl_but_not_todoist(tmp_path, monkeypatch):
+    """_strip_unearned_markers drops GOAL_MARKER/TOGGL_MARKER (🎯/⏱️) when the
+    live data says they weren't earned; ✅ (TODOIST_MARKER) is deliberately
+    exempt (see _marker_earned's docstring — too aggressive in practice,
+    reverted 2026-07-30 after one round of use) and ☀️/📧 have no validator
+    at all. live=None is a no-op (an API failure must not destroy a
+    genuinely-earned mark)."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     original = (
@@ -213,11 +215,11 @@ def test_strip_unearned_markers_removes_phantom_goal_and_auto_markers(tmp_path, 
     mod._strip_unearned_markers("辰", None)
     assert build.read_text(encoding="utf-8") == original
 
-    # Nothing earned → strip 🎯 and ✅ (both audited); ☀️ stays (no validator).
+    # Nothing earned → strip 🎯 only; ✅/☀️ stay.
     mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False})
     line = next(l for l in build.read_text(encoding="utf-8").split("\n")
                 if l.startswith("- 辰"))
-    assert "🎯" not in line and "☀️" in line and "✅" not in line
+    assert "🎯" not in line and "☀️" in line and "✅" in line
 
     # dry_run leaves the file untouched
     build.write_text(original, encoding="utf-8")
@@ -226,42 +228,38 @@ def test_strip_unearned_markers_removes_phantom_goal_and_auto_markers(tmp_path, 
     assert build.read_text(encoding="utf-8") == original
 
 
-# ── Audited redesign (2026-07-30): ⏱️/✅ are provisional-credit-then-audited,
-# same as 🎯 ─────────────────────────────────────────────────────────────────
+# ── Audited redesign (2026-07-30): ⏱️ is provisional-credit-then-audited,
+# same as 🎯 -- ✅ tried the same treatment the same day and was reverted
+# ────────────────────────────────────────────────────────────────────────────
 # History: -1t/-1l started "auto"-only (completing the card did nothing).
 # 2026-07-13 made completion earn them unconditionally ("OR" with the
 # auto-check, never stripped) so a manual completion could never be erased by
 # a failing auto-check. But that meant a false claim (closing -1t without
 # actually hitting the Toggl-coverage threshold) was never caught either.
-# 2026-07-30 (user-confirmed correction): the model should match 🎯 exactly —
-# did-fast's run_ritual still stamps + credits immediately on completion (a
-# provisional claim), but the daemon's reconcile is the checksum that strips
-# it if `live` disagrees, regardless of how it got stamped.
+# 2026-07-30 (user-confirmed correction) made ⏱️/✅ both match 🎯: audited,
+# strippable if `live` disagrees. Same day, after one round of use, ✅ alone
+# was reverted back to trusted-on-presence — _todoist_l_satisfied proved too
+# narrow a proxy for "-1l" (a first-person attestation), unlike ⏱️'s
+# Toggl-minute-coverage check, which stayed audited.
 
-def test_marker_earned_audits_toggl_and_todoist_like_goal():
-    """Regression (2026-07-30 redesign, reversing the 2026-07-13 'OR' model):
-    a manual ⏱️/✅ completion is a PROVISIONAL claim, not a permanent override
-    -- the daemon's reconcile must strip it, exactly like a stale 🎯, when the
-    live check disagrees. User-confirmed correction: "⏱️/✅ should credit
-    immediately when the card is closed... with the daemon's fire only
-    auditing/stripping it later if unearned -- not withholding credit until
-    the fire happens.\""""
+def test_marker_earned_audits_toggl_but_trusts_todoist_on_presence():
     mod = _load_daemon()
-    # Stamped, but the live check for this block fails — must NOT earn.
-    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is False
+    # ⏱️ audited: stamped but the live check fails — must NOT earn.
     assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is False
-    # Stamped and the live check confirms it — earns.
-    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": True}) is True
     assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": True}) is True
+    # ✅ trusted on presence regardless of live (deliberately not audited).
+    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
+    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": True}) is True
     # Absent marker never earns regardless of live.
     assert mod._marker_earned("✅", "- 巳", {"✅": True}) is False
-    # 🔒 still overrides the audit — a deliberate user lock is never stripped.
-    assert mod._marker_earned("✅", "- 巳 ✅ 🔒", {"✅": False}) is True
+    assert mod._marker_earned("⏱️", "- 巳", {"⏱️": True}) is False
+    # 🔒 still overrides the audit for ⏱️ — a deliberate user lock is never stripped.
+    assert mod._marker_earned("⏱️", "- 巳 ⏱️ 🔒", {"⏱️": False}) is True
 
 
-def test_daemon_owned_markers_includes_toggl_and_todoist():
+def test_daemon_owned_markers_includes_toggl_but_not_todoist():
     mod = _load_daemon()
-    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER, mod.TOGGL_MARKER, mod.TODOIST_MARKER}
+    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER, mod.TOGGL_MARKER}
 
 
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):

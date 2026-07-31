@@ -2317,10 +2317,17 @@ def main():
             except Exception as e:  # noqa: BLE001 — surface, never reroute
                 res = {"error": str(e)}
             td = res.get("todoist") or {}
-            # Deliberately NO Todoist id here: undo-fast reopens any results
-            # entry carrying todoist.id, but nothing un-stamps the header — a
-            # half-undo that leaves points scored on an open card. Without the
-            # id, undo skips it (the --ritual CLI path never journals at all).
+            # Deliberately NO Todoist id in THIS top-level dict: undo-fast's
+            # generic reversal reopens any results entry carrying todoist.id,
+            # and doing that here (without ALSO un-stamping the header and
+            # reversing the P credit) would be a half-undo — the card reopens
+            # but the header stays stamped and the points stay credited (bug
+            # 2026-07-31: "ctrl+z didn't work after I completed -1l" — looked
+            # like it undid, silently didn't). The full state a CORRECT undo
+            # needs (id, block, emoji, stamped, p_credit) lives one level
+            # down in `res` itself (the "ritual" key below); undo-fast's
+            # dedicated step=="ritual" handler (_reverse_ritual_entry) reads
+            # from there to do all three reversals together.
             ritual_entries.append({
                 "name": it.name, "step": "ritual",
                 "todoist": {"closed": bool(td.get("closed")),

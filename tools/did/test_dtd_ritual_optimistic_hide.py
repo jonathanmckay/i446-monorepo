@@ -33,15 +33,17 @@ DTD = DTD_PATH.read_text()
 
 # ── Structural: the write scripts record the id, gated to rituals ─────────────
 
-def test_enter_and_done_write_completed_id():
-    # Both completion scripts must append the id to $REMOVED.ids for EVERY
-    # completion (rituals included) — ungated since 2026-07-24; the 😈 gate
-    # left normal completions on the name-hide, which suppressed same-named
-    # duplicates. dtd.sh's enter/done scripts live in unquoted heredocs, so
-    # the source keeps the `\$` escaping (`\$clean`, `\$1`, `\$REMOVED`).
-    assert DTD.count('echo "\\$1" >> "\\$REMOVED.ids"') == 2, (
-        "enter.sh (complete branch) and done.sh must each write the completed "
-        "task's id to $REMOVED.ids")
+def test_done_writes_completed_id():
+    # The (sole) completion script must append the id to $REMOVED.ids for
+    # EVERY completion (rituals included) — ungated since 2026-07-24; the 😈
+    # gate left normal completions on the name-hide, which suppressed
+    # same-named duplicates. dtd.sh's done script lives in an unquoted
+    # heredoc, so the source keeps the `\$` escaping (`\$clean`, `\$1`,
+    # `\$REMOVED`). enter.sh no longer completes anything at all
+    # (2026-07-31: "always opt+enter to mark done") so it no longer has a
+    # copy of this write — only done.sh (alt-enter) does.
+    assert DTD.count('echo "\\$1" >> "\\$REMOVED.ids"') == 1, (
+        "done.sh must write the completed task's id to $REMOVED.ids")
     assert '*😈* ]] && echo "\\$1" >> "\\$REMOVED.ids"' not in DTD, (
         "the ritual-only 😈 gate must stay gone — it re-introduces the "
         "same-name suppression bug")

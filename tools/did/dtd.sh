@@ -260,18 +260,19 @@ echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"
 
-# --- Enter script: start selected task; if already timing, complete it ---
+# --- Enter script: ALWAYS starts the selected task's timer, never completes
+# it (2026-07-31 user request: "I always have to hit opt+enter to mark a
+# task done, not enter twice" -- enter's OTHER job, starting a timer, made a
+# second enter press on an already-timing item complete it, which was too
+# easy to trigger by accident. alt-enter ($DTD_DONE_ROUTER) is now the ONLY
+# way to mark anything done, ritual cards included -- $DTD_START already
+# resolves a 😈-prefixed ritual card to its correct Toggl project (see its
+# own RITUAL_DOMAIN block below), so pressing enter on one just starts a
+# properly-labeled timer instead of completing it. ---
 DTD_ENTER="/tmp/dtd-$DTD_ID.enter.sh"
 cat > "$DTD_ENTER" << ENTEREOF
 #!/bin/zsh
-TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 START="$DTD_START"
-HDR="$DTD_HDR"
-FIFO="$DTD_FIFO"
-SESSION="$DTD_SESSION"
-PUSHED="$DTD_PUSHED"
-REMOVED="$DTD_REMOVED"
-TIMER="$DTD_TIMER"
 task="\$1"
 # Picker mode: enter on a block row applies the snooze (2026-07-27)
 if [[ "\$1" == BLOCK:* ]]; then
@@ -279,62 +280,7 @@ if [[ "\$1" == BLOCK:* ]]; then
   exit 0
 fi
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
-clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
-
-cur=\$(python3 "\$TOGGL_CLI" current 2>/dev/null)
-cur_desc=""
-if [[ "\$cur" == Running:* ]]; then
-  cur_desc=\$(echo "\$cur" | sed -E 's/^Running: [0-9]{2}:[0-9]{2}-running //; s/ *@.*//; s/ *\\(running\\).*//; s/ *\\[id:[0-9]*\\].*//; s/ *\$//' | tr '[:upper:]' '[:lower:]')
-fi
-timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
-
-# -1neon ritual cards (😈-prefixed) must always complete on Enter, never
-# fall to the "start a timer" branch below (bug 2026-07-29: "-1l, -1t marked
-# done, didn't get the -1n points" -- a passive auto-check like -1t/-1l has
-# no natural corresponding activity to time, so a plain Enter almost never
-# finds a pre-existing matching timer and silently starts one instead of
-# completing, e.g. a real orphaned "-1t @n156 (10min)" Toggl entry from an
-# Enter press that was never followed up. Manual rituals (-1g/-1ibx/سمش)
-# hit the same branch but happen to often coincide with an already-running
-# matching timer from other usage, masking the bug for them.
-is_ritual_card=0
-[[ "\$clean" == 😈* ]] && is_ritual_card=1
-
-if [[ "\$is_ritual_card" == "1" || "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
-  echo "\$clean_for_filter" >> "\$SESSION"
-  # Optimistic hide by ID, never by name (bug 2026-07-24: completing one of
-  # two same-named "AoS" one-off copies hid both — the name-based \$REMOVED
-  # hide matches every task sharing the name). \$1 is the fzf {2} id field
-  # (= the Todoist id), so the hide lands on exactly the completed task;
-  # a recurring habit keeps its id across the recurrence advance, so it
-  # stays hidden for the session just as the name-hide kept it. ctrl-z undo
-  # strips the id again via the journal's task_ids (undo-fast). Name-write
-  # remains only as a fallback for id-less rows.
-  if [[ -n "\$1" ]]; then
-    echo "\$1" >> "\$REMOVED.ids"
-  else
-    echo "\$clean_for_filter" >> "\$REMOVED"
-  fi
-  # Immediate Todoist close for NON-recurring tasks — same rationale and
-  # recurring-skip as done.sh (2026-07-28, "player retention" lag).
-  if [[ -n "\$1" ]]; then
-    (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
-  fi
-  echo "x" >> "\$PUSHED"
-  # Push audit trail (2026-07-30): 申's -1t/-1l closed in Todoist (quick-close
-  # above) but never reached the FIFO worker — no stamp, no -1₦ credit, and
-  # the bare x-counters couldn't say which items were lost. Log every push
-  # with a timestamp; the worker's log names what arrived, this names what
-  # was SENT.
-  printf '%s\tenter\t%s\t%s\n' "\$(date +%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
-  : > "\$TIMER"
-  echo "⏳ completing: \$clean_for_filter" > "\$HDR"
-  printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
-else
-  "\$START" "\$task"
-fi
+"\$START" "\$task"
 ENTEREOF
 chmod +x "$DTD_ENTER"
 
@@ -1675,7 +1621,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v/k: ⏰block | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v/k: ⏰block | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
