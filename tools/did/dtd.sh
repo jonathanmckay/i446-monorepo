@@ -147,7 +147,37 @@ echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
 
 (
-  while IFS= read -r line; do
+  # Invariant check (2026-07-31): "completed all -1n in a block, points still
+  # short" was traced to a genuine FIFO race — rapid-fire alt-enter presses
+  # (sub-1s apart) can push a line onto $DTD_FIFO that this loop's `read`
+  # never sees, confirmed via a $DTD_PUSHED/$DTD_PROCESSED count mismatch
+  # (3 pushed, 2 processed) in both real occurrences, always the LAST item in
+  # the rapid cluster. quick-close.py still closes the Todoist card (it's a
+  # separate fire-and-forget call from enter.sh/done.sh, not gated on the
+  # worker), so the card vanishes from dtd looking "done" while its stamp and
+  # -1₦ credit silently never happen. `read -t 2` polls every idle 2s instead
+  # of blocking forever, so a lost push is caught within ~2s of going quiet
+  # instead of only being noticed later as an unexplained point shortfall.
+  # fd 3 (below) keeps ≥1 writer on the FIFO for the whole session, so a
+  # failed read here is always this timeout, never real EOF.
+  last_alerted=0
+  while true; do
+    if ! IFS= read -r -t 2 line; then
+      pushed_now=$(wc -l < "$DTD_PUSHED" 2>/dev/null | tr -d ' ')
+      processed_now=$(wc -l < "$DTD_PROCESSED" 2>/dev/null | tr -d ' ')
+      if [[ -n "$pushed_now" && -n "$processed_now" \
+            && "$pushed_now" -gt "$processed_now" && "$pushed_now" != "$last_alerted" ]]; then
+        missing=$((pushed_now - processed_now))
+        lost=$(tail -n "$missing" "$DTD_PUSHED.log" 2>/dev/null \
+               | awk -F'\t' '{print $3, $4}' | paste -sd';' - 2>/dev/null)
+        msg="⚠ INVARIANT: $missing completion(s) pushed but never processed (dtd FIFO race) — lost: $lost"
+        echo "$msg" > "$DTD_HDR"
+        echo "$msg" >> "$DTD_LOG"
+        bash "$HOME/i446-monorepo/scripts/term-color.sh" orange 2>/dev/null
+        last_alerted="$pushed_now"
+      fi
+      continue
+    fi
     [[ -z "$line" ]] && continue
     # FIFO lines are "id<TAB>content" (enter.sh/done.sh send the fzf row id so
     # completion closes the EXACT selected task, not a name match — duplicate
