@@ -215,3 +215,27 @@ def test_main_empty_edit_is_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["edit-fast.py", "review budget", "   ", str(cf)])
     assert mod.main() == 1
     assert not called
+
+
+def test_points_only_edit_resyncs_stale_short(tmp_path, monkeypatch):
+    """2026-07-31 ("I changed it to 10 points but it didn't reflect in
+    render"): _resync_short only ran on RENAMES, so a points-only ctrl-g
+    edit updated the cache content but left the stale Haiku `short` — which
+    dtd renders preferentially — showing the OLD [N] until the next full
+    refresh. Any content change must resync the short."""
+    mod = _load()
+    cf = _cache(tmp_path,
+                content='Change LinkedIn title to be "Player of Games" (30) [30]',
+                labels=("i9",),
+                short="Change LinkedIn title to Player of (30) [30]")
+    mod._df._api = lambda *a, **k: None
+    monkeypatch.setattr(mod._short, "shorten_tasks",
+                        lambda tasks: {t["id"]: "Change LinkedIn title to Player of (30) [10]"
+                                       for t in tasks})
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "Change LinkedIn title", "10", str(cf)])
+    assert mod.main() == 0
+    task = json.loads(cf.read_text())["0neon"][0]
+    assert task["content"].endswith("[10]")
+    assert task.get("short") == "Change LinkedIn title to Player of (30) [10]", (
+        "a points-only edit must regenerate the short — dtd renders it "
+        "preferentially, so a stale one keeps showing the old [N]")
