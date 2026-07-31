@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "30m hiit": {
-      "todoist_id": "6h9P9HMRh8X6fp82",
-      "minutes": 40
-    },
-    "rev rob+dau+finance goals+game perf+goals to finance linking": {
-      "todoist_id": "6h9P9HRMwrhFQw92",
-      "minutes": 80
-    },
-    "send 2 r&e": {
-      "todoist_id": "6h9P9HXrhgVxcH6R",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-07-31T04:00:05.343642-07:00"
+  "tasks": {},
+  "last_sync": "2026-07-31T05:30:09.295158-07:00"
 }
