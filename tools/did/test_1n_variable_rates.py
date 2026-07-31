@@ -193,12 +193,14 @@ def test_threshold_habit_points_are_half_minutes(df):
 
 
 def test_threshold_habit_pulls_toggl_minutes_from_base_activity(df, monkeypatch):
-    """长o314's minutes come from Toggl entries named 'o314', not '长o314'."""
+    """长o314's minutes come from Toggl entries named 'o314' or 'hcmr' (2026-07-31:
+    hcmr is the same underlying activity as o314, just a different Toggl
+    description -- both count toward the same 30-minute bucket), not '长o314'."""
     calls = []
     monkeypatch.setattr(df, "toggl_minutes_for",
                         lambda name: calls.append(name) or 36)
     r = _route_one(df, "长o314")
-    assert calls == ["o314"]
+    assert calls == [("o314", "hcmr")]
     assert r.step == "1n" and r.write_value == 18
 
 

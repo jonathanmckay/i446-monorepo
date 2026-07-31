@@ -75,7 +75,7 @@ CUMULATIVE_0N = {"问学"}
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
-VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻",
+VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "hcmr", "其他人", "新闻",
                "night hcmc", "evening hcmc", "hiit"}  # evening hcmc = the card's name
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
                "长冥想", "长o314", "aos", "1 kids nature"}
@@ -93,10 +93,23 @@ VARIABLE_1N_DEFAULTS: dict[str, int] = {}
 # VARIABLE_1N_RATES → minutes/2) and the POINTS append to BOTH the 1n+ week
 # cell (unlike other variable habits, which record minutes there) and the
 # 0分 domain column.
+# "toggl" may be a single name or a tuple of names whose Toggl minutes are
+# summed together (2026-07-31: hcmr entries count toward 长o314's same
+# 30-minute bucket as o314 itself — see ZERO_N_ALIASES, hcmr is treated as
+# the same underlying activity as o314, just a different Toggl description).
 THRESHOLD_1N: dict[str, dict] = {
-    "长o314": {"toggl": "o314", "min": 30},
+    "长o314": {"toggl": ("o314", "hcmr"), "min": 30},
     "长冥想": {"toggl": "冥想", "min": 30},
 }
+
+# 0₦ habit name aliases (2026-07-31): "hcmr" is the same underlying activity
+# as "o314", just a different Toggl description -- a /did completion on an
+# hcmr entry writes into o314's own 0n column (AQ) rather than needing a
+# column of its own. Resolved once, right before the 0n header lookup;
+# toggl_minutes_for(item.name) (which records THIS entry's own duration)
+# still uses the unaliased name so hcmr's actual minutes get read from its
+# own Toggl entries, not o314's.
+ZERO_N_ALIASES: dict[str, str] = {"hcmr": "o314"}
 
 
 def variable_1n_points(resolved_1n: str, minutes: int) -> int:
@@ -110,7 +123,7 @@ HABIT_PROJECT: dict[str, str] = {
     "wake up": "hcb", "hiit": "hcb", "bio": "hcb",
     "新闻": "hcmc", "hcmc": "hcmc", "night hcmc": "hcmc",
     "词汇": "hcmc",
-    "冥想": "hcm", "o314": "hcm", "其他人": "hcm",
+    "冥想": "hcm", "o314": "hcm", "hcmr": "hcm", "其他人": "hcm",
     "早餐": "家", "问学": "家",
     "xk88": "xk88", "xk20": "xk88", "xk22": "xk88", "xk26": "xk88",
     "睡觉": "睡觉",
@@ -264,9 +277,12 @@ def _ensure_toggl_key() -> None:
         pass
 
 
-def toggl_minutes_for(name: str) -> Optional[int]:
+def toggl_minutes_for(name) -> Optional[int]:
     """Sum today's Toggl minutes for entries whose description matches `name`
     (header-normalized equality), including the running entry's elapsed time.
+    `name` may be a single string or an iterable of strings/aliases whose
+    minutes are summed together (2026-07-31: 长o314's threshold sums both
+    "o314" and "hcmr" entries as the same underlying activity).
 
     Feature (2026-07-24): completing a 0₦ habit in dtd with no typed value
     should record how long it actually took — the user usually has a Toggl
@@ -284,10 +300,11 @@ def toggl_minutes_for(name: str) -> Optional[int]:
             _TOGGL_TODAY = toggl_api.get_entries(
                 start_date=today.isoformat(),
                 end_date=(today + timedelta(days=1)).isoformat()) or []
-        target = header_normalize(name)
+        names = (name,) if isinstance(name, str) else tuple(name)
+        targets = {header_normalize(n) for n in names}
         secs = 0.0
         for e in _TOGGL_TODAY:
-            if header_normalize(e.get("description") or "") != target:
+            if header_normalize(e.get("description") or "") not in targets:
                 continue
             dur = e.get("duration") or 0
             if dur < 0:  # running entry: elapsed = now - start
@@ -975,7 +992,11 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
     for item in items:
         name_lower = item.name.lower()
-        name_norm = header_normalize(item.name)
+        # 0₦ header lookup only -- ZERO_N_ALIASES resolves e.g. "hcmr" to
+        # "o314"'s column; toggl_minutes_for(item.name) below stays on the
+        # UNaliased name so it reads this entry's own Toggl minutes, not
+        # o314's.
+        name_norm = header_normalize(ZERO_N_ALIASES.get(name_lower, item.name))
 
         # Step 0.1: 0₦ match (hyphen/space-insensitive)
         if name_norm in h0n_norm:

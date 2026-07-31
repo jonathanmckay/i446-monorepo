@@ -286,6 +286,14 @@ def resolve(raw: str):
     if not project and not override:
         project = _project_from_task_cache(raw)
 
+    # hcmc entries whose description STARTS with "review" are review/critique
+    # work, not consumption -- route them to hcmr instead (2026-07-31 user
+    # request). Only when hcmc was inferred, never when the user explicitly
+    # forced it with @hcmc -- an explicit override always wins as-is.
+    desc_words = desc.split()
+    if not override and project == "hcmc" and desc_words and desc_words[0].lower() == "review":
+        project = "hcmr"
+
     return desc, project, tags
 
 
