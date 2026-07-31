@@ -552,6 +552,18 @@
     "rent": "1595.00"
   },
   {
+    "unit_id": 915,
+    "property_name": "kn47 K1",
+    "unit": "G201",
+    "tenant_name": "Urzua Barreto, Juana",
+    "status": "Pending",
+    "lease_sign_date": null,
+    "move_in": "2024-09-10",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2026-02-01",
+    "rent": "1304.00"
+  },
+  {
     "unit_id": 1062,
     "property_name": "kn47 K2",
     "unit": "E107",
@@ -610,18 +622,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-03-01",
     "rent": "1304.00"
-  },
-  {
-    "unit_id": 1061,
-    "property_name": "kn47 K2",
-    "unit": "E106",
-    "tenant_name": "Hanson, Shameka C.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-08-06",
-    "move_in": "2025-08-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
   },
   {
     "unit_id": 514,
@@ -1348,7 +1348,7 @@
     "property_name": "rl16",
     "unit": "C16",
     "tenant_name": "McKee, Kelton",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2023-09-08",
     "renewal_start_date": null,
@@ -2464,7 +2464,7 @@
     "property_name": "k104- LeFevre",
     "unit": "507-1",
     "tenant_name": "Cooley, Corylynne  C.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2023-11-02",
     "move_in": "2023-11-03",
     "renewal_start_date": null,
