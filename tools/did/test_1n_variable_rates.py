@@ -149,7 +149,10 @@ def test_dtd_cleaners_strip_rate_annotation():
     src = (_HERE / "dtd.sh").read_text()
     heredoc = r"s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g"
     plain = r"s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g"
-    assert src.count(heredoc) == 9, "all heredoc cleaners must strip [1/m]"
+    # 2026-07-31: enter.sh dropped its own `clean=` computation -- it forwards
+    # the raw resolved task straight to $START (which cleans it itself), one
+    # fewer heredoc cleaner than before ("always opt+enter to mark done").
+    assert src.count(heredoc) == 8, "all heredoc cleaners must strip [1/m]"
     assert src.count(plain) == 3, "all plain cleaners must strip [1/m]"
     assert r"| *\[[0-9.+]*/m\]" in src, "list strip_ann must strip [1/m]"
 
