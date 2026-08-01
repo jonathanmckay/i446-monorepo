@@ -109,9 +109,25 @@ svc.users().messages().send(userId='me', body={'raw': raw}).execute()
 ```
 
 ### iMessage
-```bash
-osascript -e 'tell application "Messages" to send "<message>" to buddy "<phone_or_email>"'
+Use the `imessage_send` MCP tool (`mcp__imessage_server__imessage_send`), not raw `osascript`.
+A bare `buddy "<id>"` AppleScript call with no `service` specified can return
+exit code 0 without actually delivering the message — a real silent failure.
+`imessage_send` targets the iMessage service explicitly (falling back to SMS),
+then polls `chat.db` for a few seconds to confirm the message actually landed
+before reporting success — so a genuine failure is never silently swallowed.
+
 ```
+mcp__imessage_server__imessage_send(recipient="<phone_or_email>", message="<message>")
+```
+
+The result string tells you which case happened:
+- `"Sent to <recipient> (confirmed in chat.db)"` — verified, done.
+- `"Sent (SMS) to <recipient> (confirmed in chat.db)"` — sent via SMS fallback, verified.
+- `"...but could NOT confirm it in chat.db..."` — AppleScript reported success but the
+  send couldn't be verified. **Do not resend automatically** — check
+  `imessage_read` for the actual conversation state first, then decide with the
+  user whether to retry. Blindly resending on an unclear result is how a message
+  ends up delivered twice.
 
 ### Slack
 Use the Slack API via the slack module:
