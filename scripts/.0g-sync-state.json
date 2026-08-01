@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "do a 1:1 with both ming and kathy that is prepped on the way down": {
-      "todoist_id": "6h9r3PJ63p64H82R",
-      "minutes": 100
-    },
     "enjoy the evening with lx": {
       "todoist_id": "6h9r3Pgv5h3pc6c2",
       "minutes": 60
@@ -14,5 +10,5 @@
       "minutes": 30
     }
   },
-  "last_sync": "2026-08-01T12:00:04.721652-07:00"
+  "last_sync": "2026-08-01T14:00:05.204641-07:00"
 }
