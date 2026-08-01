@@ -27,6 +27,11 @@ TZ = ZoneInfo("America/Los_Angeles")
 # Set by main() from a `--date YYYY-MM-DD` arg (janus viewing a past day);
 # only ever a NON-today date. Range creates honor it; live-timer forms error.
 _DATE_OVERRIDE: date | None = None
+# Entry ids created earlier in THIS invocation. A multi-item command with
+# overlapping ranges ("1427-1447 冥想 #xk26, 1427-1652 hcm #-1", 2026-07-31)
+# had item 2's MECE trim silently DELETE the entry item 1 just created —
+# deliberate overlaps between the user's own batch items must survive.
+_CREATED_IDS: set = set()
 CLI = str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py")
 
 
@@ -243,6 +248,15 @@ def resolve_do_session():
         print(f"WARN: /do session resolve failed: {e}", file=sys.stderr)
 
 
+def _strip_tag_tokens(s: str) -> str:
+    """Drop #tag tokens from a description fallback. resolve() empties the
+    desc for domain-only items ("hcm"), and the raw-text fallback at the
+    range call sites was reinstating the #tag verbatim — the 2026-07-31
+    "hcm #-1" entry literally named "hcm #-1" (tag applied AND polluting
+    the description)."""
+    return re.sub(r'\s*#-?\w+', '', s).strip()
+
+
 def resolve(raw: str):
     """Return (description, project, tags)."""
     desc = raw.strip()
@@ -336,7 +350,10 @@ def cmd_create_range(desc, project, tags, start_t, end_t):
     if end_dt <= start_dt:
         end_dt += timedelta(days=1)
     try:
-        trim_lines = _toggl_api().trim_range(start_dt, end_dt)
+        # exclude_ids: never trim an entry created by an EARLIER item of the
+        # same invocation — overlapping batch items are deliberate.
+        trim_lines = _toggl_api().trim_range(start_dt, end_dt,
+                                             exclude_ids=_CREATED_IDS)
     except Exception as e:  # noqa: BLE001 — never block entry creation on a trim failure
         trim_lines = [f"trim failed: {e}"]
 
@@ -348,6 +365,9 @@ def cmd_create_range(desc, project, tags, start_t, end_t):
     if _DATE_OVERRIDE:
         args.extend(["--date", _DATE_OVERRIDE.isoformat()])
     out = _run_cli(*args)
+    id_m = re.search(r"\[id:(\d+)\]", out or "")
+    if id_m:
+        _CREATED_IDS.add(int(id_m.group(1)))
     if trim_lines:
         out = "\n".join(trim_lines) + ("\n" + out if out else "")
     return out
@@ -513,13 +533,15 @@ def _process_entry(raw: str) -> str:
             if ":" in s and ":" in e:
                 desc_part = (range_match_start.group(3).strip() + project_suffix).strip()
                 desc, project, tags = resolve(desc_part)
-                return cmd_create_range(desc or desc_part, project, tags, s, e)
+                return cmd_create_range(desc or _strip_tag_tokens(desc_part),
+                                        project, tags, s, e)
     if range_match:
         start_t = _norm_time(range_match.group(1))
         end_t = _norm_time(range_match.group(2))
         desc_part = (raw[:range_match.start()].strip() + project_suffix).strip()
         desc, project, tags = resolve(desc_part)
-        return cmd_create_range(desc or desc_part, project, tags, start_t, end_t)
+        return cmd_create_range(desc or _strip_tag_tokens(desc_part),
+                                project, tags, start_t, end_t)
 
     # No range matched — restore the @project suffix for the backdate/default
     # paths below, which already handle @ anywhere in the string via resolve().
