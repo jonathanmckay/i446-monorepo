@@ -242,24 +242,31 @@ def test_strip_unearned_markers_removes_phantom_goal_and_toggl_but_not_todoist(t
 # narrow a proxy for "-1l" (a first-person attestation), unlike ⏱️'s
 # Toggl-minute-coverage check, which stayed audited.
 
-def test_marker_earned_audits_toggl_but_trusts_todoist_on_presence():
+def test_marker_earned_trusts_toggl_and_todoist_on_presence():
+    """2026-08-01 (JM): "If I manually mark -1l or -1t there shouldn't be an
+    audit." ⏱️ joined ✅ as trusted-on-presence; the live checks are
+    auto-award only. Only 🎯 keeps the strip audit (stale cross-day goals)."""
     mod = _load_daemon()
-    # ⏱️ audited: stamped but the live check fails — must NOT earn.
-    assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is False
+    # ⏱️/✅ trusted on presence regardless of live — a manual claim is final.
+    assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is True
     assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": True}) is True
-    # ✅ trusted on presence regardless of live (deliberately not audited).
     assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
     assert mod._marker_earned("✅", "- 巳 ✅", {"✅": True}) is True
+    # 🎯 still audited: stamped but no goals on file — must NOT earn.
+    assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": False}) is False
+    assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": True}) is True
     # Absent marker never earns regardless of live.
     assert mod._marker_earned("✅", "- 巳", {"✅": True}) is False
     assert mod._marker_earned("⏱️", "- 巳", {"⏱️": True}) is False
-    # 🔒 still overrides the audit for ⏱️ — a deliberate user lock is never stripped.
-    assert mod._marker_earned("⏱️", "- 巳 ⏱️ 🔒", {"⏱️": False}) is True
+    # 🔒 overrides even the 🎯 audit — a deliberate user lock is never stripped.
+    assert mod._marker_earned("🎯", "- 巳 🎯 🔒", {"🎯": False}) is True
 
 
-def test_daemon_owned_markers_includes_toggl_but_not_todoist():
+def test_daemon_owned_markers_is_goal_only():
+    """Strip set = {🎯} only (2026-08-01): ⏱️ left it when its audit became
+    auto-award-only; ✅ was never in it."""
     mod = _load_daemon()
-    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER, mod.TOGGL_MARKER}
+    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER}
 
 
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
