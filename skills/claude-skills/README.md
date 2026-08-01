@@ -47,3 +47,16 @@ description: "One-line summary of what this skill does."
 user-invocable: true
 ---
 ```
+
+## Self-clearing skills
+
+A skill is **self-clearing** when performing it IS the completion of a dtd
+card, so the skill closes its own card as its final step (did-fast habit
+completion or `--ritual <tag>`, followed by a FOREGROUND
+`did-fast.py --refresh-cache` so an open dtd reloads at once). The user should
+never have to check off a card for work a skill just did.
+
+Current roster: `/0t` (0t card), `/0g` (0g card), `/-1g` (😈 -1g ritual card,
+current block only), `/notes` (notes card), `/ibx0` (inbox habit set),
+`/allcolors` (⎣∀clr stamp). When adding a skill that corresponds to a dtd
+card, make it self-clearing and add it to this list.

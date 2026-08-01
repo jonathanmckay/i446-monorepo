@@ -38,6 +38,21 @@ DTD_LOG="/tmp/dtd-$DTD_ID.log"
 DTD_JOURNAL="/tmp/dtd-$DTD_ID.undo.jsonl"
 DTD_PUSHED="/tmp/dtd-$DTD_ID.pushed"
 DTD_PROCESSED="/tmp/dtd-$DTD_ID.processed"
+# FIFO-invariant-check-only bookkeeping (2026-08-01, replacing the naive
+# count-diff design from 2026-07-31): $DTD_PUSHED/$DTD_PROCESSED above are
+# SHARED with ctrl-d defer's own per-item background workers (see done.sh's
+# twin below), which push/process asynchronously and legitimately sit
+# "pushed > processed" for seconds while a network round trip is in flight --
+# using them for the FIFO-loss check produced false positives (an in-flight
+# defer misread as a lost completion). $DTD_PUSHED.log/.processed.ids are
+# written ONLY by done.sh and the main worker loop respectively, always in
+# "id<TAB>...<TAB>id<TAB>content" / "id-per-line" form, so the invariant
+# check can compute a real set difference (which SPECIFIC ids were pushed
+# but never processed) instead of guessing from the tail of the log --
+# confirmed live (2026-08-01) that the tail-based guess kept re-citing
+# already-✓'d completions as "lost" while never once naming the genuinely
+# stuck ones once more than one item was actually lost.
+DTD_PROCESSED_IDS="/tmp/dtd-$DTD_ID.processed.ids"
 DTD_SESSION="/tmp/dtd-$DTD_ID.session"
 DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 # fzf --listen port (written by the start binding) + the live-timer ticker that
@@ -140,11 +155,12 @@ fi
 
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
-      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" \
+      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PUSHED.log" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" \
+      "$DTD_SESSION" "$DTD_TIMER" \
       "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
-touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
+touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER"
 
 (
   # Invariant check (2026-07-31): "completed all -1n in a block, points still
@@ -152,29 +168,34 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
   # (sub-1s apart) can push a line onto $DTD_FIFO that this loop's `read`
   # never sees, confirmed via a $DTD_PUSHED/$DTD_PROCESSED count mismatch
   # (3 pushed, 2 processed) in both real occurrences, always the LAST item in
-  # the rapid cluster. quick-close.py still closes the Todoist card (it's a
-  # separate fire-and-forget call from enter.sh/done.sh, not gated on the
+  # the rapid cluster. The quick-close helper still closes the Todoist card
+  # (it's a separate fire-and-forget call from done.sh, not gated on the
   # worker), so the card vanishes from dtd looking "done" while its stamp and
   # -1₦ credit silently never happen. `read -t 2` polls every idle 2s instead
   # of blocking forever, so a lost push is caught within ~2s of going quiet
   # instead of only being noticed later as an unexplained point shortfall.
   # fd 3 (below) keeps ≥1 writer on the FIFO for the whole session, so a
   # failed read here is always this timeout, never real EOF.
-  last_alerted=0
+  last_alerted=""
   while true; do
     if ! IFS= read -r -t 2 line; then
-      pushed_now=$(wc -l < "$DTD_PUSHED" 2>/dev/null | tr -d ' ')
-      processed_now=$(wc -l < "$DTD_PROCESSED" 2>/dev/null | tr -d ' ')
-      if [[ -n "$pushed_now" && -n "$processed_now" \
-            && "$pushed_now" -gt "$processed_now" && "$pushed_now" != "$last_alerted" ]]; then
-        missing=$((pushed_now - processed_now))
-        lost=$(tail -n "$missing" "$DTD_PUSHED.log" 2>/dev/null \
-               | awk -F'\t' '{print $3, $4}' | paste -sd';' - 2>/dev/null)
+      # Real set difference between what done.sh pushed ($DTD_PUSHED.log,
+      # "ts<TAB>done<TAB>id<TAB>content") and what this loop has actually
+      # finished ($DTD_PROCESSED_IDS, one task_id per line) -- NOT a
+      # count-diff-and-guess-the-tail approach, which mis-blamed already-✓'d
+      # completions once more than one item was ever truly lost in the same
+      # session (confirmed live 2026-08-01).
+      lost=$(awk -F'\t' -v idsfile="$DTD_PROCESSED_IDS" '
+        BEGIN { while ((getline id < idsfile) > 0) seen[id] = 1 }
+        !($3 in seen) { print $3 "\t" $4 }
+      ' "$DTD_PUSHED.log" 2>/dev/null | awk -F'\t' '{print $1, $2}' | paste -sd';' - 2>/dev/null)
+      if [[ -n "$lost" && "$lost" != "$last_alerted" ]]; then
+        missing=$(echo "$lost" | tr ';' '\n' | grep -c .)
         msg="⚠ INVARIANT: $missing completion(s) pushed but never processed (dtd FIFO race) — lost: $lost"
         echo "$msg" > "$DTD_HDR"
         echo "$msg" >> "$DTD_LOG"
         bash "$HOME/i446-monorepo/scripts/term-color.sh" orange 2>/dev/null
-        last_alerted="$pushed_now"
+        last_alerted="$lost"
       fi
       continue
     fi
@@ -208,6 +229,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
       echo "? $task_clean" >> "$DTD_LOG"
     fi
     echo "x" >> "$DTD_PROCESSED"
+    echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
 ) &
@@ -2051,4 +2073,7 @@ kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 kill "$TALLY_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+# $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
+# precedent) -- it's the only postmortem record of what a session pushed,
+# and is what made the 2026-08-01 false-positive diagnosis possible.
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
