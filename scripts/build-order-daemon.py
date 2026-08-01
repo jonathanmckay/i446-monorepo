@@ -1004,51 +1004,40 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
 def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     """Decide whether a marker earns its points for a block header `line`.
 
-    The emoji must be present on the header. GOAL_MARKER/TOGGL_MARKER (🎯/⏱️)
-    are live-gated: `live` must confirm the underlying condition actually
-    held, stripping a stale or optimistic stamp regardless of how it got
-    there. ☀️/📧/✅ are trusted on header presence alone, no daemon-side audit.
+    The emoji must be present on the header. Only GOAL_MARKER (🎯) is
+    live-gated: `live` must confirm goals actually exist for the block,
+    stripping a stale cross-day stamp. ☀️/📧/⏱️/✅ are trusted on header
+    presence alone, no daemon-side audit.
 
-    🎯/⏱️ audit model (2026-07-30 redesign, reversing the 2026-07-13 "OR"
-    model): did-fast's run_ritual stamps them immediately on manual completion
-    (a provisional claim — "credit now, verify at close"), and the daemon's
-    reconcile is the checksum that strips it if `live` disagrees, exactly like
-    a stale claim. The daemon's OWN auto-check stamping a marker before this
-    runs is equally subject to the same audit.
-
-    ✅ is deliberately NOT in that audit (2026-07-30, same day, reverted after
-    one round of use): completing -1l is a direct first-person attestation
-    ("I did the real work in that block"), not an inference from Toggl/Todoist
-    data the way ⏱️'s minute-coverage or 🎯's goal-presence are — and the
-    -1l live check (_todoist_l_satisfied) is necessarily a narrow proxy for
-    that attestation (real, [N]-pointed Todoist completions in the window)
-    that can legitimately be False on a genuine, fully-worked meeting-heavy
-    block. Treating it as authoritative-enough to strip a manual claim proved
-    too aggressive in practice; ✅ now behaves like ☀️/📧 — trusted once
-    stamped, by whichever path stamped it (manual completion or the daemon's
-    own passing auto-check), and never clawed back. The daemon still only
-    *auto*-stamps ✅ when its own live check passes; only the strip/audit side
-    is gone. When `live` is None (e.g. a re-score with no evaluation pass),
-    all markers are trusted, preserving legacy behavior."""
+    ⏱️/✅ are deliberately NOT audited (⏱️'s audit added 2026-07-30, removed
+    2026-08-01 per JM: "If I manually mark -1l or -1t there shouldn't be an
+    audit. That should have been an audit that would happen at [the fire] to
+    see if I was close enough to not need to manually check."). Completing
+    -1t/-1l is a direct first-person attestation of the previous block's
+    recording; the live checks (_toggl_covers_block, _todoist_l_satisfied)
+    are narrow proxies that can legitimately fail on genuinely-worked blocks.
+    Their role is AUTO-AWARD only: at each fire the daemon stamps ⏱️/✅ itself
+    when its own check passes, sparing the manual claim — it never claws a
+    stamp back. When `live` is None (e.g. a re-score with no evaluation
+    pass), all markers are trusted, preserving legacy behavior."""
     if emoji not in line:
         return False
     if LOCK_MARKER in line:
         return True
-    if emoji == TODOIST_MARKER:
+    if emoji in (TODOIST_MARKER, TOGGL_MARKER):
         return True
     if live is not None and emoji in live and not live[emoji]:
         return False
     return True
 
 
-# Only 🎯/⏱️ are audited: a live check that comes back False strips the
-# marker (and its points) even if it was stamped by a manual completion.
-# Manual completion is a provisional claim for these two, not a permanent
-# override — the daemon's reconcile is the checksum, not the awarder (see
-# _marker_earned). ☀️/📧 have no daemon-side validator; ✅ has one
-# (_todoist_l_satisfied) but is deliberately excluded from stripping (see
-# _marker_earned) — none of the three are in this set.
-DAEMON_OWNED_MARKERS = {GOAL_MARKER, TOGGL_MARKER}
+# Only 🎯 is audited: a goal-presence check that comes back False strips
+# the marker (and its points) even if it was stamped by a manual completion
+# — the stale-cross-day-goal protection. ☀️/📧 have no daemon-side
+# validator; ⏱️/✅ have validators but those are AUTO-AWARD only (stamp on
+# pass, never strip — 2026-08-01, see _marker_earned): a manual -1t/-1l
+# completion is a final first-person attestation, not a provisional claim.
+DAEMON_OWNED_MARKERS = {GOAL_MARKER}
 
 
 def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
