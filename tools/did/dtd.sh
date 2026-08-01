@@ -53,6 +53,15 @@ DTD_PROCESSED="/tmp/dtd-$DTD_ID.processed"
 # already-✓'d completions as "lost" while never once naming the genuinely
 # stuck ones once more than one item was actually lost.
 DTD_PROCESSED_IDS="/tmp/dtd-$DTD_ID.processed.ids"
+# Shutdown signal for the worker loop below. `read -t 2` returns nonzero on
+# BOTH a real 2s idle timeout AND real EOF (all FIFO writers closed) -- zsh
+# gives no way to tell them apart from the exit status alone, and the
+# invariant-check branch used to just `continue` unconditionally in either
+# case, so the worker never noticed EOF and looped forever, hanging dtd's
+# exit-cleanup wait on $WORKER_PID (2026-08-01: "dtd hangs on ctrl-c").
+# Cleanup touches this file before closing fd 3; the worker checks for it
+# only on a timeout/EOF tick and breaks instead of continuing.
+DTD_STOP="/tmp/dtd-$DTD_ID.stop"
 DTD_SESSION="/tmp/dtd-$DTD_ID.session"
 DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 # fzf --listen port (written by the start binding) + the live-timer ticker that
@@ -156,7 +165,7 @@ fi
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
       "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PUSHED.log" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" \
-      "$DTD_SESSION" "$DTD_TIMER" \
+      "$DTD_SESSION" "$DTD_TIMER" "$DTD_STOP" \
       "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
@@ -197,6 +206,11 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
         bash "$HOME/i446-monorepo/scripts/term-color.sh" orange 2>/dev/null
         last_alerted="$lost"
       fi
+      # Shutdown check: only cleanup sets $DTD_STOP, and only after it has
+      # already closed fd 3 -- so by the time this is seen, the FIFO is
+      # genuinely at EOF with nothing left to drain. Break instead of
+      # looping forever on repeated instant-EOF reads.
+      [[ -f "$DTD_STOP" ]] && break
       continue
     fi
     [[ -z "$line" ]] && continue
@@ -2059,6 +2073,11 @@ while true; do
   echo "$clean" >&3
 done
 
+# Signal the worker to stop BEFORE closing fd 3, so by the time it next sees
+# EOF on the FIFO (immediately after the close below) $DTD_STOP already
+# exists and it breaks instead of spinning forever (see $DTD_STOP's
+# declaration comment).
+touch "$DTD_STOP"
 exec 3>&-
 
 session_count=$(grep -c . "$DTD_SESSION" 2>/dev/null)
@@ -2110,4 +2129,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
