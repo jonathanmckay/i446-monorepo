@@ -998,8 +998,22 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         # o314's.
         name_norm = header_normalize(ZERO_N_ALIASES.get(name_lower, item.name))
 
+        # A card's bare NAME can collide with a 0₦ daily header while the
+        # card itself is actually the WEEKLY 1n+ habit of the same name
+        # (e.g. "i447" is both the daily 0n column AND a bare 1n+ header) --
+        # name-based routing below would always send it through the 0₦
+        # branch, whose own Todoist-close only accepts 0neon/夜neon labels
+        # (see Step 0.1), so the weekly card's close silently never happened
+        # and it sat open forever, resurfacing every time it was "completed"
+        # (bug 2026-08-01: "marked i447 done 3 times today, not staying
+        # done"). If dtd's preferred_id says the selected task is actually
+        # in the 1neon bucket, this item isn't a 0₦ completion no matter
+        # what its name collides with -- skip straight to the 1n+ match.
+        pref_is_1neon = preferred_id is not None and any(
+            str(t.get("id")) == str(preferred_id) for t in tq.get("1neon", []))
+
         # Step 0.1: 0₦ match (hyphen/space-insensitive)
-        if name_norm in h0n_norm:
+        if name_norm in h0n_norm and not pref_is_1neon:
             today_md = item.target_date or f"{date.today().month}/{date.today().day}"
             today_date = date.today()
             # Past date → needs agent (posthoc flow), UNLESS dtd passed a

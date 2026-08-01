@@ -551,7 +551,27 @@ def enrich_build_order():
         for idx_offset, ol in enumerate(other_lines):
             new_lines.insert(last_past_block_insert + idx_offset, ol)
 
-    BUILD_ORDER.write_text("\n".join(new_lines))
+    # Locked, merge-aware write (2026-08-01): enrich reads the file BEFORE its
+    # slow Toggl/Todoist gathering, so a ritual stamp landing during that
+    # window was silently erased by this rewrite (午's manually-claimed ⏱️✅
+    # vanished minutes after being stamped — the week's recurring "stamps
+    # lost in place" class, distinct from the Syncthing-conflict variant
+    # build_order_heal covers). Hold the same flock every stamp writer uses,
+    # re-read the CURRENT copy under it, and union its block-header ritual
+    # emojis into our rewritten text before writing.
+    import fcntl
+    sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+    import build_order_heal as _boh
+    with open(BUILD_ORDER.with_suffix(".lock"), "a") as _lf:
+        fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
+        try:
+            merged_text, _rescued = _boh.merge_stamps(
+                "\n".join(new_lines), BUILD_ORDER.read_text())
+            if _rescued:
+                print(f"rescued stamps that landed mid-enrich: {_rescued}")
+            BUILD_ORDER.write_text(merged_text)
+        finally:
+            fcntl.flock(_lf.fileno(), fcntl.LOCK_UN)
     n_claimed = len(completed_claimed)
     n_unclaimed = len(unclaimed)
     print(f"Enriched build order: {len(d357_docs)} meetings, {len(toggl_entries)} time entries, {n_claimed} tasks matched, {n_unclaimed} other tasks")
