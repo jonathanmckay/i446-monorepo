@@ -31,6 +31,8 @@ def test_strip_tag_tokens():
     assert mod._strip_tag_tokens("hcm #-1") == "hcm"
     assert mod._strip_tag_tokens("冥想 #xk26") == "冥想"
     assert mod._strip_tag_tokens("plain desc") == "plain desc"
+    assert mod._strip_tag_tokens("@i9") == "", \
+        "a bare @project range item must not become an entry NAMED '@i9' (2026-08-01)"
 
 
 def test_range_item_never_leaks_hash_tag_into_description(monkeypatch):

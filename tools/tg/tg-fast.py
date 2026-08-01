@@ -249,12 +249,12 @@ def resolve_do_session():
 
 
 def _strip_tag_tokens(s: str) -> str:
-    """Drop #tag tokens from a description fallback. resolve() empties the
-    desc for domain-only items ("hcm"), and the raw-text fallback at the
-    range call sites was reinstating the #tag verbatim — the 2026-07-31
-    "hcm #-1" entry literally named "hcm #-1" (tag applied AND polluting
-    the description)."""
-    return re.sub(r'\s*#-?\w+', '', s).strip()
+    """Drop #tag and @project tokens from a description fallback. resolve()
+    empties the desc for domain-only items ("hcm"), and the raw-text
+    fallback at the range call sites was reinstating the tokens verbatim —
+    the 2026-07-31 "hcm #-1" entry was literally named "hcm #-1", and
+    "0725-0734 @i9" (2026-08-01) created an entry NAMED "@i9"."""
+    return re.sub(r'\s*(?:#-?\w+|@\w+)', '', s).strip()
 
 
 def resolve(raw: str):
