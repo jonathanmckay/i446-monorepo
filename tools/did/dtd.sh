@@ -459,11 +459,45 @@ while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 DONEEOF
 chmod +x "$DTD_DONE"
 
+# --- Fast-path optimistic hide, split out of done.sh (2026-08-01) ---
+# fzf's own man page: "execute-silent... fzf will not be responsive until the
+# command is complete. For asynchronous execution, start your command as a
+# background process." done.sh was NOT backgrounded, so a rapid second
+# alt-enter landing while fzf was still blocked on the FIRST done.sh
+# invocation was silently lost -- never even reaching the FIFO (ruled out the
+# pipe itself: stress-tested dtd's exact reader construct to 100 concurrent
+# writers with zero loss; the loss is fzf not accepting the keypress at all
+# while unresponsive). This bug (2026-07-31/08-01: "-1t/-1l marked done but
+# no -1n points") is what the FIFO-invariant checker above was built to
+# detect -- this is the actual fix, closing the window instead of just
+# reporting it.
+#
+# The router below now runs THIS tiny script synchronously (near-instant --
+# no python3, just the id-based hide reload() needs to see immediately),
+# then backgrounds the FULL done.sh for everything else (resolve, quick-close,
+# FIFO push, tty-drain). done.sh still does its own copy of this same hide
+# when it runs a moment later -- a duplicate id line in $REMOVED.ids is a
+# harmless no-op (set-membership check, not a counter). The value-prompt
+# habits (cpap/xk20/...) are unaffected: the router still sends those through
+# execute (foreground, needs a real tty for the prompt), never this path.
+DTD_DONE_HIDE="/tmp/dtd-$DTD_ID.done-hide.sh"
+cat > "$DTD_DONE_HIDE" << HIDEEOF
+#!/bin/zsh
+REMOVED="$DTD_REMOVED"
+if [[ -n "\$1" ]]; then
+  echo "\$1" >> "\$REMOVED.ids"
+fi
+HIDEEOF
+chmod +x "$DTD_DONE_HIDE"
+
 # --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
 # cpap + xk20/xk22/xk26 + i444 prompt for a value on completion and so need a tty —
 # route them → execute (which gives the DONE script a terminal) and every other
-# task → execute-silent
-# (flicker-free, as before). The router emits ONLY the execute/execute-silent
+# task → execute-silent, running the fast hide above synchronously then
+# backgrounding done.sh itself (see its comment) so fzf regains
+# responsiveness in milliseconds instead of waiting through done.sh's full
+# python3-resolve + FIFO-push + tty-drain tail.
+# The router emits ONLY the execute/execute-silent
 # action; the reload/clear-query/transform-header chain stays in the binding
 # where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
 # action keeps the transform output free of fzf placeholders; task ids are
@@ -477,7 +511,7 @@ case "\$_t" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
-    printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
+    printf 'execute-silent(%s %s; %s %s >/dev/null 2>&1 &)' "$DTD_DONE_HIDE" "\$_id" "$DTD_DONE" "\$_id" ;;
 esac
 ROUTEREOF
 chmod +x "$DTD_DONE_ROUTER"
@@ -2076,4 +2110,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"

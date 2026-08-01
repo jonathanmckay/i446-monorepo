@@ -42,8 +42,12 @@ def test_completion_script_hides_by_id_not_name():
     # done.sh (alt-enter) is the sole completion script (2026-07-31: enter.sh
     # dropped completion entirely -- "always opt+enter to mark done"). The
     # unconditional name-write is gone from it; the name lands in $REMOVED
-    # only inside the id-less else-branch.
-    assert DTD.count('echo "\\$1" >> "\\$REMOVED.ids"') == 1
+    # only inside the id-less else-branch. 2026-08-01: a SECOND copy of this
+    # exact line now lives in $DTD_DONE_HIDE, the fast synchronous split-out
+    # (see test_dtd_done_async.py) that runs before done.sh gets
+    # backgrounded -- a duplicate id line in a set-membership file is a
+    # harmless no-op, not a behavior change worth re-litigating here.
+    assert DTD.count('echo "\\$1" >> "\\$REMOVED.ids"') == 2
     # Old pattern: name-write directly followed by the PUSHED/ids lines (i.e.
     # unconditional). New pattern: the name-write to $REMOVED sits in an
     # `else` branch after `if [[ -n "\$1" ]]`.
