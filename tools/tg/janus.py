@@ -3242,7 +3242,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
                 ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
     desc = display_desc(cur.get("description") or "") or "(no description)"
     pid = cur.get("project_id")
-    code = proj_code(pid)
+    code = toggl_project_code(pid, cur.get("description"))
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
         elapsed = (now - st).total_seconds()
@@ -3256,7 +3256,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     if code:
         left += f" · {code}"
     pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))
-    style = project_style(pid) or "class:running"
+    style = project_style(code) or "class:running"
     return [
         (f"bold {style}".strip(), left),
         ("class:time", f"{'':>{pad}}{clock}\n"),
