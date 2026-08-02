@@ -413,7 +413,8 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
 
     msg = {"text": ""}
     status = Window(FormattedTextControl(
-        lambda: msg["text"] or "digits pick day answers · Enter/Tab next · ^S save · ^Q cancel"),
+        lambda: msg["text"] or "digits pick day answers · Enter/Tab next · "
+                                "Tab/Esc/blank-Enter on last field saves · ^Q cancel"),
         height=1, style="class:status")
 
     body = HSplit(rows, padding=0)
@@ -460,11 +461,22 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
             return
         kind = ordered[idx][2]
         if kind == "textml":
+            if idx == last_idx:
+                # blank line (Enter on an already-empty line) on the last
+                # field finishes the form instead of adding another newline
+                before = e.current_buffer.document.text_before_cursor.split("\n")
+                if len(before) >= 2 and before[-1] == "" and before[-2] == "":
+                    _submit(e.app)
+                    return
             e.current_buffer.insert_text("\n")
         elif idx == last_idx:
             _submit(e.app)
         else:
             e.app.layout.focus_next()
+
+    @kb.add("escape")
+    def _(e):
+        _submit(e.app)
 
     @kb.add("c-s")
     def _(e):

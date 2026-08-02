@@ -1,6 +1,6 @@
 ---
 name: "1s"
-description: "Weekly strategic review. Runs /1n donuts, copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
+description: "Weekly strategic review. Copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
 user-invocable: true
 ---
 
@@ -36,9 +36,9 @@ until the user has backfilled and the check passes. The survey tool enforces
 the same gate itself (`--force` is the deliberate escape hatch; use it only
 if the user explicitly says to skip backfilling).
 
-### Step 0: Prep — donuts, 1g summary, open tabs
+### Step 0: Prep — 1g summary, open tabs
 
-Run these three prep steps before the analysis.
+Run these prep steps before the analysis.
 
 #### Step 0-pre: MSFT share pull (weekly, must run interactively)
 
@@ -54,13 +54,9 @@ one-line summary; surface any ⚠ clobber flags to the user. This step lives her
 (not launchd) deliberately: macOS TCC blocks CloudStorage for launchd-spawned
 python3, and /1s already runs weekly in a terminal with full access.
 
-#### Step 0a: Run /1n (weekly donut charts)
+#### Step 0a: Copy 1g tldr to 1分+1s
 
-Invoke the `/1n` skill. This generates two donut charts for the review week and inserts them into the `1分+1s` sheet at O{week} and P{week}.
-
-#### Step 0b: Copy 1g tldr to 1分+1s
-
-Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (same ISO week number used by /1n).
+Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (ISO week number for the review week).
 
 ```applescript
 tell application "Microsoft Excel"
@@ -76,7 +72,7 @@ end tell
 
 Replace `WEEK_ROW` with the ISO week number for the review week.
 
-#### Step 0c: Launch the weekly survey form
+#### Step 0b: Launch the weekly survey form
 
 Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
 the manual questions of the `1分+1s` row (Title for the Week, Biggest Win,
@@ -87,9 +83,10 @@ and must never be written. Above each question the form surfaces the week's
 DAILY answers from `0s897` (titles, wins, learnings, proud/regret) so
 answering is selecting/condensing rather than composing de novo — typing a
 day digit (`3`, or `2,5`) as the whole answer expands to that day's text on
-save. On `^S` it writes the answers to the review week's row (col A M.W
-label), saves, and **marks the weekly 1s task done** (survey completion IS
-task completion; `--no-mark` suppresses that for reruns).
+save. Finishing the last field (Tab off it, Escape, or a blank Enter) writes
+the answers to the review week's row (col A M.W label), saves, and **marks
+the weekly 1s task done** (survey completion IS task completion; `--no-mark`
+suppresses that for reruns).
 
 It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 
@@ -105,7 +102,7 @@ It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 3. ```bash
    cmux focus-pane --pane pane:<N>
    ```
-4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, ^S saves.`
+4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, finishing the last field autosaves.`
 
 Do NOT block on the form — continue with Step 1 while the user fills it. If
 cmux is unavailable, tell the user to run it themselves:

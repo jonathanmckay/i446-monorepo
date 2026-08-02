@@ -231,6 +231,28 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     else
       task_id=""; task_clean="$line"
     fi
+    # Mark processed the INSTANT this line is dequeued from the FIFO --
+    # before calling did-fast at all, not just "before the undo/jq pipeline"
+    # (2026-08-02, second incident: task 6hC5fV8W3qJxwm3R "finish 1 g245
+    # before m5x2" proved did-fast ran its ENTIRE pipeline successfully --
+    # real Todoist close, real Neon ledger entry "T did 1g" at 10:01:19 --
+    # yet nothing after it in this loop ran: no log line, no processed-id
+    # record, even with the earlier fix (2026-08-02, first incident, task
+    # 6gHVV7fjPwqfvq76 "i447") that moved this write to right after
+    # capturing did-fast's exit code. That proves the interruption strikes
+    # somewhere in or around the `result=$(...)` capture itself, EARLIER
+    # than "after did-fast returns" -- so this write can no longer live
+    # after the did-fast call at all. Once a line is dequeued, this loop
+    # WILL attempt it exactly once; that attempt is what "processed" means
+    # here, matching what the invariant check (below) is actually meant to
+    # detect: a message the FIFO never delivered, not one that hit trouble
+    # somewhere downstream. A silent post-did-fast gap (this exact class,
+    # twice now, unreproducible via component testing both times) is a
+    # separate, lower-severity failure mode: the real work still lands
+    # (proven both times), only this shell's own confirmation log line is
+    # missing. See test_dtd_processed_before_pipeline.py.
+    echo "x" >> "$DTD_PROCESSED"
+    echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
     echo "⏳ $task_clean" > "$DTD_HDR"
     if [[ -n "$task_id" ]]; then
       result=$(python3 "$DID_FAST" --task-id "$task_id" "$task_clean" 2>>"$DTD_LOG.err")
@@ -238,22 +260,6 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
     fi
     rc=$?
-    # Mark processed IMMEDIATELY once did-fast has returned control to this
-    # shell -- BEFORE the undo-journal pipe / jq extraction below, not after
-    # (2026-08-02 incident: task 6gHVV7fjPwqfvq76 "i447" proved did-fast ran
-    # to completion -- its own "already done today" warning survived to
-    # $DTD_LOG.err -- yet NOTHING after it in that same iteration ran: no
-    # undo-journal entry, no "? i447" log fallback, no processed-id record.
-    # Neither undo-fast.py nor the jq extraction reproduced any hang/crash
-    # against the exact same "future_skipped-only, empty results" payload
-    # when tested in isolation, so the interruption's precise trigger wasn't
-    # pinned down (this was a ~16h-old session spanning an overnight
-    # sleep/wake) -- but wherever it strikes, it can no longer make the
-    # invariant checker misreport a message the FIFO demonstrably delivered
-    # as a "lost/FIFO race" one, nor silently swallow a genuine did-fast
-    # failure. See test_dtd_processed_before_pipeline.py.
-    echo "x" >> "$DTD_PROCESSED"
-    echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
     if [[ $rc -ne 0 || -z "$result" ]]; then
       echo "✗ $task_clean (did-fast exit $rc, no output)" > "$DTD_HDR"
       echo "✗ $task_clean (did-fast exit $rc, no output)" >> "$DTD_LOG"
