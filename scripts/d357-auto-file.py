@@ -51,6 +51,12 @@ MAX_PER_RUN = 2
 BUDGET_USD = "0.50"
 MIN_AGE_SEC = 120  # let any in-flight d357_quick.py stop-cleanup settle first
 CLAUDE_TIMEOUT_SEC = 600  # 10 min — generous for one bounded extraction task
+# "Only file going forward" (user decision 2026-08-02): this script's rollout
+# date. There's a 36-meeting backlog back to April that predates automated
+# filing — draining it would be ~$18 of unattended spend nobody signed off
+# on for months-old meetings. Only transcripts dated on/after this line get
+# auto-filed; the backlog is left for a manual/deliberate pass if ever wanted.
+CUTOFF_DATE = "2026.08.02"
 
 # Recording transcripts: YYYY.MM.DD-HHMM-<slug>.txt (meet.py's naming).
 REC_STEM_RE = re.compile(r'^(\d{4}\.\d{2}\.\d{2})-\d{4}-(.+)$')
@@ -102,6 +108,8 @@ def find_unfiled(now: float | None = None) -> list[Path]:
         if not m:
             continue
         date_str, slug = m.group(1), m.group(2)
+        if date_str < CUTOFF_DATE:
+            continue
         try:
             age = now - txt.stat().st_mtime
         except OSError:
