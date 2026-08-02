@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "enjoy the evening with lx": {
-      "todoist_id": "6h9r3Pgv5h3pc6c2",
-      "minutes": 60
-    },
-    "do something meaningful fitness wise": {
-      "todoist_id": "6h9r3Pg6fQg38gcR",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-08-02T03:55:01.838930-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-02T04:00:10.897453-07:00"
 }
