@@ -2344,7 +2344,7 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
             "start_dt": m["start_dt"],
             "time_str": f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}",
             "label": label,
-            "style": project_style(m["project_id"]),
+            "style": project_style(toggl_project_code(m["project_id"], m["desc"])),
             "dur_min": mins,
             "is_running": is_running,
             # The real Toggl entry id(s) this display row was merged from —
@@ -2417,7 +2417,7 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
             "start_dt": blk_start,
             "time_str": f"{blk_start:%H:%M}",
             "label": label,
-            "style": project_style(e["project_id"]),
+            "style": project_style(toggl_project_code(e["project_id"], e["desc"])),
             "dur_min": mins,
             "is_running": bool(e.get("running")),
             "tags": list(e.get("tags") or []),
