@@ -56,7 +56,7 @@ def test_past_block_picks_colors_m5x2_entry_with_no_project():
         "desc": "m5x2 Strat", "project_id": None, "running": False,
         "ids": [1], "tags": [],
     }]
-    picks = mod._past_block_picks("巳", merged)
+    picks = mod._past_block_picks("午", merged)
     assert len(picks) == 1
     assert picks[0]["style"] == "fg:#d50032"
 
