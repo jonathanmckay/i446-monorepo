@@ -397,6 +397,10 @@ class State:
         # real); they just wait their turn instead of being rejected.
         self.work_q = None          # asyncio.Queue, created on first use
         self.queued_cmds = set()    # dedupe keys of queued + running jobs
+        # Active d357 meeting recording started from janus (user request
+        # 2026-08-02): {"desc": toggl/meeting title, "start_dt": datetime}.
+        # None = not recording. Mirrors ~/.local/state/jm/d357-state.json.
+        self.recording = None
 
 
 STATE = State()
@@ -1979,6 +1983,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             is_sel = my_key is not None and STATE.event_sel == my_key
             dur = f"({head0['dur_min']})" if head0.get("is_event") else fmt_dur(head0["dur_min"])
             prefix = "▶ " if running else ""
+            if running and _rec_active_for(head0.get("raw_desc")):
+                prefix = "▶🎙 "  # d357 recording live for this meeting (2026-08-02)
             vtags = " ".join(f"#{t}" for t in (head0.get("tags") or [])
                              if t in VALUE_TAGS)
             base_sty = head0.get("style") or ""
@@ -2195,7 +2201,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # Selectable like any other entry — editing a running timer's
             # description/project doesn't require stopping it first.
             dur = fmt_dur(p["dur_min"])
-            prefix = "▶ "
+            prefix = "▶🎙 " if _rec_active_for(p.get("raw_desc")) else "▶ "
             vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
                              if t in VALUE_TAGS)
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
@@ -3209,7 +3215,8 @@ def render_current_bottom() -> list[tuple[str, str]]:
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
     dur = f"{m}m{s:02d}.{frac}s"
-    left = f" ▶ {dur}  {desc}"
+    marker = "▶🎙" if _rec_active_for(cur.get("description")) else "▶"
+    left = f" {marker} {dur}  {desc}"
     if code:
         left += f" · {code}"
     pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))
@@ -3588,13 +3595,100 @@ async def _work_consumer(app):
             app.invalidate()
 
 
+# ── d357 meeting recording (user request 2026-08-02: "hitting 'enter' on a
+# meeting will also kick off a d357 recording session ... opt enter, or enter
+# on another meeting, means the original one is over: close the meeting,
+# finalize the notes, and record the points") ───────────────────────────────
+
+D357_QUICK = str(Path.home() / "i446-monorepo/tools/meet/d357_quick.py")
+D357_STATE = Path.home() / ".local/state/jm/d357-state.json"
+
+
+def _load_recording_state() -> None:
+    """Boot restore: if a janus-started d357 recording is still live (pid
+    alive, started today), re-adopt it so a janus restart doesn't orphan the
+    🎙 indicator and the finalize-on-next-meeting flow."""
+    try:
+        st = json.loads(D357_STATE.read_text())
+        pid = st.get("pid")
+        if not pid:
+            return
+        os.kill(int(pid), 0)
+        started = dt.datetime.fromisoformat(st["started"])
+        if started.date() != dt.date.today():
+            return
+        STATE.recording = {"desc": st.get("name") or "meeting",
+                           "start_dt": started.astimezone(TZ) if started.tzinfo
+                           else started.replace(tzinfo=TZ)}
+    except Exception:
+        pass
+
+
+def _rec_active_for(desc: str | None) -> bool:
+    return bool(STATE.recording and desc
+                and desc.strip().lower() == STATE.recording["desc"].strip().lower())
+
+
+def _spawn_d357_stop() -> None:
+    """Fire-and-forget stop: d357_quick sends one C-c and then babysits the
+    (up to 5 min) Whisper + filing wait in its own detached process — the
+    serial work queue must never block on transcription."""
+    try:
+        subprocess.Popen(["python3", D357_QUICK, "stop"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        flash(f"d357 stop failed to launch: {e}", 8.0)
+
+
+def _finalize_recording_cmd(now: dt.datetime) -> str | None:
+    """The did-fast command that closes the recorded meeting: completed range
+    from the meeting's start to now, project from its running entry. The MECE
+    trim inside did-fast carves/stops the still-running timer itself."""
+    rec = STATE.recording
+    if not rec:
+        return None
+    desc = rec["desc"]
+    start = rec["start_dt"]
+    ent = next((e for e in STATE.entries
+                if e.get("running") and (e.get("desc") or "").strip().lower() == desc.strip().lower()),
+               None)
+    if ent:
+        start = ent["start_dt"]
+    code = proj_code(ent.get("project_id")) if ent else ""
+    cmd = f"{desc} {start:%H%M}-{now:%H%M}"
+    if code:
+        cmd += f" @{code}"
+    return cmd
+
+
+async def _finalize_recording(app) -> None:
+    """Stop the d357 session (detached) and grant the meeting its points via
+    did-fast. Runs INSIDE a queued job — callers must already hold the queue."""
+    rec = STATE.recording
+    if not rec:
+        return
+    now = dt.datetime.now(TZ)
+    did_cmd = _finalize_recording_cmd(now)
+    STATE.recording = None
+    _spawn_d357_stop()
+    flash(f"⏹ {rec['desc']} — finalizing notes, recording points…", 5.0)
+    app.invalidate()
+    if did_cmd:
+        res = await asyncio.to_thread(run_did_fast, did_cmd)
+        flash(res, 8.0)
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+    app.invalidate()
+
+
 def _convert_selected_event(ev: dict, app) -> None:
     """Convert a selected calendar event into Toggl — an ENDED event runs
     did-fast (completed entry + its points in one shot, carving any runaway
     covering entry via the MECE trim); a not-yet-ended one starts a tg-fast
-    timer backdated to the event's start. Shared by plain Enter and ⌥↵
-    (user request 2026-07-29: "opt+enter a calendar event ... both change
-    toggl, but also give me points for completed meetings")."""
+    timer backdated to the event's start AND kicks off a d357 recording
+    session (user request 2026-08-02), finalizing any previous one first.
+    Shared by plain Enter and ⌥↵ (user request 2026-07-29)."""
     now = view_now()
     is_past = ev["end_dt"] <= now
     cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
@@ -3604,10 +3698,16 @@ def _convert_selected_event(ev: dict, app) -> None:
         cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
     STATE.event_sel = None
     label = f"{'did' if is_past else 'tg'} {cmd}"
+    title = _safe_event_title(ev.get("title"))
+    ev_minutes = max(0, int((ev["end_dt"] - dt.datetime.now(TZ)).total_seconds() // 60))
 
     async def _run_event_and_refresh():
         flash(f"$ {label}")
         app.invalidate()
+        if not is_past:
+            # Enter on a NEW meeting while one is recording = the old one is
+            # over: finalize it (notes + points) before starting the new one.
+            await _finalize_recording(app)
         runner = run_did_fast if is_past else run_tg_fast
         res = await asyncio.to_thread(runner, cmd)
         flash(res, 6.0)
@@ -3621,6 +3721,20 @@ def _convert_selected_event(ev: dict, app) -> None:
             await asyncio.to_thread(fetch_points)
             app.invalidate()
         else:
+            # Kick off the recording; the wrapper reports its audio verdict.
+            args = ["python3", D357_QUICK, "start", title]
+            if ev_minutes:
+                args += ["--minutes", str(ev_minutes + 5)]
+            r = await asyncio.to_thread(
+                subprocess.run, args, capture_output=True, text=True, timeout=60)
+            out = (r.stdout or "").strip().splitlines()
+            line = out[-1] if out else ""
+            if line.startswith("REC|"):
+                STATE.recording = {"desc": title, "start_dt": dt.datetime.now(TZ)}
+                flash(f"🎙 recording: {title} — {line.split('|', 2)[2]}", 8.0)
+            else:
+                flash(f"⚠ d357 did NOT start: {line or 'no output'}", 10.0)
+            app.invalidate()
             polls = (0.4, 0.8, 1.5)
             for i, delay in enumerate(polls):
                 await asyncio.sleep(delay)
@@ -3906,6 +4020,22 @@ def _(event):
     record to check, so it runs unconditionally (that's the backfill case)."""
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if STATE.recording is not None:
+        # ⌥↵ while a d357 recording is live = "the meeting is over" (user
+        # request 2026-08-02): stop the recording, finalize the notes, and
+        # record the meeting's points. If the selection is the recorded
+        # meeting itself (its entry or its event) — or nothing is selected —
+        # that IS the whole gesture; otherwise fall through and also handle
+        # the selected item normally (both run serially on the work queue).
+        rec_desc = STATE.recording["desc"].strip().lower()
+        sel_desc = ""
+        if isinstance(item, dict):
+            sel_desc = (item.get("raw_desc") or item.get("title") or "").strip().lower()
+        _enqueue_work(event.app, f"finalize {STATE.recording['desc']}",
+                      lambda: _finalize_recording(event.app),
+                      key=f"finalize:{rec_desc}")
+        if item is None or sel_desc == rec_desc:
+            return
     if isinstance(item, dict) and item.get("kind") is None and item.get("end_dt"):
         # A raw calendar event: ⌥↵ = "did this meeting" — same conversion
         # as plain Enter (an ended event did-fasts: Toggl entry + points in
@@ -4482,6 +4612,9 @@ async def main():
 
     # Write PID so other tools can signal us
     _assert_pid_file()
+
+    # Re-adopt a live janus-started d357 recording across restarts
+    _load_recording_state()
 
     # Arm the boot grace from the moment the app actually takes the tty
     STATE.boot_time = time.monotonic()
