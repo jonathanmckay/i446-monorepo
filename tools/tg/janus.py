@@ -288,6 +288,20 @@ def project_style(pid_or_code) -> str:
     return f"fg:{hexv}" if hexv else ""
 
 
+def toggl_project_code(pid, desc: str | None = None) -> str:
+    """Resolve a Toggl entry's project code, with the same literal-title
+    override gcal_project_code already applies to calendar events: "m5x2" in
+    the description wins even when the entry has no (or the wrong) project
+    attached. Without this, a continued/restarted Toggl entry that drops its
+    project (observed live 2026-08-02: "m5x2 Strat" losing @m5x2 on
+    continuation) renders uncolored despite saying "m5x2" right in its name —
+    same regression class as gcal_project_code's 2026-07-12 fix, just never
+    applied on the Toggl-entry side."""
+    if desc and "m5x2" in desc.lower():
+        return "m5x2"
+    return proj_code(pid)
+
+
 # ─── State ─────────────────────────────────────────────────────────────────
 
 class State:
@@ -1707,7 +1721,7 @@ def render_current() -> list[tuple[str, str]]:
         return [("class:idle", " (no timer running)\n")]
     desc = cur.get("description") or "(no description)"
     pid = cur.get("project_id")
-    code = proj_code(pid)
+    code = toggl_project_code(pid, desc)
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
         elapsed_s = int((dt.datetime.now(TZ) - st).total_seconds())
@@ -1717,7 +1731,7 @@ def render_current() -> list[tuple[str, str]]:
     if code:
         line += f"  · {code}"
     line += f"   {fmt_dur_live(elapsed_s)}\n"
-    style = project_style(pid) or "class:running"
+    style = project_style(code) or "class:running"
     return [(f"bold {style}".strip(), line)]
 
 
