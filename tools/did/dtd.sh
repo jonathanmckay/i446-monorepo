@@ -4,6 +4,14 @@
 # fzf header shows latest completion status.
 # KEY: cache is snapshotted ONCE at startup. No mid-session re-reads.
 
+# Reset the terminal tab color on every launch. Without this, an "orange"
+# left over from a PREVIOUS session's FIFO-race alert (line ~214 below)
+# stays on the tab indefinitely — nothing else ever clears it — so a fresh,
+# error-free dtd session can still look like it's mid-error. Backgrounded:
+# term-color.sh's TTY walk (+ AppleScript on Terminal.app) shouldn't add
+# latency to fzf startup.
+( bash "$HOME/i446-monorepo/scripts/term-color.sh" reset 2>/dev/null ) &
+
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
