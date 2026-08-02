@@ -668,7 +668,7 @@
     "1-i447": {
       "name": "1 i447",
       "category": "1n+",
-      "neon_header": "i447",
+      "neon_header": "1 i447",
       "domain": "i447",
       "todoist_label": "1neon",
       "aliases": [

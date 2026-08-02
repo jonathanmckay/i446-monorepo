@@ -160,11 +160,6 @@ ONENEON_ALIASES: dict[str, str] = {
     # this the completion closed the card and silently skipped the column
     # write (found by neon-task-checksum's first run, 2026-07-26).
     "1 groceries": "groceries",
-    # Weekly card "1 i447" vs bare 1n+ header "i447": the bare name collides
-    # with the DAILY 0n habit "i447", which routing hits first — the weekly
-    # card could never be completed by name and sat overdue forever (bug
-    # 2026-07-27: "i447 keeps recurring even though I mark it done").
-    "1 i447": "i447",
 }
 
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")

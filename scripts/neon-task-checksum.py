@@ -72,7 +72,6 @@ ALIASES = {
     "一起吃": "一起饭",
     "long o314": "长o314",
     "1 groceries": "groceries",
-    "1 i447": "i447",
 }
 
 # 1=Sunday … 7=Saturday (1n+ row 3; verified against the live cards 2026-07-25)
@@ -89,7 +88,7 @@ WEEKLY_DOMAIN = {
     "groceries": "hcb", "1 hcme": "hcm", "1 sunset": "hcm", "2 hci": "hci",
     "长冥想": "hcm", "业写": "h335", "一起饭": "xk87", "nails": "hci",
     "aos": "xk88", "family": "家", "s897": "s897", "relax {60}": "hcm",
-    "i447": "i447", "1 对身": "hcb", "1 f695": "m5x2", "1 kids nature": "xk87",
+    "1 i447": "i447", "1 对身": "hcb", "1 f695": "m5x2", "1 kids nature": "xk87",
 }
 
 
