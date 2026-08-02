@@ -1260,18 +1260,6 @@
     "rent": "1395.00"
   },
   {
-    "unit_id": 577,
-    "property_name": "rl16",
-    "unit": "C16",
-    "tenant_name": "McKee, Kelton",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2023-09-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1395.00"
-  },
-  {
     "unit_id": 581,
     "property_name": "rl16",
     "unit": "C20",
@@ -1288,10 +1276,10 @@
     "property_name": "rl16",
     "unit": "C23",
     "tenant_name": "Johnston, Deborah L.",
-    "status": "Renewed",
+    "status": "Eligible",
     "lease_sign_date": "2024-08-28",
     "move_in": "2024-08-28",
-    "renewal_start_date": "2026-08-01",
+    "renewal_start_date": null,
     "last_lease_renewal": "2026-08-01",
     "rent": "1627.00"
   },
@@ -1516,10 +1504,10 @@
     "property_name": "c313",
     "unit": "22",
     "tenant_name": "Hyatt, Jacob A.",
-    "status": "Renewed",
+    "status": "Eligible",
     "lease_sign_date": "2025-02-27",
     "move_in": "2025-03-01",
-    "renewal_start_date": "2026-08-01",
+    "renewal_start_date": null,
     "last_lease_renewal": "2026-08-01",
     "rent": "1420.00"
   },
@@ -1576,7 +1564,7 @@
     "property_name": "j312",
     "unit": "3118",
     "tenant_name": "White, Melisa",
-    "status": "Renewed",
+    "status": "Eligible",
     "lease_sign_date": "2025-07-02",
     "move_in": "2022-06-14",
     "renewal_start_date": null,
@@ -1644,30 +1632,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 828,
-    "property_name": "kn47 K1",
-    "unit": "A102",
-    "tenant_name": "Kern, Christina",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2022-10-06",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-01",
-    "rent": "1304.00"
-  },
-  {
-    "unit_id": 837,
-    "property_name": "kn47 K1",
-    "unit": "B103",
-    "tenant_name": "Quigley, Joseph B.",
-    "status": "Pending",
-    "lease_sign_date": "2026-04-29",
-    "move_in": "2018-10-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-15",
-    "rent": "1304.00"
-  },
-  {
     "unit_id": 859,
     "property_name": "kn47 K1",
     "unit": "C207",
@@ -1699,18 +1663,6 @@
     "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2014-09-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-01",
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 884,
-    "property_name": "kn47 K1",
-    "unit": "E106",
-    "tenant_name": "Copeland, Argel",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2012-09-07",
     "renewal_start_date": null,
     "last_lease_renewal": "2025-11-01",
     "rent": "1089.00"
