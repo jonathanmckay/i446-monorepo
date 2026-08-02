@@ -106,7 +106,10 @@ day digit (`3`, or `2,5`) as the whole answer expands to that day's text on
 save. Finishing the last field (Tab off it, Escape, or a blank Enter) writes
 the answers to the review week's row (col A M.W label), saves, and **marks
 the weekly 1s task done** (survey completion IS task completion; `--no-mark`
-suppresses that for reruns).
+suppresses that for reruns). On a successful save it prints an explicit
+`✓ 1s saved to Neon — ...` confirmation, then (for interactive form runs,
+not `--from-json`) auto-closes its own cmux tab ~1.5s later via `cmux
+close-surface` — no stray pane left sitting at a shell prompt.
 
 It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 

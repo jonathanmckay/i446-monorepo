@@ -26,6 +26,7 @@ import datetime as _dt
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
@@ -560,7 +561,12 @@ def main() -> int:
 
     filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
     result = write_answers(answers, sunday)
-    msg = "1s → %s week %s (%d fields) · %s" % (SHEET, week_row_label(sunday), filled, result)
+    # write_answers() raises on failure, so reaching this line means the
+    # Neon write already succeeded — say so plainly (user decision
+    # 2026-08-02: finishing the survey should make the Neon write obvious,
+    # not just log a terse AppleScript return value).
+    msg = "✓ 1s saved to Neon — %s week %s, %d field%s written (%s)" % (
+        SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s", result)
 
     # Completing the survey IS completing the weekly 1s task (user decision
     # 2026-07-21: "I need to complete the survey before task is complete") —
@@ -575,6 +581,18 @@ def main() -> int:
             msg += " · 1s mark FAILED: %s" % e
 
     print(msg)
+
+    # Interactive runs (the form, not scripted --from-json) close their own
+    # cmux tab after a successful save, so the survey doesn't leave a stray
+    # pane sitting at a shell prompt (user decision 2026-08-02).
+    if not args.from_json:
+        time.sleep(1.5)
+        try:
+            subprocess.run(["cmux", "close-surface"], capture_output=True,
+                            text=True, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass  # not running in a cmux pane, or cmux unavailable — fine
+
     return 0
 
 
