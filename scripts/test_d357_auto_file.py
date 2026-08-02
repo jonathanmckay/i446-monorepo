@@ -70,6 +70,26 @@ def test_too_recent_recording_is_not_yet_a_candidate(tmp_path):
     assert mod.find_unfiled() == []
 
 
+def test_backlog_before_cutoff_is_never_a_candidate(tmp_path):
+    """User decision 2026-08-02: 'only file going forward' — the 36-meeting
+    pre-existing backlog (April-July) must never be auto-filed, only
+    transcripts dated on/after CUTOFF_DATE."""
+    mod = _load_mod()
+    mod.RECORDINGS_DIR = tmp_path / "recordings"
+    mod.D357_DIR = tmp_path / "d357"
+    mod.RECORDINGS_DIR.mkdir()
+    mod.D357_DIR.mkdir()
+    old_mtime = time.time() - mod.MIN_AGE_SEC - 10
+    old = mod.RECORDINGS_DIR / "2026.04.27-1053-joe-1-1.txt"
+    old.write_text("t")
+    os.utime(old, (old_mtime, old_mtime))
+    on_cutoff = mod.RECORDINGS_DIR / f"{mod.CUTOFF_DATE}-1235-focus-properties.txt"
+    on_cutoff.write_text("t")
+    os.utime(on_cutoff, (old_mtime, old_mtime))
+
+    assert mod.find_unfiled() == [on_cutoff]
+
+
 def test_non_recording_txt_files_are_ignored(tmp_path):
     """Filenames that don't match the YYYY.MM.DD-HHMM-<slug> shape (e.g. a
     stray .txt) are skipped, not mis-parsed."""

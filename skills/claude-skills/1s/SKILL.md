@@ -12,15 +12,33 @@ Compare what you planned (1g goals) vs what you spent time on (Toggl) vs what yo
 
 ```
 /1s [week]
+/1s survey [week]
 ```
 
 - No args → reviews the most recent completed week (last Sun–Sat)
 - `last` → same as no args
 - `MM/DD` → reviews the week containing that date
+- `survey [week]` → **survey-only fast path**: just opens the 1s survey form
+  for that week (or the last completed week if omitted). Skips the
+  completeness gate, MSFT pull, 1g summary copy, Toggl fetch, points
+  aggregation, narrative analysis, and vault write — go straight to Step 0b.
+  Use this when you just want to fill out the retrospective questions for a
+  week (including backfilling an old one) without running the full analysis.
+
+### Survey-only fast path
+
+If the first argument is literally `survey`, skip directly to **Step 0b**
+(launch the survey form) using the remaining argument (if any) as the week
+date — do not run Step -1's completeness gate, Step 0-pre's MSFT pull, Step
+0a's 1g-tldr copy, or Steps 1–8. The survey form itself is unaffected by any
+of that (it only reads/writes the `1分+1s` and `0s897` sheets), so none of it
+is needed just to fill out the manual questions for a week.
 
 ## Steps
 
 ### Step -1: Week-completeness gate (BLOCKING)
+
+Skip this step entirely for the `survey` fast path (see above).
 
 The weekly review may not run on an incomplete week. Check first:
 
@@ -55,6 +73,8 @@ one-line summary; surface any ⚠ clobber flags to the user. This step lives her
 python3, and /1s already runs weekly in a terminal with full access.
 
 #### Step 0a: Copy 1g tldr to 1分+1s
+
+**Skip this step entirely if the review week is not the most recent completed week** (i.e. the user passed a `week` argument targeting an older week for backfill). The `1g` sheet resets every week (`/1g` overwrites it), so `1g!A1` only ever holds the *current* week's tldr — copying it into an old week's row writes that day's placeholder/garbage text into historical data (regression 2026-08-02: copied "u" into week 6.3's row, ~6 weeks stale). There is no way to recover a past week's tldr from the live sheet; leave the cell as-is for backfills.
 
 Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (ISO week number for the review week).
 
@@ -121,6 +141,18 @@ Calculate the Sun–Sat range for the target week. Default: the most recent Satu
 ```
 
 Set `week_start` (Sunday) and `week_end` (Saturday) as YYYY-MM-DD strings.
+
+**Backfill gate**: if `week_end` is before the most recently completed Saturday
+(i.e. the user targeted an old week, not the current one), **STOP after this
+step** and tell the user Steps 2/5/6/7 can't run correctly — the `1g` sheet
+has no historical archive (same root cause as the Step 0a bug below: `/1g`
+overwrites it weekly, so `1g!A1` and its goal rows only ever hold the
+*current* week's data). Ask how to proceed: drop the goals/target/Δ columns
+and do a time-vs-points-only comparison, abort to survey-only (Step 0b, which
+still works — Toggl and 0分 history are real, only `1g` is not), or take
+manually-supplied goals from the user. Do not silently pull `1g`'s current
+contents and label them as the old week's goals (regression 2026-08-02, week
+6.3 backfill).
 
 ### Step 2: Pull weekly goals from 1g sheet
 
