@@ -23,7 +23,10 @@ def test_tag_columns_match_live_headers():
     assert zerot_fast.TAG_COLUMNS["-2"] == "AW"
     assert zerot_fast.TAG_COLUMNS["-3"] == "AX"
     assert zerot_fast.TAG_COLUMNS["其他人"] == "AS"
-    assert zerot_fast.TAG_COLUMNS["xk87"] == "AZ"
+    assert "xk87" not in zerot_fast.TAG_COLUMNS, (
+        "AZ ('∑xk87') is a live SUM formula, not a tag-total target; "
+        "writing to it clobbers the formula"
+    )
 
 
 def test_tag_columns_agree_with_daemon():
@@ -126,8 +129,9 @@ def test_tag_and_project_minutes_only_count_target_day():
 
     # Tags must only count yesterday
     assert tag_totals["-3"] == 300, f"-3 tag should be 300 (yesterday only), got {tag_totals['-3']}"
-    assert tag_totals["xk87"] == 300, f"xk87 tag should be 300 (yesterday only), got {tag_totals['xk87']}"
-    # Projects should be empty (xk87 matched by tag, not project_id)
+    # xk87 isn't a tracked tag column (AZ is a live SUM formula, not a write target)
+    assert "xk87" not in tag_totals, f"xk87 should not be tracked, got {tag_totals}"
+    # Projects should be empty (no project_id in PROJECT_COLUMNS)
     assert not proj_totals, f"proj_totals should be empty, got {proj_totals}"
 
 

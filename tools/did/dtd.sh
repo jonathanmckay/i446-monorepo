@@ -558,11 +558,25 @@ chmod +x "$DTD_DONE_HIDE"
 # where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
 # action keeps the transform output free of fzf placeholders; task ids are
 # alphanumeric, so no quoting is needed around \$_id.
+#
+# jq, not python3, for the id->content lookup (2026-08-02): this whole script
+# runs as fzf's `transform` action on EVERY alt-enter, synchronously, BEFORE
+# fzf is ready to accept the next key -- the one part of the chain the
+# 2026-08-01 fast-hide/background split (above) never touched, because that
+# fix was about done.sh's OWN tail, not this router's own front. Measured
+# live: a python3 interpreter start for dtd_resolve.py's one-id JSON lookup
+# costs ~65-100ms; the equivalent jq query costs ~5ms (same output). A
+# rapid-fire triple alt-enter 1-2s apart still lost 2 of 3 completions the
+# same day as the fast-hide fix (task 6hC77PCj8M3VhGPc "-1l" + 6hC77P8gJ2cgV8m6
+# "-1ibx"), so this router-side cost is real, additive latency in the exact
+# window that's already been shown to matter -- cutting it doesn't prove the
+# race is fully closed, but it's a genuine, measured reduction in it, not a
+# refactor for its own sake.
 DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
 _id="\$1"
-_t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
+_t=\$(jq -r --arg id "\$_id" '([.[] | select(type=="array")[] | select(.id == \$id) | .content] | first) // \$id' "$DTD_CACHE_FILE" 2>/dev/null | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;

@@ -1714,7 +1714,10 @@ def defer_unchecked_neg1(dry_run=False):
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 
 # Tag → 0n column letter
-TOGGL_TAG_COLS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
+# AZ ("∑xk87") is deliberately absent: it's a live =SUM(AJ:AO) formula
+# aggregating the kid/family columns, not a raw tag-total target — a "xk87":
+# "AZ" entry here used to clobber that formula with a Toggl-tag-derived total.
+TOGGL_TAG_COLS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX"}
 # Sleep (睡觉) carries the "-3" tag but is tracked separately in column D, so it
 # must be excluded from the -3/AX tag total — otherwise AX reads as ~a whole
 # night of sleep (regression 2026-06-28: AX=439). Mirrors 0t-fast.SLEEP_PROJECT_ID.
