@@ -9,6 +9,14 @@ UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
+# Staleness self-check (mirrors janus.py's _code_is_stale): dtd.sh only reads
+# itself once, at launch, to generate the worker/router/hdrgen scripts below —
+# a fix landed on disk afterward is invisible to this running session until
+# it's relaunched, which has repeatedly masked fixes (the ctrl-c hang, the
+# FIFO-loss race) for anyone still on an old session. Capture our own mtime
+# now; DTD_HDRGEN compares it against the live file on every header repaint.
+DTD_SELF="$HOME/i446-monorepo/tools/did/dtd.sh"
+DTD_SRC_MTIME=$(stat -f %m "$DTD_SELF" 2>/dev/null || echo 0)
 # Machine-local runtime state (not synced). See lib/state_paths.py + architecture.md
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/jm"
 mkdir -p "$STATE_DIR"
@@ -229,6 +237,28 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     else
       result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
     fi
+    rc=$?
+    # Mark processed IMMEDIATELY once did-fast has returned control to this
+    # shell -- BEFORE the undo-journal pipe / jq extraction below, not after
+    # (2026-08-02 incident: task 6gHVV7fjPwqfvq76 "i447" proved did-fast ran
+    # to completion -- its own "already done today" warning survived to
+    # $DTD_LOG.err -- yet NOTHING after it in that same iteration ran: no
+    # undo-journal entry, no "? i447" log fallback, no processed-id record.
+    # Neither undo-fast.py nor the jq extraction reproduced any hang/crash
+    # against the exact same "future_skipped-only, empty results" payload
+    # when tested in isolation, so the interruption's precise trigger wasn't
+    # pinned down (this was a ~16h-old session spanning an overnight
+    # sleep/wake) -- but wherever it strikes, it can no longer make the
+    # invariant checker misreport a message the FIFO demonstrably delivered
+    # as a "lost/FIFO race" one, nor silently swallow a genuine did-fast
+    # failure. See test_dtd_processed_before_pipeline.py.
+    echo "x" >> "$DTD_PROCESSED"
+    echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
+    if [[ $rc -ne 0 || -z "$result" ]]; then
+      echo "✗ $task_clean (did-fast exit $rc, no output)" > "$DTD_HDR"
+      echo "✗ $task_clean (did-fast exit $rc, no output)" >> "$DTD_LOG"
+      continue
+    fi
     # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
     # the pushed/processed counters, so the journal entry must land first).
     # $task_id rides along so undo can strip the optimistic id-hide from
@@ -242,8 +272,6 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       echo "? $task_clean" > "$DTD_HDR"
       echo "? $task_clean" >> "$DTD_LOG"
     fi
-    echo "x" >> "$DTD_PROCESSED"
-    echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
 ) &
@@ -1729,6 +1757,14 @@ export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: defer | c
 # load/result binds and after every action so worker confirmations persist.
 cat > "$DTD_HDRGEN" <<HDRGENEOF
 #!/bin/zsh
+# Stale-code check first, same as janus.py's render_header: if it wins, it
+# replaces the WHOLE header line (in red) so a fix that shipped after this
+# session launched can't be missed or mistaken for the normal status line.
+live_mtime=\$(stat -f %m "$DTD_SELF" 2>/dev/null || echo 0)
+if (( live_mtime > $DTD_SRC_MTIME + 1 )); then
+  printf '\033[1;91m⚠ RESTART DTD — code updated on disk\033[0m'
+  exit 0
+fi
 ws=\$(cat "$DTD_HDR" 2>/dev/null | tr '\n' ' ')
 tally=\$(cat "$DTD_TALLY" 2>/dev/null | tr '\n' ' ')
 if [ -n "\$tally" ]; then
