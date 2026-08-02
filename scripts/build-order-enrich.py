@@ -23,7 +23,7 @@ BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 COMPLETED_TODAY = _sp.COMPLETED_TODAY
 COMPLETED_ARCHIVE_DIR = Path.home() / "vault/z_ibx/completed-archive"
-D357_DIR = Path.home() / "vault/d357"
+D357_DIR = Path.home() / "vault/d357"  # files live in week subfolders (D357_DIR/<M.W>/...) — glob recursively
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 
 BLOCKS = [
@@ -170,7 +170,7 @@ def get_d357_docs_today():
     today_dot = now.strftime("%Y.%m.%d")
     recordings_dir = Path.home() / "vault/h335/i9/recordings"
     docs = []
-    for f in list(D357_DIR.glob(f"{today_hyphen}*.md")) + list(D357_DIR.glob(f"{today_dot}*.md")):
+    for f in list(D357_DIR.glob(f"**/{today_hyphen}*.md")) + list(D357_DIR.glob(f"**/{today_dot}*.md")):
         text = f.read_text()
         title_match = re.search(r'^title:\s*"(.+?)"', text, re.MULTILINE)
         title = title_match.group(1) if title_match else f.stem

@@ -47,7 +47,7 @@ from neon import excel as neon_excel
 
 VAULT = Path.home() / "vault"
 BUILD_ORDER = VAULT / "g245" / "5e-1" / "build-order.md"
-D357_DIR = VAULT / "d357"  # canonical flat location, filenames YYYY.MM.DD-<kebab>.md
+D357_DIR = VAULT / "d357"  # files live in week subfolders (D357_DIR/<M.W>/YYYY.MM.DD-<kebab>.md) — glob recursively
 ARCHIVE_ROOT = VAULT / "g245" / "archive"
 RESET_SCRIPT = Path.home() / "i446-monorepo" / "scripts" / "-1g-cron.py"
 DID_FAST = Path.home() / "i446-monorepo" / "tools" / "did" / "did-fast.py"
@@ -191,7 +191,7 @@ def find_meetings_for_date(target: dt.date):
         return []
     prefix = target.strftime("%Y.%m.%d")
     results = []
-    for path in sorted(D357_DIR.glob(f"{prefix}-*.md")):
+    for path in sorted(D357_DIR.glob(f"**/{prefix}-*.md")):
         slug = path.stem[len(prefix) + 1:]  # +1 for the dash separator
         if slug in SKIP_SLUGS:
             continue

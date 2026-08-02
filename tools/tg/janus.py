@@ -1985,8 +1985,15 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             prefix = "▶ " if running else ""
             # d357 recording live → 🎙 rides RIGHT of the task name
             # (user request 2026-08-02: "move the mic to be to the right
-            # of the task").
-            rec_sfx = " 🎙" if running and _rec_active_for(head0.get("raw_desc")) else ""
+            # of the task"). A doc already filed for this entry → 📝 instead
+            # (mutually exclusive in practice: a doc isn't filed until well
+            # after the live recording ends).
+            if running and _rec_active_for(head0.get("raw_desc")):
+                rec_sfx = " 🎙"
+            elif _has_d357_doc(head0.get("raw_desc")):
+                rec_sfx = " 📝"
+            else:
+                rec_sfx = ""
             vtags = " ".join(f"#{t}" for t in (head0.get("tags") or [])
                              if t in VALUE_TAGS)
             base_sty = head0.get("style") or ""
@@ -2204,8 +2211,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # description/project doesn't require stopping it first.
             dur = fmt_dur(p["dur_min"])
             prefix = "▶ "
-            # 🎙 sits right of the task name (user request 2026-08-02)
-            rec_sfx = " 🎙" if _rec_active_for(p.get("raw_desc")) else ""
+            # 🎙 sits right of the task name (user request 2026-08-02); a
+            # filed doc for this entry gets 📝 instead (see _has_d357_doc).
+            if _rec_active_for(p.get("raw_desc")):
+                rec_sfx = " 🎙"
+            elif _has_d357_doc(p.get("raw_desc")):
+                rec_sfx = " 📝"
+            else:
+                rec_sfx = ""
             vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
                              if t in VALUE_TAGS)
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
@@ -2240,6 +2253,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # edge just before the minutes (user request 2026-07-28).
         vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
                          if t in VALUE_TAGS)
+        # A filed d357 doc for this (past, non-running) entry → 📝 right of
+        # the task name, same convention as the head0/is_running rows above.
+        doc_sfx = " 📝" if (not p.get("is_event")
+                            and _has_d357_doc(p.get("raw_desc"))) else ""
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1
                     - (dwidth(vtags) + 1 if vtags else 0))
         if p.get("is_event"):
@@ -2272,7 +2289,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty = f"{gsty} bg:#3a3a3a"
         out.append((time_sty, tcol))
         out.append((gsty, gch))
-        body_txt = truncate(p["label"], space)
+        body_txt = truncate(p["label"], max(1, space - dwidth(doc_sfx))) + doc_sfx
         if p.get("is_event"):
             # Calendar entries right-justified, Toggl entries left (user
             # request 2026-07-28) — the two sources read as separate columns
@@ -3632,6 +3649,58 @@ def _load_recording_state() -> None:
 def _rec_active_for(desc: str | None) -> bool:
     return bool(STATE.recording and desc
                 and desc.strip().lower() == STATE.recording["desc"].strip().lower())
+
+
+# ── d357 "already filed" indicator (user request 2026-08-02: an emoji for
+# Toggl entries that already have a filed d357 doc, distinct from 🎙's
+# "recording right now") ────────────────────────────────────────────────────
+# Real filed docs live in week subfolders (vault/d357/<M.W>/YYYY.MM.DD-<slug>.md),
+# not flat under vault/d357/ — build-order-daemon.py's own D357_DIR.glob is
+# flat and (confirmed 2026-08-02) matches zero real files there; this globs
+# recursively instead. Time-gated (not mtime-gated): filing into an EXISTING
+# week subfolder doesn't bump vault/d357/'s own mtime, so an mtime cache would
+# never invalidate in the common case. A doc lands on disk via a manual/Claude
+# Code-driven flow well after the janus recording session ends, so this can't
+# just read STATE.recording — it has to check the filesystem.
+D357_ROOT = Path.home() / "vault/d357"
+_D357_DOC_CACHE_TTL = 20.0  # seconds
+_d357_doc_cache: dict = {"checked": 0.0, "date": None, "tokens": []}
+
+
+def _slug_tokens(stem: str) -> list[str]:
+    """Meaningful tokens from a d357 file stem, minus its YYYY.MM.DD- prefix.
+    Mirrors build-order-daemon.py's _slug_tokens exactly (same matching
+    semantics on both ends of the d357 pipeline)."""
+    name = re.sub(r'^\d{4}\.\d{2}\.\d{2}-', '', stem)
+    return [t.lower() for t in name.split('-') if len(t) >= 3 and not t.isdigit()]
+
+
+def _load_d357_tokens_for_today() -> list[list[str]]:
+    today = dt.date.today()
+    now = time.monotonic()
+    if (_d357_doc_cache["date"] != today
+            or now - _d357_doc_cache["checked"] > _D357_DOC_CACHE_TTL):
+        prefix = today.strftime("%Y.%m.%d")
+        toks = []
+        try:
+            for path in D357_ROOT.glob(f"**/{prefix}-*.md"):
+                toks.append(_slug_tokens(path.stem))
+        except OSError:
+            pass
+        _d357_doc_cache["tokens"] = toks
+        _d357_doc_cache["date"] = today
+        _d357_doc_cache["checked"] = now
+    return _d357_doc_cache["tokens"]
+
+
+def _has_d357_doc(raw_desc: str | None) -> bool:
+    """True if a d357 doc has been filed today whose slug tokens
+    substring-match raw_desc — same title-token-in-description heuristic as
+    build-order-daemon.py's _try_name_fallback."""
+    if not raw_desc:
+        return False
+    desc = raw_desc.strip().lower()
+    return any(any(t in desc for t in toks) for toks in _load_d357_tokens_for_today())
 
 
 def _spawn_d357_stop() -> None:
