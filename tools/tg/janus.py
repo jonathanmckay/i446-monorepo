@@ -1983,8 +1983,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             is_sel = my_key is not None and STATE.event_sel == my_key
             dur = f"({head0['dur_min']})" if head0.get("is_event") else fmt_dur(head0["dur_min"])
             prefix = "▶ " if running else ""
-            if running and _rec_active_for(head0.get("raw_desc")):
-                prefix = "▶🎙 "  # d357 recording live for this meeting (2026-08-02)
+            # d357 recording live → 🎙 rides RIGHT of the task name
+            # (user request 2026-08-02: "move the mic to be to the right
+            # of the task").
+            rec_sfx = " 🎙" if running and _rec_active_for(head0.get("raw_desc")) else ""
             vtags = " ".join(f"#{t}" for t in (head0.get("tags") or [])
                              if t in VALUE_TAGS)
             base_sty = head0.get("style") or ""
@@ -2009,7 +2011,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                         - tail_w)
             out.append((left_sty, left))
             out.append((gsty, gch))
-            txt = truncate(head0["label"], space)
+            txt = truncate(head0["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
             if head0.get("is_event"):
                 out.append((sty, " " * max(0, space - dwidth(txt)) + txt))
             else:
@@ -2201,7 +2203,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # Selectable like any other entry — editing a running timer's
             # description/project doesn't require stopping it first.
             dur = fmt_dur(p["dur_min"])
-            prefix = "▶🎙 " if _rec_active_for(p.get("raw_desc")) else "▶ "
+            prefix = "▶ "
+            # 🎙 sits right of the task name (user request 2026-08-02)
+            rec_sfx = " 🎙" if _rec_active_for(p.get("raw_desc")) else ""
             vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
                              if t in VALUE_TAGS)
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
@@ -2221,7 +2225,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 gsty = f"{gsty} bg:#3a3a3a"
             out.append((time_sty, tcol))
             out.append((gsty, gch))
-            out.append((sty, prefix + pad(truncate(p["label"], space), space)))
+            _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
+            out.append((sty, prefix + pad(_txt, space)))
             if vtags:
                 out.append((dur_sty, f" {vtags}"))
             out.append((dur_sty, f" {dur}\n"))
@@ -3215,8 +3220,8 @@ def render_current_bottom() -> list[tuple[str, str]]:
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
     dur = f"{m}m{s:02d}.{frac}s"
-    marker = "▶🎙" if _rec_active_for(cur.get("description")) else "▶"
-    left = f" {marker} {dur}  {desc}"
+    rec_sfx = " 🎙" if _rec_active_for(cur.get("description")) else ""
+    left = f" ▶ {dur}  {desc}{rec_sfx}"
     if code:
         left += f" · {code}"
     pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))

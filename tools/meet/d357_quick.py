@@ -33,6 +33,11 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
+# Callers like janus run with a GUI-app PATH that lacks homebrew — tmux and
+# SwitchAudioSource silently vanish and the start dies with no recording
+# (2026-08-02: "I see no mic icon for strat"). Make the wrapper self-sufficient.
+os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "")
+
 STATE = Path.home() / ".local/state/jm/d357-state.json"
 LOG = Path("/tmp/d357-active.log")
 MEET_DIR = Path.home() / "i446-monorepo/tools/meet"

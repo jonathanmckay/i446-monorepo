@@ -167,7 +167,10 @@ def test_rec_indicator_on_running_row():
             "project_id": None, "is_running": True, "tags": []}
     mod.STATE.recording = {"desc": "Huddle: XBOX Developer", "start_dt": today}
     text = "".join(t for _, t in mod._compact_block_lines("未", 12, [pick], 0, ""))
-    assert "▶🎙" in text, "recording meeting's running row must carry the 🎙 marker"
+    line = next(l for l in text.split("\n") if "🎙" in l)
+    assert line.index("🎙") > line.index("Huddle"), \
+        "🎙 sits to the RIGHT of the task name (user request 2026-08-02)"
+    assert "▶🎙" not in line, "no longer fused to the ▶ marker"
     mod.STATE.recording = None
     text = "".join(t for _, t in mod._compact_block_lines("未", 12, [pick], 0, ""))
     assert "🎙" not in text

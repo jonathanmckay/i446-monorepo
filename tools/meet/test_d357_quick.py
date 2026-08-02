@@ -74,3 +74,13 @@ def test_wrapper_never_writes_points_or_toggl():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_path_includes_homebrew_for_gui_callers():
+    """2026-08-02: janus (GUI-app PATH) launched the wrapper and tmux /
+    SwitchAudioSource weren't found — the recording silently never started.
+    The wrapper must prepend homebrew paths itself."""
+    mod = _load()
+    import os
+    assert os.environ["PATH"].startswith("/opt/homebrew/bin"), \
+        "wrapper must be PATH-self-sufficient for GUI-spawned callers"
