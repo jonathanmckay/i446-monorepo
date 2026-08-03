@@ -74,8 +74,15 @@ def get_github_token():
     env_token = os.environ.get("GH_TOKEN", "").strip()
     if env_token:
         return env_token
+    # The gist (GIST_ID) is owned by the "jonathanmckay" personal account, not
+    # whichever `gh` account happens to be active — `gh auth token` with no
+    # --user returns the ACTIVE account's token (jomckay_microsoft, work),
+    # which 403s on a PATCH to someone else's gist (found 2026-08-02 chasing
+    # the GH_TOKEN fix above: fetching worked, the push 403'd because the
+    # crontab's hardcoded token was also the wrong account's).
     gh = os.environ.get("GH_PATH", "/opt/homebrew/bin/gh")
-    result = subprocess.run([gh, "auth", "token"], capture_output=True, text=True)
+    result = subprocess.run([gh, "auth", "token", "--user", "jonathanmckay"],
+                            capture_output=True, text=True)
     return result.stdout.strip()
 
 
