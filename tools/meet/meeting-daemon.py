@@ -511,8 +511,21 @@ def main() -> None:
             meeting = get_current_meeting()
 
             if recording:
+                if state.get("source") == "janus":
+                    # janus (tools/tg/janus.py) owns this recording's whole
+                    # stop lifecycle itself, with its own locking against
+                    # double-interrupting meet.py (d357_quick.py's per-session
+                    # lock). This daemon's Outlook-derived meeting title can
+                    # easily diverge from janus's Google-Calendar-derived one
+                    # (the MSFT import calendar is slow-sync/lags — see
+                    # vault memory on Outlook/gcal divergence), which would
+                    # otherwise trip the "different meeting" stop below and
+                    # send an uncoordinated, unlocked Ctrl-C into a live
+                    # janus recording (2026-08-02 finding: this path was
+                    # live/unguarded, though it happened not to fire that day).
+                    pass
                 # Stop conditions: calendar ended, or call ended >2min, or different meeting
-                if calendar_event_ended(state):
+                elif calendar_event_ended(state):
                     stop_recording(state, "calendar event ended")
                 elif state.get("source") == "daemon" and not is_call_active():
                     # Daemon-started + no call active for one full poll cycle = end
