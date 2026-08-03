@@ -365,79 +365,80 @@ def run_link_meetings(dry_run=False, target_date=None):
         log(f"link-meetings: no d357 meetings for {target}")
         return
 
-    lines = load_lines()
-    start, end = find_neg1_section(lines)
-    if start < 0:
-        log("link-meetings: ERROR no -1₲ section found")
-        return
+    with nb.build_order_lock():
+        lines = load_lines()
+        start, end = find_neg1_section(lines)
+        if start < 0:
+            log("link-meetings: ERROR no -1₲ section found")
+            return
 
-    headers = find_branch_headers(lines, start, end)
-    if not headers:
-        log("link-meetings: ERROR no 地支 headers found in -1₲")
-        return
+        headers = find_branch_headers(lines, start, end)
+        if not headers:
+            log("link-meetings: ERROR no 地支 headers found in -1₲")
+            return
 
-    # block_end[name] = start of next branch header, or section end for last branch
-    block_end = {}
-    for k, (name, idx) in enumerate(headers):
-        block_end[name] = headers[k + 1][1] if k + 1 < len(headers) else end
+        # block_end[name] = start of next branch header, or section end for last branch
+        block_end = {}
+        for k, (name, idx) in enumerate(headers):
+            block_end[name] = headers[k + 1][1] if k + 1 < len(headers) else end
 
-    section_text = "\n".join(lines[start:end])
+        section_text = "\n".join(lines[start:end])
 
-    inlined = 0
-    floated = 0
-    floats_by_branch = {}  # name -> [stems to float-insert]
+        inlined = 0
+        floated = 0
+        floats_by_branch = {}  # name -> [stems to float-insert]
 
-    for m_h, m_min, stem in meetings:
-        if stem in section_text:
-            # Already linked somewhere — leave alone (manual placement wins)
-            continue
-        # 1) Time-window match: ±MEETING_START_TOLERANCE_MIN around the
-        # recording start. Reliable when Toggl entries align with the
-        # meeting's actual start.
-        idx = _try_inline_append(lines, start, end, stem, m_h, m_min)
-        if idx is not None:
-            inlined += 1
-            section_text = "\n".join(lines[start:end])
-            continue
-        # 2) Name fallback: if no time match, look for slug-token substrings
-        # in time-entry descriptions (e.g. "accounting-analytics" → entry
-        # titled "m5x2 Accounting & Analytics"). Catches cases where the
-        # recording started long after the meeting (retro-recording).
-        idx = _try_name_fallback(lines, start, end, stem)
-        if idx is not None:
-            inlined += 1
-            section_text = "\n".join(lines[start:end])
-            continue
-        # 3) No match anywhere — float as standalone bullet under the
-        # branch the meeting hour maps to.
-        branch = hour_to_branch(m_h)
-        floats_by_branch.setdefault(branch, []).append(stem)
-
-    # Insert floats in reverse branch order so indices stay valid.
-    # Re-resolve block_end after potential prior changes (line lengths unchanged
-    # for inline appends, so positions still valid, but be safe).
-    if floats_by_branch:
-        headers2 = find_branch_headers(lines, *find_neg1_section(lines))
-        block_end2 = {}
-        for k, (name, idx) in enumerate(headers2):
-            block_end2[name] = headers2[k + 1][1] if k + 1 < len(headers2) else find_neg1_section(lines)[1]
-        for name, _ in reversed(headers2):
-            stems = floats_by_branch.get(name)
-            if not stems:
+        for m_h, m_min, stem in meetings:
+            if stem in section_text:
+                # Already linked somewhere — leave alone (manual placement wins)
                 continue
-            insertion = [f"    - [[d357/{s}|{s}]]" for s in stems]
-            if dry_run:
-                log(f"[DRY RUN] Would float under {name} @ line {block_end2[name]}:")
-                for t in insertion:
-                    log(f"  {t}")
-            else:
-                lines[block_end2[name]:block_end2[name]] = insertion
-            floated += len(insertion)
+            # 1) Time-window match: ±MEETING_START_TOLERANCE_MIN around the
+            # recording start. Reliable when Toggl entries align with the
+            # meeting's actual start.
+            idx = _try_inline_append(lines, start, end, stem, m_h, m_min)
+            if idx is not None:
+                inlined += 1
+                section_text = "\n".join(lines[start:end])
+                continue
+            # 2) Name fallback: if no time match, look for slug-token substrings
+            # in time-entry descriptions (e.g. "accounting-analytics" → entry
+            # titled "m5x2 Accounting & Analytics"). Catches cases where the
+            # recording started long after the meeting (retro-recording).
+            idx = _try_name_fallback(lines, start, end, stem)
+            if idx is not None:
+                inlined += 1
+                section_text = "\n".join(lines[start:end])
+                continue
+            # 3) No match anywhere — float as standalone bullet under the
+            # branch the meeting hour maps to.
+            branch = hour_to_branch(m_h)
+            floats_by_branch.setdefault(branch, []).append(stem)
 
-    if inlined == 0 and floated == 0:
-        log("link-meetings: no new links (idempotent)")
-        return
-    save_lines(lines, dry_run=dry_run)
+        # Insert floats in reverse branch order so indices stay valid.
+        # Re-resolve block_end after potential prior changes (line lengths unchanged
+        # for inline appends, so positions still valid, but be safe).
+        if floats_by_branch:
+            headers2 = find_branch_headers(lines, *find_neg1_section(lines))
+            block_end2 = {}
+            for k, (name, idx) in enumerate(headers2):
+                block_end2[name] = headers2[k + 1][1] if k + 1 < len(headers2) else find_neg1_section(lines)[1]
+            for name, _ in reversed(headers2):
+                stems = floats_by_branch.get(name)
+                if not stems:
+                    continue
+                insertion = [f"    - [[d357/{s}|{s}]]" for s in stems]
+                if dry_run:
+                    log(f"[DRY RUN] Would float under {name} @ line {block_end2[name]}:")
+                    for t in insertion:
+                        log(f"  {t}")
+                else:
+                    lines[block_end2[name]:block_end2[name]] = insertion
+                floated += len(insertion)
+
+        if inlined == 0 and floated == 0:
+            log("link-meetings: no new links (idempotent)")
+            return
+        save_lines(lines, dry_run=dry_run)
     log(f"link-meetings: appended {inlined} inline, floated {floated}")
 
 
@@ -1093,35 +1094,38 @@ def _strip_unearned_markers(block_name: str, live: dict | None,
     unearned = [m for m in DAEMON_OWNED_MARKERS if m in live and not live[m]]
     if not unearned:
         return
-    text = BUILD_ORDER.read_text(encoding="utf-8")
-    if "## -1₲" not in text:
-        return
-    lines = text.split("\n")
-    in_section = False
-    for i, line in enumerate(lines):
-        if line.startswith("## -1₲"):
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if not in_section:
-            continue
-        if (line.startswith("- ") and not line.startswith("    ")
-                and _block_line_name(line) == block_name):
-            if LOCK_MARKER in line:
-                return  # user-attested block: stamps are never stripped
-            present = [m for m in unearned if m in line]
-            if present:
-                new_line = line
-                for m in present:
-                    new_line = new_line.replace(m, "")
-                new_line = re.sub(r"\s{2,}", " ", new_line).rstrip()
-                if new_line != line and not dry_run:
-                    lines[i] = new_line
-                    BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
-                log(f"strip: {block_name} removed stale {present}"
-                    + (" [DRY RUN]" if dry_run else ""))
+    # Lock-protected (2026-08-02) — same read-modify-write race as
+    # _write_block_marker, just on the strip side.
+    with nb.build_order_lock():
+        text = BUILD_ORDER.read_text(encoding="utf-8")
+        if "## -1₲" not in text:
             return
+        lines = text.split("\n")
+        in_section = False
+        for i, line in enumerate(lines):
+            if line.startswith("## -1₲"):
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if not in_section:
+                continue
+            if (line.startswith("- ") and not line.startswith("    ")
+                    and _block_line_name(line) == block_name):
+                if LOCK_MARKER in line:
+                    return  # user-attested block: stamps are never stripped
+                present = [m for m in unearned if m in line]
+                if present:
+                    new_line = line
+                    for m in present:
+                        new_line = new_line.replace(m, "")
+                    new_line = re.sub(r"\s{2,}", " ", new_line).rstrip()
+                    if new_line != line and not dry_run:
+                        lines[i] = new_line
+                        BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
+                    log(f"strip: {block_name} removed stale {present}"
+                        + (" [DRY RUN]" if dry_run else ""))
+                return
 
 
 # --- Mode: lock-and-mark ---
@@ -1132,31 +1136,32 @@ def annotate_block_fired(hour: int, dry_run: bool = False) -> None:
     branch = HOUR_TO_BRANCH_BLOCK.get(hour)
     if branch is None:
         return
-    try:
-        lines = load_lines()
-    except OSError as e:
-        log(f"annotate: ERROR can't read build order: {e}")
-        return
-    target_prefix = f"- {branch}"
-    for i, line in enumerate(lines):
-        # Match a 地支 block header (line starts with "- <branch>" possibly followed by space + extras)
-        if not line.startswith(target_prefix):
-            continue
-        # Header found; ensure it's a header (next char is end-of-line or whitespace)
-        rest = line[len(target_prefix):]
-        if rest and not rest[0].isspace():
-            continue
-        if DAEMON_FIRED_EMOJI in line:
-            log(f"annotate: {branch} already marked")
+    with nb.build_order_lock():
+        try:
+            lines = load_lines()
+        except OSError as e:
+            log(f"annotate: ERROR can't read build order: {e}")
             return
-        lines[i] = line.rstrip() + " " + DAEMON_FIRED_EMOJI
-        if dry_run:
-            log(f"[DRY RUN] Would annotate {branch}: {lines[i]!r}")
+        target_prefix = f"- {branch}"
+        for i, line in enumerate(lines):
+            # Match a 地支 block header (line starts with "- <branch>" possibly followed by space + extras)
+            if not line.startswith(target_prefix):
+                continue
+            # Header found; ensure it's a header (next char is end-of-line or whitespace)
+            rest = line[len(target_prefix):]
+            if rest and not rest[0].isspace():
+                continue
+            if DAEMON_FIRED_EMOJI in line:
+                log(f"annotate: {branch} already marked")
+                return
+            lines[i] = line.rstrip() + " " + DAEMON_FIRED_EMOJI
+            if dry_run:
+                log(f"[DRY RUN] Would annotate {branch}: {lines[i]!r}")
+                return
+            save_lines(lines)
+            log(f"annotate: marked {branch} with {DAEMON_FIRED_EMOJI}")
             return
-        save_lines(lines)
-        log(f"annotate: marked {branch} with {DAEMON_FIRED_EMOJI}")
-        return
-    log(f"annotate: {branch} block header not found in build order")
+        log(f"annotate: {branch} block header not found in build order")
 
 
 def _load_block_rituals() -> dict:
@@ -1670,50 +1675,51 @@ def git_commit_archive(archive_date, defer_result, dry_run=False):
 
 def defer_unchecked_neg1(dry_run=False):
     """Returns dict {deferred: int, dropped: int}."""
-    lines = load_lines()
-    start, end = find_neg1_section(lines)
-    if start < 0:
-        log("defer: no -1₲ section")
-        return {"deferred": 0, "dropped": 0}
+    with nb.build_order_lock():
+        lines = load_lines()
+        start, end = find_neg1_section(lines)
+        if start < 0:
+            log("defer: no -1₲ section")
+            return {"deferred": 0, "dropped": 0}
 
-    unchecked = []
-    for i in range(start + 1, end):
-        m = UNCHECKED_ITEM_RE.match(lines[i])
-        if m and m.group(1).strip():
-            unchecked.append((i, m.group(1).strip()))
+        unchecked = []
+        for i in range(start + 1, end):
+            m = UNCHECKED_ITEM_RE.match(lines[i])
+            if m and m.group(1).strip():
+                unchecked.append((i, m.group(1).strip()))
 
-    if not unchecked:
-        log("defer: no unchecked items")
-        return {"deferred": 0, "dropped": 0}
+        if not unchecked:
+            log("defer: no unchecked items")
+            return {"deferred": 0, "dropped": 0}
 
-    keep = unchecked[:MAX_DEFERRED]
-    dropped = unchecked[MAX_DEFERRED:]
+        keep = unchecked[:MAX_DEFERRED]
+        dropped = unchecked[MAX_DEFERRED:]
 
-    def fmt(text: str) -> str:
-        return text if text.startswith("- [ ]") else f"- [ ] {text}"
+        def fmt(text: str) -> str:
+            return text if text.startswith("- [ ]") else f"- [ ] {text}"
 
-    deferred_lines = [fmt(t) for _, t in keep]
+        deferred_lines = [fmt(t) for _, t in keep]
 
-    if dry_run:
-        log(f"[DRY RUN] Would defer {len(keep)} to 以后的目标:")
-        for dl in deferred_lines:
-            log(f"  {dl}")
-        if dropped:
-            log(f"[DRY RUN] Would drop {len(dropped)} item(s)")
-        return {"deferred": len(keep), "dropped": len(dropped)}
+        if dry_run:
+            log(f"[DRY RUN] Would defer {len(keep)} to 以后的目标:")
+            for dl in deferred_lines:
+                log(f"  {dl}")
+            if dropped:
+                log(f"[DRY RUN] Would drop {len(dropped)} item(s)")
+            return {"deferred": len(keep), "dropped": len(dropped)}
 
-    later_idx = -1
-    for i, line in enumerate(lines):
-        if line.strip().startswith("### ") and LATER_HEADING in line:
-            later_idx = i
-            break
+        later_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith("### ") and LATER_HEADING in line:
+                later_idx = i
+                break
 
-    if later_idx < 0:
-        log("defer: WARN no 以后的目标 heading — skipping defer")
-        return {"deferred": 0, "dropped": 0}
+        if later_idx < 0:
+            log("defer: WARN no 以后的目标 heading — skipping defer")
+            return {"deferred": 0, "dropped": 0}
 
-    lines[later_idx + 1:later_idx + 1] = deferred_lines
-    save_lines(lines)
+        lines[later_idx + 1:later_idx + 1] = deferred_lines
+        save_lines(lines)
     log(f"defer: moved {len(keep)} to 以后的目标, dropped {len(dropped)}")
     return {"deferred": len(keep), "dropped": len(dropped)}
 

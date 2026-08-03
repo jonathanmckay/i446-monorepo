@@ -556,22 +556,19 @@ def enrich_build_order():
     # window was silently erased by this rewrite (午's manually-claimed ⏱️✅
     # vanished minutes after being stamped — the week's recurring "stamps
     # lost in place" class, distinct from the Syncthing-conflict variant
-    # build_order_heal covers). Hold the same flock every stamp writer uses,
-    # re-read the CURRENT copy under it, and union its block-header ritual
-    # emojis into our rewritten text before writing.
-    import fcntl
+    # build_order_heal covers). Hold the same lock every stamp writer uses
+    # (centralized 2026-08-02 into neon_blocks.build_order_lock), re-read the
+    # CURRENT copy under it, and union its block-header ritual emojis into
+    # our rewritten text before writing.
     sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
     import build_order_heal as _boh
-    with open(BUILD_ORDER.with_suffix(".lock"), "a") as _lf:
-        fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
-        try:
-            merged_text, _rescued = _boh.merge_stamps(
-                "\n".join(new_lines), BUILD_ORDER.read_text())
-            if _rescued:
-                print(f"rescued stamps that landed mid-enrich: {_rescued}")
-            BUILD_ORDER.write_text(merged_text)
-        finally:
-            fcntl.flock(_lf.fileno(), fcntl.LOCK_UN)
+    import neon_blocks as _nb
+    with _nb.build_order_lock():
+        merged_text, _rescued = _boh.merge_stamps(
+            "\n".join(new_lines), BUILD_ORDER.read_text())
+        if _rescued:
+            print(f"rescued stamps that landed mid-enrich: {_rescued}")
+        BUILD_ORDER.write_text(merged_text)
     n_claimed = len(completed_claimed)
     n_unclaimed = len(unclaimed)
     print(f"Enriched build order: {len(d357_docs)} meetings, {len(toggl_entries)} time entries, {n_claimed} tasks matched, {n_unclaimed} other tasks")
