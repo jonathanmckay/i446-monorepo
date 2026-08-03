@@ -65,6 +65,15 @@ ACCOUNT_DISPLAY = {
 
 
 def get_github_token():
+    # GH_TOKEN first: cron can't unlock the macOS keychain `gh auth token`
+    # reads from (locked since ~2026-07-28), so the crontab sets GH_TOKEN
+    # directly as a workaround — but this function ignored it and always
+    # shelled out anyway, so every cron run failed with an empty token even
+    # though a valid one was sitting right there in the environment (bug
+    # 2026-08-02: "jm dashboard only updated through the end of July").
+    env_token = os.environ.get("GH_TOKEN", "").strip()
+    if env_token:
+        return env_token
     gh = os.environ.get("GH_PATH", "/opt/homebrew/bin/gh")
     result = subprocess.run([gh, "auth", "token"], capture_output=True, text=True)
     return result.stdout.strip()
