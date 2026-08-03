@@ -191,6 +191,112 @@ def test_concurrent_ritual_completions_lose_stamps_without_lock(tmp_path):
     )
 
 
+def test_run_ritual_on_ix_branch_uses_a_lock():
+    """Regression (2026-08-02): "I've cleared out 酉 and 戌 -1n, yet system
+    has not granted me full points yet." 酉 lost its 🎯 stamp and 戌 lost
+    ⏱️/✅ despite all 5 -1neon Todoist cards for both blocks showing
+    completed. Root cause: `_stamp_on_ix`'s flock only protects the remote
+    (Straylight -> ssh -> Ix) path. `run_ritual`'s local `if _on_ix():`
+    branch -- hit by completions that run directly ON Ix, e.g. mobile dtd --
+    read-modify-wrote build-order.md with NO lock at all, so the exact same
+    race `_stamp_on_ix` was built to prevent could still happen one level
+    up: 戌's -1ibx/-1t/-1l completions landed within 2 seconds of each
+    other and only 📧 survived."""
+    src = (_HERE / "did-fast.py").read_text()
+    fn_body = src[src.index("def run_ritual"):]
+    branch = fn_body[fn_body.index("if _on_ix():"):fn_body.index("\n    else:")]
+    assert "fcntl" in branch and "flock" in branch, (
+        "the on-Ix local stamp path must be lock-protected too, or "
+        "completions running directly on Ix can still clobber each other"
+    )
+    lock_idx = branch.index("LOCK_EX")
+    unlock_idx = branch.index("LOCK_UN")
+    read_idx = branch.index("read_text")
+    write_idx = branch.index("write_text")
+    assert lock_idx < read_idx < write_idx < unlock_idx, (
+        "the on-Ix branch's read and write must both happen strictly "
+        "between acquiring and releasing the lock"
+    )
+
+
+def _locked_on_ix_worker(build_order_path: str, block: str, emoji: str) -> None:
+    """Reproduction of run_ritual's (fixed) on-Ix local branch, run in a
+    separate OS process so real flock semantics apply."""
+    import fcntl
+    import neon_blocks as nb
+
+    bo = Path(build_order_path)
+    lock_path = bo.with_suffix(".lock")
+    with open(lock_path, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            t = bo.read_text(encoding="utf-8")
+            nt, changed = nb.stamp_emoji(t, block, emoji)
+            if changed:
+                bo.write_text(nt, encoding="utf-8")
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
+def _unlocked_on_ix_worker(build_order_path: str, block: str, emoji: str) -> None:
+    """Same, minus the lock -- reproduces the pre-fix on-Ix race."""
+    import neon_blocks as nb
+
+    bo = Path(build_order_path)
+    t = bo.read_text(encoding="utf-8")
+    nt, changed = nb.stamp_emoji(t, block, emoji)
+    if changed:
+        bo.write_text(nt, encoding="utf-8")
+
+
+def test_concurrent_on_ix_ritual_completions_all_survive_with_lock(tmp_path):
+    """The actual reported bug, reproduced for 戌: rituals completed within
+    seconds of each other directly on Ix must all land on the header."""
+    build_order = tmp_path / "build-order.md"
+    build_order.write_text("## -1₲\n\n- 戌\n    - [ ] some goal\n", encoding="utf-8")
+
+    emojis = ["☀️", "🎯", "📧", "⏱️", "✅"]
+    procs = [multiprocessing.Process(target=_locked_on_ix_worker,
+                                     args=(str(build_order), "戌", e))
+             for e in emojis]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=10)
+
+    final = build_order.read_text(encoding="utf-8")
+    header = next(l for l in final.split("\n") if l.startswith("- 戌"))
+    missing = [e for e in emojis if e not in header]
+    assert not missing, f"lock failed to prevent lost updates: {missing} missing from {header!r}"
+
+
+def test_concurrent_on_ix_ritual_completions_lose_stamps_without_lock(tmp_path):
+    """Sanity check: WITHOUT the lock, the same concurrent scenario loses at
+    least one stamp most of the time -- confirms the lock is what fixes it,
+    same rationale as the remote-path sanity check above."""
+    losses_observed = 0
+    for i in range(5):
+        build_order = tmp_path / f"build-order-onix-{i}.md"
+        build_order.write_text("## -1₲\n\n- 戌\n    - [ ] some goal\n", encoding="utf-8")
+        emojis = ["☀️", "🎯", "📧", "⏱️", "✅"]
+        procs = [multiprocessing.Process(target=_unlocked_on_ix_worker,
+                                         args=(str(build_order), "戌", e))
+                 for e in emojis]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=10)
+        final = build_order.read_text(encoding="utf-8")
+        header = next(l for l in final.split("\n") if l.startswith("- 戌"))
+        if any(e not in header for e in emojis):
+            losses_observed += 1
+    assert losses_observed > 0, (
+        "expected the unlocked on-Ix path to lose at least one stamp across "
+        "5 runs -- if it never does, this environment can't reproduce the "
+        "race and the locked test isn't proving much"
+    )
+
+
 def test_on_ix_hostname_detection(monkeypatch):
     df = _load()
     import socket

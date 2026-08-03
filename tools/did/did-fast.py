@@ -2138,8 +2138,28 @@ def run_ritual(tag: str) -> dict:
     text = bo.read_text(encoding="utf-8")
     new_text, changed = nb.stamp_emoji(text, block, emoji)
     if _on_ix():
-        if changed:
-            bo.write_text(new_text, encoding="utf-8")
+        # Same flock _stamp_on_ix uses for the remote (Straylight->Ix) path
+        # below — this local branch (hit by ix-local callers like mobile
+        # dtd) read-modify-wrote build-order.md with NO lock at all, so two
+        # rituals completed within a couple seconds of each other here could
+        # still race exactly like _stamp_on_ix's docstring describes: both
+        # read the same pre-stamp text, and whichever write landed last
+        # silently discarded the other's stamp (2026-08-02: 戌 lost ⏱️/✅
+        # this way — three rituals completed within 2s, only 📧 survived).
+        # Re-read+recompute fresh under the lock rather than trusting the
+        # pre-lock `text`/`new_text` above, which could itself be stale by
+        # the time the lock is acquired.
+        import fcntl
+        lock_path = bo.with_suffix(".lock")
+        with open(lock_path, "a") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                text = bo.read_text(encoding="utf-8")
+                new_text, changed = nb.stamp_emoji(text, block, emoji)
+                if changed:
+                    bo.write_text(new_text, encoding="utf-8")
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
     else:
         remote = _stamp_on_ix(block, emoji)
         if remote is None:
