@@ -549,10 +549,36 @@ chmod +x "$DTD_DONE_HIDE"
 # --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
 # cpap + xk20/xk22/xk26 + i444 prompt for a value on completion and so need a tty —
 # route them → execute (which gives the DONE script a terminal) and every other
-# task → execute-silent, running the fast hide above synchronously then
-# backgrounding done.sh itself (see its comment) so fzf regains
-# responsiveness in milliseconds instead of waiting through done.sh's full
-# python3-resolve + FIFO-push + tty-drain tail.
+# task → execute-silent, running the fast hide above then done.sh itself.
+#
+# done.sh runs WITHOUT a trailing `&` (2026-08-03, reverting the 2026-08-01
+# fast-hide/background split's own backgrounding of done.sh — done-hide.sh
+# alone still gives the instant-hide UI win). fzf's own man page is explicit
+# that execute-silent blocks fzf until the command completes and says the fix
+# for that is to background the command yourself — which is exactly what
+# invited this bug: `command &` inside execute-silent detaches done.sh as a
+# grandchild that isn't part of the action's own tracked lifetime, and lands
+# in whatever process-group/session teardown fzf (or the surrounding
+# terminal/session) does once the action's own foreground portion returns.
+# Confirmed live 2026-08-03: task 6hCHH5g2FG7rw7X2 ("get to a conclusion on
+# biowar {10}") got as far as done.sh's $PUSHED.log line (proving done.sh
+# itself ran) but its FIFO push never reached the worker (absent from
+# $DTD_PROCESSED_IDS) and did-fast never ran (zero ledger entries on ix for
+# "biowar") — a clean, total loss, not a slow-tail race. Reproduced the
+# general mechanism directly against fzf: a bare `&`-backgrounded child of an
+# execute-silent action reliably fails to complete even a first `echo`
+# statement, survives neither nohup nor a real new session/process group
+# (python3 subprocess.Popen(start_new_session=True)), regardless of whether
+# fzf itself exits or stays alive across a later action. Running done.sh
+# synchronously (chained by `;`, no `&`) means fzf can't move on until
+# done.sh's own process — not a detached grandchild — actually exits, closing
+# the loss window entirely; the cpap/xk20/xk22/xk26/i444 value-prompt tasks
+# have called done.sh this same synchronous way via bare execute(...) since
+# this script existed and have never shown this failure mode. Cost: done.sh's
+# own ~65-100ms python3-resolve (dtd_resolve.py) tail is back in the
+# synchronous window fzf blocks on — worse for perceived input latency, but a
+# bounded, known cost against an unbounded, silent data loss.
+#
 # The router emits ONLY the execute/execute-silent
 # action; the reload/clear-query/transform-header chain stays in the binding
 # where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
@@ -581,7 +607,7 @@ case "\$_t" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
-    printf 'execute-silent(%s %s; %s %s >/dev/null 2>&1 &)' "$DTD_DONE_HIDE" "\$_id" "$DTD_DONE" "\$_id" ;;
+    printf 'execute-silent(%s %s; %s %s >/dev/null 2>&1)' "$DTD_DONE_HIDE" "\$_id" "$DTD_DONE" "\$_id" ;;
 esac
 ROUTEREOF
 chmod +x "$DTD_DONE_ROUTER"
