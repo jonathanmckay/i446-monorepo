@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
@@ -36,8 +37,11 @@ _BUILD_ORDER_LOCK = BUILD_ORDER.with_suffix(".lock")
 
 
 @contextmanager
-def build_order_lock():
+def build_order_lock(build_order: Path | None = None):
     """Exclusive OS-level lock guarding a read-modify-write of build-order.md.
+    Locks `build_order`'s own `.lock` sibling (defaults to the real
+    BUILD_ORDER path) so tests can pass a tmp_path copy without contending
+    with — or depending on — the production lock file.
 
     Third incident of the same lost-update race as of 2026-08-02 (three
     separate unlocked read-then-write call sites across did-fast.py and
@@ -63,8 +67,9 @@ def build_order_lock():
             if changed:
                 BUILD_ORDER.write_text(new_text, encoding="utf-8")
     """
-    _BUILD_ORDER_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    with open(_BUILD_ORDER_LOCK, "a") as lf:
+    lock_path = (build_order or BUILD_ORDER).with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as lf:
         fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -220,6 +225,36 @@ def unstamp_emoji(text: str, block: str, emoji: str) -> tuple[str, bool]:
         else:
             out.append(line)
     return "\n".join(out), changed
+
+
+def flip_goal_checkboxes(text: str, bare_contents: list[str]) -> tuple[str, bool]:
+    """Flip `- [ ]` to `- [x]` for each -1₲ goal sub-bullet whose bare text
+    (brackets/parens stripped) matches an entry in `bare_contents` — moved
+    out of did-fast.py's inline 5e step so it can be lock-protected the same
+    way as stamp_emoji (2026-08-02).
+
+    Matches are consumed in order: once a line is flipped for one
+    bare_contents entry, it's no longer `[ ]` and can't match a later entry
+    in the same call — preserves the original inline loop's one-line-per-
+    completion behavior when two completions bare-match the same goal text.
+    """
+    if NEG1_SECTION not in text:
+        return text, False
+    lines = text.split("\n")
+    changed = False
+    for bare in bare_contents:
+        if not bare:
+            continue
+        for i, line in enumerate(lines):
+            if not re.match(r"^ {2,4}- \[ \] .+", line):
+                continue
+            goal = line.strip()[6:]
+            bare_goal = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", goal).strip().lower()
+            if bare_goal and (bare_goal == bare or bare_goal in bare or bare in bare_goal):
+                lines[i] = line.replace("- [ ]", "- [x]", 1)
+                changed = True
+                break
+    return "\n".join(lines), changed
 
 
 def score_day(

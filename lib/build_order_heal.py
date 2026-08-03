@@ -22,7 +22,11 @@ removed here; validation/stripping stays the daemon's job.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import neon_blocks as _nb  # noqa: E402
 
 RITUAL_EMOJIS = ("☀️", "🎯", "📧", "⏱️", "✅")
 _BLOCK_RE = re.compile(r"^- ([寅卯辰巳午未申酉戌亥子])(?=\s|$)")
@@ -74,37 +78,48 @@ def heal(build_order: Path) -> dict:
     """Merge every SAME-DAY conflict sibling into `build_order`, delete the
     processed conflict files, and return a summary. Conflict copies from a
     different day are left alone (their branch lines describe another day's
-    blocks — merging them would stamp rituals that never happened today)."""
+    blocks — merging them would stamp rituals that never happened today).
+
+    Lock-protected (2026-08-02): this runs on whichever machine calls it
+    (Straylight's did-fast run_ritual, Ix's run_lock_and_mark), and two
+    invocations racing on the SAME machine — e.g. two rapid ritual
+    completions each calling heal() first — could otherwise lose one
+    side's merge the exact same way the ritual stamps themselves used to.
+    The lock is local-machine-scoped like everything else in this module
+    (see neon_blocks.build_order_lock's docstring on flock's cross-machine
+    limits) — appropriate here since heal() only ever reads/writes
+    THIS machine's own local conflict files and local canonical copy."""
     result = {"merged": [], "skipped": [], "errors": []}
-    try:
-        canonical = build_order.read_text(encoding="utf-8")
-    except OSError as e:
-        result["errors"].append(str(e))
-        return result
-    day = _doc_date(canonical)
-    stem = build_order.stem  # "build-order"
-    processed: list[Path] = []
-    for cf in sorted(build_order.parent.glob(f"{stem}.sync-conflict-*.md")):
+    with _nb.build_order_lock(build_order):
         try:
-            ctext = cf.read_text(encoding="utf-8")
+            canonical = build_order.read_text(encoding="utf-8")
         except OSError as e:
-            result["errors"].append(f"{cf.name}: {e}")
-            continue
-        if day is None or _doc_date(ctext) != day:
-            result["skipped"].append(cf.name)
-            continue
-        canonical, added = merge_stamps(canonical, ctext)
-        result["merged"].append({"file": cf.name, "added": added})
-        processed.append(cf)
-    # Write BEFORE deleting the conflict copies — a failed write must not
-    # discard the only surviving copy of the stamps.
-    if any(m["added"] for m in result["merged"]):
-        tmp = build_order.with_suffix(".md.tmp")
-        tmp.write_text(canonical, encoding="utf-8")
-        tmp.rename(build_order)
-    for cf in processed:
-        try:
-            cf.unlink()
-        except OSError as e:
-            result["errors"].append(f"unlink {cf.name}: {e}")
+            result["errors"].append(str(e))
+            return result
+        day = _doc_date(canonical)
+        stem = build_order.stem  # "build-order"
+        processed: list[Path] = []
+        for cf in sorted(build_order.parent.glob(f"{stem}.sync-conflict-*.md")):
+            try:
+                ctext = cf.read_text(encoding="utf-8")
+            except OSError as e:
+                result["errors"].append(f"{cf.name}: {e}")
+                continue
+            if day is None or _doc_date(ctext) != day:
+                result["skipped"].append(cf.name)
+                continue
+            canonical, added = merge_stamps(canonical, ctext)
+            result["merged"].append({"file": cf.name, "added": added})
+            processed.append(cf)
+        # Write BEFORE deleting the conflict copies — a failed write must not
+        # discard the only surviving copy of the stamps.
+        if any(m["added"] for m in result["merged"]):
+            tmp = build_order.with_suffix(".md.tmp")
+            tmp.write_text(canonical, encoding="utf-8")
+            tmp.rename(build_order)
+        for cf in processed:
+            try:
+                cf.unlink()
+            except OSError as e:
+                result["errors"].append(f"unlink {cf.name}: {e}")
     return result

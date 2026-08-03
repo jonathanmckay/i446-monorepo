@@ -2042,6 +2042,37 @@ def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
     return tokenized == "CH"
 
 
+def _flip_checkboxes_on_ix(bare_matches: list[str]) -> Optional[bool]:
+    """Same single-writer + lock pattern as _stamp_on_ix, for flipping -1₲
+    goal checkboxes (did-fast step 5e) instead of stamping a ritual emoji.
+    Returns True = at least one line flipped, False = no match found, None
+    = ssh failed (caller falls back to the local write)."""
+    py = (
+        "import sys; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
+        "import neon_blocks as nb\n"
+        "from pathlib import Path\n"
+        "bo = Path.home() / 'vault/g245/5e-1/build-order.md'\n"
+        f"bares = {bare_matches!r}\n"
+        "with nb.build_order_lock(bo):\n"
+        "    t = bo.read_text(encoding='utf-8')\n"
+        "    nt, ch = nb.flip_goal_checkboxes(t, bares)\n"
+        "    if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "print('CH' if ch else 'NC')\n"
+    )
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "ix", "python3", "-"],
+            input=py, capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    outp = (r.stdout or "").strip().splitlines()
+    tokenized = outp[-1] if outp else ""
+    if r.returncode != 0 or tokenized not in ("CH", "NC"):
+        return None
+    return tokenized == "CH"
+
+
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
     stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
@@ -2535,23 +2566,28 @@ def main():
     PRAYER_HABITS = {"ص"}
     prayer_done = any(r.item.name.lower() in PRAYER_HABITS for r in fast if r.step == "0n")
     if prayer_done:
+        # Single-writer + lock-protected, same as run_ritual's stamp (2026-08-02):
+        # this used to read-modify-write build-order.md unconditionally on
+        # WHATEVER machine did-fast.py runs on, with no lock at all — the
+        # exact same lost-update exposure run_ritual had before its own fix,
+        # just never caught here because it's a rarer path than a manual
+        # ritual completion.
         try:
-            _bo = Path.home() / "vault/g245/5e-1/build-order.md"
-            if _bo.exists():
-                _now_h = datetime.now().hour
-                _bidx = max(0, min(8, (_now_h - 4) // 2))
-                _branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
-                _bname = _branches[_bidx]
-                _bo_text = _bo.read_text()
-                if "## -1₲" in _bo_text:
-                    _lines = _bo_text.split("\n")
-                    _new = []
-                    for _l in _lines:
-                        if (_l.startswith(f"- {_bname}") and "☀️" not in _l):
-                            _new.append(f"{_l.rstrip()} ☀️")
-                        else:
-                            _new.append(_l)
-                    _bo.write_text("\n".join(_new))
+            import sys as _s3
+            _s3.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import neon_blocks as _nb3
+            _now_h = datetime.now().hour
+            _bname = _nb3.current_block(_now_h)
+            if _on_ix():
+                _bo = Path.home() / "vault/g245/5e-1/build-order.md"
+                if _bo.exists():
+                    with _nb3.build_order_lock():
+                        _t = _bo.read_text(encoding="utf-8")
+                        _nt, _ch = _nb3.stamp_emoji(_t, _bname, "☀️")
+                        if _ch:
+                            _bo.write_text(_nt, encoding="utf-8")
+            else:
+                _stamp_on_ix(_bname, "☀️")
         except Exception:
             pass  # non-critical
 
