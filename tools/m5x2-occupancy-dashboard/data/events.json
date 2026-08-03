@@ -4038,5 +4038,35 @@
     "unit": "E205",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-03",
+    "effective": "2026-08-02",
+    "kind": "moveout",
+    "unit_id": "1048",
+    "prop": "kn47 K2",
+    "unit": "D201",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-03",
+    "effective": "2026-08-02",
+    "kind": "moveout",
+    "unit_id": "935",
+    "prop": "kn47 K1",
+    "unit": "J101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-03",
+    "effective": "2026-08-03",
+    "kind": "movein",
+    "unit_id": "989",
+    "prop": "kn47 K1",
+    "unit": "M206",
+    "tenant": null,
+    "baseline": false
   }
 ]
