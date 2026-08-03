@@ -1001,7 +1001,7 @@ except OSError:
     pass
 zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
             if t.get('id') not in _deferred_ids
-            and (t.get('recurring', True) or t['due'] <= today)]
+            and t['due'] <= today]
 # Block-snooze (ctrl-v, 2026-07-24): ids hidden until their chosen 地支 block
 # starts. File is {date, snoozes: {id: start_hour}}; a stale date voids it.
 # Uses the CURRENT clock (not the session-start today arg) so an idle-open
