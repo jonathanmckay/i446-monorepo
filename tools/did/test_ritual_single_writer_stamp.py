@@ -297,6 +297,64 @@ def test_concurrent_on_ix_ritual_completions_lose_stamps_without_lock(tmp_path):
     )
 
 
+def _step_5c_region(src: str) -> str:
+    i = src.index("PRAYER_HABITS = {")
+    j = src.index("# 5e. Flip build order checkboxes")
+    return src[i:j]
+
+
+def _step_5e_region(src: str) -> str:
+    i = src.index("# 5e. Flip build order checkboxes")
+    j = src.index("# 6. Close or defer Todoist tasks")
+    return src[i:j]
+
+
+def test_prayer_marker_step_routes_through_single_writer_lock():
+    """Regression (2026-08-02, rubber-duck follow-up to the 戌 ⏱️/✅ bug):
+    the ☀️ prayer-marker step (did-fast 5c) did an unconditional LOCAL
+    read-modify-write of build-order.md on whatever machine did-fast.py
+    happened to run on -- no _on_ix() check, no delegation to Ix, no lock.
+    Same exposure run_ritual had before its 2026-07-27/07-29 fixes, just
+    never caught here because it's a rarer path. Must now route through
+    _on_ix()/_stamp_on_ix like run_ritual, with the on-Ix branch locked via
+    the shared neon_blocks.build_order_lock()."""
+    src = (_HERE / "did-fast.py").read_text()
+    body = _step_5c_region(src)
+    assert "_on_ix()" in body, "must branch on _on_ix() like run_ritual, not write unconditionally"
+    assert "_stamp_on_ix(" in body, "off-Ix completions must delegate to Ix (single writer)"
+    assert "build_order_lock" in body, "the on-Ix branch must hold the shared lock"
+
+
+def test_checkbox_flip_step_routes_through_single_writer_lock():
+    """Same bug, same fix, for did-fast's 5e goal-checkbox-flip step."""
+    src = (_HERE / "did-fast.py").read_text()
+    body = _step_5e_region(src)
+    assert "_on_ix()" in body, "must branch on _on_ix() like run_ritual, not write unconditionally"
+    assert "_flip_checkboxes_on_ix(" in body, "off-Ix completions must delegate to Ix (single writer)"
+    assert "build_order_lock" in body, "the on-Ix branch must hold the shared lock"
+
+
+def test_flip_checkboxes_on_ix_remote_script_uses_the_shared_lock(monkeypatch):
+    df = _load()
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("input", "")))
+        return _P("CH\n")
+    monkeypatch.setattr(df.subprocess, "run", fake_run)
+    assert df._flip_checkboxes_on_ix(["finish the report"]) is True
+    cmd, payload = calls[0]
+    assert cmd[:2] == ["ssh", "-o"] and "ix" in cmd
+    assert "flip_goal_checkboxes" in payload and "finish the report" in payload
+    assert "build_order_lock" in payload
+
+    monkeypatch.setattr(df.subprocess, "run", lambda *a, **k: _P("NC\n"))
+    assert df._flip_checkboxes_on_ix(["nothing"]) is False
+
+    monkeypatch.setattr(df.subprocess, "run", lambda *a, **k: _P("", rc=255))
+    assert df._flip_checkboxes_on_ix(["x"]) is None
+
+
 def test_on_ix_hostname_detection(monkeypatch):
     df = _load()
     import socket
