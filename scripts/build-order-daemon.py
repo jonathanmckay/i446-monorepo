@@ -42,6 +42,8 @@ from pathlib import Path
 # directly, and it carries its own ssh+osascript fallback if the daemon is down.
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel as neon_excel
+import neon_blocks as nb  # build_order_lock() — centralized 2026-08-02 after
+# three separate incidents of the same unlocked build-order.md race
 
 # --- Paths ---
 
@@ -772,35 +774,42 @@ def _has_block_marker(block_name: str, marker: str) -> bool:
 
 
 def _write_block_marker(block_name: str, marker: str, dry_run: bool = False) -> bool:
-    """Append an emoji marker to a block header in -1₲. Idempotent."""
-    if _has_block_marker(block_name, marker):
-        return False
-    if not BUILD_ORDER.exists():
-        return False
-    text = BUILD_ORDER.read_text(encoding="utf-8")
-    if "## -1₲" not in text:
-        return False
-    lines = text.split("\n")
-    in_section = False
-    for i, line in enumerate(lines):
-        if line.strip() == "## -1₲":
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if not in_section:
-            continue
-        if line.startswith("- ") and not line.startswith("    "):
-            name = _block_line_name(line)
-            if name == block_name:
-                if dry_run:
-                    log(f"[DRY RUN] Would write {marker} to {block_name}")
+    """Append an emoji marker to a block header in -1₲. Idempotent.
+
+    Lock-protected (2026-08-02): the check-then-write (including the nested
+    _has_block_marker call) must be atomic as a whole, or a concurrent
+    writer (another daemon fire, an on-Ix did-fast ritual completion) can
+    land between the check and the write and get silently discarded —
+    third instance of this exact bug class."""
+    with nb.build_order_lock():
+        if _has_block_marker(block_name, marker):
+            return False
+        if not BUILD_ORDER.exists():
+            return False
+        text = BUILD_ORDER.read_text(encoding="utf-8")
+        if "## -1₲" not in text:
+            return False
+        lines = text.split("\n")
+        in_section = False
+        for i, line in enumerate(lines):
+            if line.strip() == "## -1₲":
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if not in_section:
+                continue
+            if line.startswith("- ") and not line.startswith("    "):
+                name = _block_line_name(line)
+                if name == block_name:
+                    if dry_run:
+                        log(f"[DRY RUN] Would write {marker} to {block_name}")
+                        return True
+                    lines[i] = line.rstrip() + " " + marker
+                    BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
+                    log(f"marker: wrote {marker} to {block_name}")
                     return True
-                lines[i] = line.rstrip() + " " + marker
-                BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
-                log(f"marker: wrote {marker} to {block_name}")
-                return True
-    return False
+        return False
 
 
 def _block_has_goals(block_name: str) -> bool:

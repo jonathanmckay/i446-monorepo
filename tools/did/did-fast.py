@@ -2601,34 +2601,38 @@ def main():
     # stamped it (any completion, pointed or not), so it was removed.
 
     # 5e. Flip build order checkboxes for completed tasks
-    # Matches closed Todoist tasks and build_order items against -1₲ goals
+    # Matches closed Todoist tasks and build_order items against -1₲ goals.
+    # Single-writer + lock-protected (2026-08-02), same reasoning as 5c above
+    # — the matching logic itself (which bare strings to look for) stays
+    # local since it only needs `fast`, already in memory; only the actual
+    # build-order.md read-modify-write is delegated to Ix when off-Ix.
     try:
-        _bo = Path.home() / "vault/g245/5e-1/build-order.md"
-        if _bo.exists():
-            _bo_text = _bo.read_text()
-            if "## -1₲" in _bo_text:
-                _bo_lines = _bo_text.split("\n")
-                _changed = False
-                for r in fast:
-                    if r.step in ("todoist", "build_order"):
-                        content = ""
-                        if r.todoist_task:
-                            content = r.todoist_task.get("content", "")
-                        elif r.step == "build_order":
-                            content = r.item.name
-                        if not content:
-                            continue
-                        bare = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", content).strip().lower()
-                        for bi, bl in enumerate(_bo_lines):
-                            if re.match(r"^ {2,4}- \[ \] .+", bl):
-                                goal = bl.strip()[6:]
-                                bare_goal = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", goal).strip().lower()
-                                if bare_goal and (bare_goal == bare or bare_goal in bare or bare in bare_goal):
-                                    _bo_lines[bi] = bl.replace("- [ ]", "- [x]", 1)
-                                    _changed = True
-                                    break
-                if _changed:
-                    _bo.write_text("\n".join(_bo_lines))
+        bare_matches = []
+        for r in fast:
+            if r.step in ("todoist", "build_order"):
+                content = ""
+                if r.todoist_task:
+                    content = r.todoist_task.get("content", "")
+                elif r.step == "build_order":
+                    content = r.item.name
+                if not content:
+                    continue
+                bare_matches.append(
+                    re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", content).strip().lower())
+        if bare_matches:
+            import sys as _s4
+            _s4.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import neon_blocks as _nb4
+            if _on_ix():
+                _bo = Path.home() / "vault/g245/5e-1/build-order.md"
+                if _bo.exists():
+                    with _nb4.build_order_lock():
+                        _t = _bo.read_text(encoding="utf-8")
+                        _nt, _ch = _nb4.flip_goal_checkboxes(_t, bare_matches)
+                        if _ch:
+                            _bo.write_text(_nt, encoding="utf-8")
+            else:
+                _flip_checkboxes_on_ix(bare_matches)
     except Exception:
         pass  # non-critical
 
