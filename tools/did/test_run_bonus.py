@@ -137,7 +137,7 @@ def _stub_run_0n(d, minutes, target_date="5/4"):
 
     fake_excel = _FakeExcel()
     with patch.object(run, "excel", fake_excel), \
-         patch.object(run, "_find_and_close_todoist", return_value=None), \
+         patch.object(run, "_find_and_close_todoist", return_value=(None, None)), \
          patch.object(run, "_append_completed"), \
          patch.object(run, "_fire_refresh"), \
          patch.object(run, "apply_long_bonus", side_effect=fake_apply_long_bonus), \

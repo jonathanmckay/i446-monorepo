@@ -33,6 +33,7 @@ For `step=1n+`:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -51,6 +52,19 @@ VAULT = Path.home() / "vault"
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 COMPLETED_TODAY = _sp.COMPLETED_TODAY
 TASK_QUEUE = _sp.TASK_QUEUE
+
+# Shared completed-today writer (locked + atomic + id-tracking), same module
+# did-fast.py uses. run.py used to have its own unlocked, id-blind
+# _append_completed() that raced against this one on the same file and never
+# recorded Todoist ids — habits closed via run.py (0l, xk20/22/26, 冥想, o314,
+# hiit, ...) could vanish from completed-today.json on a concurrent write and,
+# lacking an id, could never be defended by dtd's id-based completed-ids guard
+# either. Regression 2026-08-02: "a ton of 0neon tasks I already marked done
+# today are back" — those habits all route through run.py's fast path.
+_MC_PATH = Path(__file__).parent / "mark-completed.py"
+_MC_SPEC = importlib.util.spec_from_file_location("mark_completed", _MC_PATH)
+mc = importlib.util.module_from_spec(_MC_SPEC)
+_MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 
 TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")
@@ -250,20 +264,10 @@ def _auto_detect_minutes(toggl_desc: str, project_code: str) -> int:
         return 1
 
 
-def _append_completed(name: str) -> None:
-    today = datetime.now().strftime("%Y-%m-%d")
-    data = {"date": today, "names": []}
-    if COMPLETED_TODAY.exists():
-        try:
-            data = json.loads(COMPLETED_TODAY.read_text())
-            if data.get("date") != today:
-                data = {"date": today, "names": []}
-        except Exception:
-            pass
-    if name.lower() not in [n.lower() for n in data["names"]]:
-        data["names"].append(name.lower())
-    COMPLETED_TODAY.parent.mkdir(parents=True, exist_ok=True)
-    COMPLETED_TODAY.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+def _append_completed(name: str, task_id: str | None = None) -> None:
+    """Record a completion via the shared, locked, atomic mark-completed.py
+    writer (see the mc import above) — not a local reimplementation."""
+    mc.append_names([name], ids={name: task_id} if task_id else None)
 
 
 def _drop_from_queue(task_id: str) -> None:
@@ -310,8 +314,13 @@ def _word_overlap(query: str, content: str) -> float:
     return len(qt & ct) / len(qt)
 
 
-def _find_and_close_todoist(label: str, query: str, aliases: list) -> str | None:
-    """Find best-matching open task by word overlap. Close it. Return task content or None."""
+def _find_and_close_todoist(label: str, query: str, aliases: list) -> tuple[str | None, str | None]:
+    """Find best-matching open task by word overlap. Close it.
+
+    Return (task content, task id) — both None if no match/close. The id is
+    needed by callers to record completed-today's id map (see _append_completed),
+    which is how dtd suppresses a just-closed card before the next cache refresh.
+    """
     candidates = todoist.find_tasks(labels=[label], limit=100)
     best = None
     best_score = 0.0
@@ -325,10 +334,10 @@ def _find_and_close_todoist(label: str, query: str, aliases: list) -> str | None
         try:
             todoist.close_task(best["id"])
             _drop_from_queue(best["id"])
-            return best.get("content")
+            return best.get("content"), best.get("id")
         except Exception as e:
             print(f"  ✗ Todoist close failed: {e}", file=sys.stderr)
-    return None
+    return None, None
 
 
 def _calc_mw(target_date: str) -> tuple[float, int]:
@@ -421,7 +430,7 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
                                     due_string=target_date)
             todoist.close_task(t["id"])
             print(f"  ✓ {name} (posthoc {target_date}) — Todoist created + closed")
-            _append_completed(name)
+            _append_completed(name, t["id"])
             return 0
         except Exception as e:
             print(f"  ✗ posthoc Todoist failed: {e}", file=sys.stderr)
@@ -460,7 +469,7 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     verify = result.get("value")
 
     # Close Todoist
-    closed = _find_and_close_todoist(d.get("todoist_label") or "0neon", name, d.get("aliases", []))
+    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "0neon", name, d.get("aliases", []))
 
     # Toggl entry if time range
     if time_range:
@@ -474,7 +483,7 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
         except Exception:
             pass
 
-    _append_completed(name)
+    _append_completed(name, closed_id)
     _fire_refresh()
     msg = f"  ✓ {name} → {minutes} (today) verify={verify}"
     if closed:
@@ -541,9 +550,9 @@ def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) ->
         excel.append("0分", fen_col, date=target_date, value=f"+{points}", src=f"1n {name}")
 
     # Close 1neon Todoist
-    closed = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
+    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
 
-    _append_completed(name)
+    _append_completed(name, closed_id)
     _fire_refresh()
     print(f"  ✓ {name} → 1n+!{col}{week_row} = {minutes}m, 0分!{fen_col} +{points}"
           + (" + todoist closed" if closed else ""))
@@ -647,7 +656,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         from neon.blocks import flip_checkbox
         flipped = flip_checkbox(content)
 
-    _append_completed(content[:50])
+    _append_completed(content[:50], best["id"])
     _fire_refresh()
     msg = f"  ✓ {content!r} (overlap={best_score:.2f})"
     if fen_writes:

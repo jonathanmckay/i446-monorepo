@@ -813,10 +813,19 @@ def compute_outlook_sent_counts(days=DAYS):
 
 
 def main():
+    # NOTE: only push_to_gist() (the final step) actually needs this token —
+    # every fetch below is independent and already its own try/except. Gating
+    # the whole run on it here meant a single cron-environment auth hiccup
+    # (gh's credential store moved to the macOS keychain around 2026-07-28,
+    # which a non-interactive cron session can't unlock) silently dropped
+    # ALL data collection, not just the gist publish — the dashboard's
+    # email/comms-response charts then froze at their last successful push
+    # ("only updated through end of July", reported 2026-08-02) even though
+    # nothing about Gmail/iMessage/Slack/Teams/Outlook fetching was broken.
     token = get_github_token()
     if not token:
-        print("ERROR: gh auth token returned empty. Run: gh auth login")
-        sys.exit(1)
+        print("WARN: gh auth token returned empty — will fetch data but "
+              "cannot push to gist. Run: gh auth login (or set GH_TOKEN).")
 
     all_data = []
     all_sent_counts = {}  # {account_name: {date: int}}
@@ -913,6 +922,11 @@ def main():
         "summary": summary,
         "by_block": by_block,
     }
+
+    if not token:
+        print(f"\nSKIPPED gist push (no token) — {len(daily)} daily entries "
+              f"computed but not published: {GIST_ID}")
+        sys.exit(1)
 
     status = push_to_gist(payload, token)
     print(f"\nGist updated (HTTP {status}): {GIST_ID}")
