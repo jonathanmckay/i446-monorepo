@@ -18,7 +18,9 @@ trusted (the right behavior for the completion-time preview).
 """
 from __future__ import annotations
 
+import fcntl
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -28,6 +30,46 @@ BRANCHES = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]  # 04
 _CONFIG = Path.home() / "i446-monorepo" / "config" / "block-rituals.json"
 
 NEG1_SECTION = "## -1₲"
+
+BUILD_ORDER = Path.home() / "vault" / "g245" / "5e-1" / "build-order.md"
+_BUILD_ORDER_LOCK = BUILD_ORDER.with_suffix(".lock")
+
+
+@contextmanager
+def build_order_lock():
+    """Exclusive OS-level lock guarding a read-modify-write of build-order.md.
+
+    Third incident of the same lost-update race as of 2026-08-02 (three
+    separate unlocked read-then-write call sites across did-fast.py and
+    build-order-daemon.py each independently rediscovered it) — this
+    centralizes the lock so every writer shares one primitive instead of
+    re-fixing one call site at a time.
+
+    ONLY effective for writers running ON Ix (the file's single canonical
+    writer since the 2026-07-27 fix) — flock has no cross-machine reach: a
+    caller on Straylight locking Straylight's own `.lock` file provides zero
+    protection against Ix's daemon or another Ix-local writer, even though
+    Syncthing carries the `.lock` file itself between machines (flock locks
+    an open file description on one kernel, not file bytes). Callers that
+    might run off-Ix must delegate the read-modify-write to Ix (e.g. over
+    ssh) and take this lock THERE — see tools/did/did-fast.py's
+    `_stamp_on_ix`/`_run_locked_mutation_on_ix` for the pattern.
+
+    Usage — hold the lock for the ENTIRE read-modify-write, never just the
+    write (a lock released between read and write protects nothing):
+        with build_order_lock():
+            text = BUILD_ORDER.read_text(encoding="utf-8")
+            new_text, changed = stamp_emoji(text, block, emoji)
+            if changed:
+                BUILD_ORDER.write_text(new_text, encoding="utf-8")
+    """
+    _BUILD_ORDER_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(_BUILD_ORDER_LOCK, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------------------
