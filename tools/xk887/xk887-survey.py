@@ -30,8 +30,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import calendar
 import datetime as _dt
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -108,11 +110,36 @@ SHEETS = [
 ]
 
 
+_WEEK_LABEL_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
+
+
+def sunday_for_week_label(label: str, year: int | None = None) -> _dt.date:
+    """Reverse of week_row_label: 'M.W' -> that week's Sunday. The label has
+    no year component (same as everywhere else this convention is used --
+    1分+1s, 0n's 1n+ sheet), so this assumes the current year unless one is
+    given. Raises ValueError if W doesn't exist in that month (e.g. '2.6')."""
+    m = _WEEK_LABEL_RE.match(label)
+    if not m:
+        raise ValueError("not a week label: %r" % label)
+    month, week = int(m.group(1)), int(m.group(2))
+    year = year or _dt.date.today().year
+    days_in_month = calendar.monthrange(year, month)[1]
+    for day in range(1, days_in_month + 1):
+        d = _dt.date(year, month, day)
+        if d.weekday() == 6 and (day - 1) // 7 + 1 == week:  # Sunday
+            return d
+    raise ValueError("no week %s in %d-%02d" % (label, year, month))
+
+
 def week_range(arg: str | None, today: _dt.date | None = None) -> tuple[_dt.date, _dt.date]:
     """Sun-Sat range of the review week. No arg -> the most recent COMPLETED
-    week; a date arg -> the week containing it. (Same convention as 1s.)"""
+    week; an 'M.W' arg (e.g. '7.4') -> that week directly, the same label
+    col A is keyed by; any other arg -> an ISO date, the week containing it.
+    (Same convention as 1s.)"""
     today = today or _dt.date.today()
-    if arg:
+    if arg and _WEEK_LABEL_RE.match(arg):
+        sunday = sunday_for_week_label(arg)
+    elif arg:
         d = _dt.date.fromisoformat(arg)
         sunday = d - _dt.timedelta(days=(d.weekday() + 1) % 7)
     else:
@@ -305,7 +332,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     msg = {"text": ""}
     nav = "Enter/Tab next · last field saves page" + (" →" if page_no < total else " + finish")
     status = Window(FormattedTextControl(
-        lambda: msg["text"] or nav + " · S-Tab back · ^S save page · ^Q cancel"),
+        lambda: msg["text"] or nav + " · S-Tab back · ^→/^← page · ^S save page · ^Q cancel"),
         height=1, style="class:status")
 
     root = HSplit([Frame(ScrollablePane(HSplit(rows, padding=0)),
@@ -364,6 +391,24 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     @kb.add("c-s")
     def _(e):
         _submit(e.app)
+
+    # Free page navigation (2026-08-04) -- previously the only way off a page
+    # was Tab/Enter at the LAST field (submit, forward) or S-Tab at the
+    # FIRST field (back) -- so revisiting an earlier or later page meant
+    # tabbing through every field in between. These work from any field on
+    # any page. Forward still validates + writes (same as Tab/Enter at the
+    # last field); back still writes nothing (blanks never clobber, so a
+    # later re-submit of a revisited page is always safe).
+    @kb.add("c-right")
+    @kb.add("c-pagedown")
+    def _(e):
+        _submit(e.app)
+
+    @kb.add("c-left")
+    @kb.add("c-pageup")
+    def _(e):
+        if page_no > 1:
+            e.app.exit(result="back")
 
     @kb.add("c-q")
     @kb.add("c-c")
@@ -430,7 +475,9 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("date", nargs="?", help="any date in the review week (default: last completed week)")
+    ap.add_argument("date", nargs="?",
+                    help="'M.W' week label (e.g. 7.4) or any ISO date in the review week "
+                         "(default: last completed week)")
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     args = ap.parse_args()

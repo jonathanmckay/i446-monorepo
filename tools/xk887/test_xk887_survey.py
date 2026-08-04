@@ -28,6 +28,70 @@ def test_week_range_with_date_arg():
     assert (s, e) == (dt.date(2026, 7, 12), dt.date(2026, 7, 18))
 
 
+def test_week_range_accepts_week_label_directly():
+    """2026-08-04: 'xk887 7.4' should target that week directly, without
+    needing to know/guess a date that falls inside it."""
+    m = _load()
+    s, e = m.week_range("7.4")
+    assert m.week_row_label(s) == "7.4"
+    assert (e - s).days == 6
+
+
+def test_sunday_for_week_label_round_trips_with_week_row_label():
+    m = _load()
+    for d in (dt.date(2026, 7, 19), dt.date(2026, 1, 4), dt.date(2026, 12, 27),
+              dt.date(2026, 2, 1)):
+        label = m.week_row_label(d)
+        assert m.sunday_for_week_label(label, year=d.year) == d
+
+
+def test_sunday_for_week_label_defaults_to_current_year():
+    m = _load()
+    label = m.week_row_label(dt.date.today())
+    # Whatever week we're actually in right now, asking for its own label
+    # back (no explicit year) must resolve to a Sunday in the current year.
+    assert m.sunday_for_week_label(label).year == dt.date.today().year
+
+
+def test_sunday_for_week_label_rejects_nonexistent_week():
+    m = _load()
+    import pytest
+    with pytest.raises(ValueError):
+        m.sunday_for_week_label("2.6", year=2026)  # Feb never has a 6th Sunday-week
+
+
+def test_week_range_still_accepts_iso_dates():
+    """Must not regress the existing 'any date in the week' arg form."""
+    m = _load()
+    s, e = m.week_range("2026-07-15")
+    assert (s, e) == (dt.date(2026, 7, 12), dt.date(2026, 7, 18))
+
+
+def test_free_page_navigation_bound_from_any_field():
+    """2026-08-04: previously the only way off a page was Tab/Enter at the
+    LAST field (forward) or S-Tab at the FIRST field (back) -- revisiting an
+    earlier or later page meant tabbing through every field in between.
+    ^Right/^PageDown must submit-and-advance, ^Left/^PageUp must go back,
+    from anywhere on the page."""
+    src = (Path(__file__).parent / "xk887-survey.py").read_text()
+    start = src.index("def run_page(")
+    end = src.index("\ndef ", start + 1)
+    body = src[start:end]
+    for key in ('"c-right"', '"c-pagedown"'):
+        idx = body.index(key)
+        # the next kb.add-decorated function after this key must call _submit
+        fn_start = body.index("def _(e):", idx)
+        fn_end = body.index("\n\n", fn_start)
+        assert "_submit(e.app)" in body[fn_start:fn_end], (
+            "%s must trigger the same submit-and-advance as Tab/Enter" % key)
+    for key in ('"c-left"', '"c-pageup"'):
+        idx = body.index(key)
+        fn_start = body.index("def _(e):", idx)
+        fn_end = body.index("\n\n", fn_start)
+        assert 'result="back"' in body[fn_start:fn_end], (
+            "%s must trigger the same back-navigation as S-Tab" % key)
+
+
 def test_week_row_label_matches_1s_convention():
     m = _load()
     assert m.week_row_label(dt.date(2026, 7, 19)) == "7.3"
