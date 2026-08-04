@@ -188,44 +188,71 @@ echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER"
 
 (
-  # Invariant check (2026-07-31): "completed all -1n in a block, points still
-  # short" was traced to a genuine FIFO race — rapid-fire alt-enter presses
-  # (sub-1s apart) can push a line onto $DTD_FIFO that this loop's `read`
-  # never sees, confirmed via a $DTD_PUSHED/$DTD_PROCESSED count mismatch
-  # (3 pushed, 2 processed) in both real occurrences, always the LAST item in
-  # the rapid cluster. The quick-close helper still closes the Todoist card
-  # (it's a separate fire-and-forget call from done.sh, not gated on the
-  # worker), so the card vanishes from dtd looking "done" while its stamp and
-  # -1₦ credit silently never happen. `read -t 2` polls every idle 2s instead
-  # of blocking forever, so a lost push is caught within ~2s of going quiet
-  # instead of only being noticed later as an unexplained point shortfall.
-  # fd 3 (below) keeps ≥1 writer on the FIFO for the whole session, so a
-  # failed read here is always this timeout, never real EOF.
-  last_alerted=""
+  # RECOVERY, not just detection (2026-08-03): "completed all -1n in a block,
+  # points still short" is a genuine FIFO race. The done keybinding's FIFO
+  # push (done.sh: `printf ... > "$FIFO"`) runs inside a short-lived, KILLABLE
+  # fzf `execute` child; a rapid-fire alt-enter burst (sub-1s apart) tears that
+  # child down mid-write, so the line NEVER reaches this loop -- always the
+  # LAST item in the cluster. Meanwhile quick-close.py (forked detached, not
+  # gated on this worker) still closes the Todoist card, so it vanishes looking
+  # "done" while its stamp and -1₦ credit silently never happen. Every prior
+  # fix (2026-07-30..08-02) only DETECTED the loss via a set-difference alert;
+  # the work still had to be redone by hand. This loop now RECOVERS it.
+  #
+  # done.sh appends every requested completion to $DTD_PUSHED.log (atomic
+  # O_APPEND, "ts<TAB>done<TAB>id<TAB>content") BEFORE the racy FIFO push, so
+  # that log -- not the ephemeral FIFO -- is the durable source of truth for
+  # "this work was requested." fd 4 below is a persistent read-write handle on
+  # the FIFO that THIS subshell owns (in-process, never a killable child); we
+  # open it <> so the open can't block waiting for a reader (we are the reader,
+  # via `done < "$DTD_FIFO"`) and so shutdown stays driven by $DTD_STOP, never
+  # by EOF. `read -t 2` polls every idle 2s; each tick reconciles the durable
+  # log against $DTD_PROCESSED_IDS and re-injects any lost id back onto the
+  # FIFO through fd 4, healing the loss through the exact same processing path
+  # within ~2s. fd 3 (opened by the parent below) keeps ≥1 writer for the whole
+  # session, so a failed read here is always this timeout, never real EOF.
+  exec 4<>"$DTD_FIFO"
+  typeset -A reinjected
   while true; do
     if ! IFS= read -r -t 2 line; then
-      # Real set difference between what done.sh pushed ($DTD_PUSHED.log,
-      # "ts<TAB>done<TAB>id<TAB>content") and what this loop has actually
-      # finished ($DTD_PROCESSED_IDS, one task_id per line) -- NOT a
-      # count-diff-and-guess-the-tail approach, which mis-blamed already-✓'d
-      # completions once more than one item was ever truly lost in the same
-      # session (confirmed live 2026-08-01).
+      # Durable-log reconcile + recover: any id done.sh recorded in
+      # $DTD_PUSHED.log (field 3) that this loop has not yet marked in
+      # $DTD_PROCESSED_IDS was lost before reaching us (killable-child FIFO
+      # race). Re-inject the FIRST such item onto the FIFO through fd 4 and let
+      # it flow through the exact same processing path below -- do NOT merely
+      # alert. ONE item per tick keeps the self-write far under the pipe buffer
+      # (no capacity deadlock draining our own FIFO); the next idle tick picks
+      # up the next one. Safe to replay: did-fast's Todoist close + Neon write
+      # are idempotent, and the id is marked processed the instant it is
+      # dequeued (below), so a recovered item is attempted exactly once.
       lost=$(awk -F'\t' -v idsfile="$DTD_PROCESSED_IDS" '
         BEGIN { while ((getline id < idsfile) > 0) seen[id] = 1 }
         !($3 in seen) { print $3 "\t" $4 }
-      ' "$DTD_PUSHED.log" 2>/dev/null | awk -F'\t' '{print $1, $2}' | paste -sd';' - 2>/dev/null)
-      if [[ -n "$lost" && "$lost" != "$last_alerted" ]]; then
-        missing=$(echo "$lost" | tr ';' '\n' | grep -c .)
-        msg="⚠ INVARIANT: $missing completion(s) pushed but never processed (dtd FIFO race) — lost: $lost"
+      ' "$DTD_PUSHED.log" 2>/dev/null)
+      recovered=""
+      if [[ -n "$lost" ]]; then
+        while IFS=$'\t' read -r rid rcontent; do
+          [[ -z "$rid" ]] && continue
+          [[ -n "${reinjected[$rid]}" ]] && continue
+          printf '%s\t%s\n' "$rid" "$rcontent" >&4 || break
+          reinjected[$rid]=1
+          recovered="$rcontent"
+          break
+        done <<< "$lost"
+      fi
+      if [[ -n "$recovered" ]]; then
+        msg="⚠ RECOVERED: re-injected a lost completion from the durable log (dtd FIFO race) — $recovered"
         echo "$msg" > "$DTD_HDR"
         echo "$msg" >> "$DTD_LOG"
         bash "$HOME/i446-monorepo/scripts/term-color.sh" orange 2>/dev/null
-        last_alerted="$lost"
+        # Drain the reinjected item through the loop before honoring shutdown,
+        # so a completion recovered at the last second is never dropped.
+        continue
       fi
       # Shutdown check: only cleanup sets $DTD_STOP, and only after it has
-      # already closed fd 3 -- so by the time this is seen, the FIFO is
-      # genuinely at EOF with nothing left to drain. Break instead of
-      # looping forever on repeated instant-EOF reads.
+      # already closed fd 3 -- so by the time this is seen (with nothing left
+      # to recover), the FIFO is genuinely drained. Break instead of looping
+      # forever on repeated instant-timeout reads.
       [[ -f "$DTD_STOP" ]] && break
       continue
     fi
