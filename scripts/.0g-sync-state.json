@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-04T08:00:08.330306-07:00"
+  "tasks": {
+    "offsite goes well": {
+      "todoist_id": "6hCWmp49qMcmCpXR",
+      "minutes": 90
+    },
+    "make it to banbridge": {
+      "todoist_id": "6hCWmp2fxVCRjwc2",
+      "minutes": 30
+    },
+    "maximize time in the social settings": {
+      "todoist_id": "6hCWmp6xHvxqqWh2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-08-04T10:00:04.659142-07:00"
 }
