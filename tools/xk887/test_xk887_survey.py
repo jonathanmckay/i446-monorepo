@@ -46,6 +46,73 @@ def test_field_keys_are_namespaced_and_unique():
     assert len(keys) == len(set(keys))
 
 
+def test_applescript_opens_workbook_if_not_already_open():
+    """2026-08-04: xk887.xlsx isn't kept open like Neon分v12.2.xlsx -- it
+    drifts closed between infrequent /xk887 runs, and referencing `workbook
+    "xk887.xlsx"` while closed threw uncaught all the way up through
+    main(), crashing the whole process (and its cmux pane) right after the
+    user submitted a page, silently losing what they'd typed. Confirmed
+    live: the workbook was closed, the last real week of data across all
+    four sheets was ~3 months old."""
+    m = _load()
+    script = m.build_applescript({"xk88_good": "x"}, dt.date(2026, 7, 19))
+    open_idx = script.index('wbNames does not contain "%s"' % m.WORKBOOK)
+    ref_idx = script.index('set wb to workbook "%s"' % m.WORKBOOK)
+    assert open_idx < ref_idx, "must check/open the workbook BEFORE referencing it"
+    assert str(m.WORKBOOK_PATH) in script
+
+
+def test_workbook_path_uses_cloudstorage_convention():
+    """ix's OneDrive mount is Library/CloudStorage/OneDrive-Personal/..., not
+    a plain ~/OneDrive symlink (confirmed via mdfind on ix) -- a guessed
+    ~/OneDrive/vault-excel path silently fails to find the file."""
+    m = _load()
+    assert "Library/CloudStorage/OneDrive-Personal" in str(m.WORKBOOK_PATH)
+
+
+def test_dump_recovery_persists_answers_and_is_replayable(tmp_path, monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    answers = {"xk88_good": "great week", "xk20_notes": "n"}
+    path = m.dump_recovery(answers, dt.date(2026, 7, 19), sheet="xk88")
+    assert path.exists()
+    assert path.parent == tmp_path
+    assert "7.3" in path.name and "xk88" in path.name
+    import json
+    assert json.loads(path.read_text()) == answers
+
+
+def test_dump_recovery_does_not_collide_on_repeated_failures(tmp_path, monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    p1 = m.dump_recovery({"a": "1"}, dt.date(2026, 7, 19), sheet="xk88")
+    import time
+    time.sleep(1.1)  # timestamp resolution is seconds
+    p2 = m.dump_recovery({"a": "2"}, dt.date(2026, 7, 19), sheet="xk88")
+    assert p1 != p2
+    assert p1.exists() and p2.exists()
+
+
+def test_run_paginated_survives_a_write_failure_without_crashing(monkeypatch, tmp_path):
+    """The old behavior: an uncaught RuntimeError from write_answers()
+    propagated straight out of run_paginated() -- a bare traceback, and (via
+    cmux respawn-pane) the whole pane getting reaped. It must instead return
+    a plain exit code and leave a recovery file behind."""
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(m, "run_page",
+                        lambda cfg, sunday, saturday, i, total, answers:
+                            ("submit", {"%s_good" % cfg["sheet"]: "x"}))
+
+    def _boom(answers, sunday, sheets=None):
+        raise RuntimeError("Invalid object specifier (workbook not open)")
+    monkeypatch.setattr(m, "write_answers", _boom)
+
+    rc = m.run_paginated(dt.date(2026, 7, 19), dt.date(2026, 7, 25))
+    assert rc == 1
+    assert list(tmp_path.glob("*xk88*.json")), "expected a recovery dump for the failed page"
+
+
 def test_applescript_targets_week_label_and_skips_blanks():
     m = _load()
     script = m.build_applescript(
