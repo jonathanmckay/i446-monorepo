@@ -297,6 +297,132 @@ def test_concurrent_on_ix_ritual_completions_lose_stamps_without_lock(tmp_path):
     )
 
 
+def test_run_ritual_fallback_branch_uses_a_lock():
+    """Regression (2026-08-04): "I fulfilled all -1n tasks for 午 and 未 yet
+    not getting full points." Block 未's ✅/📧 rituals were both closed in
+    Todoist ~1-4s apart; neither's header stamp nor P-credit ever landed (no
+    "ritual 未 -1n" entry in the neon ledger for either, confirmed via
+    Todoist's completed-tasks API that both cards WERE closed). Root cause:
+    when `_stamp_on_ix`'s ssh call fails/times out (the known Tailscale
+    MagicSock wedge, or ssh contention from several rituals completing near-
+    simultaneously), `run_ritual` fell back to a completely UNLOCKED local
+    write using `text`/`new_text` computed BEFORE the (up to 15s) ssh
+    attempt -- two rituals racing into this same fallback could silently
+    discard each other's stamp, the exact same class `_stamp_on_ix`'s own
+    lock and the on-Ix branch's lock were built to prevent, just one branch
+    over. The fallback must be lock-protected too, with a FRESH re-read
+    under the lock (not the stale pre-ssh-attempt snapshot)."""
+    src = (_HERE / "did-fast.py").read_text()
+    fn_body = src[src.index("def run_ritual"):]
+    branch = fn_body[fn_body.index("remote = _stamp_on_ix(block, emoji)"):
+                     fn_body.index('out["stamped"] = changed')]
+    fallback = branch[branch.index("if remote is None:"):branch.index("else:")]
+    assert "fcntl" in fallback and "flock" in fallback, (
+        "the ix-unreachable fallback must be lock-protected, or concurrent "
+        "fallbacks (or a fallback racing a since-synced ix update) can "
+        "still silently clobber each other's stamps")
+    lock_idx = fallback.index("LOCK_EX")
+    unlock_idx = fallback.index("LOCK_UN")
+    read_idx = fallback.index("read_text")
+    write_idx = fallback.index("write_text")
+    assert lock_idx < read_idx < write_idx < unlock_idx, (
+        "the fallback's read and write must both happen strictly between "
+        "acquiring and releasing the lock, and the read must be FRESH under "
+        "the lock -- not the stale text read before the ssh attempt")
+
+
+def _locked_fallback_worker(build_order_path: str, block: str, emoji: str) -> None:
+    """Reproduction of run_ritual's (fixed) ix-unreachable fallback branch,
+    run in a separate OS process so real flock semantics apply."""
+    import fcntl
+    import neon_blocks as nb
+
+    bo = Path(build_order_path)
+    lock_path = bo.with_suffix(".lock")
+    with open(lock_path, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            t = bo.read_text(encoding="utf-8")
+            nt, changed = nb.stamp_emoji(t, block, emoji)
+            if changed:
+                bo.write_text(nt, encoding="utf-8")
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
+def _unlocked_fallback_worker(build_order_path: str, block: str, emoji: str) -> None:
+    """Same, minus the lock and with a stale pre-read -- reproduces the
+    pre-fix fallback race exactly (text read once, well before the write)."""
+    import neon_blocks as nb
+
+    bo = Path(build_order_path)
+    text = bo.read_text(encoding="utf-8")  # the stale, pre-ssh-attempt read
+    new_text, changed = nb.stamp_emoji(text, block, emoji)
+    if changed:
+        bo.write_text(new_text, encoding="utf-8")
+
+
+def test_concurrent_fallback_ritual_completions_all_survive_with_lock(tmp_path):
+    """The actual reported bug, reproduced for 未: rituals that all fall
+    back to a local write within seconds of each other must all land on
+    the header, not just whichever one writes last."""
+    build_order = tmp_path / "build-order.md"
+    build_order.write_text("## -1₲\n\n- 未\n    - [ ] some goal\n", encoding="utf-8")
+
+    emojis = ["☀️", "🎯", "📧", "⏱️", "✅"]
+    procs = [multiprocessing.Process(target=_locked_fallback_worker,
+                                     args=(str(build_order), "未", e))
+             for e in emojis]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=10)
+
+    final = build_order.read_text(encoding="utf-8")
+    header = next(l for l in final.split("\n") if l.startswith("- 未"))
+    missing = [e for e in emojis if e not in header]
+    assert not missing, f"lock failed to prevent lost updates: {missing} missing from {header!r}"
+
+
+def test_concurrent_fallback_ritual_completions_lose_stamps_without_lock(tmp_path):
+    """Sanity check: WITHOUT the lock (the pre-fix fallback), the same
+    concurrent scenario loses at least one stamp most of the time --
+    confirms the lock is what fixes it, same rationale as the other two
+    sanity checks in this file."""
+    losses_observed = 0
+    for i in range(5):
+        build_order = tmp_path / f"build-order-fallback-{i}.md"
+        build_order.write_text("## -1₲\n\n- 未\n    - [ ] some goal\n", encoding="utf-8")
+        emojis = ["☀️", "🎯", "📧", "⏱️", "✅"]
+        procs = [multiprocessing.Process(target=_unlocked_fallback_worker,
+                                         args=(str(build_order), "未", e))
+                 for e in emojis]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=10)
+        final = build_order.read_text(encoding="utf-8")
+        header = next(l for l in final.split("\n") if l.startswith("- 未"))
+        if any(e not in header for e in emojis):
+            losses_observed += 1
+    assert losses_observed > 0, (
+        "expected the unlocked fallback to lose at least one stamp across "
+        "5 runs -- if it never does, this environment can't reproduce the "
+        "race and the locked test isn't proving much")
+
+
+def test_run_ritual_logs_its_result():
+    """Regression (2026-08-04): this exact bug class has now recurred on
+    2026-07-29, 2026-08-02, and 2026-08-04, each time requiring after-the-
+    fact reconstruction from the Todoist API and the Neon ledger because
+    run_ritual's own result (`out`, which already carries
+    `stamp_fallback_local`, `stamped`, `p_credit`/`p_credit_error`) was
+    never persisted anywhere. A 4th occurrence should be readable directly."""
+    src = (_HERE / "did-fast.py").read_text()
+    assert "_log_ritual(out)" in src[src.index("def run_ritual"):]
+    assert "def _log_ritual(" in src
+
+
 def _step_5c_region(src: str) -> str:
     i = src.index("PRAYER_HABITS = {")
     j = src.index("# 5e. Flip build order checkboxes")

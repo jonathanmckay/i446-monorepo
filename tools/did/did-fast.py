@@ -2073,6 +2073,28 @@ def _flip_checkboxes_on_ix(bare_matches: list[str]) -> Optional[bool]:
     return tokenized == "CH"
 
 
+def _log_ritual(out: dict) -> None:
+    """Append the full run_ritual() result to a durable per-day log (2026-08-04).
+    This is a recurring, hard-to-reproduce bug class (undocumented losses on
+    2026-07-29, 2026-08-02, 2026-08-04 so far, each a different survivor set
+    among near-simultaneous completions) and `out` — which already carries
+    `stamp_fallback_local`, `stamped`, `p_credit`/`p_credit_error`, etc. —
+    was never persisted anywhere, so every prior investigation had to
+    reconstruct what happened after the fact from the Todoist API and the
+    Neon ledger instead of just reading it. Best-effort: a logging failure
+    must never fail the ritual itself."""
+    try:
+        log_dir = Path.home() / ".cache" / "jm"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"ritual-completions-{datetime.now():%Y-%m-%d}.jsonl"
+        entry = dict(out)
+        entry["ts"] = datetime.now().isoformat(timespec="seconds")
+        with open(log_path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never block a ritual
+        pass
+
+
 def run_ritual(tag: str) -> dict:
     """Complete one block ritual (-1neon card): close its open Todoist task,
     stamp the ritual emoji on the CURRENT 地支 block in build-order.md, and
@@ -2194,9 +2216,41 @@ def run_ritual(tag: str) -> dict:
     else:
         remote = _stamp_on_ix(block, emoji)
         if remote is None:
+            # Fallback path (2026-08-04 fix): ix was unreachable or slow
+            # enough that _stamp_on_ix's ssh call (timeout=15) never
+            # returned CH/NC -- either the known Tailscale MagicSock wedge
+            # (see reference_tailscale_magicsock_ix memory; auto-fixed by a
+            # watchdog within 5min, but not fast enough to help a ritual
+            # completed mid-wedge) or plain ssh contention from several
+            # rituals completing within seconds of each other. This branch
+            # used to write `new_text` computed from `text` read BEFORE the
+            # (up to 15s) ssh attempt, completely unlocked -- two rituals
+            # racing into this same fallback together, or one racing a
+            # since-synced ix update, silently discarded each other's stamp
+            # with nothing to serialize them, and the stale pre-attempt
+            # `text` could itself already be missing stamps ix had applied
+            # moments earlier. Confirmed live 2026-08-04: block 未's ✅/📧
+            # rituals were both closed in Todoist ~1-4s apart, and neither's
+            # stamp nor P-credit ever landed (findable in the neon ledger:
+            # no "ritual 未 -1n" entry for either). Lock (the SAME local
+            # .lock file the on-ix branch above already uses -- this only
+            # serializes against OTHER Straylight-local fallbacks racing
+            # each other, not against ix itself; flock has no cross-machine
+            # reach, see neon_blocks.build_order_lock's docstring) and
+            # re-read fresh under it, instead of trusting a stale
+            # pre-ssh-attempt snapshot.
             out["stamp_fallback_local"] = True
-            if changed:
-                bo.write_text(new_text, encoding="utf-8")
+            import fcntl
+            lock_path = bo.with_suffix(".lock")
+            with open(lock_path, "a") as lf:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                try:
+                    text = bo.read_text(encoding="utf-8")
+                    new_text, changed = nb.stamp_emoji(text, block, emoji)
+                    if changed:
+                        bo.write_text(new_text, encoding="utf-8")
+                finally:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
         else:
             # Ix's copy is the truth: credit points only if IX stamped fresh
             # (a local-stale "would change" must not double-credit a ritual
@@ -2291,6 +2345,7 @@ def run_ritual(tag: str) -> dict:
                                          else str(write_res.get("error") or ""))[:60]}
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
             out["p_credit_error"] = str(e)
+    _log_ritual(out)
     return out
 
 
