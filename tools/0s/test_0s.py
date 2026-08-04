@@ -106,3 +106,44 @@ def test_progress_line_printed_before_slow_neon_write():
     assert announce < write, "progress line must precede the Excel write"
     assert "flush=True" in main_src[:write]
     assert main_src.index("marking 0l done") < main_src.index("subprocess.run")
+
+
+def test_did_fast_0l_timeout_has_headroom():
+    """Bug 2026-08-04: 0s wrote to Neon but silently failed to mark 0l done
+    because the did-fast subprocess call only got 60s — too little for 0l's
+    own two sequential Excel round-trips (0n write ~30s + 0l-completion-time
+    write ~15s) plus Todoist search/close. Must be raised well past 60."""
+    import ast
+    src = open(z.__file__).read()
+    main_fn = [n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "main"][0]
+    def _has_0l(arg):
+        if isinstance(arg, ast.Constant):
+            return arg.value == "0l"
+        if isinstance(arg, ast.List):
+            return any(_has_0l(e) for e in arg.elts)
+        return False
+
+    calls = [n for n in ast.walk(main_fn) if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", None) == "run"
+             and any(_has_0l(a) for a in n.args)]
+    assert calls, "expected a subprocess.run(...) call passing \"0l\""
+    timeout_kw = next(kw for kw in calls[0].keywords if kw.arg == "timeout")
+    assert timeout_kw.value.value >= 120, "0l subprocess timeout must have headroom past 60s"
+
+
+def test_marked_done_requires_actual_write_success():
+    """The did-fast 0l subprocess always exits 0 and reports success/failure
+    inside its JSON stdout — a clean subprocess return is not proof the 0n
+    write succeeded. main() must parse and check 0n_write.ok before claiming
+    '0l marked done', not assume success from the absence of an exception."""
+    import pathlib
+    src = pathlib.Path(__file__).with_name("0s.py").read_text()
+    main_src = src[src.index("def main()"):]
+    block_start = main_src.index('points_checked")')
+    block = main_src[block_start:block_start + 2000]
+    assert "0n_write" in block, "must inspect did-fast's 0n_write result, not just catch exceptions"
+    assert '.get("ok")' in block
+    marked_done_idx = block.index('"0l marked done"') if '"0l marked done"' in block else block.index("0l marked done")
+    ok_check_idx = block.index('.get("ok")')
+    assert ok_check_idx < marked_done_idx, "success message must be gated on the actual write result"
