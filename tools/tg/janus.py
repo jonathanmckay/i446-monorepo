@@ -4689,6 +4689,20 @@ async def _initial_slow_fetches(app):
 
 
 async def main():
+    # Reset the terminal tab color on every launch, matching dtd.sh's own
+    # startup reset (2026-08-04, "make dtd and janus background the same") —
+    # without this, a color set by a PREVIOUS session (an "orange" tool-use
+    # failure, or a Claude Code hook's blue/black) stays on the tab
+    # indefinitely, so a fresh janus launch could look different from a
+    # fresh dtd launch depending on what state the tab was left in.
+    # Backgrounded: term-color.sh's TTY walk + AppleScript shouldn't add
+    # latency to the first paint.
+    try:
+        subprocess.Popen(["bash", str(Path.home() / "i446-monorepo/scripts/term-color.sh"), "reset"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Fast fetches only (sub-second) — enough content for an instant first paint.
     fetch_current()
     fetch_today(True)  # forced: the startup load must not be throttled/coalesced
