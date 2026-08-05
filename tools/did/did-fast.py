@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import urllib.error
@@ -677,16 +678,46 @@ def refresh_task_queue(block: bool = False) -> dict:
     import fcntl
     lock_path = TASK_QUEUE_PATH.with_suffix(".lock")
     lock_fd = open(lock_path, "w")
-    flags = fcntl.LOCK_EX if block else (fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
-        fcntl.flock(lock_fd, flags)
-    except (IOError, OSError):
-        # Non-blocking only: another refresh is already running → return existing.
-        print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
-        lock_fd.close()
-        if TASK_QUEUE_PATH.exists():
-            return json.loads(TASK_QUEUE_PATH.read_text())
-        return {}
+    if block:
+        # Bounded wait instead of an unbounded LOCK_EX: if the current holder
+        # is itself stalled (e.g. a prior refresh stuck on a dead network),
+        # an infinite block here makes every explicit refresh pile up behind
+        # it forever (observed: 6+ did-fast processes jammed on this one lock).
+        # Poll non-blocking up to a cap, then give up and return the existing
+        # cache rather than wedge the caller.
+        import time
+        try:
+            wait_cap = int(os.environ.get("DIDFAST_LOCK_WAIT_SECS", "20"))
+        except ValueError:
+            wait_cap = 20
+        deadline = time.monotonic() + max(1, wait_cap)
+        got = False
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                got = True
+                break
+            except (IOError, OSError):
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.25)
+        if not got:
+            print("WARN: refresh_task_queue gave up waiting for the lock "
+                  f"(> {wait_cap}s) -- returning existing cache", file=sys.stderr)
+            lock_fd.close()
+            if TASK_QUEUE_PATH.exists():
+                return json.loads(TASK_QUEUE_PATH.read_text())
+            return {}
+    else:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            # Non-blocking: another refresh is already running → return existing.
+            print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
+            lock_fd.close()
+            if TASK_QUEUE_PATH.exists():
+                return json.loads(TASK_QUEUE_PATH.read_text())
+            return {}
     try:
         return _refresh_task_queue_inner()
     finally:
@@ -2353,7 +2384,41 @@ def run_ritual(tag: str) -> dict:
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+def _install_watchdog():
+    """Hard wall-clock ceiling on EVERY did-fast invocation. did-fast runs
+    inside dtd's single-threaded completion worker: if any call here blocks
+    without bound (a DNS/getaddrinfo stall that urllib's socket timeout does
+    NOT cover, an ssh that hangs past ConnectTimeout, a flock held by another
+    stalled process), the worker freezes and NOTHING else in the queue clears
+    until the process is killed by hand -- the recurring "dtd hangs / stopped
+    clearing tasks / invariant fired" incident. A SIGALRM watchdog converts any
+    such hang into a fast, clean non-zero exit; the worker then logs "✗ ..." and
+    moves on to the next item instead of wedging. Tune/disable with
+    DIDFAST_WATCHDOG_SECS (0 disables)."""
+    try:
+        secs = int(os.environ.get("DIDFAST_WATCHDOG_SECS", "60"))
+    except ValueError:
+        secs = 60
+    if secs <= 0:
+        return
+
+    def _bail(signum, frame):
+        sys.stderr.write(
+            f"FATAL: did-fast watchdog fired after {secs}s -- aborting so the "
+            f"dtd worker keeps draining its queue instead of hanging\n")
+        sys.stderr.flush()
+        os._exit(124)
+
+    try:
+        signal.signal(signal.SIGALRM, _bail)
+        signal.alarm(secs)
+    except (ValueError, OSError):
+        # not on the main thread / platform without SIGALRM -- best effort
+        pass
+
+
 def main():
+    _install_watchdog()
     if len(sys.argv) < 2:
         print("usage: did-fast.py <items> | --refresh-headers | --refresh-cache",
               file=sys.stderr)
