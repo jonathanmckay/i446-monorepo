@@ -241,10 +241,18 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
         done <<< "$lost"
       fi
       if [[ -n "$recovered" ]]; then
-        msg="⚠ RECOVERED: re-injected a lost completion from the durable log (dtd FIFO race) — $recovered"
+        # A recovered completion is a SUCCESS, not a failure: the FIFO race is
+        # auto-healed right here and the points still land (the "✓ ..." line
+        # that follows confirms it). So log it CALMLY and do NOT flash the pane
+        # orange -- that alarm signals "a tool call failed and needs you", which
+        # is exactly the wrong message for a loss the worker just fixed by
+        # itself. It was mis-classifying self-heals as failures that made a
+        # working recovery look like "the invariant fired again". A genuine
+        # problem (did-fast erroring on the reprocessed item) still surfaces via
+        # the "✗ ... (did-fast exit N)" branch below.
+        msg="↻ auto-recovered a completion the FIFO dropped, reprocessing — $recovered"
         echo "$msg" > "$DTD_HDR"
         echo "$msg" >> "$DTD_LOG"
-        bash "$HOME/i446-monorepo/scripts/term-color.sh" orange 2>/dev/null
         # Drain the reinjected item through the loop before honoring shutdown,
         # so a completion recovered at the last second is never dropped.
         continue

@@ -138,11 +138,19 @@ def test_recovery_does_not_drop_an_item_recovered_at_shutdown():
         "so a last-second recovery drains instead of being dropped")
 
 
-def test_reconcile_sets_degraded_terminal_color():
-    """Matches the existing orange = 'tool-use failure (non-fatal)'
-    convention rather than inventing a new signal."""
+def test_recovery_is_a_calm_signal_not_the_failure_alarm():
+    """A successful auto-recovery is a SUCCESS, not a tool failure: it must NOT
+    flash the pane orange (that alarm means "a tool call failed, look at me").
+    Mis-signalling a self-heal as a failure is exactly what made a working
+    recovery read as "the invariant fired again". The recovery path logs a
+    calm notice instead; orange stays reserved for genuine failures."""
     block = _timeout_block()
-    assert "term-color.sh\" orange" in block
+    m = re.search(r'if \[\[ -n "\$recovered" \]\]; then\n(.*?)\n      fi\n', block, re.S)
+    assert m, "could not find the recovered-notice branch"
+    branch = m.group(1)
+    assert "term-color.sh\" orange" not in branch, (
+        "a successful recovery must not raise the failure (orange) signal")
+    assert 'echo "$msg" >> "$DTD_LOG"' in branch, "recovery must still be logged"
 
 
 def test_detect_only_invariant_language_is_gone():
