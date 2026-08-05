@@ -1,5 +1,10 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-05T02:00:04.956253-07:00"
+  "tasks": {
+    "offsite goes well": {
+      "todoist_id": "6hCjR33Fhq9FxWcR",
+      "minutes": 90
+    }
+  },
+  "last_sync": "2026-08-05T03:55:04.663089-07:00"
 }
