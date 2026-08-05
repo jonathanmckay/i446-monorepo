@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "offsite goes well": {
-      "todoist_id": "6hCWmp49qMcmCpXR",
-      "minutes": 90
-    },
     "make it to banbridge": {
       "todoist_id": "6hCWmp2fxVCRjwc2",
       "minutes": 30
@@ -14,5 +10,5 @@
       "minutes": 40
     }
   },
-  "last_sync": "2026-08-04T16:00:04.582175-07:00"
+  "last_sync": "2026-08-04T18:00:04.948286-07:00"
 }
