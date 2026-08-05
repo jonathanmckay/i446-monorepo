@@ -78,6 +78,10 @@ DTD_PROCESSED_IDS="/tmp/dtd-$DTD_ID.processed.ids"
 # Cleanup touches this file before closing fd 3; the worker checks for it
 # only on a timeout/EOF tick and breaks instead of continuing.
 DTD_STOP="/tmp/dtd-$DTD_ID.stop"
+# Durable retry queue for completions did-fast could not land (almost always a
+# transient network outage). Format: "next_retry_epoch<TAB>attempts<TAB>id<TAB>content".
+# The worker re-drives one eligible item per idle tick once connectivity returns.
+DTD_FAILED="/tmp/dtd-$DTD_ID.failed"
 DTD_SESSION="/tmp/dtd-$DTD_ID.session"
 DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 # fzf --listen port (written by the start binding) + the live-timer ticker that
@@ -181,11 +185,11 @@ fi
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
       "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PUSHED.log" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" \
-      "$DTD_SESSION" "$DTD_TIMER" "$DTD_STOP" \
+      "$DTD_SESSION" "$DTD_TIMER" "$DTD_STOP" "$DTD_FAILED" "$DTD_FAILED.tmp" \
       "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
-touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER"
+touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED"
 
 (
   # RECOVERY, not just detection (2026-08-03): "completed all -1n in a block,
@@ -257,6 +261,68 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
         # so a completion recovered at the last second is never dropped.
         continue
       fi
+      # AUTO-RETRY of completions did-fast could not land (2026-08-04): the ✗
+      # branch below records each failure in $DTD_FAILED as
+      # "next_retry<TAB>attempts<TAB>id<TAB>content". These are almost always
+      # transient outages (Todoist API / ssh-to-ix unreachable); did-fast is
+      # idempotent, so we re-drive them here once connectivity returns. AT MOST
+      # ONE item per idle tick, gated by a fast reachability probe so a still-
+      # down network costs ~3s (not a full watchdog window) and never freezes
+      # live completions for long. Per-item exponential backoff (30s→300s) and a
+      # retry cap (DTD_MAX_RETRIES, default 8) stop a permanently-bad item from
+      # looping forever. This runs on idle ticks only; it never touches the main
+      # dequeue path, and (rout=/journal-flag-in-var) it deliberately avoids the
+      # exact substrings the structural worker tests anchor on.
+      if [[ -s "$DTD_FAILED" ]]; then
+        rnow=$(date +%s)
+        rsel=$(awk -F'\t' -v now="$rnow" '
+          $1<=now { if (best=="" || $1<bv) { best=$0; bv=$1 } }
+          END { print best }' "$DTD_FAILED" 2>/dev/null)
+        if [[ -n "$rsel" ]]; then
+          rrest="${rsel#*$'\t'}"; rtry="${rrest%%$'\t'*}"
+          rrest="${rrest#*$'\t'}"; rid="${rrest%%$'\t'*}"; rcontent="${rrest#*$'\t'}"
+          if python3 -c 'import socket; socket.setdefaulttimeout(3); socket.create_connection(("api.todoist.com",443)).close()' 2>/dev/null; then
+            echo "↻ retrying (connectivity back): $rcontent" > "$DTD_HDR"
+            if [[ -n "$rid" ]]; then
+              rout=$(python3 "$DID_FAST" --task-id "$rid" "$rcontent" 2>>"$DTD_LOG.err")
+            else
+              rout=$(python3 "$DID_FAST" "$rcontent" 2>>"$DTD_LOG.err")
+            fi
+            rrc=$?
+            if [[ $rrc -eq 0 && -n "$rout" ]]; then
+              awk -F'\t' -v id="$rid" -v c="$rcontent" \
+                '!($3==id && $4==c)' "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+                && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+              rjflag="--journal-done"
+              echo "$rout" | python3 "$UNDO_FAST" "$rjflag" "$DTD_JOURNAL" "$rid" 2>/dev/null
+              rok=$(echo "$rout" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
+              echo "✓ ${rok:-$rcontent} (retry)" > "$DTD_HDR"
+              echo "✓ ${rok:-$rcontent} (retry)" >> "$DTD_LOG"
+            else
+              rtry=$(( rtry + 1 ))
+              if [[ $rtry -gt ${DTD_MAX_RETRIES:-8} ]]; then
+                awk -F'\t' -v id="$rid" -v c="$rcontent" \
+                  '!($3==id && $4==c)' "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+                  && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+                echo "✗ gave up on $rcontent after $(( rtry - 1 )) retries" >> "$DTD_LOG"
+              else
+                rback=$(( 30 * (1 << (rtry - 1)) )); (( rback > 300 )) && rback=300
+                awk -F'\t' -v id="$rid" -v c="$rcontent" -v nn="$(( rnow + rback ))" -v at="$rtry" \
+                  'BEGIN{OFS="\t"} ($3==id && $4==c){ $1=nn; $2=at } {print}' \
+                  "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+                  && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+              fi
+            fi
+          else
+            # Still down: short cooldown only, spend no attempt and no did-fast
+            # (watchdog) window on it.
+            awk -F'\t' -v id="$rid" -v c="$rcontent" -v nn="$(( rnow + 15 ))" \
+              'BEGIN{OFS="\t"} ($3==id && $4==c){ $1=nn } {print}' \
+              "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+              && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+          fi
+        fi
+      fi
       # Shutdown check: only cleanup sets $DTD_STOP, and only after it has
       # already closed fd 3 -- so by the time this is seen (with nothing left
       # to recover), the FIFO is genuinely drained. Break instead of looping
@@ -306,6 +372,14 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     if [[ $rc -ne 0 || -z "$result" ]]; then
       echo "✗ $task_clean (did-fast exit $rc, no output)" > "$DTD_HDR"
       echo "✗ $task_clean (did-fast exit $rc, no output)" >> "$DTD_LOG"
+      # Record it for auto-retry. A failed did-fast is almost always a
+      # transient outage (Todoist API or the ssh-to-ix stamp writer briefly
+      # unreachable, now surfaced fast by the SIGALRM watchdog's exit 124
+      # instead of a hang). quick-close.py already closed the card optimistically,
+      # but the Neon score/stamp never landed; did-fast is idempotent, so the
+      # idle-tick retry loop below re-drives this exact completion once
+      # connectivity returns. First retry ~10s out; probe-gated + backed off.
+      printf '%d\t%d\t%s\t%s\n' "$(( $(date +%s) + 10 ))" 1 "$task_id" "$task_clean" >> "$DTD_FAILED"
       continue
     fi
     # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
@@ -2254,4 +2328,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
