@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "make it to banbridge": {
-      "todoist_id": "6hCWmp2fxVCRjwc2",
-      "minutes": 30
-    },
-    "maximize time in the social settings": {
-      "todoist_id": "6hCWmp6xHvxqqWh2",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-08-04T20:00:06.416243-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-05T02:00:04.956253-07:00"
 }
