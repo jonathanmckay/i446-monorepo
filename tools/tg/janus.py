@@ -4032,28 +4032,51 @@ def _(event):
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
         return
-    if STATE.day_offset != 0:
-        # Viewing another day: typed commands apply to THAT day (user request
-        # 2026-07-27 — "tg calls go to yesterday if I'm viewing yesterday").
-        # Only completed HHMM-HHMM ranges can land on a past day; live-timer
-        # actions (stop/current/del) still act on now, and anything else
-        # would silently start a timer TODAY, so warn instead of running.
-        viewed = view_now().date()
-        low = text.lower()
-        live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
-        has_range = re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
-                              re.sub(r"\s@\S+\s*$", "", text))
-        if has_range:
-            text = f"{text} --date {viewed.isoformat()}"
-        elif not live_ok:
-            flash(f"viewing {viewed:%-m/%-d} — use '<desc> HHMM-HHMM' to log that day "
-                  "(start/stop act on today)", 6.0)
-            return
-    flash(f"$ tg {text}")
+
+    # Comma splits multiple /tg calls (2026-08-05 user request) — mirrors
+    # /did's own comma/semicolon split convention. Each part gets the SAME
+    # day-offset resolution (viewed-day --date append / live-command
+    # rejection) a lone command would; a rejected part is flashed and
+    # dropped, it doesn't abort the rest. Parts run SEQUENTIALLY (one
+    # tg-fast.py call at a time, not concurrently) — the same serial-not-
+    # parallel choice made everywhere else timer commands batch, so this
+    # doesn't reintroduce the class of race this session already spent real
+    # effort closing elsewhere (d357/dtd/-1n ritual stamps): concurrent
+    # Toggl calls racing to trim/split each other's entries.
+    parts = [p.strip() for p in text.split(",") if p.strip()] or [text]
+
+    def _resolve_part(part: str) -> str | None:
+        if STATE.day_offset != 0:
+            # Viewing another day: typed commands apply to THAT day (user
+            # request 2026-07-27 — "tg calls go to yesterday if I'm viewing
+            # yesterday"). Only completed HHMM-HHMM ranges can land on a
+            # past day; live-timer actions (stop/current/del) still act on
+            # now, and anything else would silently start a timer TODAY, so
+            # warn instead of running.
+            viewed = view_now().date()
+            low = part.lower()
+            live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
+            has_range = re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
+                                  re.sub(r"\s@\S+\s*$", "", part))
+            if has_range:
+                part = f"{part} --date {viewed.isoformat()}"
+            elif not live_ok:
+                flash(f"viewing {viewed:%-m/%-d} — use '<desc> HHMM-HHMM' to log that day "
+                      "(start/stop act on today)", 6.0)
+                return None
+        return part
+
+    resolved = [r for r in (_resolve_part(p) for p in parts) if r is not None]
+    if not resolved:
+        return
+    flash(f"$ tg {' | '.join(resolved)}" if len(resolved) > 1 else f"$ tg {resolved[0]}")
 
     async def _run_and_refresh():
-        res = await asyncio.to_thread(run_tg_fast, text)
-        flash(res, 6.0)
+        results = []
+        for cmd in resolved:
+            results.append(await asyncio.to_thread(run_tg_fast, cmd))
+            event.app.invalidate()
+        flash(" | ".join(results) if len(results) > 1 else results[0], 6.0)
         event.app.invalidate()
         # Toggl /current has propagation lag; poll it a few times. The entries
         # list only needs ONE (forced) read — fetch it on the last poll so a
