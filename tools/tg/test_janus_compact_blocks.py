@@ -49,6 +49,35 @@ def test_zero_slot_entry_rides_header_no_duplicate_row():
         "the vacated :00 slot must not grow a grid-mark row"
 
 
+def test_deleted_calendar_event_lets_the_next_real_entry_take_the_header():
+    """The exact user-reported scenario, verbatim (2026-08-06): "we should
+    have 未:00 with EL:JM 1:1 on the right, and then after I delete that
+    from the calendar, it should be 未:15 with -1g as the time entry.
+    Essentially every hour/block :00 doesn't need to be its own line."
+    Modeled as two independent renders of the same block — before the
+    calendar event exists (it rides the header at :00) and after it's
+    deleted (the -1g entry at :15 takes over, still just ONE header line,
+    never a bare :00 header stacked above it)."""
+    mod = _load_tui()
+    zero = _midnight().replace(hour=12, minute=0)
+    quarter = _midnight().replace(hour=12, minute=15)
+
+    before = "".join(t for _, t in mod._compact_block_lines(
+        "未", 12, [_pick(mod, "EL:JM 1:1", zero)], 0, ""))
+    before_header = before.split("\n")[0]
+    assert before_header.startswith("未:00"), f"got: {before_header!r}"
+    assert "EL:JM 1:1" in before_header
+
+    after = "".join(t for _, t in mod._compact_block_lines(
+        "未", 12, [_pick(mod, "-1g", quarter)], 0, ""))
+    lines = after.split("\n")
+    after_header = lines[0]
+    assert after_header.startswith("未:15"), f"got: {after_header!r}"
+    assert "-1g" in after_header, "the surviving entry takes the header, not a body row"
+    assert not any(ln.startswith("未:00") or ln.startswith("  :00") for ln in lines), \
+        "no leftover bare :00 header line once the :00 event is gone"
+
+
 def test_mid_block_entry_rides_header_with_its_own_time():
     """Widened 2026-08-06 (user request: "every hour/block :00 doesn't need
     to be its own line"): the block's FIRST real entry rides the header
@@ -65,6 +94,32 @@ def test_mid_block_entry_rides_header_with_its_own_time():
     assert header.endswith("₦4")
     assert "Blizz" in header, "the block's first (and only) entry rides the header"
     assert not any("Blizz" in ln for ln in lines[1:]), "no duplicated body row"
+
+
+def test_second_hour_entry_rides_header_with_full_time_and_correct_gutter():
+    """When the block's first real entry falls in its SECOND hour (e.g. a
+    12:00-14:00 block whose earliest entry is at 13:05), the header shows
+    the full HH:MM (space-separated from the block name, not fused into a
+    `blk:MM` suffix that would misread as the block's own hour) — and the
+    header's busy-bar gutter cell must reflect THAT slot (13:05), not the
+    block's own :00 slot it no longer represents."""
+    mod = _load_tui()
+    start = _midnight().replace(hour=13, minute=5)
+    mod.STATE.events = [{
+        "title": "conflict", "start_dt": start, "end_dt": start.replace(minute=35),
+    }]
+    frags = mod._compact_block_lines("未", 12, [_pick(mod, "late start", start)], 0, "")
+    text = "".join(t for _, t in frags)
+    header = text.split("\n")[0]
+    assert header.startswith("未 13:05"), f"got: {header!r}"
+    assert "late start" in header
+    # The busy-bar gutter is a single glyph cell rendered as its own
+    # fragment; a stale (blk_sh, 0)-keyed lookup would find no coverage at
+    # 12:00 and render a plain space instead of the busy glyph.
+    gutter_frags = [t for s, t in frags if s == "class:gutter_busy"]
+    assert gutter_frags and gutter_frags[0] == "▍", (
+        "header gutter must reflect the entry's OWN slot (13:00-13:30, "
+        f"covered by the conflicting event), got fragments: {gutter_frags!r}")
 
 
 def test_future_block_header_carries_event_with_minute_duration():

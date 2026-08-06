@@ -217,11 +217,17 @@ def test_selected_event_row_gets_full_row_background_band():
     and duration must all carry the highlight background."""
     mod = _load_tui()
     today = _midnight()
+    # A decoy at the block's own :00 (2026-08-06: the chronologically-first
+    # real entry now rides the header) keeps "standup" itself as an ordinary
+    # BODY row, which is what this test is actually about.
+    decoy = {"start_dt": today.replace(hour=8), "time_str": "08:00", "label": "prep",
+             "style": "", "dur_min": 10, "entry_ids": [0], "raw_desc": "prep",
+             "project_id": None}
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = mod._event_key(ev)
-    frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
+    frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
     # Time column gets the accent style; label carries the fg color + bg band;
     # the trailing " (15)\n" duration fragment carries the plain bg band.
     assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t in frags)
@@ -233,11 +239,15 @@ def test_selected_event_row_gets_full_row_background_band():
 def test_unselected_event_row_uses_plain_time_and_dim_styles():
     mod = _load_tui()
     today = _midnight()
+    # Decoy at :00 for the same reason as the selected-row test above.
+    decoy = {"start_dt": today.replace(hour=8), "time_str": "08:00", "label": "prep",
+             "style": "", "dur_min": 10, "entry_ids": [0], "raw_desc": "prep",
+             "project_id": None}
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = None
-    frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
+    frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
     assert any(s == "class:time" for s, t in frags if t.strip() == "09:00")
     assert any(s == "class:dim" for s, t in frags if t == " (15)\n")
     assert not any("selected" in s or "reverse" in s for s, t in frags)
