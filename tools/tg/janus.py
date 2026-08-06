@@ -3315,7 +3315,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -4297,11 +4297,47 @@ def _(event):
     (Agency fetch or the read-only MSFT Slow Sync import) only get a local
     hide — "won't affect the calendar for outlook, but will for m5x2". The
     hide is written first either way, so the row vanishes immediately and a
-    mirrored copy on the other source can't resurface it."""
+    mirrored copy on the other source can't resurface it.
+
+    Widened 2026-08-06 (user request: "I want ctrl+x to apply to toggl
+    entries as well") — on a selected TRACKED entry, deletes it for real via
+    the Toggl API instead. A running timer is refused (mirrors ^P split's
+    existing guard on the same item kind): deleting your live timer out from
+    under you is exactly the kind of accidental-Ctrl+X you don't get to
+    undo. A merged multi-entry row (contiguous same-desc Toggl entries
+    rendered as one line) deletes every constituent id — unlike split,
+    there's no single-timeline ambiguity for a delete."""
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if isinstance(item, dict) and item.get("kind") == "entry":
+        if item.get("running"):
+            flash("can't delete a running timer — stop it first", 4.0)
+            return
+        ids = item.get("entry_ids") or []
+        if not ids:
+            flash("^X delete: entry has no id", 3.0)
+            return
+        desc = item.get("raw_desc") or "entry"
+        STATE.entries = [e for e in STATE.entries if e.get("id") not in ids]
+        STATE.event_sel = None
+        flash(f"deleting {desc}…", 3.0)
+
+        async def _delete_toggl_and_refresh():
+            try:
+                for eid in ids:
+                    await asyncio.to_thread(toggl_api.delete_entry, eid)
+                flash(f"deleted: {desc}", 6.0)
+            except Exception as e:  # noqa: BLE001
+                flash(f"toggl delete failed ({e}) — refreshing to resync", 8.0)
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_current)
+            event.app.invalidate()
+
+        event.app.create_background_task(_delete_toggl_and_refresh())
+        event.app.invalidate()
+        return
     if not (isinstance(item, dict) and item.get("kind") is None and item.get("end_dt")):
-        flash("^X delete: select a calendar event first", 3.0)
+        flash("^X delete: select a calendar event or tracked entry first", 3.0)
         return
     ev = item
     title = event_title(ev)
