@@ -969,6 +969,25 @@ cols = int(cols)
 
 with open(cache_file) as f:
     d = json.load(f)
+# Stable render order across refreshes (2026-08-06 bug report: every time a
+# task is finished, the whole list reorders for a few seconds). A ritual/
+# d359-met completion triggers did-fast --refresh-cache, which the auto-
+# reload watcher (below, polling the live task-queue file's mtime) picks up
+# within ~2s and swaps wholesale into this session's cache file, then
+# reloads fzf. But
+# --refresh-cache re-fetches from Todoist (a today|overdue filter query
+# plus several separate per-label queries, unioned) whose return order for
+# same-priority-tier tasks is NOT guaranteed stable call-to-call -- none of
+# today_tasks/_sec()'s buckets below apply their own sort, they just take
+# whatever order the cache array happens to be in. So the SAME set of tasks
+# can render in a different relative order after a refresh even though
+# nothing the user cares about changed, which reads as a full reorder. Sort
+# every task bucket by id right after load so rendering only ever depends
+# on WHICH tasks exist, never on the order Todoist's API happened to return
+# them in on any given fetch.
+for _k, _v in d.items():
+    if isinstance(_v, list):
+        d[_k] = sorted(_v, key=lambda t: str(t.get('id', '')) if isinstance(t, dict) else '')
 try:
     with open(done_file) as f:
         _done_raw = json.load(f)
