@@ -528,18 +528,6 @@
     "rent": "0.00"
   },
   {
-    "unit_id": 1299,
-    "property_name": "c702",
-    "unit": "B301",
-    "tenant_name": "Holman, Jessica",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-08-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "0.00"
-  },
-  {
     "unit_id": 1276,
     "property_name": "c702",
     "unit": "A106",
@@ -1336,7 +1324,7 @@
     "property_name": "rl16",
     "unit": "C10",
     "tenant_name": "Barraza, Rosa",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2006-12-01",
     "renewal_start_date": null,
@@ -4312,7 +4300,7 @@
     "property_name": "k104- LeFevre",
     "unit": "509-3",
     "tenant_name": "Bacon, Keegan A.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-03-08",
     "move_in": "2026-03-10",
     "renewal_start_date": null,
