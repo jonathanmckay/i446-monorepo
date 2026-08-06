@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "300pts hcm": {
-      "todoist_id": "6hCrCjqh9j9HvfG2",
-      "minutes": 100
-    },
-    "6-930 with kids / lx": {
-      "todoist_id": "6hCpRRQCV5hpF9rR",
-      "minutes": 60
-    }
-  },
-  "last_sync": "2026-08-06T03:55:02.688907-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-06T04:00:08.931169-07:00"
 }
