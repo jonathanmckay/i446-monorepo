@@ -42,6 +42,10 @@ STUB_MARKER = "msft-onedrive"
 # Sentinel that marks the auto-inserted "open the .docx" link line so re-runs
 # replace it in place instead of stacking duplicates.
 DOCX_LINK_SENTINEL = "<!-- msftshare:docx-link -->"
+# Binary/office formats we share verbatim: no pandoc conversion and no vault
+# frontmatter surgery (there's nothing markdown to rewrite, and they're already
+# shareable). These may live anywhere on disk, not just inside the vault.
+PASSTHROUGH_EXTS = {".pptx", ".ppt", ".xlsx", ".xls", ".pdf"}
 # dirs not worth walking when resolving a bare name
 PRUNE = {".git", ".stversions", ".obsidian", ".trash", "node_modules",
          "i446-monorepo", "drive-main", "drive-fundraising-legal",
@@ -100,6 +104,13 @@ def _norm(s: str) -> str:
 
 
 def resolve_doc(arg: str) -> Path:
+    # Passthrough office files (e.g. .pptx) are shared verbatim and may live
+    # anywhere — accept an explicit path (absolute, ~, cwd, or vault-relative)
+    # without the vault-membership or markdown requirements below.
+    ap = Path(arg).expanduser()
+    for c in (ap, VAULT / arg):
+        if c.is_file() and c.suffix.lower() in PASSTHROUGH_EXTS:
+            return c.resolve()
     # explicit path forms first
     cands = []
     p = Path(arg).expanduser()
@@ -245,6 +256,37 @@ def update_index(doc: Path, name: str):
 
 # --- main -----------------------------------------------------------------
 
+def share_passthrough(doc: Path, msft: bool):
+    """Share a binary office file (e.g. .pptx) verbatim into Work OneDrive.
+
+    No pandoc conversion and no vault frontmatter surgery — these formats are
+    already shareable and usually live outside the vault. If the source happens
+    to be inside the vault its folder path is mirrored; otherwise it lands at
+    the vault-shared root under its own name."""
+    import shutil
+    name = doc.name
+    try:
+        rel_dir = doc.relative_to(VAULT.resolve()).parent
+    except ValueError:
+        rel_dir = Path(".")
+    dest = SHARED_ROOT / rel_dir / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src_size = doc.stat().st_size
+    shutil.copy2(doc, dest)
+    if not dest.is_file() or dest.stat().st_size != src_size:
+        die(f"copy looks incomplete ({dest}) — source is {src_size} bytes")
+    shadow_rel = str(Path("vault-shared") / rel_dir / name)
+    out = [f"✓ shared verbatim: {shadow_rel}  ({dest.stat().st_size // 1024} KB)",
+           f"  open: {file_uri(dest)}",
+           f"  source of truth: the original file ({doc}) — not flipped",
+           "  → in OneDrive, right-click the file → Copy link to share "
+           "(wait for the cloud-sync badge to clear first)"]
+    if msft:
+        out.append("  note: the 'msft' flip is not supported for binary office "
+                   "files — the original stays canonical; share via the link above.")
+    print("\n".join(out))
+
+
 def main():
     args = [a for a in sys.argv[1:] if a]
     if not args:
@@ -256,6 +298,13 @@ def main():
         die("Work OneDrive not synced here — this skill only runs on Straylight")
 
     doc = resolve_doc(doc_arg)
+
+    # Binary office formats (e.g. .pptx) are shared verbatim — no conversion,
+    # no vault-relative resolution, no frontmatter/read_text below.
+    if doc.suffix.lower() in PASSTHROUGH_EXTS:
+        share_passthrough(doc, msft)
+        return
+
     rel = doc.relative_to(VAULT.resolve())
     name = doc.stem
 
