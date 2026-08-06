@@ -105,13 +105,23 @@ def test_current_block_shows_spilled_run_with_title():
 
 
 def test_row_cap_keeps_biggest_not_earliest():
-    """戌's 3-row card: four entries where the LATEST is the second-biggest —
-    the cap must drop the smallest, not the latest."""
+    """戌's 3-row card: five entries where the LATEST is the second-biggest —
+    the cap must drop the smallest of the BODY candidates, not the latest.
+
+    2026-08-06: the block's chronologically-first entry (backboard) now
+    always rides the header (see test_janus_compact_blocks.py's widened
+    header-promotion rule), so it's no longer a candidate the row cap can
+    drop at all — it's guaranteed visible regardless of size. This test
+    adds a second small entry (tiny, 2m) that ISN'T first, so there's still
+    a genuine cap decision among the remaining body candidates: 4 of them
+    for 3 slots, and the cap must drop the smallest of those four (tiny),
+    not the latest (run)."""
     mod = _load_tui()
     _setup(mod)
     today = _midnight()
     picks = []
     for name, h, m, dur, eid in [("backboard", 18, 18, 7, 1), ("1 f694", 18, 25, 8, 2),
+                                 ("tiny", 18, 30, 2, 5),
                                  ("figure out space", 18, 38, 51, 3), ("run", 19, 37, 23, 4)]:
         picks.append({"start_dt": today.replace(hour=h, minute=m),
                       "time_str": f"{h}:{m:02d}", "label": name, "style": "",
@@ -119,8 +129,9 @@ def test_row_cap_keeps_biggest_not_earliest():
                       "project_id": None})
     frags = mod._compact_block_lines("戌", 18, picks, 0, "")
     text = "".join(t for _, t in frags)
+    assert "backboard" in text.split("\n")[0], "the chronologically-first entry rides the header"
     assert "run" in text and "figure out space" in text and "1 f694" in text
-    assert "backboard" not in text, "the smallest entry is the one to drop"
+    assert "tiny" not in text, "the smallest of the BODY candidates is the one to drop"
 
 
 def test_row_cap_never_drops_the_running_entry():

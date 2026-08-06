@@ -209,11 +209,20 @@ def test_running_entry_is_selectable():
 def test_selected_entry_row_gets_full_row_background_band():
     mod = _load_tui()
     today = _midnight()
+    # A decoy at the block's own :00 (2026-08-06: the chronologically-first
+    # real entry now rides the header — see test_janus_compact_blocks.py's
+    # widened header-promotion rule) keeps "carolina" itself as an ordinary
+    # BODY row, which is what this test is actually about: an isolated,
+    # separately-styled time fragment on a body row, not the header's fused
+    # `blk_name + time` fragment.
+    decoy = {"start_dt": today.replace(hour=8), "time_str": "08:00", "label": "standup",
+             "style": "", "dur_min": 10, "entry_ids": [0], "raw_desc": "standup",
+             "project_id": None}
     pick = {"start_dt": today.replace(hour=9), "time_str": "09:00", "label": "carolina 1|1 · i9",
             "style": "fg:#2979ff", "dur_min": 15, "entry_ids": [1], "raw_desc": "carolina 1|1",
             "project_id": None}
     mod.STATE.event_sel = mod._sel_key({"kind": "entry", "start_dt": pick["start_dt"], "entry_ids": [1]})
-    frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
+    frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
     assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t in frags)
     assert any("bg:#3a3a3a" in s and "carolina" in t for s, t in frags)
     assert any(s == "class:selected_bg" for s, t in frags)

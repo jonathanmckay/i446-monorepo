@@ -49,18 +49,22 @@ def test_zero_slot_entry_rides_header_no_duplicate_row():
         "the vacated :00 slot must not grow a grid-mark row"
 
 
-def test_mid_block_entry_keeps_header_bare():
-    """An entry that does NOT start exactly at :00 stays in the body (a 12:01
-    entry renders "  :01", which never duplicated the header) and the header
-    keeps the bare 2026-07-21 layout (pts at the right edge)."""
+def test_mid_block_entry_rides_header_with_its_own_time():
+    """Widened 2026-08-06 (user request: "every hour/block :00 doesn't need
+    to be its own line"): the block's FIRST real entry rides the header
+    regardless of whether it starts exactly at :00 — labelled with its own
+    time (`午:01`, not the literal `午:00`) instead of leaving a bare header
+    and demoting the entry to an abbreviated body row two lines down."""
     mod = _load_tui()
     start = _midnight().replace(hour=12, minute=1)
     frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "₦4")
     text = "".join(t for _, t in frags)
-    header = text.split("\n")[0]
+    lines = text.split("\n")
+    header = lines[0]
+    assert header.startswith("午:01"), f"header shows the entry's own time, got: {header!r}"
     assert header.endswith("₦4")
-    assert "Blizz" not in header, "a mid-block entry must not ride the header"
-    assert "Blizz" in text, "entry shows in the body"
+    assert "Blizz" in header, "the block's first (and only) entry rides the header"
+    assert not any("Blizz" in ln for ln in lines[1:]), "no duplicated body row"
 
 
 def test_future_block_header_carries_event_with_minute_duration():
@@ -198,12 +202,16 @@ def test_past_block_continues_finished_event_to_its_end():
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
     text = "".join(t for _, t in mod.render_morning())
     wu = [ln for ln in text.split("\n")]
-    block = "\n".join(wu[wu.index(next(l for l in wu if l.startswith("午:00"))):][:4])
-    assert "blizz" in block, "toggl entry takes a body row (10:01 ≠ exact :00)"
-    # blizz@10:01 + the two fill marks 10:30/11:00 — the marks are covered by
-    # BOTH the event and the blizz entry; the toggl cont wins (tracked
-    # reality beats the plan), so the glyphs stay LEFT-justified.
-    assert block.count("◇ │") == 2
+    # 2026-08-06: blizz@10:01 is the block's first real entry, so it now
+    # rides the header itself (`午:01`) instead of a bare `午:00` header with
+    # blizz relegated to a body row underneath.
+    block = "\n".join(wu[wu.index(next(l for l in wu if l.startswith("午:01"))):][:4])
+    assert "blizz" in block, "the block's first entry rides the header"
+    # blizz now occupies the header instead of a body row, freeing that body
+    # slot for one more continuation mark: 10:30/11:00/11:30 all covered by
+    # the still-running event (tracked reality wins where it overlaps, but
+    # nothing tracked competes for these three anymore).
+    assert block.count("◇ │") == 3
 
 
 def test_transparent_and_allday_events_do_not_continue():

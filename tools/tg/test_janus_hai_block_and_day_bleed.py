@@ -60,9 +60,11 @@ def test_hai_renders_before_zi_when_zi_is_current():
                                 today.replace(hour=21, minute=0), project_id=1)]
     mod.view_now = lambda: today.replace(hour=22, minute=30)
     text = "".join(t for _, t in mod.render_focus_compact())
-    assert "亥:00" in text, "亥 must render in the focus band when 子 is current"
+    # 2026-08-06: xk22 (20:10) is 亥's first real entry, so it rides the
+    # header itself (`亥:10`) rather than a bare `亥:00` header.
+    assert "亥:10" in text, "亥 must render in the focus band when 子 is current"
     assert "子:00" in text
-    assert text.index("亥:00") < text.index("子:00"), "亥 must come before 子"
+    assert text.index("亥:10") < text.index("子:00"), "亥 must come before 子"
     assert "xk22" in text.split("子:00")[0], "亥's own entries must render in its card"
 
 

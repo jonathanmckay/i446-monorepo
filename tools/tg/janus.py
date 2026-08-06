@@ -1896,6 +1896,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     # 15/30-min grid resolution — needed by the busy-bar gutter cells on the
     # header rows too, so computed before either header branch.
     slot_min = 15 if max_rows > 3 else 30
+    # Set by the past-block branch below when its head0 rides the header from
+    # a slot other than :00 (2026-08-06); stays None/blk_sh on the is_future
+    # branch, which never vacates :00. Must default here (not just in that
+    # branch) — the body/mark-fill section past the header if/else, and the
+    # prev_hour seed for body-row abbreviation, are both shared by both
+    # branches.
+    vacated_00 = None
+    header_hour = blk_sh
 
     # ── header: the block's :00 slot ──
     # Free rows never ride the header: the header's event slot belongs to the
@@ -1958,24 +1966,48 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         out.append((dur_sty, "\n"))
     else:
         body_picks = picks
-        left = f"{blk_name}:00"
         pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
         # The -1n score sits at the RIGHT edge beside the block's 分, not after the block
         # name (user request 2026-07-21: "in the block lines... not in the
         # header"): `辰:00              ₦9 73分`.
         right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
-        # A real item starting EXACTLY at the block's :00 rides the header
-        # line instead of duplicating a "  :00" body row right under it (user
-        # request 2026-07-30: "Shouldn't XBOX Developer be on the 未 line
-        # rather than repeating it? I'm seeing the :00 line get duplicated").
-        # Exact only — a 12:18 entry renders "  :18", which never duplicated
-        # anything (and block-clipped spills/sleep land exactly on :00).
+        # The FIRST real item in the block rides the header line instead of
+        # duplicating a body row right under it (user request 2026-07-30:
+        # "Shouldn't XBOX Developer be on the 未 line rather than repeating
+        # it?"; widened 2026-08-06: "every hour/block :00 doesn't need to be
+        # its own line" — a block whose :00 slot was a now-deleted calendar
+        # event used to leave a bare "未:00" header AND demote the real next
+        # entry (e.g. -1g at 12:15) to an abbreviated "  :15" body row two
+        # lines down. Now the header adopts whichever real entry is
+        # chronologically first (picks arrive pre-sorted), labelled with ITS
+        # OWN start time (`未:15`, or `未 13:05` if it falls in the block's
+        # second hour) instead of always the literal `blk:00`. Deliberately
+        # NOT the is_future branch's "blk:00 HH:MM label" convention above —
+        # the user's own example was explicit that the block name's own
+        # suffix changes, not an inline time prefix.
         # Free/gap bars keep their own body rows — the header's slot belongs
         # to a tracked entry, a meeting, or the sleep-spillover item.
         head0 = next(
-            (p for p in picks
-             if not p.get("is_free") and not p.get("is_gap")
-             and (p["start_dt"].hour, p["start_dt"].minute) == (blk_sh, 0)), None)
+            (p for p in picks if not p.get("is_free") and not p.get("is_gap")), None)
+        # Tracks the block's own :00 slot when head0 was promoted from a
+        # LATER slot, so the mark-fill grid below (FOCUS_ROWS' include_00)
+        # doesn't re-materialize a phantom "  :00" row under a header that
+        # now displays a later time — the exact "duplicate :00 line" class
+        # the head0 mechanism exists to prevent, just from the other side.
+        # (vacated_00/header_hour both default at the top of the function.)
+        if head0 is not None:
+            hs0 = head0["start_dt"]
+            if (hs0.hour, hs0.minute) == (blk_sh, 0):
+                left = f"{blk_name}:00"
+            elif hs0.hour == blk_sh:
+                left = f"{blk_name}:{hs0.minute:02d}"
+                vacated_00 = (blk_sh, 0)
+            else:
+                left = f"{blk_name} {hs0.hour:02d}:{hs0.minute:02d}"
+                vacated_00 = (blk_sh, 0)
+            header_hour = hs0.hour
+        else:
+            left = f"{blk_name}:00"
         if head0 is not None:
             body_picks = [p for p in picks if p is not head0]
             running = bool(head0.get("is_running"))
@@ -2023,7 +2055,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 sty = base_sty
                 left_sty = "class:dim"
                 dur_sty = "class:dim"
-            gsty, gch = _gutter(blk_sh, 0, slot_min)
+            # head0's OWN slot, not always the block's :00 (2026-08-06) — the
+            # busy-bar cell must reflect whatever 15/30-min window the header
+            # is actually displaying now that it can ride a later slot.
+            gsty, gch = _gutter(hs0.hour, hs0.minute, slot_min)
             if is_sel:
                 gsty = f"{gsty} bg:#3a3a3a"
             tail_w = (dwidth(right) + 1) if right else 0
@@ -2100,6 +2135,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # re-materializing in the :00 row it vacated (user report 2026-07-30:
         # "the :00 line gets duplicated in a lot of places").
         occupied = {_slot(p) for p in picks}
+        # head0 promoted from a LATER slot (2026-08-06): its own real slot is
+        # already in `occupied` via the loop above, but the block's :00 slot
+        # it vacated is not — without this, FOCUS_ROWS' include_00 grid
+        # re-materializes a phantom "  :00" mark under a header that now
+        # reads a later time (the mirror image of the bug this whole
+        # mechanism exists to prevent).
+        if vacated_00 is not None:
+            occupied.add(vacated_00)
         offsets = range(0 if include_00 else slot_min, 120, slot_min)
         mark_slots = [(blk_sh + off // 60, off % 60) for off in offsets]
         marks = [(hh * 60 + mm, hh, mm, None)
@@ -2140,7 +2183,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                                              "dur_min": p.get("dur_min"),
                                              "running": bool(p.get("is_running"))})
 
-    prev_hour = blk_sh  # the header established this hour at its :00 slot
+    # The header established THIS hour (2026-08-06: not always blk_sh — a
+    # promoted head0 in the block's second hour shifts it), so a body row in
+    # the same hour abbreviates instead of redundantly repeating it.
+    prev_hour = header_hour
     for _, hh, mm, p in rows:
         tcol, prev_hour = _abbrev_tcol(hh, mm, prev_hour)
         if p is None:
