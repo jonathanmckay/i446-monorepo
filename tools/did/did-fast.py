@@ -993,6 +993,18 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     h1n_norm = {header_normalize(k): v for k, v in h1n.items()}
     all_tasks = tq.get("0neon", []) + tq.get("夜neon", []) + tq.get("1neon", [])
     results = []
+    # Same-task-matched-twice-in-one-batch guard (bug 2026-08-06): parse_input
+    # splits raw input on every comma/semicolon with no awareness that a
+    # single task's own content can legitimately contain one (e.g. "quarterly
+    # checkin with theo, ren, ashan feedback and Ashan feedback [60]" split
+    # into 3 fragments — "...theo", "ren", "ashan feedback..." — each of
+    # which independently word-overlap-matched the SAME task and each
+    # credited its own +60, tripling the payout to +180 for one completion).
+    # Once a task id is matched anywhere in this batch, later items in the
+    # SAME batch may not match it again — the fragment falls through to
+    # later routing steps (usually landing as needs_agent) instead of
+    # silently re-crediting it.
+    claimed_task_ids: set[str] = set()
 
     # "bigs" = time with both big kids → split the minutes between xk20 (Theo)
     # and xk22 (Ren), then let the normal 0₦ path handle each. Odd minute goes
@@ -1089,7 +1101,10 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
             matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id,
                                         require_labels={"0neon", "夜neon"})
+            if matched and str(matched.get("id")) in claimed_task_ids:
+                matched = None  # already closed by an earlier item this batch
             if matched:
+                claimed_task_ids.add(str(matched.get("id")))
                 r.todoist_task = matched
                 # By default, 0n habits do NOT write to 0分: Excel's own
                 # formulas roll up 0n data into 0分, and writing here
@@ -1185,14 +1200,27 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             neon_1n_tasks = tq.get("1neon", [])
             matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id,
                                         require_labels={"1neon"})
+            if matched and str(matched.get("id")) in claimed_task_ids:
+                matched = None  # already closed by an earlier item this batch
             if matched:
+                claimed_task_ids.add(str(matched.get("id")))
                 r.todoist_task = matched
             results.append(r)
             continue
 
         # Step 0.3: Todoist match
         matched = None if skip_todoist else match_todoist_task(item.name, all_tasks, preferred_id=preferred_id)
+        if matched and str(matched.get("id")) in claimed_task_ids:
+            # Same task already matched+credited by an earlier item in this
+            # batch (e.g. a comma inside the task's own name split it into
+            # multiple fragments) — do not credit it again.
+            results.append(RouteResult(
+                item=item, step="skipped",
+                error=f"{item.name}: already matched+credited to "
+                      f"\"{matched['content']}\" earlier in this batch"))
+            continue
         if matched:
+            claimed_task_ids.add(str(matched.get("id")))
             # Extract points
             pts_match = POINTS_RE.search(matched["content"])
             points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
@@ -1212,7 +1240,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         # Step 0.35: Live Todoist search (fallback when cache misses)
         # Searches all open tasks by text, not just neon-labeled ones.
         live_matched = None if skip_todoist else _live_todoist_search(item.name)
+        if live_matched and str(live_matched.get("id")) in claimed_task_ids:
+            results.append(RouteResult(
+                item=item, step="skipped",
+                error=f"{item.name}: already matched+credited to "
+                      f"\"{live_matched['content']}\" earlier in this batch"))
+            continue
         if live_matched:
+            claimed_task_ids.add(str(live_matched.get("id")))
             pts_match = POINTS_RE.search(live_matched["content"])
             points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
             fen_col = None

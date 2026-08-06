@@ -153,3 +153,43 @@ def test_ritual_card_not_carried_when_open_but_label_stripped(monkeypatch, tmp_p
 
     stale_ids = [t["id"] for t in result["today"] if t.get("id") == "stale-1"]
     assert stale_ids == [], "an open-but-unlabeled card must not be carried forward as a ritual card"
+
+
+def test_route_items_no_double_credit_when_task_name_has_commas(monkeypatch):
+    """Bug 2026-08-06: parse_input splits raw /did input on every comma with
+    no awareness that a single task's own content can legitimately contain
+    one. "/did quarterly checkin with theo, ren, ashan feedback and Ashan
+    feedback" (a real [60] task) split into 3 fragments -- "...theo", "ren",
+    "ashan feedback..." -- each of which independently word-overlap-matched
+    the SAME task via the live-search fallback and each credited its own
+    +60, tripling a single completion's payout to +180 in 0分!X (xk87).
+    route_items must credit a task matched more than once in one batch
+    exactly once."""
+    mod = _load_did_fast()
+
+    task = {
+        "id": "quarterly-1",
+        "content": "quarterly checkin with theo, ren, ashan feedback and Ashan feedback (60) [60]",
+        "labels": ["xk87"], "priority": "p3",
+        "due": {"date": "2026-07-31"}, "recurring": True,
+    }
+
+    def fake_live_search(query):
+        # All 3 comma-split fragments legitimately best-match this one task.
+        return task
+
+    monkeypatch.setattr(mod, "_live_todoist_search", fake_live_search)
+
+    raw = "quarterly checkin with theo, ren, ashan feedback and Ashan feedback"
+    items = mod.parse_input(raw)
+    assert len(items) == 3, "expected the naive comma-split to produce 3 fragments"
+
+    results = mod.route_items(items, headers={"0n": {}, "1n": {}}, tq={})
+
+    credited = [r for r in results if r.fen_points]
+    assert len(credited) == 1, f"expected exactly 1 credited result, got {len(credited)}: {results}"
+    assert credited[0].fen_points == 60
+    assert credited[0].todoist_task["id"] == "quarterly-1"
+
+    dup_skips = [r for r in results if r.step == "skipped" and "already matched" in (r.error or "")]
+    assert len(dup_skips) == 2, f"expected the other 2 fragments flagged as duplicate-skips, got {len(dup_skips)}"
