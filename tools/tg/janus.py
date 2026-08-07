@@ -3471,13 +3471,25 @@ def render_all() -> list[tuple[str, str]]:
 # ─── Command execution ─────────────────────────────────────────────────────
 
 def run_tg_fast(text: str) -> str:
+    """A single tg-fast.py call can make several Toggl API requests in
+    sequence (e.g. a range create: trim_range's get_entries + the create
+    itself; a backdate: current + stop + trim + start). Every request goes
+    through toggl_server/throttle.py's shared cross-process leaky bucket,
+    which caps EACH request's wait at its own MAX_WAIT (8s default) — so two
+    or more requests back to back can legitimately take 15s+ under load or a
+    post-429 cooldown, with no bug in tg-fast.py itself. 15s was too tight
+    and killed the subprocess mid-transaction (2026-08-07: a comma-delimited
+    range create timed out and errored, same failure mode did-fast.py's own
+    45s timeout already exists to avoid — see run_did_fast)."""
     try:
         proc = subprocess.run(
             ["python3", TG_FAST, text],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=30,
         )
         out = (proc.stdout or proc.stderr or "").strip().splitlines()
         return out[-1] if out else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "err: tg-fast timed out"
     except Exception as e:
         return f"err: {e}"
 

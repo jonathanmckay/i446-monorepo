@@ -755,7 +755,7 @@ label="\${names[1]}"
 # flag unset and get the non-interactive default.
 days=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
-  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring)> " "\$label" > /dev/tty
+  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
   read days < /dev/tty
 fi
 days=\${days// /}
