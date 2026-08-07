@@ -62,22 +62,34 @@ def test_pending_row_is_the_bare_habit_name():
 
 
 def test_done_and_pending_split_into_separate_rows():
+    """Row order flipped 2026-08-07: pending leads (line 0), done follows
+    (line 1)."""
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
     text = "".join(t for _, t in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 2
-    assert "765" in lines[0] and "睡觉" not in lines[0]
-    assert "hiit" in lines[1] and "765" not in lines[1]
+    assert "hiit" in lines[0] and "765" not in lines[0]
+    assert "765" in lines[1] and "睡觉" not in lines[1]
 
 
-def test_done_chips_use_single_trailing_space_not_two():
-    """Follow-up (2026-07-20): "1 space (not 2 like right now)" between
-    done-row chips."""
+def test_done_chips_keep_one_space_between_same_color_numbers():
+    """Follow-up (2026-07-20), refined 2026-08-07: adjacent done-row chips
+    that SHARE a color (teams/push both map to i9) keep exactly one space
+    between them, else the two numbers would visually merge."""
     mod = _load_tui()
     mod.STATE.habits_today = [("teams", 3.0), ("push", 4.0)]
     row1 = "".join(t for _, t in mod.render_habits_today()).split("\n")[0]
-    assert "3 4" in row1, f"exactly one space must separate chips: {row1!r}"
+    assert "3 4" in row1, f"exactly one space must separate same-color chips: {row1!r}"
+
+
+def test_done_chips_no_space_between_different_color_numbers():
+    """2026-08-07: adjacent done-row chips that DIFFER in color get no gap
+    at all — the color change itself is the visual separator."""
+    mod = _load_tui()
+    mod.STATE.habits_today = [("teams", 3.0), ("0l", 4.0)]  # i9, g245 — different colors
+    row1 = "".join(t for _, t in mod.render_habits_today()).split("\n")[0]
+    assert "34" in row1 and "3 4" not in row1, f"no space between different-color chips: {row1!r}"
 
 
 def test_integer_values_render_without_a_trailing_point_zero():

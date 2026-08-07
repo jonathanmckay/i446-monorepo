@@ -91,8 +91,9 @@ def test_done_habit_unaffected_by_snooze(tmp_path):
 
 
 def test_prayer_counter_chip_labeled_after_ytd_chips(tmp_path):
-    """Placement follow-up (2026-07-27): ص closes the SECOND line, after the
-    其他人 YTD chip — not leading the done row."""
+    """Placement follow-up (2026-07-27): ص closes the pending/YTD line, after
+    the 其他人 YTD chip — not leading the done row. Row order flipped
+    2026-08-07 (pending line now leads, at index 0)."""
     mod = _load_tui()
     _setup(mod, tmp_path)
     mod.STATE.prayer_count = 3.0
@@ -101,8 +102,8 @@ def test_prayer_counter_chip_labeled_after_ytd_chips(tmp_path):
     text = _strip_text(mod)
     assert "ص 3" in text
     lines = text.split("\n")
-    assert "ص 3" in lines[1], "counter chip lives on the pending/YTD line"
-    assert lines[1].index("ص 3") > lines[1].index("其他人")
+    assert "ص 3" in lines[0], "counter chip lives on the pending/YTD line"
+    assert lines[0].index("ص 3") > lines[0].index("其他人")
 
 
 def test_prayer_zero_still_shown(tmp_path):

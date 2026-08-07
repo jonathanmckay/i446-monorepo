@@ -233,6 +233,35 @@ PROJECT_COLORS = {
     "家":   "#00b8d4",    # Pool Party (family)
 }
 
+# Daily Dozen (hcbi sheet, Q<n> summary rows) → chip color. User-specified
+# 2026-08-07, logical food-association mapping over vault/i447/
+# neon-color-pallette.md swatches (reusing already-assigned domain colors
+# where they're the best visual fit, same precedent as HABIT_YTD_COLORS
+# below reusing hcmp's/qz12's hues for an unrelated display context — a
+# swatch's "owner" domain doesn't leak into a different line's meaning).
+# Order matches the hcbi sheet's E:O header order (bn,br,fr,cr,gr,vg,fx,g,
+# nt,sp,wtr) — the row/row+1 alternating-column read in fetch_habits_today
+# reassembles them back into this single logical order.
+DAILY_DOZEN_COLORS = {
+    "bn":  "#880e4f",  # Plum — beans (dark red/maroon)
+    "br":  "#ff1744",  # Hot Rod — berries (bright red)
+    "fr":  "#ff4136",  # Ferrari — fruit (red)
+    "cr":  "#1b5e20",  # Emerald Shadow — cruciferous (dark green)
+    "gr":  "#00e676",  # Matrix — greens (green)
+    "vg":  "#ff6d00",  # Lava — other vegetables (orange)
+    "fx":  "#fec4a4",  # Tangerine Weak-sauce — flax (cream)
+    "g":   "#ffd600",  # Lightning — grains (gold)
+    "nt":  "#8b3a00",  # Rust — nuts/seeds (brown)
+    "sp":  "#e65100",  # Molten — spices (dark orange)
+    "wtr": "#2979ff",  # Electric Blue — water (blue)
+}
+DAILY_DOZEN_ORDER = ["bn", "br", "fr", "cr", "gr", "vg", "fx", "g", "nt", "sp", "wtr"]
+# hcbi columns X (food 分, user calls it "hcbc") / Y (hcbp) hold each
+# domain's running Q<n> total — rendered as a labeled "behind" chip only
+# when negative (same "only show what's owed" convention as
+# HABIT_YTD_COLORS below), in that domain's own PROJECT_COLORS hue.
+HCBI_BEHIND_DOMAINS = {"hcbc": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
+
 # Radioactive — the palette's one unassigned signature neon. The ₦ accent:
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
 # colors in Janus (0n or -1n)... both").
@@ -354,6 +383,13 @@ class State:
         # labeled "ص N" counter chip, never a bare done/pending chip
         # (user request 2026-07-27). None until a successful fetch.
         self.prayer_count: float | None = None
+        # Today's-quarter Daily Dozen line (hcbi sheet): [(category, value), ...]
+        # in DAILY_DOZEN_ORDER, categories with no value yet omitted. Third
+        # line of the habit strip (user request 2026-08-07).
+        self.daily_dozen: list[tuple[str, float]] = []
+        # {"hcbc": v, "hcbp": v} Q<n> running totals (hcbi!X/Y), rendered as
+        # a "behind" chip only when negative — see HCBI_BEHIND_DOMAINS.
+        self.hcbi_behind: dict[str, float] = {}
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -1444,6 +1480,58 @@ def _ytd_applescript_lines() -> str:
     return "\n".join(lines)
 
 
+def _dozen_applescript_lines(q_label: str) -> str:
+    """AppleScript appended to fetch_habits_today's script (after a third
+    '||' marker): finds the hcbi sheet's row labeled q_label in column B —
+    the current quarter's Daily Dozen summary row — and reads E:Y of that
+    row plus the row below. The sheet splits the 11 Daily Dozen categories'
+    Q<n> values across the two rows (odd E:O columns on the label row, even
+    E:O columns on the row below); columns X/Y on the label row hold the
+    hcbc/hcbp running Q<n> point totals (HCBI_BEHIND_DOMAINS). Best-effort:
+    a missing/renamed row just leaves this segment empty, same tolerance as
+    the rest of this fetch."""
+    return f'''    try
+        set wsD to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set qRow to 0
+        -- A vertical B300:B450 range returns a list of ROWS (each a
+        -- 1-element list, since it's one column wide) -- the same 2-level
+        -- unwrap fetch_habits_today's own C3:C500 date search above uses,
+        -- NOT a flat list of values (that shape only applies to a single
+        -- ROW range like the header/data reads below).
+        set bVals to value of range "B300:B450" of wsD
+        repeat with i from 1 to (count of bVals)
+            set bv to ""
+            try
+                set bv to (item 1 of (item i of bVals)) as text
+            end try
+            if bv is "{q_label}" then
+                set qRow to i + 299
+                exit repeat
+            end if
+        end repeat
+        if qRow > 0 then
+            set tmpD to value of range ("E" & qRow & ":Y" & (qRow + 1)) of wsD
+            set dRow1 to item 1 of tmpD
+            set dRow2 to item 2 of tmpD
+            repeat with i from 1 to (count of dRow1)
+                set dv to ""
+                try
+                    set dv to (item i of dRow1) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+            set out to out & "|"
+            repeat with i from 1 to (count of dRow2)
+                set dv to ""
+                try
+                    set dv to (item i of dRow2) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+        end if
+    end try'''
+
+
 def fetch_habits_today():
     """Read today's 0₦ (Neon habits) row: EVERY habit (done and not-yet-done
     alike), in column order, for the two-row habit strip under the header
@@ -1451,6 +1539,7 @@ def fetch_habits_today():
     strip empty/stale, same tolerance as fetch_points."""
     try:
         now = view_now()
+        q_label = f"Q{(now.month - 1) // 3 + 1}"
         IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
         # BULK range reads only — the old shape (a per-row date loop up to
         # r500 + per-cell header/value reads) was ~580 individual AppleEvents
@@ -1503,6 +1592,8 @@ def fetch_habits_today():
     end repeat
     set out to out & "|"
 {_ytd_applescript_lines()}
+    set out to out & "|"
+{_dozen_applescript_lines(q_label)}
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
@@ -1513,7 +1604,10 @@ end tell'''
             return
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
-        raw, _, ytd_raw = proc.stdout.strip().partition("||")
+        segs = proc.stdout.strip().split("||")
+        raw = segs[0] if len(segs) > 0 else ""
+        ytd_raw = segs[1] if len(segs) > 1 else ""
+        dozen_raw = segs[2] if len(segs) > 2 else ""
         ytd: dict[str, float] = {}
         for name, val in zip(HABIT_YTD_CELLS, ytd_raw.split("|")):
             try:
@@ -1521,6 +1615,34 @@ end tell'''
             except ValueError:
                 pass
         STATE.habits_ytd = ytd
+        dozen_rows = dozen_raw.split("|")
+        dozen_row1 = dozen_rows[0].split(",") if len(dozen_rows) > 0 else []
+        dozen_row2 = dozen_rows[1].split(",") if len(dozen_rows) > 1 else []
+
+        def _dozen_cell(offset: int) -> str:
+            # offset is 1-based within E:Y (E=1 .. Y=21); the value lives on
+            # whichever of the two rows is non-blank for that column.
+            v1 = dozen_row1[offset - 1].strip() if offset - 1 < len(dozen_row1) else ""
+            v2 = dozen_row2[offset - 1].strip() if offset - 1 < len(dozen_row2) else ""
+            return v1 or v2
+        dozen: list[tuple[str, float]] = []
+        for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
+            raw_v = _dozen_cell(offset)
+            if raw_v:
+                try:
+                    dozen.append((key, float(raw_v)))
+                except ValueError:
+                    pass
+        behind: dict[str, float] = {}
+        for key, offset in (("hcbc", 20), ("hcbp", 21)):
+            raw_v = _dozen_cell(offset)
+            if raw_v:
+                try:
+                    behind[key] = float(raw_v)
+                except ValueError:
+                    pass
+        STATE.daily_dozen = dozen
+        STATE.hcbi_behind = behind
         habits = []
         prayer: float | None = 0.0  # blank cell = 0 prayers so far, not "unknown"
         for chunk in raw.split("|"):
@@ -1661,16 +1783,40 @@ def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return row
 
 
+def _pack_number_chips(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """A row of bare-number chips renders back to back with NO gap when
+    adjacent chips differ in color — the color change itself is the visual
+    separator — but keeps a single space between adjacent chips that share a
+    color (a domain covering multiple habits, e.g. i9: stats/notes/push/
+    teams all render blue), else two same-color numbers read as one merged
+    number (user request 2026-08-07: "push=3" next to "teams=45" must not
+    become "345")."""
+    out: list[tuple[str, str]] = []
+    prev_style = None
+    for sty, text in chips:
+        if prev_style is not None and sty == prev_style:
+            text = " " + text
+        out.append((sty, text))
+        prev_style = sty
+    return out
+
+
 def render_habits_today() -> list[tuple[str, str]]:
-    """Two-row strip of today's Neon habits, split by DONE-ness rather than
-    wrapped across two lines of the same thing (2026-07-20 follow-up): row 1
-    is every habit with a value today, as solid-background chips — just the
-    number, one trailing space (not two) between chips; row 2 is every
-    habit WITHOUT a value yet, as the bare habit NAME in the same domain-
-    colored chip style, so it reads as "still open." Each row independently
-    drops whatever doesn't fit in WIDTH_HINT — the ask was two lines, not a
-    scrolling list."""
-    if not STATE.habits_today and not STATE.habits_ytd:
+    """Three-line strip under the header: today's Neon habits split by
+    DONE-ness (2026-07-20 follow-up), reordered 2026-08-07 so the unfinished
+    row leads:
+    - line 1: every habit WITHOUT a value yet, as the bare habit NAME in its
+      domain-colored chip style ("still open").
+    - line 2: every habit with a value today, as solid-background chips —
+      just the number, packed via _pack_number_chips (no gap between
+      differently-colored numbers, one space between same-colored ones).
+    - line 3: this quarter's Daily Dozen (hcbi sheet) — one bare-number chip
+      per category in DAILY_DOZEN_COLORS, packed the same way, followed by a
+      labeled "behind" chip for any HCBI_BEHIND_DOMAINS total that's
+      negative (user request 2026-08-07).
+    Each line independently drops whatever doesn't fit in WIDTH_HINT."""
+    if not (STATE.habits_today or STATE.habits_ytd or STATE.daily_dozen
+            or STATE.hcbi_behind):
         return []
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
@@ -1684,16 +1830,17 @@ def render_habits_today() -> list[tuple[str, str]]:
         blk = hour_to_block(view_now().hour)
         label = _read_block_emojis().get(blk[0]) if blk else ""
         if label:
-            neon_chip = [(NEON_PTS_STYLE, f"{label} ")]
-    done_chips = neon_chip + [(_habit_chip_style(name), f"{v:g} ")
-                              for name, v in STATE.habits_today if v is not None]
+            neon_chip = [(NEON_PTS_STYLE, f"{label}")]
+    done_chips = _pack_number_chips(
+        neon_chip + [(_habit_chip_style(name), f"{v:g}")
+                     for name, v in STATE.habits_today if v is not None])
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
-    # as the jm dashboard "2026" header cards) on the second line AFTER the
+    # as the jm dashboard "2026" header cards) on the pending line AFTER the
     # pending 0neon names, each in its own purple (HABIT_YTD_COLORS —
     # user-requested order + palette 2026-07-21). Only shown while the queue
     # is at or below zero — a positive standing means nothing is owed, and
-    # hiding it keeps the second line a pure "what's left to do" list (user
-    # request 2026-07-24).
+    # hiding it keeps this a pure "what's left to do" list (user request
+    # 2026-07-24).
     pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today
                      if v is None and not _habit_deferred(name)
@@ -1702,14 +1849,20 @@ def render_habits_today() -> list[tuple[str, str]]:
                        f"{name} {v:+g} ")
                       for name, v in STATE.habits_ytd.items() if v <= 0]
     # ص prayer counter: always-visible labeled chip ("ص 3") closing the
-    # second line, after the 其他人 YTD chip — a count toward 5, so the
+    # pending line, after the 其他人 YTD chip — a count toward 5, so the
     # bare-number done-chip format (or disappearing into the pending names)
     # never fit it (user request 2026-07-27; placement follow-up same day).
     if STATE.prayer_count is not None:
         pending_chips.append((_habit_chip_style("ص"),
                               f"ص {STATE.prayer_count:g} "))
+    dozen_chips = _pack_number_chips(
+        [(f"bold bg:{DAILY_DOZEN_COLORS.get(key, '#444444')} #ffffff", f"{v:g}")
+         for key, v in STATE.daily_dozen])
+    dozen_chips += [(f"bold bg:{color} #ffffff", f"{name} {int(round(STATE.hcbi_behind[name])):+d} ")
+                    for name, color in HCBI_BEHIND_DOMAINS.items()
+                    if STATE.hcbi_behind.get(name, 0) < 0]
     out: list[tuple[str, str]] = []
-    for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
+    for chips in (_habit_row(pending_chips), _habit_row(done_chips), _habit_row(dozen_chips)):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))
