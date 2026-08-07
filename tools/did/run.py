@@ -289,7 +289,14 @@ def _drop_from_queue(task_id: str) -> None:
                     changed = True
         if changed:
             q["updated"] = datetime.now().isoformat(timespec="seconds")
-            TASK_QUEUE.write_text(json.dumps(q, ensure_ascii=False, indent=2))
+            # Atomic write (tmp + rename) -- see refresh-cache.py's identical
+            # fix (2026-08-07): a plain write_text() truncates this file
+            # before writing, and dtd's 2s-poll auto-reload watcher can read
+            # that truncated state mid-write, crashing its list-generator's
+            # unguarded json.load() and blanking the list for up to 2s.
+            tmp_path = TASK_QUEUE.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(q, ensure_ascii=False, indent=2))
+            tmp_path.rename(TASK_QUEUE)
     except Exception:
         pass
 

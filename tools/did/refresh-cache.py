@@ -160,7 +160,18 @@ def main() -> int:
         print(f"shorten skipped: {e}", file=sys.stderr)
 
     CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    # Atomic write (tmp + rename): dtd's auto-reload watcher polls this file's
+    # mtime every 2s and its list-generator does an unguarded json.load() with
+    # no retry. A plain write_text() truncates the file before writing the new
+    # content, so a poll landing in that window reads a truncated/empty file,
+    # the generator crashes on the parse, and dtd's list goes blank until the
+    # next successful poll (up to another 2s) -- the "flashes then goes blank
+    # for a full 2s" bug (2026-08-07). did-fast.py's own cache writer already
+    # uses this exact tmp+rename pattern for the same file; this writer never
+    # got it.
+    tmp_path = CACHE.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    tmp_path.rename(CACHE)
     _nudge_janus()  # so a running janus re-reads the freshened cache
     counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}
     counts["today-dynamic"] = len(fresh_dynamic)
