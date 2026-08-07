@@ -220,6 +220,7 @@ PROJECT_COLORS = {
     "n156": "#1249b4",   # Sapphire
     "hcmc": "#0d3b66",   # Deep Sea
     "m5x2": "#d50032",   # Crimson
+    "m828": "#9b0023",   # Velvet (darker than m5x2's Crimson, user request 2026-08-07)
     "hcb":  "#f81d78",   # Bubblegum Shock
     "hcbp": "#ff4081",   # Flamingo
     "infra":"#9e9e9e",   # Concrete

@@ -114,7 +114,7 @@ PROJECT_COLORS = {
     "i9":    "#2979ff",  # Electric Blue
     "infra": "#9e9e9e",  # Concrete
     "m5x2":  "#d50032",  # Crimson
-    "m828":  "#1249b4",  # Sapphire
+    "m828":  "#9b0023",  # Velvet
     "n156":  "#1249b4",  # Sapphire
     "q5n7":  "#c3fc0d",  # Radioactive
     "qz12":  "#aa00ff",  # Purple Haze
