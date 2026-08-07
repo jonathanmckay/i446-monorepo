@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-07T10:00:02.907009-07:00"
+  "tasks": {
+    "get to a newtrajectory with hcbc": {
+      "todoist_id": "6hFFxcPwFjg5VWv2",
+      "minutes": 40
+    },
+    "1500分 「50」": {
+      "todoist_id": "6hFFxcVWVG7GPVwR",
+      "minutes": 20
+    },
+    "tasks below 50": {
+      "todoist_id": "6hFFxcfw5CgM5XPR",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-08-07T12:00:03.064316-07:00"
 }
