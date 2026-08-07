@@ -351,7 +351,7 @@ def load_points_data():
 # for xk88). We hardcode (col, row) per card since headers span two rows.
 CACHE_CARDS = [
     {"label": "hcbp",   "col": "AB", "row": 372, "period": "Q3",   "color": "#f81d78"},
-    {"label": "hcbc",   "col": "AF", "row": 371, "period": "Q2",   "color": "#ff4081"},
+    {"label": "hcbc",   "col": "AF", "row": 372, "period": "Q3",   "color": "#ff4081"},
     {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
