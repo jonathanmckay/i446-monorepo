@@ -61,16 +61,17 @@ def test_pending_row_is_the_bare_habit_name():
     assert "hiit" in lines[0] and "teams" in lines[0]
 
 
-def test_done_and_pending_split_into_separate_rows():
-    """Row order flipped 2026-08-07: pending leads (line 0), done follows
-    (line 1)."""
+def test_done_and_pending_share_one_line_done_first():
+    """2026-08-07 follow-up: done and pending chips merge onto ONE line, done
+    numbers first, pending names immediately appended right after (no
+    separator) — "right after the '9' would come '2nd hci'"."""
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
     text = "".join(t for _, t in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
-    assert len(lines) == 2
-    assert "hiit" in lines[0] and "765" not in lines[0]
-    assert "765" in lines[1] and "睡觉" not in lines[1]
+    assert len(lines) == 1
+    assert "765" in lines[0] and "睡觉" not in lines[0] and "hiit" in lines[0]
+    assert lines[0].index("765") < lines[0].index("hiit")
 
 
 def test_done_chips_keep_one_space_between_same_color_numbers():

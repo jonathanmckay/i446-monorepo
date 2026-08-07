@@ -1802,18 +1802,18 @@ def _pack_number_chips(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
 
 def render_habits_today() -> list[tuple[str, str]]:
-    """Three-line strip under the header: today's Neon habits split by
-    DONE-ness (2026-07-20 follow-up), reordered 2026-08-07 so the unfinished
-    row leads:
-    - line 1: every habit WITHOUT a value yet, as the bare habit NAME in its
-      domain-colored chip style ("still open").
-    - line 2: every habit with a value today, as solid-background chips —
+    """Two-line strip under the header, today's Neon habits (2026-07-20),
+    reworked 2026-08-07:
+    - line 1: every habit with a value today, as solid-background chips —
       just the number, packed via _pack_number_chips (no gap between
-      differently-colored numbers, one space between same-colored ones).
-    - line 3: this quarter's Daily Dozen (hcbi sheet) — one bare-number chip
-      per category in DAILY_DOZEN_COLORS, packed the same way, followed by a
-      labeled "behind" chip for any HCBI_BEHIND_DOMAINS total that's
-      negative (user request 2026-08-07).
+      differently-colored numbers, one space between same-colored ones) —
+      immediately followed (same line, no separator) by every habit WITHOUT
+      a value yet, as the bare habit NAME in its domain-colored chip style
+      ("still open").
+    - line 2: this quarter's Daily Dozen (hcbi sheet) — a bare-number chip
+      for each category that's currently BEHIND (negative; neutral/positive
+      categories are omitted), packed the same way, followed by a labeled
+      "behind" chip for any HCBI_BEHIND_DOMAINS total that's negative.
     Each line independently drops whatever doesn't fit in WIDTH_HINT."""
     if not (STATE.habits_today or STATE.habits_ytd or STATE.daily_dozen
             or STATE.hcbi_behind):
@@ -1855,14 +1855,17 @@ def render_habits_today() -> list[tuple[str, str]]:
     if STATE.prayer_count is not None:
         pending_chips.append((_habit_chip_style("ص"),
                               f"ص {STATE.prayer_count:g} "))
+    # Only categories currently BEHIND (negative) are worth a glance here —
+    # neutral/positive ones are dropped entirely (user request 2026-08-07).
     dozen_chips = _pack_number_chips(
         [(f"bold bg:{DAILY_DOZEN_COLORS.get(key, '#444444')} #ffffff", f"{v:g}")
-         for key, v in STATE.daily_dozen])
+         for key, v in STATE.daily_dozen if v < 0])
     dozen_chips += [(f"bold bg:{color} #ffffff", f"{name} {int(round(STATE.hcbi_behind[name])):+d} ")
                     for name, color in HCBI_BEHIND_DOMAINS.items()
                     if STATE.hcbi_behind.get(name, 0) < 0]
+    habit_line = done_chips + pending_chips
     out: list[tuple[str, str]] = []
-    for chips in (_habit_row(pending_chips), _habit_row(done_chips), _habit_row(dozen_chips)):
+    for chips in (_habit_row(habit_line), _habit_row(dozen_chips)):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))
