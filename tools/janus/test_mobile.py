@@ -131,3 +131,195 @@ def test_log_entry_appends_habit_tag_items(jm, monkeypatch):
     r = jm.log_entry("e2", "run", 61, "hcbp", tags=["其他人", "-3"])
     assert seen["text"] == "run 61 @hcbp, 其他人 61"
     assert r["ok"] and r["tag_steps"] == ["其他人→0n"]
+
+
+# ---------------------------------------------------------------------------
+# edit_entry / split_entry (2026-08-06 feature — swipe-left edit, split top/bottom)
+# ---------------------------------------------------------------------------
+
+def _raw_entry(jm, sh, sm, eh, em, desc="work", pid=None, eid=1, tags=None):
+    """A raw Toggl API entry dict (the true, un-clipped shape get_entries
+    returns), today, [sh:sm, eh:em)."""
+    today = dt.datetime.now(jm.TZ).date()
+    st = dt.datetime.combine(today, dt.time(sh, sm), jm.TZ)
+    en = dt.datetime.combine(today, dt.time(eh, em), jm.TZ)
+    return {"id": eid, "description": desc, "start": st.isoformat(),
+            "stop": en.isoformat(), "duration": int((en - st).total_seconds()),
+            "project_id": pid, "tags": tags or []}
+
+
+def _raw_running(jm, sh, sm, desc="work", pid=None, eid=1):
+    today = dt.datetime.now(jm.TZ).date()
+    st = dt.datetime.combine(today, dt.time(sh, sm), jm.TZ)
+    return {"id": eid, "description": desc, "start": st.isoformat(),
+            "stop": None, "duration": -1, "project_id": pid, "tags": []}
+
+
+def _raw_cross_midnight(jm, desc="睡觉", eid=1, pid=None):
+    """Starts 23:30 yesterday, ends 06:00 today — the nightly 睡觉 case the
+    2026-08-06 review flagged: the timeline row displays a clipped
+    start="00:00" (see _fetch_today), which does NOT match this entry's true
+    start, so any edit that resubmits that clipped value must be refused."""
+    today = dt.datetime.now(jm.TZ).date()
+    yesterday = today - dt.timedelta(days=1)
+    st = dt.datetime.combine(yesterday, dt.time(23, 30), jm.TZ)
+    en = dt.datetime.combine(today, dt.time(6, 0), jm.TZ)
+    return {"id": eid, "description": desc, "start": st.isoformat(),
+            "stop": en.isoformat(), "duration": int((en - st).total_seconds()),
+            "project_id": pid, "tags": []}
+
+
+def test_edit_desc_only_does_not_touch_time(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 30, desc="old", eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    calls = []
+    monkeypatch.setattr(jm.toggl_api, "update_entry", lambda eid, **f: calls.append((eid, f)))
+    monkeypatch.setattr(jm.toggl_api, "trim_range",
+                        lambda *a, **kw: pytest.fail("trim_range must not run for a desc-only edit"))
+    r = jm.edit_entry("1", "new desc", "09:00", "09:30", "")
+    assert r["ok"]
+    assert calls == [(1, {"description": "new desc"})]
+
+
+def test_edit_time_change_trims_then_updates(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 30, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    order = []
+    monkeypatch.setattr(jm.toggl_api, "trim_range",
+                        lambda s, en, exclude_ids=None: order.append(("trim", s, en, exclude_ids)))
+    monkeypatch.setattr(jm.toggl_api, "update_entry",
+                        lambda eid, **f: order.append(("update", eid, f)))
+    r = jm.edit_entry("1", "work", "09:00", "10:00", "")
+    assert r["ok"]
+    assert [c[0] for c in order] == ["trim", "update"]
+    assert order[0][3] == {1}  # excludes the entry's own id from being trimmed against itself
+    assert order[1][2]["duration"] == 3600
+
+
+def test_edit_rejects_cross_midnight_time_change(jm, monkeypatch):
+    """The timeline shows this row's start as a clipped '00:00' — resubmitting
+    that value (unchanged, from the user's perspective) must not be treated
+    as a no-op; it differs from the true start (23:30 yesterday) and must be
+    refused rather than silently truncating real overnight minutes."""
+    e = _raw_cross_midnight(jm, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    monkeypatch.setattr(jm.toggl_api, "trim_range",
+                        lambda *a, **kw: pytest.fail("must not trim a cross-midnight entry"))
+    monkeypatch.setattr(jm.toggl_api, "update_entry",
+                        lambda *a, **kw: pytest.fail("must not move a cross-midnight entry's time"))
+    r = jm.edit_entry("1", "睡觉", "00:00", "06:00", "")
+    assert not r["ok"] and "cross-midnight" in r["error"]
+
+
+def test_edit_rejects_retime_of_already_logged_entry(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 30, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    jm._ledger_add(dt.datetime.now(jm.TZ).date(), "1", "already credited")
+    r = jm.edit_entry("1", "work", "09:00", "10:00", "")
+    assert not r["ok"] and "logged" in r["error"]
+
+
+def test_edit_rejects_retime_that_would_overlap_a_logged_entry(jm, monkeypatch):
+    """Retiming entry 1 into entry 2's span would make trim_range() delete/
+    shrink entry 2 (already credited) and hand its remainder a brand-new,
+    unlogged id — the exact mechanism behind the 2026-08-06 xk87 triple-credit
+    bug, just via edit instead of the comma-split parser."""
+    target = _raw_entry(jm, 9, 0, 9, 30, eid=1)
+    other = _raw_entry(jm, 9, 45, 10, 15, eid=2)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [target, other])
+    jm._ledger_add(dt.datetime.now(jm.TZ).date(), "2", "already credited")
+    r = jm.edit_entry("1", "work", "09:00", "10:00", "")
+    assert not r["ok"] and "overlap" in r["error"]
+
+
+def test_edit_running_entry_allows_start_change_only(jm, monkeypatch):
+    e = _raw_running(jm, 9, 0, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    calls = []
+    monkeypatch.setattr(jm.toggl_api, "update_entry", lambda eid, **f: calls.append((eid, f)))
+    monkeypatch.setattr(jm.toggl_api, "trim_range",
+                        lambda *a, **kw: pytest.fail("must not trim a running entry"))
+    r = jm.edit_entry("1", "work", "08:45", "now", "")
+    assert r["ok"]
+    assert len(calls) == 1
+    eid, fields = calls[0]
+    assert eid == 1 and set(fields) == {"description", "start"}
+
+
+def test_edit_running_entry_rejects_end_change(jm, monkeypatch):
+    e = _raw_running(jm, 9, 0, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    r = jm.edit_entry("1", "work", "09:00", "10:00", "")
+    assert not r["ok"] and "running" in r["error"]
+
+
+def test_split_top_shrinks_original_to_earlier_chunk(jm, monkeypatch):
+    """id-ownership must follow the desktop TUI's ^P convention: the id
+    always stays with the temporally EARLIER piece. For split-top, the chunk
+    (first 10m) IS the earlier piece, so the original id shrinks to become
+    it; the remainder is the new entry."""
+    e = _raw_entry(jm, 9, 0, 9, 30, pid=5, eid=1, tags=["t"])  # 30min → chunk=10
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    calls = []
+    monkeypatch.setattr(jm.toggl_api, "create_entry", lambda *a: calls.append(("create", a)))
+    monkeypatch.setattr(jm.toggl_api, "update_entry",
+                        lambda eid, **f: calls.append(("update", eid, f)))
+    r = jm.split_entry("1", "top")
+    assert r["ok"] and r["chunk_minutes"] == 10
+    assert [c[0] for c in calls] == ["create", "update"], \
+        "the new (later) piece must be created BEFORE the original is shrunk"
+    _, (desc, start_iso, stop_iso, dur, pid, tags) = calls[0]
+    assert dur == 1200 and pid == 5 and tags == ["t"]  # remainder: 09:10-09:30, 20min
+    assert calls[1][1] == 1 and calls[1][2]["duration"] == 600  # original → 09:00-09:10
+
+
+def test_split_bottom_shrinks_original_to_earlier_remainder(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 30, eid=1)  # 30min → chunk=10
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    calls = []
+    monkeypatch.setattr(jm.toggl_api, "create_entry", lambda *a: calls.append(("create", a)))
+    monkeypatch.setattr(jm.toggl_api, "update_entry",
+                        lambda eid, **f: calls.append(("update", eid, f)))
+    r = jm.split_entry("1", "bottom")
+    assert r["ok"]
+    _, (desc, start_iso, stop_iso, dur, pid, tags) = calls[0]
+    assert dur == 600  # new entry = the LATER chunk: 09:20-09:30
+    assert calls[1][1] == 1 and calls[1][2]["duration"] == 1200  # original → remainder 09:00-09:20
+
+
+def test_split_chunk_scales_down_for_short_entries(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 7, eid=1)  # 7min → chunk=5 per _split_chunk_minutes
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    monkeypatch.setattr(jm.toggl_api, "create_entry", lambda *a: None)
+    monkeypatch.setattr(jm.toggl_api, "update_entry", lambda *a, **k: None)
+    r = jm.split_entry("1", "top")
+    assert r["ok"] and r["chunk_minutes"] == 5
+
+
+def test_split_refuses_when_duration_equals_its_own_chunk(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 1, eid=1)  # 1min entry → chunk=1 → refuse (0 remainder)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    r = jm.split_entry("1", "top")
+    assert not r["ok"] and "too short" in r["error"]
+
+
+def test_split_refuses_running(jm, monkeypatch):
+    e = _raw_running(jm, 9, 0, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    r = jm.split_entry("1", "top")
+    assert not r["ok"] and "running" in r["error"]
+
+
+def test_split_refuses_cross_midnight(jm, monkeypatch):
+    e = _raw_cross_midnight(jm, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    r = jm.split_entry("1", "top")
+    assert not r["ok"] and "cross-midnight" in r["error"]
+
+
+def test_split_refuses_already_logged(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 30, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    jm._ledger_add(dt.datetime.now(jm.TZ).date(), "1", "already credited")
+    r = jm.split_entry("1", "top")
+    assert not r["ok"] and "logged" in r["error"]

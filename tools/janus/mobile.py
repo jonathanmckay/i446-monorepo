@@ -233,6 +233,189 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
         return {"ok": False, "error": str(e)[:200]}
 
 
+_FMT = "%Y-%m-%dT%H:%M:%S%z"
+
+
+def _get_entry(entry_id: str) -> dict | None:
+    """True (un-clipped) entry from Toggl by id — the timeline's own rows are
+    clipped to [midnight, now] for display (see _fetch_today), so any mutation
+    must re-fetch the real record rather than trust a client-submitted HH:MM
+    built from a clipped row (bug 2026-08-06: a 睡觉 entry starting 23:30
+    yesterday displays as start=00:00 today; blindly resubmitting that would
+    silently delete the real overnight minutes)."""
+    today = _dt.datetime.now(TZ).date()
+    entries = toggl_api.get_entries(
+        start_date=(today - _dt.timedelta(days=1)).isoformat(),
+        end_date=(today + _dt.timedelta(days=2)).isoformat()) or []
+    for e in entries:
+        if str(e.get("id")) == str(entry_id):
+            return e
+    return None
+
+
+def _split_chunk_minutes(duration_min: float) -> int:
+    """Fixed split-chunk size, scaled down for short entries so a 6-minute
+    entry doesn't refuse to split just because 10 doesn't fit."""
+    if duration_min < 5:
+        return 1
+    if duration_min < 10:
+        return 5
+    return 10
+
+
+def _would_touch_logged(entry_id: str, start_dt: _dt.datetime, end_dt: _dt.datetime,
+                        ledger: dict) -> bool:
+    """True if retiming `entry_id` to [start_dt, end_dt) would make
+    trim_range() delete/shrink another entry that's already been credited.
+    trim_range replaces whatever it trims with brand-new ids (create_entry
+    for the surviving remainder) that are absent from the ledger — silently
+    re-swipeable/re-loggable minutes that were already counted once (bug
+    2026-08-06, the same mechanism that tripled the quarterly-checkin task)."""
+    day = start_dt.date()
+    entries = toggl_api.get_entries(
+        start_date=(day - _dt.timedelta(days=1)).isoformat(),
+        end_date=(day + _dt.timedelta(days=2)).isoformat()) or []
+    for e in entries:
+        eid = str(e.get("id"))
+        if eid == str(entry_id) or eid not in ledger:
+            continue
+        try:
+            e_start = _parse_iso(e["start"])
+        except Exception:
+            continue
+        running = (e.get("duration") or 0) < 0
+        e_end = _dt.datetime.now(TZ) if running else (
+            _parse_iso(e["stop"]) if e.get("stop") else None)
+        if e_end is None or e_end <= start_dt or e_start >= end_dt:
+            continue
+        return True
+    return False
+
+
+def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
+               project_code: str) -> dict:
+    """Edit description/project/time. Time changes go through the same
+    trim_range() MECE-keeping path the desktop TUI uses. Guards (2026-08-06
+    review): refuses to touch a cross-midnight entry's clipped time (can't
+    safely reconstruct which calendar day a bare HH:MM belongs to), refuses
+    to retime an already-logged entry, and refuses a retime that would bump
+    trim_range into deleting/shrinking a DIFFERENT already-logged entry."""
+    e = _get_entry(entry_id)
+    if not e:
+        return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
+    today = _dt.datetime.now(TZ).date()
+    true_start = _parse_iso(e["start"])
+    running = (e.get("duration") or 0) < 0 or not e.get("stop")
+    true_end = None if running else _parse_iso(e["stop"])
+
+    desc = (desc or "").strip()
+    if not desc:
+        return {"ok": False, "error": "description required"}
+    fields: dict = {"description": desc}
+    if project_code:
+        pid = PROJECT_MAP.get(project_code)
+        if pid is None:
+            return {"ok": False, "error": f"unknown project @{project_code}"}
+        fields["project_id"] = pid
+
+    cur_start_hhmm = true_start.strftime("%H:%M")
+    cur_end_hhmm = "now" if running else true_end.strftime("%H:%M")
+    start_changed = bool(start_hhmm) and start_hhmm != cur_start_hhmm
+    end_changed = bool(end_hhmm) and end_hhmm not in ("", "now") and end_hhmm != cur_end_hhmm
+
+    if end_changed and running:
+        return {"ok": False, "error": "still running — stop it first to set an end time"}
+
+    if start_changed or end_changed:
+        if true_start.date() != today or (true_end is not None and true_end.date() != today):
+            return {"ok": False, "error": "cross-midnight entry — retime from desktop"}
+        try:
+            new_start = (_dt.datetime.combine(today, _dt.time(*map(int, start_hhmm.split(":"))), TZ)
+                        if start_changed else true_start)
+        except Exception:
+            return {"ok": False, "error": "bad start time (HH:MM)"}
+
+        if running:
+            # No fixed end to reason about yet — just move the start.
+            if new_start >= _dt.datetime.now(TZ):
+                return {"ok": False, "error": "start must be in the past"}
+            fields["start"] = new_start.strftime(_FMT)
+        else:
+            try:
+                new_end = (_dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), TZ)
+                          if end_changed else true_end)
+            except Exception:
+                return {"ok": False, "error": "bad end time (HH:MM)"}
+            if new_end <= new_start:
+                return {"ok": False, "error": "end must be after start"}
+            ledger = _ledger(today)
+            if str(entry_id) in ledger:
+                return {"ok": False, "error": "already logged — can't retime a logged entry"}
+            if _would_touch_logged(entry_id, new_start, new_end, ledger):
+                return {"ok": False, "error": "would overlap an already-logged entry — refusing"}
+            try:
+                toggl_api.trim_range(new_start, new_end, exclude_ids={e.get("id")})
+            except Exception as ex:
+                return {"ok": False, "error": f"trim failed (entry not yet moved): {ex}"[:200]}
+            fields["start"] = new_start.strftime(_FMT)
+            fields["stop"] = new_end.strftime(_FMT)
+            fields["duration"] = int((new_end - new_start).total_seconds())
+
+    try:
+        toggl_api.update_entry(e.get("id"), **fields)
+        return {"ok": True}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)[:200]}
+
+
+def split_entry(entry_id: str, mode: str) -> dict:
+    """Split into a fixed chunk (see _split_chunk_minutes) + remainder.
+    `mode="top"` carves the chunk off the START; `mode="bottom"` carves it
+    off the END. Id-ownership always follows the EARLIER piece (matches the
+    desktop TUI's ^P split convention) — the original id shrinks to become
+    whichever piece comes first chronologically, and a new entry is created
+    for whichever piece comes second. The new (later) piece is created
+    BEFORE the original is shrunk (2026-08-06 review): if the shrink call
+    then fails, the worst case is a transient overlap, not a permanently
+    lost chunk of time."""
+    if mode not in ("top", "bottom"):
+        return {"ok": False, "error": "bad mode"}
+    e = _get_entry(entry_id)
+    if not e:
+        return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
+    running = (e.get("duration") or 0) < 0 or not e.get("stop")
+    if running:
+        return {"ok": False, "error": "still running — stop it first"}
+    today = _dt.datetime.now(TZ).date()
+    start = _parse_iso(e["start"])
+    end = _parse_iso(e["stop"])
+    if start.date() != today or end.date() != today:
+        return {"ok": False, "error": "cross-midnight entry — split from desktop"}
+
+    duration_min = (end - start).total_seconds() / 60
+    chunk = _split_chunk_minutes(duration_min)
+    if duration_min <= chunk:
+        return {"ok": False, "error": f"too short to split (need > {chunk}m)"}
+
+    if str(entry_id) in _ledger(today):
+        return {"ok": False, "error": "already logged — can't split a logged entry"}
+
+    cut = (start + _dt.timedelta(minutes=chunk) if mode == "top"
+          else end - _dt.timedelta(minutes=chunk))
+    desc = e.get("description") or ""
+    proj_id = e.get("project_id")
+    tags = e.get("tags") or None
+
+    try:
+        toggl_api.create_entry(desc, cut.strftime(_FMT), end.strftime(_FMT),
+                               int((end - cut).total_seconds()), proj_id, tags)
+        toggl_api.update_entry(e.get("id"), stop=cut.strftime(_FMT),
+                               duration=int((cut - start).total_seconds()))
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)[:200]}
+    return {"ok": True, "chunk_minutes": chunk}
+
+
 _DF_MOD = None  # lazy did-fast module (for habit-name lookups only)
 
 
@@ -341,6 +524,29 @@ def api_log():
                              tags=b.get("tags") or []))
 
 
+@app.route("/api/edit", methods=["POST"])
+def api_edit():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("id"):
+        return jsonify({"ok": False, "error": "id required"}), 400
+    return jsonify(edit_entry(str(b["id"]), b.get("desc") or "",
+                              (b.get("start") or "").strip(), (b.get("end") or "").strip(),
+                              (b.get("project") or "").strip()))
+
+
+@app.route("/api/split", methods=["POST"])
+def api_split():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("id") or b.get("mode") not in ("top", "bottom"):
+        return jsonify({"ok": False, "error": "id+mode(top|bottom) required"}), 400
+    return jsonify(split_entry(str(b["id"]), b["mode"]))
+
+
+@app.route("/api/projects")
+def api_projects():
+    return jsonify({"ok": True, "codes": sorted(PROJECT_MAP.keys())})
+
+
 @app.route("/")
 def index():
     return render_template_string(PAGE)
@@ -380,6 +586,8 @@ PAGE = r"""<!doctype html>
   .row { position:relative; overflow:hidden; }
   .row .track { position:absolute; inset:0; background:var(--go); color:#003;
     font-weight:800; display:flex; align-items:center; padding-left:16px; opacity:0; }
+  .row .track.edit { background:#2979ff; color:#001a3d;
+    justify-content:flex-end; padding-left:0; padding-right:16px; }
   .line { position:relative; display:flex; align-items:center; gap:10px;
     padding:9px 14px; background:var(--bg); min-height:38px;
     transform:translateX(0); transition:transform .05s linear; will-change:transform;
@@ -398,22 +606,24 @@ PAGE = r"""<!doctype html>
     z-index:20; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .toast.err { background:#ff4081; color:#2a0010; }
-  #dlg { position:fixed; inset:0; background:#000a; z-index:10; display:none;
+  #dlg, #editDlg { position:fixed; inset:0; background:#000a; z-index:10; display:none;
     align-items:flex-end; }
-  #dlg.show { display:flex; }
-  #dlg .card { background:#232323; width:100%; padding:16px 16px
+  #dlg.show, #editDlg.show { display:flex; }
+  #dlg .card, #editDlg .card { background:#232323; width:100%; padding:16px 16px
     calc(env(safe-area-inset-bottom) + 16px); border-radius:14px 14px 0 0; }
-  #dlg h3 { margin:0 0 12px; font-size:15px; color:#cfcfcf; font-weight:700; }
-  #dlg input { width:100%; background:#1b1b1b; border:1px solid #333; color:#cfcfcf;
-    font:15px ui-monospace,Menlo,monospace; border-radius:8px; padding:10px 12px;
+  #dlg h3, #editDlg h3 { margin:0 0 12px; font-size:15px; color:#cfcfcf; font-weight:700; }
+  #dlg input, #editDlg input, #editDlg select { width:100%; background:#1b1b1b; border:1px solid #333;
+    color:#cfcfcf; font:15px ui-monospace,Menlo,monospace; border-radius:8px; padding:10px 12px;
     margin-bottom:10px; }
-  #dlg .times { display:flex; gap:10px; }
-  #dlg .times input { flex:1; text-align:center; }
-  #dlg .btns { display:flex; gap:10px; margin-top:4px; }
-  #dlg button { flex:1; font:700 15px ui-monospace,Menlo,monospace; border:none;
+  #dlg .times, #editDlg .times { display:flex; gap:10px; }
+  #dlg .times input, #editDlg .times input { flex:1; text-align:center; }
+  #dlg .btns, #editDlg .btns { display:flex; gap:10px; margin-top:4px; }
+  #dlg button, #editDlg button { flex:1; font:700 15px ui-monospace,Menlo,monospace; border:none;
     border-radius:8px; padding:12px; }
-  #dlg .save { background:var(--go); color:#003; }
-  #dlg .cancel { background:#333; color:#aaa; }
+  #dlg .save, #editDlg .save { background:var(--go); color:#003; }
+  #dlg .cancel, #editDlg .cancel { background:#333; color:#aaa; }
+  #editDlg .split { background:#2979ff; color:#001a3d; }
+  #editDlg input:disabled { opacity:.4; }
 </style>
 </head>
 <body>
@@ -435,6 +645,26 @@ PAGE = r"""<!doctype html>
     <div class="btns">
       <button class="cancel" onclick="closeDlg()">cancel</button>
       <button class="save" onclick="saveDlg()">save</button>
+    </div>
+  </div>
+</div>
+
+<div id="editDlg">
+  <div class="card">
+    <h3>edit entry</h3>
+    <input id="e-desc" placeholder="description" autocomplete="off">
+    <div class="times">
+      <input id="e-start" inputmode="numeric" placeholder="HH:MM">
+      <input id="e-end" inputmode="numeric" placeholder="HH:MM">
+    </div>
+    <select id="e-project"></select>
+    <div class="btns">
+      <button class="cancel" onclick="closeEditDlg()">cancel</button>
+      <button class="save" onclick="saveEdit()">save</button>
+    </div>
+    <div class="btns" style="margin-top:8px">
+      <button class="split" onclick="doSplit('top')">split top</button>
+      <button class="split" onclick="doSplit('bottom')">split bottom</button>
     </div>
   </div>
 </div>
@@ -490,6 +720,15 @@ function makeRow(r){
   track.textContent = r.type==='gap' ? '+ fill' : 'neon log 分 ('+r.minutes+'m)';
   row.appendChild(track);
 
+  // Left-swipe reveal (edit) — entries only; a gap has nothing to edit.
+  let trackEdit = null;
+  if(r.type === 'entry'){
+    trackEdit = document.createElement('div');
+    trackEdit.className = 'track edit';
+    trackEdit.textContent = 'edit';
+    row.appendChild(trackEdit);
+  }
+
   const line = document.createElement('div');
   line.className = 'line' + (r.type==='gap'?' gaprow':'') +
     (r.logged?' logged':'') + (r.running?' running':'');
@@ -502,25 +741,34 @@ function makeRow(r){
   meta.textContent = r.start+'–'+r.end+' · '+r.minutes+'m';
   line.appendChild(ttl); line.appendChild(meta);
   row.appendChild(line);
-  bindSwipe(row, line, track, r);
+  bindSwipe(row, line, track, trackEdit, r);
   return row;
 }
 
-function bindSwipe(row, line, track, r){
+function bindSwipe(row, line, track, trackEdit, r){
   let x0=null, dx=0, dragging=false;
   const W = () => row.offsetWidth;
   const start = x=>{ x0=x; dx=0; dragging=true; line.classList.remove('snap'); };
   const move = x=>{
     if(!dragging) return;
-    dx = Math.max(0, x - x0);
+    dx = x - x0;
+    if(!trackEdit) dx = Math.max(0, dx);  // gap rows: right-swipe only
     line.style.transform = 'translateX('+dx+'px)';
-    track.style.opacity = Math.min(1, dx/(W()*0.4));
+    if(dx >= 0){
+      track.style.opacity = Math.min(1, dx/(W()*0.4));
+      if(trackEdit) trackEdit.style.opacity = 0;
+    } else {
+      track.style.opacity = 0;
+      trackEdit.style.opacity = Math.min(1, -dx/(W()*0.4));
+    }
   };
   const end = ()=>{
     if(!dragging) return; dragging=false;
     line.classList.add('snap');
-    line.style.transform='translateX(0)'; track.style.opacity=0;
+    line.style.transform='translateX(0)';
+    track.style.opacity=0; if(trackEdit) trackEdit.style.opacity=0;
     if(dx > W()*0.42) act(row, line, r);
+    else if(trackEdit && dx < -W()*0.42) openEdit(r);
   };
   line.addEventListener('touchstart', e=>start(e.touches[0].clientX), {passive:true});
   line.addEventListener('touchmove',  e=>move(e.touches[0].clientX),  {passive:true});
@@ -584,7 +832,71 @@ async function saveDlg(){
   } catch(e){ toast('offline', true); }
 }
 
+let projectCodes = [];
+async function loadProjects(){
+  try {
+    const r = await fetch('/api/projects');
+    const d = await r.json();
+    if(d.ok) projectCodes = d.codes;
+  } catch(e){ /* dropdown just stays empty — non-fatal */ }
+}
+
+const editDlg = document.getElementById('editDlg');
+let editCtx = null;
+
+function openEdit(r){
+  editCtx = r;
+  document.getElementById('e-desc').value = r.desc;
+  document.getElementById('e-start').value = r.start;
+  const endEl = document.getElementById('e-end');
+  endEl.value = r.end;
+  endEl.disabled = !!r.running;   // no fixed end yet — stop it first (desktop mirrors this)
+  const sel = document.getElementById('e-project');
+  sel.innerHTML = '<option value="">(none)</option>' +
+    projectCodes.map(c=>'<option value="'+c+'"'+(c===r.project?' selected':'')+'>'+c+'</option>').join('');
+  editDlg.classList.add('show');
+}
+
+function closeEditDlg(){ editDlg.classList.remove('show'); editCtx = null; }
+
+async function saveEdit(){
+  if(!editCtx) return;
+  const desc = document.getElementById('e-desc').value.trim();
+  const start = document.getElementById('e-start').value.trim();
+  const endEl = document.getElementById('e-end');
+  const end = endEl.disabled ? '' : endEl.value.trim();
+  const project = document.getElementById('e-project').value;
+  if(!desc){ toast('need a description', true); return; }
+  const id = editCtx.id;
+  closeEditDlg();
+  try {
+    const r = await fetch('/api/edit', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, desc, start, end, project})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'edit failed', true); return; }
+    toast('saved ✓');
+    load();
+  } catch(e){ toast('offline', true); }
+}
+
+async function doSplit(mode){
+  if(!editCtx) return;
+  const id = editCtx.id;
+  closeEditDlg();
+  try {
+    const r = await fetch('/api/split', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, mode})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'split failed', true); return; }
+    toast('split ✓ ('+d.chunk_minutes+'m)');
+    load();
+  } catch(e){ toast('offline', true); }
+}
+
 document.getElementById('reload').onclick = load;
+loadProjects();
 load();
 </script>
 </body>
