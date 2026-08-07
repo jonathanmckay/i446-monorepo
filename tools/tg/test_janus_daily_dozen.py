@@ -1,14 +1,17 @@
-"""Daily Dozen line (user request 2026-08-07): a third line under the header
+"""Daily Dozen line (user request 2026-08-07): a second line under the header
 showing this quarter's hcbi "Daily Dozen" category totals as bare-number
-chips (DAILY_DOZEN_COLORS), plus a labeled "behind" chip for any
+chips (DAILY_DOZEN_COLORS) — only categories currently BEHIND (negative;
+neutral/positive ones are omitted) — plus a labeled "behind" chip for any
 HCBI_BEHIND_DOMAINS total (hcbc/hcbp) that's currently negative — e.g.
 "hcbc is currently behind -834分 in q3".
 
 Same turn also: (1) done-row chips no longer always carry a trailing space —
 _pack_number_chips drops the gap between differently-colored chips and keeps
-it only between same-colored ones; (2) the pending (unfinished-habit) row now
-renders FIRST, the done-number row second.
-"""
+it only between same-colored ones; (2) done and pending habit chips share ONE
+line, done numbers first, pending names appended right after with no
+separator (a follow-up correction: an earlier version of this change put
+pending on its own leading line — the user then asked for the two merged
+back into one line, done first)."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -35,15 +38,31 @@ def test_dozen_only_still_renders_even_with_no_habits():
     assert mod.render_habits_today() != []
 
 
-def test_dozen_line_is_the_third_row():
+def test_dozen_line_is_the_second_row():
+    """done+pending share line 0 (see test_janus_habits_strip.py); the Daily
+    Dozen line is line 1."""
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
     mod.STATE.daily_dozen = [("bn", -32.0), ("fr", -64.0)]
     text = "".join(t for _, t in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
-    assert len(lines) == 3
-    assert "-32" in lines[2] and "-64" in lines[2]
-    assert "-32" not in lines[0] and "-32" not in lines[1]
+    assert len(lines) == 2
+    assert "-32" in lines[1] and "-64" in lines[1]
+    assert "-32" not in lines[0]
+
+
+def test_dozen_only_shows_categories_currently_behind():
+    """Neutral (0) and positive Daily Dozen categories are dropped entirely
+    (user request 2026-08-07) — only negative ("behind") ones render."""
+    mod = _load_tui()
+    mod.STATE.daily_dozen = [("bn", -32.0), ("cr", 0.0), ("g", 36.0)]
+    text = "".join(t for _, t in mod.render_habits_today())
+    assert "-32" in text
+    assert "36" not in text
+    # "0" for cr must not appear as a bare dozen chip (a coincidental "0"
+    # elsewhere, e.g. inside another number, is not what this guards).
+    lines = [l for l in text.split("\n") if l.strip()]
+    assert lines[-1] == "-32"
 
 
 def test_dozen_chip_uses_its_configured_color():
