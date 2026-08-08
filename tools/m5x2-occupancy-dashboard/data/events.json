@@ -4248,5 +4248,105 @@
     "unit": "C64",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-08",
+    "kind": "movein",
+    "unit_id": "788",
+    "prop": "v202",
+    "unit": "2",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "1245",
+    "prop": "tc68",
+    "unit": "D096",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-30",
+    "kind": "ntv",
+    "unit_id": "700",
+    "prop": "l912 (Multi-Family)",
+    "unit": "104",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-14",
+    "kind": "leased",
+    "unit_id": "919",
+    "prop": "kn47 K1",
+    "unit": "H101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-31",
+    "kind": "leased",
+    "unit_id": "1220",
+    "prop": "tc68",
+    "unit": "C71",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-08",
+    "kind": "movein",
+    "unit_id": "1243",
+    "prop": "tc68",
+    "unit": "D094",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-08",
+    "kind": "movein",
+    "unit_id": "1072",
+    "prop": "kn47-k3",
+    "unit": "K101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-07",
+    "kind": "moveout",
+    "unit_id": "805",
+    "prop": "tc34",
+    "unit": "A3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-08-08",
+    "kind": "movein",
+    "unit_id": "978",
+    "prop": "kn47 K1",
+    "unit": "M103",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-08",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "373",
+    "prop": "ps25",
+    "unit": "B15",
+    "tenant": null,
+    "baseline": false
   }
 ]

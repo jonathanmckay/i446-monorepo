@@ -312,18 +312,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 700,
-    "property_name": "l912 (Multi-Family)",
-    "unit": "104",
-    "tenant_name": "Duvauchelle, Solomon",
-    "status": "Notice Given",
-    "lease_sign_date": null,
-    "move_in": "2018-08-16",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-06-01",
-    "rent": "1536.00"
-  },
-  {
     "unit_id": 95,
     "property_name": "m608",
     "unit": "3",
@@ -604,7 +592,7 @@
     "property_name": "b101",
     "unit": "10",
     "tenant_name": "Williams, William A.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-09-12",
     "move_in": "2025-09-12",
     "renewal_start_date": null,
@@ -796,7 +784,7 @@
     "property_name": "k104- LeFevre",
     "unit": "508-1",
     "tenant_name": "Burris, Kelly",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2022-05-17",
     "renewal_start_date": null,
