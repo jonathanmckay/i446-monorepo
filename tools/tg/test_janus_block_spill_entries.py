@@ -104,6 +104,31 @@ def test_current_block_shows_spilled_run_with_title():
     assert spilled, "the spilled row must be selectable"
 
 
+def test_spill_item_never_rides_the_header():
+    """User report 2026-08-07: 戌's header showed "戌:00 bball 9m" — bball
+    was really 酉:47's entry spilling 9 minutes into 戌, already shown with
+    its full duration in 酉's own row. Repeating it as 戌's header is a
+    double entry. The header must promote PAST a spill item to the first
+    genuinely NEW entry of the block (冥想 at :10) — the spill item still
+    renders, just as an ordinary body row, not the header."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    spill = {"start_dt": today.replace(hour=18, minute=0), "time_str": "18:00",
+             "label": "bball", "style": "", "dur_min": 9, "entry_ids": [1],
+             "raw_desc": "bball", "project_id": None, "is_spill": True}
+    new_entry = {"start_dt": today.replace(hour=18, minute=10), "time_str": "18:10",
+                 "label": "冥想", "style": "", "dur_min": 15, "entry_ids": [2],
+                 "raw_desc": "冥想", "project_id": None}
+    frags = mod._compact_block_lines("戌", 18, [spill, new_entry], 0, "")
+    text = "".join(t for _, t in frags)
+    header_line = text.split("\n")[0]
+    assert "冥想" in header_line, f"header must promote to the new entry: {header_line!r}"
+    assert "戌:10" in header_line
+    assert "bball" not in header_line, f"the spill item must not ride the header: {header_line!r}"
+    assert "bball" in text, "the spill item must still render as a body row"
+
+
 def test_row_cap_keeps_biggest_not_earliest():
     """戌's 3-row card: five entries where the LATEST is the second-biggest —
     the cap must drop the smallest of the BODY candidates, not the latest.

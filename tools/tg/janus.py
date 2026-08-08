@@ -2144,8 +2144,15 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # suffix changes, not an inline time prefix.
         # Free/gap bars keep their own body rows — the header's slot belongs
         # to a tracked entry, a meeting, or the sleep-spillover item.
+        # A non-sleep spillover (_block_spill_items, is_spill) is EXCLUDED
+        # from this promotion too (user report 2026-08-07): it already rode
+        # the header/a row of the block it actually started in, so letting it
+        # win here just duplicates that entry — the header should promote to
+        # the first genuinely NEW entry of this block instead (e.g. 戌:10
+        # 冥想, not 戌:00 bball when bball is really 酉:47's spillover).
         head0 = next(
-            (p for p in picks if not p.get("is_free") and not p.get("is_gap")), None)
+            (p for p in picks if not p.get("is_free") and not p.get("is_gap")
+             and not p.get("is_spill")), None)
         # Tracks the block's own :00 slot when head0 was promoted from a
         # LATER slot, so the mark-fill grid below (FOCUS_ROWS' include_00)
         # doesn't re-materialize a phantom "  :00" row under a header that
@@ -2627,6 +2634,13 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
             "entry_ids": [e["id"]],
             "raw_desc": e["desc"],
             "project_id": e["project_id"],
+            # Excluded from header (head0) promotion in _compact_block_lines
+            # (user report 2026-08-07): this entry already got its own row in
+            # the PREVIOUS block with its full duration — repeating it as
+            # THIS block's header too is a double entry. Still rendered as a
+            # body row here (that's this function's whole point, see the
+            # docstring), just never the thing the header promotes to.
+            "is_spill": True,
         })
     return out
 
