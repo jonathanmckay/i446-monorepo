@@ -2537,6 +2537,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             if running_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
             running_click = _row_click(running_key)  # click-to-select, user request 2026-08-07
+            out.extend(_cursor_marker(running_selected))
             out.append(_frag(time_sty, tcol, running_click))
             out.append(_frag(gsty, gch, running_click))
             _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
@@ -2589,6 +2590,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         if is_selected:
             gsty = f"{gsty} bg:#3a3a3a"
         row_click = _row_click(my_key)  # click-to-select, user request 2026-08-07
+        out.extend(_cursor_marker(is_selected))
         out.append(_frag(time_sty, tcol, row_click))
         out.append(_frag(gsty, gch, row_click))
         body_txt = truncate(p["label"], max(1, space - dwidth(doc_sfx))) + doc_sfx
