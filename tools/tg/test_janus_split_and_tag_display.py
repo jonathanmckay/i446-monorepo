@@ -62,7 +62,7 @@ def test_free_row_right_justified():
     mod.STATE.events = []
     today = _midnight()
     picks = mod._future_free_gaps(18, 19, today.replace(hour=13))
-    text = "".join(t for _, t in mod._compact_block_lines("戌", 18, picks, 0, "", is_future=True))
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("戌", 18, picks, 0, "", is_future=True))
     free_line = next(l for l in text.split("\n") if "free →" in l)
     assert free_line.rstrip().endswith(")"), "label (with duration) sits at the right edge"
     assert "┄" in free_line and free_line.index("┄") < free_line.index("free"), \
@@ -79,7 +79,7 @@ def test_value_tags_render_before_minutes():
               "label": "eat · hcb", "style": "", "dur_min": 25,
               "entry_ids": [1], "raw_desc": "eat", "project_id": None,
               "tags": ["-2", "billable"]}]
-    text = "".join(t for _, t in mod._compact_block_lines("未", 12, picks, 0, ""))
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, picks, 0, ""))
     row = next(l for l in text.split("\n") if "eat" in l)
     assert "#-2" in row
     assert row.index("#-2") > row.index("eat")

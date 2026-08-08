@@ -173,7 +173,7 @@ def test_event_rows_right_justified_entry_rows_left():
          "event": {"start_dt": today.replace(hour=8, minute=30),
                    "end_dt": today.replace(hour=9), "title": "XTECH LT"}},
     ]
-    lines = "".join(t for _, t in mod._compact_block_lines("巳", 8, picks, 0, "")).split("\n")
+    lines = "".join(t for _, t, *_ in mod._compact_block_lines("巳", 8, picks, 0, "")).split("\n")
     entry_line = next(l for l in lines if "wash cloth" in l)
     event_line = next(l for l in lines if "XTECH LT" in l)
     assert entry_line.index("wash cloth") < 10, "Toggl entries stay left-justified"

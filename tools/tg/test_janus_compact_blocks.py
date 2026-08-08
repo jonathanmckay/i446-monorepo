@@ -38,7 +38,7 @@ def test_zero_slot_entry_rides_header_no_duplicate_row():
     mod = _load_tui()
     start = _midnight().replace(hour=12, minute=0)
     frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "₦4")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     lines = text.split("\n")
     header = lines[0]
     assert header.startswith("午:00"), f"header starts with block:00, got: {header!r}"
@@ -62,13 +62,13 @@ def test_deleted_calendar_event_lets_the_next_real_entry_take_the_header():
     zero = _midnight().replace(hour=12, minute=0)
     quarter = _midnight().replace(hour=12, minute=15)
 
-    before = "".join(t for _, t in mod._compact_block_lines(
+    before = "".join(t for _, t, *_ in mod._compact_block_lines(
         "未", 12, [_pick(mod, "EL:JM 1:1", zero)], 0, ""))
     before_header = before.split("\n")[0]
     assert before_header.startswith("未:00"), f"got: {before_header!r}"
     assert "EL:JM 1:1" in before_header
 
-    after = "".join(t for _, t in mod._compact_block_lines(
+    after = "".join(t for _, t, *_ in mod._compact_block_lines(
         "未", 12, [_pick(mod, "-1g", quarter)], 0, ""))
     lines = after.split("\n")
     after_header = lines[0]
@@ -87,7 +87,7 @@ def test_mid_block_entry_rides_header_with_its_own_time():
     mod = _load_tui()
     start = _midnight().replace(hour=12, minute=1)
     frags = mod._compact_block_lines("午", 12, [_pick(mod, "Blizz", start)], 0, "₦4")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     lines = text.split("\n")
     header = lines[0]
     assert header.startswith("午:01"), f"header shows the entry's own time, got: {header!r}"
@@ -109,14 +109,14 @@ def test_second_hour_entry_rides_header_with_full_time_and_correct_gutter():
         "title": "conflict", "start_dt": start, "end_dt": start.replace(minute=35),
     }]
     frags = mod._compact_block_lines("未", 12, [_pick(mod, "late start", start)], 0, "")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     header = text.split("\n")[0]
     assert header.startswith("未 13:05"), f"got: {header!r}"
     assert "late start" in header
     # The busy-bar gutter is a single glyph cell rendered as its own
     # fragment; a stale (blk_sh, 0)-keyed lookup would find no coverage at
     # 12:00 and render a plain space instead of the busy glyph.
-    gutter_frags = [t for s, t in frags if s == "class:gutter_busy"]
+    gutter_frags = [t for s, t, *_ in frags if s == "class:gutter_busy"]
     assert gutter_frags and gutter_frags[0] == "▍", (
         "header gutter must reflect the entry's OWN slot (13:00-13:30, "
         f"covered by the conflicting event), got fragments: {gutter_frags!r}")
@@ -130,7 +130,7 @@ def test_future_block_header_carries_event_with_minute_duration():
     start = _midnight().replace(hour=14, minute=0)
     frags = mod._compact_block_lines(
         "申", 14, [_pick(mod, "Strategy", start, dur=60)], 0, "₦1", is_future=True)
-    header = "".join(t for _, t in frags).split("\n")[0]
+    header = "".join(t for _, t, *_ in frags).split("\n")[0]
     assert header.startswith("申:00"), f"header starts with block:00, got: {header!r}"
     assert "Strategy" in header and "(60)" in header, f"event + (N) on header: {header!r}"
     assert header.endswith("₦1"), f"₦ label trails the header line, got: {header!r}"
@@ -155,7 +155,7 @@ def test_future_partial_block_shows_remaining_marks_not_blank():
     start = _midnight().replace(hour=10, minute=0)
     frags = mod._compact_block_lines(
         "午", 10, [_pick(mod, "sync", start, dur=30)], 0, "", is_future=True)
-    lines = [ln for ln in "".join(t for _, t in frags).split("\n")]
+    lines = [ln for ln in "".join(t for _, t, *_ in frags).split("\n")]
     body = [ln for ln in lines[1:] if ln != ""]
     assert len(body) == 3, f"expected 3 non-blank body rows, got {body}"
     assert any("11:00" in ln for ln in body), f"11:00 mark missing: {body}"
@@ -169,7 +169,7 @@ def test_abbreviated_time_column_rolls_hour_over():
     start = _midnight().replace(hour=10, minute=0)
     frags = mod._compact_block_lines(
         "午", 10, [_pick(mod, "sync", start, dur=30)], 0, "", is_future=True)
-    body = [ln for ln in "".join(t for _, t in frags).split("\n")[1:] if ln]
+    body = [ln for ln in "".join(t for _, t, *_ in frags).split("\n")[1:] if ln]
     assert body[0].startswith("  :30"), f"10:30 abbreviates, got {body[0]!r}"
     assert body[1].startswith("11:00"), f"hour roll-over is full, got {body[1]!r}"
     assert body[2].startswith("  :30"), f"11:30 abbreviates, got {body[2]!r}"
@@ -182,7 +182,7 @@ def test_future_body_entry_duration_in_minutes():
     e2 = _midnight().replace(hour=10, minute=30)
     picks = [_pick(mod, "first", e1, dur=30), _pick(mod, "second", e2, dur=45)]
     frags = mod._compact_block_lines("午", 10, picks, 0, "", is_future=True)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "first (30)" in text.split("\n")[0], "first rides header with (30)"
     assert "second" in text and "(45)" in text, "second is a body row with (45)"
 
@@ -199,7 +199,7 @@ def test_through_event_draws_continuation_in_empty_block():
     cont = mod._block_gcal_cont(12, today)
     assert set(cont) == {(12, 0), (12, 30), (13, 0), (13, 30)}
     frags = mod._compact_block_lines("未", 12, [], 0, "", cont=cont)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert text.count("│ ◇") == 3  # 12:30 / 13:00 / 13:30; 12:00 is the header
     assert "◇ │" not in text  # gcal continuation right-justifies (2026-07-30)
     assert "┄" not in text
@@ -215,7 +215,7 @@ def test_partial_coverage_mixes_grid_and_continuation():
     cont = mod._block_gcal_cont(12, today)
     assert set(cont) == {(12, 0), (12, 30)}
     frags = mod._compact_block_lines("未", 12, [], 0, "", cont=cont)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert text.count("│ ◇") == 1  # only 12:30 covered (12:00 is the header slot)
     assert "┄" not in text          # empty marks render as just the time now
     assert "13:00" in text          # uncovered marks: just the time
@@ -233,7 +233,7 @@ def test_future_header_event_spans_block_marks_continue():
     frags = mod._compact_block_lines(
         "申", 14, [_pick(mod, "Strategy", start, dur=120)], 0, "",
         cont=cont, is_future=True)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "Strategy (120)" in text.split("\n")[0]
     assert text.count("│ ◇") == 3  # 14:30 / 15:00 / 15:30
 
@@ -255,7 +255,7 @@ def test_past_block_continues_finished_event_to_its_end():
         "end_dt": today.replace(hour=14),
     }]
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     wu = [ln for ln in text.split("\n")]
     # 2026-08-06: blizz@10:01 is the block's first real entry, so it now
     # rides the header itself (`午:01`) instead of a bare `午:00` header with

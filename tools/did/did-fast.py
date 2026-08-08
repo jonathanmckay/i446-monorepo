@@ -1221,16 +1221,23 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             continue
         if matched:
             claimed_task_ids.add(str(matched.get("id")))
-            # Extract points
-            pts_match = POINTS_RE.search(matched["content"])
-            points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
-
-            # Map label to 0分 column
+            # Extract points. {N} curly points already flow to column Q via
+            # item.curly_points (see the fen_appends loop below) — crediting
+            # the label's domain column here too would double-count, same
+            # class as the 2026-07-27 bug the item.curly_points is None guard
+            # above (Step 0.2's 0₦-habit branch) exists to prevent. That
+            # guard was never applied here.
+            points = 0
             fen_col = None
-            for lbl in matched.get("labels", []):
-                if lbl in LABEL_TO_0FEN:
-                    fen_col = LABEL_TO_0FEN[lbl]
-                    break
+            if item.curly_points is None:
+                pts_match = POINTS_RE.search(matched["content"])
+                points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+
+                # Map label to 0分 column
+                for lbl in matched.get("labels", []):
+                    if lbl in LABEL_TO_0FEN:
+                        fen_col = LABEL_TO_0FEN[lbl]
+                        break
 
             r = RouteResult(item=item, step="todoist", todoist_task=matched,
                             fen_col=fen_col, fen_points=points)
@@ -1248,13 +1255,18 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             continue
         if live_matched:
             claimed_task_ids.add(str(live_matched.get("id")))
-            pts_match = POINTS_RE.search(live_matched["content"])
-            points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+            # See the matching guard in Step 0.3 above: {N} curly points
+            # already credit column Q via item.curly_points, so skip the
+            # domain-column credit here to avoid double-counting.
+            points = 0
             fen_col = None
-            for lbl in live_matched.get("labels", []):
-                if lbl in LABEL_TO_0FEN:
-                    fen_col = LABEL_TO_0FEN[lbl]
-                    break
+            if item.curly_points is None:
+                pts_match = POINTS_RE.search(live_matched["content"])
+                points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+                for lbl in live_matched.get("labels", []):
+                    if lbl in LABEL_TO_0FEN:
+                        fen_col = LABEL_TO_0FEN[lbl]
+                        break
             r = RouteResult(item=item, step="todoist", todoist_task=live_matched,
                             fen_col=fen_col, fen_points=points)
             results.append(r)

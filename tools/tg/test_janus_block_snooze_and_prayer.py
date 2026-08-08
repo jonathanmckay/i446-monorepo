@@ -43,7 +43,7 @@ def _write_snooze(mod, snoozes, date=None):
 
 
 def _strip_text(mod):
-    return "".join(t for _, t in mod.render_habits_today())
+    return "".join(t for _, t, *_ in mod.render_habits_today())
 
 
 def test_snoozed_habit_hidden_until_its_block(tmp_path):

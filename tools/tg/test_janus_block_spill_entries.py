@@ -95,7 +95,7 @@ def test_current_block_shows_spilled_run_with_title():
         _entry("snack", today.replace(hour=21, minute=1),
                today.replace(hour=21, minute=15), eid=43),
     ]
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     hai = text.split("子:00")[0]
     assert "run" in hai, f"spilled run must be titled in 亥:\n{hai}"
     spilled = [it for it in mod.STATE.visible_events
@@ -121,7 +121,7 @@ def test_spill_item_never_rides_the_header():
                  "label": "冥想", "style": "", "dur_min": 15, "entry_ids": [2],
                  "raw_desc": "冥想", "project_id": None}
     frags = mod._compact_block_lines("戌", 18, [spill, new_entry], 0, "")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     header_line = text.split("\n")[0]
     assert "冥想" in header_line, f"header must promote to the new entry: {header_line!r}"
     assert "戌:10" in header_line
@@ -153,7 +153,7 @@ def test_row_cap_keeps_biggest_not_earliest():
                       "dur_min": dur, "entry_ids": [eid], "raw_desc": name,
                       "project_id": None})
     frags = mod._compact_block_lines("戌", 18, picks, 0, "")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "backboard" in text.split("\n")[0], "the chronologically-first entry rides the header"
     assert "run" in text and "figure out space" in text and "1 f694" in text
     assert "tiny" not in text, "the smallest of the BODY candidates is the one to drop"
@@ -170,7 +170,7 @@ def test_row_cap_never_drops_the_running_entry():
     picks.append({"start_dt": today.replace(hour=19, minute=50), "time_str": "",
                   "label": "live", "style": "", "dur_min": 1, "is_running": True,
                   "entry_ids": [9], "raw_desc": "live", "project_id": None})
-    text = "".join(t for _, t in mod._compact_block_lines("戌", 18, picks, 0, ""))
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("戌", 18, picks, 0, ""))
     assert "live" in text, "the running row survives the cap regardless of duration"
 
 

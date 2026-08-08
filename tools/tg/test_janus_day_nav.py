@@ -54,11 +54,11 @@ def test_header_badges_past_day_but_not_today():
     m = _load_tui()
     m.STATE.today_points = 0
     m.STATE.day_offset = 0
-    today_hdr = "".join(t for _, t in m.render_header())
+    today_hdr = "".join(t for _, t, *_ in m.render_header())
     assert "◀" not in today_hdr, "today's header carries no back-arrow badge"
 
     m.STATE.day_offset = -1
-    past_hdr = "".join(t for _, t in m.render_header())
+    past_hdr = "".join(t for _, t, *_ in m.render_header())
     assert "◀" in past_hdr, "past-day header shows the ◀ date badge"
     assert "today" in past_hdr, "past-day header hints ⎋ resets to today"
 

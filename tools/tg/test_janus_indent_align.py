@@ -44,7 +44,7 @@ def test_compact_full_time_rows_have_no_leading_space():
     mod.STATE.block_points = {}
     mod.STATE.events = []
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     lines = text.split("\n")
     header = next(ln for ln in lines if ln.startswith("辰"))
     assert header.startswith("辰:01 deep work"), f"deep work rides the header, got {header!r}"
@@ -68,7 +68,7 @@ def test_minutes_only_rows_align_colon_under_full_time():
     mod.STATE.block_points = {}
     mod.STATE.events = []
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     min_rows = [ln for ln in text.split("\n") if ln.startswith("  :")]
     assert min_rows, "expected at least one minutes-only continuation row"
     for ln in min_rows:

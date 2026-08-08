@@ -69,7 +69,7 @@ def test_current_block_renders_compact_card_style():
                                 today.replace(hour=8, minute=30), project_id=1)]
     mod.STATE.current = None
     mod.view_now = lambda: today.replace(hour=8, minute=40)
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     assert "巳:00" in text
     assert "─ 巳" not in text, "must not use the old dash-ruled header"
 
@@ -82,7 +82,7 @@ def test_current_block_has_eight_body_rows():
     mod.STATE.current = None
     mod.view_now = lambda: today.replace(hour=8, minute=5)
     frags = mod.render_focus_compact()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     lines = text.split("\n")
     # First block: header + 8 body lines = 9 non-empty-split lines before 午's header.
     boundary = next(i for i, l in enumerate(lines) if l.startswith("午:00"))
@@ -103,9 +103,9 @@ def test_running_task_shows_live_marker_even_under_a_minute():
     mod.STATE.current = {"start": start.isoformat(), "description": "0t", "project_id": 1}
     mod.view_now = lambda: now
     frags = mod.render_focus_compact()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "▶" in text and "0t" in text
-    assert any(s.startswith("bold") and "0t" in t for s, t in frags), \
+    assert any(s.startswith("bold") and "0t" in t for s, t, *_ in frags), \
         "running row must carry the bold ▶ style, not a plain entry row"
 
 
@@ -122,7 +122,7 @@ def test_idle_gap_flashes_bounded_by_now_not_future_block_end():
     mod.STATE.current = None
     now = today.replace(hour=9, minute=5)  # 15 min idle since 8:50
     mod.view_now = lambda: now
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     assert "empty" in text and "09:05" in text and "(15m)" in text
     assert "09:15" not in text.split("午:00")[0], \
         "the idle gap must not extend past `now` into the block's unelapsed future"
@@ -144,7 +144,7 @@ def test_next_block_uses_future_compact_picks_not_shared_preview_grid():
         "all_day": False, "transparency": "opaque",
     }]
     mod.view_now = lambda: today.replace(hour=8, minute=5)
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     assert "午:00" in text
     assert "m5x2 Strat" in text
 
@@ -170,7 +170,7 @@ def test_current_block_shows_upcoming_meeting_title_not_just_a_glyph():
                                     today.replace(hour=11, minute=5),
                                     today.replace(hour=11, minute=30))]
     mod.view_now = lambda: today.replace(hour=10, minute=31)  # 午 = 10-11
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     top = text.split("未:00")[0]
     assert "1:1 Jonathan & Scott" in top
     assert "(25)" in top, "scheduled (not tracked) duration must be parenthesized"
@@ -189,7 +189,7 @@ def test_current_block_shows_in_progress_meeting_even_though_it_already_started(
                                     today.replace(hour=10, minute=30),
                                     today.replace(hour=11, minute=0))]
     mod.view_now = lambda: today.replace(hour=10, minute=45)  # mid-meeting
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     top = text.split("未:00")[0]
     assert "Gen 10 Console Forecast Walkthrough" in top
 
@@ -212,7 +212,7 @@ def test_current_block_shows_fully_past_untracked_meeting():
                                     today.replace(hour=10, minute=0),
                                     today.replace(hour=10, minute=20))]
     mod.view_now = lambda: today.replace(hour=10, minute=31)
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     top = text.split("未:00")[0]
     assert "HL:JM 1:1" in top
     assert "(20)" in top, "scheduled/uncovered duration must read (N), not Nm"
@@ -226,7 +226,7 @@ def test_empty_mark_shows_middle_dot_placeholder():
     for an empty slot, so it reads as "checked, nothing here"."""
     mod = _load_tui()
     frags = mod._compact_block_lines("辰", 6, [], 0, "")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "·" in text
     lines = [l for l in text.split("\n") if l.strip() and "辰" not in l]
     assert all(l.rstrip().endswith("·") for l in lines), \
@@ -239,7 +239,7 @@ def test_continuation_mark_unaffected_by_placeholder():
     mod = _load_tui()
     cont = {(6, 30): "class:future"}
     frags = mod._compact_block_lines("辰", 6, [], 0, "", cont=cont)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "◇ │" in text
     # The continuation row itself must not also carry a "·".
     cont_line = [l for l in text.split("\n") if "◇" in l][0]
@@ -253,14 +253,14 @@ def test_compact_block_lines_default_max_rows_unchanged():
     mod = _load_tui()
     today = _midnight()
     frags = mod._compact_block_lines("辰", 6, [], 0, "")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert text.count("\n") == 4, "default card must stay header + 3 body rows"
 
 
 def test_compact_block_lines_max_rows_eight_uses_15min_marks_including_00():
     mod = _load_tui()
     frags = mod._compact_block_lines("巳", 8, [], 0, "", max_rows=8)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert text.count("\n") == 9, "header + 8 body rows"
     # The :00 slot is the header's own row ("巳:00"); the body covers the
     # other 7 slots up to the hour rollover, then the rolled-over hour. Each
@@ -335,7 +335,7 @@ def test_current_block_uncovered_meeting_shrinks_surrounding_gap():
     mod.STATE.events = [_gcal_event("old meeting", today.replace(hour=8),
                                     today.replace(hour=8, minute=11))]
     mod.view_now = lambda: today.replace(hour=8, minute=45)
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     assert "old meeting" in text and "(11)" in text
     assert "(45m)" not in text, "the gap must shrink around the event, not still span the whole stretch"
     assert "(34m)" in text

@@ -223,10 +223,10 @@ def test_selected_entry_row_gets_full_row_background_band():
             "project_id": None}
     mod.STATE.event_sel = mod._sel_key({"kind": "entry", "start_dt": pick["start_dt"], "entry_ids": [1]})
     frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
-    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t in frags)
-    assert any("bg:#3a3a3a" in s and "carolina" in t for s, t in frags)
-    assert any(s == "class:selected_bg" for s, t in frags)
-    assert not any("reverse" in s for s, t in frags)
+    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t, *_ in frags)
+    assert any("bg:#3a3a3a" in s and "carolina" in t for s, t, *_ in frags)
+    assert any(s == "class:selected_bg" for s, t, *_ in frags)
+    assert not any("reverse" in s for s, t, *_ in frags)
 
 
 def test_selection_of_entry_row_never_shifts_horizontal_position():
@@ -236,10 +236,10 @@ def test_selection_of_entry_row_never_shifts_horizontal_position():
             "style": "fg:#2979ff", "dur_min": 15, "entry_ids": [1], "raw_desc": "carolina 1|1",
             "project_id": None}
     mod.STATE.event_sel = None
-    unselected = "".join(t for _, t in mod._compact_block_lines("巳", 8, [pick], 0, "",
+    unselected = "".join(t for _, t, *_ in mod._compact_block_lines("巳", 8, [pick], 0, "",
                                                                   max_rows=8, track_selection=True))
     mod.STATE.event_sel = mod._sel_key({"kind": "entry", "start_dt": pick["start_dt"], "entry_ids": [1]})
-    selected = "".join(t for _, t in mod._compact_block_lines("巳", 8, [pick], 0, "",
+    selected = "".join(t for _, t, *_ in mod._compact_block_lines("巳", 8, [pick], 0, "",
                                                                max_rows=8, track_selection=True))
     assert selected == unselected, "highlighting must not change any character or width, only color"
 
@@ -251,8 +251,8 @@ def test_selected_gap_row_gets_highlight():
           "style": "", "dur_min": 45, "is_gap": True}
     mod.STATE.event_sel = mod._sel_key({"kind": "empty", "start_dt": gap["start_dt"]})
     frags = mod._compact_block_lines("巳", 8, [gap], 0, "", max_rows=8, track_selection=True)
-    assert any(s == "class:selected_bg" for s, t in frags)
-    assert any(s == "class:selected_accent" for s, t in frags)
+    assert any(s == "class:selected_bg" for s, t, *_ in frags)
+    assert any(s == "class:selected_accent" for s, t, *_ in frags)
 
 
 # ─── Enter handler: arm-edit / prefill-empty / apply-edit ───────────────────

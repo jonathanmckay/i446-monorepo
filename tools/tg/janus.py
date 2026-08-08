@@ -57,6 +57,8 @@ from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
 from prompt_toolkit.styles import Style, StyleTransformation  # noqa: E402
+from prompt_toolkit.mouse_events import MouseEventType  # noqa: E402
+from prompt_toolkit.application.current import get_app  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
@@ -416,6 +418,21 @@ class State:
         # an unintended timer start.
         self.visible_events: list[dict] = []
         self.event_sel: tuple | None = None
+        # Auto-scroll-into-view (user request 2026-08-07: "select a line, and
+        # scroll within that box", comparing to dtd's fzf list). A monotonic
+        # deadline, not a one-shot bool: main_window is focusable=False with
+        # no cursor of its own, so scrolling it at all means emitting a
+        # "[SetCursorPosition]" fragment at the selected row — but doing that
+        # on EVERY render would re-snap the view every ~0.1s
+        # (refresh_interval) and make manual mouse-wheel scrolling (which
+        # already works for free via prompt_toolkit's default Window mouse
+        # handler) unusable the instant something is selected. Tab/Shift-Tab
+        # set this to "now + 0.3s"; _compact_block_lines only emits the
+        # cursor marker for the selected row while still inside that window,
+        # so the view snaps to a fresh selection once, then leaves the user's
+        # scroll position alone. A plain click never sets this — the clicked
+        # row is already on screen by definition.
+        self.scroll_to_selection_until: float = 0.0
         # Armed by Enter on a selected real-entry row: {"ids": [...], "date":
         # the pick's own date} for the NEXT Enter to update (rename/
         # reproject/retime) instead of creating something new (user request
@@ -688,6 +705,51 @@ def _sel_key(item: dict):
     if kind == "empty":
         return ("empty", item["start_dt"])
     return _event_key(item)
+
+
+def _row_click(key) -> object | None:
+    """Mouse handler factory for a selectable row (dtd-style click-to-select,
+    user request 2026-08-07: "dtd has the tasks list that I can... click to
+    select. That's what I want from janus as well"). key is whatever
+    _sel_key() would produce for this row — the SAME identity Tab/Enter
+    already use, so a click just sets STATE.event_sel directly instead of
+    Tab-cycling to it. None key -> None handler (an unselectable row, e.g. a
+    synthetic sleep-spillover pick with no real entry behind it, or a
+    meeting-free bar that was never added to STATE.visible_events — clicking
+    it must do nothing, not silently select something else).
+
+    MOUSE_UP, not MOUSE_DOWN: matches prompt_toolkit's own Button/RadioList
+    click idiom (widgets/base.py) — robust against a drag that starts on
+    this row but releases elsewhere, which MOUSE_DOWN would wrongly select."""
+    if key is None:
+        return None
+
+    def handler(mouse_event):
+        if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            STATE.event_sel = key
+            get_app().invalidate()
+    return handler
+
+
+def _frag(style: str, text: str, handler=None) -> tuple:
+    """One formatted-text fragment, with an optional click mouse_handler —
+    prompt_toolkit fragments are plain (style, text) 2-tuples normally, and
+    (style, text, handler) 3-tuples only when a handler is attached; this
+    keeps that shape decision out of every individual append call."""
+    return (style, text, handler) if handler is not None else (style, text)
+
+
+def _cursor_marker(is_sel: bool) -> list[tuple]:
+    """A "[SetCursorPosition]" fragment for the selected row, but ONLY while
+    STATE.scroll_to_selection_until hasn't expired (see State's docstring on
+    that field) — prompt_toolkit auto-scrolls main_window to keep this
+    position in view even though it's focusable=False, which is the whole
+    scroll-into-view mechanism; emitting it on every render instead of just
+    the one right after a selection change would refuse to let the user
+    manually scroll away from the current selection at all."""
+    if is_sel and time.monotonic() < STATE.scroll_to_selection_until:
+        return [("[SetCursorPosition]", "")]
+    return []
 
 
 def _entry_edit_prefill(item: dict) -> str:
@@ -2108,19 +2170,24 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # keeps its accent even under the selected-header styling.
         # The gutter cell replaces the space after "巳:00" (budgeted via
         # dwidth(left), which still includes it — same 1-char width).
-        out.append((left_sty, f"{blk_name}:00"))
-        out.append(_gutter(blk_sh, 0, slot_min))
+        # Click-to-select (user request 2026-08-07): the header-riding event
+        # is selectable the same way Tab already reaches it (head_selected
+        # above) — None when head isn't an event, matching that exactly.
+        head_click = _row_click(_event_key(head["event"]) if head.get("is_event") else None)
+        out.extend(_cursor_marker(head_selected))
+        out.append(_frag(left_sty, f"{blk_name}:00", head_click))
+        out.append(_frag(*_gutter(blk_sh, 0, slot_min), head_click))
         # Header-riding events right-justify like every other calendar row
         # (user request 2026-07-28): block name left, event at the right edge.
-        out.append(("class:selected_bg" if head_selected else "",
-                    " " * max(0, avail - dwidth(label))))
+        out.append(_frag("class:selected_bg" if head_selected else "",
+                         " " * max(0, avail - dwidth(label)), head_click))
         if tpfx:
-            out.append((time_sty, tpfx))
-        out.append((head_sty, label))
-        out.append((dur_sty, f" {dur}"))
+            out.append(_frag(time_sty, tpfx, head_click))
+        out.append(_frag(head_sty, label, head_click))
+        out.append(_frag(dur_sty, f" {dur}", head_click))
         if neon_tail:
-            out.append((NEON_PTS_STYLE, neon_tail))
-        out.append((dur_sty, "\n"))
+            out.append(_frag(NEON_PTS_STYLE, neon_tail, head_click))
+        out.append(_frag(dur_sty, "\n", head_click))
     else:
         body_picks = picks
         pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
@@ -2229,25 +2296,29 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             space = max(1, WIDTH_HINT - dwidth(left) - 1 - dwidth(prefix)
                         - dwidth(dur) - 1 - (dwidth(vtags) + 1 if vtags else 0)
                         - tail_w)
-            out.append((left_sty, left))
-            out.append((gsty, gch))
+            # Click-to-select (user request 2026-08-07): head0's row uses the
+            # SAME my_key Tab/Enter already select it by.
+            head0_click = _row_click(my_key)
+            out.extend(_cursor_marker(is_sel))
+            out.append(_frag(left_sty, left, head0_click))
+            out.append(_frag(gsty, gch, head0_click))
             txt = truncate(head0["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
             if head0.get("is_event"):
-                out.append((sty, " " * max(0, space - dwidth(txt)) + txt))
+                out.append(_frag(sty, " " * max(0, space - dwidth(txt)) + txt, head0_click))
             else:
-                out.append((sty, prefix + pad(txt, space)))
+                out.append(_frag(sty, prefix + pad(txt, space), head0_click))
             if vtags:
-                out.append((dur_sty, f" {vtags}"))
-            out.append((dur_sty, f" {dur}"))
+                out.append(_frag(dur_sty, f" {vtags}", head0_click))
+            out.append(_frag(dur_sty, f" {dur}", head0_click))
             if right:
-                out.append(("class:dim", " "))
+                out.append(_frag("class:dim", " ", head0_click))
                 if emojis:
-                    out.append((NEON_PTS_STYLE, emojis))
+                    out.append(_frag(NEON_PTS_STYLE, emojis, head0_click))
                     if pts_str:
-                        out.append(("class:dim", " "))
+                        out.append(_frag("class:dim", " ", head0_click))
                 if pts_str:
-                    out.append(("bold #ffffff", pts_str))
-            out.append(("class:dim", "\n"))
+                    out.append(_frag("bold #ffffff", pts_str, head0_click))
+            out.append(_frag("class:dim", "\n", head0_click))
         else:
             trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
             out.append(("class:dim", left))
@@ -2393,7 +2464,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # creates ranged entries).
             end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
             label = _gap_label(end, p["dur_min"])
-            gap_selected = STATE.event_sel == _sel_key({"kind": "empty", "start_dt": p["start_dt"]})
+            gap_key = _sel_key({"kind": "empty", "start_dt": p["start_dt"]})
+            gap_selected = STATE.event_sel == gap_key
             if gap_selected:
                 fill_cls = "class:selected_bg"
                 time_sty = "class:selected_accent"
@@ -2404,9 +2476,11 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty, gch = _gutter(hh, mm, slot_min)
             if gap_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
-            out.append((time_sty, tcol))
-            out.append((gsty, gch))
-            out.append((fill_cls, _gap_fill(label, space) + "\n"))
+            gap_click = _row_click(gap_key)  # click-to-select, user request 2026-08-07
+            out.extend(_cursor_marker(gap_selected))
+            out.append(_frag(time_sty, tcol, gap_click))
+            out.append(_frag(gsty, gch, gap_click))
+            out.append(_frag(fill_cls, _gap_fill(label, space) + "\n", gap_click))
             continue
         if p.get("is_free"):
             # Meeting-free future stretch: a calm green bar — the mirror of
@@ -2447,8 +2521,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                              if t in VALUE_TAGS)
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
                         - (dwidth(vtags) + 1 if vtags else 0))
-            running_selected = bool(p.get("entry_ids")) and STATE.event_sel == _sel_key(
-                {"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
+            running_key = ({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]}
+                          if p.get("entry_ids") else None)
+            running_key = _sel_key(running_key) if running_key else None
+            running_selected = running_key is not None and STATE.event_sel == running_key
             if running_selected:
                 sty = (f"bold {p['style']}".strip() if p["style"] else "bold class:running") + " bg:#3a3a3a"
                 time_sty = "class:selected_accent"
@@ -2460,13 +2536,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty, gch = _gutter(hh, mm, slot_min)
             if running_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
-            out.append((time_sty, tcol))
-            out.append((gsty, gch))
+            running_click = _row_click(running_key)  # click-to-select, user request 2026-08-07
+            out.append(_frag(time_sty, tcol, running_click))
+            out.append(_frag(gsty, gch, running_click))
             _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
-            out.append((sty, prefix + pad(_txt, space)))
+            out.append(_frag(sty, prefix + pad(_txt, space), running_click))
             if vtags:
-                out.append((dur_sty, f" {vtags}"))
-            out.append((dur_sty, f" {dur}\n"))
+                out.append(_frag(dur_sty, f" {vtags}", running_click))
+            out.append(_frag(dur_sty, f" {dur}\n", running_click))
             continue
         # A gcal event mixed into a non-future (current-block) card via its own
         # is_event flag still reads as "scheduled" (parenthesized duration),
@@ -2511,19 +2588,20 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         gsty, gch = _gutter(hh, mm, slot_min)
         if is_selected:
             gsty = f"{gsty} bg:#3a3a3a"
-        out.append((time_sty, tcol))
-        out.append((gsty, gch))
+        row_click = _row_click(my_key)  # click-to-select, user request 2026-08-07
+        out.append(_frag(time_sty, tcol, row_click))
+        out.append(_frag(gsty, gch, row_click))
         body_txt = truncate(p["label"], max(1, space - dwidth(doc_sfx))) + doc_sfx
         if p.get("is_event"):
             # Calendar entries right-justified, Toggl entries left (user
             # request 2026-07-28) — the two sources read as separate columns
             # at a glance instead of interleaving mid-line.
-            out.append((sty, " " * max(0, space - dwidth(body_txt)) + body_txt))
+            out.append(_frag(sty, " " * max(0, space - dwidth(body_txt)) + body_txt, row_click))
         else:
-            out.append((sty, pad(body_txt, space)))
+            out.append(_frag(sty, pad(body_txt, space), row_click))
         if vtags:
-            out.append((dur_sty, f" {vtags}"))
-        out.append((dur_sty, f" {dur}\n"))
+            out.append(_frag(dur_sty, f" {vtags}", row_click))
+        out.append(_frag(dur_sty, f" {dur}\n", row_click))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
     for _ in range(max_rows - len(rows)):
@@ -4701,6 +4779,9 @@ def _(event):
                 if it.get("start_dt") and it["start_dt"] <= now]
         i = past[-1] if past else 0
     STATE.event_sel = keys[i]
+    # Scroll the newly-selected row into view if it's currently off-screen
+    # (user request 2026-08-07) — see State.scroll_to_selection_until.
+    STATE.scroll_to_selection_until = time.monotonic() + 0.3
 
 
 @kb.add("s-tab", filter=_input_empty)
@@ -4720,6 +4801,7 @@ def _(event):
                 if it.get("start_dt") and it["start_dt"] <= now]
         i = past[-1] if past else len(keys) - 1
     STATE.event_sel = keys[i]
+    STATE.scroll_to_selection_until = time.monotonic() + 0.3
 
 
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;

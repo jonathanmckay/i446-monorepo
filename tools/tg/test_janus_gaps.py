@@ -163,13 +163,13 @@ def test_gap_row_states_empty_and_end_time_off_phase(monkeypatch):
     entry = {"start_dt": today.replace(hour=8), "time_str": "08:00",
              "label": "email", "style": "#888888", "dur_min": 40}
     frags = mod._compact_block_lines("巳", 8, [entry, gap], 0, "")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert text.count("\n") == 4, "block must stay exactly 4 lines"
     assert "empty" in text, "gap row must say the word 'empty', not just imply it"
     assert "09:10" in text, "gap row must state its real end time (08:40 + 30m)"
     # Off phase: plain red text, not the solid-block alarm style.
-    assert any("empty" in t for s, t in frags if s == "class:no_entry")
-    assert not any("empty" in t for s, t in frags if "no_entry_bg" in s)
+    assert any("empty" in t for s, t, *_ in frags if s == "class:no_entry")
+    assert not any("empty" in t for s, t, *_ in frags if "no_entry_bg" in s)
 
 
 def test_gap_row_pulses_solid_block_when_alarm_on(monkeypatch):
@@ -181,9 +181,9 @@ def test_gap_row_pulses_solid_block_when_alarm_on(monkeypatch):
     frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
     # On phase: the whole label (padded to width) carries the solid-block
     # style, not plain "no_entry" text and not the old idle grey.
-    assert any("empty" in t for s, t in frags if s == "class:no_entry_bg")
-    assert not any(s == "class:no_entry" for s, t in frags if "empty" in t)
-    assert not any("idle" in s for s, t in frags if "empty" in t)
+    assert any("empty" in t for s, t, *_ in frags if s == "class:no_entry_bg")
+    assert not any(s == "class:no_entry" for s, t, *_ in frags if "empty" in t)
+    assert not any("idle" in s for s, t, *_ in frags if "empty" in t)
 
 
 def test_gap_row_fills_remaining_width_with_dashes(monkeypatch):
@@ -196,7 +196,7 @@ def test_gap_row_fills_remaining_width_with_dashes(monkeypatch):
     gap = {"start_dt": today.replace(hour=8, minute=40), "time_str": "08:40",
            "label": "", "style": "", "dur_min": 30, "is_gap": True}
     frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
-    body = "".join(t for s, t in frags if s == "class:no_entry_bg")
+    body = "".join(t for s, t, *_ in frags if s == "class:no_entry_bg")
     assert "┄" in body, "gap row must fill its remaining width with dashes"
     assert not body.rstrip("\n").endswith(" "), (
         "the row must not end in blank padding once dashes are restored")
@@ -247,11 +247,11 @@ def test_detail_band_past_gap_states_empty_and_end_time(monkeypatch):
     mod.STATE.scroll_min = 0
     mod.STATE.entries = []  # no toggl entries → the whole window is one gap
     frags = mod.render_detail()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "empty" in text, "an untracked past stretch must say 'empty' outright"
     assert "06:00" in text, "gap must state its real end time (window end)"
-    assert any("04:00 │" in t for s, t in frags), "gap is keyed by its start time"
-    assert any(s == "class:no_entry_bg" and "empty" in t for s, t in frags), (
+    assert any("04:00 │" in t for s, t, *_ in frags), "gap is keyed by its start time"
+    assert any(s == "class:no_entry_bg" and "empty" in t for s, t, *_ in frags), (
         "alarm-on phase must render the solid-block style, not plain text")
 
 
@@ -271,8 +271,8 @@ def test_detail_band_past_gap_muted_when_alarm_off(monkeypatch):
     mod.STATE.scroll_min = 0
     mod.STATE.entries = []
     frags = mod.render_detail()
-    assert not any(s == "class:no_entry_bg" for s, t in frags)
-    assert any(s == "class:no_entry" and "empty" in t for s, t in frags)
+    assert not any(s == "class:no_entry_bg" for s, t, *_ in frags)
+    assert any(s == "class:no_entry" and "empty" in t for s, t, *_ in frags)
 
 
 def test_detail_band_gap_end_time_survives_capped_closing_entry(monkeypatch):
@@ -300,7 +300,7 @@ def test_detail_band_gap_end_time_survives_capped_closing_entry(monkeypatch):
         _entry("work", today.replace(hour=4, minute=25), today.replace(hour=5)),
     ]
     frags = mod.render_detail()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "04:20" in text, "gap must end at the true closing entry's start"
 
 
@@ -311,9 +311,9 @@ def test_gap_never_rides_the_header_rule():
     gap = {"start_dt": today.replace(hour=9, minute=15), "time_str": "09:15",
            "label": "", "style": "", "dur_min": 30, "is_gap": True}
     frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
-    header = "".join(t for _, t in frags).split("\n")[0]
+    header = "".join(t for _, t, *_ in frags).split("\n")[0]
     assert "09:15" not in header, "gap must be a body row, not inline in the rule"
-    assert any("no_entry" in s for s, _ in frags)
+    assert any("no_entry" in s for s, _, *_h in frags)
 
 
 def test_mao_sleep_total_is_dim_not_bold_white():
@@ -322,6 +322,6 @@ def test_mao_sleep_total_is_dim_not_bold_white():
     mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=5, minute=31))]
     mod.STATE.entries_yday = []
     frags = mod._mao_line(emojis="")
-    sleep_frag = [(s, t) for s, t in frags if "331m" in t]
+    sleep_frag = [(s, t) for s, t, *_ in frags if "331m" in t]
     assert sleep_frag, "sleep total missing"
     assert sleep_frag[0][0] == "class:dim"

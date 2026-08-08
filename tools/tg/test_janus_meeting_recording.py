@@ -166,13 +166,13 @@ def test_rec_indicator_on_running_row():
             "entry_ids": [1], "raw_desc": "Huddle: XBOX Developer",
             "project_id": None, "is_running": True, "tags": []}
     mod.STATE.recording = {"desc": "Huddle: XBOX Developer", "start_dt": today}
-    text = "".join(t for _, t in mod._compact_block_lines("未", 12, [pick], 0, ""))
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, [pick], 0, ""))
     line = next(l for l in text.split("\n") if "🎙" in l)
     assert line.index("🎙") > line.index("Huddle"), \
         "🎙 sits to the RIGHT of the task name (user request 2026-08-02)"
     assert "▶🎙" not in line, "no longer fused to the ▶ marker"
     mod.STATE.recording = None
-    text = "".join(t for _, t in mod._compact_block_lines("未", 12, [pick], 0, ""))
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, [pick], 0, ""))
     assert "🎙" not in text
 
 

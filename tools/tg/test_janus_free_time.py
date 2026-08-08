@@ -112,7 +112,7 @@ def test_evening_block_shows_free_row_between_meetings():
     mod.STATE.events = [
         _gcal("ES:JM 1:1", today.replace(hour=16, minute=30), today.replace(hour=17)),
     ]
-    text = "".join(t for _, t in mod.render_evening())
+    text = "".join(t for _, t, *_ in mod.render_evening())
     assert "free →" in text
     assert "酉:00" in text  # block header still the meeting-bearing card
 
@@ -126,11 +126,11 @@ def test_fully_free_future_block_keeps_bare_header_free_in_body():
     today = _midnight()
     picks = mod._future_free_gaps(18, 19, today.replace(hour=13))
     frags = mod._compact_block_lines("戌", 18, picks, 0, "", is_future=True)
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     header = text.split("\n")[0]
     assert "free" not in header
     assert "free → 20:00 (120m)" in text  # durations are minutes-denominated
-    styles = [s for s, t in frags if "free →" in t]
+    styles = [s for s, t, *_ in frags if "free →" in t]
     assert styles == ["class:free"], f"free rows must use class:free: {styles!r}"
 
 
@@ -139,7 +139,7 @@ def test_current_block_shows_remaining_free_time():
     _setup(mod)
     today = _midnight()
     mod.view_now = lambda: today.replace(hour=8, minute=30)
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     top = text.split("午:00")[0]
     assert "free → 10:00 (90m)" in top
 
@@ -178,7 +178,7 @@ def test_gutter_cell_rendered_in_rows_same_width_as_before():
                               today.replace(hour=7))]
     mod.view_now = lambda: today.replace(hour=5)
     frags = mod._compact_block_lines("辰", 6, [], 0, "")
-    lines = "".join(t for _, t in frags).split("\n")
+    lines = "".join(t for _, t, *_ in frags).split("\n")
     assert any("▍" in l for l in lines), "busy slot must draw its gutter cell"
     busy_line = next(l for l in lines if "▍" in l)
     free_line = next(l for l in lines if "·" in l and "▍" not in l)

@@ -145,7 +145,7 @@ def test_head_event_is_selectable_and_highlighted():
     frags = mod._compact_block_lines("午", 10, [pick], 0, "", is_future=True,
                                      max_rows=8, track_selection=True)
     assert mod.STATE.visible_events == [ev], "head event must register for the cursor"
-    assert not any("bg:#3a3a3a" in s or "selected" in s for s, t in frags), \
+    assert not any("bg:#3a3a3a" in s or "selected" in s for s, t, *_ in frags), \
         "unselected head must not be highlighted"
 
     mod.STATE.visible_events = []
@@ -153,8 +153,8 @@ def test_head_event_is_selectable_and_highlighted():
     frags = mod._compact_block_lines("午", 10, [pick], 0, "", is_future=True,
                                      max_rows=8, track_selection=True)
     assert any("GamePass sync" in t and ("bg:#3a3a3a" in s or "selected" in s)
-              for s, t in frags), "selected head must carry the highlight"
-    assert not any("reverse" in s for s, t in frags)
+              for s, t, *_ in frags), "selected head must carry the highlight"
+    assert not any("reverse" in s for s, t, *_ in frags)
 
 
 def test_render_focus_compact_tracks_next_block_events_too():
@@ -230,10 +230,10 @@ def test_selected_event_row_gets_full_row_background_band():
     frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
     # Time column gets the accent style; label carries the fg color + bg band;
     # the trailing " (15)\n" duration fragment carries the plain bg band.
-    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t in frags)
-    assert any("bg:#3a3a3a" in s and "standup" in t for s, t in frags)
-    assert any(s == "class:selected_bg" and t == " (15)\n" for s, t in frags)
-    assert not any("reverse" in s for s, t in frags), "must not use ANSI reverse video"
+    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t, *_ in frags)
+    assert any("bg:#3a3a3a" in s and "standup" in t for s, t, *_ in frags)
+    assert any(s == "class:selected_bg" and t == " (15)\n" for s, t, *_ in frags)
+    assert not any("reverse" in s for s, t, *_ in frags), "must not use ANSI reverse video"
 
 
 def test_unselected_event_row_uses_plain_time_and_dim_styles():
@@ -248,9 +248,9 @@ def test_unselected_event_row_uses_plain_time_and_dim_styles():
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = None
     frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
-    assert any(s == "class:time" for s, t in frags if t.strip() == "09:00")
-    assert any(s == "class:dim" for s, t in frags if t == " (15)\n")
-    assert not any("selected" in s or "reverse" in s for s, t in frags)
+    assert any(s == "class:time" for s, t, *_ in frags if t.strip() == "09:00")
+    assert any(s == "class:dim" for s, t, *_ in frags if t == " (15)\n")
+    assert not any("selected" in s or "reverse" in s for s, t, *_ in frags)
 
 
 def test_selection_never_shifts_row_horizontal_position():
@@ -264,10 +264,10 @@ def test_selection_never_shifts_row_horizontal_position():
     pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = None
-    unselected = "".join(t for _, t in
+    unselected = "".join(t for _, t, *_ in
                          mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True))
     mod.STATE.event_sel = mod._event_key(ev)
-    selected = "".join(t for _, t in
+    selected = "".join(t for _, t, *_ in
                        mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True))
     assert selected == unselected, "highlighting must not change any character or width, only color"
 
@@ -328,7 +328,7 @@ def test_render_morning_shows_uncovered_past_meeting_and_registers_for_cursor():
     ev = _gcal_event("forgotten standup", today.replace(hour=10), today.replace(hour=10, minute=30))
     mod.STATE.events = [ev]
     mod.view_now = lambda: today.replace(hour=12, minute=5)  # 未 current -> 午 is a past block
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     assert "forgotten standup" in text
     assert ev in mod.STATE.visible_events, "an uncovered past meeting must be selectable, same as any other event row"
 

@@ -44,7 +44,7 @@ def test_dozen_line_is_the_second_row():
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
     mod.STATE.daily_dozen = [("bn", -32.0), ("fr", -64.0)]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 2
     assert "-32" in lines[1] and "-64" in lines[1]
@@ -56,7 +56,7 @@ def test_dozen_only_shows_categories_currently_behind():
     (user request 2026-08-07) — only negative ("behind") ones render."""
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0), ("cr", 0.0), ("g", 36.0)]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "-32" in text
     assert "36" not in text
     # "0" for cr must not appear as a bare dozen chip (a coincidental "0"
@@ -79,7 +79,7 @@ def test_dozen_chips_pack_like_the_done_row():
     gap between them; same convention as the done row's _pack_number_chips."""
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0), ("fr", -64.0)]
-    row = "".join(t for _, t in mod.render_habits_today())
+    row = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "-32-64" in row.replace("\n", "")
 
 
@@ -87,7 +87,7 @@ def test_behind_chip_shown_only_when_negative():
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0)]
     mod.STATE.hcbi_behind = {"hcbc": -834.0, "hcbp": 243.0}
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "hcbc" in text and "-834" in text
     assert "hcbp" not in text and "243" not in text
 
@@ -96,7 +96,7 @@ def test_behind_chip_uses_its_domain_color():
     mod = _load_tui()
     mod.STATE.hcbi_behind = {"hcbc": -834.0}
     frags = mod.render_habits_today()
-    style, text = next((s, t) for s, t in frags if "hcbc" in t)
+    style, text = next((s, t) for s, t, *_ in frags if "hcbc" in t)
     assert f"bg:{mod.HCBI_BEHIND_DOMAINS['hcbc']}" in style
     assert "-834" in text
 
@@ -105,7 +105,7 @@ def test_no_behind_chips_when_all_positive():
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0)]
     mod.STATE.hcbi_behind = {"hcbc": 10.0, "hcbp": 243.0}
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "hcbc" not in text and "hcbp" not in text
 
 

@@ -98,7 +98,7 @@ def test_render_morning_draws_sleep_continuation():
     mod.STATE.events = []
     mod.detail_window = lambda: (today.replace(hour=12), today.replace(hour=16))
     frags = mod.render_morning()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     chen_idx = text.index("辰:00")
     chen_block = text[chen_idx:text.index("巳:00", chen_idx)]
     assert "睡觉" in chen_block
@@ -118,7 +118,7 @@ def test_render_morning_sleep_and_entry_in_body():
     mod.STATE.block_points = {}
     mod.detail_window = lambda: (today.replace(hour=8), today.replace(hour=12))
     frags = mod.render_morning()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     chen = [ln for ln in text.split("\n") if ln.startswith("辰:00")]
     assert chen, f"expected a bare 辰:00 header, got lines: {[l for l in text.split(chr(10)) if '辰' in l]}"
     assert "睡觉" in text and "新闻" in text

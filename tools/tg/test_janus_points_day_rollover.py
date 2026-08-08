@@ -71,7 +71,7 @@ def test_fetch_points_keeps_last_good_within_day(monkeypatch):
 
 def test_section_rule_rounds_float_pts():
     mod = _load_tui()
-    text = "".join(t for _, t in mod.section_rule("酉", focus=True,
+    text = "".join(t for _, t, *_ in mod.section_rule("酉", focus=True,
                                                   pts=323.7142857142857))
     assert " 324分" in text
     assert "." not in text, f"float repr must never reach the rule: {text!r}"
@@ -80,7 +80,7 @@ def test_section_rule_rounds_float_pts():
 def test_compact_header_rounds_float_pts():
     mod = _load_tui()
     out = mod._compact_block_lines("酉", 16, [], 323.7142857142857, "")
-    text = "".join(t for _, t in out)
+    text = "".join(t for _, t, *_ in out)
     assert "324分" in text
     assert "." not in text.split("\n")[0]
 
@@ -89,7 +89,7 @@ def test_header_rounds_float_total():
     mod = _load_tui()
     mod.STATE.day_offset = 0
     mod.STATE.today_points = 695.357142857143
-    text = "".join(t for _, t in mod.render_header())
+    text = "".join(t for _, t, *_ in mod.render_header())
     assert "695分" in text
     assert "." not in text
 

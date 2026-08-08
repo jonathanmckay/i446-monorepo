@@ -245,7 +245,7 @@ def test_row_cap_prefers_tracked_entries_over_event_picks():
          "style": "", "dur_min": 45, "is_event": True,
          "event": _event("Potrero PT", today.replace(hour=9, minute=15), today.replace(hour=10))},
     ]
-    text = "".join(t for _, t in mod._compact_block_lines("巳", 8, picks, 0, ""))
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("巳", 8, picks, 0, ""))
     for name in ("asha sync", "冥想", "hiit"):
         assert name in text, f"tracked entry {name!r} must survive the cap"
 
