@@ -181,3 +181,54 @@ def test_partial_fetch_previous_block_trusts_fresh(tmp_path, monkeypatch):
     ids = [t["id"] for t in json.loads(cache.read_text())["today"]]
     assert "NEW1" in ids
     assert "OLD1" not in ids, "retired cards must never outlive their block"
+
+
+def test_empty_fetch_on_base_label_preserves_still_open_tasks(tmp_path, monkeypatch):
+    """Regression (2026-08-08): "I'm still losing a bunch of tasks after I
+    complete one for like 10 seconds."
+
+    The empty/partial-fetch guards above (2026-07-19, 2026-07-28) only ever
+    covered DYNAMIC_TODAY_LABELS (-1neon/#0g/#-1g), spliced into "today".
+    The base LABELS loop (关键径路/夜neon/0neon/1neon -- the bulk of dtd's
+    visible list, fetched via the SAME no-retry find_tasks()) had no such
+    guard: an empty/rate-limited fetch for e.g. "0neon" wiped that entire
+    bucket unconditionally until the next successful refresh. Fix: apply the
+    same "if a label's fresh fetch is empty but the old cache had entries,
+    keep the old ones" guard to the base LABELS loop too.
+    """
+    m = _load()
+    cache = tmp_path / "task-queue.json"
+    cache.write_text(json.dumps({
+        "updated": "2026-08-08T07:00:00",
+        "0neon": [
+            {"id": "H1", "content": "0t (3) [10]", "labels": ["0neon", "n156"],
+             "due": "2026-08-08", "recurring": True},
+            {"id": "H2", "content": "0g (4) [8]", "labels": ["0neon", "g245"],
+             "due": "2026-08-08", "recurring": True},
+        ],
+        "1neon": [
+            {"id": "W1", "content": "1 hcb", "labels": ["1neon", "hcb"],
+             "due": "2026-08-08", "recurring": True},
+        ],
+    }))
+    monkeypatch.setattr(m, "CACHE", cache)
+
+    def fake_find(labels=None, limit=200):
+        if labels == ["0neon"]:
+            return []  # simulate a rate-limited/empty fetch on this base label
+        if labels == ["1neon"]:
+            return [{"id": "W1", "content": "1 hcb", "labels": ["1neon", "hcb"],
+                      "due": "2026-08-08", "recurring": True}]
+        return []
+    monkeypatch.setattr(m.todoist, "find_tasks", fake_find)
+    monkeypatch.setattr(m, "_nudge_janus", lambda: None)
+
+    m.main()
+    written = json.loads(cache.read_text())
+    ids_0n = [t["id"] for t in written.get("0neon", [])]
+    assert "H1" in ids_0n and "H2" in ids_0n, (
+        "an empty fetch on a BASE label (0neon) must not wipe still-open "
+        f"habits from the cache -- got {ids_0n!r}")
+    assert [t["id"] for t in written.get("1neon", [])] == ["W1"], (
+        "a genuinely successful fetch on another base label must still "
+        "overwrite normally")

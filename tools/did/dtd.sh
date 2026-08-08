@@ -966,21 +966,6 @@ cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
 timer_file = sys.argv[7] if len(sys.argv) > 7 else ''
 cols = int(cols)
-# Ignore the passed-in 'today' arg in favor of the live clock. fzf's --bind
-# strings (reload(\$DTD_RELOAD), enter/alt-enter/ctrl-s/etc.) are captured as
-# STATIC text the moment fzf launches -- they never pick up the outer shell
-# loop's per-iteration LOCAL_TODAY refresh, only the watcher's async POST
-# does (see watch_today below). A dtd session left open across midnight (not
-# unusual -- this file's own single fzf process can run for many hours)
-# keeps re-sending yesterday's date on every keypress-triggered reload,
-# clobbering the watcher's fix moments after it lands: today_tasks' due<=today
-# bound then excludes every card due today (rituals included -- 'the -1n
-# cards aren't rendering' bug report, 2026-08-08), and the done-file date gate
-# a few lines below also misfires the same way. Mirrors the fix already
-# applied locally to the habits-deferred check further down (see its comment
-# on 'the session-start today arg').
-import datetime as _dt_live
-today = _dt_live.date.today().isoformat()
 
 with open(cache_file) as f:
     d = json.load(f)
@@ -2181,7 +2166,18 @@ while true; do
   # the live cache. This prevents tasks vanishing mid-session when an external
   # process (morning routine, /todo, other terminals) rewrites the live cache
   # after startup. Use ctrl-r to explicitly pull external changes.
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
+  # Date arg is a LIVE, unevaluated \$(date ...) substitution, not \$LOCAL_TODAY
+  # baked in as a literal (2026-08-08 fix): this string becomes DTD_RELOAD,
+  # which fzf's --bind flags below capture as STATIC text for fzf's entire
+  # (often many-hours-long) process lifetime. A literal date here means every
+  # keypress-triggered reload keeps re-sending the date from whenever fzf
+  # happened to launch -- past midnight, today_tasks' due<=today bound then
+  # excludes every card genuinely due today (rituals included -- "the -1n
+  # cards aren't rendering" bug report) on every single reload, not just a
+  # transient window. A literal \$(...) here is re-evaluated by the shell fzf
+  # spawns to run each reload/execute action, so it tracks the real clock for
+  # as long as the fzf process stays open, no relaunch required.
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' \"\$(date +%Y-%m-%d)\" '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
   DTD_RELOAD="${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).

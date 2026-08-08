@@ -75,20 +75,42 @@ def fetch(label: str) -> tuple[str, list]:
 def main() -> int:
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = dict(pool.map(fetch, LABELS))
+
+    # Load the existing cache BEFORE merging results in, so the empty-fetch
+    # guard below has something to fall back to.
+    old_cache: dict = {}
+    if CACHE.exists():
+        try:
+            old_cache = json.loads(CACHE.read_text())
+        except (json.JSONDecodeError, OSError):
+            old_cache = {}
+
+    # Per-label empty-fetch guard (2026-08-08): find_tasks() has no retry,
+    # and a bare empty/falsy result is indistinguishable from "genuinely
+    # nothing open" vs. a transient Todoist rate-limit/eventual-consistency
+    # hiccup on that exact label's index -- the same lag class the
+    # DYNAMIC_TODAY_LABELS splice further down already guards against (see
+    # its own "Per-label empty-fetch guard" comment, bug 2026-07-19). That
+    # guard only ever covered the -1neon/#0g/#-1g union into "today"; this
+    # base LABELS loop (关键径路/夜neon/0neon/1neon -- the bulk of dtd's
+    # visible list) was never given the same protection, so a rate-limited
+    # fetch here wiped a whole bucket of real, still-open tasks until the
+    # next successful refresh (user report: "I'm still losing a bunch of
+    # tasks after I complete one for like 10 seconds" -- Todoist's own
+    # read-after-write index propagation lag, not a code-level delay).
+    for lbl in LABELS:
+        key = CACHE_KEY[lbl]
+        if not results.get(key) and old_cache.get(key):
+            results[key] = old_cache[key]
+
     data: dict = {"updated": datetime.now().isoformat(timespec="seconds")}
     data.update(results)
     # Preserve the "today" bucket from the existing cache if present.
     # The "today" bucket is populated by did-fast.py --refresh-cache (which
     # fetches all tasks due today/overdue). This lightweight refresh only
     # updates neon-labeled buckets and must not drop the broader task list.
-    old_cache: dict = {}
-    if CACHE.exists():
-        try:
-            old_cache = json.loads(CACHE.read_text())
-            if "today" in old_cache and "today" not in data:
-                data["today"] = old_cache["today"]
-        except (json.JSONDecodeError, OSError):
-            old_cache = {}
+    if "today" in old_cache and "today" not in data:
+        data["today"] = old_cache["today"]
     # Refresh the dynamic subset of "today" (rituals + #0g/#-1g goals) so newly-set
     # goals and a new block's rituals appear (the rest of "today" is left as
     # did-fast --refresh-cache last wrote it). Drop stale entries for these labels,

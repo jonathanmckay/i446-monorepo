@@ -720,7 +720,17 @@ def _row_click(key) -> object | None:
 
     MOUSE_UP, not MOUSE_DOWN: matches prompt_toolkit's own Button/RadioList
     click idiom (widgets/base.py) — robust against a drag that starts on
-    this row but releases elsewhere, which MOUSE_DOWN would wrongly select."""
+    this row but releases elsewhere, which MOUSE_DOWN would wrongly select.
+
+    Every other event type — critically SCROLL_UP/SCROLL_DOWN — returns
+    NotImplemented, not None (bug fix 2026-08-08: "I still can't scroll in
+    the window"). FormattedTextControl.mouse_handler() returns exactly
+    whatever this handler returns; a bare `None` reads as "handled, stop
+    here" and swallows the event, which meant Window's own default
+    _scroll_up/_scroll_down fallback (the thing that makes the mouse wheel
+    work at all — prompt_toolkit supplies it for free, no code of ours
+    invokes it directly) never ran on any row with a click handler attached,
+    i.e. almost every visible row after click-to-select landed."""
     if key is None:
         return None
 
@@ -728,6 +738,8 @@ def _row_click(key) -> object | None:
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
             STATE.event_sel = key
             get_app().invalidate()
+            return None
+        return NotImplemented
     return handler
 
 
@@ -750,6 +762,17 @@ def _cursor_marker(is_sel: bool) -> list[tuple]:
     if is_sel and time.monotonic() < STATE.scroll_to_selection_until:
         return [("[SetCursorPosition]", "")]
     return []
+
+
+def _row_selection(key) -> tuple[bool, object | None, list[tuple]]:
+    """(is_selected, click_handler, cursor_marker) for a selectable row —
+    every branch in _compact_block_lines needs exactly these three things
+    for whatever key identifies its row (None for an unselectable synthetic
+    pick), and previously recomputed each of them separately with its own
+    "is this row selected" comparison; collapsed here so the key expression
+    is the only thing that varies per branch (cleanup 2026-08-08)."""
+    is_sel = key is not None and STATE.event_sel == key
+    return is_sel, _row_click(key), _cursor_marker(is_sel)
 
 
 def _entry_edit_prefill(item: dict) -> str:
@@ -2150,8 +2173,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # unselectable (user report 2026-07-15: "still can't select... future
         # calendar entries", since the next focus block's only event is
         # almost always its head).
-        head_selected = (track_selection and head.get("is_event")
-                        and STATE.event_sel == _event_key(head["event"]))
+        head_key = _event_key(head["event"]) if track_selection and head.get("is_event") else None
+        head_selected, head_click, head_marker = _row_selection(head_key)
         if track_selection and head.get("is_event"):
             STATE.visible_events.append(head["event"])
         if head_selected:
@@ -2170,11 +2193,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # keeps its accent even under the selected-header styling.
         # The gutter cell replaces the space after "巳:00" (budgeted via
         # dwidth(left), which still includes it — same 1-char width).
-        # Click-to-select (user request 2026-08-07): the header-riding event
-        # is selectable the same way Tab already reaches it (head_selected
-        # above) — None when head isn't an event, matching that exactly.
-        head_click = _row_click(_event_key(head["event"]) if head.get("is_event") else None)
-        out.extend(_cursor_marker(head_selected))
+        out.extend(head_marker)
         out.append(_frag(left_sty, f"{blk_name}:00", head_click))
         out.append(_frag(*_gutter(blk_sh, 0, slot_min), head_click))
         # Header-riding events right-justify like every other calendar row
@@ -2257,7 +2276,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                     STATE.visible_events.append(reg)
             else:
                 my_key = None  # synthetic pick (sleep spillover) — unselectable
-            is_sel = my_key is not None and STATE.event_sel == my_key
+            is_sel, head0_click, head0_marker = _row_selection(my_key)
             dur = f"({head0['dur_min']})" if head0.get("is_event") else fmt_dur(head0["dur_min"])
             prefix = "▶ " if running else ""
             # d357 recording live → 🎙 rides RIGHT of the task name
@@ -2296,10 +2315,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             space = max(1, WIDTH_HINT - dwidth(left) - 1 - dwidth(prefix)
                         - dwidth(dur) - 1 - (dwidth(vtags) + 1 if vtags else 0)
                         - tail_w)
-            # Click-to-select (user request 2026-08-07): head0's row uses the
-            # SAME my_key Tab/Enter already select it by.
-            head0_click = _row_click(my_key)
-            out.extend(_cursor_marker(is_sel))
+            out.extend(head0_marker)
             out.append(_frag(left_sty, left, head0_click))
             out.append(_frag(gsty, gch, head0_click))
             txt = truncate(head0["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
@@ -2465,7 +2481,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
             label = _gap_label(end, p["dur_min"])
             gap_key = _sel_key({"kind": "empty", "start_dt": p["start_dt"]})
-            gap_selected = STATE.event_sel == gap_key
+            gap_selected, gap_click, gap_marker = _row_selection(gap_key)
             if gap_selected:
                 fill_cls = "class:selected_bg"
                 time_sty = "class:selected_accent"
@@ -2476,8 +2492,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty, gch = _gutter(hh, mm, slot_min)
             if gap_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
-            gap_click = _row_click(gap_key)  # click-to-select, user request 2026-08-07
-            out.extend(_cursor_marker(gap_selected))
+            out.extend(gap_marker)
             out.append(_frag(time_sty, tcol, gap_click))
             out.append(_frag(gsty, gch, gap_click))
             out.append(_frag(fill_cls, _gap_fill(label, space) + "\n", gap_click))
@@ -2524,7 +2539,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             running_key = ({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]}
                           if p.get("entry_ids") else None)
             running_key = _sel_key(running_key) if running_key else None
-            running_selected = running_key is not None and STATE.event_sel == running_key
+            running_selected, running_click, running_marker = _row_selection(running_key)
             if running_selected:
                 sty = (f"bold {p['style']}".strip() if p["style"] else "bold class:running") + " bg:#3a3a3a"
                 time_sty = "class:selected_accent"
@@ -2536,8 +2551,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty, gch = _gutter(hh, mm, slot_min)
             if running_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
-            running_click = _row_click(running_key)  # click-to-select, user request 2026-08-07
-            out.extend(_cursor_marker(running_selected))
+            out.extend(running_marker)
             out.append(_frag(time_sty, tcol, running_click))
             out.append(_frag(gsty, gch, running_click))
             _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
@@ -2569,7 +2583,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             my_key = _sel_key({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
         else:
             my_key = None  # e.g. the synthetic sleep-spillover pick — no real entry behind it
-        is_selected = my_key is not None and STATE.event_sel == my_key
+        is_selected, row_click, row_marker = _row_selection(my_key)
         if is_selected:
             # The event cursor's highlight, dtd-style: a flat background band
             # across the WHOLE row (not ANSI reverse, which just inverts
@@ -2589,8 +2603,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         gsty, gch = _gutter(hh, mm, slot_min)
         if is_selected:
             gsty = f"{gsty} bg:#3a3a3a"
-        row_click = _row_click(my_key)  # click-to-select, user request 2026-08-07
-        out.extend(_cursor_marker(is_selected))
+        out.extend(row_marker)
         out.append(_frag(time_sty, tcol, row_click))
         out.append(_frag(gsty, gch, row_click))
         body_txt = truncate(p["label"], max(1, space - dwidth(doc_sfx))) + doc_sfx
