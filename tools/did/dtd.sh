@@ -966,6 +966,21 @@ cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
 timer_file = sys.argv[7] if len(sys.argv) > 7 else ''
 cols = int(cols)
+# Ignore the passed-in 'today' arg in favor of the live clock. fzf's --bind
+# strings (reload(\$DTD_RELOAD), enter/alt-enter/ctrl-s/etc.) are captured as
+# STATIC text the moment fzf launches -- they never pick up the outer shell
+# loop's per-iteration LOCAL_TODAY refresh, only the watcher's async POST
+# does (see watch_today below). A dtd session left open across midnight (not
+# unusual -- this file's own single fzf process can run for many hours)
+# keeps re-sending yesterday's date on every keypress-triggered reload,
+# clobbering the watcher's fix moments after it lands: today_tasks' due<=today
+# bound then excludes every card due today (rituals included -- 'the -1n
+# cards aren't rendering' bug report, 2026-08-08), and the done-file date gate
+# a few lines below also misfires the same way. Mirrors the fix already
+# applied locally to the habits-deferred check further down (see its comment
+# on 'the session-start today arg').
+import datetime as _dt_live
+today = _dt_live.date.today().isoformat()
 
 with open(cache_file) as f:
     d = json.load(f)
