@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "1500分 「50」": {
-      "todoist_id": "6hFFxcVWVG7GPVwR",
-      "minutes": 20
-    },
-    "tasks below 50": {
-      "todoist_id": "6hFFxcfw5CgM5XPR",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-08-07T20:00:04.933294-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-07T22:00:04.346006-07:00"
 }
