@@ -3613,19 +3613,23 @@ def render_current_bottom() -> list[tuple[str, str]]:
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
     dur = f"{m}m{s:02d}.{frac}s"
-    rec_sfx = " 🎙" if _rec_active_for(cur.get("description")) else ""
+    recording = _rec_active_for(cur.get("description"))
+    rec_sfx = " 🎙" if recording else ""
     left = f" ▶ {dur}  {desc}{rec_sfx}"
     if code:
         left += f" · {code}"
-    pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))
     style = project_style(code) or "class:running"
     if is_sel:
         style = f"{style} bg:#3a3a3a".strip()
         time_style = "class:selected_accent"
     else:
         time_style = "class:time"
+    dot_frags = _rec_level_dot_frags(click) if recording else []
+    dots_width = sum(dwidth(t) for _, t, *_ in dot_frags)
+    pad = max(0, WIDTH_HINT - dwidth(left) - dots_width - len(clock))
     return [
         _frag(f"bold {style}".strip(), left, click),
+        *dot_frags,
         _frag(time_style, f"{'':>{pad}}{clock}\n", click),
     ]
 
@@ -4057,6 +4061,63 @@ def _load_recording_state() -> None:
 def _rec_active_for(desc: str | None) -> bool:
     return bool(STATE.recording and desc
                 and desc.strip().lower() == STATE.recording["desc"].strip().lower())
+
+
+_REC_LEVEL_CACHE = {"checked": float("-inf"), "have_data": False, "mic_ok": None, "call_ok": None}
+_REC_LEVEL_TTL = 1.0
+_LEVEL_RE = re.compile(r"^LEVEL mic=(\d+)(?: call=(\d+))?$", re.M)
+
+
+def _read_rec_levels() -> tuple[bool, bool | None] | None:
+    """(mic_ok, call_ok) from the LAST "LEVEL mic=N [call=N]" line meet.py's
+    recording loop prints roughly once a second (see meet.py record_audio) —
+    answers "is the .wav actually receiving bytes right now" without waiting
+    on meet.py's own 60-180s periodic warning (user request 2026-08-09,
+    prompted by a call-audio channel that sat at zero for 2 minutes before
+    the existing warning fired). call_ok is None for a mic-only session — no
+    second channel to show a dot for. Returns None (render nothing) when
+    nothing is recording, or no LEVEL line has landed yet (~1s after start)."""
+    if not STATE.recording:
+        return None
+    now = time.monotonic()
+    if now - _REC_LEVEL_CACHE["checked"] < _REC_LEVEL_TTL:
+        return ((_REC_LEVEL_CACHE["mic_ok"], _REC_LEVEL_CACHE["call_ok"])
+                if _REC_LEVEL_CACHE["have_data"] else None)
+    _REC_LEVEL_CACHE["checked"] = now
+    last = None
+    try:
+        st = json.loads(D357_STATE.read_text())
+        log_path = Path(st.get("log") or "")
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8", errors="ignore")
+        for last in _LEVEL_RE.finditer(tail):
+            pass  # last match wins — only the newest sample matters
+    except Exception:
+        last = None
+    if last is None:
+        _REC_LEVEL_CACHE["have_data"] = False
+        return None
+    mic_ok = int(last.group(1)) > 0
+    call_ok = int(last.group(2)) > 0 if last.group(2) is not None else None
+    _REC_LEVEL_CACHE.update(have_data=True, mic_ok=mic_ok, call_ok=call_ok)
+    return mic_ok, call_ok
+
+
+def _rec_level_dot_frags(click) -> list[tuple]:
+    """● per recording channel (mic, then call if the session has one) —
+    green for signal in the last ~1s, red for flat zero. See
+    _read_rec_levels for the log-tailing mechanics."""
+    levels = _read_rec_levels()
+    if levels is None:
+        return []
+    mic_ok, call_ok = levels
+    frags = [_frag("bold #00d700" if mic_ok else "bold #ff5555", " ●", click)]
+    if call_ok is not None:
+        frags.append(_frag("bold #00d700" if call_ok else "bold #ff5555", "●", click))
+    return frags
 
 
 # ── d357 "already filed" indicator (user request 2026-08-02: an emoji for
