@@ -87,6 +87,11 @@ def _setup(mod, current=None, recording=None):
     mod.STATE.current_swipe_start = None
     mod.STATE.queued_cmds = set()
     mod.STATE.work_q = None
+    mod.STATE.done_target = None
+    # Default: points always resolvable, so existing tests keep exercising
+    # the direct did-fast dispatch path. Tests for the "can't resolve
+    # points, ask instead" prompt (2026-08-09) override this explicitly.
+    mod._resolvable_points = lambda desc: 45
 
 
 def _current_item(mod, desc="writing code"):

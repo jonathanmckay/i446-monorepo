@@ -456,6 +456,16 @@ class State:
         # "project_id", "tags", "start_dt", "end_dt"}. The next Enter reads
         # the input line as the HHMM split point and cuts the entry in two.
         self.split_target: dict | None = None
+        # Armed by ⌥↵/swipe-right on the current-timer row when no points
+        # could be resolved for it (no inline [N], no matching Todoist task
+        # carrying one): {"desc", "start_dt", "code"}. janus is the
+        # interactive points-conversion interface (user request 2026-08-09)
+        # — did-fast/batch flows keep silently defaulting to 0 per
+        # [[zero-points-default]], but this one high-intent gesture asks
+        # instead of guessing. The next Enter reads the input line as the
+        # point value (blank = 0) and completes the /done. Consumed first,
+        # same chokepoint discipline as edit_target/split_target.
+        self.done_target: dict | None = None
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
@@ -3867,6 +3877,50 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
     return False, 0
 
 
+_POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
+
+
+def _resolvable_points(desc: str) -> int | None:
+    """The points value did-fast would resolve for `desc` on its own — an
+    inline [N] already in `desc` itself, or a [N] on a matching OPEN task in
+    the cached task queue (same file/matching did-fast's own Todoist-content
+    lookup reads; see fetch_short_names' walk() for the identical shape).
+    None when neither exists, meaning did-fast would silently default to 0 —
+    the signal _run_current_timer_done uses to ask instead of guessing."""
+    m = _POINTS_BRACKET_RE.search(desc or "")
+    if m:
+        return int(m.group(1))
+    try:
+        data = json.loads(TASK_QUEUE.read_text())
+    except Exception:
+        return None
+    target = _norm_key(desc)
+    if not target:
+        return None
+    found = None
+
+    def walk(o):
+        nonlocal found
+        if found is not None:
+            return
+        if isinstance(o, dict):
+            c = o.get("content")
+            if c and _norm_key(c) == target:
+                found = c
+                return
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(data)
+    if not found:
+        return None
+    m = _POINTS_BRACKET_RE.search(found)
+    return int(m.group(1)) if m else None
+
+
 def _did_summary(stdout_text: str) -> str:
     """One flash-able line from did-fast's JSON blob. The old last-line-of-
     output flash literally showed "}" for every successful conversion; pull
@@ -4257,11 +4311,28 @@ def _run_current_timer_done(app) -> None:
         flash("timer just started — give it a minute before /done", 3.0)
         return
     code = toggl_project_code(cur.get("project_id"), cur.get("description"))
+    if _resolvable_points(raw_desc) is None:
+        # Neither an inline [N] nor a matching Todoist task carries a points
+        # value — did-fast would silently default to 0. janus is the
+        # interactive points-conversion interface (user request 2026-08-09),
+        # so ask instead of guessing: arm done_target and hand the input line
+        # to the user. The next Enter (top of the enter handler) reads
+        # whatever they typed as the point value and completes the /done.
+        STATE.event_sel = None
+        STATE.done_target = {"desc": raw_desc, "start_dt": start, "code": code}
+        input_buffer.text = ""
+        flash(f'no points for "{raw_desc}" — type a number, ⏎ to log (blank = 0)', 8.0)
+        return
     cmd = f"{raw_desc} {start:%H%M}-{now:%H%M}"
     if code:
         cmd += f" @{code}"
     STATE.event_sel = None
+    _run_done_command(app, cmd)
 
+
+def _run_done_command(app, cmd: str) -> None:
+    """Shared did-fast dispatch for /done — stop the running timer AND grant
+    its points in one call (the completed-range MECE trim does the stop)."""
     async def _run():
         flash(f"$ did {cmd}  (stop + done)")
         app.invalidate()
@@ -4342,6 +4413,30 @@ def _convert_selected_event(ev: dict, app) -> None:
 
 @kb.add("enter")
 def _(event):
+    if STATE.done_target is not None:
+        # Consumed first, unconditionally — same chokepoint discipline as
+        # split_target/edit_target below. The input line holds the point
+        # value _run_current_timer_done couldn't resolve on its own; blank
+        # reads as 0 (same default did-fast itself would've silently used),
+        # not cancel — this prompt exists to let the user CHOOSE that
+        # default deliberately, not to add a way to abort the /done outright
+        # (the timer's a completed range either way once this fires).
+        dtgt = STATE.done_target
+        STATE.done_target = None
+        text = input_buffer.text.strip()
+        input_buffer.reset()
+        try:
+            pts = int(text) if text else 0
+        except ValueError:
+            flash(f"not a number: {text!r} — done cancelled, timer still running", 4.0)
+            return
+        now = dt.datetime.now(TZ)
+        cmd = f"{dtgt['desc']} {dtgt['start_dt']:%H%M}-{now:%H%M}"
+        if dtgt.get("code"):
+            cmd += f" @{dtgt['code']}"
+        cmd += f" [{pts}]"
+        _run_done_command(event.app, cmd)
+        return
     if STATE.split_target is not None:
         # Same chokepoint discipline as edit_target below: consumed first,
         # empty submission = cancel. The input line holds the HHMM split

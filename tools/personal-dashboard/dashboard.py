@@ -1226,6 +1226,69 @@ def load_turns_data():
         return {}
 
 
+NEON_LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
+
+
+def load_neon_manual_edits(n_days=DAYS):
+    """Detected out-of-band ("manual") Neon edits per day, from the write ledger.
+
+    The excel-http daemon on ix journals every pipeline write with the cell's
+    before-formula. `chain: "broken"` marks a write that found the cell changed
+    outside the pipeline since its last journaled write; `kind: "ack"` marks a
+    deliberately blessed manual edit (the hourly neon-ledger-audit live check
+    prompts these). Counted as distinct cells per day, so a break followed by
+    its own ack the same day is one edit, not two.
+
+    Caveats (by construction, not bugs): detection is lazy — a hand edit only
+    surfaces the NEXT time the pipeline writes that cell or the audit's 48h
+    live check sees it — so today's number can rise tomorrow; and sync
+    clobbers / out-of-band scripts register identically to hand edits. Treat
+    it as a lower bound on out-of-pipeline edits, not an exact keystroke count.
+    """
+    dates = last_n_days(n_days)
+    wanted = set(dates)
+    today = dates[-1]
+    cells_by_day: dict[str, set] = {}
+    today_detail = []
+    for month in sorted({d[:7] for d in dates}):
+        path = os.path.join(NEON_LEDGER_DIR, month + ".jsonl")
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # torn trailing line from a live append
+                    day = (e.get("ts") or "")[:10]
+                    if day not in wanted:
+                        continue
+                    is_break = e.get("chain") == "broken"
+                    is_ack = e.get("kind") == "ack"
+                    if not (is_break or is_ack):
+                        continue
+                    key = (e.get("sheet", ""), e.get("col", ""),
+                           str(e.get("date") or f"r{e.get('row')}"))
+                    seen = cells_by_day.setdefault(day, set())
+                    if key not in seen and day == today:
+                        label = "ack: " + (e.get("note") or "") if is_ack else (e.get("src") or "?")
+                        today_detail.append({
+                            "cell": f"{key[0]}!{key[1]} @{key[2]}",
+                            "via": label,
+                            "ts": (e.get("ts") or "")[11:16],
+                        })
+                    seen.add(key)
+        except FileNotFoundError:
+            continue
+    return {
+        "counts": [len(cells_by_day.get(d, ())) for d in dates],
+        "today": len(cells_by_day.get(today, ())),
+        "today_cells": today_detail,
+    }
+
+
 def load_imessage_stats():
     """Load iMessage stats from response DB + live chat.db for today/yesterday."""
     import sqlite3
@@ -1919,6 +1982,7 @@ def _build_api_data():
         "email": load_email_data,
         "imsg": load_imessage_stats,
         "ga4": load_ga4_data,
+        "neon_edits": load_neon_manual_edits,
     }
     raw = {}
     with ThreadPoolExecutor(max_workers=len(loaders)) as ex:
@@ -1938,6 +2002,8 @@ def _build_api_data():
     email_raw = raw["email"]
     imsg_stats = raw["imsg"]
     ga4_raw = raw["ga4"]
+    # capture before `raw` is shadowed by the ratio loop below
+    neon_edits_raw = raw.get("neon_edits") or {}
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -2094,6 +2160,7 @@ def _build_api_data():
         "ratio": {"datasets": ratio_datasets},
         "email": {"datasets": email_datasets, "summary": email_summary, "imessage": imsg_stats},
         "ga4": {"views": ga4_views, "top_pages": ga4_raw.get("top_pages", [])},
+        "neon_edits": neon_edits_raw,
         "summary": {
             "total_points": {k: int(v) for k, v in total_points.items() if v > 0},
             "total_mins": {k: int(v) for k, v in total_time.items() if v > 0},
@@ -2224,6 +2291,11 @@ HTML = """<!DOCTYPE html>
     <h2 id="pointsLabel">Points / Day</h2>
     <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
     <div class="summary" id="pointsSummary"></div>
+  </div>
+  <div class="card">
+    <h2 title="Cells detected changed outside the excel-http pipeline (ledger chain breaks + acked manual edits), distinct cells per day. Detection is lazy: an edit surfaces on that cell's next pipeline write or the hourly audit — a lower bound, and sync clobbers register too.">Neon Manual Edits / Day</h2>
+    <div class="chart-wrap xs"><canvas id="neonEditsChart"></canvas></div>
+    <div class="summary" id="neonEditsSummary"></div>
   </div>
 </div>
 
@@ -2420,7 +2492,38 @@ fetch('/api/data').then(r => r.json()).then(data => {
 
   renderFourCharts(data, 'daily');
   renderEmailChart(data);
+  renderNeonEditsChart(data);
 });
+
+// Neon manual edits: bar per day of distinct cells detected changed outside
+// the pipeline (ledger chain breaks + acks). Stays on the daily axis
+// regardless of the granularity selector — it's a hygiene signal, not a
+// performance chart.
+function renderNeonEditsChart(data) {
+  const ne = data.neon_edits || {};
+  const el = document.getElementById('neonEditsSummary');
+  if (!ne.counts || !ne.counts.length) {
+    el.textContent = 'ledger unavailable';
+    return;
+  }
+  new Chart(document.getElementById('neonEditsChart'), {
+    type: 'bar',
+    data: {
+      labels: data.dates,
+      datasets: [{ label: 'manual edits', data: ne.counts, backgroundColor: '#c9784a' }]
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      scales: {
+        ...CHART_DEFAULTS.scales,
+        y: { ...CHART_DEFAULTS.scales.y, ticks: { ...CHART_DEFAULTS.scales.y.ticks, precision: 0 } }
+      }
+    }
+  });
+  const cells = ne.today_cells || [];
+  const detail = cells.slice(0, 6).map(c => `${c.cell} (${c.ts})`).join(' · ');
+  el.textContent = `today: ${ne.today}` + (cells.length ? ` — ${detail}` + (cells.length > 6 ? ` +${cells.length - 6} more` : '') : '');
+}
 
 // Email chart (Project Bocking): blended response-time line (purple) +
 // per-account count bars (stacked). At block granularity data.email is
