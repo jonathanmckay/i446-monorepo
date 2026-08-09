@@ -1,18 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "60分 hiit": {
-      "todoist_id": "6hFRQmwH5PF42rH2",
-      "minutes": 30
-    },
-    "hcbc positive": {
-      "todoist_id": "6hFRQp38wfqcrcW2",
-      "minutes": 30
-    },
-    "1500分": {
-      "todoist_id": "6hFRQp6jjQw5RH82",
+    "help lx recover with mom": {
+      "todoist_id": "6hFcc6wg3QM4gpR2",
       "minutes": 50
     }
   },
-  "last_sync": "2026-08-08T20:00:03.613543-07:00"
+  "last_sync": "2026-08-08T22:00:08.937240-07:00"
 }
