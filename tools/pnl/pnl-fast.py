@@ -253,6 +253,52 @@ def build_account_lookup():
 ACCOUNT_LOOKUP = build_account_lookup()
 
 
+# ── Pre-cutover backfill ──────────────────────────────────────────────────────
+# AppFolio's GL was restated ~June 2026; income-statement queries for earlier
+# months now return ~$0 (those books lived in QBO, unreachable). The archived
+# reports this pipeline generated in Apr–Jun 2026 captured the real monthly
+# numbers while AppFolio still served them; harvest-report-backfill.py
+# extracts them into data/report-backfill.json (label-level, rounded to the
+# dollar as printed). Months before the cutover are REPLACED wholesale from
+# the backfill — the live GL only holds stray post-restatement reversals for
+# those months, which would double-count against archived truth.
+APPFOLIO_GL_CUTOVER = "2026-06"
+BACKFILL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "data", "report-backfill.json")
+_BACKFILL_CACHE = None
+
+
+def _load_backfill():
+    global _BACKFILL_CACHE
+    if _BACKFILL_CACHE is None:
+        try:
+            with open(BACKFILL_PATH, encoding="utf-8") as f:
+                _BACKFILL_CACHE = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            _BACKFILL_CACHE = {}
+    return _BACKFILL_CACHE
+
+
+def overlay_backfill(monthly, months, code):
+    """Replace pre-cutover months of `monthly` with archived-report data.
+
+    Returns the list of months actually backfilled (for provenance)."""
+    data = _load_backfill().get(code, {})
+    applied = []
+    for mk in months:
+        if mk >= APPFOLIO_GL_CUTOVER:
+            continue
+        bf = data.get(mk)
+        if not bf:
+            continue
+        month_dict = defaultdict(float)
+        for label, val in bf.items():
+            month_dict[label] = float(val)
+        monthly[mk] = month_dict
+        applied.append(mk)
+    return applied
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
@@ -1647,7 +1693,8 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
                          gpr_monthly=None, lease_history=None, lease_snapshot=None,
                          lease_today=None,
                          occupancy_data=None, anchor_idx=None,
-                         budget_month=None, budget_ytd=None):
+                         budget_month=None, budget_ytd=None,
+                         backfill_months=None):
     """Generate the complete markdown report."""
     addr = prop["addr"]
     fund = prop["fund"]
@@ -1675,6 +1722,13 @@ def generate_full_report(code, prop, monthly, summaries, af_totals, months, labe
     r.append(f"## Trailing 12-Month P&L {period_short}")
     r.append("")
     r.append("Source: AppFolio income statement (12-month detail view, accrual basis).")
+    if backfill_months:
+        r.append("")
+        r.append(f"Months {backfill_months[0]}..{backfill_months[-1]} predate the "
+                 "AppFolio GL cutover (June 2026) and are backfilled from this "
+                 "pipeline's archived reports generated Apr–Jun 2026, when "
+                 "AppFolio still served those books — same account "
+                 "denominations, values as printed then (whole dollars).")
     r.append("")
 
     # Pre-compute derived metrics and T-12 vals (needed by Summary)
@@ -1863,13 +1917,26 @@ def main():
 
     # Parse
     monthly, af_totals, _, gpr_monthly = parse_api_rows(raw_current, months)
+    backfilled = overlay_backfill(monthly, months, code)
+    if backfilled:
+        print(f"  backfilled {len(backfilled)} pre-cutover months from archived reports "
+              f"({backfilled[0]}..{backfilled[-1]})", file=sys.stderr)
     prior_monthly = None
     prior_summaries = None
     prior_t12_noi = None
     if raw_prior:
         prior_monthly, _, _, _ = parse_api_rows(raw_prior, prior_months)
+        overlay_backfill(prior_monthly, prior_months, code)
         prior_summaries = compute_summaries(prior_monthly, prior_months, prop["units"])
-        prior_t12_noi = sum(prior_summaries[m]["NOI"] for m in prior_months)
+        # A prior-year T-12 total is only honest if every pre-cutover month in
+        # the prior window has backfill (the live GL returns ~$0 there). With
+        # partial coverage the sum understates badly and the YoY %s mislead —
+        # suppress the total; per-month YoY columns (which only use covered
+        # months) stay.
+        _bf = _load_backfill().get(code, {})
+        prior_complete = all(mk >= APPFOLIO_GL_CUTOVER or mk in _bf for mk in prior_months)
+        prior_t12_noi = (sum(prior_summaries[m]["NOI"] for m in prior_months)
+                         if prior_complete else None)
 
     # Compute
     summaries = compute_summaries(monthly, months, prop["units"])
@@ -1920,6 +1987,7 @@ def main():
         prior_monthly, prior_summaries, prior_t12_noi,
         gpr_monthly, lease_history, lease_snapshot, lease_today, occupancy_data,
         anchor_idx, budget_month, budget_ytd,
+        backfill_months=backfilled,
     )
 
     if args.dry_run:
