@@ -347,6 +347,10 @@ def _find_and_close_todoist(label: str, query: str, aliases: list) -> tuple[str 
     return None, None
 
 
+IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
+WORKBOOK = "Neon分v12.2.xlsx"
+
+
 def _calc_mw(target_date: str) -> tuple[float, int]:
     """target_date 'M/D' → (M.W, week_row in 1n+)."""
     n = datetime.now()
@@ -361,14 +365,36 @@ def _calc_mw(target_date: str) -> tuple[float, int]:
     M = sunday.month
     W = (sunday.day - 1) // 7 + 1
     mw = float(f"{M}.{W}")
-    # Find the row in 1n+ where col B == "M.W" string
     week_str = f"{M}.{W}"
-    out = excel.read("1n+", "B", row=1)  # not used; we need to find the row
-    # Look up row by scanning
-    for r in range(4, 60):
-        cell = excel.read("1n+", "B", row=r)
-        if cell.get("ok") and str(cell.get("value", "")).strip() in (week_str, f"{M}.{W:.1f}"[:-2]):
-            return mw, r
+    # Single server-side scan (2026-08-09 fix): this used to call
+    # excel.read("1n+", "B", row=r) once PER row in a client-side loop over
+    # rows 4-59 -- up to 56 sequential network round trips, each individually
+    # timeout-bounded (20s daemon + 45s ssh fallback) but additive, so a
+    # daemon outage turned "find one row" into a many-minute wait. This runs
+    # right after the 1s survey's own Neon write, in the /did mark-done
+    # chain, which is what made /1s look hung after finishing the form (bug
+    # report: "when I save or finish all the questions... it just hangs").
+    # Doing the row scan IN the AppleScript (like 0t-fast.py's fallback
+    # template already does for its date scan) makes this exactly one call.
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "1n+" of workbook "{WORKBOOK}"
+    set foundRow to 0
+    repeat with r from 4 to 59
+        set cellVal to string value of range ("B" & r) of theSheet
+        if cellVal = "{week_str}" then
+            set foundRow to r
+            exit repeat
+        end if
+    end repeat
+    return foundRow as string
+end tell
+'''
+    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
+                          text=True, timeout=60)
+    out = proc.stdout.strip()
+    if proc.returncode == 0 and out.isdigit() and int(out) > 0:
+        return mw, int(out)
     raise RuntimeError(f"M.W={week_str} not found in 1n+ col B")
 
 
