@@ -7,18 +7,21 @@ runs /done) on the task".
 The pinned bottom-bar mirror of the running timer (render_current_bottom,
 just above the input box) was previously pure static text — not in
 STATE.visible_events at all, no click handler. It's now a selectable
-{"kind": "current"} row, deliberately independent of the main pane's own
-selectable running-entry row ({"kind": "entry", "running": True}), which
-keeps its existing edit-on-Enter behavior untouched:
+{"kind": "current"} row, given the same entry_ids/start_dt/project_id shape
+as a real {"kind": "entry"} row so it can share that path's machinery:
 
-  - plain Enter on the selected "current" row: stop the timer (same action
-    as ^S), no points.
+  - plain Enter on the selected "current" row: arms an edit, same as the
+    main pane's own running-entry row (2026-08-09: "hitting enter to edit
+    it is more natural than enter to stop"). Plain stop is ^S — already a
+    global, unconditional stop, so no new binding was needed.
   - opt+enter (escape, enter) on the selected "current" row, OR a swipe-right
     gesture directly on the row (MOUSE_DOWN then MOUSE_UP >= SWIPE_RIGHT_COLS
     columns to the right): /done — stop the timer AND grant its points /
     close the matching Todoist task, via the same did-fast
     HHMM-nowHHMM-range trick _finalize_recording_cmd already uses for a
     still-running entry (did-fast's MECE trim stops it as a side effect).
+    This stays distinct from a plain "entry" row's ⌥↵, which still refuses
+    on a running entry.
 """
 import asyncio
 import datetime as dtm
@@ -94,8 +97,14 @@ def _setup(mod, current=None, recording=None):
     mod._resolvable_points = lambda desc: 45
 
 
-def _current_item(mod, desc="writing code"):
-    item = {"kind": "current", "raw_desc": desc}
+def _current_item(mod, desc="writing code", entry_id=1,
+                  start_dt=None, project_id=None):
+    # Matches render_all()'s real shape for the "current" row (2026-08-09) —
+    # entry_ids/start_dt/project_id let it share the "entry" kind's
+    # edit-arm path verbatim.
+    item = {"kind": "current", "raw_desc": desc, "entry_ids": [entry_id],
+            "start_dt": start_dt or dtm.datetime(2026, 8, 8, 14, 0, 0, tzinfo=TZ),
+            "project_id": project_id, "running": True}
     mod.STATE.visible_events = [item]
     mod.STATE.event_sel = mod._sel_key(item)
     return item
@@ -136,23 +145,33 @@ def test_bottom_bar_click_handler_and_selected_highlight():
     assert "bg:#3a3a3a" in sel_frags[0][0]
 
 
-# ─── plain Enter = stop ──────────────────────────────────────────────────
+# ─── plain Enter = edit ──────────────────────────────────────────────────
 
-def test_enter_on_current_row_stops_and_clears_selection():
+def test_enter_on_current_row_arms_edit_not_stop():
+    """2026-08-09: "hitting enter to edit it is more natural than enter to
+    stop" — the pinned current-timer row now shares the main pane's
+    edit-on-Enter behavior verbatim; plain stop moved to ^S (already a
+    global unconditional stop, so no new binding was needed)."""
     mod = _load_tui()
     _setup(mod, current={"description": "x", "start": "2026-08-08T14:00:00+00:00",
                           "project_id": None})
-    _current_item(mod)
+    item = _current_item(mod, desc="x", entry_id=42,
+                         start_dt=dtm.datetime(2026, 8, 8, 14, 0, 0, tzinfo=TZ))
     mod.input_buffer.text = ""
     _binding(mod, ("c-m",)).handler(_FakeEvent())
     assert mod.STATE.event_sel is None
-    assert mod.STATE.flash == "stopping…"
+    assert mod.STATE.edit_target == {"ids": [42], "date": dtm.date(2026, 8, 8)}
+    assert mod.input_buffer.text == mod._entry_edit_prefill(item)
+    assert mod.STATE.queued_cmds == set(), "must not run anything yet — edit is armed, not applied"
 
 
-def test_enter_on_main_pane_running_entry_still_arms_edit_not_stop():
+def test_enter_on_main_pane_running_entry_still_arms_edit():
     """The main pane's OWN selectable running-entry row (kind == "entry",
-    running == True) must keep its pre-existing edit-on-Enter behavior —
-    this change must not have collapsed the two into one."""
+    running == True) keeps its pre-existing edit-on-Enter behavior — Enter
+    is now unified across "entry" and "current" (2026-08-09), but ⌥↵ stays
+    distinct: a plain "entry" row still refuses on a running entry, while
+    the pinned "current" row's ⌥↵ runs /done (see test_janus_done_points_
+    prompt.py and the ⌥↵-on-current tests below)."""
     mod = _load_tui()
     today = dtm.datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     item = {"kind": "entry", "start_dt": today.replace(hour=9), "entry_ids": [1],

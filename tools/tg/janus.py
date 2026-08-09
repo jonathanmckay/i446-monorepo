@@ -3598,11 +3598,14 @@ def render_current_bottom() -> list[tuple[str, str]]:
 
     Selectable (user request 2026-08-08): render_all() appends this row's
     {"kind": "current"} into STATE.visible_events whenever a timer is
-    running, so Tab/click select it like any other row, ↵ stops it, ⌥↵ runs
-    /done (stop + grant points). Both fragments carry the same click handler
-    — _current_row_click, not the plain _row_click — so a swipe-right
-    gesture anywhere on the line (MOUSE_DOWN here, MOUSE_UP far enough to
-    the right) runs the /done action directly instead of just selecting."""
+    running, so Tab/click select it like any other row. ↵ arms an edit
+    (2026-08-09: "hitting enter to edit it is more natural than enter to
+    stop" — matches the main pane's own running-entry row); ⌥↵ runs /done
+    (stop + grant points); plain stop is ^S, already global. Both fragments
+    carry the same click handler — _current_row_click, not the plain
+    _row_click — so a swipe-right gesture anywhere on the line (MOUSE_DOWN
+    here, MOUSE_UP far enough to the right) runs the /done action directly
+    instead of just selecting."""
     now = dt.datetime.now(TZ)
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
@@ -3800,14 +3803,30 @@ def render_all() -> list[tuple[str, str]]:
         # populate visible_events itself without an implicit ordering
         # dependency on which window paints first — appended here instead,
         # in the one function that already owns the reset (user request
-        # 2026-08-08: make that row selectable — ↵ stops it, ⌥↵ runs /done).
-        # raw_desc mirrors the shape every other selectable row carries, so
-        # the ⌥↵ handler's existing STATE.recording dedup check (which reads
+        # 2026-08-08: make that row selectable; 2026-08-09: ↵ now arms an
+        # edit — same as the main pane's own running-entry row — since
+        # that's the more natural default; ⌥↵/swipe-right still runs /done;
+        # plain stop moved to ^S, already a global unconditional stop so no
+        # new binding was needed).
+        # entry_ids/start_dt/project_id/running give this item the same
+        # shape as a "kind": "entry" row so it can share _entry_edit_prefill
+        # and the edit_target arm/apply path verbatim. raw_desc mirrors the
+        # shape every other selectable row carries, so the ⌥↵ handler's
+        # existing STATE.recording dedup check (which reads
         # item.get("raw_desc")) recognizes this row when it IS the entry
         # being recorded, instead of double-firing did-fast.
+        cur_id = STATE.current.get("id")
+        try:
+            cur_start = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
+        except Exception:
+            cur_start = dt.datetime.now(TZ)
         STATE.visible_events.append({
             "kind": "current",
             "raw_desc": STATE.current.get("description") or "",
+            "entry_ids": [cur_id] if cur_id is not None else [],
+            "start_dt": cur_start,
+            "project_id": STATE.current.get("project_id"),
+            "running": True,
         })
     return parts
 
@@ -4609,35 +4628,20 @@ def _(event):
         if not item:
             return
         kind = item.get("kind") if isinstance(item, dict) else None
-        if kind == "current":
-            # ↵ on the pinned current-timer row = stop, plain (same action
-            # as ^S) — ⌥↵/swipe-right on the SAME row runs /done instead
-            # (user request 2026-08-08). Deliberately independent of the
-            # main pane's own selectable running-entry row just above (kind
-            # == "entry", below), which keeps its existing edit-on-Enter
-            # behavior untouched.
-            STATE.event_sel = None
-            flash("stopping…")
-
-            async def _stop_current():
-                res = await asyncio.to_thread(run_tg_fast, "stop")
-                flash(res)
-                event.app.invalidate()
-                polls = (0.4, 0.8, 1.5)
-                for i, delay in enumerate(polls):
-                    await asyncio.sleep(delay)
-                    await asyncio.to_thread(fetch_current)
-                    if i == len(polls) - 1:
-                        await asyncio.to_thread(fetch_today, True)
-                    event.app.invalidate()
-
-            event.app.create_background_task(_stop_current())
-            return
-        if kind == "entry":
+        if kind in ("entry", "current"):
             # Arm the edit target and hand the user editable text instead of
             # acting immediately — "loads the description into the input
             # line so you can retype it and re-submit" (user request
             # 2026-07-17). The NEXT Enter (top of this handler) applies it.
+            # The pinned current-timer row (kind == "current") shares this
+            # path verbatim as of 2026-08-09 — "hitting enter to edit it is
+            # more natural than enter to stop" — render_all() gives that
+            # item the same entry_ids/start_dt/project_id shape as a real
+            # "entry" row so _entry_edit_prefill works unchanged. Stop moved
+            # to ^S, already a global unconditional stop, so no new binding
+            # was needed. ⌥↵/swipe-right on this row still runs /done — that
+            # stays distinct from a plain "entry" row's ⌥↵ (which refuses on
+            # a running entry).
             STATE.event_sel = None
             STATE.edit_target = {"ids": item["entry_ids"], "date": item["start_dt"].date()}
             input_buffer.text = _entry_edit_prefill(item)
