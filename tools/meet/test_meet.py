@@ -12,7 +12,9 @@ from meet import (
     SAMPLE_RATE,
     airpods_hfp_active,
     capture_quality_warnings,
+    channel_peak,
     check_one_sided,
+    format_level_line,
 )
 
 
@@ -98,6 +100,50 @@ def test_all_filler_flagged():
     result = check_one_sided("Mm-hmm. Yep. Yeah. " * 20)
     assert result is not None
     assert result >= 90
+
+
+# ── Live level sampling (user request 2026-08-09: "visibility into the .wav
+# to see if it's working or not" — janus tails these LEVEL lines to show a
+# live ●mic ●call dot next to the 🎙 recording marker) ──────────────────────
+
+def test_channel_peak_only_looks_at_frames_since_last_sample():
+    """A live indicator answers "receiving bytes right now," not "ever had
+    signal" — a loud chunk seen on a PRIOR sample must not keep a channel
+    reading green forever after it actually goes silent."""
+    loud = np.full(100, 20000, dtype=np.int16)
+    silent = np.zeros(100, dtype=np.int16)
+    frames = [loud]
+    peak, idx = channel_peak(frames, 0)
+    assert peak == 20000
+    assert idx == 1
+
+    frames.append(silent)
+    peak, idx = channel_peak(frames, idx)  # only the NEW (silent) chunk
+    assert peak == 0
+    assert idx == 2
+
+
+def test_channel_peak_no_new_frames_reads_zero_not_stale():
+    frames = [np.full(100, 20000, dtype=np.int16)]
+    peak, idx = channel_peak(frames, 1)  # already consumed everything
+    assert peak == 0
+    assert idx == 1
+
+
+def test_format_level_line_matches_janus_parsing_regex():
+    """The two sides of this protocol live in different files (meet.py emits,
+    tools/tg/janus.py's _read_rec_levels/_LEVEL_RE parses) — this pins the
+    exact wire format so they can't silently drift apart."""
+    import re
+    LEVEL_RE = re.compile(r"^LEVEL mic=(\d+)(?: call=(\d+))?$")
+
+    mic_only = format_level_line(1234, None)
+    m = LEVEL_RE.match(mic_only)
+    assert m and m.group(1) == "1234" and m.group(2) is None
+
+    both = format_level_line(1234, 0)
+    m = LEVEL_RE.match(both)
+    assert m and m.group(1) == "1234" and m.group(2) == "0"
 
 
 # ── Teams mode: repeating checks + notifications ─────────────────────────────

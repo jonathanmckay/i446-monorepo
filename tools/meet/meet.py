@@ -201,6 +201,27 @@ def speech_ratio(audio: np.ndarray) -> float:
     return float(np.mean(np.abs(audio) > SPEECH_THRESH))
 
 
+def channel_peak(frames: list, start_idx: int) -> tuple[int, int]:
+    """Peak abs amplitude of frames[start_idx:] (the chunks appended since
+    the last sample, NOT the whole recording so far — a live indicator
+    should answer "receiving bytes right now", not "ever had signal"), and
+    the new end index to pass back in as next call's start_idx."""
+    new = frames[start_idx:]
+    end_idx = len(frames)
+    peak = int(np.max(np.abs(np.concatenate(new, axis=0)))) if new else 0
+    return peak, end_idx
+
+
+def format_level_line(mic_peak: int, call_peak: Optional[int]) -> str:
+    """"LEVEL mic=N [call=N]" — one line per live level sample, tailed by
+    janus (tools/tg/janus.py's _read_rec_levels, matching _LEVEL_RE there)
+    to show a live ●mic ●call dot next to the 🎙 recording marker. call_peak
+    is None for a mic-only session (no second channel to report)."""
+    if call_peak is None:
+        return f"LEVEL mic={mic_peak}"
+    return f"LEVEL mic={mic_peak} call={call_peak}"
+
+
 def capture_quality_warnings(audio: np.ndarray, transcript: str) -> list[str]:
     """Flag recordings likely to be silence, one-sided, or Whisper hallucination."""
     duration = len(audio) / SAMPLE_RATE if audio is not None else 0
@@ -296,6 +317,18 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
 
     early_check_done = False  # quick 15s check for call audio signal
 
+    # Live per-channel level sampling (user request 2026-08-09: "visibility
+    # into the .wav to see if it's working or not" — the existing checks
+    # above only warn every 60-180s, so a dead channel can sit silent for
+    # minutes with nothing visible; janus tails these lines to show a live
+    # ●mic ●call dot next to the 🎙 recording marker). Delta-only peak (just
+    # the frames appended since the last sample), not the whole recording so
+    # far, so the dot reflects "receiving bytes right now," not history.
+    LEVEL_INTERVAL = 1.0
+    last_level_print = 0.0
+    level_mic_idx = 0
+    level_bh_idx = 0
+
     if max_duration:
         print(f"   Auto-stop after {max_duration // 60}min (calendar duration)")
     if idle_timeout:
@@ -313,6 +346,15 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
         while not stop.requested:
             sd.sleep(500)
             elapsed += 0.5
+
+            # Live level sample (see LEVEL_INTERVAL above)
+            if elapsed - last_level_print >= LEVEL_INTERVAL:
+                last_level_print = elapsed
+                mic_peak, level_mic_idx = channel_peak(mic_frames, level_mic_idx)
+                call_peak = None
+                if teams_mode:
+                    call_peak, level_bh_idx = channel_peak(bh_frames, level_bh_idx)
+                print(format_level_line(mic_peak, call_peak), flush=True)
 
             # Early check (15s): if call audio has zero signal, warn immediately
             if teams_mode and not early_check_done and elapsed >= 15 and bh_frames:
