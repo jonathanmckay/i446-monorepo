@@ -30,42 +30,69 @@ class _FakeProc:
         self.stderr = ""
 
 
-def _run(monkeypatch, m, out):
+def _run(monkeypatch, m, out, tmp_path=None):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(out))
+    # Regression (2026-07-30): these fixtures ARE the exact D=-46/4351/1523
+    # torn reads the log exists to capture, so without this every test run
+    # appended fake "rejected read" entries to the real, shared
+    # /tmp/janus-points-rejected.log -- polluting live production diagnostics
+    # with test artifacts indistinguishable from genuine torn reads.
+    if tmp_path is not None:
+        monkeypatch.setattr(m, "POINTS_REJECTED_LOG", tmp_path / "rejected.log")
     m.fetch_points()
 
 
-def test_negative_torn_total_is_rejected(monkeypatch):
+def test_rejected_read_logs_to_configurable_path_not_hardcoded_shared_file(monkeypatch, tmp_path):
+    """Bug 2026-07-30: fetch_points hardcoded open("/tmp/janus-points-rejected.log",
+    "a") inline, so every test run of a torn-read fixture (this file's whole
+    purpose) appended fake entries to the real, shared, production log --
+    indistinguishable from genuine torn reads and actively hindering live
+    diagnosis of a real "stale points" bug report. fetch_points must write to
+    the module-level POINTS_REJECTED_LOG so tests can redirect it."""
+    m = _load_tui()
+    m.STATE.today_points = 606
+    m.STATE.block_points = {}
+    real_log = Path("/tmp/janus-points-rejected.log")
+    before = real_log.stat().st_size if real_log.exists() else None
+    fake_log = tmp_path / "rejected.log"
+    _run(monkeypatch, m, "-46|=D|=D-G|=D-SUM(G,H)|=D-SUM(G,H,I)|=D|=D|=D|=D|=D", tmp_path)
+    assert fake_log.exists() and "cand=-46" in fake_log.read_text(), \
+        "the rejected read must be logged to the configured path"
+    after = real_log.stat().st_size if real_log.exists() else None
+    assert before == after, "the real shared log must be untouched by a test run"
+
+
+def test_negative_torn_total_is_rejected(monkeypatch, tmp_path):
     m = _load_tui()
     m.STATE.today_points = 606
     m.STATE.block_points = {"午": 215}
     # The exact dawn torn read from the log: D=-46, every block still residual.
-    _run(monkeypatch, m, "-46|=D|=D-G|=D-SUM(G,H)|=D-SUM(G,H,I)|=D|=D|=D|=D|=D")
+    _run(monkeypatch, m, "-46|=D|=D-G|=D-SUM(G,H)|=D-SUM(G,H,I)|=D|=D|=D|=D|=D", tmp_path)
     assert m.STATE.today_points == 606, "a negative torn total must not be adopted"
     assert m.STATE.block_points == {"午": 215}, "blocks kept when total is torn"
 
 
-def test_high_spike_total_is_rejected(monkeypatch):
+def test_high_spike_total_is_rejected(monkeypatch, tmp_path):
     m = _load_tui()
     m.STATE.today_points = 606
     m.STATE.block_points = {"巳": 3, "午": 215}
     # D spikes to 4351 (the reported bug) while blocks read normally.
-    _run(monkeypatch, m, "4351||3|215|=D|=D|=D|=D|=D|=D")
+    _run(monkeypatch, m, "4351||3|215|=D|=D|=D|=D|=D|=D", tmp_path)
     assert m.STATE.today_points == 606, "an implausibly high total must not be adopted"
     assert m.STATE.block_points == {"巳": 3, "午": 215}, "blocks not paired with a torn total"
 
 
-def test_plausible_total_and_blocks_are_adopted(monkeypatch):
+def test_plausible_total_and_blocks_are_adopted(monkeypatch, tmp_path):
     m = _load_tui()
     m.STATE.today_points = 0
     m.STATE.block_points = {}
     # D | 卯 | 辰 | 巳=3 | 午=215 | 未… residual
-    _run(monkeypatch, m, "606|||3|215|=D|=D|=D|=D|=D")
+    _run(monkeypatch, m, "606|||3|215|=D|=D|=D|=D|=D", tmp_path)
     assert m.STATE.today_points == 606
     assert m.STATE.block_points == {"巳": 3, "午": 215}
 
 
-def test_spike_under_cap_caught_by_py_crosscheck(monkeypatch):
+def test_spike_under_cap_caught_by_py_crosscheck(monkeypatch, tmp_path):
     """The 1523-on-a-758分-day bug: a torn total below the 2000 cap that a fixed
     bound can't catch. D must equal its own =SUM(P:Y); here it doesn't, so reject.
     Layout: D | 9×G:O | 10×P:Y (P:Y sums to 758, D claims 1523)."""
@@ -73,16 +100,16 @@ def test_spike_under_cap_caught_by_py_crosscheck(monkeypatch):
     m.STATE.today_points = 758
     m.STATE.block_points = {"午": 200}
     raw = "1523|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|377|33|195|34|13|6|50|0"
-    _run(monkeypatch, m, raw)
+    _run(monkeypatch, m, raw, tmp_path)
     assert m.STATE.today_points == 758, "D≠SUM(P:Y) is a torn read; keep last good"
 
 
-def test_consistent_total_with_py_is_adopted(monkeypatch):
+def test_consistent_total_with_py_is_adopted(monkeypatch, tmp_path):
     """D == SUM(P:Y) → trustworthy, committed."""
     m = _load_tui()
     m.STATE.today_points = 0
     raw = "758|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|377|33|195|34|13|6|50|0"
-    _run(monkeypatch, m, raw)
+    _run(monkeypatch, m, raw, tmp_path)
     assert m.STATE.today_points == 758
 
 
@@ -102,7 +129,7 @@ def test_total_trustworthy_unit():
     assert m._total_trustworthy(2000, 2000) is True   # exactly at the cap is fine
 
 
-def test_residual_block_value_read_directly_rounds_once(monkeypatch):
+def test_residual_block_value_read_directly_rounds_once(monkeypatch, tmp_path):
     """The current/residual block's 分 is read straight from Neon's own
     computed VALUE for that cell (not reconstructed via Σ − locked, removed
     2026-07-20 after it produced 5064分/6932分 on-screen) — a single
@@ -117,7 +144,7 @@ def test_residual_block_value_read_directly_rounds_once(monkeypatch):
     py_vals = ["511"] + ["0"] * 9  # sums to today_points, passes the D==SUM(P:Y) cross-check
     gio_vals = ["0", "0", "0", "288", "0", "0", "0", "0", "0"]
     out = "|".join(["511.357142857143", *raw_terms, *py_vals, *gio_vals])
-    _run(monkeypatch, m, out)
+    _run(monkeypatch, m, out, tmp_path)
     assert m.STATE.today_points == 511
     assert m.STATE.block_points.get("午") == 288, "residual block value must round once, straight from Neon"
     assert m.STATE.block_points.get("卯") == 6

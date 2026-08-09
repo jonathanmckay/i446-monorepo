@@ -698,6 +698,46 @@ class ZeroNeonOverrideTests(unittest.TestCase):
         self.assertEqual(r.fen_points, 0)
 
 
+class TodoistMatchCurlyOverrideTests(unittest.TestCase):
+    """The ZeroNeonOverrideTests guard above (item.curly_points is None)
+    only covered Step 0.1's 0₦-habit branch. One-off #0g/#-1g goals (e.g.
+    from /0g or /-1g) don't live in the 0n/1n+ registry, so they fall to
+    Step 0.3 (cached Todoist match) or Step 0.35 (live search) instead —
+    both computed fen_col/fen_points from item.points_override without the
+    curly_points guard, so completing a {N} goal via dtd/did credited BOTH
+    the label's domain column (e.g. g245 -> T, 个) AND the separate Q (0g)
+    append built from item.curly_points -- a double-count (bug report:
+    "marking the daily goals as done double counted points in the daily
+    goals section and in the 个 section", 2026-08-07)."""
+
+    def setUp(self):
+        # Empty registry headers so neither Step 0.1 nor Step 0.2 match --
+        # forces routing through to Step 0.3's Todoist-cache match.
+        self.headers = {"0n": {}, "1n": {}}
+
+    def test_curly_goal_matched_via_todoist_cache_does_not_double_count(self):
+        task = {"id": "1", "content": "some new goal {20}", "labels": ["g245", "#0g"]}
+        tq = {"0neon": [task], "1neon": [], "夜neon": []}
+        items = _df_module.parse_input("some new goal {20}")
+        routes = _df_module.route_items(items, self.headers, tq)
+        self.assertEqual(len(routes), 1)
+        r = routes[0]
+        self.assertEqual(r.step, "todoist")
+        # The domain-column write (T, from label g245) must be suppressed --
+        # {N} already credits Q separately via item.curly_points.
+        self.assertIsNone(r.fen_col)
+        self.assertEqual(r.fen_points, 0)
+
+        # Mirror the real fen_appends collector (did-fast.py's Step 5 loop)
+        # to confirm the net effect is exactly ONE credit, not two.
+        fen_appends = []
+        if r.fen_col and r.fen_points > 0:
+            fen_appends.append((r.fen_col, r.fen_points))
+        if r.item.curly_points and r.item.curly_points > 0:
+            fen_appends.append(("Q", r.item.curly_points))
+        self.assertEqual(fen_appends, [("Q", 20)])
+
+
 class DeferFlagParsingTests(unittest.TestCase):
     """Regression: `/did 新闻 --tmrw` passed --tmrw through to the routing
     query, breaking the registry match for 新闻 (a registered 0n habit).

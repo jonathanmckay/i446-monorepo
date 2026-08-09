@@ -160,9 +160,13 @@ def main() -> int:
         except Exception as e:
             print(f"✗ Todoist content update failed: {e}")
             return 1
+        # Resync the Haiku short on EVERY content change, not just renames —
+        # dtd renders `short` preferentially, so a points-only edit ("10")
+        # that skipped this kept displaying the OLD [N] until the next full
+        # refresh (bug 2026-07-31: "[30]→[10] didn't reflect in render").
         _pf.patch_cache(cache, task["id"], new_content)
+        _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
         if new_name is not None:
-            _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
             summary.append(f'name→"{new_name}"')
         if points is not None:
             summary.append(f"[{points}]")

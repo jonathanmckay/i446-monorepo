@@ -40,11 +40,11 @@ def test_render_ytd_chips_signed_and_colored():
     mod.STATE.habits_today = [("0l", 1.0)]
     mod.STATE.habits_ytd = {"o314": -107.0, "其他人": 1.0, "冥想": 0.0}
     frags = mod.render_habits_today()
-    behind = next((s, t) for s, t in frags if "o314" in t)
-    at_zero = next((s, t) for s, t in frags if "冥想" in t)
+    behind = next((s, t) for s, t, *_ in frags if "o314" in t)
+    at_zero = next((s, t) for s, t, *_ in frags if "冥想" in t)
     assert "-107" in behind[1] and mod.HABIT_YTD_COLORS["o314"] in behind[0]
     assert "+0" in at_zero[1] and mod.HABIT_YTD_COLORS["冥想"] in at_zero[0]
-    assert not any("其他人" in t for _s, t in frags), \
+    assert not any("其他人" in t for _s, t, *_ in frags), \
         "above-zero standing must not render a chip"
 
 
@@ -63,7 +63,7 @@ def test_ytd_chips_render_even_with_no_daily_habits():
     mod.STATE.habits_today = []
     mod.STATE.habits_ytd = {"冥想": -80.0}
     frags = mod.render_habits_today()
-    assert any("冥想 -80" in t for _s, t in frags)
+    assert any("冥想 -80" in t for _s, t, *_ in frags)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
   "_meta": {
     "source_of_truth": "row 1 of each sheet in ~/OneDrive/vault-excel/Neon分v12.2.xlsx",
     "regenerated_by": "~/i446-monorepo/scripts/regen-neon-cols.py",
-    "last_regen": "2026-07-27",
+    "last_regen": "2026-08-02",
     "note": "Skills MUST read this file at runtime — never hard-code column letters."
   },
   "sheets": {
@@ -68,7 +68,7 @@
       "headers": {
         "mee": "A",
         "日": "B",
-        "2026.0": "C",
+        "2026": "C",
         "睡觉": "D",
         "cpap": "E",
         "wake up": "F",
@@ -112,9 +112,9 @@
         "冥想": "AR",
         "其他人": "AS",
         "1+": "AU",
-        "-1.0": "AV",
-        "-2.0": "AW",
-        "-3.0": "AX",
+        "-1": "AV",
+        "-2": "AW",
+        "-3": "AX",
         "∑xk87": "AZ",
         "∑hcmt": "BA",
         "∑hcmc": "BB",
@@ -131,7 +131,7 @@
       "week_label_col": "B",
       "points_row": 3,
       "headers": {
-        "5.0": "B",
+        "5": "B",
         "1s": "C",
         "1g": "D",
         "1 hpm": "E",
@@ -149,7 +149,7 @@
         "1 xk87 wknd": "Q",
         "1 cal": "R",
         "1 s897": "S",
-        "1 hcm": "T",
+        "1 hcmc": "T",
         "1 hcb": "U",
         "长o314": "V",
         "groceries": "W",
@@ -164,7 +164,7 @@
         "family": "AF",
         "s897": "AG",
         "relax {60}": "AH",
-        "i447": "AI",
+        "1 i447": "AI",
         "1 对身": "AJ",
         "1 f695": "AK",
         "1 kids nature": "AL",

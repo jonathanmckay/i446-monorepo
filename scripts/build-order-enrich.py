@@ -23,7 +23,7 @@ BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 COMPLETED_TODAY = _sp.COMPLETED_TODAY
 COMPLETED_ARCHIVE_DIR = Path.home() / "vault/z_ibx/completed-archive"
-D357_DIR = Path.home() / "vault/d357"
+D357_DIR = Path.home() / "vault/d357"  # files live in week subfolders (D357_DIR/<M.W>/...) — glob recursively
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 
 BLOCKS = [
@@ -170,7 +170,7 @@ def get_d357_docs_today():
     today_dot = now.strftime("%Y.%m.%d")
     recordings_dir = Path.home() / "vault/h335/i9/recordings"
     docs = []
-    for f in list(D357_DIR.glob(f"{today_hyphen}*.md")) + list(D357_DIR.glob(f"{today_dot}*.md")):
+    for f in list(D357_DIR.glob(f"**/{today_hyphen}*.md")) + list(D357_DIR.glob(f"**/{today_dot}*.md")):
         text = f.read_text()
         title_match = re.search(r'^title:\s*"(.+?)"', text, re.MULTILINE)
         title = title_match.group(1) if title_match else f.stem
@@ -551,7 +551,24 @@ def enrich_build_order():
         for idx_offset, ol in enumerate(other_lines):
             new_lines.insert(last_past_block_insert + idx_offset, ol)
 
-    BUILD_ORDER.write_text("\n".join(new_lines))
+    # Locked, merge-aware write (2026-08-01): enrich reads the file BEFORE its
+    # slow Toggl/Todoist gathering, so a ritual stamp landing during that
+    # window was silently erased by this rewrite (午's manually-claimed ⏱️✅
+    # vanished minutes after being stamped — the week's recurring "stamps
+    # lost in place" class, distinct from the Syncthing-conflict variant
+    # build_order_heal covers). Hold the same lock every stamp writer uses
+    # (centralized 2026-08-02 into neon_blocks.build_order_lock), re-read the
+    # CURRENT copy under it, and union its block-header ritual emojis into
+    # our rewritten text before writing.
+    sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+    import build_order_heal as _boh
+    import neon_blocks as _nb
+    with _nb.build_order_lock():
+        merged_text, _rescued = _boh.merge_stamps(
+            "\n".join(new_lines), BUILD_ORDER.read_text())
+        if _rescued:
+            print(f"rescued stamps that landed mid-enrich: {_rescued}")
+        BUILD_ORDER.write_text(merged_text)
     n_claimed = len(completed_claimed)
     n_unclaimed = len(unclaimed)
     print(f"Enriched build order: {len(d357_docs)} meetings, {len(toggl_entries)} time entries, {n_claimed} tasks matched, {n_unclaimed} other tasks")

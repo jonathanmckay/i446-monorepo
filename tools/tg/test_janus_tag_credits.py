@@ -46,14 +46,25 @@ def test_parse_edit_text_bare_tag_leaves_rest_unchanged():
     assert tags == ["-2"]
 
 
-# ─── rates ──────────────────────────────────────────────────────────────────
+# ─── minute credits (correction 2026-07-28: write MINUTES to the tag's own
+# 0n column — AV/-1, AW/-2, AX/-3 — the sheet's formulas apply the ratio) ───
 
-def test_tag_credit_rates():
+def test_value_tags_whitelist():
     mod = _load_tui()
-    assert mod.tag_credit_points("-1", 30) == 3.0
-    assert mod.tag_credit_points("-2", 30) == 15.0
-    assert mod.tag_credit_points("-3", 30) == 30.0
-    assert mod.tag_credit_points("2", 30) == 0, "positive/unknown tags earn nothing"
+    assert mod.VALUE_TAGS == ("-1", "-2", "-3")
+
+
+def test_apply_tag_credit_writes_minutes_to_0n_tag_column(monkeypatch):
+    mod = _load_tui()
+    writes = []
+    monkeypatch.setattr(mod, "_tag_col", lambda tag: {"-1": "AV", "-2": "AW", "-3": "AX"}[tag])
+    monkeypatch.setattr(mod.neon_excel, "append",
+                        lambda sheet, col, *, date, value: writes.append((sheet, col, date, value)))
+    assert mod._apply_tag_credit("-2", 30, dtm.date(2026, 7, 28)) == 30
+    assert writes == [("0n", "AW", "7/28", "+30")], \
+        "minutes (not points) go to the tag's own 0n column"
+    assert mod._apply_tag_credit("-2", 0, dtm.date(2026, 7, 28)) is None
+    assert len(writes) == 1, "zero minutes must not write"
 
 
 # ─── pending resolution ─────────────────────────────────────────────────────
@@ -162,7 +173,7 @@ def test_event_rows_right_justified_entry_rows_left():
          "event": {"start_dt": today.replace(hour=8, minute=30),
                    "end_dt": today.replace(hour=9), "title": "XTECH LT"}},
     ]
-    lines = "".join(t for _, t in mod._compact_block_lines("巳", 8, picks, 0, "")).split("\n")
+    lines = "".join(t for _, t, *_ in mod._compact_block_lines("巳", 8, picks, 0, "")).split("\n")
     entry_line = next(l for l in lines if "wash cloth" in l)
     event_line = next(l for l in lines if "XTECH LT" in l)
     assert entry_line.index("wash cloth") < 10, "Toggl entries stay left-justified"

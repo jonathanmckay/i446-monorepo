@@ -39,13 +39,13 @@ def test_header_shows_restart_banner_when_stale():
     # `now`) returns it without re-statting: a far-future `checked` keeps elapsed
     # negative, so the cache is never refreshed.
     mod._stale_state.update({"checked": 1e12, "stale": False})
-    assert "RESTART" not in "".join(t for _, t in mod.render_header())
+    assert "RESTART" not in "".join(t for _, t, *_ in mod.render_header())
 
     mod._stale_state.update({"checked": 1e12, "stale": True})
     frags = mod.render_header()
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert "RESTART" in text
-    assert any(s == "class:no_entry" for s, _ in frags), "banner is rendered red"
+    assert any(s == "class:no_entry" for s, _, *_h in frags), "banner is rendered red"
 
 
 def test_header_says_janus_not_tg():
@@ -58,17 +58,17 @@ def test_header_says_janus_not_tg():
     mod.STATE.today_points = 0
     mod.STATE.day_offset = 0
     mod._stale_state.update({"checked": 1e12, "stale": False})
-    text = "".join(t for _, t in mod.render_header())
+    text = "".join(t for _, t, *_ in mod.render_header())
     assert "janus" in text
     assert " tg " not in text and "tg ·" not in text
 
     mod._stale_state.update({"checked": 1e12, "stale": True})
-    text = "".join(t for _, t in mod.render_header())
+    text = "".join(t for _, t, *_ in mod.render_header())
     assert "janus" in text
     assert "tg ·" not in text
 
     mod.STATE.day_offset = -1
-    text = "".join(t for _, t in mod.render_header())
+    text = "".join(t for _, t, *_ in mod.render_header())
     assert "janus" in text
     assert "tg ·" not in text
 

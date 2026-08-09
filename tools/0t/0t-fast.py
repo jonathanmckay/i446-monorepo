@@ -136,7 +136,11 @@ def gather_entries_local(*days: date) -> list[dict]:
 # AX=-3) and build-order-daemon.py's TOGGL_TAG_COLS. A "1+" column was inserted
 # at AU, shifting -1→AV and -2→AW; keep these in sync to avoid writing -1 into
 # the 1+ column (AU).
-TAG_COLUMNS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
+# AZ ("∑xk87") is NOT a tag target: it's a live =SUM(AJ:AO) formula aggregating
+# the individual kid/family columns (xk20/xk22/xk26/qft/xk88/NVC+e). A prior
+# "xk87": "AZ" entry here made this raw-set the cell, clobbering the formula
+# with a Toggl-tag-derived total whenever an entry carried an "xk87" tag.
+TAG_COLUMNS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX"}
 PROJECT_COLUMNS = {}  # project_id → (name, 0n column)
 
 

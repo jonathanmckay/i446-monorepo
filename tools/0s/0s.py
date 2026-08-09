@@ -283,9 +283,28 @@ def main() -> int:
     if (answers.get("points_checked") or "").strip() == "1":
         print("0s → marking 0l done …", flush=True)
         try:
-            subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
-                           capture_output=True, text=True, timeout=60)
-            msg += " · 0l marked done"
+            # 0l's did-fast path does two sequential Excel round-trips (0n
+            # write + 0l-completion-time write, ~30s+15s budget) plus a
+            # Todoist search/close — 60s left too little margin and was
+            # timing out (2026-08-04 bug report: 0s wrote to Neon but 0l
+            # silently stayed unmarked).
+            proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
+                                   capture_output=True, text=True, timeout=120)
+            # did-fast always exits 0 and reports per-write ok/error in its
+            # JSON stdout — a clean subprocess return does NOT mean the 0n
+            # write actually succeeded, so it must be checked explicitly
+            # rather than assumed from the absence of an exception.
+            wrote_ok = False
+            try:
+                on_write = json.loads(proc.stdout).get("0n_write") or {}
+                wrote_ok = bool(on_write.get("ok"))
+                fail_reason = on_write.get("error")
+            except (json.JSONDecodeError, AttributeError):
+                fail_reason = (proc.stderr or proc.stdout or "unknown").strip()[:200]
+            if wrote_ok:
+                msg += " · 0l marked done"
+            else:
+                msg += " · 0l mark FAILED: %s" % fail_reason
         except Exception as e:  # noqa: BLE001
             msg += " · 0l mark FAILED: %s" % e
 

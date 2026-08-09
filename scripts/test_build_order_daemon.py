@@ -7,6 +7,7 @@ leaving the -1₦ cell empty.
 Fix: Added a read-back verification step that calls neon_read_y after writing
 and logs VERIFY_FAILED if the cell is empty/zero.
 """
+import json
 from pathlib import Path
 
 DAEMON = Path(__file__).parent / "build-order-daemon.py"
@@ -193,10 +194,13 @@ def test_block_has_goals_rejects_whitespace_only_bullet(tmp_path, monkeypatch):
     assert mod._block_has_goals("辰") is True
 
 
-def test_strip_unearned_markers_removes_phantom_goal_but_guards_none(tmp_path, monkeypatch):
-    """_strip_unearned_markers drops GOAL_MARKER (🎯) when the live data says it
-    wasn't earned, never touches ☀️/📧, and is a no-op when live is None (an API
-    failure must not destroy a genuinely-earned mark)."""
+def test_strip_unearned_markers_removes_phantom_goal_and_toggl_but_not_todoist(tmp_path, monkeypatch):
+    """_strip_unearned_markers drops GOAL_MARKER/TOGGL_MARKER (🎯/⏱️) when the
+    live data says they weren't earned; ✅ (TODOIST_MARKER) is deliberately
+    exempt (see _marker_earned's docstring — too aggressive in practice,
+    reverted 2026-07-30 after one round of use) and ☀️/📧 have no validator
+    at all. live=None is a no-op (an API failure must not destroy a
+    genuinely-earned mark)."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     original = (
@@ -211,10 +215,7 @@ def test_strip_unearned_markers_removes_phantom_goal_but_guards_none(tmp_path, m
     mod._strip_unearned_markers("辰", None)
     assert build.read_text(encoding="utf-8") == original
 
-    # 🎯 not earned → strip 🎯 only; ✅ stays even though its own live check is
-    # False too (2026-07-13 OR redesign: ⏱️/✅ are no longer daemon-strippable —
-    # a manual completion may have earned them independently of the auto-check,
-    # so a failing auto-check must never erase them). ☀️ has no validator either.
+    # Nothing earned → strip 🎯 only; ✅/☀️ stay.
     mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False})
     line = next(l for l in build.read_text(encoding="utf-8").split("\n")
                 if l.startswith("- 辰"))
@@ -227,28 +228,43 @@ def test_strip_unearned_markers_removes_phantom_goal_but_guards_none(tmp_path, m
     assert build.read_text(encoding="utf-8") == original
 
 
-# ── OR redesign: ⏱️/✅ are earned by manual completion OR the auto-check ─────
-# Bug: -1t/-1l were "auto"-only — completing their card did nothing (no stamp,
-# no P credit); the daemon's Toggl/Todoist auto-check was the sole path. Users
-# who genuinely did the work but whose real tasks lacked [N]/{N} (or whose
-# Toggl categorization missed the threshold) never earned the marker even
-# though they manually confirmed it. Fix: header presence alone earns ⏱️/✅
-# (like ☀️/📧 always have) — the daemon's auto-check still WRITES the marker
-# when it independently passes, but a failing auto-check no longer strips a
-# marker manual completion already wrote. Only 🎯 (GOAL_MARKER) keeps the old
-# live-gated/strippable behavior.
+# ── Audited redesign (2026-07-30): ⏱️ is provisional-credit-then-audited,
+# same as 🎯 -- ✅ tried the same treatment the same day and was reverted
+# ────────────────────────────────────────────────────────────────────────────
+# History: -1t/-1l started "auto"-only (completing the card did nothing).
+# 2026-07-13 made completion earn them unconditionally ("OR" with the
+# auto-check, never stripped) so a manual completion could never be erased by
+# a failing auto-check. But that meant a false claim (closing -1t without
+# actually hitting the Toggl-coverage threshold) was never caught either.
+# 2026-07-30 (user-confirmed correction) made ⏱️/✅ both match 🎯: audited,
+# strippable if `live` disagrees. Same day, after one round of use, ✅ alone
+# was reverted back to trusted-on-presence — _todoist_l_satisfied proved too
+# narrow a proxy for "-1l" (a first-person attestation), unlike ⏱️'s
+# Toggl-minute-coverage check, which stayed audited.
 
-def test_marker_earned_ors_manual_completion_with_failing_auto_check():
+def test_marker_earned_trusts_toggl_and_todoist_on_presence():
+    """2026-08-01 (JM): "If I manually mark -1l or -1t there shouldn't be an
+    audit." ⏱️ joined ✅ as trusted-on-presence; the live checks are
+    auto-award only. Only 🎯 keeps the strip audit (stale cross-day goals)."""
     mod = _load_daemon()
-    # ✅ manually stamped, but the daemon's own auto-check for this block fails
-    # (e.g. no [N]/{N}-pointed task completed in the window) — must still earn.
-    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
+    # ⏱️/✅ trusted on presence regardless of live — a manual claim is final.
     assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is True
+    assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": True}) is True
+    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
+    assert mod._marker_earned("✅", "- 巳 ✅", {"✅": True}) is True
+    # 🎯 still audited: stamped but no goals on file — must NOT earn.
+    assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": False}) is False
+    assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": True}) is True
     # Absent marker never earns regardless of live.
     assert mod._marker_earned("✅", "- 巳", {"✅": True}) is False
+    assert mod._marker_earned("⏱️", "- 巳", {"⏱️": True}) is False
+    # 🔒 overrides even the 🎯 audit — a deliberate user lock is never stripped.
+    assert mod._marker_earned("🎯", "- 巳 🎯 🔒", {"🎯": False}) is True
 
 
-def test_daemon_owned_markers_excludes_toggl_and_todoist():
+def test_daemon_owned_markers_is_goal_only():
+    """Strip set = {🎯} only (2026-08-01): ⏱️ left it when its audit became
+    auto-award-only; ✅ was never in it."""
     mod = _load_daemon()
     assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER}
 
@@ -411,6 +427,180 @@ def test_prev_block_window_is_unchanged_for_every_other_block():
         assert (start, end, date) == (fh - 4, fh - 2, today), (
             f"fire hour {fh} must use the plain same-day window"
         )
+
+
+# ── Ritual card dedup/earned must tolerate annotated content ───────────────
+# Bug (2026-07-29): "seeing a lot of extra -1n" + uniform bogus (15)[15] on
+# every ritual card (real ritual cards never carry [N] -- their points come
+# from 0分!P via the block header). The instant a ritual card picked up ANY
+# trailing annotation, create_block_rituals' dedup check (`tag in open_bare`,
+# exact string match) stopped recognizing it as already open and created a
+# duplicate every 2h fire, while delete_block_rituals' earned check (`bare in
+# auto_emoji`) stopped recognizing an EARNED auto card, silently deleting it
+# (no credit) instead of closing it. lib/neon_blocks.ritual_card_tag() already
+# handles this correctly (whole-token comparison) for dtd's completion path;
+# _ritual_bare_tag() is the same logic, now shared by both daemon functions.
+
+def test_ritual_bare_tag_tolerates_trailing_annotations():
+    mod = _load_daemon()
+    tags = ["سمش", "-1g", "-1ibx", "-1t", "-1l"]
+    assert mod._ritual_bare_tag("😈 -1g (15) [15]", "😈", tags) == "-1g"
+    assert mod._ritual_bare_tag("😈 -1g", "😈", tags) == "-1g"
+    assert mod._ritual_bare_tag("😈 -1t (30)", "😈", tags) == "-1t"
+
+
+def test_ritual_bare_tag_none_for_unrelated_task():
+    # Unlike neon_blocks.ritual_card_tag() (which gatekeeps arbitrary dtd task
+    # names and fails closed with no marker), _ritual_bare_tag() is only ever
+    # called on tasks already filtered by the -1neon LABEL
+    # (_todoist_open_rituals), so it doesn't need that guard -- it's purely
+    # tag-matching, not "is this a ritual card at all" classification.
+    mod = _load_daemon()
+    tags = ["سمش", "-1g", "-1ibx", "-1t", "-1l"]
+    assert mod._ritual_bare_tag("😈 unrelated task (15) [15]", "😈", tags) is None
+
+
+def _fake_todoist_write(created):
+    """Records created/mutated payloads and returns a (status, body) reply
+    that echoes back the same labels sent in -- i.e. a successful, non-flaky
+    write, so tests aren't exercising the label-repair path by accident."""
+    def _write(path, payload, token, method="POST"):
+        created.append(payload)
+        body = json.dumps({"id": "created", "labels": (payload or {}).get("labels", [])}).encode()
+        return 200, body
+    return _write
+
+
+def test_create_block_rituals_skips_annotated_duplicate(monkeypatch):
+    """Functional: an already-open '-1g' card annotated with (15) [15] must
+    stop create_block_rituals from creating a second one."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals",
+                        lambda token: [{"id": "1", "content": "😈 -1g (15) [15]"}])
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write", _fake_todoist_write(created))
+    mod.create_block_rituals()
+    created_tags = [p["content"].replace("😈", "").strip() for p in created]
+    assert "-1g" not in created_tags, "annotated '-1g' must be recognized as already open"
+    # The other 4 rituals (not open at all) still get created.
+    assert {"سمش", "-1ibx", "-1t", "-1l"} <= set(created_tags)
+
+
+def test_delete_block_rituals_closes_annotated_earned_auto_card(monkeypatch):
+    """Functional: an EARNED auto card ('-1t') annotated with (15) [15] must
+    still be CLOSED (credited), not deleted, at block turnover."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals",
+                        lambda token: [{"id": "1", "content": "😈 -1t (15) [15]"}])
+    calls = []
+    monkeypatch.setattr(
+        mod, "_todoist_write",
+        lambda path, payload, token, method="POST": calls.append((path, method)))
+    mod.delete_block_rituals(live={"⏱️": True})
+    assert calls == [("/tasks/1/close", "POST")], (
+        "annotated but earned auto card must be closed, not deleted")
+
+
+# ── Ritual fetch failure must fail closed, not open ─────────────────────────
+# Bug (2026-07-30): -1t and -1l (and the other three -1neon cards) were
+# double created. _todoist_open_rituals() caught any fetch exception (e.g. an
+# HTTP 503) and returned [], indistinguishable from "genuinely nothing open".
+# create_block_rituals() then created a full second set of cards on top of
+# whatever was already open. Confirmed in /tmp/neon-lock-and-mark.log on Ix at
+# 2026-07-30T04:00:06-0700: "rituals: fetch open ERROR HTTP Error 503: Service
+# Unavailable" immediately followed by five "rituals: + ..." creation lines.
+# Fix: _todoist_open_rituals() now returns None on failure (vs. [] for a
+# genuinely empty result), and both create_block_rituals/delete_block_rituals
+# abort instead of proceeding as if nothing were open.
+
+def test_todoist_open_rituals_returns_none_on_fetch_error(monkeypatch):
+    mod = _load_daemon()
+
+    def raise_error(*a, **k):
+        raise OSError("HTTP Error 503: Service Unavailable")
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", raise_error)
+    assert mod._todoist_open_rituals("tok") is None
+
+
+def test_create_block_rituals_skips_when_fetch_fails(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: None)
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write",
+                        lambda path, payload, token, method="POST": created.append(payload))
+    mod.create_block_rituals()
+    assert created == [], "a failed fetch must not be treated as license to create a duplicate set"
+
+
+def test_delete_block_rituals_skips_when_fetch_fails(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: None)
+    calls = []
+    monkeypatch.setattr(
+        mod, "_todoist_write",
+        lambda path, payload, token, method="POST": calls.append((path, method)))
+    mod.delete_block_rituals(live={"⏱️": True})
+    assert calls == [], "a failed fetch must not be treated as an empty leftover set"
+
+
+def test_create_block_rituals_still_creates_on_genuinely_empty_fetch(monkeypatch):
+    """Sanity check the fix distinguishes failure (None) from a genuinely
+    empty result ([]) -- the latter must still allow creation as before."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write", _fake_todoist_write(created))
+    mod.create_block_rituals()
+    assert len(created) == 5
+
+
+# ── Created ritual card must have its label verified, and repaired if the
+# creation write dropped it (bug 2026-07-30: 3 of 5 cards created in the same
+# batch came back from Todoist with labels=[] -- an apparent write flake on
+# rapid-fire creates. An unlabeled card is invisible to the label-filtered
+# open-rituals fetch, so it's never retired and just orphans in the inbox,
+# with the dedup check also blind to it -- each subsequent fire creates
+# another one on top since it can't see the orphan as "already open" either).
+
+def test_create_block_rituals_repairs_dropped_label(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    calls = []
+
+    def flaky_write(path, payload, token, method="POST"):
+        if path == "/tasks":
+            calls.append(("create", path, payload))
+            # Simulate Todoist dropping the label on write, regardless of
+            # what was sent.
+            return 200, json.dumps({"id": "created-1", "labels": []}).encode()
+        calls.append(("repair", path, payload))
+        return 200, json.dumps({"id": "created-1", "labels": payload["labels"]}).encode()
+
+    monkeypatch.setattr(mod, "_todoist_write", flaky_write)
+    mod.create_block_rituals()
+
+    repairs = [c for c in calls if c[0] == "repair"]
+    assert len(repairs) == 5, "every card that came back unlabeled must get a corrective PATCH"
+    assert all(c[1] == "/tasks/created-1" and c[2] == {"labels": ["-1neon"]} for c in repairs)
+
+
+def test_create_block_rituals_no_repair_when_label_persists(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    created = []
+    monkeypatch.setattr(mod, "_todoist_write", _fake_todoist_write(created))
+    mod.create_block_rituals()
+    # _fake_todoist_write echoes the sent labels back, so every create is
+    # already correctly labeled -- no repair call (a 6th write) should fire.
+    assert len(created) == 5
 
 
 def test_goal_marker_stays_current_block():

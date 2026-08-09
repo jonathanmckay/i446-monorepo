@@ -15,8 +15,8 @@ Checks:
                   no .partial older than 36h  (needs FDA: the launchd job
                   must stay wrapped in `ssh localhost`, same as the backup
                   itself — TCC blocked plain launchd for 6 weeks unnoticed)
-  syncthing     — process alive; z_ibx/task-queue.json (written on Straylight,
-                  synced here) < 36h old proves the pipe actually flows
+  syncthing     — process alive; g245/5e-1/build-order.md (written on
+                  Straylight, synced here) < 36h old proves the pipe flows
 
 Launchd: com.jm.backup-health (daily 08:40, ssh-localhost wrapper).
 On failure: macOS notification on ix + failures listed in the JSON.
@@ -104,11 +104,13 @@ def check_syncthing():
     rc, _, _ = run(["pgrep", "-x", "syncthing"])
     if rc != 0:
         return "syncthing: process not running on ix"
-    probe = os.path.join(VAULT, "z_ibx", "task-queue.json")
+    # build-order.md is written on Straylight many times a day and synced here
+    # (z_ibx/task-queue.json is a stale legacy file — do not probe it).
+    probe = os.path.join(VAULT, "g245", "5e-1", "build-order.md")
     if os.path.exists(probe):
         age = (time.time() - os.path.getmtime(probe)) / HOURS
         if age > 36:
-            return f"syncthing: task-queue.json last synced {age:.0f}h ago — pipe from Straylight looks dead"
+            return f"syncthing: build-order.md last synced {age:.0f}h ago — pipe from Straylight looks dead"
     return None
 
 

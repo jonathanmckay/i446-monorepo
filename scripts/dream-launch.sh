@@ -144,6 +144,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] claude=$CLAUDE ($(${CLAUDE} --version 2>/de
 # --- Keychain access: ensure we can read credentials ---
 # launchd/SSH sessions can't access the login keychain. If we detect that,
 # try unlocking it. If that fails, we're in a GUI session and it should work.
+KEYCHAIN_OK=1
 if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Keychain locked, attempting unlock..." >> "$LOG"
   if [[ -f "$HOME/.dream-keychain-pass" ]]; then
@@ -153,7 +154,28 @@ if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2
   if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Cannot access keychain. Claude will fail to authenticate." >> "$LOG"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Fix: log in via GUI, or create ~/.dream-keychain-pass with your login password." >> "$LOG"
+    KEYCHAIN_OK=0
+    # Fire critical alert NOW so JM can re-auth before the morning surface,
+    # rather than discovering the failure when no brief lands. The alert
+    # also stubs morning-brief.md so the GUI surface shows the failure.
+    if [[ -x "$HOME/i446-monorepo/scripts/dream-alert.sh" ]]; then
+      "$HOME/i446-monorepo/scripts/dream-alert.sh" "keychain_locked" \
+        "Dream $VERSION cannot read Claude Code keychain entry; claude will 401. Re-login via GUI." \
+        >> "$LOG" 2>&1 || true
+    fi
   fi
+fi
+
+# --- Bail early if keychain is unusable ---
+# If we've already alerted for keychain_locked, running claude will just 401
+# for ~3h until the watchdog kills it — burning compute and battery for nothing.
+# The dream-alert.sh call above has already stubbed morning-brief.md and written
+# FAILED, so exit cleanly here.
+if [[ "$KEYCHAIN_OK" == "0" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Skipping claude run: keychain locked (alert already fired)" >> "$LOG"
+  # Ensure READY sentinel exists so downstream watchers move on (they read FAILED).
+  date '+%Y-%m-%d %H:%M:%S' > "$RUN_DIR/READY"
+  exit 0
 fi
 
 # --- Run claude with activity watchdog ---
@@ -243,6 +265,19 @@ PASS3EOF
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION finished (exit=$EXIT_CODE)" >> "$LOG"
+
+# --- Auth-failure detector ---
+# Catches the case where keychain looked unlocked but the credential blob is
+# expired/invalid. Claude --print exits 0 even on 401, so we have to grep the
+# log. Three consecutive nights (v48-v50) failed silently this way before v51.
+if grep -qE "401 Invalid authentication credentials|Failed to authenticate" "$LOG" 2>/dev/null; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTH FAILURE detected in agent log" >> "$LOG"
+  if [[ -x "$HOME/i446-monorepo/scripts/dream-alert.sh" ]]; then
+    "$HOME/i446-monorepo/scripts/dream-alert.sh" "claude_auth_401" \
+      "Dream $VERSION: claude returned 401. Re-login via GUI; check 'security find-generic-password -s Claude Code-credentials -w'." \
+      >> "$LOG" 2>&1 || true
+  fi
+fi
 
 # --- Write READY marker ---
 date '+%Y-%m-%d %H:%M:%S' > "$RUN_DIR/READY"

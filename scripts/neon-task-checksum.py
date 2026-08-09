@@ -72,7 +72,6 @@ ALIASES = {
     "一起吃": "一起饭",
     "long o314": "长o314",
     "1 groceries": "groceries",
-    "1 i447": "i447",
 }
 
 # 1=Sunday … 7=Saturday (1n+ row 3; verified against the live cards 2026-07-25)
@@ -85,11 +84,11 @@ WEEKLY_DOMAIN = {
     "1 f692": "m5x2", "1 f693": "i9", "1 m5x2": "m5x2", "1 i9": "i9",
     "1 -2g": "g245", "1 vm+li+msgr": "i9", "1 -1n": "g245", "1 f694": "f694",
     "1 xk88": "xk88", "1 xk87": "xk87", "1 xk87 wknd": "xk87", "1 cal": "g245",
-    "1 s897": "s897", "1 hcm": "hcm", "1 hcb": "hcb", "长o314": "hcm",
+    "1 s897": "s897", "1 hcm": "hcmc", "1 hcmc": "hcmc", "1 hcb": "hcb", "长o314": "hcm",
     "groceries": "hcb", "1 hcme": "hcm", "1 sunset": "hcm", "2 hci": "hci",
     "长冥想": "hcm", "业写": "h335", "一起饭": "xk87", "nails": "hci",
     "aos": "xk88", "family": "家", "s897": "s897", "relax {60}": "hcm",
-    "i447": "i447", "1 对身": "hcb", "1 f695": "m5x2", "1 kids nature": "xk87",
+    "1 i447": "i447", "1 对身": "hcb", "1 f695": "m5x2", "1 kids nature": "xk87",
 }
 
 
@@ -414,6 +413,16 @@ def main() -> int:
         manifest = json.loads(vdh.MANIFEST.read_text())
         daily_tasks = fetch_label_tasks(token, "0neon") + fetch_label_tasks(token, "夜neon")
         missing = vdh.compute_missing(manifest, [t["content"] for t in daily_tasks])
+        # Habits the user deleted from dtd TODAY (ctrl-x -> explicit 0 + NA
+        # marker) must not be resurrected same-day — validate-daily-habits.py's
+        # own main() already honors this; this script re-implements the same
+        # missing/recreate logic and had skipped the check entirely, so its
+        # --fix pass (and the 04:15 launchd run) silently recreated habits the
+        # user had just deleted (regression 2026-07-28: "cleared out 1st hci
+        # from dtd... but I see it here again").
+        na = vdh.na_today()
+        skipped_na = [k for k in missing if vdh.bare(manifest["habits"][k]["match"]) in na]
+        missing = [k for k in missing if k not in skipped_na]
         recreated = []
         skip_daily = recreate_guard("daily", len(daily_tasks),
                                     len(manifest["habits"]), len(missing))
@@ -429,7 +438,8 @@ def main() -> int:
                     report.setdefault("errors", []).append(f"daily {key}: {e}")
         drift = manifest_drift(manifest, headers_0n)
         report["daily"] = {"checked": len(manifest["habits"]), "missing": missing,
-                           "recreated": recreated, "manifest_drift": drift}
+                           "recreated": recreated, "manifest_drift": drift,
+                           "skipped_na": skipped_na}
         if missing:
             emit_alert("daily_habit_missing",
                        f"{', '.join(missing)}" + (" (recreated)" if recreated else ""))

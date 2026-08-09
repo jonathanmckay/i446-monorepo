@@ -57,14 +57,16 @@ def test_best_effort_never_raises(tmp_path):
     assert r.returncode == 0 and not r.stderr
 
 
-def test_dtd_wires_quick_close_into_both_completion_paths():
-    """Structural: both completion scripts (done.sh heredoc and enter.sh's
-    running-timer complete branch) must fire quick-close after the
-    optimistic id-hide, backgrounded so ⌃⏎ never blocks on the network."""
+def test_dtd_wires_quick_close_into_the_completion_path():
+    """Structural: the (sole) completion script, done.sh, must fire
+    quick-close after the optimistic id-hide, backgrounded so ⌥⏎ never
+    blocks on the network. enter.sh no longer has a completion branch at all
+    (2026-07-31: "always opt+enter to mark done"), so it no longer has its
+    own copy of this call."""
     src = (HERE / "dtd.sh").read_text()
-    assert src.count("quick-close.py") == 2, "done.sh + enter.sh complete branch"
-    # Backgrounded subshell, output discarded — ⌃⏎ must never block on the network.
-    assert src.count('quick-close.py" "\\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &') == 2
+    assert src.count("quick-close.py") == 1, "done.sh only"
+    # Backgrounded subshell, output discarded — alt-enter must never block on the network.
+    assert src.count('quick-close.py" "\\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &') == 1
 
 
 if __name__ == "__main__":

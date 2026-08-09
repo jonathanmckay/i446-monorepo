@@ -460,13 +460,6 @@
       "domain": "hcb",
       "todoist_label": "1neon"
     },
-    "1-hcm": {
-      "name": "1 hcm",
-      "category": "1n+",
-      "neon_header": "1 hcm",
-      "domain": "hcm",
-      "todoist_label": "1neon"
-    },
     "1-hcme": {
       "name": "1 hcme",
       "category": "1n+",
@@ -675,11 +668,22 @@
     "1-i447": {
       "name": "1 i447",
       "category": "1n+",
-      "neon_header": "i447",
+      "neon_header": "1 i447",
       "domain": "i447",
       "todoist_label": "1neon",
       "aliases": [
         "1 i447"
+      ]
+    },
+    "1-hcmc": {
+      "name": "1 hcmc",
+      "category": "1n+",
+      "neon_header": "1 hcm",
+      "domain": "hcmc",
+      "todoist_label": "1neon",
+      "aliases": [
+        "1 hcm",
+        "1 hcmc"
       ]
     }
   }

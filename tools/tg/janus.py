@@ -57,6 +57,8 @@ from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
 from prompt_toolkit.styles import Style, StyleTransformation  # noqa: E402
+from prompt_toolkit.mouse_events import MouseEventType  # noqa: E402
+from prompt_toolkit.application.current import get_app  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
@@ -220,6 +222,7 @@ PROJECT_COLORS = {
     "n156": "#1249b4",   # Sapphire
     "hcmc": "#0d3b66",   # Deep Sea
     "m5x2": "#d50032",   # Crimson
+    "m828": "#9b0023",   # Velvet (darker than m5x2's Crimson, user request 2026-08-07)
     "hcb":  "#f81d78",   # Bubblegum Shock
     "hcbp": "#ff4081",   # Flamingo
     "infra":"#9e9e9e",   # Concrete
@@ -231,6 +234,35 @@ PROJECT_COLORS = {
     "hcmr": "#bda6ff",   # Weak-sauce Purple
     "家":   "#00b8d4",    # Pool Party (family)
 }
+
+# Daily Dozen (hcbi sheet, Q<n> summary rows) → chip color. User-specified
+# 2026-08-07, logical food-association mapping over vault/i447/
+# neon-color-pallette.md swatches (reusing already-assigned domain colors
+# where they're the best visual fit, same precedent as HABIT_YTD_COLORS
+# below reusing hcmp's/qz12's hues for an unrelated display context — a
+# swatch's "owner" domain doesn't leak into a different line's meaning).
+# Order matches the hcbi sheet's E:O header order (bn,br,fr,cr,gr,vg,fx,g,
+# nt,sp,wtr) — the row/row+1 alternating-column read in fetch_habits_today
+# reassembles them back into this single logical order.
+DAILY_DOZEN_COLORS = {
+    "bn":  "#880e4f",  # Plum — beans (dark red/maroon)
+    "br":  "#ff1744",  # Hot Rod — berries (bright red)
+    "fr":  "#ff4136",  # Ferrari — fruit (red)
+    "cr":  "#1b5e20",  # Emerald Shadow — cruciferous (dark green)
+    "gr":  "#00e676",  # Matrix — greens (green)
+    "vg":  "#ff6d00",  # Lava — other vegetables (orange)
+    "fx":  "#fec4a4",  # Tangerine Weak-sauce — flax (cream)
+    "g":   "#ffd600",  # Lightning — grains (gold)
+    "nt":  "#8b3a00",  # Rust — nuts/seeds (brown)
+    "sp":  "#e65100",  # Molten — spices (dark orange)
+    "wtr": "#2979ff",  # Electric Blue — water (blue)
+}
+DAILY_DOZEN_ORDER = ["bn", "br", "fr", "cr", "gr", "vg", "fx", "g", "nt", "sp", "wtr"]
+# hcbi columns X (food 分, user calls it "hcbc") / Y (hcbp) hold each
+# domain's running Q<n> total — rendered as a labeled "behind" chip only
+# when negative (same "only show what's owed" convention as
+# HABIT_YTD_COLORS below), in that domain's own PROJECT_COLORS hue.
+HCBI_BEHIND_DOMAINS = {"hcbc": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
 
 # Radioactive — the palette's one unassigned signature neon. The ₦ accent:
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
@@ -288,6 +320,20 @@ def project_style(pid_or_code) -> str:
     return f"fg:{hexv}" if hexv else ""
 
 
+def toggl_project_code(pid, desc: str | None = None) -> str:
+    """Resolve a Toggl entry's project code, with the same literal-title
+    override gcal_project_code already applies to calendar events: "m5x2" in
+    the description wins even when the entry has no (or the wrong) project
+    attached. Without this, a continued/restarted Toggl entry that drops its
+    project (observed live 2026-08-02: "m5x2 Strat" losing @m5x2 on
+    continuation) renders uncolored despite saying "m5x2" right in its name —
+    same regression class as gcal_project_code's 2026-07-12 fix, just never
+    applied on the Toggl-entry side."""
+    if desc and "m5x2" in desc.lower():
+        return "m5x2"
+    return proj_code(pid)
+
+
 # ─── State ─────────────────────────────────────────────────────────────────
 
 class State:
@@ -339,6 +385,13 @@ class State:
         # labeled "ص N" counter chip, never a bare done/pending chip
         # (user request 2026-07-27). None until a successful fetch.
         self.prayer_count: float | None = None
+        # Today's-quarter Daily Dozen line (hcbi sheet): [(category, value), ...]
+        # in DAILY_DOZEN_ORDER, categories with no value yet omitted. Third
+        # line of the habit strip (user request 2026-08-07).
+        self.daily_dozen: list[tuple[str, float]] = []
+        # {"hcbc": v, "hcbp": v} Q<n> running totals (hcbi!X/Y), rendered as
+        # a "behind" chip only when negative — see HCBI_BEHIND_DOMAINS.
+        self.hcbi_behind: dict[str, float] = {}
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -365,6 +418,27 @@ class State:
         # an unintended timer start.
         self.visible_events: list[dict] = []
         self.event_sel: tuple | None = None
+        # MOUSE_DOWN column on the pinned current-timer row, while a
+        # swipe-right gesture is in progress; None between gestures. Read by
+        # _current_row_click's MOUSE_UP branch to measure the drag distance
+        # (user request 2026-08-08: "swipe right on the current time entry"
+        # = the same /done action as opt+enter).
+        self.current_swipe_start: int | None = None
+        # Auto-scroll-into-view (user request 2026-08-07: "select a line, and
+        # scroll within that box", comparing to dtd's fzf list). A monotonic
+        # deadline, not a one-shot bool: main_window is focusable=False with
+        # no cursor of its own, so scrolling it at all means emitting a
+        # "[SetCursorPosition]" fragment at the selected row — but doing that
+        # on EVERY render would re-snap the view every ~0.1s
+        # (refresh_interval) and make manual mouse-wheel scrolling (which
+        # already works for free via prompt_toolkit's default Window mouse
+        # handler) unusable the instant something is selected. Tab/Shift-Tab
+        # set this to "now + 0.3s"; _compact_block_lines only emits the
+        # cursor marker for the selected row while still inside that window,
+        # so the view snaps to a fresh selection once, then leaves the user's
+        # scroll position alone. A plain click never sets this — the clicked
+        # row is already on screen by definition.
+        self.scroll_to_selection_until: float = 0.0
         # Armed by Enter on a selected real-entry row: {"ids": [...], "date":
         # the pick's own date} for the NEXT Enter to update (rename/
         # reproject/retime) instead of creating something new (user request
@@ -378,13 +452,29 @@ class State:
         # unrelated later submission (cancel via empty text, Escape, or a
         # day-nav all clear it the same way event_sel already does).
         self.edit_target: dict | None = None
+        # Armed by ^P on a selected completed entry: {"id", "date", "desc",
+        # "project_id", "tags", "start_dt", "end_dt"}. The next Enter reads
+        # the input line as the HHMM split point and cuts the entry in two.
+        self.split_target: dict | None = None
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
         # concurrent invocation could double-create the entry/points and race
-        # on the same ix-osa Excel write. Gates re-entry from a double-tap and
-        # tells ticker_points to skip a beat so it doesn't read Neon mid-write.
+        # on the same ix-osa Excel write. True while the serial work queue's
+        # consumer is mid-job; tells ticker_points to skip a beat so it
+        # doesn't read Neon mid-write.
         self.conversion_in_flight = False
+        # Serial FIFO queue for did/tg jobs (user request 2026-07-30: "I want
+        # it to be able to enqueue tasks" — pressing ⌥↵ on a second row used
+        # to bounce with "still converting the last one"). Jobs still run one
+        # at a time (the Excel-write race the old gate guarded against is
+        # real); they just wait their turn instead of being rejected.
+        self.work_q = None          # asyncio.Queue, created on first use
+        self.queued_cmds = set()    # dedupe keys of queued + running jobs
+        # Active d357 meeting recording started from janus (user request
+        # 2026-08-02): {"desc": toggl/meeting title, "start_dt": datetime}.
+        # None = not recording. Mirrors ~/.local/state/jm/d357-state.json.
+        self.recording = None
 
 
 STATE = State()
@@ -496,6 +586,61 @@ def fetch_today(force=False):
             flash(f"toggl today err: {e}")
 
 
+# ── ^X event delete / hide (user request 2026-07-30) ───────────────────────
+# Google-hosted events (m5x2/m5c7 calendars) are really deleted via the API;
+# Outlook-sourced rows (Agency fetch, or the read-only "MSFT (Slow Sync)"
+# ICS import) can't be — they're hidden locally instead, keyed the same way
+# fetch_gcal's cross-calendar dedupe is so both copies of a mirrored meeting
+# stay gone.
+
+HIDDEN_EVENTS = Path.home() / ".local/state/jm/janus-hidden-events.json"
+HIDDEN_EVENTS_KEEP_DAYS = 30
+_hidden_ev_cache: dict = {"mtime": None, "keys": set()}
+
+
+def _hidden_event_key(ev: dict) -> tuple[str, str, str]:
+    return ((ev.get("title") or "").strip().lower(),
+            ev["start_dt"].isoformat(), ev["end_dt"].isoformat())
+
+
+def _load_hidden_events() -> set:
+    """mtime-cached — checked on every fetch_gcal."""
+    try:
+        mtime = HIDDEN_EVENTS.stat().st_mtime
+    except OSError:
+        return set()
+    if _hidden_ev_cache["mtime"] != mtime:
+        try:
+            data = json.loads(HIDDEN_EVENTS.read_text())
+            _hidden_ev_cache["keys"] = {tuple(k) for k in data.get("hidden", [])
+                                        if isinstance(k, list) and len(k) == 3}
+        except Exception:
+            _hidden_ev_cache["keys"] = set()
+        _hidden_ev_cache["mtime"] = mtime
+    return _hidden_ev_cache["keys"]
+
+
+def _hide_event(ev: dict) -> None:
+    """Persist the event's hide key; prunes entries older than
+    HIDDEN_EVENTS_KEEP_DAYS so the file can't grow without bound."""
+    keys = set(_load_hidden_events())
+    keys.add(_hidden_event_key(ev))
+    cutoff = (dt.date.today() - dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
+    keep = [list(k) for k in sorted(keys) if k[1] >= cutoff]
+    HIDDEN_EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    HIDDEN_EVENTS.write_text(json.dumps({"hidden": keep}))
+    _hidden_ev_cache["mtime"] = None  # force reload next read
+
+
+def _event_gcal_deletable(ev: dict) -> bool:
+    """True when the event lives on a Google calendar the API can delete
+    from: it carries an id (fresh fetch — pre-2026-07-30 caches don't), and
+    its calendar isn't a read-only ICS import (the Outlook mirror)."""
+    cid = ev.get("calendar_id") or ""
+    return bool(ev.get("id")) and bool(cid) and \
+        not cid.endswith("@import.calendar.google.com")
+
+
 def fetch_gcal(force=False):
     try:
         now = view_now()  # viewed day's calendar
@@ -510,7 +655,21 @@ def fetch_gcal(force=False):
         # Merge and sort by start time
         combined = gcal_events + outlook_events
         combined.sort(key=lambda e: e["start_dt"])
-        STATE.events = combined
+        # Dedupe cross-calendar copies: the same meeting arrives from BOTH
+        # Outlook (Agency) and the "MSFT (Slow Sync)" Google import. Hidden
+        # while covered events were suppressed; the reclaim feature surfaced
+        # them as triple rows (2026-07-29: "Potrero PT" ×3 filled 巳's card).
+        seen_ev = set()
+        deduped = []
+        for e in combined:
+            k = ((e.get("title") or "").strip().lower(), e["start_dt"], e["end_dt"])
+            if k in seen_ev:
+                continue
+            seen_ev.add(k)
+            deduped.append(e)
+        hidden = _load_hidden_events()
+        deduped = [e for e in deduped if _hidden_event_key(e) not in hidden]
+        STATE.events = deduped
         STATE.last_gcal_fetch = time.monotonic()
         _shorten_events(combined)
     except Exception as e:
@@ -551,7 +710,110 @@ def _sel_key(item: dict):
         return ("entry", item["start_dt"], tuple(item["entry_ids"]))
     if kind == "empty":
         return ("empty", item["start_dt"])
+    if kind == "current":
+        return ("current",)  # singleton — only one live timer can ever exist
     return _event_key(item)
+
+
+def _row_click(key) -> object | None:
+    """Mouse handler factory for a selectable row (dtd-style click-to-select,
+    user request 2026-08-07: "dtd has the tasks list that I can... click to
+    select. That's what I want from janus as well"). key is whatever
+    _sel_key() would produce for this row — the SAME identity Tab/Enter
+    already use, so a click just sets STATE.event_sel directly instead of
+    Tab-cycling to it. None key -> None handler (an unselectable row, e.g. a
+    synthetic sleep-spillover pick with no real entry behind it, or a
+    meeting-free bar that was never added to STATE.visible_events — clicking
+    it must do nothing, not silently select something else).
+
+    MOUSE_UP, not MOUSE_DOWN: matches prompt_toolkit's own Button/RadioList
+    click idiom (widgets/base.py) — robust against a drag that starts on
+    this row but releases elsewhere, which MOUSE_DOWN would wrongly select.
+
+    Every other event type — critically SCROLL_UP/SCROLL_DOWN — returns
+    NotImplemented, not None (bug fix 2026-08-08: "I still can't scroll in
+    the window"). FormattedTextControl.mouse_handler() returns exactly
+    whatever this handler returns; a bare `None` reads as "handled, stop
+    here" and swallows the event, which meant Window's own default
+    _scroll_up/_scroll_down fallback (the thing that makes the mouse wheel
+    work at all — prompt_toolkit supplies it for free, no code of ours
+    invokes it directly) never ran on any row with a click handler attached,
+    i.e. almost every visible row after click-to-select landed."""
+    if key is None:
+        return None
+
+    def handler(mouse_event):
+        if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            STATE.event_sel = key
+            get_app().invalidate()
+            return None
+        return NotImplemented
+    return handler
+
+
+SWIPE_RIGHT_COLS = 4  # MOUSE_UP.x - MOUSE_DOWN.x threshold that reads as a swipe, not a click
+
+
+def _current_row_click(key) -> object | None:
+    """Mouse handler for the pinned current-timer row (render_current_bottom)
+    — a superset of _row_click's plain click-to-select, plus swipe-right-to-
+    /done (user request 2026-08-08). MOUSE_DOWN records its column in
+    STATE.current_swipe_start; MOUSE_UP measures the drag distance against
+    it. Past SWIPE_RIGHT_COLS reads as a swipe and runs the same stop+grant
+    action as ⌥↵ on this row; short of that, it's an ordinary click-to-
+    select, same as any other row. MOUSE_UP (not MOUSE_DOWN) still owns the
+    select-only path so a drag that started here but released elsewhere
+    never wrongly selects it — mirrors _row_click's own reasoning."""
+    if key is None:
+        return None
+
+    def handler(mouse_event):
+        if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
+            STATE.current_swipe_start = mouse_event.position.x
+            return None
+        if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            start = STATE.current_swipe_start
+            STATE.current_swipe_start = None
+            if start is not None and mouse_event.position.x - start >= SWIPE_RIGHT_COLS:
+                _run_current_timer_done(get_app())
+                return None
+            STATE.event_sel = key
+            get_app().invalidate()
+            return None
+        return NotImplemented
+    return handler
+
+
+def _frag(style: str, text: str, handler=None) -> tuple:
+    """One formatted-text fragment, with an optional click mouse_handler —
+    prompt_toolkit fragments are plain (style, text) 2-tuples normally, and
+    (style, text, handler) 3-tuples only when a handler is attached; this
+    keeps that shape decision out of every individual append call."""
+    return (style, text, handler) if handler is not None else (style, text)
+
+
+def _cursor_marker(is_sel: bool) -> list[tuple]:
+    """A "[SetCursorPosition]" fragment for the selected row, but ONLY while
+    STATE.scroll_to_selection_until hasn't expired (see State's docstring on
+    that field) — prompt_toolkit auto-scrolls main_window to keep this
+    position in view even though it's focusable=False, which is the whole
+    scroll-into-view mechanism; emitting it on every render instead of just
+    the one right after a selection change would refuse to let the user
+    manually scroll away from the current selection at all."""
+    if is_sel and time.monotonic() < STATE.scroll_to_selection_until:
+        return [("[SetCursorPosition]", "")]
+    return []
+
+
+def _row_selection(key) -> tuple[bool, object | None, list[tuple]]:
+    """(is_selected, click_handler, cursor_marker) for a selectable row —
+    every branch in _compact_block_lines needs exactly these three things
+    for whatever key identifies its row (None for an unselectable synthetic
+    pick), and previously recomputed each of them separately with its own
+    "is this row selected" comparison; collapsed here so the key expression
+    is the only thing that varies per branch (cleanup 2026-08-08)."""
+    is_sel = key is not None and STATE.event_sel == key
+    return is_sel, _row_click(key), _cursor_marker(is_sel)
 
 
 def _entry_edit_prefill(item: dict) -> str:
@@ -620,16 +882,19 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     return (body or None), code, time_range, tags
 
 
-# ── Value-tag 媒分 credits (user request 2026-07-28) ────────────────────────
-# Media-tier Toggl tags earn 媒 (hcmc) 分 per minute: "-2 means I explicitly
-# want the points ... 0.1/m for -1, 1/m for -3, 0.5/m for -2". Credits fire
-# ONLY for tags added through janus's edit flow — /tg shortcodes auto-tag
-# some entries (睡觉 -3, hiit -2) and blanket-crediting every tagged entry
-# would hand sleep ~400分/day of 媒. A tag on a RUNNING entry queues until
-# the timer stops (minutes unknown until then); fetch_today resolves the
-# queue. Credited (id, tag) pairs are journaled date-gated so a re-edit
-# can't double-credit.
-TAG_POINTS = {"-1": 0.1, "-2": 0.5, "-3": 1.0}  # 分 per minute → 媒 column
+# ── Value-tag media-minute credits (user request 2026-07-28) ────────────────
+# Media-tier Toggl tags (-1/-2/-3) each have their OWN minutes column in the
+# 0n sheet (AV/AW/AX as of 2026-07-28) whose formulas apply the ratio
+# (0.1/m, 0.5/m, 1/m) to turn minutes into 分 — so janus writes MINUTES to
+# the tag's column, never points ("put the number of minutes in column AW,
+# which will then apply the multiplier"). Credits fire ONLY for tags added
+# through janus's edit flow — /tg shortcodes auto-tag some entries (睡觉 -3,
+# hiit -2) and blanket-crediting every tagged entry would hand sleep
+# ~400m/day of media minutes. A tag on a RUNNING entry queues until the
+# timer stops (minutes unknown until then); fetch_today resolves the queue.
+# Credited (id, tag) pairs are journaled date-gated so a re-edit can't
+# double-credit.
+VALUE_TAGS = ("-1", "-2", "-3")
 TAG_CREDITS = Path.home() / ".local/state/jm/janus-tag-credits.json"
 
 
@@ -651,22 +916,26 @@ def _tag_credit_save(d: dict) -> None:
         pass
 
 
-def tag_credit_points(tag: str, mins: int) -> float:
-    """分 a value tag earns for `mins` tracked minutes (0 for unknown tags)."""
-    return round(mins * TAG_POINTS.get(tag, 0), 1)
-
-
-def _apply_tag_credit(tag: str, mins: int, day: dt.date) -> float | None:
-    """Append mins×rate 媒分 to the entry's own day row in 0分. Column
-    letter via neon.cols (never hardcoded — the 2026-04-28 reshuffle rule)."""
-    pts = tag_credit_points(tag, mins)
-    if pts <= 0:
-        return None
+def _tag_col(tag: str) -> str:
+    """0n column letter for a value tag's minutes, via neon-cols (never
+    hardcoded — the 2026-04-28 reshuffle rule). Falls back to the
+    AppleScript-stringified key ("-2.0") for configs regenerated before the
+    numeric-header normalization landed in regen-neon-cols.py."""
     from neon import cols as neon_cols
-    col = neon_cols.domain_col("0分", "hcmc")
-    neon_excel.append("0分", col, date=f"{day.month}/{day.day}",
-                      value=f"+{pts:g}")
-    return pts
+    try:
+        return neon_cols.col("0n", tag)
+    except KeyError:
+        return neon_cols.col("0n", f"{tag}.0")
+
+
+def _apply_tag_credit(tag: str, mins: int, day: dt.date) -> int | None:
+    """Append the entry's MINUTES to the tag's own 0n column for the entry's
+    day — the sheet's formulas apply the tag ratio to produce the 分."""
+    if mins <= 0:
+        return None
+    neon_excel.append("0n", _tag_col(tag), date=f"{day.month}/{day.day}",
+                      value=f"+{mins}")
+    return mins
 
 
 def _find_entry(entry_ids: list) -> dict | None:
@@ -693,13 +962,13 @@ def _resolve_pending_tag_credits() -> None:
             continue
         mins = int((ent["end_dt"] - ent["start_dt"]).total_seconds() // 60)
         try:
-            pts = _apply_tag_credit(p["tag"], mins, ent["start_dt"].date())
+            credited = _apply_tag_credit(p["tag"], mins, ent["start_dt"].date())
         except Exception:
             remaining.append(p)  # ix unreachable etc. — retry next fetch
             continue
-        if pts:
+        if credited:
             st["credited"].append(p["key"])
-            flash(f"#{p['tag']} +{pts:g}分 媒 ({display_desc(ent['desc'])})", 6.0)
+            flash(f"#{p['tag']} +{credited}m → 0n ({display_desc(ent['desc'])})", 6.0)
     st["pending"] = remaining
     _tag_credit_save(st)
 
@@ -778,6 +1047,16 @@ def _fill_event_shorts(by_hash: dict[str, list[dict]], max_new: int = 6) -> None
         app.invalidate()
     except Exception:
         pass
+
+
+# Module-level so tests can monkeypatch it to a tmp_path instead of appending
+# to the real shared file (bug 2026-07-30: test_janus_points_total_guard.py's
+# torn-read fixtures -- literally D=-46/4351/1523 -- wrote straight into this
+# hardcoded path, so every test run polluted live diagnostics with fake
+# "rejected read" entries indistinguishable from genuine production torn
+# reads, e.g. three lines at the SAME wall-clock second with wildly different
+# candidates).
+POINTS_REJECTED_LOG = Path("/tmp/janus-points-rejected.log")
 
 
 def fetch_points():
@@ -964,7 +1243,7 @@ end tell'''
                 # Torn read (implausible total, or daemon lock / did-fast append
                 # in flight): keep last good values and leave evidence for diagnosis.
                 try:
-                    with open("/tmp/janus-points-rejected.log", "a") as fh:
+                    with open(POINTS_REJECTED_LOG, "a") as fh:
                         fh.write(f"{dt.datetime.now(TZ):%F %T} total_ok={total_ok} "
                                  f"cand={candidate} D={STATE.today_points} "
                                  f"bp={bp_excel} raw={raw_out!r}\n")
@@ -1327,6 +1606,58 @@ def _ytd_applescript_lines() -> str:
     return "\n".join(lines)
 
 
+def _dozen_applescript_lines(q_label: str) -> str:
+    """AppleScript appended to fetch_habits_today's script (after a third
+    '||' marker): finds the hcbi sheet's row labeled q_label in column B —
+    the current quarter's Daily Dozen summary row — and reads E:Y of that
+    row plus the row below. The sheet splits the 11 Daily Dozen categories'
+    Q<n> values across the two rows (odd E:O columns on the label row, even
+    E:O columns on the row below); columns X/Y on the label row hold the
+    hcbc/hcbp running Q<n> point totals (HCBI_BEHIND_DOMAINS). Best-effort:
+    a missing/renamed row just leaves this segment empty, same tolerance as
+    the rest of this fetch."""
+    return f'''    try
+        set wsD to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set qRow to 0
+        -- A vertical B300:B450 range returns a list of ROWS (each a
+        -- 1-element list, since it's one column wide) -- the same 2-level
+        -- unwrap fetch_habits_today's own C3:C500 date search above uses,
+        -- NOT a flat list of values (that shape only applies to a single
+        -- ROW range like the header/data reads below).
+        set bVals to value of range "B300:B450" of wsD
+        repeat with i from 1 to (count of bVals)
+            set bv to ""
+            try
+                set bv to (item 1 of (item i of bVals)) as text
+            end try
+            if bv is "{q_label}" then
+                set qRow to i + 299
+                exit repeat
+            end if
+        end repeat
+        if qRow > 0 then
+            set tmpD to value of range ("E" & qRow & ":Y" & (qRow + 1)) of wsD
+            set dRow1 to item 1 of tmpD
+            set dRow2 to item 2 of tmpD
+            repeat with i from 1 to (count of dRow1)
+                set dv to ""
+                try
+                    set dv to (item i of dRow1) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+            set out to out & "|"
+            repeat with i from 1 to (count of dRow2)
+                set dv to ""
+                try
+                    set dv to (item i of dRow2) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+        end if
+    end try'''
+
+
 def fetch_habits_today():
     """Read today's 0₦ (Neon habits) row: EVERY habit (done and not-yet-done
     alike), in column order, for the two-row habit strip under the header
@@ -1334,6 +1665,7 @@ def fetch_habits_today():
     strip empty/stale, same tolerance as fetch_points."""
     try:
         now = view_now()
+        q_label = f"Q{(now.month - 1) // 3 + 1}"
         IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
         # BULK range reads only — the old shape (a per-row date loop up to
         # r500 + per-cell header/value reads) was ~580 individual AppleEvents
@@ -1386,6 +1718,8 @@ def fetch_habits_today():
     end repeat
     set out to out & "|"
 {_ytd_applescript_lines()}
+    set out to out & "|"
+{_dozen_applescript_lines(q_label)}
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
@@ -1396,7 +1730,10 @@ end tell'''
             return
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
-        raw, _, ytd_raw = proc.stdout.strip().partition("||")
+        segs = proc.stdout.strip().split("||")
+        raw = segs[0] if len(segs) > 0 else ""
+        ytd_raw = segs[1] if len(segs) > 1 else ""
+        dozen_raw = segs[2] if len(segs) > 2 else ""
         ytd: dict[str, float] = {}
         for name, val in zip(HABIT_YTD_CELLS, ytd_raw.split("|")):
             try:
@@ -1404,6 +1741,34 @@ end tell'''
             except ValueError:
                 pass
         STATE.habits_ytd = ytd
+        dozen_rows = dozen_raw.split("|")
+        dozen_row1 = dozen_rows[0].split(",") if len(dozen_rows) > 0 else []
+        dozen_row2 = dozen_rows[1].split(",") if len(dozen_rows) > 1 else []
+
+        def _dozen_cell(offset: int) -> str:
+            # offset is 1-based within E:Y (E=1 .. Y=21); the value lives on
+            # whichever of the two rows is non-blank for that column.
+            v1 = dozen_row1[offset - 1].strip() if offset - 1 < len(dozen_row1) else ""
+            v2 = dozen_row2[offset - 1].strip() if offset - 1 < len(dozen_row2) else ""
+            return v1 or v2
+        dozen: list[tuple[str, float]] = []
+        for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
+            raw_v = _dozen_cell(offset)
+            if raw_v:
+                try:
+                    dozen.append((key, float(raw_v)))
+                except ValueError:
+                    pass
+        behind: dict[str, float] = {}
+        for key, offset in (("hcbc", 20), ("hcbp", 21)):
+            raw_v = _dozen_cell(offset)
+            if raw_v:
+                try:
+                    behind[key] = float(raw_v)
+                except ValueError:
+                    pass
+        STATE.daily_dozen = dozen
+        STATE.hcbi_behind = behind
         habits = []
         prayer: float | None = 0.0  # blank cell = 0 prayers so far, not "unknown"
         for chunk in raw.split("|"):
@@ -1544,16 +1909,40 @@ def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return row
 
 
+def _pack_number_chips(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """A row of bare-number chips renders back to back with NO gap when
+    adjacent chips differ in color — the color change itself is the visual
+    separator — but keeps a single space between adjacent chips that share a
+    color (a domain covering multiple habits, e.g. i9: stats/notes/push/
+    teams all render blue), else two same-color numbers read as one merged
+    number (user request 2026-08-07: "push=3" next to "teams=45" must not
+    become "345")."""
+    out: list[tuple[str, str]] = []
+    prev_style = None
+    for sty, text in chips:
+        if prev_style is not None and sty == prev_style:
+            text = " " + text
+        out.append((sty, text))
+        prev_style = sty
+    return out
+
+
 def render_habits_today() -> list[tuple[str, str]]:
-    """Two-row strip of today's Neon habits, split by DONE-ness rather than
-    wrapped across two lines of the same thing (2026-07-20 follow-up): row 1
-    is every habit with a value today, as solid-background chips — just the
-    number, one trailing space (not two) between chips; row 2 is every
-    habit WITHOUT a value yet, as the bare habit NAME in the same domain-
-    colored chip style, so it reads as "still open." Each row independently
-    drops whatever doesn't fit in WIDTH_HINT — the ask was two lines, not a
-    scrolling list."""
-    if not STATE.habits_today and not STATE.habits_ytd:
+    """Two-line strip under the header, today's Neon habits (2026-07-20),
+    reworked 2026-08-07:
+    - line 1: every habit with a value today, as solid-background chips —
+      just the number, packed via _pack_number_chips (no gap between
+      differently-colored numbers, one space between same-colored ones) —
+      immediately followed (same line, no separator) by every habit WITHOUT
+      a value yet, as the bare habit NAME in its domain-colored chip style
+      ("still open").
+    - line 2: this quarter's Daily Dozen (hcbi sheet) — a bare-number chip
+      for each category that's currently BEHIND (negative; neutral/positive
+      categories are omitted), packed the same way, followed by a labeled
+      "behind" chip for any HCBI_BEHIND_DOMAINS total that's negative.
+    Each line independently drops whatever doesn't fit in WIDTH_HINT."""
+    if not (STATE.habits_today or STATE.habits_ytd or STATE.daily_dozen
+            or STATE.hcbi_behind):
         return []
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
@@ -1567,16 +1956,17 @@ def render_habits_today() -> list[tuple[str, str]]:
         blk = hour_to_block(view_now().hour)
         label = _read_block_emojis().get(blk[0]) if blk else ""
         if label:
-            neon_chip = [(NEON_PTS_STYLE, f"{label} ")]
-    done_chips = neon_chip + [(_habit_chip_style(name), f"{v:g} ")
-                              for name, v in STATE.habits_today if v is not None]
+            neon_chip = [(NEON_PTS_STYLE, f"{label}")]
+    done_chips = _pack_number_chips(
+        neon_chip + [(_habit_chip_style(name), f"{v:g}")
+                     for name, v in STATE.habits_today if v is not None])
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
-    # as the jm dashboard "2026" header cards) on the second line AFTER the
+    # as the jm dashboard "2026" header cards) on the pending line AFTER the
     # pending 0neon names, each in its own purple (HABIT_YTD_COLORS —
     # user-requested order + palette 2026-07-21). Only shown while the queue
     # is at or below zero — a positive standing means nothing is owed, and
-    # hiding it keeps the second line a pure "what's left to do" list (user
-    # request 2026-07-24).
+    # hiding it keeps this a pure "what's left to do" list (user request
+    # 2026-07-24).
     pending_chips = [(_habit_chip_style(name), f"{name} ")
                      for name, v in STATE.habits_today
                      if v is None and not _habit_deferred(name)
@@ -1585,14 +1975,23 @@ def render_habits_today() -> list[tuple[str, str]]:
                        f"{name} {v:+g} ")
                       for name, v in STATE.habits_ytd.items() if v <= 0]
     # ص prayer counter: always-visible labeled chip ("ص 3") closing the
-    # second line, after the 其他人 YTD chip — a count toward 5, so the
+    # pending line, after the 其他人 YTD chip — a count toward 5, so the
     # bare-number done-chip format (or disappearing into the pending names)
     # never fit it (user request 2026-07-27; placement follow-up same day).
     if STATE.prayer_count is not None:
         pending_chips.append((_habit_chip_style("ص"),
                               f"ص {STATE.prayer_count:g} "))
+    # Only categories currently BEHIND (negative) are worth a glance here —
+    # neutral/positive ones are dropped entirely (user request 2026-08-07).
+    dozen_chips = _pack_number_chips(
+        [(f"bold bg:{DAILY_DOZEN_COLORS.get(key, '#444444')} #ffffff", f"{v:g}")
+         for key, v in STATE.daily_dozen if v < 0])
+    dozen_chips += [(f"bold bg:{color} #ffffff", f"{name} {int(round(STATE.hcbi_behind[name])):+d} ")
+                    for name, color in HCBI_BEHIND_DOMAINS.items()
+                    if STATE.hcbi_behind.get(name, 0) < 0]
+    habit_line = done_chips + pending_chips
     out: list[tuple[str, str]] = []
-    for chips in (_habit_row(done_chips), _habit_row(pending_chips)):
+    for chips in (_habit_row(habit_line), _habit_row(dozen_chips)):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))
@@ -1605,7 +2004,7 @@ def render_current() -> list[tuple[str, str]]:
         return [("class:idle", " (no timer running)\n")]
     desc = cur.get("description") or "(no description)"
     pid = cur.get("project_id")
-    code = proj_code(pid)
+    code = toggl_project_code(pid, desc)
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
         elapsed_s = int((dt.datetime.now(TZ) - st).total_seconds())
@@ -1615,7 +2014,7 @@ def render_current() -> list[tuple[str, str]]:
     if code:
         line += f"  · {code}"
     line += f"   {fmt_dur_live(elapsed_s)}\n"
-    style = project_style(pid) or "class:running"
+    style = project_style(code) or "class:running"
     return [(f"bold {style}".strip(), line)]
 
 
@@ -1780,6 +2179,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     # 15/30-min grid resolution — needed by the busy-bar gutter cells on the
     # header rows too, so computed before either header branch.
     slot_min = 15 if max_rows > 3 else 30
+    # Set by the past-block branch below when its head0 rides the header from
+    # a slot other than :00 (2026-08-06); stays None/blk_sh on the is_future
+    # branch, which never vacates :00. Must default here (not just in that
+    # branch) — the body/mark-fill section past the header if/else, and the
+    # prev_hour seed for body-row abbreviation, are both shared by both
+    # branches.
+    vacated_00 = None
+    header_hour = blk_sh
 
     # ── header: the block's :00 slot ──
     # Free rows never ride the header: the header's event slot belongs to the
@@ -1807,8 +2214,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # unselectable (user report 2026-07-15: "still can't select... future
         # calendar entries", since the next focus block's only event is
         # almost always its head).
-        head_selected = (track_selection and head.get("is_event")
-                        and STATE.event_sel == _event_key(head["event"]))
+        head_key = _event_key(head["event"]) if track_selection and head.get("is_event") else None
+        head_selected, head_click, head_marker = _row_selection(head_key)
         if track_selection and head.get("is_event"):
             STATE.visible_events.append(head["event"])
         if head_selected:
@@ -1827,38 +2234,160 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # keeps its accent even under the selected-header styling.
         # The gutter cell replaces the space after "巳:00" (budgeted via
         # dwidth(left), which still includes it — same 1-char width).
-        out.append((left_sty, f"{blk_name}:00"))
-        out.append(_gutter(blk_sh, 0, slot_min))
+        out.extend(head_marker)
+        out.append(_frag(left_sty, f"{blk_name}:00", head_click))
+        out.append(_frag(*_gutter(blk_sh, 0, slot_min), head_click))
         # Header-riding events right-justify like every other calendar row
         # (user request 2026-07-28): block name left, event at the right edge.
-        out.append(("class:selected_bg" if head_selected else "",
-                    " " * max(0, avail - dwidth(label))))
+        out.append(_frag("class:selected_bg" if head_selected else "",
+                         " " * max(0, avail - dwidth(label)), head_click))
         if tpfx:
-            out.append((time_sty, tpfx))
-        out.append((head_sty, label))
-        out.append((dur_sty, f" {dur}"))
+            out.append(_frag(time_sty, tpfx, head_click))
+        out.append(_frag(head_sty, label, head_click))
+        out.append(_frag(dur_sty, f" {dur}", head_click))
         if neon_tail:
-            out.append((NEON_PTS_STYLE, neon_tail))
-        out.append((dur_sty, "\n"))
+            out.append(_frag(NEON_PTS_STYLE, neon_tail, head_click))
+        out.append(_frag(dur_sty, "\n", head_click))
     else:
         body_picks = picks
-        left = f"{blk_name}:00"
         pts_str = f"{int(round(pts))}分" if pts else ""  # never print a float repr
         # The -1n score sits at the RIGHT edge beside the block's 分, not after the block
         # name (user request 2026-07-21: "in the block lines... not in the
         # header"): `辰:00              ₦9 73分`.
         right = f"{emojis} {pts_str}" if emojis and pts_str else (emojis or pts_str)
-        trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
-        out.append(("class:dim", left))
-        out.append(_gutter(blk_sh, 0, slot_min))
-        out.append(("class:dim", " " * max(0, trail - 1)))
-        if emojis:
-            out.append((NEON_PTS_STYLE, emojis))
+        # The FIRST real item in the block rides the header line instead of
+        # duplicating a body row right under it (user request 2026-07-30:
+        # "Shouldn't XBOX Developer be on the 未 line rather than repeating
+        # it?"; widened 2026-08-06: "every hour/block :00 doesn't need to be
+        # its own line" — a block whose :00 slot was a now-deleted calendar
+        # event used to leave a bare "未:00" header AND demote the real next
+        # entry (e.g. -1g at 12:15) to an abbreviated "  :15" body row two
+        # lines down. Now the header adopts whichever real entry is
+        # chronologically first (picks arrive pre-sorted), labelled with ITS
+        # OWN start time (`未:15`, or `未 13:05` if it falls in the block's
+        # second hour) instead of always the literal `blk:00`. Deliberately
+        # NOT the is_future branch's "blk:00 HH:MM label" convention above —
+        # the user's own example was explicit that the block name's own
+        # suffix changes, not an inline time prefix.
+        # Free/gap bars keep their own body rows — the header's slot belongs
+        # to a tracked entry, a meeting, or the sleep-spillover item.
+        # A non-sleep spillover (_block_spill_items, is_spill) is EXCLUDED
+        # from this promotion too (user report 2026-08-07): it already rode
+        # the header/a row of the block it actually started in, so letting it
+        # win here just duplicates that entry — the header should promote to
+        # the first genuinely NEW entry of this block instead (e.g. 戌:10
+        # 冥想, not 戌:00 bball when bball is really 酉:47's spillover).
+        head0 = next(
+            (p for p in picks if not p.get("is_free") and not p.get("is_gap")
+             and not p.get("is_spill")), None)
+        # Tracks the block's own :00 slot when head0 was promoted from a
+        # LATER slot, so the mark-fill grid below (FOCUS_ROWS' include_00)
+        # doesn't re-materialize a phantom "  :00" row under a header that
+        # now displays a later time — the exact "duplicate :00 line" class
+        # the head0 mechanism exists to prevent, just from the other side.
+        # (vacated_00/header_hour both default at the top of the function.)
+        if head0 is not None:
+            hs0 = head0["start_dt"]
+            if (hs0.hour, hs0.minute) == (blk_sh, 0):
+                left = f"{blk_name}:00"
+            elif hs0.hour == blk_sh:
+                left = f"{blk_name}:{hs0.minute:02d}"
+                vacated_00 = (blk_sh, 0)
+            else:
+                left = f"{blk_name} {hs0.hour:02d}:{hs0.minute:02d}"
+                vacated_00 = (blk_sh, 0)
+            header_hour = hs0.hour
+        else:
+            left = f"{blk_name}:00"
+        if head0 is not None:
+            body_picks = [p for p in picks if p is not head0]
+            running = bool(head0.get("is_running"))
+            if head0.get("is_event"):
+                my_key = _sel_key(head0["event"])
+                if track_selection:
+                    STATE.visible_events.append(head0["event"])
+            elif head0.get("entry_ids"):
+                reg = {"kind": "entry", "start_dt": head0["start_dt"],
+                       "entry_ids": head0["entry_ids"],
+                       "raw_desc": head0["raw_desc"],
+                       "project_id": head0["project_id"],
+                       "dur_min": head0.get("dur_min"), "running": running}
+                my_key = _sel_key(reg)
+                if track_selection:
+                    STATE.visible_events.append(reg)
+            else:
+                my_key = None  # synthetic pick (sleep spillover) — unselectable
+            is_sel, head0_click, head0_marker = _row_selection(my_key)
+            dur = f"({head0['dur_min']})" if head0.get("is_event") else fmt_dur(head0["dur_min"])
+            prefix = "▶ " if running else ""
+            # d357 recording live → 🎙 rides RIGHT of the task name
+            # (user request 2026-08-02: "move the mic to be to the right
+            # of the task"). A doc already filed for this entry → 📝 instead
+            # (mutually exclusive in practice: a doc isn't filed until well
+            # after the live recording ends).
+            if running and _rec_active_for(head0.get("raw_desc")):
+                rec_sfx = " 🎙"
+            elif _has_d357_doc(head0.get("raw_desc")):
+                rec_sfx = " 📝"
+            else:
+                rec_sfx = ""
+            vtags = " ".join(f"#{t}" for t in (head0.get("tags") or [])
+                             if t in VALUE_TAGS)
+            base_sty = head0.get("style") or ""
+            if running:
+                base_sty = f"bold {base_sty}".strip() if base_sty else "bold class:running"
+            elif _is_placeholder(head0["label"]):
+                base_sty = _placeholder_style()
+            if is_sel:
+                sty = f"{base_sty} bg:#3a3a3a".strip() if base_sty else "class:selected_bg"
+                left_sty = "class:selected_accent"
+                dur_sty = "class:selected_bg"
+            else:
+                sty = base_sty
+                left_sty = "class:dim"
+                dur_sty = "class:dim"
+            # head0's OWN slot, not always the block's :00 (2026-08-06) — the
+            # busy-bar cell must reflect whatever 15/30-min window the header
+            # is actually displaying now that it can ride a later slot.
+            gsty, gch = _gutter(hs0.hour, hs0.minute, slot_min)
+            if is_sel:
+                gsty = f"{gsty} bg:#3a3a3a"
+            tail_w = (dwidth(right) + 1) if right else 0
+            space = max(1, WIDTH_HINT - dwidth(left) - 1 - dwidth(prefix)
+                        - dwidth(dur) - 1 - (dwidth(vtags) + 1 if vtags else 0)
+                        - tail_w)
+            out.extend(head0_marker)
+            out.append(_frag(left_sty, left, head0_click))
+            out.append(_frag(gsty, gch, head0_click))
+            txt = truncate(head0["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
+            if head0.get("is_event"):
+                out.append(_frag(sty, " " * max(0, space - dwidth(txt)) + txt, head0_click))
+            else:
+                out.append(_frag(sty, prefix + pad(txt, space), head0_click))
+            if vtags:
+                out.append(_frag(dur_sty, f" {vtags}", head0_click))
+            out.append(_frag(dur_sty, f" {dur}", head0_click))
+            if right:
+                out.append(_frag("class:dim", " ", head0_click))
+                if emojis:
+                    out.append(_frag(NEON_PTS_STYLE, emojis, head0_click))
+                    if pts_str:
+                        out.append(_frag("class:dim", " ", head0_click))
+                if pts_str:
+                    out.append(_frag("bold #ffffff", pts_str, head0_click))
+            out.append(_frag("class:dim", "\n", head0_click))
+        else:
+            trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
+            out.append(("class:dim", left))
+            out.append(_gutter(blk_sh, 0, slot_min))
+            out.append(("class:dim", " " * max(0, trail - 1)))
+            if emojis:
+                out.append((NEON_PTS_STYLE, emojis))
+                if pts_str:
+                    out.append(("class:dim", " "))
             if pts_str:
-                out.append(("class:dim", " "))
-        if pts_str:
-            out.append(("bold #ffffff", pts_str))
-        out.append(("class:dim", "\n"))
+                out.append(("bold #ffffff", pts_str))
+            out.append(("class:dim", "\n"))
 
     # ── body: later slot marks after :00, entries on their slots ──
     # Empty marks always render (this is what fixes a future block like 午
@@ -1887,12 +2416,25 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # restored after the cut.
         keep = sorted(entry_rows,
                       key=lambda r: (not r[3].get("is_running"),
+                                     bool(r[3].get("is_event")),
                                      -(r[3].get("dur_min") or 0)))[:max_rows]
         rows = sorted(keep, key=lambda r: r[0])
     else:
         rows = entry_rows
     if len(rows) < max_rows:
-        occupied = {_slot(p) for p in body_picks}
+        # Occupied slots come from ALL picks (not just body_picks): a pick
+        # that moved up to ride the header must not leave a grid mark (·/◇ │)
+        # re-materializing in the :00 row it vacated (user report 2026-07-30:
+        # "the :00 line gets duplicated in a lot of places").
+        occupied = {_slot(p) for p in picks}
+        # head0 promoted from a LATER slot (2026-08-06): its own real slot is
+        # already in `occupied` via the loop above, but the block's :00 slot
+        # it vacated is not — without this, FOCUS_ROWS' include_00 grid
+        # re-materializes a phantom "  :00" mark under a header that now
+        # reads a later time (the mirror image of the bug this whole
+        # mechanism exists to prevent).
+        if vacated_00 is not None:
+            occupied.add(vacated_00)
         offsets = range(0 if include_00 else slot_min, 120, slot_min)
         mark_slots = [(blk_sh + off // 60, off % 60) for off in offsets]
         marks = [(hh * 60 + mm, hh, mm, None)
@@ -1933,16 +2475,29 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                                              "dur_min": p.get("dur_min"),
                                              "running": bool(p.get("is_running"))})
 
-    prev_hour = blk_sh  # the header established this hour at its :00 slot
+    # The header established THIS hour (2026-08-06: not always blk_sh — a
+    # promoted head0 in the block's second hour shifts it), so a body row in
+    # the same hour abbreviates instead of redundantly repeating it.
+    prev_hour = header_hour
     for _, hh, mm, p in rows:
         tcol, prev_hour = _abbrev_tcol(hh, mm, prev_hour)
         if p is None:
             if cont and (hh, mm) in cont:
                 # A meeting started earlier flows through this slot: keep the
-                # ◇ │ continuation rather than a bare time.
+                # ◇ │ continuation rather than a bare time. Calendar coverage
+                # renders at the RIGHT edge, matching the right-justified
+                # event rows it continues; Toggl/sleep coverage stays left
+                # (user request 2026-07-30).
+                csty = cont[(hh, mm)]
+                csty, c_event = csty if isinstance(csty, tuple) else (csty, False)
                 out.append(("class:time", tcol))
                 out.append(_gutter(hh, mm, slot_min))
-                out.append((cont[(hh, mm)] or "class:future", "◇ │\n"))
+                glyph = "◇ │"
+                if c_event:
+                    space = max(0, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(glyph))
+                    out.append((csty or "class:future", " " * space + "│ ◇\n"))
+                else:
+                    out.append((csty or "class:future", glyph + "\n"))
             else:
                 # Genuinely empty: the time, then a faint "·" placeholder —
                 # restoring the marker the old detail-band gcal-preview grid
@@ -1966,7 +2521,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # creates ranged entries).
             end = p["start_dt"] + dt.timedelta(minutes=p["dur_min"])
             label = _gap_label(end, p["dur_min"])
-            gap_selected = STATE.event_sel == _sel_key({"kind": "empty", "start_dt": p["start_dt"]})
+            gap_key = _sel_key({"kind": "empty", "start_dt": p["start_dt"]})
+            gap_selected, gap_click, gap_marker = _row_selection(gap_key)
             if gap_selected:
                 fill_cls = "class:selected_bg"
                 time_sty = "class:selected_accent"
@@ -1977,9 +2533,10 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty, gch = _gutter(hh, mm, slot_min)
             if gap_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
-            out.append((time_sty, tcol))
-            out.append((gsty, gch))
-            out.append((fill_cls, _gap_fill(label, space) + "\n"))
+            out.extend(gap_marker)
+            out.append(_frag(time_sty, tcol, gap_click))
+            out.append(_frag(gsty, gch, gap_click))
+            out.append(_frag(fill_cls, _gap_fill(label, space) + "\n", gap_click))
             continue
         if p.get("is_free"):
             # Meeting-free future stretch: a calm green bar — the mirror of
@@ -1991,7 +2548,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1)
             out.append(("class:time", tcol))
             out.append(_gutter(hh, mm, slot_min))
-            out.append(("class:free", _gap_fill(label, space) + "\n"))
+            # Right-justified like calendar rows (user request 2026-07-28) —
+            # free time and the plan share the right column; tracked reality
+            # keeps the left. The ┄ texture leads instead of trailing.
+            ft = truncate(label, space)
+            rem = space - dwidth(ft)
+            fill = ("┄" * (rem - 1) + " ") if rem > 1 else " " * max(0, rem)
+            out.append(("class:free", fill + ft + "\n"))
             continue
         if p.get("is_running"):
             # The live task: same row shape as any entry, but a bold "▶ "
@@ -2002,9 +2565,22 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # description/project doesn't require stopping it first.
             dur = fmt_dur(p["dur_min"])
             prefix = "▶ "
-            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1)
-            running_selected = bool(p.get("entry_ids")) and STATE.event_sel == _sel_key(
-                {"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
+            # 🎙 sits right of the task name (user request 2026-08-02); a
+            # filed doc for this entry gets 📝 instead (see _has_d357_doc).
+            if _rec_active_for(p.get("raw_desc")):
+                rec_sfx = " 🎙"
+            elif _has_d357_doc(p.get("raw_desc")):
+                rec_sfx = " 📝"
+            else:
+                rec_sfx = ""
+            vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
+                             if t in VALUE_TAGS)
+            space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
+                        - (dwidth(vtags) + 1 if vtags else 0))
+            running_key = ({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]}
+                          if p.get("entry_ids") else None)
+            running_key = _sel_key(running_key) if running_key else None
+            running_selected, running_click, running_marker = _row_selection(running_key)
             if running_selected:
                 sty = (f"bold {p['style']}".strip() if p["style"] else "bold class:running") + " bg:#3a3a3a"
                 time_sty = "class:selected_accent"
@@ -2016,17 +2592,30 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             gsty, gch = _gutter(hh, mm, slot_min)
             if running_selected:
                 gsty = f"{gsty} bg:#3a3a3a"
-            out.append((time_sty, tcol))
-            out.append((gsty, gch))
-            out.append((sty, prefix + pad(truncate(p["label"], space), space)))
-            out.append((dur_sty, f" {dur}\n"))
+            out.extend(running_marker)
+            out.append(_frag(time_sty, tcol, running_click))
+            out.append(_frag(gsty, gch, running_click))
+            _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
+            out.append(_frag(sty, prefix + pad(_txt, space), running_click))
+            if vtags:
+                out.append(_frag(dur_sty, f" {vtags}", running_click))
+            out.append(_frag(dur_sty, f" {dur}\n", running_click))
             continue
         # A gcal event mixed into a non-future (current-block) card via its own
         # is_event flag still reads as "scheduled" (parenthesized duration),
         # not "tracked" (fmt_dur) — the block-level is_future flag alone can't
         # express "elapsed portion is real, remaining portion is a plan".
         dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
-        space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1)
+        # Value tags (#-1/#-2/#-3 — the ones worth points) ride the right
+        # edge just before the minutes (user request 2026-07-28).
+        vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
+                         if t in VALUE_TAGS)
+        # A filed d357 doc for this (past, non-running) entry → 📝 right of
+        # the task name, same convention as the head0/is_running rows above.
+        doc_sfx = " 📝" if (not p.get("is_event")
+                            and _has_d357_doc(p.get("raw_desc"))) else ""
+        space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1
+                    - (dwidth(vtags) + 1 if vtags else 0))
         if p.get("is_event"):
             my_key = _sel_key(p["event"])
         elif p.get("entry_ids"):
@@ -2035,7 +2624,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             my_key = _sel_key({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]})
         else:
             my_key = None  # e.g. the synthetic sleep-spillover pick — no real entry behind it
-        is_selected = my_key is not None and STATE.event_sel == my_key
+        is_selected, row_click, row_marker = _row_selection(my_key)
         if is_selected:
             # The event cursor's highlight, dtd-style: a flat background band
             # across the WHOLE row (not ANSI reverse, which just inverts
@@ -2055,17 +2644,20 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         gsty, gch = _gutter(hh, mm, slot_min)
         if is_selected:
             gsty = f"{gsty} bg:#3a3a3a"
-        out.append((time_sty, tcol))
-        out.append((gsty, gch))
-        body_txt = truncate(p["label"], space)
+        out.extend(row_marker)
+        out.append(_frag(time_sty, tcol, row_click))
+        out.append(_frag(gsty, gch, row_click))
+        body_txt = truncate(p["label"], max(1, space - dwidth(doc_sfx))) + doc_sfx
         if p.get("is_event"):
             # Calendar entries right-justified, Toggl entries left (user
             # request 2026-07-28) — the two sources read as separate columns
             # at a glance instead of interleaving mid-line.
-            out.append((sty, " " * max(0, space - dwidth(body_txt)) + body_txt))
+            out.append(_frag(sty, " " * max(0, space - dwidth(body_txt)) + body_txt, row_click))
         else:
-            out.append((sty, pad(body_txt, space)))
-        out.append((dur_sty, f" {dur}\n"))
+            out.append(_frag(sty, pad(body_txt, space), row_click))
+        if vtags:
+            out.append(_frag(dur_sty, f" {vtags}", row_click))
+        out.append(_frag(dur_sty, f" {dur}\n", row_click))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
     for _ in range(max_rows - len(rows)):
@@ -2089,13 +2681,14 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
         if mins < 1 and not is_running:
             continue
         is_sleep = (m["desc"] or "").strip() == "睡觉"
-        code = proj_code(m["project_id"])
-        label = (display_desc(m["desc"]) or "(blank)") + (f" · {code}" if code else "")
+        # Project shows via row COLOR alone (user 2026-07-29: "I use colors
+        # to show project, so you don't need to include project names").
+        label = display_desc(m["desc"]) or "(blank)"
         items.append({
             "start_dt": m["start_dt"],
             "time_str": f"{m['end_dt']:%H:%M}" if is_sleep else f"{m['start_dt']:%H:%M}",
             "label": label,
-            "style": project_style(m["project_id"]),
+            "style": project_style(toggl_project_code(m["project_id"], m["desc"])),
             "dur_min": mins,
             "is_running": is_running,
             # The real Toggl entry id(s) this display row was merged from —
@@ -2105,6 +2698,7 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
             # so an edit (rename/reproject) applies to every entry behind it,
             # not an arbitrarily-chosen first/last one.
             "entry_ids": m.get("ids", []),
+            "tags": m.get("tags") or [],
             # Raw (undecorated) description + project id — for the entry-edit
             # prefill, which must retype the actual editable value, not the
             # Haiku-shortened/code-suffixed display `label` above.
@@ -2162,18 +2756,25 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
         mins = int((end - blk_start).total_seconds() // 60)
         if mins < 1:
             continue
-        code = proj_code(e["project_id"])
-        label = (display_desc(e["desc"]) or "(blank)") + (f" · {code}" if code else "")
+        label = display_desc(e["desc"]) or "(blank)"  # color carries the project
         out.append({
             "start_dt": blk_start,
             "time_str": f"{blk_start:%H:%M}",
             "label": label,
-            "style": project_style(e["project_id"]),
+            "style": project_style(toggl_project_code(e["project_id"], e["desc"])),
             "dur_min": mins,
             "is_running": bool(e.get("running")),
+            "tags": list(e.get("tags") or []),
             "entry_ids": [e["id"]],
             "raw_desc": e["desc"],
             "project_id": e["project_id"],
+            # Excluded from header (head0) promotion in _compact_block_lines
+            # (user report 2026-08-07): this entry already got its own row in
+            # the PREVIOUS block with its full duration — repeating it as
+            # THIS block's header too is a double entry. Still rendered as a
+            # body row here (that's this function's whole point, see the
+            # docstring), just never the thing the header promotes to.
+            "is_spill": True,
         })
     return out
 
@@ -2320,6 +2921,8 @@ def _future_block_picks(blk_name, events, limit: int = 4) -> list[dict]:
             continue
         if ev.get("transparency") == "transparent" or ev.get("all_day"):
             continue
+        if _event_tracked(ev, STATE.entries):
+            continue
         mins = max(1, int((ev["end_dt"] - ev["start_dt"]).total_seconds() // 60))
         items.append({
             "start_dt": ev["start_dt"],
@@ -2347,14 +2950,122 @@ def _event_covered(ev: dict, entries: list[dict]) -> bool:
                for e in entries)
 
 
+RECLAIM_MIN_ENTRY_MIN = 60  # a covering entry this long smells like a runaway clock
+RECLAIM_SLACK_MIN = 30      # ...and must exceed the event by this much
+TRACKED_EARLY_START_MIN = 15  # running same-title entry this early = tracking the meeting
+
+
+def _norm_meeting_title(s: str) -> str:
+    """Comparison key for entry-desc vs event-title matching. Routed through
+    _safe_event_title on BOTH sides: a converted entry's desc already had its
+    commas/whitespace collapsed at creation, and calendar copies of the same
+    meeting can differ by stray double spaces (2026-07-30: running entry
+    'Huddle: XBOX Developer' vs event 'Huddle:  XBOX Developer' rendered as
+    a dup pair)."""
+    return _safe_event_title(s).lower()
+
+
+def _event_tracked(ev: dict, entries: list[dict]) -> bool:
+    """A same-titled Toggl entry is already tracking THIS event instance, so
+    its calendar row is a duplicate and stays hidden. Title match (normalized)
+    plus time proximity: the entry overlaps the event window, or is running
+    and started up to TRACKED_EARLY_START_MIN before the event starts (timers
+    are usually started a few minutes early). Scoped to the instance, never
+    the title globally — a recurring meeting later in the day still shows.
+
+    Keyed on title-match rather than looser overlap so it composes with
+    _event_reclaimable instead of fighting it: hanger entries with unrelated
+    names still surface their swallowed meetings."""
+    t = _norm_meeting_title(ev.get("title") or "")
+    if not t:
+        return False
+    pool = list(entries) + list(getattr(STATE, "entries_yday", []))
+    for e in pool:
+        if _norm_meeting_title(e.get("desc") or "") != t:
+            continue
+        if e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]:
+            return True
+        if (e.get("running")
+                and 0 <= (ev["start_dt"] - e["start_dt"]).total_seconds()
+                <= TRACKED_EARLY_START_MIN * 60):
+            return True
+    return False
+
+
+def _same_day_dup(e, pool) -> bool:
+    """The covering entry RESTARTS a description already used earlier the
+    same day (an earlier ≥1m entry with the same desc that ended before it
+    started) — the "resumed my reading timer and it ran through the
+    meeting" pattern (user request 2026-07-29: a 57m `read fy2027
+    priorities` dup fell under the 60m runaway floor and hid the CosmosDB
+    meeting). A dup is its own overrun signal: nobody names a meeting's
+    dedicated entry after an activity they already timed that morning, so
+    no size guard applies on this path."""
+    d = (e.get("desc") or "").strip().lower()
+    if not d:
+        return False
+    for o in pool:
+        if o is e or (o.get("desc") or "").strip().lower() != d:
+            continue
+        if (o["end_dt"] <= e["start_dt"]
+                and o["start_dt"].date() == e["start_dt"].date()
+                and (o["end_dt"] - o["start_dt"]).total_seconds() >= 60):
+            return True
+    return False
+
+
+def _event_reclaimable(ev, entries, now) -> bool:
+    """A COVERED ended event that should still show and be selectable —
+    the "clock I didn't turn off swallowed my meetings" case (user request
+    2026-07-29): converting it via Enter/⌥↵ carves the covering entry
+    around the meeting (did-fast's MECE trim) and grants its points.
+
+    A covering entry counts as overrun when EITHER it is >60m AND at least
+    30m longer than the event (runaway clock — a meeting deliberately
+    tracked as its own entry is about the meeting's length and stays
+    hidden), OR it duplicates an earlier same-day entry (_same_day_dup).
+    No recency or same-day cut ("I want it to span days, because often the
+    stale toggl entry is from the previous day"): yesterday-started
+    overnight clocks count as covering candidates too."""
+    ev_min = (ev["end_dt"] - ev["start_dt"]).total_seconds() / 60
+    if ev_min <= 0:
+        return False
+    pool = list(entries) + list(getattr(STATE, "entries_yday", []))
+    for e in pool:
+        if not (e["start_dt"] < ev["end_dt"] and e["end_dt"] > ev["start_dt"]):
+            continue
+        # The suspect must cover ≥80% of the meeting BY ITSELF. Granular,
+        # deliberate tracking (several distinct entries across the window)
+        # never produces a single dominating suspect, so good Toggl data
+        # stays the default and the event stays hidden (user 2026-07-29:
+        # "if there are good toggl entries, then toggl should be the
+        # default, it's only hanger time entries that I want to suppress" —
+        # a 13-minute 冥想 dup brushing the tail of a 45m PT session was
+        # resurfacing the whole event).
+        overlap = ((min(e["end_dt"], ev["end_dt"])
+                    - max(e["start_dt"], ev["start_dt"])).total_seconds() / 60)
+        if overlap < 0.8 * ev_min:
+            continue
+        ent_min = (e["end_dt"] - e["start_dt"]).total_seconds() / 60
+        if ent_min > RECLAIM_MIN_ENTRY_MIN and ent_min >= ev_min + RECLAIM_SLACK_MIN:
+            return True
+        if _same_day_dup(e, pool):
+            return True
+    return False
+
+
 def _past_event_picks(blk_name, events, entries, now, limit: int = 4) -> list[dict]:
-    """Ended gcal events in this block with NO overlapping Toggl entry -- the
-    "I had three meetings but Toggl shows nothing/one giant blob" case (user
-    report 2026-07-17). Shares _future_block_picks' item shape (is_event=True,
-    raw event carried) so the existing event-cursor/Enter-conversion plumbing
-    treats an uncovered past meeting identically to an upcoming one; only the
-    Enter handler's did-fast-vs-tg-fast branch cares about past vs. future."""
-    ended = [ev for ev in events if ev["end_dt"] <= now and not _event_covered(ev, entries)]
+    """Ended gcal events in this block that are either uncovered by any
+    Toggl entry (the "Toggl shows nothing/one giant blob" case, 2026-07-17)
+    or covered only by a runaway long entry (_event_reclaimable,
+    2026-07-29). Shares _future_block_picks' item shape (is_event=True,
+    raw event carried) so the existing event-cursor/Enter-conversion
+    plumbing treats an uncovered past meeting identically to an upcoming
+    one; only the Enter handler's did-fast-vs-tg-fast branch cares about
+    past vs. future."""
+    ended = [ev for ev in events if ev["end_dt"] <= now
+             and (not _event_covered(ev, entries)
+                  or _event_reclaimable(ev, entries, now))]
     return _future_block_picks(blk_name, ended, limit=limit)
 
 
@@ -2383,7 +3094,7 @@ def _block_gcal_cont(blk_sh, ref, slot_min: int = 30) -> dict[tuple[int, int], s
             if ev.get("transparency") == "transparent" or ev.get("all_day"):
                 continue
             if ev["start_dt"] <= t < ev["end_dt"]:
-                out[(hh, mm)] = project_style(gcal_project_code(ev))
+                out[(hh, mm)] = (project_style(gcal_project_code(ev)), True)
                 break
     return out
 
@@ -2482,9 +3193,12 @@ def render_morning() -> list[tuple[str, str]]:
         if merged and merged[-1]["desc"] == e["desc"]:
             merged[-1]["end_dt"] = end
             merged[-1]["ids"].append(e["id"])
+            merged[-1]["tags"] = sorted(set(merged[-1].get("tags") or [])
+                                        | set(e.get("tags") or []))
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end,
                            "desc": e["desc"], "project_id": e["project_id"],
+                           "tags": list(e.get("tags") or []),
                            "ids": [e["id"]]})
 
     bo_emojis = _read_block_emojis()
@@ -2856,24 +3570,41 @@ def render_evening() -> list[tuple[str, str]]:
             + _future_free_gaps(sh, eh, view_now()),
             key=lambda p: p["start_dt"])
         cont = _block_gcal_cont(sh, cutoff)
+        # track_selection: evening blocks were the one stretch of the day the
+        # event cursor could not reach (render_all's reset + EXTEND contract
+        # covers morning and the focus band) — Tab stopped dead after the
+        # next block (user report 2026-07-30: "I can't select anything after
+        # 申"), which also put late-day meetings out of ⌥↵/^X's reach.
         out += _compact_block_lines(name, sh, picks, 0, bo_emojis.get(name, ""),
-                                    cont=cont, is_future=True)
+                                    cont=cont, is_future=True,
+                                    track_selection=True)
     return out
 
 
 def render_current_bottom() -> list[tuple[str, str]]:
     """Mirror of the running timer, pinned above the footer so it's always visible.
     The ticking elapsed timer (tenths heartbeat) leads on the LEFT — where the eye
-    looks for it — then the desc; the wall clock is right-justified."""
+    looks for it — then the desc; the wall clock is right-justified.
+
+    Selectable (user request 2026-08-08): render_all() appends this row's
+    {"kind": "current"} into STATE.visible_events whenever a timer is
+    running, so Tab/click select it like any other row, ↵ stops it, ⌥↵ runs
+    /done (stop + grant points). Both fragments carry the same click handler
+    — _current_row_click, not the plain _row_click — so a swipe-right
+    gesture anywhere on the line (MOUSE_DOWN here, MOUSE_UP far enough to
+    the right) runs the /done action directly instead of just selecting."""
     now = dt.datetime.now(TZ)
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
     if not cur:
         return [("class:idle", " (no timer)"),
                 ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
+    key = _sel_key({"kind": "current"})
+    is_sel = STATE.event_sel == key
+    click = _current_row_click(key)  # swipe-aware handler, not _row_click's plain click-to-select
     desc = display_desc(cur.get("description") or "") or "(no description)"
     pid = cur.get("project_id")
-    code = proj_code(pid)
+    code = toggl_project_code(pid, cur.get("description"))
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
         elapsed = (now - st).total_seconds()
@@ -2882,14 +3613,20 @@ def render_current_bottom() -> list[tuple[str, str]]:
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
     dur = f"{m}m{s:02d}.{frac}s"
-    left = f" ▶ {dur}  {desc}"
+    rec_sfx = " 🎙" if _rec_active_for(cur.get("description")) else ""
+    left = f" ▶ {dur}  {desc}{rec_sfx}"
     if code:
         left += f" · {code}"
     pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))
-    style = project_style(pid) or "class:running"
+    style = project_style(code) or "class:running"
+    if is_sel:
+        style = f"{style} bg:#3a3a3a".strip()
+        time_style = "class:selected_accent"
+    else:
+        time_style = "class:time"
     return [
-        (f"bold {style}".strip(), left),
-        ("class:time", f"{'':>{pad}}{clock}\n"),
+        _frag(f"bold {style}".strip(), left, click),
+        _frag(time_style, f"{'':>{pad}}{clock}\n", click),
     ]
 
 
@@ -2899,7 +3636,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · esc cancel · -/= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -2940,9 +3677,12 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
             merged[-1]["end_dt"] = end
             merged[-1]["running"] = merged[-1].get("running") or e.get("running")
             merged[-1]["ids"].append(e["id"])
+            merged[-1]["tags"] = sorted(set(merged[-1].get("tags") or [])
+                                        | set(e.get("tags") or []))
         else:
             merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"],
                            "project_id": e["project_id"], "running": e.get("running", False),
+                           "tags": list(e.get("tags") or []),
                            "ids": [e["id"]]})
     picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
     # A still-relevant entry that STARTED in the previous block (e.g. a run
@@ -3040,6 +3780,21 @@ def render_all() -> list[tuple[str, str]]:
     parts.append(("class:rule", "─" * WIDTH_HINT + "\n"))
     parts += render_focus_compact()
     parts += render_evening()
+    if STATE.current:
+        # The pinned bottom-bar mirror of the running timer (render_current_
+        # bottom) is a separate Window from main_window, so it can't reset or
+        # populate visible_events itself without an implicit ordering
+        # dependency on which window paints first — appended here instead,
+        # in the one function that already owns the reset (user request
+        # 2026-08-08: make that row selectable — ↵ stops it, ⌥↵ runs /done).
+        # raw_desc mirrors the shape every other selectable row carries, so
+        # the ⌥↵ handler's existing STATE.recording dedup check (which reads
+        # item.get("raw_desc")) recognizes this row when it IS the entry
+        # being recorded, instead of double-firing did-fast.
+        STATE.visible_events.append({
+            "kind": "current",
+            "raw_desc": STATE.current.get("description") or "",
+        })
     return parts
 
 
@@ -3052,13 +3807,25 @@ def render_all() -> list[tuple[str, str]]:
 # ─── Command execution ─────────────────────────────────────────────────────
 
 def run_tg_fast(text: str) -> str:
+    """A single tg-fast.py call can make several Toggl API requests in
+    sequence (e.g. a range create: trim_range's get_entries + the create
+    itself; a backdate: current + stop + trim + start). Every request goes
+    through toggl_server/throttle.py's shared cross-process leaky bucket,
+    which caps EACH request's wait at its own MAX_WAIT (8s default) — so two
+    or more requests back to back can legitimately take 15s+ under load or a
+    post-429 cooldown, with no bug in tg-fast.py itself. 15s was too tight
+    and killed the subprocess mid-transaction (2026-08-07: a comma-delimited
+    range create timed out and errored, same failure mode did-fast.py's own
+    45s timeout already exists to avoid — see run_did_fast)."""
     try:
         proc = subprocess.run(
             ["python3", TG_FAST, text],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=30,
         )
         out = (proc.stdout or proc.stderr or "").strip().splitlines()
         return out[-1] if out else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "err: tg-fast timed out"
     except Exception as e:
         return f"err: {e}"
 
@@ -3170,6 +3937,15 @@ def _boot_grace_active(window: float = 2.0) -> bool:
     return time.monotonic() - STATE.boot_time < window
 
 
+def _safe_event_title(title: str) -> str:
+    """Conversion commands ride through tg-fast/did-fast, which SPLIT
+    multi-item input on [,;，；] — a comma inside an event title
+    ("CosmosDB Deprecation, Part 3") therefore became TWO items and created
+    a Toggl entry literally named "Part" (2026-07-29). Separators collapse
+    to spaces before the title enters a command string."""
+    return re.sub(r"\s+", " ", re.sub(r"[,;，；]", " ", title or "")).strip()
+
+
 def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
     """The /tg-style command string that converts a calendar event into a
     Toggl entry: backdated to the event's own start if it already began
@@ -3177,7 +3953,7 @@ def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
     meeting), otherwise a plain start (it hasn't happened yet). Reuses
     tg-fast.py's own self-contained backdated-start handling (stop-current +
     trim-overlap + start) — nothing about that is reimplemented here."""
-    title = ev.get("title") or ""
+    title = _safe_event_title(ev.get("title"))
     code = gcal_project_code(ev)
     suffix = f" @{code}" if code else ""
     if ev["start_dt"] <= now:
@@ -3195,14 +3971,359 @@ def _event_to_did_command(ev: dict) -> str:
     backfill). Never used for a still-in-progress/future event — the enter
     handler only calls this when the event has actually ended (ev["end_dt"]
     <= now); an unfinished meeting has no real end time to encode."""
-    title = ev.get("title") or ""
+    title = _safe_event_title(ev.get("title"))
     code = gcal_project_code(ev)
     suffix = f" @{code}" if code else ""
     return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}"
 
 
+def _enqueue_work(app, label: str, job, key: str | None = None) -> bool:
+    """Add a did/tg job to the serial work queue (user request 2026-07-30:
+    enqueue instead of the old "still converting the last one…" rejection).
+
+    Jobs are async callables, run strictly one at a time in FIFO order by a
+    single consumer — the one-at-a-time discipline the old gate enforced
+    (concurrent did-fast runs race ix-osa writes on the same sheet and can
+    double-grant points) is kept; only the rejection is gone. `key` dedupes:
+    an identical command already queued or running is refused, since running
+    it twice is exactly the double-grant the old gate existed to stop."""
+    key = key or label
+    if key in STATE.queued_cmds:
+        flash(f"already queued: {label}", 3.0)
+        return False
+    if STATE.work_q is None:
+        STATE.work_q = asyncio.Queue()
+        app.create_background_task(_work_consumer(app))
+    STATE.queued_cmds.add(key)
+    STATE.work_q.put_nowait((label, key, job))
+    waiting = STATE.work_q.qsize() - (0 if STATE.conversion_in_flight else 1)
+    if waiting > 0:
+        flash(f"queued (#{waiting + 1}): {label}", 3.0)
+    else:
+        # Idle queue: the job starts on the next loop tick — flash the command
+        # NOW so the press feels immediate (the job re-flashes on start, which
+        # is what a QUEUED job's turn looks like).
+        flash(f"$ {label}")
+    return True
+
+
+async def _work_consumer(app):
+    """Single consumer for STATE.work_q — the serialization point for every
+    did/tg job janus fires. Lives as one background task for the app's whole
+    lifetime (created lazily by the first _enqueue_work)."""
+    while True:
+        label, key, job = await STATE.work_q.get()
+        STATE.conversion_in_flight = True
+        try:
+            await job()
+        except Exception as e:  # noqa: BLE001 — a failed job must not kill the consumer
+            flash(f"{label}: {e}", 8.0)
+        finally:
+            STATE.conversion_in_flight = False
+            STATE.queued_cmds.discard(key)
+            STATE.work_q.task_done()
+            app.invalidate()
+
+
+# ── d357 meeting recording (user request 2026-08-02: "hitting 'enter' on a
+# meeting will also kick off a d357 recording session ... opt enter, or enter
+# on another meeting, means the original one is over: close the meeting,
+# finalize the notes, and record the points") ───────────────────────────────
+
+D357_QUICK = str(Path.home() / "i446-monorepo/tools/meet/d357_quick.py")
+D357_STATE = Path.home() / ".local/state/jm/d357-state.json"
+
+
+def _load_recording_state() -> None:
+    """Boot restore: if a janus-started d357 recording is still live (pid
+    alive, started today), re-adopt it so a janus restart doesn't orphan the
+    🎙 indicator and the finalize-on-next-meeting flow."""
+    try:
+        st = json.loads(D357_STATE.read_text())
+        pid = st.get("pid")
+        if not pid:
+            return
+        os.kill(int(pid), 0)
+        started = dt.datetime.fromisoformat(st["started"])
+        if started.date() != dt.date.today():
+            return
+        STATE.recording = {"desc": st.get("name") or "meeting",
+                           "start_dt": started.astimezone(TZ) if started.tzinfo
+                           else started.replace(tzinfo=TZ)}
+    except Exception:
+        pass
+
+
+def _rec_active_for(desc: str | None) -> bool:
+    return bool(STATE.recording and desc
+                and desc.strip().lower() == STATE.recording["desc"].strip().lower())
+
+
+# ── d357 "already filed" indicator (user request 2026-08-02: an emoji for
+# Toggl entries that already have a filed d357 doc, distinct from 🎙's
+# "recording right now") ────────────────────────────────────────────────────
+# Real filed docs live in week subfolders (vault/d357/<M.W>/YYYY.MM.DD-<slug>.md),
+# not flat under vault/d357/ — build-order-daemon.py's own D357_DIR.glob is
+# flat and (confirmed 2026-08-02) matches zero real files there; this globs
+# recursively instead. Time-gated (not mtime-gated): filing into an EXISTING
+# week subfolder doesn't bump vault/d357/'s own mtime, so an mtime cache would
+# never invalidate in the common case. A doc lands on disk via a manual/Claude
+# Code-driven flow well after the janus recording session ends, so this can't
+# just read STATE.recording — it has to check the filesystem.
+D357_ROOT = Path.home() / "vault/d357"
+_D357_DOC_CACHE_TTL = 20.0  # seconds
+_d357_doc_cache: dict = {"checked": 0.0, "date": None, "tokens": []}
+
+
+def _slug_tokens(stem: str) -> list[str]:
+    """Meaningful tokens from a d357 file stem, minus its YYYY.MM.DD- prefix.
+    Mirrors build-order-daemon.py's _slug_tokens exactly (same matching
+    semantics on both ends of the d357 pipeline)."""
+    name = re.sub(r'^\d{4}\.\d{2}\.\d{2}-', '', stem)
+    return [t.lower() for t in name.split('-') if len(t) >= 3 and not t.isdigit()]
+
+
+def _load_d357_tokens_for_today() -> list[list[str]]:
+    today = dt.date.today()
+    now = time.monotonic()
+    if (_d357_doc_cache["date"] != today
+            or now - _d357_doc_cache["checked"] > _D357_DOC_CACHE_TTL):
+        prefix = today.strftime("%Y.%m.%d")
+        toks = []
+        try:
+            for path in D357_ROOT.glob(f"**/{prefix}-*.md"):
+                toks.append(_slug_tokens(path.stem))
+        except OSError:
+            pass
+        _d357_doc_cache["tokens"] = toks
+        _d357_doc_cache["date"] = today
+        _d357_doc_cache["checked"] = now
+    return _d357_doc_cache["tokens"]
+
+
+def _has_d357_doc(raw_desc: str | None) -> bool:
+    """True if a d357 doc has been filed today whose slug tokens
+    substring-match raw_desc — same title-token-in-description heuristic as
+    build-order-daemon.py's _try_name_fallback."""
+    if not raw_desc:
+        return False
+    desc = raw_desc.strip().lower()
+    return any(any(t in desc for t in toks) for toks in _load_d357_tokens_for_today())
+
+
+def _spawn_d357_stop() -> None:
+    """Fire-and-forget stop: d357_quick sends one C-c and then babysits the
+    (up to 5 min) Whisper + filing wait in its own detached process — the
+    serial work queue must never block on transcription."""
+    try:
+        subprocess.Popen(["python3", D357_QUICK, "stop"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        flash(f"d357 stop failed to launch: {e}", 8.0)
+
+
+def _finalize_recording_cmd(now: dt.datetime) -> str | None:
+    """The did-fast command that closes the recorded meeting: completed range
+    from the meeting's start to now, project from its running entry. The MECE
+    trim inside did-fast carves/stops the still-running timer itself."""
+    rec = STATE.recording
+    if not rec:
+        return None
+    desc = rec["desc"]
+    start = rec["start_dt"]
+    ent = next((e for e in STATE.entries
+                if e.get("running") and (e.get("desc") or "").strip().lower() == desc.strip().lower()),
+               None)
+    if ent:
+        start = ent["start_dt"]
+    code = proj_code(ent.get("project_id")) if ent else ""
+    cmd = f"{desc} {start:%H%M}-{now:%H%M}"
+    if code:
+        cmd += f" @{code}"
+    return cmd
+
+
+async def _finalize_recording(app) -> None:
+    """Stop the d357 session (detached) and grant the meeting its points via
+    did-fast. Runs INSIDE a queued job — callers must already hold the queue."""
+    rec = STATE.recording
+    if not rec:
+        return
+    now = dt.datetime.now(TZ)
+    did_cmd = _finalize_recording_cmd(now)
+    STATE.recording = None
+    _spawn_d357_stop()
+    flash(f"⏹ {rec['desc']} — finalizing notes, recording points…", 5.0)
+    app.invalidate()
+    if did_cmd:
+        res = await asyncio.to_thread(run_did_fast, did_cmd)
+        flash(res, 8.0)
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+    app.invalidate()
+
+
+def _run_current_timer_done(app) -> None:
+    """The /done action for the running timer: stop it AND grant its points
+    (close the matching Todoist task) in one shot — the ⌥↵ and swipe-right
+    gestures on the pinned current-timer row both call this (user request
+    2026-08-08). Mirrors _finalize_recording_cmd's own trick: a completed
+    HHMM-nowHHMM did-fast command's MECE trim carves/stops the still-running
+    entry itself, so there's no separate "stop" call to sequence first.
+
+    If a d357 recording IS live for this exact entry, defers to
+    _finalize_recording instead (same finalize-notes-then-grant flow the
+    recording gets everywhere else) rather than racing it with a second,
+    plainer did-fast call for the same minutes."""
+    cur = STATE.current
+    if not cur:
+        return
+    raw_desc = cur.get("description") or ""
+    if (STATE.recording is not None
+            and STATE.recording["desc"].strip().lower() == raw_desc.strip().lower()):
+        rec_desc = STATE.recording["desc"].strip().lower()
+        _enqueue_work(app, f"finalize {STATE.recording['desc']}",
+                      lambda: _finalize_recording(app), key=f"finalize:{rec_desc}")
+        return
+    try:
+        start = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
+    except Exception:
+        flash("current timer: bad start time", 4.0)
+        return
+    now = dt.datetime.now(TZ)
+    if (now - start).total_seconds() < 60:
+        flash("timer just started — give it a minute before /done", 3.0)
+        return
+    code = toggl_project_code(cur.get("project_id"), cur.get("description"))
+    cmd = f"{raw_desc} {start:%H%M}-{now:%H%M}"
+    if code:
+        cmd += f" @{code}"
+    STATE.event_sel = None
+
+    async def _run():
+        flash(f"$ did {cmd}  (stop + done)")
+        app.invalidate()
+        res = await asyncio.to_thread(run_did_fast, cmd)
+        flash(res, 8.0)
+        app.invalidate()
+        await asyncio.to_thread(fetch_current)
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+        app.invalidate()
+
+    _enqueue_work(app, f"did {cmd}", _run, key=cmd)
+
+
+def _convert_selected_event(ev: dict, app) -> None:
+    """Convert a selected calendar event into Toggl — an ENDED event runs
+    did-fast (completed entry + its points in one shot, carving any runaway
+    covering entry via the MECE trim); a not-yet-ended one starts a tg-fast
+    timer backdated to the event's start AND kicks off a d357 recording
+    session (user request 2026-08-02), finalizing any previous one first.
+    Shared by plain Enter and ⌥↵ (user request 2026-07-29)."""
+    now = view_now()
+    is_past = ev["end_dt"] <= now
+    cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
+    if is_past and STATE.day_offset != 0:
+        # Viewing a past day: did-fast's trailing M/D token targets the
+        # entry + points at the event's own day, not today.
+        cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
+    STATE.event_sel = None
+    label = f"{'did' if is_past else 'tg'} {cmd}"
+    title = _safe_event_title(ev.get("title"))
+    ev_minutes = max(0, int((ev["end_dt"] - dt.datetime.now(TZ)).total_seconds() // 60))
+
+    async def _run_event_and_refresh():
+        flash(f"$ {label}")
+        app.invalidate()
+        if not is_past:
+            # Enter on a NEW meeting while one is recording = the old one is
+            # over: finalize it (notes + points) before starting the new one.
+            await _finalize_recording(app)
+        runner = run_did_fast if is_past else run_tg_fast
+        res = await asyncio.to_thread(runner, cmd)
+        flash(res, 6.0)
+        app.invalidate()
+        if is_past:
+            # did-fast's own Excel write + Toggl create has already
+            # landed by the time the subprocess returns — no need for
+            # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
+            # propagation lag, just one forced re-read of both.
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_points)
+            app.invalidate()
+        else:
+            # Kick off the recording; the wrapper reports its audio verdict.
+            args = ["python3", D357_QUICK, "start", title]
+            if ev_minutes:
+                args += ["--minutes", str(ev_minutes + 5)]
+            r = await asyncio.to_thread(
+                subprocess.run, args, capture_output=True, text=True, timeout=60)
+            out = (r.stdout or "").strip().splitlines()
+            line = out[-1] if out else ""
+            if line.startswith("REC|"):
+                STATE.recording = {"desc": title, "start_dt": dt.datetime.now(TZ)}
+                flash(f"🎙 recording: {title} — {line.split('|', 2)[2]}", 8.0)
+            else:
+                flash(f"⚠ d357 did NOT start: {line or 'no output'}", 10.0)
+            app.invalidate()
+            polls = (0.4, 0.8, 1.5)
+            for i, delay in enumerate(polls):
+                await asyncio.sleep(delay)
+                await asyncio.to_thread(fetch_current)
+                if i == len(polls) - 1:
+                    await asyncio.to_thread(fetch_today, True)
+                app.invalidate()
+
+    _enqueue_work(app, label, _run_event_and_refresh, key=cmd)
+
+
 @kb.add("enter")
 def _(event):
+    if STATE.split_target is not None:
+        # Same chokepoint discipline as edit_target below: consumed first,
+        # empty submission = cancel. The input line holds the HHMM split
+        # point (^P prefills the midpoint — editing digits is the whole UX).
+        sp = STATE.split_target
+        STATE.split_target = None
+        text = input_buffer.text.strip()
+        input_buffer.reset()
+        m = re.fullmatch(r"(\d{2})(\d{2})", text) if text else None
+        if not m:
+            flash("split cancelled" if not text else f"not an HHMM time: {text}", 4.0)
+            return
+        cut = _hhmm_to_dt(sp["date"], text)
+        if not (sp["start_dt"] < cut < sp["end_dt"]):
+            flash(f"split point must be inside {sp['start_dt']:%H%M}-{sp['end_dt']:%H%M}", 5.0)
+            return
+        flash(f"$ split {sp['desc']} at {cut:%H:%M}")
+
+        async def _split_and_refresh():
+            try:
+                # First half: shorten the original in place (id, tags, project
+                # untouched). Second half: a fresh identical entry from the
+                # cut to the original end.
+                await asyncio.to_thread(
+                    toggl_api.update_entry, sp["id"],
+                    stop=cut.isoformat(),
+                    duration=int((cut - sp["start_dt"]).total_seconds()))
+                await asyncio.to_thread(
+                    toggl_api.create_entry, sp["desc"], cut.isoformat(),
+                    sp["end_dt"].isoformat(),
+                    int((sp["end_dt"] - cut).total_seconds()),
+                    sp["project_id"], sp["tags"] or None)
+                flash(f"split: {sp['desc']} → {sp['start_dt']:%H:%M}-{cut:%H:%M} + "
+                      f"{cut:%H:%M}-{sp['end_dt']:%H:%M}", 6.0)
+            except Exception as e:  # noqa: BLE001 — surface, never crash the app
+                flash(f"split failed: {e}", 6.0)
+            event.app.invalidate()
+            await asyncio.to_thread(fetch_today, True)
+            event.app.invalidate()
+
+        event.app.create_background_task(_split_and_refresh())
+        return
+
     if STATE.edit_target is not None:
         # Consumed FIRST, unconditionally, before anything else about this
         # keypress is inspected — the chokepoint that stops a stale edit
@@ -3244,7 +4365,7 @@ def _(event):
             existing = list((ent or {}).get("tags") or [])
             fields["tags"] = sorted(set(existing) | set(tags))
             new_value_tags = [t for t in tags
-                              if t in TAG_POINTS and t not in existing]
+                              if t in VALUE_TAGS and t not in existing]
         if time_range:
             start_dt = _hhmm_to_dt(edit_date, time_range[0])
             end_dt = _hhmm_to_dt(edit_date, time_range[1])
@@ -3291,17 +4412,17 @@ def _(event):
                         if ent and not ent.get("running"):
                             mins = int((ent["end_dt"] - ent["start_dt"])
                                        .total_seconds() // 60)
-                            pts = await asyncio.to_thread(
+                            credited = await asyncio.to_thread(
                                 _apply_tag_credit, tag, mins,
                                 ent["start_dt"].date())
-                            if pts:
+                            if credited:
                                 st["credited"].append(key)
-                                flash(f"#{tag} +{pts:g}分 媒", 5.0)
+                                flash(f"#{tag} +{credited}m → 0n", 5.0)
                         else:
                             st["pending"].append(
                                 {"key": key, "id": ids[0], "tag": tag})
-                            flash(f"#{tag} queued — 媒分 credit when the "
-                                  "timer stops", 5.0)
+                            flash(f"#{tag} queued — minutes credit when "
+                                  "the timer stops", 5.0)
                     _tag_credit_save(st)
                 else:
                     flash("updated", 4.0)
@@ -3332,6 +4453,30 @@ def _(event):
         if not item:
             return
         kind = item.get("kind") if isinstance(item, dict) else None
+        if kind == "current":
+            # ↵ on the pinned current-timer row = stop, plain (same action
+            # as ^S) — ⌥↵/swipe-right on the SAME row runs /done instead
+            # (user request 2026-08-08). Deliberately independent of the
+            # main pane's own selectable running-entry row just above (kind
+            # == "entry", below), which keeps its existing edit-on-Enter
+            # behavior untouched.
+            STATE.event_sel = None
+            flash("stopping…")
+
+            async def _stop_current():
+                res = await asyncio.to_thread(run_tg_fast, "stop")
+                flash(res)
+                event.app.invalidate()
+                polls = (0.4, 0.8, 1.5)
+                for i, delay in enumerate(polls):
+                    await asyncio.sleep(delay)
+                    await asyncio.to_thread(fetch_current)
+                    if i == len(polls) - 1:
+                        await asyncio.to_thread(fetch_today, True)
+                    event.app.invalidate()
+
+            event.app.create_background_task(_stop_current())
+            return
         if kind == "entry":
             # Arm the edit target and hand the user editable text instead of
             # acting immediately — "loads the description into the input
@@ -3350,79 +4495,57 @@ def _(event):
             input_buffer.cursor_position = len(input_buffer.text)
             return
         # Anything else is a raw gcal event dict (kind absent) — the
-        # existing convert-to-Toggl-entry path, unchanged.
-        ev = item
-        if STATE.conversion_in_flight:
-            # did-fast is a ~10-45s Excel write; a double-Enter mid-flight
-            # would double-create the entry AND double-grant points, plus
-            # race two ix-osa writes against the same sheet. tg-fast's plain
-            # timer-start doesn't need this guard (idempotent enough), but
-            # this path does.
-            flash("still converting the last one…", 3.0)
-            return
-        now = view_now()
-        is_past = ev["end_dt"] <= now
-        cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
-        if is_past and STATE.day_offset != 0:
-            # Viewing a past day: did-fast's trailing M/D token targets the
-            # entry + points at the event's own day, not today.
-            cmd += f" {ev['start_dt'].month}/{ev['start_dt'].day}"
-        STATE.event_sel = None
-        flash(f"$ {'did' if is_past else 'tg'} {cmd}")
-
-        async def _run_event_and_refresh():
-            STATE.conversion_in_flight = True
-            try:
-                runner = run_did_fast if is_past else run_tg_fast
-                res = await asyncio.to_thread(runner, cmd)
-                flash(res, 6.0)
-                event.app.invalidate()
-                if is_past:
-                    # did-fast's own Excel write + Toggl create has already
-                    # landed by the time the subprocess returns — no need for
-                    # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
-                    # propagation lag, just one forced re-read of both.
-                    await asyncio.to_thread(fetch_today, True)
-                    await asyncio.to_thread(fetch_points)
-                    event.app.invalidate()
-                else:
-                    polls = (0.4, 0.8, 1.5)
-                    for i, delay in enumerate(polls):
-                        await asyncio.sleep(delay)
-                        await asyncio.to_thread(fetch_current)
-                        if i == len(polls) - 1:
-                            await asyncio.to_thread(fetch_today, True)
-                        event.app.invalidate()
-            finally:
-                STATE.conversion_in_flight = False
-
-        event.app.create_background_task(_run_event_and_refresh())
+        # convert-to-Toggl-entry path, shared with ⌥↵ (2026-07-29).
+        _convert_selected_event(item, event.app)
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
         return
-    if STATE.day_offset != 0:
-        # Viewing another day: typed commands apply to THAT day (user request
-        # 2026-07-27 — "tg calls go to yesterday if I'm viewing yesterday").
-        # Only completed HHMM-HHMM ranges can land on a past day; live-timer
-        # actions (stop/current/del) still act on now, and anything else
-        # would silently start a timer TODAY, so warn instead of running.
-        viewed = view_now().date()
-        low = text.lower()
-        live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
-        has_range = re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
-                              re.sub(r"\s@\S+\s*$", "", text))
-        if has_range:
-            text = f"{text} --date {viewed.isoformat()}"
-        elif not live_ok:
-            flash(f"viewing {viewed:%-m/%-d} — use '<desc> HHMM-HHMM' to log that day "
-                  "(start/stop act on today)", 6.0)
-            return
-    flash(f"$ tg {text}")
+
+    # Comma splits multiple /tg calls (2026-08-05 user request) — mirrors
+    # /did's own comma/semicolon split convention. Each part gets the SAME
+    # day-offset resolution (viewed-day --date append / live-command
+    # rejection) a lone command would; a rejected part is flashed and
+    # dropped, it doesn't abort the rest. Parts run SEQUENTIALLY (one
+    # tg-fast.py call at a time, not concurrently) — the same serial-not-
+    # parallel choice made everywhere else timer commands batch, so this
+    # doesn't reintroduce the class of race this session already spent real
+    # effort closing elsewhere (d357/dtd/-1n ritual stamps): concurrent
+    # Toggl calls racing to trim/split each other's entries.
+    parts = [p.strip() for p in text.split(",") if p.strip()] or [text]
+
+    def _resolve_part(part: str) -> str | None:
+        if STATE.day_offset != 0:
+            # Viewing another day: typed commands apply to THAT day (user
+            # request 2026-07-27 — "tg calls go to yesterday if I'm viewing
+            # yesterday"). Only completed HHMM-HHMM ranges can land on a
+            # past day; live-timer actions (stop/current/del) still act on
+            # now, and anything else would silently start a timer TODAY, so
+            # warn instead of running.
+            viewed = view_now().date()
+            low = part.lower()
+            live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
+            has_range = re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
+                                  re.sub(r"\s@\S+\s*$", "", part))
+            if has_range:
+                part = f"{part} --date {viewed.isoformat()}"
+            elif not live_ok:
+                flash(f"viewing {viewed:%-m/%-d} — use '<desc> HHMM-HHMM' to log that day "
+                      "(start/stop act on today)", 6.0)
+                return None
+        return part
+
+    resolved = [r for r in (_resolve_part(p) for p in parts) if r is not None]
+    if not resolved:
+        return
+    flash(f"$ tg {' | '.join(resolved)}" if len(resolved) > 1 else f"$ tg {resolved[0]}")
 
     async def _run_and_refresh():
-        res = await asyncio.to_thread(run_tg_fast, text)
-        flash(res, 6.0)
+        results = []
+        for cmd in resolved:
+            results.append(await asyncio.to_thread(run_tg_fast, cmd))
+            event.app.invalidate()
+        flash(" | ".join(results) if len(results) > 1 else results[0], 6.0)
         event.app.invalidate()
         # Toggl /current has propagation lag; poll it a few times. The entries
         # list only needs ONE (forced) read — fetch it on the last poll so a
@@ -3477,6 +4600,40 @@ def _(event):
     record to check, so it runs unconditionally (that's the backfill case)."""
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if STATE.recording is not None:
+        # ⌥↵ while a d357 recording is live = "the meeting is over" (user
+        # request 2026-08-02): stop the recording, finalize the notes, and
+        # record the meeting's points. If the selection is the recorded
+        # meeting itself (its entry or its event) — or nothing is selected —
+        # that IS the whole gesture; otherwise fall through and also handle
+        # the selected item normally (both run serially on the work queue).
+        rec_desc = STATE.recording["desc"].strip().lower()
+        sel_desc = ""
+        if isinstance(item, dict):
+            sel_desc = (item.get("raw_desc") or item.get("title") or "").strip().lower()
+        _enqueue_work(event.app, f"finalize {STATE.recording['desc']}",
+                      lambda: _finalize_recording(event.app),
+                      key=f"finalize:{rec_desc}")
+        if item is None or sel_desc == rec_desc:
+            return
+    if isinstance(item, dict) and item.get("kind") is None and item.get("end_dt"):
+        # A raw calendar event: ⌥↵ = "did this meeting" — same conversion
+        # as plain Enter (an ended event did-fasts: Toggl entry + points in
+        # one shot; a live one starts a backdated timer). One gesture for
+        # "give me credit" whether the row is an entry or a meeting
+        # (user request 2026-07-29).
+        _convert_selected_event(item, event.app)
+        return
+    if isinstance(item, dict) and item.get("kind") == "current":
+        # ⌥↵ on the pinned current-timer row = /done: stop it AND grant its
+        # points in one shot (user request 2026-08-08). The STATE.recording
+        # branch above already handled (and returned for) the case where
+        # this exact entry IS the one being recorded — reaching here means
+        # either no recording is live, or it's for some other entry, so
+        # _run_current_timer_done's own recording check is just a second,
+        # harmless line of defense, not the primary path.
+        _run_current_timer_done(event.app)
+        return
     if not (isinstance(item, dict) and item.get("kind") == "entry"):
         flash("opt+enter: select a tracked entry first", 3.0)
         return
@@ -3492,9 +4649,6 @@ def _(event):
         if recorded:
             flash(f"already recorded today: {desc} ({pts}分) — not re-running", 6.0)
             return
-    if STATE.conversion_in_flight:
-        flash("still converting the last one…", 3.0)
-        return
     start = item["start_dt"]
     end = start + dt.timedelta(minutes=item["dur_min"])
     code = proj_code(item.get("project_id"))
@@ -3515,21 +4669,132 @@ def _(event):
     for _t in _habit_tags(entry_tags):
         cmd += f", {_t} {item['dur_min']}{date_sfx}"
     STATE.event_sel = None
-    flash(f"$ did {cmd}")
 
     async def _run_did_and_refresh():
-        STATE.conversion_in_flight = True
-        try:
-            res = await asyncio.to_thread(run_did_fast, cmd)
-            flash(res, 8.0)
-            event.app.invalidate()
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
-            event.app.invalidate()
-        finally:
-            STATE.conversion_in_flight = False
+        flash(f"$ did {cmd}")
+        event.app.invalidate()
+        res = await asyncio.to_thread(run_did_fast, cmd)
+        flash(res, 8.0)
+        event.app.invalidate()
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+        event.app.invalidate()
 
-    event.app.create_background_task(_run_did_and_refresh())
+    _enqueue_work(event.app, f"did {cmd}", _run_did_and_refresh, key=cmd)
+
+
+@kb.add("c-p")
+def _(event):
+    """Split the selected tracked entry in two at a chosen point — ^P to
+    match dtd's split binding (user request 2026-07-28). Arms split_target
+    and prefills the MIDPOINT HHMM in the input line; edit the digits and
+    Enter cuts (first half keeps the entry id; second half is a fresh
+    identical entry). v1 scope: single completed entries — a merged row has
+    no single well-defined timeline and a running one has no end yet."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not (isinstance(item, dict) and item.get("kind") == "entry"):
+        flash("^P split: select a tracked entry first", 3.0)
+        return
+    if item.get("running"):
+        flash("can't split a running timer — stop it first", 4.0)
+        return
+    if len(item.get("entry_ids") or []) != 1 or not item.get("dur_min"):
+        flash("can't split a merged multi-entry row", 4.0)
+        return
+    if item["dur_min"] < 2:
+        flash("nothing to split — entry is under 2 minutes", 4.0)
+        return
+    ent = _find_entry(item["entry_ids"])
+    start = item["start_dt"]
+    end = start + dt.timedelta(minutes=item["dur_min"])
+    mid = start + (end - start) / 2
+    STATE.event_sel = None
+    STATE.split_target = {
+        "id": item["entry_ids"][0], "date": start.date(),
+        "desc": item["raw_desc"], "project_id": item.get("project_id"),
+        "tags": list((ent or {}).get("tags") or []),
+        "start_dt": start, "end_dt": end,
+    }
+    input_buffer.text = f"{mid:%H%M}"
+    input_buffer.cursor_position = len(input_buffer.text)
+    flash(f"split {item['raw_desc']} ({start:%H%M}-{end:%H%M}) — edit the "
+          "cut point, ⏎ to split", 8.0)
+
+
+@kb.add("c-x")
+def _(event):
+    """^X on a selected calendar event: delete it — ctrl+x to match dtd's
+    delete binding (user request 2026-07-30). Google-hosted events (m5x2 /
+    m5c7 calendars) are deleted for real via the Calendar API; Outlook rows
+    (Agency fetch or the read-only MSFT Slow Sync import) only get a local
+    hide — "won't affect the calendar for outlook, but will for m5x2". The
+    hide is written first either way, so the row vanishes immediately and a
+    mirrored copy on the other source can't resurface it.
+
+    Widened 2026-08-06 (user request: "I want ctrl+x to apply to toggl
+    entries as well") — on a selected TRACKED entry, deletes it for real via
+    the Toggl API instead. A running timer is refused (mirrors ^P split's
+    existing guard on the same item kind): deleting your live timer out from
+    under you is exactly the kind of accidental-Ctrl+X you don't get to
+    undo. A merged multi-entry row (contiguous same-desc Toggl entries
+    rendered as one line) deletes every constituent id — unlike split,
+    there's no single-timeline ambiguity for a delete."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if isinstance(item, dict) and item.get("kind") == "entry":
+        if item.get("running"):
+            flash("can't delete a running timer — stop it first", 4.0)
+            return
+        ids = item.get("entry_ids") or []
+        if not ids:
+            flash("^X delete: entry has no id", 3.0)
+            return
+        desc = item.get("raw_desc") or "entry"
+        STATE.entries = [e for e in STATE.entries if e.get("id") not in ids]
+        STATE.event_sel = None
+        flash(f"deleting {desc}…", 3.0)
+
+        async def _delete_toggl_and_refresh():
+            try:
+                for eid in ids:
+                    await asyncio.to_thread(toggl_api.delete_entry, eid)
+                flash(f"deleted: {desc}", 6.0)
+            except Exception as e:  # noqa: BLE001
+                flash(f"toggl delete failed ({e}) — refreshing to resync", 8.0)
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_current)
+            event.app.invalidate()
+
+        event.app.create_background_task(_delete_toggl_and_refresh())
+        event.app.invalidate()
+        return
+    if not (isinstance(item, dict) and item.get("kind") is None and item.get("end_dt")):
+        flash("^X delete: select a calendar event or tracked entry first", 3.0)
+        return
+    ev = item
+    title = event_title(ev)
+    _hide_event(ev)
+    STATE.events = [e for e in STATE.events
+                    if _hidden_event_key(e) != _hidden_event_key(ev)]
+    STATE.event_sel = None
+    if _event_gcal_deletable(ev):
+        flash(f"deleting {title}…", 3.0)
+
+        async def _delete_and_refresh():
+            try:
+                await asyncio.to_thread(gcal_client.delete_event,
+                                        ev["calendar_id"], ev["id"])
+                flash(f"deleted from {ev.get('calendar')}: {title}", 6.0)
+                await asyncio.to_thread(fetch_gcal, True)
+            except Exception as e:
+                flash(f"calendar delete failed ({e}) — hidden locally", 8.0)
+            event.app.invalidate()
+
+        event.app.create_background_task(_delete_and_refresh())
+    else:
+        flash(f"hidden in janus (Outlook calendar untouched): {title}", 6.0)
+    event.app.invalidate()
 
 
 @kb.add("c-q")
@@ -3619,19 +4884,24 @@ ANSI_SEQUENCES["\x1b[61;5u"] = Keys.F23  # Ctrl+=
 ANSI_SEQUENCES["\x1b[45;5u"] = Keys.F24  # Ctrl+-
 
 
+# Bare "-"/"=" are NOT bound: even gated on an empty command line they
+# swallowed the FIRST keystroke of any "-"-leading description — typing
+# "-1l" or "#-2" into an idle janus navigated a day back instead (user
+# report 2026-07-29). Day nav keeps Ctrl+←/→, [ / ], and real Ctrl+-/=
+# (the CSI-u aliases below); plain characters always type.
 @kb.add("c-left")   # view the previous day (to fill in missed time entries)
 @kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 @kb.add("f24")      # Ctrl+- via CSI-u (see ANSI_SEQUENCES alias above)
-@kb.add("-", filter=_input_empty)
 def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
     STATE.event_sel = None  # a different day has different (or no) events
-    if STATE.edit_target is not None:
-        # A different day's rows are about to render — an armed edit +
+    if STATE.edit_target is not None or STATE.split_target is not None:
+        # A different day's rows are about to render — an armed edit/split +
         # prefilled input text from THIS day would otherwise survive the
         # nav and silently update the wrong entries on the next Enter.
         STATE.edit_target = None
+        STATE.split_target = None
         input_buffer.reset()
     flash(f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
@@ -3640,7 +4910,6 @@ def _day_back(event):
 @kb.add("c-right")  # view the next day, capped at today
 @kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 @kb.add("f23")      # Ctrl+= via CSI-u (see ANSI_SEQUENCES alias above)
-@kb.add("=", filter=_input_empty)
 def _day_forward(event):
     if STATE.day_offset >= 0:
         flash("already on today")
@@ -3648,8 +4917,9 @@ def _day_forward(event):
     STATE.day_offset += 1
     STATE.scroll_min = 0
     STATE.event_sel = None
-    if STATE.edit_target is not None:
+    if STATE.edit_target is not None or STATE.split_target is not None:
         STATE.edit_target = None
+        STATE.split_target = None
         input_buffer.reset()
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
     _reload_day(event.app)
@@ -3681,6 +4951,9 @@ def _(event):
                 if it.get("start_dt") and it["start_dt"] <= now]
         i = past[-1] if past else 0
     STATE.event_sel = keys[i]
+    # Scroll the newly-selected row into view if it's currently off-screen
+    # (user request 2026-08-07) — see State.scroll_to_selection_until.
+    STATE.scroll_to_selection_until = time.monotonic() + 0.3
 
 
 @kb.add("s-tab", filter=_input_empty)
@@ -3700,13 +4973,16 @@ def _(event):
                 if it.get("start_dt") and it["start_dt"] <= now]
         i = past[-1] if past else len(keys) - 1
     STATE.event_sel = keys[i]
+    STATE.scroll_to_selection_until = time.monotonic() + 0.3
 
 
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;
                     # cancel an armed edit/selection
 def _(event):
-    if STATE.edit_target is not None or STATE.event_sel is not None:
+    if (STATE.edit_target is not None or STATE.split_target is not None
+            or STATE.event_sel is not None):
         STATE.edit_target = None
+        STATE.split_target = None
         STATE.event_sel = None
         input_buffer.reset()
         flash("cancelled")
@@ -3955,6 +5231,20 @@ async def _initial_slow_fetches(app):
 
 
 async def main():
+    # Reset the terminal tab color on every launch, matching dtd.sh's own
+    # startup reset (2026-08-04, "make dtd and janus background the same") —
+    # without this, a color set by a PREVIOUS session (an "orange" tool-use
+    # failure, or a Claude Code hook's blue/black) stays on the tab
+    # indefinitely, so a fresh janus launch could look different from a
+    # fresh dtd launch depending on what state the tab was left in.
+    # Backgrounded: term-color.sh's TTY walk + AppleScript shouldn't add
+    # latency to the first paint.
+    try:
+        subprocess.Popen(["bash", str(Path.home() / "i446-monorepo/scripts/term-color.sh"), "reset"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Fast fetches only (sub-second) — enough content for an instant first paint.
     fetch_current()
     fetch_today(True)  # forced: the startup load must not be throttled/coalesced
@@ -3966,6 +5256,9 @@ async def main():
 
     # Write PID so other tools can signal us
     _assert_pid_file()
+
+    # Re-adopt a live janus-started d357 recording across restarts
+    _load_recording_state()
 
     # Arm the boot grace from the moment the app actually takes the tty
     STATE.boot_time = time.monotonic()

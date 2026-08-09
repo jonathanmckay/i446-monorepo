@@ -1,0 +1,223 @@
+---
+name: "bookreview"
+description: "Write a book review. Interactive: prompts for bullets, drafts in Obsidian for manual editing, then publishes to Goodreads/blog when approved. Usage: /bookreview <title>"
+user-invocable: true
+---
+
+# Book Review (/bookreview)
+
+Interactive skill for writing a book review. The user provides the book title, then dictates bullet points, and the skill generates a polished review.
+
+## Usage
+
+```
+/bookreview <title>
+```
+
+## Flow
+
+### Step 1: Identify the book
+
+Take the `<title>` argument and search for the book to confirm:
+- **Title** (full, including subtitle if relevant)
+- **Author**
+- **Series** (if applicable, e.g. "Foreigner, #1")
+
+Use web search if needed to confirm author/series. Present a one-line confirmation:
+
+```
+Book: <Title> by <Author> [Series: <series>]
+Ready for bullets. Type your thoughts — send DONE when finished.
+```
+
+### Step 2: Collect bullets
+
+Enter an interactive loop. The user will send messages with bullet points, impressions, and raw thoughts about the book. Accumulate all bullets across multiple messages.
+
+When the user sends `DONE` (or `done`, `d`, `finish`, `ok`, `go`), proceed to Step 3.
+
+During collection, just acknowledge briefly: `Got it. Keep going or send DONE.`
+
+### Step 3: Ask for score
+
+Ask the user for a score (1-5) or skip:
+
+```
+Score? (1-5, or skip)
+```
+
+### Step 4: Generate the review
+
+Using the collected bullets, write a review that:
+- Is written in the user's voice (direct, opinionated, analytical)
+- References the example reviews below for tone and structure
+- Opens with a bold **Title Line** (a short, punchy summary phrase)
+- Is 2-4 paragraphs, not a bullet list
+- Does NOT summarize the plot — assumes the reader knows the book
+- Focuses on what the book does well or poorly, and why it matters
+- Draws connections to other works, ideas, or the user's experience when the bullets suggest them
+
+**Tone reference** (from existing reviews):
+- Analytical but personal
+- States opinions as facts, then supports them
+- Uses specific examples from the book
+- Comfortable with ambiguity ("the book never quite delivers...")
+- Often ends with a question or unresolved tension
+
+### Step 5: Save draft and open for manual editing
+
+Do **not** ask whether the composed review is good before saving. Save it as a draft immediately so the user can edit the real vault file.
+
+Before saving, search `~/vault/hcmc/reviews/` for related reviews to link.
+
+```bash
+# Same author (case-insensitive grep on frontmatter)
+grep -rl "^author:.*AUTHOR_NAME" ~/vault/hcmc/reviews/ --include="*.md"
+
+# Same series (if applicable)
+grep -rl "^series:.*SERIES_NAME" ~/vault/hcmc/reviews/ --include="*.md"
+```
+
+Build three link lists from the results (paths relative to the reviews/ root, e.g. `2025/the-blade-itself.md`):
+
+- **`related:`** — all books by the same author (excluding the current review)
+- **`series_next:` / `series_prev:`** — if this book is in a series and adjacent entries exist, link them. Also update the adjacent review's frontmatter to point back (add `series_next:` or `series_prev:` to the neighbor).
+- **`series_number:`** — position in the series (if applicable)
+
+Do NOT ask the user to confirm the links; just include them silently. If no related reviews exist, omit the fields.
+
+Then:
+
+1. **Determine the year folder.** Use today's date for the completion date unless the user specifies otherwise.
+
+2. **Create the review file** at `~/vault/hcmc/reviews/{YEAR}/{kebab-case-title}.md`:
+
+```markdown
+---
+title: "<Title Line>: <Full Book Title>"
+slug: "<kebab-case-full-book-title>"
+author: "<Author>"
+date: YYYY-MM-DD
+type: review
+media: book
+score: N
+tags: [hcmc, review]
+source: goodreads
+series: "<Series Name>"
+series_number: N
+series_prev: "YYYY/prev-title.md"
+series_next: "YYYY/next-title.md"
+related:
+  - "YYYY/other-by-author.md"
+  - "YYYY/another-by-author.md"
+---
+
+**<Title Line>**
+
+<review text>
+```
+
+- The frontmatter `title` is `<Title Line>: <Full Book Title>` — the punchy custom phrase first, then the actual book title after a colon. The same `<Title Line>` is repeated as the bold opener of the body. If the title line ends in a period, drop the period before the separator (`"Sharp Line: Book"`, not `"Sharp Line.: Book"`). If it ends in a question mark, the question mark wins and replaces the separator (`"Sharp Line? Book"`, not `"Sharp Line?: Book"`).
+- The frontmatter `slug` is the kebab-case full book title, **not** the punchy title line. This keeps the blog URL stable at `/reviews/<book-title>/` even if the title line changes during manual editing.
+
+- Omit `score` if skipped
+- Omit `series`, `series_number`, `series_prev`, `series_next` if not part of a series
+- Omit `related` if no other reviews by this author exist
+- Omit `source` if user doesn't plan to post to Goodreads
+
+3. **Open the saved review in Obsidian** so the user can edit the vault file manually:
+
+```bash
+python3 - <<'PY'
+import urllib.parse, subprocess
+path = "/Users/mckay/vault/hcmc/reviews/YYYY/title.md"
+url = "obsidian://open?vault=vault&file=" + urllib.parse.quote(path.replace("/Users/mckay/vault/", "")) + "&newTab=true"
+subprocess.run(["open", url], check=True)
+PY
+```
+
+4. Stop and tell the user:
+
+```
+Draft saved and opened in Obsidian for manual editing.
+When ready, send PUBLISH and I'll copy the final text, open Goodreads, and sync it to the o315 blog.
+```
+
+### Step 6: Publish after manual edit
+
+Only continue when the user explicitly sends `PUBLISH` (or `publish`). Then:
+
+1. Re-read the saved review file from disk so any manual Obsidian edits are included.
+
+2. **Copy review text to clipboard** (without frontmatter) so the user can paste directly:
+
+```bash
+# Copy just the review body to clipboard
+python3 - <<'PY' | pbcopy
+from pathlib import Path
+p = Path("/Users/mckay/vault/hcmc/reviews/YYYY/title.md")
+text = p.read_text()
+if text.startswith("---"):
+    text = text.split("---", 2)[2].lstrip()
+print(text, end="")
+PY
+```
+
+3. **Open Goodreads** in Chrome so the user can paste the review:
+
+```bash
+open -a "Google Chrome" "https://www.goodreads.com/book/show/<search_query>"
+```
+
+Use a Goodreads search URL:
+```bash
+open -a "Google Chrome" "https://www.goodreads.com/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('TITLE AUTHOR'))")"
+```
+
+4. **Publish to the o315 blog** by syncing generated blog copies from the vault source of truth:
+
+```bash
+cd /Users/mckay/vault/hcmp/o315/blog && python3 scripts/sync-vault-reviews.py
+```
+
+5. **Commit, push, and verify the deploy:**
+
+```bash
+cd /Users/mckay/vault/hcmp/o315/blog
+git add content/reviews/<slug>.md
+git commit -m "Add review: <Title>"
+git push
+```
+
+Then wait for the GitHub Actions deploy to complete:
+
+```bash
+# Get the latest run ID
+gh run list --repo jonathanmckay/o315-blog-v3 --limit 1
+# Watch it until it finishes
+gh run watch <run_id> --repo jonathanmckay/o315-blog-v3
+```
+
+If the deploy fails, check `gh run view <run_id> --repo jonathanmckay/o315-blog-v3 --log-failed` and fix before continuing.
+
+6. **Verify the review is live** by fetching the prod URL:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" "https://jonathanmckay.com/reviews/<slug>/"
+```
+
+If the response is `200`, open it in Chrome for the user to see:
+
+```bash
+open -a "Google Chrome" "https://jonathanmckay.com/reviews/<slug>/"
+```
+
+If not `200`, diagnose and fix. The review is not done until it loads in prod.
+
+### Step 7: Report
+
+```
+Published: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
+Live at: https://jonathanmckay.com/reviews/<slug>/
+Goodreads opened, final review copied to clipboard, blog deployed and verified.
+```

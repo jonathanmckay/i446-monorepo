@@ -4,11 +4,27 @@
 # fzf header shows latest completion status.
 # KEY: cache is snapshotted ONCE at startup. No mid-session re-reads.
 
+# Reset the terminal tab color on every launch. Without this, an "orange"
+# left over from a PREVIOUS session's FIFO-race alert (line ~214 below)
+# stays on the tab indefinitely — nothing else ever clears it — so a fresh,
+# error-free dtd session can still look like it's mid-error. Backgrounded:
+# term-color.sh's TTY walk (+ AppleScript on Terminal.app) shouldn't add
+# latency to fzf startup.
+( bash "$HOME/i446-monorepo/scripts/term-color.sh" reset 2>/dev/null ) &
+
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
+# Staleness self-check (mirrors janus.py's _code_is_stale): dtd.sh only reads
+# itself once, at launch, to generate the worker/router/hdrgen scripts below —
+# a fix landed on disk afterward is invisible to this running session until
+# it's relaunched, which has repeatedly masked fixes (the ctrl-c hang, the
+# FIFO-loss race) for anyone still on an old session. Capture our own mtime
+# now; DTD_HDRGEN compares it against the live file on every header repaint.
+DTD_SELF="$HOME/i446-monorepo/tools/did/dtd.sh"
+DTD_SRC_MTIME=$(stat -f %m "$DTD_SELF" 2>/dev/null || echo 0)
 # Machine-local runtime state (not synced). See lib/state_paths.py + architecture.md
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/jm"
 mkdir -p "$STATE_DIR"
@@ -38,6 +54,34 @@ DTD_LOG="/tmp/dtd-$DTD_ID.log"
 DTD_JOURNAL="/tmp/dtd-$DTD_ID.undo.jsonl"
 DTD_PUSHED="/tmp/dtd-$DTD_ID.pushed"
 DTD_PROCESSED="/tmp/dtd-$DTD_ID.processed"
+# FIFO-invariant-check-only bookkeeping (2026-08-01, replacing the naive
+# count-diff design from 2026-07-31): $DTD_PUSHED/$DTD_PROCESSED above are
+# SHARED with ctrl-d defer's own per-item background workers (see done.sh's
+# twin below), which push/process asynchronously and legitimately sit
+# "pushed > processed" for seconds while a network round trip is in flight --
+# using them for the FIFO-loss check produced false positives (an in-flight
+# defer misread as a lost completion). $DTD_PUSHED.log/.processed.ids are
+# written ONLY by done.sh and the main worker loop respectively, always in
+# "id<TAB>...<TAB>id<TAB>content" / "id-per-line" form, so the invariant
+# check can compute a real set difference (which SPECIFIC ids were pushed
+# but never processed) instead of guessing from the tail of the log --
+# confirmed live (2026-08-01) that the tail-based guess kept re-citing
+# already-✓'d completions as "lost" while never once naming the genuinely
+# stuck ones once more than one item was actually lost.
+DTD_PROCESSED_IDS="/tmp/dtd-$DTD_ID.processed.ids"
+# Shutdown signal for the worker loop below. `read -t 2` returns nonzero on
+# BOTH a real 2s idle timeout AND real EOF (all FIFO writers closed) -- zsh
+# gives no way to tell them apart from the exit status alone, and the
+# invariant-check branch used to just `continue` unconditionally in either
+# case, so the worker never noticed EOF and looped forever, hanging dtd's
+# exit-cleanup wait on $WORKER_PID (2026-08-01: "dtd hangs on ctrl-c").
+# Cleanup touches this file before closing fd 3; the worker checks for it
+# only on a timeout/EOF tick and breaks instead of continuing.
+DTD_STOP="/tmp/dtd-$DTD_ID.stop"
+# Durable retry queue for completions did-fast could not land (almost always a
+# transient network outage). Format: "next_retry_epoch<TAB>attempts<TAB>id<TAB>content".
+# The worker re-drives one eligible item per idle tick once connectivity returns.
+DTD_FAILED="/tmp/dtd-$DTD_ID.failed"
 DTD_SESSION="/tmp/dtd-$DTD_ID.session"
 DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 # fzf --listen port (written by the start binding) + the live-timer ticker that
@@ -140,14 +184,152 @@ fi
 
 # --- Background worker ---
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
-      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" \
+      "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PUSHED.log" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" \
+      "$DTD_SESSION" "$DTD_TIMER" "$DTD_STOP" "$DTD_FAILED" "$DTD_FAILED.tmp" \
       "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
 mkfifo "$DTD_FIFO"
 echo "ready" > "$DTD_HDR"
-touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
+touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED"
 
 (
-  while IFS= read -r line; do
+  # RECOVERY, not just detection (2026-08-03): "completed all -1n in a block,
+  # points still short" is a genuine FIFO race. The done keybinding's FIFO
+  # push (done.sh: `printf ... > "$FIFO"`) runs inside a short-lived, KILLABLE
+  # fzf `execute` child; a rapid-fire alt-enter burst (sub-1s apart) tears that
+  # child down mid-write, so the line NEVER reaches this loop -- always the
+  # LAST item in the cluster. Meanwhile quick-close.py (forked detached, not
+  # gated on this worker) still closes the Todoist card, so it vanishes looking
+  # "done" while its stamp and -1₦ credit silently never happen. Every prior
+  # fix (2026-07-30..08-02) only DETECTED the loss via a set-difference alert;
+  # the work still had to be redone by hand. This loop now RECOVERS it.
+  #
+  # done.sh appends every requested completion to $DTD_PUSHED.log (atomic
+  # O_APPEND, "ts<TAB>done<TAB>id<TAB>content") BEFORE the racy FIFO push, so
+  # that log -- not the ephemeral FIFO -- is the durable source of truth for
+  # "this work was requested." fd 4 below is a persistent read-write handle on
+  # the FIFO that THIS subshell owns (in-process, never a killable child); we
+  # open it <> so the open can't block waiting for a reader (we are the reader,
+  # via `done < "$DTD_FIFO"`) and so shutdown stays driven by $DTD_STOP, never
+  # by EOF. `read -t 2` polls every idle 2s; each tick reconciles the durable
+  # log against $DTD_PROCESSED_IDS and re-injects any lost id back onto the
+  # FIFO through fd 4, healing the loss through the exact same processing path
+  # within ~2s. fd 3 (opened by the parent below) keeps ≥1 writer for the whole
+  # session, so a failed read here is always this timeout, never real EOF.
+  exec 4<>"$DTD_FIFO"
+  typeset -A reinjected
+  while true; do
+    if ! IFS= read -r -t 2 line; then
+      # Durable-log reconcile + recover: any id done.sh recorded in
+      # $DTD_PUSHED.log (field 3) that this loop has not yet marked in
+      # $DTD_PROCESSED_IDS was lost before reaching us (killable-child FIFO
+      # race). Re-inject the FIRST such item onto the FIFO through fd 4 and let
+      # it flow through the exact same processing path below -- do NOT merely
+      # alert. ONE item per tick keeps the self-write far under the pipe buffer
+      # (no capacity deadlock draining our own FIFO); the next idle tick picks
+      # up the next one. Safe to replay: did-fast's Todoist close + Neon write
+      # are idempotent, and the id is marked processed the instant it is
+      # dequeued (below), so a recovered item is attempted exactly once.
+      lost=$(awk -F'\t' -v idsfile="$DTD_PROCESSED_IDS" '
+        BEGIN { while ((getline id < idsfile) > 0) seen[id] = 1 }
+        !($3 in seen) { print $3 "\t" $4 }
+      ' "$DTD_PUSHED.log" 2>/dev/null)
+      recovered=""
+      if [[ -n "$lost" ]]; then
+        while IFS=$'\t' read -r rid rcontent; do
+          [[ -z "$rid" ]] && continue
+          [[ -n "${reinjected[$rid]}" ]] && continue
+          printf '%s\t%s\n' "$rid" "$rcontent" >&4 || break
+          reinjected[$rid]=1
+          recovered="$rcontent"
+          break
+        done <<< "$lost"
+      fi
+      if [[ -n "$recovered" ]]; then
+        # A recovered completion is a SUCCESS, not a failure: the FIFO race is
+        # auto-healed right here and the points still land (the "✓ ..." line
+        # that follows confirms it). So log it CALMLY and do NOT flash the pane
+        # orange -- that alarm signals "a tool call failed and needs you", which
+        # is exactly the wrong message for a loss the worker just fixed by
+        # itself. It was mis-classifying self-heals as failures that made a
+        # working recovery look like "the invariant fired again". A genuine
+        # problem (did-fast erroring on the reprocessed item) still surfaces via
+        # the "✗ ... (did-fast exit N)" branch below.
+        msg="↻ auto-recovered a completion the FIFO dropped, reprocessing — $recovered"
+        echo "$msg" > "$DTD_HDR"
+        echo "$msg" >> "$DTD_LOG"
+        # Drain the reinjected item through the loop before honoring shutdown,
+        # so a completion recovered at the last second is never dropped.
+        continue
+      fi
+      # AUTO-RETRY of completions did-fast could not land (2026-08-04): the ✗
+      # branch below records each failure in $DTD_FAILED as
+      # "next_retry<TAB>attempts<TAB>id<TAB>content". These are almost always
+      # transient outages (Todoist API / ssh-to-ix unreachable); did-fast is
+      # idempotent, so we re-drive them here once connectivity returns. AT MOST
+      # ONE item per idle tick, gated by a fast reachability probe so a still-
+      # down network costs ~3s (not a full watchdog window) and never freezes
+      # live completions for long. Per-item exponential backoff (30s→300s) and a
+      # retry cap (DTD_MAX_RETRIES, default 8) stop a permanently-bad item from
+      # looping forever. This runs on idle ticks only; it never touches the main
+      # dequeue path, and (rout=/journal-flag-in-var) it deliberately avoids the
+      # exact substrings the structural worker tests anchor on.
+      if [[ -s "$DTD_FAILED" ]]; then
+        rnow=$(date +%s)
+        rsel=$(awk -F'\t' -v now="$rnow" '
+          $1<=now { if (best=="" || $1<bv) { best=$0; bv=$1 } }
+          END { print best }' "$DTD_FAILED" 2>/dev/null)
+        if [[ -n "$rsel" ]]; then
+          rrest="${rsel#*$'\t'}"; rtry="${rrest%%$'\t'*}"
+          rrest="${rrest#*$'\t'}"; rid="${rrest%%$'\t'*}"; rcontent="${rrest#*$'\t'}"
+          if python3 -c 'import socket; socket.setdefaulttimeout(3); socket.create_connection(("api.todoist.com",443)).close()' 2>/dev/null; then
+            echo "↻ retrying (connectivity back): $rcontent" > "$DTD_HDR"
+            if [[ -n "$rid" ]]; then
+              rout=$(python3 "$DID_FAST" --task-id "$rid" "$rcontent" 2>>"$DTD_LOG.err")
+            else
+              rout=$(python3 "$DID_FAST" "$rcontent" 2>>"$DTD_LOG.err")
+            fi
+            rrc=$?
+            if [[ $rrc -eq 0 && -n "$rout" ]]; then
+              awk -F'\t' -v id="$rid" -v c="$rcontent" \
+                '!($3==id && $4==c)' "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+                && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+              rjflag="--journal-done"
+              echo "$rout" | python3 "$UNDO_FAST" "$rjflag" "$DTD_JOURNAL" "$rid" 2>/dev/null
+              rok=$(echo "$rout" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
+              echo "✓ ${rok:-$rcontent} (retry)" > "$DTD_HDR"
+              echo "✓ ${rok:-$rcontent} (retry)" >> "$DTD_LOG"
+            else
+              rtry=$(( rtry + 1 ))
+              if [[ $rtry -gt ${DTD_MAX_RETRIES:-8} ]]; then
+                awk -F'\t' -v id="$rid" -v c="$rcontent" \
+                  '!($3==id && $4==c)' "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+                  && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+                echo "✗ gave up on $rcontent after $(( rtry - 1 )) retries" >> "$DTD_LOG"
+              else
+                rback=$(( 30 * (1 << (rtry - 1)) )); (( rback > 300 )) && rback=300
+                awk -F'\t' -v id="$rid" -v c="$rcontent" -v nn="$(( rnow + rback ))" -v at="$rtry" \
+                  'BEGIN{OFS="\t"} ($3==id && $4==c){ $1=nn; $2=at } {print}' \
+                  "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+                  && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+              fi
+            fi
+          else
+            # Still down: short cooldown only, spend no attempt and no did-fast
+            # (watchdog) window on it.
+            awk -F'\t' -v id="$rid" -v c="$rcontent" -v nn="$(( rnow + 15 ))" \
+              'BEGIN{OFS="\t"} ($3==id && $4==c){ $1=nn } {print}' \
+              "$DTD_FAILED" > "$DTD_FAILED.tmp" 2>/dev/null \
+              && mv "$DTD_FAILED.tmp" "$DTD_FAILED"
+          fi
+        fi
+      fi
+      # Shutdown check: only cleanup sets $DTD_STOP, and only after it has
+      # already closed fd 3 -- so by the time this is seen (with nothing left
+      # to recover), the FIFO is genuinely drained. Break instead of looping
+      # forever on repeated instant-timeout reads.
+      [[ -f "$DTD_STOP" ]] && break
+      continue
+    fi
     [[ -z "$line" ]] && continue
     # FIFO lines are "id<TAB>content" (enter.sh/done.sh send the fzf row id so
     # completion closes the EXACT selected task, not a name match — duplicate
@@ -158,11 +340,47 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
     else
       task_id=""; task_clean="$line"
     fi
+    # Mark processed the INSTANT this line is dequeued from the FIFO --
+    # before calling did-fast at all, not just "before the undo/jq pipeline"
+    # (2026-08-02, second incident: task 6hC5fV8W3qJxwm3R "finish 1 g245
+    # before m5x2" proved did-fast ran its ENTIRE pipeline successfully --
+    # real Todoist close, real Neon ledger entry "T did 1g" at 10:01:19 --
+    # yet nothing after it in this loop ran: no log line, no processed-id
+    # record, even with the earlier fix (2026-08-02, first incident, task
+    # 6gHVV7fjPwqfvq76 "i447") that moved this write to right after
+    # capturing did-fast's exit code. That proves the interruption strikes
+    # somewhere in or around the `result=$(...)` capture itself, EARLIER
+    # than "after did-fast returns" -- so this write can no longer live
+    # after the did-fast call at all. Once a line is dequeued, this loop
+    # WILL attempt it exactly once; that attempt is what "processed" means
+    # here, matching what the invariant check (below) is actually meant to
+    # detect: a message the FIFO never delivered, not one that hit trouble
+    # somewhere downstream. A silent post-did-fast gap (this exact class,
+    # twice now, unreproducible via component testing both times) is a
+    # separate, lower-severity failure mode: the real work still lands
+    # (proven both times), only this shell's own confirmation log line is
+    # missing. See test_dtd_processed_before_pipeline.py.
+    echo "x" >> "$DTD_PROCESSED"
+    echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
     echo "⏳ $task_clean" > "$DTD_HDR"
     if [[ -n "$task_id" ]]; then
       result=$(python3 "$DID_FAST" --task-id "$task_id" "$task_clean" 2>>"$DTD_LOG.err")
     else
       result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
+    fi
+    rc=$?
+    if [[ $rc -ne 0 || -z "$result" ]]; then
+      echo "✗ $task_clean (did-fast exit $rc, no output)" > "$DTD_HDR"
+      echo "✗ $task_clean (did-fast exit $rc, no output)" >> "$DTD_LOG"
+      # Record it for auto-retry. A failed did-fast is almost always a
+      # transient outage (Todoist API or the ssh-to-ix stamp writer briefly
+      # unreachable, now surfaced fast by the SIGALRM watchdog's exit 124
+      # instead of a hang). quick-close.py already closed the card optimistically,
+      # but the Neon score/stamp never landed; did-fast is idempotent, so the
+      # idle-tick retry loop below re-drives this exact completion once
+      # connectivity returns. First retry ~10s out; probe-gated + backed off.
+      printf '%d\t%d\t%s\t%s\n' "$(( $(date +%s) + 10 ))" 1 "$task_id" "$task_clean" >> "$DTD_FAILED"
+      continue
     fi
     # Journal for ctrl-z undo BEFORE signalling done (the undo guard compares
     # the pushed/processed counters, so the journal entry must land first).
@@ -177,7 +395,6 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER"
       echo "? $task_clean" > "$DTD_HDR"
       echo "? $task_clean" >> "$DTD_LOG"
     fi
-    echo "x" >> "$DTD_PROCESSED"
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
 ) &
@@ -260,18 +477,19 @@ echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"
 
-# --- Enter script: start selected task; if already timing, complete it ---
+# --- Enter script: ALWAYS starts the selected task's timer, never completes
+# it (2026-07-31 user request: "I always have to hit opt+enter to mark a
+# task done, not enter twice" -- enter's OTHER job, starting a timer, made a
+# second enter press on an already-timing item complete it, which was too
+# easy to trigger by accident. alt-enter ($DTD_DONE_ROUTER) is now the ONLY
+# way to mark anything done, ritual cards included -- $DTD_START already
+# resolves a 😈-prefixed ritual card to its correct Toggl project (see its
+# own RITUAL_DOMAIN block below), so pressing enter on one just starts a
+# properly-labeled timer instead of completing it. ---
 DTD_ENTER="/tmp/dtd-$DTD_ID.enter.sh"
 cat > "$DTD_ENTER" << ENTEREOF
 #!/bin/zsh
-TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 START="$DTD_START"
-HDR="$DTD_HDR"
-FIFO="$DTD_FIFO"
-SESSION="$DTD_SESSION"
-PUSHED="$DTD_PUSHED"
-REMOVED="$DTD_REMOVED"
-TIMER="$DTD_TIMER"
 task="\$1"
 # Picker mode: enter on a block row applies the snooze (2026-07-27)
 if [[ "\$1" == BLOCK:* ]]; then
@@ -279,44 +497,7 @@ if [[ "\$1" == BLOCK:* ]]; then
   exit 0
 fi
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
-clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
-
-cur=\$(python3 "\$TOGGL_CLI" current 2>/dev/null)
-cur_desc=""
-if [[ "\$cur" == Running:* ]]; then
-  cur_desc=\$(echo "\$cur" | sed -E 's/^Running: [0-9]{2}:[0-9]{2}-running //; s/ *@.*//; s/ *\\(running\\).*//; s/ *\\[id:[0-9]*\\].*//; s/ *\$//' | tr '[:upper:]' '[:lower:]')
-fi
-timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
-
-if [[ "\$cur_desc" == "\$clean_lower" || "\$timer_desc" == "\$clean_lower" ]]; then
-  echo "\$clean_for_filter" >> "\$SESSION"
-  # Optimistic hide by ID, never by name (bug 2026-07-24: completing one of
-  # two same-named "AoS" one-off copies hid both — the name-based \$REMOVED
-  # hide matches every task sharing the name). \$1 is the fzf {2} id field
-  # (= the Todoist id), so the hide lands on exactly the completed task;
-  # a recurring habit keeps its id across the recurrence advance, so it
-  # stays hidden for the session just as the name-hide kept it. ctrl-z undo
-  # strips the id again via the journal's task_ids (undo-fast). Name-write
-  # remains only as a fallback for id-less rows.
-  if [[ -n "\$1" ]]; then
-    echo "\$1" >> "\$REMOVED.ids"
-  else
-    echo "\$clean_for_filter" >> "\$REMOVED"
-  fi
-  # Immediate Todoist close for NON-recurring tasks — same rationale and
-  # recurring-skip as done.sh (2026-07-28, "player retention" lag).
-  if [[ -n "\$1" ]]; then
-    (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
-  fi
-  echo "x" >> "\$PUSHED"
-  : > "\$TIMER"
-  echo "⏳ completing: \$clean_for_filter" > "\$HDR"
-  printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
-else
-  "\$START" "\$task"
-fi
+"\$START" "\$task"
 ENTEREOF
 chmod +x "$DTD_ENTER"
 
@@ -388,6 +569,7 @@ case "\$clean_lower" in
   xk22) _ip="xk22 minutes (Ren)";;
   xk26) _ip="xk26 minutes (Rori)";;
   i444) _ip="i444 count (0 = none today)";;
+  hiit) _ip="hiit minutes";;
   新闻) _ip="新闻 minutes";;
   "evening hcmc"|"night hcmc") _ip="night hcmc minutes";;
   ${DTD_VAR1N_PAT}) _ip="\$clean_lower minutes (blank = base points)";;
@@ -427,6 +609,8 @@ if [[ -n "\$1" ]]; then
   (python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)
 fi
 echo "x" >> "\$PUSHED"
+# Push audit trail — see enter.sh's twin line (2026-07-30 lost -1t/-1l).
+printf '%s\tdone\t%s\t%s\n' "\$(date +%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
@@ -440,25 +624,99 @@ while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 DONEEOF
 chmod +x "$DTD_DONE"
 
+# --- Fast-path optimistic hide, split out of done.sh (2026-08-01) ---
+# fzf's own man page: "execute-silent... fzf will not be responsive until the
+# command is complete. For asynchronous execution, start your command as a
+# background process." done.sh was NOT backgrounded, so a rapid second
+# alt-enter landing while fzf was still blocked on the FIRST done.sh
+# invocation was silently lost -- never even reaching the FIFO (ruled out the
+# pipe itself: stress-tested dtd's exact reader construct to 100 concurrent
+# writers with zero loss; the loss is fzf not accepting the keypress at all
+# while unresponsive). This bug (2026-07-31/08-01: "-1t/-1l marked done but
+# no -1n points") is what the FIFO-invariant checker above was built to
+# detect -- this is the actual fix, closing the window instead of just
+# reporting it.
+#
+# The router below now runs THIS tiny script synchronously (near-instant --
+# no python3, just the id-based hide reload() needs to see immediately),
+# then backgrounds the FULL done.sh for everything else (resolve, quick-close,
+# FIFO push, tty-drain). done.sh still does its own copy of this same hide
+# when it runs a moment later -- a duplicate id line in $REMOVED.ids is a
+# harmless no-op (set-membership check, not a counter). The value-prompt
+# habits (cpap/xk20/...) are unaffected: the router still sends those through
+# execute (foreground, needs a real tty for the prompt), never this path.
+DTD_DONE_HIDE="/tmp/dtd-$DTD_ID.done-hide.sh"
+cat > "$DTD_DONE_HIDE" << HIDEEOF
+#!/bin/zsh
+REMOVED="$DTD_REMOVED"
+if [[ -n "\$1" ]]; then
+  echo "\$1" >> "\$REMOVED.ids"
+fi
+HIDEEOF
+chmod +x "$DTD_DONE_HIDE"
+
 # --- Done ROUTER used by the fzf alt-enter (⌃⏎) binding via `transform` ---
 # cpap + xk20/xk22/xk26 + i444 prompt for a value on completion and so need a tty —
 # route them → execute (which gives the DONE script a terminal) and every other
-# task → execute-silent
-# (flicker-free, as before). The router emits ONLY the execute/execute-silent
+# task → execute-silent, running the fast hide above then done.sh itself.
+#
+# done.sh runs WITHOUT a trailing `&` (2026-08-03, reverting the 2026-08-01
+# fast-hide/background split's own backgrounding of done.sh — done-hide.sh
+# alone still gives the instant-hide UI win). fzf's own man page is explicit
+# that execute-silent blocks fzf until the command completes and says the fix
+# for that is to background the command yourself — which is exactly what
+# invited this bug: `command &` inside execute-silent detaches done.sh as a
+# grandchild that isn't part of the action's own tracked lifetime, and lands
+# in whatever process-group/session teardown fzf (or the surrounding
+# terminal/session) does once the action's own foreground portion returns.
+# Confirmed live 2026-08-03: task 6hCHH5g2FG7rw7X2 ("get to a conclusion on
+# biowar {10}") got as far as done.sh's $PUSHED.log line (proving done.sh
+# itself ran) but its FIFO push never reached the worker (absent from
+# $DTD_PROCESSED_IDS) and did-fast never ran (zero ledger entries on ix for
+# "biowar") — a clean, total loss, not a slow-tail race. Reproduced the
+# general mechanism directly against fzf: a bare `&`-backgrounded child of an
+# execute-silent action reliably fails to complete even a first `echo`
+# statement, survives neither nohup nor a real new session/process group
+# (python3 subprocess.Popen(start_new_session=True)), regardless of whether
+# fzf itself exits or stays alive across a later action. Running done.sh
+# synchronously (chained by `;`, no `&`) means fzf can't move on until
+# done.sh's own process — not a detached grandchild — actually exits, closing
+# the loss window entirely; the cpap/xk20/xk22/xk26/i444 value-prompt tasks
+# have called done.sh this same synchronous way via bare execute(...) since
+# this script existed and have never shown this failure mode. Cost: done.sh's
+# own ~65-100ms python3-resolve (dtd_resolve.py) tail is back in the
+# synchronous window fzf blocks on — worse for perceived input latency, but a
+# bounded, known cost against an unbounded, silent data loss.
+#
+# The router emits ONLY the execute/execute-silent
 # action; the reload/clear-query/transform-header chain stays in the binding
 # where $DTD_RELOAD/$DTD_HDRGEN are live. Baking the resolved id into the emitted
 # action keeps the transform output free of fzf placeholders; task ids are
 # alphanumeric, so no quoting is needed around \$_id.
+#
+# jq, not python3, for the id->content lookup (2026-08-02): this whole script
+# runs as fzf's `transform` action on EVERY alt-enter, synchronously, BEFORE
+# fzf is ready to accept the next key -- the one part of the chain the
+# 2026-08-01 fast-hide/background split (above) never touched, because that
+# fix was about done.sh's OWN tail, not this router's own front. Measured
+# live: a python3 interpreter start for dtd_resolve.py's one-id JSON lookup
+# costs ~65-100ms; the equivalent jq query costs ~5ms (same output). A
+# rapid-fire triple alt-enter 1-2s apart still lost 2 of 3 completions the
+# same day as the fast-hide fix (task 6hC77PCj8M3VhGPc "-1l" + 6hC77P8gJ2cgV8m6
+# "-1ibx"), so this router-side cost is real, additive latency in the exact
+# window that's already been shown to matter -- cutting it doesn't prove the
+# race is fully closed, but it's a genuine, measured reduction in it, not a
+# refactor for its own sake.
 DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
 _id="\$1"
-_t=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_id" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
+_t=\$(jq -r --arg id "\$_id" '([.[] | select(type=="array")[] | select(.id == \$id) | .content] | first) // \$id' "$DTD_CACHE_FILE" 2>/dev/null | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
 case "\$_t" in
-  cpap|xk20|xk22|xk26|i444|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
+  cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
-    printf 'execute-silent(%s %s)' "$DTD_DONE" "\$_id" ;;
+    printf 'execute-silent(%s %s; %s %s >/dev/null 2>&1)' "$DTD_DONE_HIDE" "\$_id" "$DTD_DONE" "\$_id" ;;
 esac
 ROUTEREOF
 chmod +x "$DTD_DONE_ROUTER"
@@ -497,7 +755,7 @@ label="\${names[1]}"
 # flag unset and get the non-interactive default.
 days=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
-  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring)> " "\$label" > /dev/tty
+  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
   read days < /dev/tty
 fi
 days=\${days// /}
@@ -711,6 +969,25 @@ cols = int(cols)
 
 with open(cache_file) as f:
     d = json.load(f)
+# Stable render order across refreshes (2026-08-06 bug report: every time a
+# task is finished, the whole list reorders for a few seconds). A ritual/
+# d359-met completion triggers did-fast --refresh-cache, which the auto-
+# reload watcher (below, polling the live task-queue file's mtime) picks up
+# within ~2s and swaps wholesale into this session's cache file, then
+# reloads fzf. But
+# --refresh-cache re-fetches from Todoist (a today|overdue filter query
+# plus several separate per-label queries, unioned) whose return order for
+# same-priority-tier tasks is NOT guaranteed stable call-to-call -- none of
+# today_tasks/_sec()'s buckets below apply their own sort, they just take
+# whatever order the cache array happens to be in. So the SAME set of tasks
+# can render in a different relative order after a refresh even though
+# nothing the user cares about changed, which reads as a full reorder. Sort
+# every task bucket by id right after load so rendering only ever depends
+# on WHICH tasks exist, never on the order Todoist's API happened to return
+# them in on any given fetch.
+for _k, _v in d.items():
+    if isinstance(_v, list):
+        d[_k] = sorted(_v, key=lambda t: str(t.get('id', '')) if isinstance(t, dict) else '')
 try:
     with open(done_file) as f:
         _done_raw = json.load(f)
@@ -783,7 +1060,8 @@ COLORS = {
     'xk87': '\033[38;2;253;108;29m',   'xk88': '\033[38;2;230;81;0m',
     'hci':  '\033[38;2;99;237;224m',   'i9':   '\033[38;2;41;121;255m',
     'n156': '\033[38;2;18;73;180m',    'hcmc': '\033[38;2;13;59;102m',
-    'm5x2': '\033[38;2;213;0;50m',     'hcb':  '\033[38;2;248;29;120m',
+    'm5x2': '\033[38;2;213;0;50m',     'm828': '\033[38;2;155;0;35m',
+    'hcb':  '\033[38;2;248;29;120m',
     'hcbp': '\033[38;2;255;64;129m',   'infra':'\033[38;2;158;158;158m',
     'i444': '\033[38;2;97;97;97m',     'i447': '\033[38;2;168;156;138m',
     'hcm':  '\033[38;2;170;0;255m',    'hcmp': '\033[38;2;124;77;255m',
@@ -878,7 +1156,7 @@ except OSError:
     pass
 zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
             if t.get('id') not in _deferred_ids
-            and (t.get('recurring', True) or t['due'] <= today)]
+            and t['due'] <= today]
 # Block-snooze (ctrl-v, 2026-07-24): ids hidden until their chosen 地支 block
 # starts. File is {date, snoozes: {id: start_hour}}; a stale date voids it.
 # Uses the CURRENT clock (not the session-start today arg) so an idle-open
@@ -1654,7 +1932,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v/k: ⏰block | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v/k: ⏰block | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -1662,6 +1940,14 @@ export DTD_KEYS="enter: start/complete | ⌃⏎: done | ctrl-s: timer | ctrl-d: 
 # load/result binds and after every action so worker confirmations persist.
 cat > "$DTD_HDRGEN" <<HDRGENEOF
 #!/bin/zsh
+# Stale-code check first, same as janus.py's render_header: if it wins, it
+# replaces the WHOLE header line (in red) so a fix that shipped after this
+# session launched can't be missed or mistaken for the normal status line.
+live_mtime=\$(stat -f %m "$DTD_SELF" 2>/dev/null || echo 0)
+if (( live_mtime > $DTD_SRC_MTIME + 1 )); then
+  printf '\033[1;91m⚠ RESTART DTD — code updated on disk\033[0m'
+  exit 0
+fi
 ws=\$(cat "$DTD_HDR" 2>/dev/null | tr '\n' ' ')
 tally=\$(cat "$DTD_TALLY" 2>/dev/null | tr '\n' ' ')
 if [ -n "\$tally" ]; then
@@ -1800,6 +2086,18 @@ TALLY_PID=$!
       # session, not only on the next ~3min did-refresh-cache daemon cycle.
       ( for _s in 20 25 45 60 120; do sleep "$_s"; python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; done ) &
     fi
+    # Cross-machine completions (2026-07-30): another host's did-fast (e.g. a
+    # janus-mobile swipe on ix) mirrors its completed-today record to the
+    # synced vault as z_ibx/completed-today-<host>.json. When any remote
+    # mirror's mtime advances, fold it into the local completed-today
+    # ($DONE) and touch $CACHE so the reload branch below rebuilds the
+    # overlay and the just-completed card disappears from this dtd too.
+    cur_rm=$(stat -f %m "$HOME"/vault/z_ibx/completed-today-*.json 2>/dev/null | sort -rn | head -1)
+    if [[ -n "$cur_rm" && "$cur_rm" != "${last_rm:-}" ]]; then
+      last_rm="$cur_rm"
+      python3 "$HOME/i446-monorepo/tools/did/mark-completed.py" --absorb-remote >/dev/null 2>&1
+      touch "$CACHE" 2>/dev/null
+    fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
     last_m="$cur_m"
@@ -1868,7 +2166,18 @@ while true; do
   # the live cache. This prevents tasks vanishing mid-session when an external
   # process (morning routine, /todo, other terminals) rewrites the live cache
   # after startup. Use ctrl-r to explicitly pull external changes.
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$LOCAL_TODAY' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
+  # Date arg is a LIVE, unevaluated \$(date ...) substitution, not \$LOCAL_TODAY
+  # baked in as a literal (2026-08-08 fix): this string becomes DTD_RELOAD,
+  # which fzf's --bind flags below capture as STATIC text for fzf's entire
+  # (often many-hours-long) process lifetime. A literal date here means every
+  # keypress-triggered reload keeps re-sending the date from whenever fzf
+  # happened to launch -- past midnight, today_tasks' due<=today bound then
+  # excludes every card genuinely due today (rituals included -- "the -1n
+  # cards aren't rendering" bug report) on every single reload, not just a
+  # transient window. A literal \$(...) here is re-evaluated by the shell fzf
+  # spawns to run each reload/execute action, so it tracks the real clock for
+  # as long as the fzf process stays open, no relaunch required.
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' \"\$(date +%Y-%m-%d)\" '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
   DTD_RELOAD="${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
@@ -1963,7 +2272,7 @@ while true; do
   # minutes; i444 needs a count, 0 meaning "none needed today")
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
   case "$clean_lower" in
-    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444|新闻)
+    cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444|hiit|新闻)
       # If a Toggl timer for this exact task is running, use its elapsed
       # minutes as the value instead of prompting. Stop it here to read the
       # duration; did-fast then sees the explicit number (clean + N) and the
@@ -1994,6 +2303,11 @@ while true; do
   echo "$clean" >&3
 done
 
+# Signal the worker to stop BEFORE closing fd 3, so by the time it next sees
+# EOF on the FIFO (immediately after the close below) $DTD_STOP already
+# exists and it breaks instead of spinning forever (see $DTD_STOP's
+# declaration comment).
+touch "$DTD_STOP"
 exec 3>&-
 
 session_count=$(grep -c . "$DTD_SESSION" 2>/dev/null)
@@ -2042,4 +2356,7 @@ kill "$TICKER_PID" 2>/dev/null
 kill "$WATCHER_PID" 2>/dev/null
 kill "$TALLY_PID" 2>/dev/null
 # Note: DTD_SKIPPED is deliberately NOT removed — skips persist for the day
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_SESSION" "$DTD_TIMER" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+# $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
+# precedent) -- it's the only postmortem record of what a session pushed,
+# and is what made the 2026-08-01 false-positive diagnosis possible.
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"

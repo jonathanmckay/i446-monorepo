@@ -20,6 +20,79 @@ def test_gen_email_stats_in_cron():
     )
 
 
+def test_main_does_not_exit_before_fetching_data_on_missing_gh_token():
+    """Bug (2026-08-02, 'jm dashboard only updated through the end of
+    July'): main() called sys.exit(1) as its VERY FIRST action whenever
+    get_github_token() came back empty — before any Gmail/iMessage/Slack/
+    Teams/Outlook fetch — even though only the final push_to_gist() step
+    actually needs that token. gh's credential store moved to the macOS
+    keychain around 2026-07-28 (~/.config/gh/hosts.yml mtime), which a
+    non-interactive cron session can't unlock, so `gh auth token` came back
+    empty from cron from then on — silently dropping ALL data collection,
+    not just the gist publish, and freezing the dashboard's email/comms-
+    response (Project Bocking) charts at their last successful push."""
+    import ast
+
+    module = _load_gen_email_stats()
+    tree = ast.parse(Path(module.__file__).read_text())
+    main_fn = next(n for n in tree.body
+                   if isinstance(n, ast.FunctionDef) and n.name == "main")
+
+    def _first_stmt_index_calling(body, attr_name):
+        for i, stmt in enumerate(body):
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                        and node.func.attr == attr_name:
+                    return i
+        return None
+
+    exit_idx = _first_stmt_index_calling(main_fn.body, "exit")
+    fetch_idx = next(i for i, stmt in enumerate(main_fn.body) if isinstance(stmt, ast.For))
+
+    assert exit_idx is not None, (
+        "expected sys.exit to still fire when the gist push is skipped for lack of a token"
+    )
+    assert exit_idx > fetch_idx, (
+        "sys.exit on a missing gh token must come AFTER the account-fetching "
+        "loop, never before it — only push_to_gist needs the token"
+    )
+
+
+def test_missing_gh_token_still_runs_all_fetchers(monkeypatch):
+    """Behavioral counterpart: with no token, every independent fetcher must
+    still run (and push_to_gist must NOT be called) before main() exits."""
+    module = _load_gen_email_stats()
+    called = []
+
+    monkeypatch.setattr(module, "get_github_token", lambda: "")
+    monkeypatch.setattr(module, "ACCOUNTS", [])  # skip the Gmail per-account loop's own deps
+    monkeypatch.setattr(module, "compute_imessage_response_times",
+                        lambda: (called.append("imessage") or ([], {})))
+    monkeypatch.setattr(module, "compute_slack_response_times",
+                        lambda: (called.append("slack") or ([], {})))
+    monkeypatch.setattr(module, "compute_teams_response_times",
+                        lambda: (called.append("teams") or []))
+    monkeypatch.setattr(module, "compute_teams_replies_via_graph", lambda: [])
+    monkeypatch.setattr(module, "compute_teams_sent_counts", lambda: {})
+    monkeypatch.setattr(module, "compute_outlook_response_times",
+                        lambda: (called.append("outlook") or []))
+    monkeypatch.setattr(module, "compute_outlook_sent_counts", lambda: {})
+
+    def _fail_push(*a, **k):
+        raise AssertionError("push_to_gist must not be called without a token")
+    monkeypatch.setattr(module, "push_to_gist", _fail_push)
+
+    try:
+        module.main()
+        raise AssertionError("main() should sys.exit(1) when the token is missing")
+    except SystemExit as e:
+        assert e.code == 1
+
+    assert called == ["imessage", "slack", "teams", "outlook"], (
+        f"expected every fetcher to run despite the missing token, got {called}"
+    )
+
+
 def test_imsg_response_db_in_cron():
     """The iMessage response DB scanner must run on cron to provide live data."""
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)

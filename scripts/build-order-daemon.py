@@ -42,12 +42,14 @@ from pathlib import Path
 # directly, and it carries its own ssh+osascript fallback if the daemon is down.
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel as neon_excel
+import neon_blocks as nb  # build_order_lock() — centralized 2026-08-02 after
+# three separate incidents of the same unlocked build-order.md race
 
 # --- Paths ---
 
 VAULT = Path.home() / "vault"
 BUILD_ORDER = VAULT / "g245" / "5e-1" / "build-order.md"
-D357_DIR = VAULT / "d357"  # canonical flat location, filenames YYYY.MM.DD-<kebab>.md
+D357_DIR = VAULT / "d357"  # files live in week subfolders (D357_DIR/<M.W>/YYYY.MM.DD-<kebab>.md) — glob recursively
 ARCHIVE_ROOT = VAULT / "g245" / "archive"
 RESET_SCRIPT = Path.home() / "i446-monorepo" / "scripts" / "-1g-cron.py"
 DID_FAST = Path.home() / "i446-monorepo" / "tools" / "did" / "did-fast.py"
@@ -82,6 +84,11 @@ SCORE_EMOJI_MAP = {
 GOAL_MARKER = "🎯"
 TOGGL_MARKER = "⏱️"
 TODOIST_MARKER = "✅"
+# 🔒 on a block header = user-attested full credit: every stamp on that line is
+# trusted verbatim (including 🎯) and never stripped. Set manually when the
+# user vouches for a block the validators can't confirm (2026-07-30: 辰 rituals
+# done but no goal text on file, so 🎯 kept getting stripped by the reconcile).
+LOCK_MARKER = "🔒"
 TODOIST_KEYCHAIN_SERVICE = "todoist-api-key"
 # -1t: minutes of the 120-min block that must be *categorized* (a Toggl entry
 # with a project assigned). Stricter than the old 0.8 coverage of any tracked
@@ -93,8 +100,11 @@ BLOCK_RITUALS_CONFIG = Path.home() / "i446-monorepo" / "config" / "block-rituals
 # Labels that mark a completed item as NOT a real one-off task, for -1l. Recurring
 # habits (0neon/1neon/夜neon) don't even appear in the completed API (completion
 # advances the due date), so the live noise to strip is the -1neon rituals
-# themselves and @posthoc defer-eval records.
-NON_TASK_LABELS = {"0neon", "1neon", "夜neon", "-1neon", "posthoc"}
+# themselves. @posthoc is NOT blanket-excluded (2026-07-30): a posthoc meeting
+# completion that carries [N] is a real, pointed piece of work and should count
+# toward -1l — only posthoc *defer-tracking* records ("deferred: X → Y", logged
+# by the reschedule flow, not by doing anything) are noise. See _is_defer_noise.
+NON_TASK_LABELS = {"0neon", "1neon", "夜neon", "-1neon"}
 
 # Map fire-hour → 地支 block (just-ended) in the build order. Used to drop a
 # "fired" emoji on the block header so the user can see at a glance which
@@ -183,7 +193,7 @@ def find_meetings_for_date(target: dt.date):
         return []
     prefix = target.strftime("%Y.%m.%d")
     results = []
-    for path in sorted(D357_DIR.glob(f"{prefix}-*.md")):
+    for path in sorted(D357_DIR.glob(f"**/{prefix}-*.md")):
         slug = path.stem[len(prefix) + 1:]  # +1 for the dash separator
         if slug in SKIP_SLUGS:
             continue
@@ -355,79 +365,80 @@ def run_link_meetings(dry_run=False, target_date=None):
         log(f"link-meetings: no d357 meetings for {target}")
         return
 
-    lines = load_lines()
-    start, end = find_neg1_section(lines)
-    if start < 0:
-        log("link-meetings: ERROR no -1₲ section found")
-        return
+    with nb.build_order_lock():
+        lines = load_lines()
+        start, end = find_neg1_section(lines)
+        if start < 0:
+            log("link-meetings: ERROR no -1₲ section found")
+            return
 
-    headers = find_branch_headers(lines, start, end)
-    if not headers:
-        log("link-meetings: ERROR no 地支 headers found in -1₲")
-        return
+        headers = find_branch_headers(lines, start, end)
+        if not headers:
+            log("link-meetings: ERROR no 地支 headers found in -1₲")
+            return
 
-    # block_end[name] = start of next branch header, or section end for last branch
-    block_end = {}
-    for k, (name, idx) in enumerate(headers):
-        block_end[name] = headers[k + 1][1] if k + 1 < len(headers) else end
+        # block_end[name] = start of next branch header, or section end for last branch
+        block_end = {}
+        for k, (name, idx) in enumerate(headers):
+            block_end[name] = headers[k + 1][1] if k + 1 < len(headers) else end
 
-    section_text = "\n".join(lines[start:end])
+        section_text = "\n".join(lines[start:end])
 
-    inlined = 0
-    floated = 0
-    floats_by_branch = {}  # name -> [stems to float-insert]
+        inlined = 0
+        floated = 0
+        floats_by_branch = {}  # name -> [stems to float-insert]
 
-    for m_h, m_min, stem in meetings:
-        if stem in section_text:
-            # Already linked somewhere — leave alone (manual placement wins)
-            continue
-        # 1) Time-window match: ±MEETING_START_TOLERANCE_MIN around the
-        # recording start. Reliable when Toggl entries align with the
-        # meeting's actual start.
-        idx = _try_inline_append(lines, start, end, stem, m_h, m_min)
-        if idx is not None:
-            inlined += 1
-            section_text = "\n".join(lines[start:end])
-            continue
-        # 2) Name fallback: if no time match, look for slug-token substrings
-        # in time-entry descriptions (e.g. "accounting-analytics" → entry
-        # titled "m5x2 Accounting & Analytics"). Catches cases where the
-        # recording started long after the meeting (retro-recording).
-        idx = _try_name_fallback(lines, start, end, stem)
-        if idx is not None:
-            inlined += 1
-            section_text = "\n".join(lines[start:end])
-            continue
-        # 3) No match anywhere — float as standalone bullet under the
-        # branch the meeting hour maps to.
-        branch = hour_to_branch(m_h)
-        floats_by_branch.setdefault(branch, []).append(stem)
-
-    # Insert floats in reverse branch order so indices stay valid.
-    # Re-resolve block_end after potential prior changes (line lengths unchanged
-    # for inline appends, so positions still valid, but be safe).
-    if floats_by_branch:
-        headers2 = find_branch_headers(lines, *find_neg1_section(lines))
-        block_end2 = {}
-        for k, (name, idx) in enumerate(headers2):
-            block_end2[name] = headers2[k + 1][1] if k + 1 < len(headers2) else find_neg1_section(lines)[1]
-        for name, _ in reversed(headers2):
-            stems = floats_by_branch.get(name)
-            if not stems:
+        for m_h, m_min, stem in meetings:
+            if stem in section_text:
+                # Already linked somewhere — leave alone (manual placement wins)
                 continue
-            insertion = [f"    - [[d357/{s}|{s}]]" for s in stems]
-            if dry_run:
-                log(f"[DRY RUN] Would float under {name} @ line {block_end2[name]}:")
-                for t in insertion:
-                    log(f"  {t}")
-            else:
-                lines[block_end2[name]:block_end2[name]] = insertion
-            floated += len(insertion)
+            # 1) Time-window match: ±MEETING_START_TOLERANCE_MIN around the
+            # recording start. Reliable when Toggl entries align with the
+            # meeting's actual start.
+            idx = _try_inline_append(lines, start, end, stem, m_h, m_min)
+            if idx is not None:
+                inlined += 1
+                section_text = "\n".join(lines[start:end])
+                continue
+            # 2) Name fallback: if no time match, look for slug-token substrings
+            # in time-entry descriptions (e.g. "accounting-analytics" → entry
+            # titled "m5x2 Accounting & Analytics"). Catches cases where the
+            # recording started long after the meeting (retro-recording).
+            idx = _try_name_fallback(lines, start, end, stem)
+            if idx is not None:
+                inlined += 1
+                section_text = "\n".join(lines[start:end])
+                continue
+            # 3) No match anywhere — float as standalone bullet under the
+            # branch the meeting hour maps to.
+            branch = hour_to_branch(m_h)
+            floats_by_branch.setdefault(branch, []).append(stem)
 
-    if inlined == 0 and floated == 0:
-        log("link-meetings: no new links (idempotent)")
-        return
-    save_lines(lines, dry_run=dry_run)
+        # Insert floats in reverse branch order so indices stay valid.
+        # Re-resolve block_end after potential prior changes (line lengths unchanged
+        # for inline appends, so positions still valid, but be safe).
+        if floats_by_branch:
+            headers2 = find_branch_headers(lines, *find_neg1_section(lines))
+            block_end2 = {}
+            for k, (name, idx) in enumerate(headers2):
+                block_end2[name] = headers2[k + 1][1] if k + 1 < len(headers2) else find_neg1_section(lines)[1]
+            for name, _ in reversed(headers2):
+                stems = floats_by_branch.get(name)
+                if not stems:
+                    continue
+                insertion = [f"    - [[d357/{s}|{s}]]" for s in stems]
+                if dry_run:
+                    log(f"[DRY RUN] Would float under {name} @ line {block_end2[name]}:")
+                    for t in insertion:
+                        log(f"  {t}")
+                else:
+                    lines[block_end2[name]:block_end2[name]] = insertion
+                floated += len(insertion)
+
+        if inlined == 0 and floated == 0:
+            log("link-meetings: no new links (idempotent)")
+            return
+        save_lines(lines, dry_run=dry_run)
     log(f"link-meetings: appended {inlined} inline, floated {floated}")
 
 
@@ -764,35 +775,42 @@ def _has_block_marker(block_name: str, marker: str) -> bool:
 
 
 def _write_block_marker(block_name: str, marker: str, dry_run: bool = False) -> bool:
-    """Append an emoji marker to a block header in -1₲. Idempotent."""
-    if _has_block_marker(block_name, marker):
-        return False
-    if not BUILD_ORDER.exists():
-        return False
-    text = BUILD_ORDER.read_text(encoding="utf-8")
-    if "## -1₲" not in text:
-        return False
-    lines = text.split("\n")
-    in_section = False
-    for i, line in enumerate(lines):
-        if line.strip() == "## -1₲":
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if not in_section:
-            continue
-        if line.startswith("- ") and not line.startswith("    "):
-            name = _block_line_name(line)
-            if name == block_name:
-                if dry_run:
-                    log(f"[DRY RUN] Would write {marker} to {block_name}")
+    """Append an emoji marker to a block header in -1₲. Idempotent.
+
+    Lock-protected (2026-08-02): the check-then-write (including the nested
+    _has_block_marker call) must be atomic as a whole, or a concurrent
+    writer (another daemon fire, an on-Ix did-fast ritual completion) can
+    land between the check and the write and get silently discarded —
+    third instance of this exact bug class."""
+    with nb.build_order_lock():
+        if _has_block_marker(block_name, marker):
+            return False
+        if not BUILD_ORDER.exists():
+            return False
+        text = BUILD_ORDER.read_text(encoding="utf-8")
+        if "## -1₲" not in text:
+            return False
+        lines = text.split("\n")
+        in_section = False
+        for i, line in enumerate(lines):
+            if line.strip() == "## -1₲":
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if not in_section:
+                continue
+            if line.startswith("- ") and not line.startswith("    "):
+                name = _block_line_name(line)
+                if name == block_name:
+                    if dry_run:
+                        log(f"[DRY RUN] Would write {marker} to {block_name}")
+                        return True
+                    lines[i] = line.rstrip() + " " + marker
+                    BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
+                    log(f"marker: wrote {marker} to {block_name}")
                     return True
-                lines[i] = line.rstrip() + " " + marker
-                BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
-                log(f"marker: wrote {marker} to {block_name}")
-                return True
-    return False
+        return False
 
 
 def _block_has_goals(block_name: str) -> bool:
@@ -905,11 +923,20 @@ def _has_points(content: str) -> bool:
     return any(int(n) > 0 for n in nums)
 
 
+def _is_defer_noise(content: str) -> bool:
+    """Posthoc defer-tracking records ("deferred: X [N] (M) [N] → date [N]")
+    log a reschedule, not accomplished work — never count toward -1l even
+    though they're posthoc and often carry a stray [N] from the before/after
+    state they track."""
+    return content.strip().lower().startswith("deferred:")
+
+
 def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -> bool:
     """-1l: every real (non-habit) Todoist task completed in the block window
     carries [N] points. Empty (no real completions) = not satisfied. Recurring
-    habits don't surface in the completed API; the only noise to strip is the
-    -1neon rituals and @posthoc eval records (NON_TASK_LABELS)."""
+    habits don't surface in the completed API; the noise to strip is the
+    -1neon rituals (NON_TASK_LABELS) and posthoc defer records (_is_defer_noise)
+    — a pointed posthoc *meeting* completion is real work and counts."""
     token = _todoist_token()
     if not token:
         log("-1l: no API token in env or keychain")
@@ -934,7 +961,8 @@ def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -
         return False
 
     real = [it for it in items
-            if not (_at_labels(it.get("content", "")) & NON_TASK_LABELS)]
+            if not (_at_labels(it.get("content", "")) & NON_TASK_LABELS)
+            and not _is_defer_noise(it.get("content", ""))]
     if not real:
         log(f"-1l: {start_hour:02d}-{end_hour:02d} no real task completions → fail")
         return False
@@ -986,30 +1014,39 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
 def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     """Decide whether a marker earns its points for a block header `line`.
 
-    The emoji must be present on the header. Only GOAL_MARKER (🎯) is still
-    live-gated: `live` must confirm the habit happened today, blocking stale
-    goal markers from prior days. ☀️/📧 are written by /inbound with no
-    daemon-side validator, so header presence alone is trusted.
+    The emoji must be present on the header. Only GOAL_MARKER (🎯) is
+    live-gated: `live` must confirm goals actually exist for the block,
+    stripping a stale cross-day stamp. ☀️/📧/⏱️/✅ are trusted on header
+    presence alone, no daemon-side audit.
 
-    ⏱️/✅ (TOGGL_MARKER/TODOIST_MARKER) are ALSO header-trusted now (2026-07-13
-    OR redesign) — did-fast's run_ritual stamps them immediately on manual
-    completion, and the daemon's own auto-check independently stamps them via
-    `_write_block_marker` when it passes (see `evaluate_and_mark_block`).
-    Either path writes the same emoji to the same header line, so trusting
-    presence alone naturally gives "manual OR auto earns it" without needing
-    to distinguish which path wrote it. When `live` is None (e.g. a re-score
-    with no evaluation pass), all markers are trusted, preserving legacy
-    behavior."""
+    ⏱️/✅ are deliberately NOT audited (⏱️'s audit added 2026-07-30, removed
+    2026-08-01 per JM: "If I manually mark -1l or -1t there shouldn't be an
+    audit. That should have been an audit that would happen at [the fire] to
+    see if I was close enough to not need to manually check."). Completing
+    -1t/-1l is a direct first-person attestation of the previous block's
+    recording; the live checks (_toggl_covers_block, _todoist_l_satisfied)
+    are narrow proxies that can legitimately fail on genuinely-worked blocks.
+    Their role is AUTO-AWARD only: at each fire the daemon stamps ⏱️/✅ itself
+    when its own check passes, sparing the manual claim — it never claws a
+    stamp back. When `live` is None (e.g. a re-score with no evaluation
+    pass), all markers are trusted, preserving legacy behavior."""
     if emoji not in line:
         return False
-    if emoji == GOAL_MARKER and live is not None and emoji in live and not live[emoji]:
+    if LOCK_MARKER in line:
+        return True
+    if emoji in (TODOIST_MARKER, TOGGL_MARKER):
+        return True
+    if live is not None and emoji in live and not live[emoji]:
         return False
     return True
 
 
-# Only GOAL_MARKER is still stripped when its live check fails — TOGGL_MARKER/
-# TODOIST_MARKER are OR'd with manual completion (see _marker_earned) so a
-# failing auto-check must never erase a mark manual completion already earned.
+# Only 🎯 is audited: a goal-presence check that comes back False strips
+# the marker (and its points) even if it was stamped by a manual completion
+# — the stale-cross-day-goal protection. ☀️/📧 have no daemon-side
+# validator; ⏱️/✅ have validators but those are AUTO-AWARD only (stamp on
+# pass, never strip — 2026-08-01, see _marker_earned): a manual -1t/-1l
+# completion is a final first-person attestation, not a provisional claim.
 DAEMON_OWNED_MARKERS = {GOAL_MARKER}
 
 
@@ -1057,33 +1094,38 @@ def _strip_unearned_markers(block_name: str, live: dict | None,
     unearned = [m for m in DAEMON_OWNED_MARKERS if m in live and not live[m]]
     if not unearned:
         return
-    text = BUILD_ORDER.read_text(encoding="utf-8")
-    if "## -1₲" not in text:
-        return
-    lines = text.split("\n")
-    in_section = False
-    for i, line in enumerate(lines):
-        if line.startswith("## -1₲"):
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if not in_section:
-            continue
-        if (line.startswith("- ") and not line.startswith("    ")
-                and _block_line_name(line) == block_name):
-            present = [m for m in unearned if m in line]
-            if present:
-                new_line = line
-                for m in present:
-                    new_line = new_line.replace(m, "")
-                new_line = re.sub(r"\s{2,}", " ", new_line).rstrip()
-                if new_line != line and not dry_run:
-                    lines[i] = new_line
-                    BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
-                log(f"strip: {block_name} removed stale {present}"
-                    + (" [DRY RUN]" if dry_run else ""))
+    # Lock-protected (2026-08-02) — same read-modify-write race as
+    # _write_block_marker, just on the strip side.
+    with nb.build_order_lock():
+        text = BUILD_ORDER.read_text(encoding="utf-8")
+        if "## -1₲" not in text:
             return
+        lines = text.split("\n")
+        in_section = False
+        for i, line in enumerate(lines):
+            if line.startswith("## -1₲"):
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if not in_section:
+                continue
+            if (line.startswith("- ") and not line.startswith("    ")
+                    and _block_line_name(line) == block_name):
+                if LOCK_MARKER in line:
+                    return  # user-attested block: stamps are never stripped
+                present = [m for m in unearned if m in line]
+                if present:
+                    new_line = line
+                    for m in present:
+                        new_line = new_line.replace(m, "")
+                    new_line = re.sub(r"\s{2,}", " ", new_line).rstrip()
+                    if new_line != line and not dry_run:
+                        lines[i] = new_line
+                        BUILD_ORDER.write_text("\n".join(lines), encoding="utf-8")
+                    log(f"strip: {block_name} removed stale {present}"
+                        + (" [DRY RUN]" if dry_run else ""))
+                return
 
 
 # --- Mode: lock-and-mark ---
@@ -1094,39 +1136,66 @@ def annotate_block_fired(hour: int, dry_run: bool = False) -> None:
     branch = HOUR_TO_BRANCH_BLOCK.get(hour)
     if branch is None:
         return
-    try:
-        lines = load_lines()
-    except OSError as e:
-        log(f"annotate: ERROR can't read build order: {e}")
-        return
-    target_prefix = f"- {branch}"
-    for i, line in enumerate(lines):
-        # Match a 地支 block header (line starts with "- <branch>" possibly followed by space + extras)
-        if not line.startswith(target_prefix):
-            continue
-        # Header found; ensure it's a header (next char is end-of-line or whitespace)
-        rest = line[len(target_prefix):]
-        if rest and not rest[0].isspace():
-            continue
-        if DAEMON_FIRED_EMOJI in line:
-            log(f"annotate: {branch} already marked")
+    with nb.build_order_lock():
+        try:
+            lines = load_lines()
+        except OSError as e:
+            log(f"annotate: ERROR can't read build order: {e}")
             return
-        lines[i] = line.rstrip() + " " + DAEMON_FIRED_EMOJI
-        if dry_run:
-            log(f"[DRY RUN] Would annotate {branch}: {lines[i]!r}")
+        target_prefix = f"- {branch}"
+        for i, line in enumerate(lines):
+            # Match a 地支 block header (line starts with "- <branch>" possibly followed by space + extras)
+            if not line.startswith(target_prefix):
+                continue
+            # Header found; ensure it's a header (next char is end-of-line or whitespace)
+            rest = line[len(target_prefix):]
+            if rest and not rest[0].isspace():
+                continue
+            if DAEMON_FIRED_EMOJI in line:
+                log(f"annotate: {branch} already marked")
+                return
+            lines[i] = line.rstrip() + " " + DAEMON_FIRED_EMOJI
+            if dry_run:
+                log(f"[DRY RUN] Would annotate {branch}: {lines[i]!r}")
+                return
+            save_lines(lines)
+            log(f"annotate: marked {branch} with {DAEMON_FIRED_EMOJI}")
             return
-        save_lines(lines)
-        log(f"annotate: marked {branch} with {DAEMON_FIRED_EMOJI}")
-        return
-    log(f"annotate: {branch} block header not found in build order")
+        log(f"annotate: {branch} block header not found in build order")
 
 
 def _load_block_rituals() -> dict:
     return json.loads(BLOCK_RITUALS_CONFIG.read_text(encoding="utf-8"))
 
 
-def _todoist_open_rituals(token: str) -> list:
-    """All currently-open tasks carrying the -1neon label."""
+def _ritual_bare_tag(content: str, marker: str, tags: list[str]) -> str | None:
+    """The ritual tag a card's bare (marker-stripped) content matches, tolerating
+    trailing annotations like `(15) [15]` — same whole-token comparison as
+    lib/neon_blocks.ritual_card_tag() (kept as a local copy here: this module
+    doesn't import neon_blocks). None if it matches no known tag.
+
+    Exact-string bare matching (the previous behavior of both callers below)
+    broke the instant a ritual card picked up ANY suffix: create_block_rituals'
+    dedup check (`tag in open_bare`) stopped recognizing the card as already
+    open and created a duplicate every 2h fire, while delete_block_rituals'
+    earned-check (`bare in auto_emoji`) stopped recognizing an EARNED auto
+    card, silently deleting it (no credit) instead of closing it (bug
+    2026-07-29: "seeing a lot of extra -1n" + uniform bogus (15)[15] on every
+    ritual card, which real ritual cards never carry -- their points come from
+    0分!P via the block header, never from [N])."""
+    bare = (content or "").replace(marker, "").strip()
+    for tag in tags:
+        if bare == tag or tag in bare.split():
+            return tag
+    return None
+
+
+def _todoist_open_rituals(token: str) -> list | None:
+    """All currently-open tasks carrying the -1neon label. None on fetch
+    failure — distinct from an empty list (genuinely nothing open) — so
+    callers fail closed instead of treating an API hiccup as license to
+    duplicate (bug 2026-07-30: a 503 here made create_block_rituals think
+    nothing was open and create a full second set of cards)."""
     from urllib.parse import quote
     url = f"https://api.todoist.com/api/v1/tasks?label={quote('-1neon')}&limit=200"
     req = urllib.request.Request(url)
@@ -1137,11 +1206,11 @@ def _todoist_open_rituals(token: str) -> list:
         return data.get("results", data) if isinstance(data, dict) else data
     except Exception as e:
         log(f"rituals: fetch open ERROR {e}")
-        return []
+        return None
 
 
-def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> int:
-    """POST/DELETE against the Todoist v1 API. Returns HTTP status."""
+def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> tuple[int, bytes]:
+    """POST/DELETE against the Todoist v1 API. Returns (HTTP status, body)."""
     url = f"https://api.todoist.com/api/v1{path}"
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=body, method=method)
@@ -1149,7 +1218,7 @@ def _todoist_write(path: str, payload: dict | None, token: str, method: str = "P
     if body is not None:
         req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return resp.status
+        return resp.status, resp.read()
 
 
 def create_block_rituals(dry_run: bool = False) -> None:
@@ -1167,11 +1236,16 @@ def create_block_rituals(dry_run: bool = False) -> None:
         return
     cfg = _load_block_rituals()
     marker, label = cfg.get("auto_marker", "😈"), cfg["label"]
-    open_bare = {(t.get("content") or "").replace(marker, "").strip()
-                 for t in _todoist_open_rituals(token)}
+    tags = [r["tag"] for r in cfg["rituals"]]
+    open_rituals = _todoist_open_rituals(token)
+    if open_rituals is None:
+        log("rituals: could not verify open cards — skipping creation this fire")
+        return
+    open_tags = {_ritual_bare_tag(t.get("content") or "", marker, tags)
+                 for t in open_rituals}
     for r in cfg["rituals"]:
         tag = r["tag"]
-        if tag in open_bare:
+        if tag in open_tags:
             log(f"rituals: {tag} already open — skip")
             continue
         content = f"{marker} {tag}"
@@ -1179,9 +1253,25 @@ def create_block_rituals(dry_run: bool = False) -> None:
             log(f"[DRY RUN] create card {content!r} @{label}")
             continue
         try:
-            _todoist_write("/tasks", {"content": content, "labels": [label],
+            status, body = _todoist_write("/tasks", {"content": content, "labels": [label],
                                       "due_string": "today"}, token)
             log(f"rituals: + {content}")
+            # Verify the label actually persisted (bug 2026-07-30: 3 of 5
+            # cards created in the same batch came back with labels=[] --
+            # a Todoist-side write flake on rapid-fire creates. An
+            # unlabeled card is invisible to _todoist_open_rituals'
+            # label-filtered fetch, so it never gets retired by
+            # delete_block_rituals and just orphans in the inbox forever,
+            # each recurring fire creating another duplicate on top since
+            # the dedup check can't see it either).
+            try:
+                created = json.loads(body)
+                if label not in (created.get("labels") or []):
+                    tid = created.get("id")
+                    log(f"rituals: {content!r} created without {label!r} label — repairing")
+                    _todoist_write(f"/tasks/{tid}", {"labels": [label]}, token)
+            except Exception as e:
+                log(f"rituals: label verify/repair for {content!r} ERROR {e}")
         except Exception as e:
             log(f"rituals: create {content!r} ERROR {e}")
 
@@ -1200,13 +1290,18 @@ def delete_block_rituals(dry_run: bool = False, live: dict | None = None) -> Non
         return
     cfg = _load_block_rituals()
     marker = cfg.get("auto_marker", "😈")
+    tags = [r["tag"] for r in cfg["rituals"]]
     auto_emoji = {r["tag"]: r["emoji"] for r in cfg["rituals"]
                   if r.get("mode") == "auto"}
-    for t in _todoist_open_rituals(token):
+    open_rituals = _todoist_open_rituals(token)
+    if open_rituals is None:
+        log("rituals: could not verify open cards — skipping retirement this fire")
+        return
+    for t in open_rituals:
         tid, content = t.get("id"), t.get("content", "")
-        bare = (content or "").replace(marker, "").strip()
-        earned = (bare in auto_emoji and live is not None
-                  and bool(live.get(auto_emoji[bare])))
+        tag = _ritual_bare_tag(content, marker, tags)
+        earned = (tag in auto_emoji and live is not None
+                  and bool(live.get(auto_emoji[tag])))
         verb = "close (earned)" if earned else "delete"
         if dry_run:
             log(f"[DRY RUN] {verb} leftover card {content!r}")
@@ -1267,6 +1362,23 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
     if hour not in BLOCK_FIRE_HOURS:
         log(f"lock-and-mark: hour {hour} is not a fire time — nothing to do")
         return
+
+    # Heal Syncthing-conflict stamp losses BEFORE reconciling: Straylight
+    # stamps rituals at completion time while this daemon rewrites the same
+    # file, and the race's loser survives only as a LOCAL .sync-conflict
+    # copy. reconcile_p_for_day SETs 0分!P from the header stamps, so an
+    # unhealed loss becomes a permanent points loss (2026-07-29: 辰 scored
+    # 7/13 — 🎯/✅ lived only in the conflict copy). Union-merge is safe:
+    # the validation/strip pass below still removes stamps that don't hold.
+    if not dry_run:
+        try:
+            import build_order_heal
+            healed = build_order_heal.heal(BUILD_ORDER)
+            for m in healed.get("merged", []):
+                if m["added"]:
+                    log(f"lock-and-mark: healed conflict stamps {m['added']} from {m['file']}")
+        except Exception as e:  # noqa: BLE001 — healing must never block the fire
+            log(f"lock-and-mark: heal skipped: {e}")
 
     block_name = HOUR_TO_BRANCH_BLOCK.get(hour)
     log(f"lock-and-mark: hour={hour:02d}, block={block_name}")
@@ -1563,50 +1675,51 @@ def git_commit_archive(archive_date, defer_result, dry_run=False):
 
 def defer_unchecked_neg1(dry_run=False):
     """Returns dict {deferred: int, dropped: int}."""
-    lines = load_lines()
-    start, end = find_neg1_section(lines)
-    if start < 0:
-        log("defer: no -1₲ section")
-        return {"deferred": 0, "dropped": 0}
+    with nb.build_order_lock():
+        lines = load_lines()
+        start, end = find_neg1_section(lines)
+        if start < 0:
+            log("defer: no -1₲ section")
+            return {"deferred": 0, "dropped": 0}
 
-    unchecked = []
-    for i in range(start + 1, end):
-        m = UNCHECKED_ITEM_RE.match(lines[i])
-        if m and m.group(1).strip():
-            unchecked.append((i, m.group(1).strip()))
+        unchecked = []
+        for i in range(start + 1, end):
+            m = UNCHECKED_ITEM_RE.match(lines[i])
+            if m and m.group(1).strip():
+                unchecked.append((i, m.group(1).strip()))
 
-    if not unchecked:
-        log("defer: no unchecked items")
-        return {"deferred": 0, "dropped": 0}
+        if not unchecked:
+            log("defer: no unchecked items")
+            return {"deferred": 0, "dropped": 0}
 
-    keep = unchecked[:MAX_DEFERRED]
-    dropped = unchecked[MAX_DEFERRED:]
+        keep = unchecked[:MAX_DEFERRED]
+        dropped = unchecked[MAX_DEFERRED:]
 
-    def fmt(text: str) -> str:
-        return text if text.startswith("- [ ]") else f"- [ ] {text}"
+        def fmt(text: str) -> str:
+            return text if text.startswith("- [ ]") else f"- [ ] {text}"
 
-    deferred_lines = [fmt(t) for _, t in keep]
+        deferred_lines = [fmt(t) for _, t in keep]
 
-    if dry_run:
-        log(f"[DRY RUN] Would defer {len(keep)} to 以后的目标:")
-        for dl in deferred_lines:
-            log(f"  {dl}")
-        if dropped:
-            log(f"[DRY RUN] Would drop {len(dropped)} item(s)")
-        return {"deferred": len(keep), "dropped": len(dropped)}
+        if dry_run:
+            log(f"[DRY RUN] Would defer {len(keep)} to 以后的目标:")
+            for dl in deferred_lines:
+                log(f"  {dl}")
+            if dropped:
+                log(f"[DRY RUN] Would drop {len(dropped)} item(s)")
+            return {"deferred": len(keep), "dropped": len(dropped)}
 
-    later_idx = -1
-    for i, line in enumerate(lines):
-        if line.strip().startswith("### ") and LATER_HEADING in line:
-            later_idx = i
-            break
+        later_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith("### ") and LATER_HEADING in line:
+                later_idx = i
+                break
 
-    if later_idx < 0:
-        log("defer: WARN no 以后的目标 heading — skipping defer")
-        return {"deferred": 0, "dropped": 0}
+        if later_idx < 0:
+            log("defer: WARN no 以后的目标 heading — skipping defer")
+            return {"deferred": 0, "dropped": 0}
 
-    lines[later_idx + 1:later_idx + 1] = deferred_lines
-    save_lines(lines)
+        lines[later_idx + 1:later_idx + 1] = deferred_lines
+        save_lines(lines)
     log(f"defer: moved {len(keep)} to 以后的目标, dropped {len(dropped)}")
     return {"deferred": len(keep), "dropped": len(dropped)}
 
@@ -1616,7 +1729,10 @@ def defer_unchecked_neg1(dry_run=False):
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 
 # Tag → 0n column letter
-TOGGL_TAG_COLS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX", "xk87": "AZ"}
+# AZ ("∑xk87") is deliberately absent: it's a live =SUM(AJ:AO) formula
+# aggregating the kid/family columns, not a raw tag-total target — a "xk87":
+# "AZ" entry here used to clobber that formula with a Toggl-tag-derived total.
+TOGGL_TAG_COLS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX"}
 # Sleep (睡觉) carries the "-3" tag but is tracked separately in column D, so it
 # must be excluded from the -3/AX tag total — otherwise AX reads as ~a whole
 # night of sleep (regression 2026-06-28: AX=439). Mirrors 0t-fast.SLEEP_PROJECT_ID.

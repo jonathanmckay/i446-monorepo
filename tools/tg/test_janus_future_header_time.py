@@ -33,7 +33,7 @@ def _pick(hour, minute, label="standup", dur=60):
 
 def _header_line(mod, picks):
     out = mod._compact_block_lines("午", 10, picks, 0, "", is_future=True)
-    text = "".join(t for _, t in out)
+    text = "".join(t for _, t, *_ in out)
     return text.split("\n", 1)[0]
 
 

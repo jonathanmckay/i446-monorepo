@@ -55,6 +55,9 @@ TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 # ssh+osascript fallback built in)
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel
+import neon_blocks as nb
+
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 
 # Import ix_osa (AppleScript-over-ssh transport, same pattern as did-fast)
 _IX_PATH = Path.home() / ".claude/skills/_lib/ix-osa.py"
@@ -255,6 +258,95 @@ def _reverse_todoist_entry(td: dict, today_iso: str, errors: list[str]) -> None:
         errors.append(f"todoist {tid}: {e}")
 
 
+def _on_ix() -> bool:
+    """True when this process runs on Ix — build-order.md's single writer
+    (same check as did-fast.py's _on_ix; avoids an ssh-to-self hop that can
+    wedge on a stale Tailscale MagicSock)."""
+    import socket
+    return "mac-mini" in socket.gethostname().lower()
+
+
+def _unstamp_ritual(block: str, emoji: str) -> dict | None:
+    """Remove `emoji` from `block`'s header on the single-writer copy
+    (Ix), then recompute the day's -1₦ formula from the result. Mirrors
+    did-fast.py's _stamp_on_ix: same lock file, same flock-serialized
+    read-modify-write, just the inverse edit. Returns
+    {"changed": bool, "formula": str} or None on ssh failure."""
+    py = (
+        "import sys, fcntl, json; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
+        "import neon_blocks as nb\n"
+        "from pathlib import Path\n"
+        "bo = Path.home() / 'vault/g245/5e-1/build-order.md'\n"
+        "lock_path = bo.with_suffix('.lock')\n"
+        "with open(lock_path, 'a') as lf:\n"
+        "    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)\n"
+        "    try:\n"
+        "        t = bo.read_text(encoding='utf-8')\n"
+        f"        nt, ch = nb.unstamp_emoji(t, {block!r}, {emoji!r})\n"
+        "        if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "        _, _, formula = nb.score_day(nt)\n"
+        "    finally:\n"
+        "        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)\n"
+        "print(json.dumps({'changed': ch, 'formula': formula}))\n"
+    )
+    if _on_ix():
+        try:
+            r = subprocess.run(["python3", "-c", py],
+                               capture_output=True, text=True, timeout=15)
+        except Exception:
+            return None
+    else:
+        try:
+            r = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                 "ix", "python3", "-"],
+                input=py, capture_output=True, text=True, timeout=15)
+        except Exception:
+            return None
+    if r.returncode != 0:
+        return None
+    lines = (r.stdout or "").strip().splitlines()
+    try:
+        return json.loads(lines[-1]) if lines else None
+    except Exception:
+        return None
+
+
+def _reverse_ritual_entry(e: dict, today_iso: str, target_md: str, errors: list[str]) -> None:
+    """Undo a ritual completion: reopen the Todoist card, un-stamp the header
+    emoji, and recompute+SET 0分!P from the corrected header — the inverse of
+    run_ritual's own (close, stamp, credit) sequence.
+
+    The top-level entry["todoist"] (handled by the generic loop below)
+    deliberately omits the task id (did-fast.py, see the comment above
+    ritual_entries.append) so the generic _reverse_todoist_entry() never
+    half-undoes a ritual card — reopening it without also un-stamping the
+    header and reversing the point credit would leave the header/P out of
+    sync with an open card. The full state this function needs lives in
+    entry["ritual"], run_ritual's own return value, journaled verbatim."""
+    ritual = e.get("ritual") or {}
+    rtd = ritual.get("todoist") or {}
+    if rtd.get("id"):
+        _reverse_todoist_entry(rtd, today_iso, errors)
+    if not ritual.get("stamped"):
+        return  # this completion didn't change the header — nothing to unstamp
+    block, emoji = ritual.get("block"), ritual.get("emoji")
+    if not (block and emoji):
+        return
+    result = _unstamp_ritual(block, emoji)
+    if result is None:
+        errors.append(f"ritual {block} {emoji}: unstamp failed (ix unreachable)")
+        return
+    if not result.get("changed"):
+        return
+    credited = bool((ritual.get("p_credit") or {}).get("ok"))
+    if credited:
+        w = excel.write("0分", "P", date=target_md, value=result["formula"],
+                        src=f"undo ritual {block} {ritual.get('ritual', '?')}")
+        if not w.get("ok"):
+            errors.append(f"0分 P: undo write failed: {w.get('error') or '?'}")
+
+
 def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
                            errors: list[str]) -> None:
     """Reverse all side effects recorded in one did-fast output JSON."""
@@ -303,6 +395,10 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
                     n1_restores.append((row, col, undo["prev_1n_formula"]))
                 if n1fen_ok and e.get("fen_col"):
                     fen_strips.append((e["fen_col"], f"+'1n+'!{col}{row}"))
+
+        if step == "ritual":
+            _reverse_ritual_entry(e, today_iso, target_md, errors)
+            continue  # its own todoist/header/P handling above is exhaustive
 
         td = e.get("todoist")
         if td:

@@ -1,6 +1,6 @@
 ---
 name: "1s"
-description: "Weekly strategic review. Runs /1n donuts, copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
+description: "Weekly strategic review. Copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
 user-invocable: true
 ---
 
@@ -12,15 +12,33 @@ Compare what you planned (1g goals) vs what you spent time on (Toggl) vs what yo
 
 ```
 /1s [week]
+/1s survey [week]
 ```
 
 - No args → reviews the most recent completed week (last Sun–Sat)
 - `last` → same as no args
 - `MM/DD` → reviews the week containing that date
+- `survey [week]` → **survey-only fast path**: just opens the 1s survey form
+  for that week (or the last completed week if omitted). Skips the
+  completeness gate, MSFT pull, 1g summary copy, Toggl fetch, points
+  aggregation, narrative analysis, and vault write — go straight to Step 0b.
+  Use this when you just want to fill out the retrospective questions for a
+  week (including backfilling an old one) without running the full analysis.
+
+### Survey-only fast path
+
+If the first argument is literally `survey`, skip directly to **Step 0b**
+(launch the survey form) using the remaining argument (if any) as the week
+date — do not run Step -1's completeness gate, Step 0-pre's MSFT pull, Step
+0a's 1g-tldr copy, or Steps 1–8. The survey form itself is unaffected by any
+of that (it only reads/writes the `1分+1s` and `0s897` sheets), so none of it
+is needed just to fill out the manual questions for a week.
 
 ## Steps
 
 ### Step -1: Week-completeness gate (BLOCKING)
+
+Skip this step entirely for the `survey` fast path (see above).
 
 The weekly review may not run on an incomplete week. Check first:
 
@@ -36,9 +54,9 @@ until the user has backfilled and the check passes. The survey tool enforces
 the same gate itself (`--force` is the deliberate escape hatch; use it only
 if the user explicitly says to skip backfilling).
 
-### Step 0: Prep — donuts, 1g summary, open tabs
+### Step 0: Prep — 1g summary, open tabs
 
-Run these three prep steps before the analysis.
+Run these prep steps before the analysis.
 
 #### Step 0-pre: MSFT share pull (weekly, must run interactively)
 
@@ -54,13 +72,11 @@ one-line summary; surface any ⚠ clobber flags to the user. This step lives her
 (not launchd) deliberately: macOS TCC blocks CloudStorage for launchd-spawned
 python3, and /1s already runs weekly in a terminal with full access.
 
-#### Step 0a: Run /1n (weekly donut charts)
+#### Step 0a: Copy 1g tldr to 1分+1s
 
-Invoke the `/1n` skill. This generates two donut charts for the review week and inserts them into the `1分+1s` sheet at O{week} and P{week}.
+**Skip this step entirely if the review week is not the most recent completed week** (i.e. the user passed a `week` argument targeting an older week for backfill). The `1g` sheet resets every week (`/1g` overwrites it), so `1g!A1` only ever holds the *current* week's tldr — copying it into an old week's row writes that day's placeholder/garbage text into historical data (regression 2026-08-02: copied "u" into week 6.3's row, ~6 weeks stale). There is no way to recover a past week's tldr from the live sheet; leave the cell as-is for backfills.
 
-#### Step 0b: Copy 1g tldr to 1分+1s
-
-Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (same ISO week number used by /1n).
+Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (ISO week number for the review week).
 
 ```applescript
 tell application "Microsoft Excel"
@@ -76,7 +92,7 @@ end tell
 
 Replace `WEEK_ROW` with the ISO week number for the review week.
 
-#### Step 0c: Launch the weekly survey form
+#### Step 0b: Launch the weekly survey form
 
 Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
 the manual questions of the `1分+1s` row (Title for the Week, Biggest Win,
@@ -87,9 +103,13 @@ and must never be written. Above each question the form surfaces the week's
 DAILY answers from `0s897` (titles, wins, learnings, proud/regret) so
 answering is selecting/condensing rather than composing de novo — typing a
 day digit (`3`, or `2,5`) as the whole answer expands to that day's text on
-save. On `^S` it writes the answers to the review week's row (col A M.W
-label), saves, and **marks the weekly 1s task done** (survey completion IS
-task completion; `--no-mark` suppresses that for reruns).
+save. Finishing the last field (Tab off it, Escape, or a blank Enter) writes
+the answers to the review week's row (col A M.W label), saves, and **marks
+the weekly 1s task done** (survey completion IS task completion; `--no-mark`
+suppresses that for reruns). On a successful save it prints an explicit
+`✓ 1s saved to Neon — ...` confirmation, then (for interactive form runs,
+not `--from-json`) auto-closes its own cmux tab ~1.5s later via `cmux
+close-surface` — no stray pane left sitting at a shell prompt.
 
 It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 
@@ -105,7 +125,7 @@ It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 3. ```bash
    cmux focus-pane --pane pane:<N>
    ```
-4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, ^S saves.`
+4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, finishing the last field autosaves.`
 
 Do NOT block on the form — continue with Step 1 while the user fills it. If
 cmux is unavailable, tell the user to run it themselves:
@@ -124,6 +144,18 @@ Calculate the Sun–Sat range for the target week. Default: the most recent Satu
 ```
 
 Set `week_start` (Sunday) and `week_end` (Saturday) as YYYY-MM-DD strings.
+
+**Backfill gate**: if `week_end` is before the most recently completed Saturday
+(i.e. the user targeted an old week, not the current one), **STOP after this
+step** and tell the user Steps 2/5/6/7 can't run correctly — the `1g` sheet
+has no historical archive (same root cause as the Step 0a bug below: `/1g`
+overwrites it weekly, so `1g!A1` and its goal rows only ever hold the
+*current* week's data). Ask how to proceed: drop the goals/target/Δ columns
+and do a time-vs-points-only comparison, abort to survey-only (Step 0b, which
+still works — Toggl and 0分 history are real, only `1g` is not), or take
+manually-supplied goals from the user. Do not silently pull `1g`'s current
+contents and label them as the old week's goals (regression 2026-08-02, week
+6.3 backfill).
 
 ### Step 2: Pull weekly goals from 1g sheet
 

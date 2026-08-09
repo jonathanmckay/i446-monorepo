@@ -68,7 +68,10 @@ def test_route_base_plus_rate(df):
     assert r.variable_value == 60
 
 
-def test_route_bare_completion_falls_back_to_base(df):
+def test_route_bare_completion_falls_back_to_base(df, monkeypatch):
+    # No-minutes fallback must not depend on live Toggl (the API key now
+    # loads inside did-fast, so an unmocked lookup can find real entries)
+    monkeypatch.setattr(df, "toggl_minutes_for", lambda name: None)
     assert _route_one(df, "AoS").variable_value == 15
     assert _route_one(df, "一起饭").variable_value == 15
     # No base, no minutes → None (write nothing rather than a wrong value)
@@ -146,7 +149,10 @@ def test_dtd_cleaners_strip_rate_annotation():
     src = (_HERE / "dtd.sh").read_text()
     heredoc = r"s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g"
     plain = r"s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g"
-    assert src.count(heredoc) == 9, "all heredoc cleaners must strip [1/m]"
+    # 2026-07-31: enter.sh dropped its own `clean=` computation -- it forwards
+    # the raw resolved task straight to $START (which cleans it itself), one
+    # fewer heredoc cleaner than before ("always opt+enter to mark done").
+    assert src.count(heredoc) == 8, "all heredoc cleaners must strip [1/m]"
     assert src.count(plain) == 3, "all plain cleaners must strip [1/m]"
     assert r"| *\[[0-9.+]*/m\]" in src, "list strip_ann must strip [1/m]"
 
@@ -161,3 +167,65 @@ def test_dtd_rjust_treats_rate_marker_as_estimate():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── 长 (threshold) habits: min 30m, points to BOTH week cell and 0分 (2026-07-30)
+
+def test_threshold_habit_below_minimum_skips(df):
+    r = _route_one(df, "长o314 20")
+    assert r.step == "skipped"
+    assert "20m" in r.error and "30m" in r.error
+
+
+def test_threshold_habit_at_minimum_credits(df):
+    r = _route_one(df, "长冥想 30")
+    assert r.step == "1n"
+    assert r.variable_value == 15          # 30 × .5
+    assert r.write_value == 15             # week cell gets POINTS, not minutes
+    assert r.fen_col == "V"                # hcm domain column
+
+
+def test_threshold_habit_points_are_half_minutes(df):
+    r = _route_one(df, "长o314 36")
+    assert r.step == "1n"
+    assert r.variable_value == 18 and r.write_value == 18
+    assert r.fen_col == "V"
+
+
+def test_threshold_habit_pulls_toggl_minutes_from_base_activity(df, monkeypatch):
+    """长o314's minutes come from Toggl entries named 'o314' or 'hcmr' (2026-07-31:
+    hcmr is the same underlying activity as o314, just a different Toggl
+    description -- both count toward the same 30-minute bucket), not '长o314'."""
+    calls = []
+    monkeypatch.setattr(df, "toggl_minutes_for",
+                        lambda name: calls.append(name) or 36)
+    r = _route_one(df, "长o314")
+    assert calls == [("o314", "hcmr")]
+    assert r.step == "1n" and r.write_value == 18
+
+
+def test_non_threshold_variable_still_records_minutes(df):
+    """The week-cell-gets-points rule applies ONLY to 长 habits."""
+    r = _route_one(df, "业写 60")
+    assert r.step == "1n"
+    assert r.write_value == 60             # minutes in the cell
+    assert r.variable_value == 60          # 1/m
+
+
+def test_timer_path_threshold_writes_points(df):
+    items = df.parse_input("长冥想")
+    res = df.route_items(items, HEADERS, TQ, skip_todoist=True)
+    r = res[0]
+    assert r.step == "1n"  # dtd path defers the threshold check to the timer
+    df.apply_timer_minutes(res, {"description": "长冥想", "minutes": 40})
+    assert r.variable_value == 20
+    assert r.write_value == 20
+
+
+def test_timer_path_threshold_below_minimum_skips(df):
+    items = df.parse_input("长o314")
+    res = df.route_items(items, HEADERS, TQ, skip_todoist=True)
+    df.apply_timer_minutes(res, {"description": "长o314", "minutes": 12})
+    r = res[0]
+    assert r.step == "skipped"
+    assert "12m" in r.error

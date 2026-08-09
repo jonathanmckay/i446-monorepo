@@ -43,6 +43,13 @@ FOLDER_URL = f"https://drive.google.com/drive/folders/{FOLDER_ID}"
 DRIVE_ID = "0ALnip0aznECYUk9PVA"                   # m5x2 Main
 DEFAULT_WEEKS = 5
 
+# i9 (Xbox) side has no API access (Outlook) — sourced instead by parsing the
+# vault doc that /f695 keeps current via manual paste-in. Read-only here;
+# this script never writes to it.
+F695_DOC = Path.home() / "vault" / "h335" / "f693" / "1-f695-weekly-updates.md"
+F695_SECTIONS = ("i9 (Xbox)", "Growth", "DS", "Analytics Infra", "Product Infra")
+F695_OBSIDIAN_URI = "obsidian://open?path=" + urllib.parse.quote(str(F695_DOC))
+
 # (display, topic, drive-name tokens, email senders, subject regex, subject veto regex)
 REPORTERS = [
     ("LX", "Portfolio", ("lx", "louisa"),
@@ -183,7 +190,103 @@ def build_grid(emails: list[dict], docs: list[dict]) -> dict:
     return grid
 
 
-def render(grid: dict, weeks: list[dt.date], n_mail: int, n_docs: int) -> str:
+# ---------------------------------------------------------------------------
+# i9 (Xbox) side — parsed from the /f695 vault doc, not an API
+# ---------------------------------------------------------------------------
+
+def _parse_week_heading(line: str) -> dt.date | None:
+    m = re.match(r"^### Week of (\d{4})\.(\d{2})\.(\d{2})", line)
+    if not m:
+        return None
+    try:
+        return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def fetch_i9_people_and_grid() -> tuple[list[str], dict]:
+    """Returns (people, grid) where grid[(week_start, person)] = True if a
+    #### <Person> entry exists under that week's ### Week of heading."""
+    if not F695_DOC.exists():
+        return [], {}
+    text = F695_DOC.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # People: non-empty Person cells in the five i9-side tables.
+    people: list[str] = []
+    seen = set()
+    section = None
+    for line in lines:
+        m = re.match(r"^## (.+)$", line.strip())
+        if m:
+            section = m.group(1) if m.group(1) in F695_SECTIONS else None
+            continue
+        if section and line.strip().startswith("|"):
+            cell = line.split("|")[1].strip()
+            if cell and cell.lower() != "person" and not re.match(r"^-+$", cell):
+                if cell not in seen:
+                    seen.add(cell)
+                    people.append(cell)
+
+    # Grid: #### <Person> headings nested under ### Week of Y.MM.DD headings,
+    # scoped to the "## Weekly updates" section only.
+    grid: dict = {}
+    in_log = False
+    cur_week: dt.date | None = None
+    for line in lines:
+        if line.strip() == "## Weekly updates":
+            in_log = True
+            continue
+        if not in_log:
+            continue
+        if line.startswith("## "):
+            break  # left the Weekly updates section
+        wk = _parse_week_heading(line)
+        if wk is not None:
+            cur_week = wk
+            continue
+        m = re.match(r"^#### (.+)$", line.strip())
+        if m and cur_week is not None:
+            grid[(cur_week, m.group(1).strip())] = True
+
+    return people, grid
+
+
+def render_i9_section(people: list[str], grid: dict, weeks: list[dt.date]) -> str:
+    if not people:
+        return ""
+    today = dt.date.today()
+    cur_wk = week_start(today)
+    head = "".join(f"<th>{html.escape(p)}</th>" for p in people)
+    rows = []
+    for wk in weeks:
+        cells = []
+        for p in people:
+            if grid.get((wk, p)):
+                cells.append(
+                    f"<td class='ok'><a href='{html.escape(F695_OBSIDIAN_URI)}' "
+                    f"title='{html.escape(p)} — logged in f695 for week of {wk.isoformat()}'>✓</a></td>")
+            elif wk == cur_wk:
+                cells.append("<td class='due'>due</td>")
+            else:
+                cells.append("<td class='miss'>—</td>")
+        label = f"{wk.month}/{wk.day}" + (" (this wk)" if wk == cur_wk else "")
+        rows.append(f"<tr><td class='wk'>{label}</td>{''.join(cells)}</tr>")
+    return f"""
+<h1 style="margin-top:32px">i9 (Xbox) Weekly Reports</h1>
+<div class="sub">Outlook has no API access — filed manually via <code>/f695</code> into
+<a class="folder" href="{html.escape(F695_OBSIDIAN_URI)}">1-f695-weekly-updates.md</a></div>
+<table><tr><th style="text-align:left">Week of</th>{head}</tr>
+{''.join(rows)}
+</table>
+<div class="note">✓ opens the f695 doc (hover for which week/person) — jump to
+<code>## Weekly updates</code> to find the writeup; — is a week with nothing
+logged for that person; the current week shows "due" until it's pasted in
+with <code>/f695</code>.</div>
+"""
+
+
+def render(grid: dict, weeks: list[dt.date], n_mail: int, n_docs: int, i9_html: str = "") -> str:
     today = dt.date.today()
     cur_wk = week_start(today)
     head = "".join(f"<th>{html.escape(d)}<span class='topic'>{html.escape(t)}</span></th>"
@@ -230,6 +333,7 @@ a.folder{{color:#2979ff}}
 📄 links to a Doc in the <a class="folder" href="{FOLDER_URL}">Weekly Reports folder</a>
 (named <b>YYYY-MM-DD First-name Topic</b>). A report counts for the Sunday-anchored week it was
 received. — is a missed week; the current week shows "due" until it arrives.</div>
+{i9_html}
 </body></html>"""
 
 
@@ -244,9 +348,12 @@ def main() -> int:
     docs = fetch_drive_docs(tok)
     grid = build_grid(emails, docs)
     n_mail = sum(1 for v in grid.values() for h in v if h["kind"] == "mail")
+    i9_people, i9_grid = fetch_i9_people_and_grid()
+    i9_html = render_i9_section(i9_people, i9_grid, weeks)
     out = DIR / "index.html"
-    out.write_text(render(grid, weeks, n_mail, len(docs)))
-    print(f"wrote {out} ({len(emails)} originals scanned, {n_mail} update emails matched, {len(docs)} docs)")
+    out.write_text(render(grid, weeks, n_mail, len(docs), i9_html))
+    print(f"wrote {out} ({len(emails)} originals scanned, {n_mail} update emails matched, "
+          f"{len(docs)} docs, {len(i9_people)} i9 people)")
     return 0
 
 

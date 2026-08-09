@@ -29,9 +29,12 @@ def col_letter(n: int) -> str:
 def read_headers() -> dict:
     """SSH to ix, read row 1 of each sheet, return {sheet: {header: letter}}."""
     sheet_loop = "{" + ", ".join(f'"{s}"' for s in SHEETS) + "}"
+    # Named workbook, never `active workbook` — whatever happens to have
+    # focus on Ix (xk887.xlsx, a survey export) made this die with "object
+    # does not exist" (2026-07-28).
     script = f'''
 tell application "Microsoft Excel"
-    set wb to active workbook
+    set wb to workbook "Neon分v12.2.xlsx"
     set out to ""
     repeat with sn in {sheet_loop}
         set sh to sheet sn of wb
@@ -65,6 +68,12 @@ end tell
             continue
         n, hdr = line.split("|", 1)
         hdr = hdr.strip()
+        # Numeric headers come back AppleScript-stringified with a float tail
+        # ("-2" → "-2.0"), which breaks cols.col("0n", "-2") lookups (the
+        # media value-tag minute columns, 2026-07-28). Normalize to the
+        # header as typed in the sheet.
+        if re.fullmatch(r"-?\d+\.0", hdr):
+            hdr = hdr[:-2]
         if hdr:
             out[cur][hdr] = col_letter(int(n))
     return out

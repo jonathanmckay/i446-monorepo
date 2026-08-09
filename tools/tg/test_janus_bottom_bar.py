@@ -19,7 +19,11 @@ def _load_tui():
 
 
 def _flat(segments):
-    return "".join(text for _style, text in segments)
+    # A selectable row's fragments now carry an optional 3rd element (mouse
+    # click handler, added 2026-08-08) — tolerate both shapes, matching the
+    # `for _, t, *_ in ...` convention test_janus_entry_selection.py already
+    # uses for the same reason.
+    return "".join(text for _style, text, *_ in segments)
 
 
 def test_running_timer_leads_left_clock_on_right(monkeypatch):

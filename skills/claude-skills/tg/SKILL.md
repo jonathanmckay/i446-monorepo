@@ -120,6 +120,7 @@ When the description matches a shortcode below, auto-assign the project and tags
 | `r202 Weekly` | m5x2 | |
 | `kids to sleep` | xk87 | |
 | `lego` | xk87 | |
+| `业写` | i9 | |
 | `notes` | i9 | |
 | `-1t` | n156 | |
 | `starcraft` | hcmc2 | 2 |

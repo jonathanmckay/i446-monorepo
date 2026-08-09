@@ -38,7 +38,7 @@ def test_mao_line_is_single_line_with_wake_time():
     ]
     mod.STATE.entries_yday = []
     frags = mod._mao_line(emojis="")
-    text = "".join(t for _, t in frags)
+    text = "".join(t for _, t, *_ in frags)
     assert text.count("\n") == 1, "卯 must render as exactly one line"
     assert "睡觉 →05:31" in text
     assert "331m" in text  # 00:00→05:31
@@ -57,7 +57,7 @@ def test_mao_line_sleep_minutes_include_last_night():
         _entry("hcmc", yday.replace(hour=20, minute=0), yday.replace(hour=21, minute=0)),    # not sleep
         _entry("睡觉", yday, yday.replace(hour=5, minute=20)),         # yesterday MORNING — excluded
     ]
-    text = "".join(t for _, t in mod._mao_line(emojis=""))
+    text = "".join(t for _, t, *_ in mod._mao_line(emojis=""))
     assert "480m" in text, f"expected 331+149=480m, got: {text!r}"
 
 
@@ -70,7 +70,7 @@ def test_mao_line_uses_latest_morning_sleep_not_naps():
         _entry("睡觉", today.replace(hour=13, minute=0), today.replace(hour=13, minute=45)),
     ]
     mod.STATE.entries_yday = []
-    text = "".join(t for _, t in mod._mao_line(emojis=""))
+    text = "".join(t for _, t, *_ in mod._mao_line(emojis=""))
     assert "→05:12" in text
     assert "13:45" not in text
     assert "312m" in text  # nap's 45m not added
@@ -80,7 +80,7 @@ def test_mao_line_no_sleep_entry_still_one_line():
     mod = _load_tui()
     mod.STATE.entries = []
     mod.STATE.entries_yday = []
-    text = "".join(t for _, t in mod._mao_line(emojis=""))
+    text = "".join(t for _, t, *_ in mod._mao_line(emojis=""))
     assert text.count("\n") == 1
     assert "卯" in text
     assert "睡觉" not in text
@@ -110,7 +110,7 @@ def test_render_morning_shows_kmao_activity_when_awake(monkeypatch):
     ]
     mod.STATE.entries_yday = []
     mod.STATE.block_points = {}
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     assert "-1n" in text, f"early-wake 卯 activity hidden by sleep collapse: {text!r}"
 
 
@@ -125,6 +125,6 @@ def test_render_morning_collapses_kmao_when_all_sleep(monkeypatch):
     mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=5, minute=45))]
     mod.STATE.entries_yday = []
     mod.STATE.block_points = {}
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     assert "睡觉 →05:45" in text
     assert text.count("\n") == 1, f"all-sleep 卯 must stay one collapsed line: {text!r}"

@@ -97,6 +97,14 @@ Execute the `/did` skill for habit `0t`. Follow the full `/did` flow exactly as 
 - Close any active Todoist task labeled `0neon` whose content matches `0t`
 - Run Step 2b from the did skill (check if `0l` is also done, write completion time to AF if so)
 
+Then refresh the task cache **foreground** so an open dtd drops the 0t card
+immediately (the fast path's script does this itself; the fallback must too —
+without it the card lingers until the ~3min refresh daemon):
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+```
+
 ### Step 4: Confirm
 
 ```

@@ -130,6 +130,10 @@
           {
             "type": "command",
             "command": "echo \"{\\\"context\\\": \\\"System date: $(date +%Y-%m-%d) ($(date +%A)). Use this as today's date, not the currentDate context.\\\"}\""
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/backup-health-alert.sh 2>/dev/null"
           }
         ]
       }
@@ -140,7 +144,7 @@
   },
   "forceLoginMethod": "console",
   "companyAnnouncements": [
-    "Claude Code on Windows can now run PowerShell natively. No more wrapping commands through git bash — Claude writes and executes PowerShell directly, with proper syntax and fewer escaping headaches. See https://code.claude.com/docs/en/tools-reference#powershell-tool to enable this."
+    "Claude Code on Windows can now run PowerShell natively. No more wrapping commands through git bash \u2014 Claude writes and executes PowerShell directly, with proper syntax and fewer escaping headaches. See https://code.claude.com/docs/en/tools-reference#powershell-tool to enable this."
   ],
   "tui": "fullscreen"
 }

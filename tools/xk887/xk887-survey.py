@@ -30,14 +30,24 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import calendar
 import datetime as _dt
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "xk887.xlsx"
+# ix's OneDrive mount uses the Library/CloudStorage naming convention, not a
+# plain ~/OneDrive symlink (confirmed via mdfind on ix, 2026-08-04) — same
+# pattern as tools/2s/2s-fast.py's SCORECARD_PATH.
+WORKBOOK_PATH = Path.home() / "Library/CloudStorage/OneDrive-Personal/vault-excel" / WORKBOOK
+# Recovery dump for answers that fail to write to Excel — a stable cache dir,
+# not /tmp (macOS periodic cleanup can reap /tmp; hand-typed answers with no
+# other durability shouldn't live there). See write_answers_safely().
+RECOVERY_DIR = Path.home() / ".cache/xk887-recovery"
 
 # Each sheet: (sheet name, display title, fields).
 # Fields: (key, label, column, kind).  kind: text | textml | num | num_auto
@@ -100,11 +110,36 @@ SHEETS = [
 ]
 
 
+_WEEK_LABEL_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
+
+
+def sunday_for_week_label(label: str, year: int | None = None) -> _dt.date:
+    """Reverse of week_row_label: 'M.W' -> that week's Sunday. The label has
+    no year component (same as everywhere else this convention is used --
+    1分+1s, 0n's 1n+ sheet), so this assumes the current year unless one is
+    given. Raises ValueError if W doesn't exist in that month (e.g. '2.6')."""
+    m = _WEEK_LABEL_RE.match(label)
+    if not m:
+        raise ValueError("not a week label: %r" % label)
+    month, week = int(m.group(1)), int(m.group(2))
+    year = year or _dt.date.today().year
+    days_in_month = calendar.monthrange(year, month)[1]
+    for day in range(1, days_in_month + 1):
+        d = _dt.date(year, month, day)
+        if d.weekday() == 6 and (day - 1) // 7 + 1 == week:  # Sunday
+            return d
+    raise ValueError("no week %s in %d-%02d" % (label, year, month))
+
+
 def week_range(arg: str | None, today: _dt.date | None = None) -> tuple[_dt.date, _dt.date]:
     """Sun-Sat range of the review week. No arg -> the most recent COMPLETED
-    week; a date arg -> the week containing it. (Same convention as 1s.)"""
+    week; an 'M.W' arg (e.g. '7.4') -> that week directly, the same label
+    col A is keyed by; any other arg -> an ISO date, the week containing it.
+    (Same convention as 1s.)"""
     today = today or _dt.date.today()
-    if arg:
+    if arg and _WEEK_LABEL_RE.match(arg):
+        sunday = sunday_for_week_label(arg)
+    elif arg:
         d = _dt.date.fromisoformat(arg)
         sunday = d - _dt.timedelta(days=(d.weekday() + 1) % 7)
     else:
@@ -156,6 +191,20 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
     label = week_row_label(sunday)
     L = [
         'tell application "Microsoft Excel"',
+        # xk887.xlsx isn't part of any always-open daily-driver Excel
+        # session (unlike Neon分v12.2.xlsx) -- it drifts closed between
+        # infrequent /xk887 runs. Referencing `workbook "%s"` while it's
+        # closed throws, uncaught, all the way up through main() -- confirmed
+        # live 2026-08-04: the workbook was closed, the write for the first
+        # page of a session crashed the whole process (and reaped its cmux
+        # pane) right after the user submitted it, silently losing what
+        # they'd typed. `wbNames does not contain` is a plain query, not an
+        # error-handler around the reference -- it can't misfire on some
+        # OTHER AppleScript error (hung Excel, wrong name) the way a bare
+        # try/on-error around the reference would. Same pattern as
+        # tools/2s/2s-fast.py's write_scorecard().
+        '  set wbNames to (name of every workbook)' ,
+        '  if wbNames does not contain "%s" then open POSIX file "%s"' % (WORKBOOK, WORKBOOK_PATH),
         '  set wb to workbook "%s"' % WORKBOOK,
         '  set totalWrote to 0',
         '  set report to ""',
@@ -231,6 +280,19 @@ def write_answers(answers: dict, sunday: _dt.date, sheets=None) -> str:
     return out
 
 
+def dump_recovery(answers: dict, sunday: _dt.date, sheet: str | None = None) -> Path:
+    """Persist hand-typed answers that failed to reach Excel -- the only
+    copy of that data anywhere once the form's own process is gone. Named
+    by week + sheet + timestamp so repeated failures never clobber each
+    other. Replay via `--from-json <path>`."""
+    RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
+    ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = "-%s" % sheet if sheet else ""
+    path = RECOVERY_DIR / ("%s%s-%s.json" % (week_row_label(sunday), suffix, ts))
+    path.write_text(json.dumps(answers, ensure_ascii=False, indent=2))
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Full-screen form (prompt_toolkit) -- same interaction grammar as 0s.py/1s
 # ---------------------------------------------------------------------------
@@ -270,7 +332,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     msg = {"text": ""}
     nav = "Enter/Tab next · last field saves page" + (" →" if page_no < total else " + finish")
     status = Window(FormattedTextControl(
-        lambda: msg["text"] or nav + " · S-Tab back · ^S save page · ^Q cancel"),
+        lambda: msg["text"] or nav + " · S-Tab back · ^→/^← page · ^S save page · ^Q cancel"),
         height=1, style="class:status")
 
     root = HSplit([Frame(ScrollablePane(HSplit(rows, padding=0)),
@@ -330,6 +392,24 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     def _(e):
         _submit(e.app)
 
+    # Free page navigation (2026-08-04) -- previously the only way off a page
+    # was Tab/Enter at the LAST field (submit, forward) or S-Tab at the
+    # FIRST field (back) -- so revisiting an earlier or later page meant
+    # tabbing through every field in between. These work from any field on
+    # any page. Forward still validates + writes (same as Tab/Enter at the
+    # last field); back still writes nothing (blanks never clobber, so a
+    # later re-submit of a revisited page is always safe).
+    @kb.add("c-right")
+    @kb.add("c-pagedown")
+    def _(e):
+        _submit(e.app)
+
+    @kb.add("c-left")
+    @kb.add("c-pageup")
+    def _(e):
+        if page_no > 1:
+            e.app.exit(result="back")
+
     @kb.add("c-q")
     @kb.add("c-c")
     def _(e):
@@ -374,7 +454,17 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
         filled = sum(1 for key, _l, _c, _k in cfg["fields"]
                      if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
         print("xk887 → %s: writing %d fields …" % (cfg["sheet"], filled), flush=True)
-        result = write_answers(answers, sunday, sheets=[cfg])
+        try:
+            result = write_answers(answers, sunday, sheets=[cfg])
+        except Exception as e:  # noqa: BLE001
+            rec_path = dump_recovery(answers, sunday, sheet=cfg["sheet"])
+            print("xk887 → %s ✗ WRITE FAILED: %s" % (cfg["sheet"], e), flush=True)
+            print("xk887 → answers saved to %s -- replay with --from-json once fixed" % rec_path,
+                  flush=True)
+            if written:
+                print("xk887 → already written before this failure: %s" % ", ".join(written),
+                      flush=True)
+            return 1
         print("xk887 → %s ✓ %s" % (cfg["sheet"], result), flush=True)
         if cfg["sheet"] not in written:
             written.append(cfg["sheet"])
@@ -385,7 +475,9 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("date", nargs="?", help="any date in the review week (default: last completed week)")
+    ap.add_argument("date", nargs="?",
+                    help="'M.W' week label (e.g. 7.4) or any ISO date in the review week "
+                         "(default: last completed week)")
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     args = ap.parse_args()
@@ -401,7 +493,13 @@ def main() -> int:
                      if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
         print("xk887 → writing %d fields to xk887.xlsx week %s …" % (filled, week_row_label(sunday)),
               flush=True)
-        result = write_answers(answers, sunday)
+        try:
+            result = write_answers(answers, sunday)
+        except Exception as e:  # noqa: BLE001
+            print("xk887 ✗ WRITE FAILED: %s" % e, flush=True)
+            print("xk887 → input JSON is already durable at %s -- retry once fixed" % args.from_json,
+                  flush=True)
+            return 1
         print("xk887 → %s (%d fields) · %s" % (week_row_label(sunday), filled, result))
         return 0
 

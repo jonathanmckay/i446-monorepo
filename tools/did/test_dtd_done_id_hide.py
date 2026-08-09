@@ -38,21 +38,34 @@ def _load_undo():
 
 # ── Structural: completions hide by id, name only as fallback ────────────────
 
-def test_completion_scripts_hide_by_id_not_name():
-    # The unconditional name-write is gone from both completion scripts; the
-    # name lands in $REMOVED only inside the id-less else-branch.
+def test_completion_script_hides_by_id_not_name():
+    # done.sh (alt-enter) is the sole completion script (2026-07-31: enter.sh
+    # dropped completion entirely -- "always opt+enter to mark done"). The
+    # unconditional name-write is gone from it; the name lands in $REMOVED
+    # only inside the id-less else-branch. 2026-08-01: a SECOND copy of this
+    # exact line now lives in $DTD_DONE_HIDE, the fast synchronous split-out
+    # (see test_dtd_done_async.py) that runs before done.sh gets
+    # backgrounded -- a duplicate id line in a set-membership file is a
+    # harmless no-op, not a behavior change worth re-litigating here.
     assert DTD.count('echo "\\$1" >> "\\$REMOVED.ids"') == 2
     # Old pattern: name-write directly followed by the PUSHED/ids lines (i.e.
-    # unconditional). New pattern: every completion-script name-write to
-    # $REMOVED sits in an `else` branch after `if [[ -n "\$1" ]]`.
-    for chunk_marker in ('ENTEREOF', 'DONEEOF'):
-        start = DTD.index(f"<< {chunk_marker}")
-        body = DTD[start:DTD.index(f"\n{chunk_marker}", start)]
-        assert 'if [[ -n "\\$1" ]]; then' in body, \
-            f"{chunk_marker}: id-hide must be attempted first"
-        nw = body.index('echo "\\$clean_for_filter" >> "\\$REMOVED"')
-        assert body[:nw].rstrip().endswith("else"), \
-            f"{chunk_marker}: name-write must be the id-less fallback only"
+    # unconditional). New pattern: the name-write to $REMOVED sits in an
+    # `else` branch after `if [[ -n "\$1" ]]`.
+    start = DTD.index("<< DONEEOF")
+    body = DTD[start:DTD.index("\nDONEEOF", start)]
+    assert 'if [[ -n "\\$1" ]]; then' in body, "id-hide must be attempted first"
+    nw = body.index('echo "\\$clean_for_filter" >> "\\$REMOVED"')
+    assert body[:nw].rstrip().endswith("else"), \
+        "name-write must be the id-less fallback only"
+
+
+def test_enter_script_has_no_completion_hide_at_all():
+    """enter.sh no longer completes anything (2026-07-31), so it must have
+    none of the id/name hide machinery -- see also
+    test_dtd_enter_never_completes.py for the fuller invariant."""
+    start = DTD.index("<< ENTEREOF")
+    body = DTD[start:DTD.index("\nENTEREOF", start)]
+    assert "REMOVED" not in body
 
 
 def test_worker_passes_task_id_to_journal_done():

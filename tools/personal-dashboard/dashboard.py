@@ -114,7 +114,7 @@ PROJECT_COLORS = {
     "i9":    "#2979ff",  # Electric Blue
     "infra": "#9e9e9e",  # Concrete
     "m5x2":  "#d50032",  # Crimson
-    "m828":  "#1249b4",  # Sapphire
+    "m828":  "#9b0023",  # Velvet
     "n156":  "#1249b4",  # Sapphire
     "q5n7":  "#c3fc0d",  # Radioactive
     "qz12":  "#aa00ff",  # Purple Haze
@@ -350,9 +350,9 @@ def load_points_data():
 # Each card pulls a single cell from 0n. Headers live on row 369 (and row 1
 # for xk88). We hardcode (col, row) per card since headers span two rows.
 CACHE_CARDS = [
-    {"label": "hcbp",   "col": "AB", "row": 371, "period": "Q2",   "color": "#f81d78"},
-    {"label": "hcbc",   "col": "AF", "row": 371, "period": "Q2",   "color": "#ff4081"},
-    {"label": "xk88",   "col": "AN", "row": 371, "period": "Q2",   "color": "#e65100"},
+    {"label": "hcbp",   "col": "AB", "row": 372, "period": "Q3",   "color": "#f81d78"},
+    {"label": "hcbc",   "col": "AF", "row": 372, "period": "Q3",   "color": "#ff4081"},
+    {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
     {"label": "冥想",   "col": "AR", "row": 375, "period": "2026", "color": "#aa00ff"},

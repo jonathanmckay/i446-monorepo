@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import base64
+import datetime
 import email.mime.text
 import json
 import logging
@@ -23,14 +24,17 @@ import sys
 import time
 from pathlib import Path
 
-# Add ibx tools to path for Gmail auth
+# Add ibx tools to path for Gmail auth, lib/ for the shared Todoist client
 _IBX_DIR = Path(__file__).parent.parent / "ibx"
+_LIB_DIR = Path(__file__).parent.parent.parent / "lib"
 sys.path.insert(0, str(_IBX_DIR))
+sys.path.insert(0, str(_LIB_DIR))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import ibx as _ibx
 import lease_signer as _signer
 import automations_db as _autodb
+import todoist as _todoist
 from config import AUTOSIGN_SENDERS, DB_PATH
 
 # ---------------------------------------------------------------------------
@@ -44,9 +48,14 @@ NOTIFY_TO = "mckay@m5c7.com"
 # for that many upcoming successful signings. Decremented after each notification.
 _NOTIFY_REMAINING_PATH = Path.home() / ".config/m5x2/lease_notify_remaining"
 
-# Throttle flag: written when we've alerted the operator that the 2FA session
-# expired; cleared on the next successful sign. Prevents an alert every cycle.
+# Throttle state: written when we've alerted the operator that the 2FA
+# session expired; cleared on the next successful sign. Holds {"alerted_at":
+# iso timestamp, "todoist_task_id": id} so a still-broken daemon re-alerts
+# (email + a fresh Todoist task) once per _AUTH_ALERT_INTERVAL rather than
+# going silent until the next success — a single throttled-forever email is
+# what let this sit broken and unnoticed for a month (2026-07-07→2026-08-06).
 _AUTH_ALERT_PATH = Path.home() / ".config/m5x2/lease_auth_alert_sent"
+_AUTH_ALERT_INTERVAL = datetime.timedelta(hours=24)
 
 # Gmail label applied to emails that failed for non-auth reasons (so they're
 # flagged for manual review instead of archived into oblivion or retried forever).
@@ -142,10 +151,27 @@ def _flag_for_review(service, msg_id: str):
     ).execute()
 
 
+def _read_auth_alert_state() -> dict | None:
+    if not _AUTH_ALERT_PATH.exists():
+        return None
+    try:
+        return json.loads(_AUTH_ALERT_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None  # corrupt/legacy ("sent") flag — treat as no prior alert
+
+
 def maybe_send_auth_alert(service):
-    """Email the operator once when the 2FA session expires (throttled via flag)."""
-    if _AUTH_ALERT_PATH.exists():
-        return
+    """Alert the operator when the 2FA session expires: email + a Todoist
+    task, re-firing once per _AUTH_ALERT_INTERVAL while still broken (not
+    just once-ever) so a multi-day outage can't go silent like 2026-07-07's
+    did. The Todoist task is the durable nag — closed automatically on the
+    next successful sign (see process_email)."""
+    state = _read_auth_alert_state()
+    if state:
+        alerted_at = datetime.datetime.fromisoformat(state["alerted_at"])
+        if datetime.datetime.now() - alerted_at < _AUTH_ALERT_INTERVAL:
+            return
+
     try:
         body = (
             "The lease auto-signer's AppFolio 2FA session has expired.\n"
@@ -162,11 +188,42 @@ def maybe_send_auth_alert(service):
         msg["Subject"] = "⚠ Lease auto-signer paused — 2FA re-login needed"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         service.users().messages().send(userId="me", body={"raw": raw}).execute()
-        _AUTH_ALERT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _AUTH_ALERT_PATH.write_text("sent")
         log.info("Sent 2FA-expired alert email to operator.")
     except Exception as e:
-        log.warning(f"Failed to send auth alert: {e}")
+        log.warning(f"Failed to send auth alert email: {e}")
+
+    task_id = (state or {}).get("todoist_task_id")
+    try:
+        task = _todoist.create_task(
+            "\U0001F513 Lease auto-signer needs 2FA re-login — leases piling up unsigned "
+            "(cd ~/i446-monorepo/tools/m5x2-automations && python3 lease_signer.py --login) [10]",
+            labels=["m5x2"], due_string="today", priority=4,
+        )
+        task_id = task.get("id", task_id)
+        log.info(f"Created/refreshed Todoist reminder {task_id} for 2FA re-login.")
+    except Exception as e:
+        log.warning(f"Failed to create Todoist auth alert task: {e}")
+
+    try:
+        _AUTH_ALERT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _AUTH_ALERT_PATH.write_text(json.dumps({
+            "alerted_at": datetime.datetime.now().isoformat(),
+            "todoist_task_id": task_id,
+        }))
+    except OSError as e:
+        log.warning(f"Failed to persist auth alert state: {e}")
+
+
+def _clear_auth_alert():
+    """On a successful sign: close any open reminder task and clear state."""
+    state = _read_auth_alert_state()
+    if state and state.get("todoist_task_id"):
+        try:
+            _todoist.close_task(state["todoist_task_id"])
+            log.info(f"Closed Todoist reminder {state['todoist_task_id']} — daemon healthy again.")
+        except Exception as e:
+            log.warning(f"Failed to close Todoist auth alert task: {e}")
+    _AUTH_ALERT_PATH.unlink(missing_ok=True)
 
 
 def send_notification(service, item: dict, meta: dict, result: dict, count: int):
@@ -249,7 +306,7 @@ def process_email(service, item: dict) -> str:
     if status == "success":
         log.info(f"Signed successfully: {meta.get('unit', '')}")
         # We're healthy again — clear any prior auth-expired alert.
-        _AUTH_ALERT_PATH.unlink(missing_ok=True)
+        _clear_auth_alert()
         remaining = _notify_remaining()
         if remaining > 0:
             count = _autodb.count_successful(DB_PATH)

@@ -108,7 +108,7 @@ def test_running_timer_suppresses_no_time_entry():
     m.STATE.scroll_min = 0
     m.STATE.entries = []
     parts = m.render_detail()
-    txt_all = "".join(t for _, t in parts)
+    txt_all = "".join(t for _, t, *_ in parts)
     assert "NO TIME ENTRY" not in txt_all, "must not show idle alarm while a timer runs"
     assert "▶ work" in txt_all
 
@@ -143,7 +143,7 @@ def test_no_flash_when_timer_state_unknown():
         "desc": "push", "project_id": None, "running": False,
     }]
     assert m._no_timer_flash_on() is False, "must not whole-screen flash when unknown"
-    txt_all = "".join(t for _, t in m.render_detail())
+    txt_all = "".join(t for _, t, *_ in m.render_detail())
     assert "NO TIME ENTRY" not in txt_all, "must not nag when timer state is unconfirmed"
 
 

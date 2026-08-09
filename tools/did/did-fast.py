@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import urllib.error
@@ -75,8 +76,8 @@ CUMULATIVE_0N = {"问学"}
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
-VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "其他人", "新闻",
-               "night hcmc", "evening hcmc"}  # evening hcmc = the card's name
+VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "hcmr", "其他人", "新闻",
+               "night hcmc", "evening hcmc", "hiit"}  # evening hcmc = the card's name
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
                "长冥想", "长o314", "aos", "1 kids nature"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
@@ -86,6 +87,30 @@ VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
 VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
 # Default points when completed with no minutes at all (falls back to base).
 VARIABLE_1N_DEFAULTS: dict[str, int] = {}
+# 长 ("long") habits: duration-based with a MINIMUM THRESHOLD (2026-07-30).
+# Minutes come from today's Toggl entries for the BASE activity (o314 / 冥想,
+# not the 长-name). Below `min` minutes the habit does not credit at all
+# (result step "skipped"). At/above it, points = rate×minutes (the .5/m in
+# VARIABLE_1N_RATES → minutes/2) and the POINTS append to BOTH the 1n+ week
+# cell (unlike other variable habits, which record minutes there) and the
+# 0分 domain column.
+# "toggl" may be a single name or a tuple of names whose Toggl minutes are
+# summed together (2026-07-31: hcmr entries count toward 长o314's same
+# 30-minute bucket as o314 itself — see ZERO_N_ALIASES, hcmr is treated as
+# the same underlying activity as o314, just a different Toggl description).
+THRESHOLD_1N: dict[str, dict] = {
+    "长o314": {"toggl": ("o314", "hcmr"), "min": 30},
+    "长冥想": {"toggl": "冥想", "min": 30},
+}
+
+# 0₦ habit name aliases (2026-07-31): "hcmr" is the same underlying activity
+# as "o314", just a different Toggl description -- a /did completion on an
+# hcmr entry writes into o314's own 0n column (AQ) rather than needing a
+# column of its own. Resolved once, right before the 0n header lookup;
+# toggl_minutes_for(item.name) (which records THIS entry's own duration)
+# still uses the unaliased name so hcmr's actual minutes get read from its
+# own Toggl entries, not o314's.
+ZERO_N_ALIASES: dict[str, str] = {"hcmr": "o314"}
 
 
 def variable_1n_points(resolved_1n: str, minutes: int) -> int:
@@ -99,7 +124,7 @@ HABIT_PROJECT: dict[str, str] = {
     "wake up": "hcb", "hiit": "hcb", "bio": "hcb",
     "新闻": "hcmc", "hcmc": "hcmc", "night hcmc": "hcmc",
     "词汇": "hcmc",
-    "冥想": "hcm", "o314": "hcm", "其他人": "hcm",
+    "冥想": "hcm", "o314": "hcm", "hcmr": "hcm", "其他人": "hcm",
     "早餐": "家", "问学": "家",
     "xk88": "xk88", "xk20": "xk88", "xk22": "xk88", "xk26": "xk88",
     "睡觉": "睡觉",
@@ -136,11 +161,6 @@ ONENEON_ALIASES: dict[str, str] = {
     # this the completion closed the card and silently skipped the column
     # write (found by neon-task-checksum's first run, 2026-07-26).
     "1 groceries": "groceries",
-    # Weekly card "1 i447" vs bare 1n+ header "i447": the bare name collides
-    # with the DAILY 0n habit "i447", which routing hits first — the weekly
-    # card could never be completed by name and sat overdue forever (bug
-    # 2026-07-27: "i447 keeps recurring even though I mark it done").
-    "1 i447": "i447",
 }
 
 ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
@@ -173,6 +193,7 @@ ONENEON_TO_0FEN: dict[str, str] = {
     "1 xk87 wknd": "X", "1 s897": "Y", "1 hcbc": "W",
     "一起饭": "X", "family": "X", "s897": "Y",
     "relax {60}": "W", "业写": "R",
+    "长冥想": "V", "长o314": "V",
 }
 
 
@@ -230,9 +251,34 @@ def header_normalize(s: str) -> str:
 _TOGGL_TODAY: Optional[list] = None  # one fetch per invocation
 
 
-def toggl_minutes_for(name: str) -> Optional[int]:
+def _ensure_toggl_key() -> None:
+    """toggl_api reads TOGGL_API_KEY from env at import; only toggl_cli.py
+    self-loads it from ~/.claude.json. When did-fast imports toggl_api
+    directly in a shell without the env var (Claude sessions, launchd), every
+    request 403s and toggl_minutes_for silently returns None (found
+    2026-07-30 — 长o314 read as 0m despite 36m of entries). Replicate the
+    CLI's loader before the import."""
+    import os
+    if os.environ.get("TOGGL_API_KEY"):
+        return
+    try:
+        import json as _json
+        cfg = _json.load(open(os.path.expanduser("~/.claude.json")))
+        key = (cfg.get("mcpServers", {}).get("toggl_server", {})
+               .get("env", {}).get("TOGGL_API_KEY", ""))
+        if key:
+            os.environ["TOGGL_API_KEY"] = key
+        os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
+    except Exception:
+        pass
+
+
+def toggl_minutes_for(name) -> Optional[int]:
     """Sum today's Toggl minutes for entries whose description matches `name`
     (header-normalized equality), including the running entry's elapsed time.
+    `name` may be a single string or an iterable of strings/aliases whose
+    minutes are summed together (2026-07-31: 长o314's threshold sums both
+    "o314" and "hcmr" entries as the same underlying activity).
 
     Feature (2026-07-24): completing a 0₦ habit in dtd with no typed value
     should record how long it actually took — the user usually has a Toggl
@@ -244,15 +290,17 @@ def toggl_minutes_for(name: str) -> Optional[int]:
     try:
         if _TOGGL_TODAY is None:
             sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+            _ensure_toggl_key()
             from mcp.toggl_server import toggl_api
             today = date.today()
             _TOGGL_TODAY = toggl_api.get_entries(
                 start_date=today.isoformat(),
                 end_date=(today + timedelta(days=1)).isoformat()) or []
-        target = header_normalize(name)
+        names = (name,) if isinstance(name, str) else tuple(name)
+        targets = {header_normalize(n) for n in names}
         secs = 0.0
         for e in _TOGGL_TODAY:
-            if header_normalize(e.get("description") or "") != target:
+            if header_normalize(e.get("description") or "") not in targets:
                 continue
             dur = e.get("duration") or 0
             if dur < 0:  # running entry: elapsed = now - start
@@ -274,12 +322,28 @@ def overlap_ratio(query_tokens: list[str], task_tokens: list[str]) -> float:
 
 
 def match_todoist_task(query: str, tasks: list[dict],
-                       preferred_id: str | None = None) -> Optional[dict]:
+                       preferred_id: str | None = None,
+                       require_labels: set[str] | None = None) -> Optional[dict]:
     """Find best Todoist task match using word overlap.
 
     preferred_id (dtd's collision-proof path): if given and a task in `tasks`
     carries that id, return it directly — the EXACT row the user selected, so a
     duplicate task name can't complete the wrong instance (2026-07-12).
+
+    require_labels: when preferred_id isn't in `tasks` (stale cache, or a
+    different bucket), the fetched-by-id fallback below only counts as a
+    match if it actually carries one of these labels. Without this check, a
+    caller searching a NARROW bucket (e.g. Step 0.2's 1neon-only tasks) would
+    accept ANY task with that id as "found" — including one from a totally
+    unrelated bucket. That happened for real (2026-07-30): completing a
+    one-off `/-1g` goal card literally named "1 s897 {5}" (project 0g, label
+    `#-1g`) also matched the 1n+ habit header "1 s897" by name; Step 0.2 asked
+    match_todoist_task to find the matching *1neon* card to close, the
+    goal-card id wasn't in that bucket, and the unconditional id-fetch
+    fallback returned the goal card anyway — so did-fast believed it had
+    found and closed the weekly 1neon card and never searched for the real
+    one, which sat open/overdue forever. Falling through to the name search
+    below (instead of trusting an out-of-bucket id) finds the real one.
     """
     if preferred_id:
         for task in tasks:
@@ -292,7 +356,8 @@ def match_todoist_task(query: str, tasks: list[dict],
         # the recurring parent instead — wrong task, and its future due date
         # then tripped the already-done-today close guard).
         fetched = _fetch_task_by_id(preferred_id)
-        if fetched:
+        if fetched and (require_labels is None
+                        or set(fetched.get("labels") or []) & require_labels):
             return fetched
     queries = [query]
     alias = ALIASES.get(query.strip().lower())
@@ -613,16 +678,46 @@ def refresh_task_queue(block: bool = False) -> dict:
     import fcntl
     lock_path = TASK_QUEUE_PATH.with_suffix(".lock")
     lock_fd = open(lock_path, "w")
-    flags = fcntl.LOCK_EX if block else (fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
-        fcntl.flock(lock_fd, flags)
-    except (IOError, OSError):
-        # Non-blocking only: another refresh is already running → return existing.
-        print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
-        lock_fd.close()
-        if TASK_QUEUE_PATH.exists():
-            return json.loads(TASK_QUEUE_PATH.read_text())
-        return {}
+    if block:
+        # Bounded wait instead of an unbounded LOCK_EX: if the current holder
+        # is itself stalled (e.g. a prior refresh stuck on a dead network),
+        # an infinite block here makes every explicit refresh pile up behind
+        # it forever (observed: 6+ did-fast processes jammed on this one lock).
+        # Poll non-blocking up to a cap, then give up and return the existing
+        # cache rather than wedge the caller.
+        import time
+        try:
+            wait_cap = int(os.environ.get("DIDFAST_LOCK_WAIT_SECS", "20"))
+        except ValueError:
+            wait_cap = 20
+        deadline = time.monotonic() + max(1, wait_cap)
+        got = False
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                got = True
+                break
+            except (IOError, OSError):
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.25)
+        if not got:
+            print("WARN: refresh_task_queue gave up waiting for the lock "
+                  f"(> {wait_cap}s) -- returning existing cache", file=sys.stderr)
+            lock_fd.close()
+            if TASK_QUEUE_PATH.exists():
+                return json.loads(TASK_QUEUE_PATH.read_text())
+            return {}
+    else:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            # Non-blocking: another refresh is already running → return existing.
+            print("WARN: refresh_task_queue skipped (lock held by another process)", file=sys.stderr)
+            lock_fd.close()
+            if TASK_QUEUE_PATH.exists():
+                return json.loads(TASK_QUEUE_PATH.read_text())
+            return {}
     try:
         return _refresh_task_queue_inner()
     finally:
@@ -764,53 +859,71 @@ def _refresh_task_queue_inner() -> dict:
     # `today`), so union rather than add a bucket.
     try:
         today_iso = datetime.now().strftime("%Y-%m-%d")
+        # Block-boundary gate for BOTH carry-forward paths below (empty and
+        # partial fetch): cards the daemon retired at a boundary must never
+        # outlive their block, no matter how the flaky fetch failed. Originally
+        # added 2026-07-28 for the partial-fetch branch only; the empty-fetch
+        # branch below stayed ungated and could resurrect an already
+        # deleted/closed previous-block card indefinitely (each refresh's
+        # carry-forward becomes the next refresh's old_cache) — the
+        # "dupe -1n tasks in dtd" bug (2026-07-30), where a fully empty
+        # -1neon fetch right after a boundary carried the just-retired
+        # (and separately auto-triage-mangled) previous block's -1g/-1ibx/-1l
+        # forward alongside the new block's freshly created bare cards.
+        _now = datetime.now()
+        try:
+            _upd = datetime.fromisoformat(old_cache.get("updated", ""))
+            same_block = (_upd.date() == _now.date()
+                          and _upd.hour // 2 == _now.hour // 2)
+        except (ValueError, TypeError):
+            same_block = False
         neg1 = fetch_label("-1neon")
-        if not neg1:
-            # Empty label fetch + lagging filter = every OTHER ritual card
-            # vanishes from dtd until the next refresh (bug 2026-07-26:
-            # completing one -1n hid the rest for ~10s). Rate limiting is the
-            # likely cause — the completion-time refresh follows a burst of
-            # close/stamp API calls. Carry the old cache's ritual cards
-            # forward instead; genuinely-closed ones stay hidden via the
-            # completed-today id overlay, and the next clean refresh prunes.
-            neg1 = [t for t in old_today if "-1neon" in (t.get("labels") or [])]
-            if neg1:
-                print(f"WARN: -1neon fetch empty, carrying {len(neg1)} cached card(s)", file=sys.stderr)
-        else:
-            # Partial-fetch erosion guard (2026-07-28): a 5xx/rate storm can
-            # also return a strict SUBSET with a 200, which sails past the
-            # empty-only guard above and shrinks the cached ritual set on
-            # every refresh (this morning's storm eroded it to 1 card —
-            # "-1n tasks disappeared from dtd after completing a task").
-            # Union the old cache's ritual cards back in (dedup by id),
-            # pruning ids recorded closed in completed-today (run_ritual
-            # records them on a successful close) — but only while the old
-            # cache was written in the SAME 2h block, so cards the daemon
-            # retired at a boundary never outlive their block.
-            _now = datetime.now()
+        missing_reason = "empty" if not neg1 else "partial"
+        # A card in old_today but absent from a fresh fetch is ambiguous: a
+        # genuine 5xx/rate flake (undercounted, still open) or a card the
+        # daemon legitimately deleted/closed at this block's boundary. Blindly
+        # trusting "missing = flake" (the pre-2026-07-30 behavior of both
+        # branches below) meant a single flaky fetch right after a boundary
+        # permanently resurrected an already-retired card: every subsequent
+        # refresh's carry-forward became the NEXT refresh's old_cache, so the
+        # duplicate never healed for the rest of the block ("dupe -1n tasks in
+        # dtd" bug, 2026-07-30 — screenshot showed bare current-block -1g/
+        # -1ibx/-1t alongside stale, auto-triage-mangled previous-block -1g/
+        # -1ibx/-1l that Todoist itself had already deleted). Resolve the
+        # ambiguity directly with a per-card re-GET instead of guessing from
+        # the aggregate count, and only within the same 2h block (a retired
+        # card must never outlive its block regardless of verification).
+        if same_block and old_today:
+            closed_ids: set = set()
             try:
-                _upd = datetime.fromisoformat(old_cache.get("updated", ""))
-                same_block = (_upd.date() == _now.date()
-                              and _upd.hour // 2 == _now.hour // 2)
-            except (ValueError, TypeError):
-                same_block = False
-            if same_block:
-                closed_ids: set = set()
+                _ctj = mc._load(mc.COMPLETED)
+                if _ctj.get("date") == today_iso:
+                    closed_ids = {str(v) for v in (_ctj.get("ids") or {}).values()}
+            except Exception:
+                pass
+            _have_neg1 = {t.get("id") for t in neg1}
+            candidates = [t for t in old_today
+                          if "-1neon" in (t.get("labels") or [])
+                          and t.get("id") not in _have_neg1
+                          and str(t.get("id")) not in closed_ids]
+            carried = []
+            for t in candidates:
                 try:
-                    _ctj = mc._load(mc.COMPLETED)
-                    if _ctj.get("date") == today_iso:
-                        closed_ids = {str(v) for v in (_ctj.get("ids") or {}).values()}
+                    status, body = _todoist_request(f"{TODOIST_BASE}/tasks/{t['id']}", "GET")
+                    live = json.loads(body) if status == 200 else {}
+                    # Missing from the label fetch is also what a task looks
+                    # like once something strips its -1neon label (observed
+                    # live 2026-07-30: 3 auto-triage-mangled cards were still
+                    # OPEN but had labels=[] on re-GET) -- unchecked alone
+                    # isn't ritual-card proof, the label has to still be there.
+                    if status == 200 and not live.get("checked") and "-1neon" in (live.get("labels") or []):
+                        carried.append(t)
                 except Exception:
-                    pass
-                _have_neg1 = {t.get("id") for t in neg1}
-                carried = [t for t in old_today
-                           if "-1neon" in (t.get("labels") or [])
-                           and t.get("id") not in _have_neg1
-                           and str(t.get("id")) not in closed_ids]
-                if carried:
-                    print(f"WARN: -1neon fetch partial ({len(neg1)}), carrying "
-                          f"{len(carried)} more cached card(s)", file=sys.stderr)
-                    neg1 = neg1 + carried
+                    pass  # gone, closed, unlabeled, or unreachable — don't resurrect on ambiguity
+            if carried:
+                print(f"WARN: -1neon fetch {missing_reason} ({len(neg1)}), carrying "
+                      f"{len(carried)} more cached card(s) (verified still open)", file=sys.stderr)
+                neg1 = neg1 + carried
         have = {t.get("id") for t in results["today"]}
         for t in neg1:
             if t.get("id") in have:
@@ -880,6 +993,18 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     h1n_norm = {header_normalize(k): v for k, v in h1n.items()}
     all_tasks = tq.get("0neon", []) + tq.get("夜neon", []) + tq.get("1neon", [])
     results = []
+    # Same-task-matched-twice-in-one-batch guard (bug 2026-08-06): parse_input
+    # splits raw input on every comma/semicolon with no awareness that a
+    # single task's own content can legitimately contain one (e.g. "quarterly
+    # checkin with theo, ren, ashan feedback and Ashan feedback [60]" split
+    # into 3 fragments — "...theo", "ren", "ashan feedback..." — each of
+    # which independently word-overlap-matched the SAME task and each
+    # credited its own +60, tripling the payout to +180 for one completion).
+    # Once a task id is matched anywhere in this batch, later items in the
+    # SAME batch may not match it again — the fragment falls through to
+    # later routing steps (usually landing as needs_agent) instead of
+    # silently re-crediting it.
+    claimed_task_ids: set[str] = set()
 
     # "bigs" = time with both big kids → split the minutes between xk20 (Theo)
     # and xk22 (Ren), then let the normal 0₦ path handle each. Odd minute goes
@@ -905,10 +1030,28 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
     for item in items:
         name_lower = item.name.lower()
-        name_norm = header_normalize(item.name)
+        # 0₦ header lookup only -- ZERO_N_ALIASES resolves e.g. "hcmr" to
+        # "o314"'s column; toggl_minutes_for(item.name) below stays on the
+        # UNaliased name so it reads this entry's own Toggl minutes, not
+        # o314's.
+        name_norm = header_normalize(ZERO_N_ALIASES.get(name_lower, item.name))
+
+        # A card's bare NAME can collide with a 0₦ daily header while the
+        # card itself is actually the WEEKLY 1n+ habit of the same name
+        # (e.g. "i447" is both the daily 0n column AND a bare 1n+ header) --
+        # name-based routing below would always send it through the 0₦
+        # branch, whose own Todoist-close only accepts 0neon/夜neon labels
+        # (see Step 0.1), so the weekly card's close silently never happened
+        # and it sat open forever, resurfacing every time it was "completed"
+        # (bug 2026-08-01: "marked i447 done 3 times today, not staying
+        # done"). If dtd's preferred_id says the selected task is actually
+        # in the 1neon bucket, this item isn't a 0₦ completion no matter
+        # what its name collides with -- skip straight to the 1n+ match.
+        pref_is_1neon = preferred_id is not None and any(
+            str(t.get("id")) == str(preferred_id) for t in tq.get("1neon", []))
 
         # Step 0.1: 0₦ match (hyphen/space-insensitive)
-        if name_norm in h0n_norm:
+        if name_norm in h0n_norm and not pref_is_1neon:
             today_md = item.target_date or f"{date.today().month}/{date.today().day}"
             today_date = date.today()
             # Past date → needs agent (posthoc flow), UNLESS dtd passed a
@@ -956,8 +1099,12 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
             # Find matching Todoist task to close
             neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
-            matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id)
+            matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id,
+                                        require_labels={"0neon", "夜neon"})
+            if matched and str(matched.get("id")) in claimed_task_ids:
+                matched = None  # already closed by an earlier item this batch
             if matched:
+                claimed_task_ids.add(str(matched.get("id")))
                 r.todoist_task = matched
                 # By default, 0n habits do NOT write to 0分: Excel's own
                 # formulas roll up 0n data into 0分, and writing here
@@ -1005,13 +1152,29 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # value/range > today's matching Toggl entries > 1); the habit's
             # POINTS go to today's 0分 domain column instead (row-5 expected
             # points for standard habits, base+rate×minutes for variable).
+            threshold = THRESHOLD_1N.get(resolved_1n)
             minutes = None
             if item.time_range:
                 minutes = time_range_minutes(*item.time_range)
             elif item.time_value is not None:
                 minutes = item.time_value
+            elif threshold:
+                # 长 habits: minutes live under the BASE activity's Toggl name
+                minutes = toggl_minutes_for(threshold["toggl"])
             else:
                 minutes = toggl_minutes_for(item.name)
+            # On the dtd split/timer path (skip_todoist) Toggl minutes arrive
+            # later via apply_timer_minutes, which re-checks the threshold
+            # there — but explicit user-typed minutes are checked right here.
+            explicit_time = (item.time_range is not None
+                             or item.time_value is not None)
+            if threshold and (explicit_time or not skip_todoist) \
+                    and (minutes or 0) < threshold["min"]:
+                results.append(RouteResult(
+                    item=item, step="skipped",
+                    error=f"{item.name}: {minutes or 0}m today < "
+                          f"{threshold['min']}m threshold — no credit"))
+                continue
             cell_minutes = minutes if minutes else 1
             var_val = None
             if is_var:
@@ -1026,32 +1189,55 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                     var_val += item.bonus_points
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
-                            write_value=cell_minutes,
+                            # threshold habits append POINTS to the week cell,
+                            # not minutes (the one exception to the redesign)
+                            write_value=(var_val or 1) if threshold else cell_minutes,
                             is_cumulative_1n=is_cumul,
                             cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
                             is_variable_1n=is_var,
                             variable_value=var_val)
             # Find matching Todoist 1neon task to close
             neon_1n_tasks = tq.get("1neon", [])
-            matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id)
+            matched = match_todoist_task(item.name, neon_1n_tasks, preferred_id=preferred_id,
+                                        require_labels={"1neon"})
+            if matched and str(matched.get("id")) in claimed_task_ids:
+                matched = None  # already closed by an earlier item this batch
             if matched:
+                claimed_task_ids.add(str(matched.get("id")))
                 r.todoist_task = matched
             results.append(r)
             continue
 
         # Step 0.3: Todoist match
         matched = None if skip_todoist else match_todoist_task(item.name, all_tasks, preferred_id=preferred_id)
+        if matched and str(matched.get("id")) in claimed_task_ids:
+            # Same task already matched+credited by an earlier item in this
+            # batch (e.g. a comma inside the task's own name split it into
+            # multiple fragments) — do not credit it again.
+            results.append(RouteResult(
+                item=item, step="skipped",
+                error=f"{item.name}: already matched+credited to "
+                      f"\"{matched['content']}\" earlier in this batch"))
+            continue
         if matched:
-            # Extract points
-            pts_match = POINTS_RE.search(matched["content"])
-            points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
-
-            # Map label to 0分 column
+            claimed_task_ids.add(str(matched.get("id")))
+            # Extract points. {N} curly points already flow to column Q via
+            # item.curly_points (see the fen_appends loop below) — crediting
+            # the label's domain column here too would double-count, same
+            # class as the 2026-07-27 bug the item.curly_points is None guard
+            # above (Step 0.2's 0₦-habit branch) exists to prevent. That
+            # guard was never applied here.
+            points = 0
             fen_col = None
-            for lbl in matched.get("labels", []):
-                if lbl in LABEL_TO_0FEN:
-                    fen_col = LABEL_TO_0FEN[lbl]
-                    break
+            if item.curly_points is None:
+                pts_match = POINTS_RE.search(matched["content"])
+                points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+
+                # Map label to 0分 column
+                for lbl in matched.get("labels", []):
+                    if lbl in LABEL_TO_0FEN:
+                        fen_col = LABEL_TO_0FEN[lbl]
+                        break
 
             r = RouteResult(item=item, step="todoist", todoist_task=matched,
                             fen_col=fen_col, fen_points=points)
@@ -1061,14 +1247,26 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         # Step 0.35: Live Todoist search (fallback when cache misses)
         # Searches all open tasks by text, not just neon-labeled ones.
         live_matched = None if skip_todoist else _live_todoist_search(item.name)
+        if live_matched and str(live_matched.get("id")) in claimed_task_ids:
+            results.append(RouteResult(
+                item=item, step="skipped",
+                error=f"{item.name}: already matched+credited to "
+                      f"\"{live_matched['content']}\" earlier in this batch"))
+            continue
         if live_matched:
-            pts_match = POINTS_RE.search(live_matched["content"])
-            points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+            claimed_task_ids.add(str(live_matched.get("id")))
+            # See the matching guard in Step 0.3 above: {N} curly points
+            # already credit column Q via item.curly_points, so skip the
+            # domain-column credit here to avoid double-counting.
+            points = 0
             fen_col = None
-            for lbl in live_matched.get("labels", []):
-                if lbl in LABEL_TO_0FEN:
-                    fen_col = LABEL_TO_0FEN[lbl]
-                    break
+            if item.curly_points is None:
+                pts_match = POINTS_RE.search(live_matched["content"])
+                points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
+                for lbl in live_matched.get("labels", []):
+                    if lbl in LABEL_TO_0FEN:
+                        fen_col = LABEL_TO_0FEN[lbl]
+                        break
             r = RouteResult(item=item, step="todoist", todoist_task=live_matched,
                             fen_col=fen_col, fen_points=points)
             results.append(r)
@@ -1176,9 +1374,9 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
         # Pre-image capture (for ctrl-z undo): read the cell BEFORE writing.
         pre_lines.append(f'''    set pv{col} to value of cell {col} of row todayRow of ws
     if pv{col} is missing value then
-        set preOut to preOut & "PRE" & tab & "{col}" & tab & linefeed
+        set preOut to preOut & "PRE" & (character id 9) & "{col}" & (character id 9) & linefeed
     else
-        set preOut to preOut & "PRE" & tab & "{col}" & tab & (pv{col} as text) & linefeed
+        set preOut to preOut & "PRE" & (character id 9) & "{col}" & (character id 9) & (pv{col} as text) & linefeed
     end if''')
         if is_cumulative:
             set_lines.append(f'''    set oldVal to value of cell {col} of row todayRow of ws
@@ -1373,7 +1571,7 @@ def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
     on error
         set pf{col} to ""
     end try
-    set preOut to preOut & "PRE" & tab & "{col}" & tab & pf{col} & linefeed''')
+    set preOut to preOut & "PRE" & (character id 9) & "{col}" & (character id 9) & pf{col} & linefeed''')
         if w.is_cumulative_1n:
             inc = w.cumulative_increment
             write_lines.append(f'''    set theCellCum to range ("{col}" & weekRow) of ws1n
@@ -1522,9 +1720,16 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
             # 2026-07-27 redesign); the computed points go to 0分.
             resolved = header_normalize(
                 ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
+            if resolved in THRESHOLD_1N and mins < THRESHOLD_1N[resolved]["min"]:
+                # 长 habits: timer below the minimum → no credit at all
+                r.step = "skipped"
+                r.error = (f"{r.item.name}: {mins}m < "
+                           f"{THRESHOLD_1N[resolved]['min']}m threshold — no credit")
+                continue
             r.variable_value = (variable_1n_points(resolved, mins)
                                 + (r.item.bonus_points or 0))
-            r.write_value = mins
+            # Threshold (长) habits append POINTS to the week cell, not minutes
+            r.write_value = (r.variable_value or 1) if resolved in THRESHOLD_1N else mins
             r.item.time_value = mins
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
@@ -1875,15 +2080,30 @@ def _on_ix() -> bool:
 def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
     """Apply a block-header stamp on IX's build-order copy (single writer).
     Returns True = freshly stamped, False = already present, None = ssh
-    failed (caller falls back to the local write)."""
+    failed (caller falls back to the local write).
+
+    Multiple rituals are routinely completed within seconds of each other
+    (dtd batch-completions), each spawning its OWN ssh call here. Without a
+    lock, concurrent read-modify-write cycles race: each reads the same
+    pre-stamp text, and whichever call's write lands last silently discards
+    every other call's stamp (2026-07-29: 4 of 申's 5 rituals were completed
+    within a 4-second window and only one -- the one call that happened to
+    run in isolation -- survived). flock serializes the read-modify-write so
+    concurrent stamps queue and accumulate instead of clobbering each other."""
     py = (
-        "import sys; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
+        "import sys, fcntl; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
         "import neon_blocks as nb\n"
         "from pathlib import Path\n"
         "bo = Path.home() / 'vault/g245/5e-1/build-order.md'\n"
-        "t = bo.read_text(encoding='utf-8')\n"
-        f"nt, ch = nb.stamp_emoji(t, {block!r}, {emoji!r})\n"
-        "if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "lock_path = bo.with_suffix('.lock')\n"
+        "with open(lock_path, 'a') as lf:\n"
+        "    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)\n"
+        "    try:\n"
+        "        t = bo.read_text(encoding='utf-8')\n"
+        f"        nt, ch = nb.stamp_emoji(t, {block!r}, {emoji!r})\n"
+        "        if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "    finally:\n"
+        "        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)\n"
         "print('CH' if ch else 'NC')\n"
     )
     try:
@@ -1898,6 +2118,59 @@ def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
     if r.returncode != 0 or tokenized not in ("CH", "NC"):
         return None
     return tokenized == "CH"
+
+
+def _flip_checkboxes_on_ix(bare_matches: list[str]) -> Optional[bool]:
+    """Same single-writer + lock pattern as _stamp_on_ix, for flipping -1₲
+    goal checkboxes (did-fast step 5e) instead of stamping a ritual emoji.
+    Returns True = at least one line flipped, False = no match found, None
+    = ssh failed (caller falls back to the local write)."""
+    py = (
+        "import sys; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
+        "import neon_blocks as nb\n"
+        "from pathlib import Path\n"
+        "bo = Path.home() / 'vault/g245/5e-1/build-order.md'\n"
+        f"bares = {bare_matches!r}\n"
+        "with nb.build_order_lock(bo):\n"
+        "    t = bo.read_text(encoding='utf-8')\n"
+        "    nt, ch = nb.flip_goal_checkboxes(t, bares)\n"
+        "    if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "print('CH' if ch else 'NC')\n"
+    )
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "ix", "python3", "-"],
+            input=py, capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    outp = (r.stdout or "").strip().splitlines()
+    tokenized = outp[-1] if outp else ""
+    if r.returncode != 0 or tokenized not in ("CH", "NC"):
+        return None
+    return tokenized == "CH"
+
+
+def _log_ritual(out: dict) -> None:
+    """Append the full run_ritual() result to a durable per-day log (2026-08-04).
+    This is a recurring, hard-to-reproduce bug class (undocumented losses on
+    2026-07-29, 2026-08-02, 2026-08-04 so far, each a different survivor set
+    among near-simultaneous completions) and `out` — which already carries
+    `stamp_fallback_local`, `stamped`, `p_credit`/`p_credit_error`, etc. —
+    was never persisted anywhere, so every prior investigation had to
+    reconstruct what happened after the fact from the Todoist API and the
+    Neon ledger instead of just reading it. Best-effort: a logging failure
+    must never fail the ritual itself."""
+    try:
+        log_dir = Path.home() / ".cache" / "jm"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"ritual-completions-{datetime.now():%Y-%m-%d}.jsonl"
+        entry = dict(out)
+        entry["ts"] = datetime.now().isoformat(timespec="seconds")
+        with open(log_path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never block a ritual
+        pass
 
 
 def run_ritual(tag: str) -> dict:
@@ -1969,6 +2242,18 @@ def run_ritual(tag: str) -> dict:
     #    manual credit on the wrong header vs. what the user — and the
     #    daemon — actually see as "this block's" ⏱️/✅.)
     bo = Path.home() / "vault/g245/5e-1/build-order.md"
+    # Heal Syncthing-conflict stamp losses BEFORE stamping: Ix's daemon
+    # rewrites this file on its own schedule and the losing side of a race
+    # lands in a local .sync-conflict copy — without this, a fresh stamp
+    # writes onto a file that just lost earlier stamps (2026-07-29: 辰
+    # earned 7/13 because 🎯/✅ lived only in a conflict copy).
+    try:
+        import build_order_heal
+        healed = build_order_heal.heal(bo)
+        if any(m["added"] for m in healed.get("merged", [])):
+            out["healed_stamps"] = healed["merged"]
+    except Exception as e:  # noqa: BLE001 — healing must never block a ritual
+        out["heal_error"] = str(e)
     block = nb.current_block(datetime.now().hour)
     out["block"] = block
     if not bo.exists():
@@ -1984,14 +2269,66 @@ def run_ritual(tag: str) -> dict:
     text = bo.read_text(encoding="utf-8")
     new_text, changed = nb.stamp_emoji(text, block, emoji)
     if _on_ix():
-        if changed:
-            bo.write_text(new_text, encoding="utf-8")
+        # Same flock _stamp_on_ix uses for the remote (Straylight->Ix) path
+        # below — this local branch (hit by ix-local callers like mobile
+        # dtd) read-modify-wrote build-order.md with NO lock at all, so two
+        # rituals completed within a couple seconds of each other here could
+        # still race exactly like _stamp_on_ix's docstring describes: both
+        # read the same pre-stamp text, and whichever write landed last
+        # silently discarded the other's stamp (2026-08-02: 戌 lost ⏱️/✅
+        # this way — three rituals completed within 2s, only 📧 survived).
+        # Re-read+recompute fresh under the lock rather than trusting the
+        # pre-lock `text`/`new_text` above, which could itself be stale by
+        # the time the lock is acquired.
+        import fcntl
+        lock_path = bo.with_suffix(".lock")
+        with open(lock_path, "a") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                text = bo.read_text(encoding="utf-8")
+                new_text, changed = nb.stamp_emoji(text, block, emoji)
+                if changed:
+                    bo.write_text(new_text, encoding="utf-8")
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
     else:
         remote = _stamp_on_ix(block, emoji)
         if remote is None:
+            # Fallback path (2026-08-04 fix): ix was unreachable or slow
+            # enough that _stamp_on_ix's ssh call (timeout=15) never
+            # returned CH/NC -- either the known Tailscale MagicSock wedge
+            # (see reference_tailscale_magicsock_ix memory; auto-fixed by a
+            # watchdog within 5min, but not fast enough to help a ritual
+            # completed mid-wedge) or plain ssh contention from several
+            # rituals completing within seconds of each other. This branch
+            # used to write `new_text` computed from `text` read BEFORE the
+            # (up to 15s) ssh attempt, completely unlocked -- two rituals
+            # racing into this same fallback together, or one racing a
+            # since-synced ix update, silently discarded each other's stamp
+            # with nothing to serialize them, and the stale pre-attempt
+            # `text` could itself already be missing stamps ix had applied
+            # moments earlier. Confirmed live 2026-08-04: block 未's ✅/📧
+            # rituals were both closed in Todoist ~1-4s apart, and neither's
+            # stamp nor P-credit ever landed (findable in the neon ledger:
+            # no "ritual 未 -1n" entry for either). Lock (the SAME local
+            # .lock file the on-ix branch above already uses -- this only
+            # serializes against OTHER Straylight-local fallbacks racing
+            # each other, not against ix itself; flock has no cross-machine
+            # reach, see neon_blocks.build_order_lock's docstring) and
+            # re-read fresh under it, instead of trusting a stale
+            # pre-ssh-attempt snapshot.
             out["stamp_fallback_local"] = True
-            if changed:
-                bo.write_text(new_text, encoding="utf-8")
+            import fcntl
+            lock_path = bo.with_suffix(".lock")
+            with open(lock_path, "a") as lf:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                try:
+                    text = bo.read_text(encoding="utf-8")
+                    new_text, changed = nb.stamp_emoji(text, block, emoji)
+                    if changed:
+                        bo.write_text(new_text, encoding="utf-8")
+                finally:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
         else:
             # Ix's copy is the truth: credit points only if IX stamped fresh
             # (a local-stale "would change" must not double-credit a ritual
@@ -2086,6 +2423,7 @@ def run_ritual(tag: str) -> dict:
                                          else str(write_res.get("error") or ""))[:60]}
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
             out["p_credit_error"] = str(e)
+    _log_ritual(out)
     return out
 
 
@@ -2093,7 +2431,41 @@ def run_ritual(tag: str) -> dict:
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+def _install_watchdog():
+    """Hard wall-clock ceiling on EVERY did-fast invocation. did-fast runs
+    inside dtd's single-threaded completion worker: if any call here blocks
+    without bound (a DNS/getaddrinfo stall that urllib's socket timeout does
+    NOT cover, an ssh that hangs past ConnectTimeout, a flock held by another
+    stalled process), the worker freezes and NOTHING else in the queue clears
+    until the process is killed by hand -- the recurring "dtd hangs / stopped
+    clearing tasks / invariant fired" incident. A SIGALRM watchdog converts any
+    such hang into a fast, clean non-zero exit; the worker then logs "✗ ..." and
+    moves on to the next item instead of wedging. Tune/disable with
+    DIDFAST_WATCHDOG_SECS (0 disables)."""
+    try:
+        secs = int(os.environ.get("DIDFAST_WATCHDOG_SECS", "60"))
+    except ValueError:
+        secs = 60
+    if secs <= 0:
+        return
+
+    def _bail(signum, frame):
+        sys.stderr.write(
+            f"FATAL: did-fast watchdog fired after {secs}s -- aborting so the "
+            f"dtd worker keeps draining its queue instead of hanging\n")
+        sys.stderr.flush()
+        os._exit(124)
+
+    try:
+        signal.signal(signal.SIGALRM, _bail)
+        signal.alarm(secs)
+    except (ValueError, OSError):
+        # not on the main thread / platform without SIGALRM -- best effort
+        pass
+
+
 def main():
+    _install_watchdog()
     if len(sys.argv) < 2:
         print("usage: did-fast.py <items> | --refresh-headers | --refresh-cache",
               file=sys.stderr)
@@ -2193,10 +2565,17 @@ def main():
             except Exception as e:  # noqa: BLE001 — surface, never reroute
                 res = {"error": str(e)}
             td = res.get("todoist") or {}
-            # Deliberately NO Todoist id here: undo-fast reopens any results
-            # entry carrying todoist.id, but nothing un-stamps the header — a
-            # half-undo that leaves points scored on an open card. Without the
-            # id, undo skips it (the --ritual CLI path never journals at all).
+            # Deliberately NO Todoist id in THIS top-level dict: undo-fast's
+            # generic reversal reopens any results entry carrying todoist.id,
+            # and doing that here (without ALSO un-stamping the header and
+            # reversing the P credit) would be a half-undo — the card reopens
+            # but the header stays stamped and the points stay credited (bug
+            # 2026-07-31: "ctrl+z didn't work after I completed -1l" — looked
+            # like it undid, silently didn't). The full state a CORRECT undo
+            # needs (id, block, emoji, stamped, p_credit) lives one level
+            # down in `res` itself (the "ritual" key below); undo-fast's
+            # dedicated step=="ritual" handler (_reverse_ritual_entry) reads
+            # from there to do all three reversals together.
             ritual_entries.append({
                 "name": it.name, "step": "ritual",
                 "todoist": {"closed": bool(td.get("closed")),
@@ -2226,6 +2605,7 @@ def main():
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
     agent_needed = [r for r in routes if r.step == "needs_agent"]
+    threshold_skipped = [r for r in routes if r.step == "skipped"]
 
     # 3a-ii. d359 outreach tasks (😈-labelled `d359/<slug>`): completing one
     # via /did (and hence dtd) means contact happened — divert to the same
@@ -2353,23 +2733,28 @@ def main():
     PRAYER_HABITS = {"ص"}
     prayer_done = any(r.item.name.lower() in PRAYER_HABITS for r in fast if r.step == "0n")
     if prayer_done:
+        # Single-writer + lock-protected, same as run_ritual's stamp (2026-08-02):
+        # this used to read-modify-write build-order.md unconditionally on
+        # WHATEVER machine did-fast.py runs on, with no lock at all — the
+        # exact same lost-update exposure run_ritual had before its own fix,
+        # just never caught here because it's a rarer path than a manual
+        # ritual completion.
         try:
-            _bo = Path.home() / "vault/g245/5e-1/build-order.md"
-            if _bo.exists():
-                _now_h = datetime.now().hour
-                _bidx = max(0, min(8, (_now_h - 4) // 2))
-                _branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
-                _bname = _branches[_bidx]
-                _bo_text = _bo.read_text()
-                if "## -1₲" in _bo_text:
-                    _lines = _bo_text.split("\n")
-                    _new = []
-                    for _l in _lines:
-                        if (_l.startswith(f"- {_bname}") and "☀️" not in _l):
-                            _new.append(f"{_l.rstrip()} ☀️")
-                        else:
-                            _new.append(_l)
-                    _bo.write_text("\n".join(_new))
+            import sys as _s3
+            _s3.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import neon_blocks as _nb3
+            _now_h = datetime.now().hour
+            _bname = _nb3.current_block(_now_h)
+            if _on_ix():
+                _bo = Path.home() / "vault/g245/5e-1/build-order.md"
+                if _bo.exists():
+                    with _nb3.build_order_lock():
+                        _t = _bo.read_text(encoding="utf-8")
+                        _nt, _ch = _nb3.stamp_emoji(_t, _bname, "☀️")
+                        if _ch:
+                            _bo.write_text(_nt, encoding="utf-8")
+            else:
+                _stamp_on_ix(_bname, "☀️")
         except Exception:
             pass  # non-critical
 
@@ -2383,34 +2768,38 @@ def main():
     # stamped it (any completion, pointed or not), so it was removed.
 
     # 5e. Flip build order checkboxes for completed tasks
-    # Matches closed Todoist tasks and build_order items against -1₲ goals
+    # Matches closed Todoist tasks and build_order items against -1₲ goals.
+    # Single-writer + lock-protected (2026-08-02), same reasoning as 5c above
+    # — the matching logic itself (which bare strings to look for) stays
+    # local since it only needs `fast`, already in memory; only the actual
+    # build-order.md read-modify-write is delegated to Ix when off-Ix.
     try:
-        _bo = Path.home() / "vault/g245/5e-1/build-order.md"
-        if _bo.exists():
-            _bo_text = _bo.read_text()
-            if "## -1₲" in _bo_text:
-                _bo_lines = _bo_text.split("\n")
-                _changed = False
-                for r in fast:
-                    if r.step in ("todoist", "build_order"):
-                        content = ""
-                        if r.todoist_task:
-                            content = r.todoist_task.get("content", "")
-                        elif r.step == "build_order":
-                            content = r.item.name
-                        if not content:
-                            continue
-                        bare = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", content).strip().lower()
-                        for bi, bl in enumerate(_bo_lines):
-                            if re.match(r"^ {2,4}- \[ \] .+", bl):
-                                goal = bl.strip()[6:]
-                                bare_goal = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", goal).strip().lower()
-                                if bare_goal and (bare_goal == bare or bare_goal in bare or bare in bare_goal):
-                                    _bo_lines[bi] = bl.replace("- [ ]", "- [x]", 1)
-                                    _changed = True
-                                    break
-                if _changed:
-                    _bo.write_text("\n".join(_bo_lines))
+        bare_matches = []
+        for r in fast:
+            if r.step in ("todoist", "build_order"):
+                content = ""
+                if r.todoist_task:
+                    content = r.todoist_task.get("content", "")
+                elif r.step == "build_order":
+                    content = r.item.name
+                if not content:
+                    continue
+                bare_matches.append(
+                    re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", content).strip().lower())
+        if bare_matches:
+            import sys as _s4
+            _s4.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import neon_blocks as _nb4
+            if _on_ix():
+                _bo = Path.home() / "vault/g245/5e-1/build-order.md"
+                if _bo.exists():
+                    with _nb4.build_order_lock():
+                        _t = _bo.read_text(encoding="utf-8")
+                        _nt, _ch = _nb4.flip_goal_checkboxes(_t, bare_matches)
+                        if _ch:
+                            _bo.write_text(_nt, encoding="utf-8")
+            else:
+                _flip_checkboxes_on_ix(bare_matches)
     except Exception:
         pass  # non-critical
 
@@ -2704,6 +3093,11 @@ def main():
         if r.item.time_range and r.item.name in toggl_created:
             entry["toggl"] = toggl_created[r.item.name]
         output["results"].append(entry)
+
+    for r in threshold_skipped:
+        output["results"].append({
+            "name": r.item.name, "step": "skipped", "reason": r.error})
+        print(f"  ⏸ {r.error}", file=sys.stderr)
 
     for r in agent_needed:
         output["agent_needed"].append({

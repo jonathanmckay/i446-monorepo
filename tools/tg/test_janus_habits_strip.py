@@ -47,7 +47,7 @@ def test_done_row_is_bare_value_no_name_label():
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("wake up", 1.0)]
     frags = mod.render_habits_today()
-    row1 = "".join(t for _, t in frags).split("\n")[0]
+    row1 = "".join(t for _, t, *_ in frags).split("\n")[0]
     assert "765" in row1 and "1" in row1
     assert "睡觉" not in row1 and "wake up" not in row1
 
@@ -55,35 +55,48 @@ def test_done_row_is_bare_value_no_name_label():
 def test_pending_row_is_the_bare_habit_name():
     mod = _load_tui()
     mod.STATE.habits_today = [("hiit", None), ("teams", None)]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 1  # nothing done yet -> only the pending row renders
     assert "hiit" in lines[0] and "teams" in lines[0]
 
 
-def test_done_and_pending_split_into_separate_rows():
+def test_done_and_pending_share_one_line_done_first():
+    """2026-08-07 follow-up: done and pending chips merge onto ONE line, done
+    numbers first, pending names immediately appended right after (no
+    separator) — "right after the '9' would come '2nd hci'"."""
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
-    assert len(lines) == 2
-    assert "765" in lines[0] and "睡觉" not in lines[0]
-    assert "hiit" in lines[1] and "765" not in lines[1]
+    assert len(lines) == 1
+    assert "765" in lines[0] and "睡觉" not in lines[0] and "hiit" in lines[0]
+    assert lines[0].index("765") < lines[0].index("hiit")
 
 
-def test_done_chips_use_single_trailing_space_not_two():
-    """Follow-up (2026-07-20): "1 space (not 2 like right now)" between
-    done-row chips."""
+def test_done_chips_keep_one_space_between_same_color_numbers():
+    """Follow-up (2026-07-20), refined 2026-08-07: adjacent done-row chips
+    that SHARE a color (teams/push both map to i9) keep exactly one space
+    between them, else the two numbers would visually merge."""
     mod = _load_tui()
     mod.STATE.habits_today = [("teams", 3.0), ("push", 4.0)]
-    row1 = "".join(t for _, t in mod.render_habits_today()).split("\n")[0]
-    assert "3 4" in row1, f"exactly one space must separate chips: {row1!r}"
+    row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
+    assert "3 4" in row1, f"exactly one space must separate same-color chips: {row1!r}"
+
+
+def test_done_chips_no_space_between_different_color_numbers():
+    """2026-08-07: adjacent done-row chips that DIFFER in color get no gap
+    at all — the color change itself is the visual separator."""
+    mod = _load_tui()
+    mod.STATE.habits_today = [("teams", 3.0), ("0l", 4.0)]  # i9, g245 — different colors
+    row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
+    assert "34" in row1 and "3 4" not in row1, f"no space between different-color chips: {row1!r}"
 
 
 def test_integer_values_render_without_a_trailing_point_zero():
     mod = _load_tui()
     mod.STATE.habits_today = [("teams", 3.0)]
-    row1 = "".join(t for _, t in mod.render_habits_today()).split("\n")[0]
+    row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
     assert "3" in row1
     assert "3.0" not in row1
 
@@ -130,13 +143,13 @@ def test_deferred_habit_hidden_from_pending_row():
         ("0g", None),                            # no card info → visible
         ("早餐", 1.0),                            # done → value shows regardless
     ]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "xk20" not in text and "xk22" not in text
     assert "xk26" in text and "hiit" in text and "0g" in text
     assert "1" in text  # 早餐's value in the done row
     # Past-day view: deferral info doesn't apply.
     mod.STATE.day_offset = -1
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "xk20" in text and "xk22" in text
     mod.STATE.day_offset = 0
     mod.HABIT_DUES.clear()
@@ -169,14 +182,14 @@ def test_output_never_exceeds_two_lines():
     mod = _load_tui()
     # Many habits, half done half pending -- guaranteed to overflow WIDTH_HINT.
     mod.STATE.habits_today = [(f"habit{i}", float(i % 2)) for i in range(40)]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert text.count("\n") <= 2
 
 
 def test_each_row_drops_overflow_independently():
     mod = _load_tui()
     mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(mod.WIDTH_HINT)]
-    text = "".join(t for _, t in mod.render_habits_today())
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 1  # all "done" (nonzero) -> only row 1 renders
     assert len(lines[0]) <= mod.WIDTH_HINT + 1

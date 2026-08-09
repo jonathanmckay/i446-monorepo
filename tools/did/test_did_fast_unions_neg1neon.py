@@ -71,7 +71,13 @@ def test_refresh_guards_partial_neg1neon_fetch_against_erosion():
     body = ast.get_source_segment(SRC, inner)
     assert "same_block" in body, "partial guard must scope carries to the current 2h block"
     assert "closed_ids" in body, "carried cards must prune completed-today's closed ids"
-    assert "fetch partial" in body, "a partial carry must be logged, not silent"
+    # 2026-07-30: empty and partial fetches share one logging line keyed off
+    # a missing_reason variable ("empty"/"partial") rather than two literal
+    # "fetch empty"/"fetch partial" strings -- assert the variable's presence
+    # and values instead of the now-merged literal phrase.
+    assert 'missing_reason = "empty" if not neg1 else "partial"' in body, \
+        "a partial vs. empty carry must still be distinguishable in the log"
+    assert "fetch {missing_reason}" in body, "a partial carry must be logged, not silent"
     # The carry must hinge on the old cache's updated timestamp sharing the
     # 2h block (even-hour blocks → hour // 2 buckets).
     assert "_upd.hour // 2 == _now.hour // 2" in body

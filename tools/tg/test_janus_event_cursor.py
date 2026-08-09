@@ -8,6 +8,7 @@ an index would silently point at a different event once the list resizes);
 Enter, on an empty input line with something armed, converts the selected
 event into a running Toggl timer via tg-fast.py's own backdated-start
 handling. No selection is armed by default, so a bare Enter never surprises."""
+import asyncio
 import datetime as dtm
 import importlib.util
 import sys
@@ -144,7 +145,7 @@ def test_head_event_is_selectable_and_highlighted():
     frags = mod._compact_block_lines("午", 10, [pick], 0, "", is_future=True,
                                      max_rows=8, track_selection=True)
     assert mod.STATE.visible_events == [ev], "head event must register for the cursor"
-    assert not any("bg:#3a3a3a" in s or "selected" in s for s, t in frags), \
+    assert not any("bg:#3a3a3a" in s or "selected" in s for s, t, *_ in frags), \
         "unselected head must not be highlighted"
 
     mod.STATE.visible_events = []
@@ -152,8 +153,8 @@ def test_head_event_is_selectable_and_highlighted():
     frags = mod._compact_block_lines("午", 10, [pick], 0, "", is_future=True,
                                      max_rows=8, track_selection=True)
     assert any("GamePass sync" in t and ("bg:#3a3a3a" in s or "selected" in s)
-              for s, t in frags), "selected head must carry the highlight"
-    assert not any("reverse" in s for s, t in frags)
+              for s, t, *_ in frags), "selected head must carry the highlight"
+    assert not any("reverse" in s for s, t, *_ in frags)
 
 
 def test_render_focus_compact_tracks_next_block_events_too():
@@ -202,7 +203,11 @@ def test_visible_events_excludes_rows_trimmed_by_max_rows():
              "label": e["title"], "style": "", "dur_min": 4, "is_event": True, "event": e}
             for e in events]
     mod._compact_block_lines("巳", 8, picks, 0, "", max_rows=3, track_selection=True)
-    assert len(mod.STATE.visible_events) <= 3
+    # ev0 starts exactly at :00 so it rides the HEADER line (2026-07-30) —
+    # on screen and selectable — plus the 3 body rows the cap keeps: 4 total.
+    # The 5th (trimmed, invisible) event must not be selectable.
+    assert len(mod.STATE.visible_events) == 4
+    assert events[0] in mod.STATE.visible_events, "header-riding event selectable"
     assert all(ev in events for ev in mod.STATE.visible_events)
 
 
@@ -212,30 +217,40 @@ def test_selected_event_row_gets_full_row_background_band():
     and duration must all carry the highlight background."""
     mod = _load_tui()
     today = _midnight()
+    # A decoy at the block's own :00 (2026-08-06: the chronologically-first
+    # real entry now rides the header) keeps "standup" itself as an ordinary
+    # BODY row, which is what this test is actually about.
+    decoy = {"start_dt": today.replace(hour=8), "time_str": "08:00", "label": "prep",
+             "style": "", "dur_min": 10, "entry_ids": [0], "raw_desc": "prep",
+             "project_id": None}
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = mod._event_key(ev)
-    frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
+    frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
     # Time column gets the accent style; label carries the fg color + bg band;
     # the trailing " (15)\n" duration fragment carries the plain bg band.
-    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t in frags)
-    assert any("bg:#3a3a3a" in s and "standup" in t for s, t in frags)
-    assert any(s == "class:selected_bg" and t == " (15)\n" for s, t in frags)
-    assert not any("reverse" in s for s, t in frags), "must not use ANSI reverse video"
+    assert any(s == "class:selected_accent" and t.strip() == "09:00" for s, t, *_ in frags)
+    assert any("bg:#3a3a3a" in s and "standup" in t for s, t, *_ in frags)
+    assert any(s == "class:selected_bg" and t == " (15)\n" for s, t, *_ in frags)
+    assert not any("reverse" in s for s, t, *_ in frags), "must not use ANSI reverse video"
 
 
 def test_unselected_event_row_uses_plain_time_and_dim_styles():
     mod = _load_tui()
     today = _midnight()
+    # Decoy at :00 for the same reason as the selected-row test above.
+    decoy = {"start_dt": today.replace(hour=8), "time_str": "08:00", "label": "prep",
+             "style": "", "dur_min": 10, "entry_ids": [0], "raw_desc": "prep",
+             "project_id": None}
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = None
-    frags = mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True)
-    assert any(s == "class:time" for s, t in frags if t.strip() == "09:00")
-    assert any(s == "class:dim" for s, t in frags if t == " (15)\n")
-    assert not any("selected" in s or "reverse" in s for s, t in frags)
+    frags = mod._compact_block_lines("巳", 8, [decoy, pick], 0, "", max_rows=8, track_selection=True)
+    assert any(s == "class:time" for s, t, *_ in frags if t.strip() == "09:00")
+    assert any(s == "class:dim" for s, t, *_ in frags if t == " (15)\n")
+    assert not any("selected" in s or "reverse" in s for s, t, *_ in frags)
 
 
 def test_selection_never_shifts_row_horizontal_position():
@@ -249,10 +264,10 @@ def test_selection_never_shifts_row_horizontal_position():
     pick = {"start_dt": ev["start_dt"], "time_str": "09:00", "label": "standup",
             "style": "fg:#2979ff", "dur_min": 15, "is_event": True, "event": ev}
     mod.STATE.event_sel = None
-    unselected = "".join(t for _, t in
+    unselected = "".join(t for _, t, *_ in
                          mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True))
     mod.STATE.event_sel = mod._event_key(ev)
-    selected = "".join(t for _, t in
+    selected = "".join(t for _, t, *_ in
                        mod._compact_block_lines("巳", 8, [pick], 0, "", max_rows=8, track_selection=True))
     assert selected == unselected, "highlighting must not change any character or width, only color"
 
@@ -313,7 +328,7 @@ def test_render_morning_shows_uncovered_past_meeting_and_registers_for_cursor():
     ev = _gcal_event("forgotten standup", today.replace(hour=10), today.replace(hour=10, minute=30))
     mod.STATE.events = [ev]
     mod.view_now = lambda: today.replace(hour=12, minute=5)  # 未 current -> 午 is a past block
-    text = "".join(t for _, t in mod.render_morning())
+    text = "".join(t for _, t, *_ in mod.render_morning())
     assert "forgotten standup" in text
     assert ev in mod.STATE.visible_events, "an uncovered past meeting must be selectable, same as any other event row"
 
@@ -471,7 +486,9 @@ def test_enter_with_armed_selection_clears_it_and_flashes():
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=5)
-    _binding(mod, "enter").handler(_FakeEvent())
+    async def _amain():
+        _binding(mod, "enter").handler(_FakeEvent())
+    asyncio.run(_amain())
     assert mod.STATE.event_sel is None, "selection must clear once converted"
     assert "standup" in mod.STATE.flash
 
@@ -487,7 +504,9 @@ def test_enter_on_in_progress_event_still_uses_tg_path():
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=5)  # mid-meeting
-    _binding(mod, "enter").handler(_FakeEvent())
+    async def _amain():
+        _binding(mod, "enter").handler(_FakeEvent())
+    asyncio.run(_amain())
     assert mod.STATE.flash.startswith("$ tg "), f"in-progress event must use tg-fast: {mod.STATE.flash!r}"
 
 
@@ -502,26 +521,38 @@ def test_enter_on_ended_event_uses_did_fast_path():
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=30)  # after it ended
-    _binding(mod, "enter").handler(_FakeEvent())
+    async def _amain():
+        _binding(mod, "enter").handler(_FakeEvent())
+    asyncio.run(_amain())
     assert mod.STATE.event_sel is None
     assert mod.STATE.flash.startswith("$ did "), f"ended event must convert via did-fast: {mod.STATE.flash!r}"
     assert "0900-0915" in mod.STATE.flash
 
 
-def test_enter_ignores_armed_selection_while_conversion_in_flight():
-    """A did-fast conversion is a ~10-45s Excel write — a double-Enter mid-
-    flight must not fire a second one (double entry + double points + a
-    race on the same ix-osa write)."""
+def test_enter_mid_flight_enqueues_instead_of_rejecting():
+    """Superseded 2026-07-30 ("I want it to be able to enqueue tasks"): a
+    conversion arriving while another is mid-flight used to be REJECTED with
+    the selection left armed. Now it's consumed and queued — the serial work
+    queue still runs one did-fast at a time (the double-write race the old
+    gate guarded), but waiting replaced bouncing."""
     mod = _load_tui()
     today = _midnight()
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     mod.STATE.visible_events = [ev]
     mod.STATE.event_sel = mod._event_key(ev)
     mod.STATE.conversion_in_flight = True
+    mod.STATE.work_q = None
+    mod.STATE.queued_cmds = set()
     mod.input_buffer.text = ""
     mod.view_now = lambda: today.replace(hour=9, minute=30)
-    _binding(mod, "enter").handler(_FakeEvent())
-    assert mod.STATE.event_sel == mod._event_key(ev), "must not consume the selection while one is already in flight"
+
+    async def main():
+        _binding(mod, "enter").handler(_FakeEvent())
+
+    asyncio.run(main())
+    assert mod.STATE.event_sel is None, "selection is consumed — the job is queued, not dropped"
+    assert mod.STATE.work_q is not None and mod.STATE.work_q.qsize() == 1
+    assert "queued" in mod.STATE.flash
 
 
 if __name__ == "__main__":

@@ -18,7 +18,10 @@ trusted (the right behavior for the completion-time preview).
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -28,6 +31,50 @@ BRANCHES = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]  # 04
 _CONFIG = Path.home() / "i446-monorepo" / "config" / "block-rituals.json"
 
 NEG1_SECTION = "## -1₲"
+
+BUILD_ORDER = Path.home() / "vault" / "g245" / "5e-1" / "build-order.md"
+_BUILD_ORDER_LOCK = BUILD_ORDER.with_suffix(".lock")
+
+
+@contextmanager
+def build_order_lock(build_order: Path | None = None):
+    """Exclusive OS-level lock guarding a read-modify-write of build-order.md.
+    Locks `build_order`'s own `.lock` sibling (defaults to the real
+    BUILD_ORDER path) so tests can pass a tmp_path copy without contending
+    with — or depending on — the production lock file.
+
+    Third incident of the same lost-update race as of 2026-08-02 (three
+    separate unlocked read-then-write call sites across did-fast.py and
+    build-order-daemon.py each independently rediscovered it) — this
+    centralizes the lock so every writer shares one primitive instead of
+    re-fixing one call site at a time.
+
+    ONLY effective for writers running ON Ix (the file's single canonical
+    writer since the 2026-07-27 fix) — flock has no cross-machine reach: a
+    caller on Straylight locking Straylight's own `.lock` file provides zero
+    protection against Ix's daemon or another Ix-local writer, even though
+    Syncthing carries the `.lock` file itself between machines (flock locks
+    an open file description on one kernel, not file bytes). Callers that
+    might run off-Ix must delegate the read-modify-write to Ix (e.g. over
+    ssh) and take this lock THERE — see tools/did/did-fast.py's
+    `_stamp_on_ix`/`_run_locked_mutation_on_ix` for the pattern.
+
+    Usage — hold the lock for the ENTIRE read-modify-write, never just the
+    write (a lock released between read and write protects nothing):
+        with build_order_lock():
+            text = BUILD_ORDER.read_text(encoding="utf-8")
+            new_text, changed = stamp_emoji(text, block, emoji)
+            if changed:
+                BUILD_ORDER.write_text(new_text, encoding="utf-8")
+    """
+    lock_path = (build_order or BUILD_ORDER).with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +110,11 @@ def ritual_card_tag(name: str, cfg: Optional[dict] = None) -> Optional[str]:
     match, auto ones (-1t/-1l) included — the daemon creates cards for the full
     set since 2026-07-05, and a bare `-1t`/`-1l` falling through to the generic
     /did path would mis-route to the unrelated 0₦ habits of the same name.
-    run_ritual branches on mode (auto = close card only, no stamp/points).
+    run_ritual does NOT branch on mode (2026-07-13 redesign): every tag, auto
+    included, gets the header stamp + immediate -1₦ credit. `mode` still
+    exists in config for the daemon's own auto-check wiring, and the daemon's
+    reconcile audits -1t/-1l's stamp against that check regardless of which
+    path wrote it (2026-07-30 correction — see vault/g245/CLAUDE.md).
     """
     if cfg is None:
         cfg = load_config()
@@ -142,6 +193,68 @@ def stamp_emoji(text: str, block: str, emoji: str) -> tuple[str, bool]:
         else:
             out.append(line)
     return "\n".join(out), changed
+
+
+def unstamp_emoji(text: str, block: str, emoji: str) -> tuple[str, bool]:
+    """Remove `emoji` from `block`'s header line if present. Inverse of
+    stamp_emoji, for reversing a ritual completion (undo-fast.py) — only ever
+    called when the completion being undone is the one that stamped it
+    (caller checks run_ritual's own `stamped` flag), never as a general
+    "does this block deserve this marker" edit.
+
+    Idempotent: (text, False) if the emoji wasn't there. Only touches header
+    lines inside the -1₲ section, matching stamp_emoji's scope.
+    """
+    if NEG1_SECTION not in text:
+        return text, False
+    out: list[str] = []
+    changed = False
+    in_section = False
+    for line in text.split("\n"):
+        if line.startswith(NEG1_SECTION):
+            in_section = True
+        elif line.startswith("## ") and in_section:
+            in_section = False
+        if (in_section and line.startswith("- ") and not line.startswith("    ")
+                and _block_line_name(line) == block and emoji in line):
+            new_line = line.replace(f" {emoji}", "", 1)
+            if emoji in new_line:  # emoji wasn't space-prefixed (e.g. leads the markers)
+                new_line = new_line.replace(emoji, "", 1)
+            out.append(" ".join(new_line.split()) if new_line.strip() else new_line.rstrip())
+            changed = True
+        else:
+            out.append(line)
+    return "\n".join(out), changed
+
+
+def flip_goal_checkboxes(text: str, bare_contents: list[str]) -> tuple[str, bool]:
+    """Flip `- [ ]` to `- [x]` for each -1₲ goal sub-bullet whose bare text
+    (brackets/parens stripped) matches an entry in `bare_contents` — moved
+    out of did-fast.py's inline 5e step so it can be lock-protected the same
+    way as stamp_emoji (2026-08-02).
+
+    Matches are consumed in order: once a line is flipped for one
+    bare_contents entry, it's no longer `[ ]` and can't match a later entry
+    in the same call — preserves the original inline loop's one-line-per-
+    completion behavior when two completions bare-match the same goal text.
+    """
+    if NEG1_SECTION not in text:
+        return text, False
+    lines = text.split("\n")
+    changed = False
+    for bare in bare_contents:
+        if not bare:
+            continue
+        for i, line in enumerate(lines):
+            if not re.match(r"^ {2,4}- \[ \] .+", line):
+                continue
+            goal = line.strip()[6:]
+            bare_goal = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", goal).strip().lower()
+            if bare_goal and (bare_goal == bare or bare_goal in bare or bare in bare_goal):
+                lines[i] = line.replace("- [ ]", "- [x]", 1)
+                changed = True
+                break
+    return "\n".join(lines), changed
 
 
 def score_day(

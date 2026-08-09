@@ -28,6 +28,70 @@ def test_week_range_with_date_arg():
     assert (s, e) == (dt.date(2026, 7, 12), dt.date(2026, 7, 18))
 
 
+def test_week_range_accepts_week_label_directly():
+    """2026-08-04: 'xk887 7.4' should target that week directly, without
+    needing to know/guess a date that falls inside it."""
+    m = _load()
+    s, e = m.week_range("7.4")
+    assert m.week_row_label(s) == "7.4"
+    assert (e - s).days == 6
+
+
+def test_sunday_for_week_label_round_trips_with_week_row_label():
+    m = _load()
+    for d in (dt.date(2026, 7, 19), dt.date(2026, 1, 4), dt.date(2026, 12, 27),
+              dt.date(2026, 2, 1)):
+        label = m.week_row_label(d)
+        assert m.sunday_for_week_label(label, year=d.year) == d
+
+
+def test_sunday_for_week_label_defaults_to_current_year():
+    m = _load()
+    label = m.week_row_label(dt.date.today())
+    # Whatever week we're actually in right now, asking for its own label
+    # back (no explicit year) must resolve to a Sunday in the current year.
+    assert m.sunday_for_week_label(label).year == dt.date.today().year
+
+
+def test_sunday_for_week_label_rejects_nonexistent_week():
+    m = _load()
+    import pytest
+    with pytest.raises(ValueError):
+        m.sunday_for_week_label("2.6", year=2026)  # Feb never has a 6th Sunday-week
+
+
+def test_week_range_still_accepts_iso_dates():
+    """Must not regress the existing 'any date in the week' arg form."""
+    m = _load()
+    s, e = m.week_range("2026-07-15")
+    assert (s, e) == (dt.date(2026, 7, 12), dt.date(2026, 7, 18))
+
+
+def test_free_page_navigation_bound_from_any_field():
+    """2026-08-04: previously the only way off a page was Tab/Enter at the
+    LAST field (forward) or S-Tab at the FIRST field (back) -- revisiting an
+    earlier or later page meant tabbing through every field in between.
+    ^Right/^PageDown must submit-and-advance, ^Left/^PageUp must go back,
+    from anywhere on the page."""
+    src = (Path(__file__).parent / "xk887-survey.py").read_text()
+    start = src.index("def run_page(")
+    end = src.index("\ndef ", start + 1)
+    body = src[start:end]
+    for key in ('"c-right"', '"c-pagedown"'):
+        idx = body.index(key)
+        # the next kb.add-decorated function after this key must call _submit
+        fn_start = body.index("def _(e):", idx)
+        fn_end = body.index("\n\n", fn_start)
+        assert "_submit(e.app)" in body[fn_start:fn_end], (
+            "%s must trigger the same submit-and-advance as Tab/Enter" % key)
+    for key in ('"c-left"', '"c-pageup"'):
+        idx = body.index(key)
+        fn_start = body.index("def _(e):", idx)
+        fn_end = body.index("\n\n", fn_start)
+        assert 'result="back"' in body[fn_start:fn_end], (
+            "%s must trigger the same back-navigation as S-Tab" % key)
+
+
 def test_week_row_label_matches_1s_convention():
     m = _load()
     assert m.week_row_label(dt.date(2026, 7, 19)) == "7.3"
@@ -44,6 +108,73 @@ def test_field_keys_are_namespaced_and_unique():
     m = _load()
     keys = [m.field_key(cfg["sheet"], key) for cfg in m.SHEETS for key, *_ in cfg["fields"]]
     assert len(keys) == len(set(keys))
+
+
+def test_applescript_opens_workbook_if_not_already_open():
+    """2026-08-04: xk887.xlsx isn't kept open like Neon分v12.2.xlsx -- it
+    drifts closed between infrequent /xk887 runs, and referencing `workbook
+    "xk887.xlsx"` while closed threw uncaught all the way up through
+    main(), crashing the whole process (and its cmux pane) right after the
+    user submitted a page, silently losing what they'd typed. Confirmed
+    live: the workbook was closed, the last real week of data across all
+    four sheets was ~3 months old."""
+    m = _load()
+    script = m.build_applescript({"xk88_good": "x"}, dt.date(2026, 7, 19))
+    open_idx = script.index('wbNames does not contain "%s"' % m.WORKBOOK)
+    ref_idx = script.index('set wb to workbook "%s"' % m.WORKBOOK)
+    assert open_idx < ref_idx, "must check/open the workbook BEFORE referencing it"
+    assert str(m.WORKBOOK_PATH) in script
+
+
+def test_workbook_path_uses_cloudstorage_convention():
+    """ix's OneDrive mount is Library/CloudStorage/OneDrive-Personal/..., not
+    a plain ~/OneDrive symlink (confirmed via mdfind on ix) -- a guessed
+    ~/OneDrive/vault-excel path silently fails to find the file."""
+    m = _load()
+    assert "Library/CloudStorage/OneDrive-Personal" in str(m.WORKBOOK_PATH)
+
+
+def test_dump_recovery_persists_answers_and_is_replayable(tmp_path, monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    answers = {"xk88_good": "great week", "xk20_notes": "n"}
+    path = m.dump_recovery(answers, dt.date(2026, 7, 19), sheet="xk88")
+    assert path.exists()
+    assert path.parent == tmp_path
+    assert "7.3" in path.name and "xk88" in path.name
+    import json
+    assert json.loads(path.read_text()) == answers
+
+
+def test_dump_recovery_does_not_collide_on_repeated_failures(tmp_path, monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    p1 = m.dump_recovery({"a": "1"}, dt.date(2026, 7, 19), sheet="xk88")
+    import time
+    time.sleep(1.1)  # timestamp resolution is seconds
+    p2 = m.dump_recovery({"a": "2"}, dt.date(2026, 7, 19), sheet="xk88")
+    assert p1 != p2
+    assert p1.exists() and p2.exists()
+
+
+def test_run_paginated_survives_a_write_failure_without_crashing(monkeypatch, tmp_path):
+    """The old behavior: an uncaught RuntimeError from write_answers()
+    propagated straight out of run_paginated() -- a bare traceback, and (via
+    cmux respawn-pane) the whole pane getting reaped. It must instead return
+    a plain exit code and leave a recovery file behind."""
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(m, "run_page",
+                        lambda cfg, sunday, saturday, i, total, answers:
+                            ("submit", {"%s_good" % cfg["sheet"]: "x"}))
+
+    def _boom(answers, sunday, sheets=None):
+        raise RuntimeError("Invalid object specifier (workbook not open)")
+    monkeypatch.setattr(m, "write_answers", _boom)
+
+    rc = m.run_paginated(dt.date(2026, 7, 19), dt.date(2026, 7, 25))
+    assert rc == 1
+    assert list(tmp_path.glob("*xk88*.json")), "expected a recovery dump for the failed page"
 
 
 def test_applescript_targets_week_label_and_skips_blanks():

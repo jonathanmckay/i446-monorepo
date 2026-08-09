@@ -59,10 +59,12 @@ def test_hai_renders_before_zi_when_zi_is_current():
     mod.STATE.entries = [_entry("xk22", today.replace(hour=20, minute=10),
                                 today.replace(hour=21, minute=0), project_id=1)]
     mod.view_now = lambda: today.replace(hour=22, minute=30)
-    text = "".join(t for _, t in mod.render_focus_compact())
-    assert "亥:00" in text, "亥 must render in the focus band when 子 is current"
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
+    # 2026-08-06: xk22 (20:10) is 亥's first real entry, so it rides the
+    # header itself (`亥:10`) rather than a bare `亥:00` header.
+    assert "亥:10" in text, "亥 must render in the focus band when 子 is current"
     assert "子:00" in text
-    assert text.index("亥:00") < text.index("子:00"), "亥 must come before 子"
+    assert text.index("亥:10") < text.index("子:00"), "亥 must come before 子"
     assert "xk22" in text.split("子:00")[0], "亥's own entries must render in its card"
 
 
@@ -75,7 +77,7 @@ def test_hai_renders_on_past_day_view():
     mod.STATE.day_offset = -1
     yday = today - dtm.timedelta(days=1)
     mod.view_now = lambda: yday.replace(hour=23, minute=59, second=59)
-    text = "".join(t for _, t in mod.render_focus_compact())
+    text = "".join(t for _, t, *_ in mod.render_focus_compact())
     assert "亥:00" in text
     assert text.index("亥:00") < text.index("子:00")
 
@@ -107,7 +109,7 @@ def test_evening_still_renders_remaining_blocks_midday():
     _setup_common(mod)
     today = _midnight()
     mod.view_now = lambda: today.replace(hour=15, minute=5)
-    text = "".join(t for _, t in mod.render_evening())
+    text = "".join(t for _, t, *_ in mod.render_evening())
     assert "戌:00" in text and "亥:00" in text
     assert "子:00" not in text, "the sleep block stays out of the evening band"
 
