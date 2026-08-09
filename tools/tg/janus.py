@@ -418,6 +418,12 @@ class State:
         # an unintended timer start.
         self.visible_events: list[dict] = []
         self.event_sel: tuple | None = None
+        # MOUSE_DOWN column on the pinned current-timer row, while a
+        # swipe-right gesture is in progress; None between gestures. Read by
+        # _current_row_click's MOUSE_UP branch to measure the drag distance
+        # (user request 2026-08-08: "swipe right on the current time entry"
+        # = the same /done action as opt+enter).
+        self.current_swipe_start: int | None = None
         # Auto-scroll-into-view (user request 2026-08-07: "select a line, and
         # scroll within that box", comparing to dtd's fzf list). A monotonic
         # deadline, not a one-shot bool: main_window is focusable=False with
@@ -704,6 +710,8 @@ def _sel_key(item: dict):
         return ("entry", item["start_dt"], tuple(item["entry_ids"]))
     if kind == "empty":
         return ("empty", item["start_dt"])
+    if kind == "current":
+        return ("current",)  # singleton — only one live timer can ever exist
     return _event_key(item)
 
 
@@ -736,6 +744,39 @@ def _row_click(key) -> object | None:
 
     def handler(mouse_event):
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            STATE.event_sel = key
+            get_app().invalidate()
+            return None
+        return NotImplemented
+    return handler
+
+
+SWIPE_RIGHT_COLS = 4  # MOUSE_UP.x - MOUSE_DOWN.x threshold that reads as a swipe, not a click
+
+
+def _current_row_click(key) -> object | None:
+    """Mouse handler for the pinned current-timer row (render_current_bottom)
+    — a superset of _row_click's plain click-to-select, plus swipe-right-to-
+    /done (user request 2026-08-08). MOUSE_DOWN records its column in
+    STATE.current_swipe_start; MOUSE_UP measures the drag distance against
+    it. Past SWIPE_RIGHT_COLS reads as a swipe and runs the same stop+grant
+    action as ⌥↵ on this row; short of that, it's an ordinary click-to-
+    select, same as any other row. MOUSE_UP (not MOUSE_DOWN) still owns the
+    select-only path so a drag that started here but released elsewhere
+    never wrongly selects it — mirrors _row_click's own reasoning."""
+    if key is None:
+        return None
+
+    def handler(mouse_event):
+        if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
+            STATE.current_swipe_start = mouse_event.position.x
+            return None
+        if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            start = STATE.current_swipe_start
+            STATE.current_swipe_start = None
+            if start is not None and mouse_event.position.x - start >= SWIPE_RIGHT_COLS:
+                _run_current_timer_done(get_app())
+                return None
             STATE.event_sel = key
             get_app().invalidate()
             return None
@@ -3543,13 +3584,24 @@ def render_evening() -> list[tuple[str, str]]:
 def render_current_bottom() -> list[tuple[str, str]]:
     """Mirror of the running timer, pinned above the footer so it's always visible.
     The ticking elapsed timer (tenths heartbeat) leads on the LEFT — where the eye
-    looks for it — then the desc; the wall clock is right-justified."""
+    looks for it — then the desc; the wall clock is right-justified.
+
+    Selectable (user request 2026-08-08): render_all() appends this row's
+    {"kind": "current"} into STATE.visible_events whenever a timer is
+    running, so Tab/click select it like any other row, ↵ stops it, ⌥↵ runs
+    /done (stop + grant points). Both fragments carry the same click handler
+    — _current_row_click, not the plain _row_click — so a swipe-right
+    gesture anywhere on the line (MOUSE_DOWN here, MOUSE_UP far enough to
+    the right) runs the /done action directly instead of just selecting."""
     now = dt.datetime.now(TZ)
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
     if not cur:
         return [("class:idle", " (no timer)"),
                 ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
+    key = _sel_key({"kind": "current"})
+    is_sel = STATE.event_sel == key
+    click = _current_row_click(key)  # swipe-aware handler, not _row_click's plain click-to-select
     desc = display_desc(cur.get("description") or "") or "(no description)"
     pid = cur.get("project_id")
     code = toggl_project_code(pid, cur.get("description"))
@@ -3567,9 +3619,14 @@ def render_current_bottom() -> list[tuple[str, str]]:
         left += f" · {code}"
     pad = max(0, WIDTH_HINT - dwidth(left) - len(clock))
     style = project_style(code) or "class:running"
+    if is_sel:
+        style = f"{style} bg:#3a3a3a".strip()
+        time_style = "class:selected_accent"
+    else:
+        time_style = "class:time"
     return [
-        (f"bold {style}".strip(), left),
-        ("class:time", f"{'':>{pad}}{clock}\n"),
+        _frag(f"bold {style}".strip(), left, click),
+        _frag(time_style, f"{'':>{pad}}{clock}\n", click),
     ]
 
 
@@ -3723,6 +3780,21 @@ def render_all() -> list[tuple[str, str]]:
     parts.append(("class:rule", "─" * WIDTH_HINT + "\n"))
     parts += render_focus_compact()
     parts += render_evening()
+    if STATE.current:
+        # The pinned bottom-bar mirror of the running timer (render_current_
+        # bottom) is a separate Window from main_window, so it can't reset or
+        # populate visible_events itself without an implicit ordering
+        # dependency on which window paints first — appended here instead,
+        # in the one function that already owns the reset (user request
+        # 2026-08-08: make that row selectable — ↵ stops it, ⌥↵ runs /done).
+        # raw_desc mirrors the shape every other selectable row carries, so
+        # the ⌥↵ handler's existing STATE.recording dedup check (which reads
+        # item.get("raw_desc")) recognizes this row when it IS the entry
+        # being recorded, instead of double-firing did-fast.
+        STATE.visible_events.append({
+            "kind": "current",
+            "raw_desc": STATE.current.get("description") or "",
+        })
     return parts
 
 
@@ -4092,6 +4164,57 @@ async def _finalize_recording(app) -> None:
     app.invalidate()
 
 
+def _run_current_timer_done(app) -> None:
+    """The /done action for the running timer: stop it AND grant its points
+    (close the matching Todoist task) in one shot — the ⌥↵ and swipe-right
+    gestures on the pinned current-timer row both call this (user request
+    2026-08-08). Mirrors _finalize_recording_cmd's own trick: a completed
+    HHMM-nowHHMM did-fast command's MECE trim carves/stops the still-running
+    entry itself, so there's no separate "stop" call to sequence first.
+
+    If a d357 recording IS live for this exact entry, defers to
+    _finalize_recording instead (same finalize-notes-then-grant flow the
+    recording gets everywhere else) rather than racing it with a second,
+    plainer did-fast call for the same minutes."""
+    cur = STATE.current
+    if not cur:
+        return
+    raw_desc = cur.get("description") or ""
+    if (STATE.recording is not None
+            and STATE.recording["desc"].strip().lower() == raw_desc.strip().lower()):
+        rec_desc = STATE.recording["desc"].strip().lower()
+        _enqueue_work(app, f"finalize {STATE.recording['desc']}",
+                      lambda: _finalize_recording(app), key=f"finalize:{rec_desc}")
+        return
+    try:
+        start = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
+    except Exception:
+        flash("current timer: bad start time", 4.0)
+        return
+    now = dt.datetime.now(TZ)
+    if (now - start).total_seconds() < 60:
+        flash("timer just started — give it a minute before /done", 3.0)
+        return
+    code = toggl_project_code(cur.get("project_id"), cur.get("description"))
+    cmd = f"{raw_desc} {start:%H%M}-{now:%H%M}"
+    if code:
+        cmd += f" @{code}"
+    STATE.event_sel = None
+
+    async def _run():
+        flash(f"$ did {cmd}  (stop + done)")
+        app.invalidate()
+        res = await asyncio.to_thread(run_did_fast, cmd)
+        flash(res, 8.0)
+        app.invalidate()
+        await asyncio.to_thread(fetch_current)
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+        app.invalidate()
+
+    _enqueue_work(app, f"did {cmd}", _run, key=cmd)
+
+
 def _convert_selected_event(ev: dict, app) -> None:
     """Convert a selected calendar event into Toggl — an ENDED event runs
     did-fast (completed entry + its points in one shot, carving any runaway
@@ -4330,6 +4453,30 @@ def _(event):
         if not item:
             return
         kind = item.get("kind") if isinstance(item, dict) else None
+        if kind == "current":
+            # ↵ on the pinned current-timer row = stop, plain (same action
+            # as ^S) — ⌥↵/swipe-right on the SAME row runs /done instead
+            # (user request 2026-08-08). Deliberately independent of the
+            # main pane's own selectable running-entry row just above (kind
+            # == "entry", below), which keeps its existing edit-on-Enter
+            # behavior untouched.
+            STATE.event_sel = None
+            flash("stopping…")
+
+            async def _stop_current():
+                res = await asyncio.to_thread(run_tg_fast, "stop")
+                flash(res)
+                event.app.invalidate()
+                polls = (0.4, 0.8, 1.5)
+                for i, delay in enumerate(polls):
+                    await asyncio.sleep(delay)
+                    await asyncio.to_thread(fetch_current)
+                    if i == len(polls) - 1:
+                        await asyncio.to_thread(fetch_today, True)
+                    event.app.invalidate()
+
+            event.app.create_background_task(_stop_current())
+            return
         if kind == "entry":
             # Arm the edit target and hand the user editable text instead of
             # acting immediately — "loads the description into the input
@@ -4476,6 +4623,16 @@ def _(event):
         # "give me credit" whether the row is an entry or a meeting
         # (user request 2026-07-29).
         _convert_selected_event(item, event.app)
+        return
+    if isinstance(item, dict) and item.get("kind") == "current":
+        # ⌥↵ on the pinned current-timer row = /done: stop it AND grant its
+        # points in one shot (user request 2026-08-08). The STATE.recording
+        # branch above already handled (and returned for) the case where
+        # this exact entry IS the one being recorded — reaching here means
+        # either no recording is live, or it's for some other entry, so
+        # _run_current_timer_done's own recording check is just a second,
+        # harmless line of defense, not the primary path.
+        _run_current_timer_done(event.app)
         return
     if not (isinstance(item, dict) and item.get("kind") == "entry"):
         flash("opt+enter: select a tracked entry first", 3.0)

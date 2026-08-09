@@ -21,9 +21,20 @@ DAEMON_PORT = 9876
 IS_IX = "mac-mini" in socket.gethostname().lower()
 LEDGER_DIR = "/Users/mckay/vault/g245/neon-ledger"
 # Covers a fresh ssh handshake on a congested tailnet path (~10s observed
-# 2026-07-20 at ~630ms RTT) plus curl's own -m 10. At 5s every call fell
+# 2026-07-20 at ~630ms RTT) plus curl's own -m 20. At 5s every call fell
 # through to the (then-broken) osascript fallback whenever no connection
 # was already warm.
+#
+# curl's own -m must stay comfortably BELOW both python timeouts below, or
+# python kills the subprocess before curl's timeout ever fires cleanly.
+# 2026-08-09: curl -m 10 was too tight for genuine (non-network) Excel
+# write latency — a legitimate daemon append took ~12s, curl gave up at
+# 10s, the caller fell back to a non-idempotent ssh+osascript write, and
+# the original daemon request landed a few seconds later anyway. Result:
+# the append happened twice (100pts instead of 50 in 0分 col Q that
+# morning). Raised curl's -m to 20 and both python timeouts to match, so
+# a slow-but-successful Excel write no longer races the fallback.
+CURL_TIMEOUT = 20
 DAEMON_TIMEOUT = 25
 WORKBOOK = "Neon分v12.2.xlsx"
 
@@ -31,11 +42,11 @@ WORKBOOK = "Neon分v12.2.xlsx"
 def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict | None:
     """Invoke the daemon (over SSH, or locally when already on ix). Returns parsed JSON, or None on failure."""
     if body is None:
-        cmd = f"curl -sS -m 10 http://localhost:{DAEMON_PORT}{path}"
+        cmd = f"curl -sS -m {CURL_TIMEOUT} http://localhost:{DAEMON_PORT}{path}"
     else:
         payload = json.dumps(body, ensure_ascii=False)
         cmd = (
-            f"curl -sS -m 10 -X {method} -H 'Content-Type: application/json' "
+            f"curl -sS -m {CURL_TIMEOUT} -X {method} -H 'Content-Type: application/json' "
             f"-d {shlex.quote(payload)} http://localhost:{DAEMON_PORT}{path}"
         )
     argv = ["sh", "-c", cmd] if IS_IX else ["ssh", DAEMON_HOST, cmd]
@@ -43,7 +54,7 @@ def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict 
         r = subprocess.run(
             argv,
             capture_output=True, text=True,
-            timeout=15 if IS_IX else DAEMON_TIMEOUT,
+            timeout=DAEMON_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         return None
