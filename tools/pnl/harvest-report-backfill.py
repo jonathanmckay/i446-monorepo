@@ -51,7 +51,7 @@ VALID_LABELS = {
 }
 
 FNAME_RE = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})-([a-z0-9]+)-trailing-12m-pnl\.md$")
-HEADING_RE = re.compile(r"^## Trailing 12-Month P&L \((\w{3}) (\d{4}) . (\w{3}) (\d{4})\)")
+HEADING_RE = re.compile(r"^## Trailing 12-Month P&L \((\w{3}) (\d{4}) . (\w{3}) (\d{4})\)", re.M)
 
 
 def parse_num(s: str) -> float | None:
@@ -100,10 +100,11 @@ def harvest_file(path: str) -> tuple[str, dict] | None:
     result: dict[str, dict] = {}
     in_table = False
     for line in text.splitlines():
-        if line.startswith("| Account |"):
-            # 14 data columns expected: Account + 12 months + T12. The
-            # Comparisons table also starts "| Account |" but has different
-            # column names — distinguish by column count.
+        if line.startswith("| Account"):
+            # 14 data columns expected: Account + 12 months + T12 (header cell
+            # padding varies between generations). The Comparisons table also
+            # starts "| Account" but has 11 differently-named columns —
+            # column count is the discriminator.
             if len([c for c in line.split("|") if c.strip()]) == 14:
                 in_table = True
             continue
