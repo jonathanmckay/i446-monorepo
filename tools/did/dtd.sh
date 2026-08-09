@@ -754,18 +754,41 @@ label="\${names[1]}"
 # exports: the test harness and any scripted caller run the script with the
 # flag unset and get the non-interactive default.
 days=""
+prompted=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
   read days < /dev/tty
+  prompted=1
 fi
 days=\${days// /}
-[[ -z "\$days" ]] && days=auto
-case "\$days" in
-  auto|<->|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
-  *) echo "✗ invalid defer target: \$days (cancelled)" > "\$HDR"; exit 0 ;;
-esac
+if [[ -n "\$prompted" ]]; then
+  # A live human actually saw the prompt and left it blank/0 — that IS an
+  # explicit "skip this occurrence, no dated copy" choice. Validate whatever
+  # they typed.
+  [[ -z "\$days" ]] && days=auto
+  case "\$days" in
+    auto|<->|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *) echo "✗ invalid defer target: \$days (cancelled)" > "\$HDR"; exit 0 ;;
+  esac
+else
+  # No tty to prompt on (scripted/automated caller — DTD_DEFER_PROMPT unset,
+  # e.g. an agent driving dtd non-interactively): never manufacture "auto"
+  # (skip this occurrence, no dated copy) on a caller's behalf who never got
+  # to choose it. Leave days empty so defer-fast.py's OWN default applies
+  # instead — +1 day, WITH a dated one-off copy of the current occurrence
+  # (bug fixed 2026-08-09: this unconditional empty->auto rewrite silently
+  # skip-deferred weekly 1neon habits — e.g. "1s" vanished for a week with no
+  # dated stand-in and no trace beyond a 0-point "deferred: ... → next
+  # occurrence" posthoc — any time dtd's ctrl-d binding ran without a live
+  # terminal to prompt on).
+  days=""
+fi
 defer_label="+\$days"
-[[ "\$days" == "auto" || "\$days" == "0" ]] && defer_label="auto"
+if [[ "\$days" == "auto" || "\$days" == "0" ]]; then
+  defer_label="auto"
+elif [[ -z "\$days" ]]; then
+  defer_label="+1 (default)"
+fi
 # Optimistic UI: hide the task and show status IMMEDIATELY, then run the
 # Todoist round trips (paginated search, reschedule, posthoc create+close —
 # 3-10s) detached so fzf never blocks on the network. On failure the hide is

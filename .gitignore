@@ -86,3 +86,12 @@ tools/personal-dashboard/ga4-oauth.keys.json
 
 # d357 recording state moved to ~/.local/state/jm/ (machine-local)
 skills/claude-skills/d357/state.json
+
+# Syncthing conflict copies — never commit, reconcile manually on disk.
+# git-autopush.sh does a blind `git add -A` every 10 minutes, so without
+# this these get swept into history the moment Syncthing drops one.
+*.sync-conflict-*
+
+# Stray artifact from a shell-scripting bug (unexpanded $1/$REMOVED),
+# found 2026-08-09. Harmless to ignore if something regenerates it.
+$REMOVED.ids
