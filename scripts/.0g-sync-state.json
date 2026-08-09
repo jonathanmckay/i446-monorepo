@@ -1,5 +1,10 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-09T06:00:06.339006-07:00"
+  "tasks": {
+    "all g245 done before 午 「15」": {
+      "todoist_id": "6hFjJ3pGwwprgRQ2",
+      "minutes": 10
+    }
+  },
+  "last_sync": "2026-08-09T10:00:06.879864-07:00"
 }
