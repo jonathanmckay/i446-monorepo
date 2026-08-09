@@ -18,7 +18,10 @@ if git diff --cached --quiet; then
 fi
 
 CHANGED=$(git diff --cached --stat | tail -1)
-git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q
+if ! git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
+    echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
+    exit 1
+fi
 echo "[$TS] committed: $CHANGED"
 
 # Push the CURRENT branch, not a hardcoded main. This lets a clone sit on a
