@@ -313,9 +313,16 @@ def resolve(raw: str):
 
 
 def cmd_start(desc, project, tags):
-    args = ["start", desc] if desc else ["start", project]
-    if project and desc:
-        args.append(project)
+    # toggl_cli's start reads positionally: desc, [project], [tags...]. project
+    # must occupy slot 1 whenever ANYTHING follows it (a real project code, or
+    # tags with no project) — otherwise a tag like "-2" slides into the project
+    # slot and toggl_cli's _resolve_project falls back to int("-2") = -2, a
+    # bogus project id that 400s against the API (regression 2026-08-10: "/tg
+    # prep bball #-2" — passthrough desc, no shortcode project, explicit tag).
+    # Domain-only shortcodes (desc="") need the SAME slot-1 placement for
+    # project, not project substituting for desc — the old `else` branch put
+    # the domain code in the description slot instead of the project slot.
+    args = ["start", desc, project] if (project or tags) else ["start", desc]
     if tags:
         args.extend(tags)
     out = _run_cli(*args)
