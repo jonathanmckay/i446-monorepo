@@ -324,7 +324,9 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     # ●mic ●call dot next to the 🎙 recording marker). Delta-only peak (just
     # the frames appended since the last sample), not the whole recording so
     # far, so the dot reflects "receiving bytes right now," not history.
-    LEVEL_INTERVAL = 1.0
+    # 4 Hz (user request 2026-08-10 "more realtime"): fast enough that the
+    # janus dots visibly flash with speech on each channel.
+    LEVEL_INTERVAL = 0.25
     last_level_print = 0.0
     level_mic_idx = 0
     level_bh_idx = 0
@@ -344,8 +346,8 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
     with GracefulStop() as stop:
         elapsed = 0
         while not stop.requested:
-            sd.sleep(500)
-            elapsed += 0.5
+            sd.sleep(250)
+            elapsed += 0.25
 
             # Live level sample (see LEVEL_INTERVAL above)
             if elapsed - last_level_print >= LEVEL_INTERVAL:
