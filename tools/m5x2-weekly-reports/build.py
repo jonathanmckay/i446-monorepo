@@ -47,8 +47,12 @@ DEFAULT_WEEKS = 5
 # vault doc that /f695 keeps current via manual paste-in. Read-only here;
 # this script never writes to it.
 F695_DOC = Path.home() / "vault" / "h335" / "f693" / "1-f695-weekly-updates.md"
-F695_SECTIONS = ("i9 (Xbox)", "Growth", "DS", "Analytics Infra", "Product Infra")
 F695_OBSIDIAN_URI = "obsidian://open?path=" + urllib.parse.quote(str(F695_DOC))
+# Fixed roster (the doc's summary tables were removed 2026-08-10; the doc now
+# holds only the writeups). Growth (JM) — JM's own weekly — stays rightmost.
+I9_PEOPLE = ["Elliot Silvers", "Bei Lu", "Eldon Lei", "Roberto Ruggeri",
+             "Jessica Allen", "Ethan Abeles", "Growth (JM)"]
+I9_DUE_OFFSET = 5  # i9 updates are due the FRIDAY of their Sunday-anchored week
 
 # (display, topic, drive-name tokens, email senders, subject regex, subject veto regex)
 REPORTERS = [
@@ -204,36 +208,17 @@ def _parse_week_heading(line: str) -> dt.date | None:
         return None
 
 
-def fetch_i9_people_and_grid() -> tuple[list[str], dict]:
-    """Returns (people, grid) where grid[(week_start, person)] = True if a
-    #### <Person> entry exists under that week's ### Week of heading."""
+def fetch_i9_grid() -> dict:
+    """grid[(week_start, person)] = grade string (e.g. "C") or "" if a
+    #### <Person> entry exists under that week's ### Week of heading. The
+    grade is parsed from the entry's closing **JM (<grade>):** line."""
     if not F695_DOC.exists():
-        return [], {}
-    text = F695_DOC.read_text(encoding="utf-8")
-    lines = text.splitlines()
-
-    # People: non-empty Person cells in the five i9-side tables.
-    people: list[str] = []
-    seen = set()
-    section = None
-    for line in lines:
-        m = re.match(r"^## (.+)$", line.strip())
-        if m:
-            section = m.group(1) if m.group(1) in F695_SECTIONS else None
-            continue
-        if section and line.strip().startswith("|"):
-            cell = line.split("|")[1].strip()
-            if cell and cell.lower() != "person" and not re.match(r"^-+$", cell):
-                if cell not in seen:
-                    seen.add(cell)
-                    people.append(cell)
-
-    # Grid: #### <Person> headings nested under ### Week of Y.MM.DD headings,
-    # scoped to the "## Weekly updates" section only.
+        return {}
     grid: dict = {}
     in_log = False
     cur_week: dt.date | None = None
-    for line in lines:
+    cur_person: str | None = None
+    for line in F695_DOC.read_text(encoding="utf-8").splitlines():
         if line.strip() == "## Weekly updates":
             in_log = True
             continue
@@ -244,30 +229,66 @@ def fetch_i9_people_and_grid() -> tuple[list[str], dict]:
         wk = _parse_week_heading(line)
         if wk is not None:
             cur_week = wk
+            cur_person = None
             continue
         m = re.match(r"^#### (.+)$", line.strip())
         if m and cur_week is not None:
-            grid[(cur_week, m.group(1).strip())] = True
+            cur_person = m.group(1).strip()
+            grid[(cur_week, cur_person)] = ""
+            continue
+        g = re.match(r"^\*\*JM \(([A-Fa-f][+-]?)\):", line.strip())
+        if g and cur_week is not None and cur_person is not None:
+            grid[(cur_week, cur_person)] = g.group(1).upper()
+    return grid
 
-    return people, grid
+
+def jm_draft_in_progress(grid: dict) -> tuple[dt.date, str] | None:
+    """JM's own weekly, mid-draft: newest *growth-weekly-jm-draft*.md with
+    frontmatter `status: draft`. Returns (covered_week, obsidian_uri); the
+    covered week is read from the first M/D in the H1 title (e.g. "Mon 8/3
+    to Fri 8/7"), falling back to the week before the draft's date."""
+    for f in sorted(F695_DOC.parent.glob("*growth-weekly-jm-draft*.md"), reverse=True):
+        text = f.read_text(encoding="utf-8")
+        if not re.search(r"^status:\s*draft\s*$", text, re.M):
+            continue
+        ym = re.search(r"^date:\s*(\d{4})", text, re.M)
+        year = int(ym.group(1)) if ym else dt.date.today().year
+        m = re.search(r"^# .*?(\d{1,2})/(\d{1,2})", text, re.M)
+        if m:
+            try:
+                wk = week_start(dt.date(year, int(m.group(1)), int(m.group(2))))
+            except ValueError:
+                wk = week_start(dt.date.today()) - dt.timedelta(weeks=1)
+        else:
+            wk = week_start(dt.date.today()) - dt.timedelta(weeks=1)
+        if grid.get((wk, "Growth (JM)")) is not None:
+            return None  # already filed — the ✓ wins
+        return wk, "obsidian://open?path=" + urllib.parse.quote(str(f))
+    return None
 
 
-def render_i9_section(people: list[str], grid: dict, weeks: list[dt.date]) -> str:
-    if not people:
-        return ""
+def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
     today = dt.date.today()
     cur_wk = week_start(today)
-    head = "".join(f"<th>{html.escape(p)}</th>" for p in people)
+    draft = jm_draft_in_progress(grid)
+    head = "".join(f"<th>{html.escape(p)}</th>" for p in I9_PEOPLE)
     rows = []
     for wk in weeks:
         cells = []
-        for p in people:
-            if grid.get((wk, p)):
+        due_day = wk + dt.timedelta(days=I9_DUE_OFFSET)
+        for p in I9_PEOPLE:
+            hit = grid.get((wk, p))
+            if hit is not None:
+                grade = f" <span class='grade'>{html.escape(hit)}</span>" if hit else ""
                 cells.append(
                     f"<td class='ok'><a href='{html.escape(F695_OBSIDIAN_URI)}' "
-                    f"title='{html.escape(p)} — logged in f695 for week of {wk.isoformat()}'>✓</a></td>")
+                    f"title='{html.escape(p)} — logged in f695 for week of {wk.isoformat()}'>✓</a>{grade}</td>")
+            elif p == "Growth (JM)" and draft and draft[0] == wk:
+                cells.append(
+                    f"<td class='wip'><a href='{html.escape(draft[1])}' "
+                    f"title='JM draft in progress — click to open'>✍️</a></td>")
             elif wk == cur_wk:
-                cells.append("<td class='due'>due</td>")
+                cells.append(f"<td class='due'>due {due_day.month}/{due_day.day}</td>")
             else:
                 cells.append("<td class='miss'>—</td>")
         label = f"{wk.month}/{wk.day}" + (" (this wk)" if wk == cur_wk else "")
@@ -279,10 +300,10 @@ def render_i9_section(people: list[str], grid: dict, weeks: list[dt.date]) -> st
 <table><tr><th style="text-align:left">Week of</th>{head}</tr>
 {''.join(rows)}
 </table>
-<div class="note">✓ opens the f695 doc (hover for which week/person) — jump to
-<code>## Weekly updates</code> to find the writeup; — is a week with nothing
-logged for that person; the current week shows "due" until it's pasted in
-with <code>/f695</code>.</div>
+<div class="note">✓ opens the f695 doc (hover for which week/person); a letter next to it
+is JM's grade for that update. An update counts for the week it COVERS (a Friday send
+covers its own week) and is due the Friday of the current week. ✍️ = JM's own update
+mid-draft (click to open the draft); — is a week with nothing logged.</div>
 """
 
 
@@ -319,7 +340,9 @@ th{{color:#e7ecf0;font-size:13px}} th .topic{{display:block;color:#8b96a3;font-w
 td.wk{{color:#8b96a3;font-variant-numeric:tabular-nums;text-align:left;white-space:nowrap}}
 td.ok a{{color:#2faa4d;font-weight:700;text-decoration:none;font-size:16px}}
 td.miss{{color:#e23b3b;font-weight:700}}
-td.due{{color:#ff8a3d;font-size:12px}}
+td.due{{color:#ff8a3d;font-size:12px;white-space:nowrap}}
+td.wip a{{text-decoration:none;font-size:15px}}
+td.ok .grade{{color:#8b96a3;font-weight:700;font-size:12px}}
 .note{{color:#8b96a3;font-size:12px;margin-top:12px}}
 a.folder{{color:#2979ff}}
 </style></head><body>
@@ -348,12 +371,12 @@ def main() -> int:
     docs = fetch_drive_docs(tok)
     grid = build_grid(emails, docs)
     n_mail = sum(1 for v in grid.values() for h in v if h["kind"] == "mail")
-    i9_people, i9_grid = fetch_i9_people_and_grid()
-    i9_html = render_i9_section(i9_people, i9_grid, weeks)
+    i9_grid = fetch_i9_grid()
+    i9_html = render_i9_section(i9_grid, weeks)
     out = DIR / "index.html"
     out.write_text(render(grid, weeks, n_mail, len(docs), i9_html))
     print(f"wrote {out} ({len(emails)} originals scanned, {n_mail} update emails matched, "
-          f"{len(docs)} docs, {len(i9_people)} i9 people)")
+          f"{len(docs)} docs, {len(i9_grid)} i9 entries)")
     return 0
 
 

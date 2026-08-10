@@ -73,6 +73,7 @@ SHORTCODES = {
     "lunch": ("hcb", []), "h dinner": ("hcb", []), "dad call": ("家", []),
     "lx walk": ("xk88", []), "r203 weekly": ("m5x2", []), "r202 weekly": ("m5x2", []),
     "kids to sleep": ("xk87", []), "lego": ("xk87", []), "notes": ("i9", []),
+    "业写": ("i9", []),
     "-1t": ("n156", []), "starcraft": ("hcmc2", ["2"]),
     "im|jm 1|1": ("m5x2", []), "الشمس": ("hcm", []), "news": ("hcmc", ["-3"]),
     "teams": ("i9", []), "m5x2 people": ("m5x2", []),
