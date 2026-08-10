@@ -4211,28 +4211,44 @@ def _rec_active_for(desc: str | None) -> bool:
                 and desc.strip().lower() == STATE.recording["desc"].strip().lower())
 
 
-_REC_LEVEL_CACHE = {"checked": float("-inf"), "have_data": False, "mic_ok": None, "call_ok": None}
-_REC_LEVEL_TTL = 1.0
+_REC_LEVEL_CACHE = {"checked": float("-inf"), "have_data": False, "mic": None, "call": None}
+_REC_LEVEL_TTL = 0.25
 _LEVEL_RE = re.compile(r"^LEVEL mic=(\d+)(?: call=(\d+))?$", re.M)
+# A channel is "active" (speaking) when its newest sample peaks at or above
+# this (int16 peak; mic noise floor sits ~100-800, speech ~1000-4500), and
+# "dead" only when EVERY sample in the ~3s tail window is flat zero — a
+# single 0 between words is normal digital silence on the call leg, not a
+# broken route.
+_REC_ACTIVE_THRESH = 800
+_REC_DEAD_WINDOW = 12  # samples ≈ 3s at meet.py's 4 Hz LEVEL cadence
 
 
-def _read_rec_levels() -> tuple[bool, bool | None] | None:
-    """(mic_ok, call_ok) from the LAST "LEVEL mic=N [call=N]" line meet.py's
-    recording loop prints roughly once a second (see meet.py record_audio) —
-    answers "is the .wav actually receiving bytes right now" without waiting
-    on meet.py's own 60-180s periodic warning (user request 2026-08-09,
-    prompted by a call-audio channel that sat at zero for 2 minutes before
-    the existing warning fired). call_ok is None for a mic-only session — no
-    second channel to show a dot for. Returns None (render nothing) when
-    nothing is recording, or no LEVEL line has landed yet (~1s after start)."""
+def _rec_channel_state(latest: int, window_max: int) -> str:
+    if window_max == 0:
+        return "dead"
+    return "active" if latest >= _REC_ACTIVE_THRESH else "quiet"
+
+
+def _read_rec_levels() -> tuple[str, str | None] | None:
+    """(mic_state, call_state) from the "LEVEL mic=N [call=N]" lines meet.py's
+    recording loop prints at 4 Hz (see meet.py record_audio) — answers "is
+    the .wav actually receiving bytes right now" without waiting on meet.py's
+    own 60-180s periodic warning (user request 2026-08-09, prompted by a
+    call-audio channel that sat at zero for 2 minutes before the existing
+    warning fired). Each state is "active" (speech on the newest sample —
+    the dot visibly flashes with it), "quiet" (alive, no speech), or "dead"
+    (flat zero across the whole ~3s window). call_state is None for a
+    mic-only session — no second channel to show a dot for. Returns None
+    (render nothing) when nothing is recording, or no LEVEL line has landed
+    yet (<1s after start)."""
     if not STATE.recording:
         return None
     now = time.monotonic()
     if now - _REC_LEVEL_CACHE["checked"] < _REC_LEVEL_TTL:
-        return ((_REC_LEVEL_CACHE["mic_ok"], _REC_LEVEL_CACHE["call_ok"])
+        return ((_REC_LEVEL_CACHE["mic"], _REC_LEVEL_CACHE["call"])
                 if _REC_LEVEL_CACHE["have_data"] else None)
     _REC_LEVEL_CACHE["checked"] = now
-    last = None
+    samples: list[tuple[int, int | None]] = []
     try:
         st = json.loads(D357_STATE.read_text())
         log_path = Path(st.get("log") or "")
@@ -4241,30 +4257,44 @@ def _read_rec_levels() -> tuple[bool, bool | None] | None:
             size = f.tell()
             f.seek(max(0, size - 4096))
             tail = f.read().decode("utf-8", errors="ignore")
-        for last in _LEVEL_RE.finditer(tail):
-            pass  # last match wins — only the newest sample matters
+        for m in _LEVEL_RE.finditer(tail):
+            samples.append((int(m.group(1)),
+                            int(m.group(2)) if m.group(2) is not None else None))
     except Exception:
-        last = None
-    if last is None:
+        samples = []
+    if not samples:
         _REC_LEVEL_CACHE["have_data"] = False
         return None
-    mic_ok = int(last.group(1)) > 0
-    call_ok = int(last.group(2)) > 0 if last.group(2) is not None else None
-    _REC_LEVEL_CACHE.update(have_data=True, mic_ok=mic_ok, call_ok=call_ok)
-    return mic_ok, call_ok
+    window = samples[-_REC_DEAD_WINDOW:]
+    mic_latest, call_latest = window[-1]
+    mic = _rec_channel_state(mic_latest, max(s[0] for s in window))
+    call = None
+    if call_latest is not None:
+        call = _rec_channel_state(call_latest,
+                                  max((s[1] or 0) for s in window))
+    _REC_LEVEL_CACHE.update(have_data=True, mic=mic, call=call)
+    return mic, call
+
+
+_REC_DOT_STYLE = {
+    "active": "bold #00ff5f",   # bright flash: speech on this channel right now
+    "quiet": "#2e8b57",         # dim green: channel alive, nobody talking
+    "dead": "bold #ff5555",     # flat zero for ~3s: the route is broken
+}
 
 
 def _rec_level_dot_frags(click) -> list[tuple]:
-    """● per recording channel (mic, then call if the session has one) —
-    green for signal in the last ~1s, red for flat zero. See
+    """● per recording channel (mic in, then call out if the session has
+    one). Bright green flashes with speech (4 Hz samples against the app's
+    0.1s refresh), dim green = alive but silent, red = dead channel. See
     _read_rec_levels for the log-tailing mechanics."""
     levels = _read_rec_levels()
     if levels is None:
         return []
-    mic_ok, call_ok = levels
-    frags = [_frag("bold #00d700" if mic_ok else "bold #ff5555", " ●", click)]
-    if call_ok is not None:
-        frags.append(_frag("bold #00d700" if call_ok else "bold #ff5555", "●", click))
+    mic, call = levels
+    frags = [_frag(_REC_DOT_STYLE[mic], " ●", click)]
+    if call is not None:
+        frags.append(_frag(_REC_DOT_STYLE[call], "●", click))
     return frags
 
 

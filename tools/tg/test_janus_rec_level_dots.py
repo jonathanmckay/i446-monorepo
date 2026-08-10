@@ -6,24 +6,32 @@ checks only warn every 60-180s into a log file nobody watches live — this bit
 the user in the exact session that prompted the request (call audio sat at
 zero for 2 minutes before the fallback warning fired).
 
-meet.py now prints "LEVEL mic=N [call=N]" once a second (tools/meet/test_meet.py
-covers that side). janus tails the active recording's log (path from
+2026-08-10 follow-up ("something more clear to show input and output audio
+channels ... more realtime ... two lights that can both flash"): meet.py now
+prints "LEVEL mic=N [call=N]" at 4 Hz (tools/meet/test_meet.py covers that
+side) and the dots are three-state per channel — bright green flashing with
+speech (newest sample ≥ _REC_ACTIVE_THRESH), dim green when the channel is
+alive but silent, red only when the whole ~3s window is flat zero (a single
+0 between words is normal digital silence on the call leg, not a broken
+route). janus tails the active recording's log (path from
 ~/.local/state/jm/d357-state.json, the same file _load_recording_state()
-already reads) for the newest such line and renders a ●mic ●call dot next to
-the 🎙 marker in the pinned bottom bar: green for signal in the last ~1s, red
-for flat zero, nothing before the first sample lands or when nothing is
+already reads) and renders ●mic ●call next to the 🎙 marker in the pinned
+bottom bar; nothing renders before the first sample lands or when nothing is
 recording.
 """
 import datetime as dtm
 import importlib.util
 import json
 import sys
-import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
+
+ACTIVE = "bold #00ff5f"
+QUIET = "#2e8b57"
+DEAD = "bold #ff5555"
 
 
 def _load_tui():
@@ -56,7 +64,7 @@ def _setup_recording(mod, tmp_path, desc="team sync", log_lines=""):
     # starts near 0 in some environments (bug this whole feature tripped
     # over), so 0.0 is indistinguishable from "just checked" and would mask
     # exactly the regression this suite exists to catch.
-    mod._REC_LEVEL_CACHE.update(checked=float("-inf"), have_data=False, mic_ok=None, call_ok=None)
+    mod._REC_LEVEL_CACHE.update(checked=float("-inf"), have_data=False, mic=None, call=None)
     return log_path
 
 
@@ -77,57 +85,81 @@ def test_no_dots_before_first_level_sample(tmp_path):
 def test_mic_only_session_shows_single_dot(tmp_path):
     mod = _load_tui()
     _setup_recording(mod, tmp_path, log_lines="LEVEL mic=1234\n")
-    mic_ok, call_ok = mod._read_rec_levels()
-    assert mic_ok is True
-    assert call_ok is None
+    mic, call = mod._read_rec_levels()
+    assert mic == "active"
+    assert call is None
     frags = mod._rec_level_dot_frags(None)
     assert len(frags) == 1
 
 
-def test_both_channels_green_when_both_have_signal(tmp_path):
+def test_speech_flashes_bright_and_silence_dims(tmp_path):
+    """The two lights must FLASH with activity: a sample at/above the speech
+    threshold renders the bright style, a below-threshold (but nonzero)
+    sample the dim one — the 4 Hz cadence does the flashing."""
     mod = _load_tui()
-    _setup_recording(mod, tmp_path, log_lines="LEVEL mic=500 call=900\n")
-    mic_ok, call_ok = mod._read_rec_levels()
-    assert mic_ok is True and call_ok is True
+    _setup_recording(mod, tmp_path, log_lines="LEVEL mic=2000 call=150\n")
+    assert mod._read_rec_levels() == ("active", "quiet")
+    frags = mod._rec_level_dot_frags(None)
+    assert frags[0][0] == ACTIVE, "speaking mic must render the bright flash style"
+    assert frags[1][0] == QUIET, "alive-but-silent call must render dim, not red"
+
+
+def test_both_channels_flash_when_both_speak(tmp_path):
+    mod = _load_tui()
+    _setup_recording(mod, tmp_path, log_lines="LEVEL mic=900 call=950\n")
+    assert mod._read_rec_levels() == ("active", "active")
     frags = mod._rec_level_dot_frags(None)
     assert len(frags) == 2
-    assert all("#00d700" in style for style, _text, *_ in frags)
+    assert all(style == ACTIVE for style, _text, *_ in frags)
 
 
 def test_dead_call_channel_reads_red_not_green(tmp_path):
     """The exact regression this feature exists for: call audio at flat zero
-    must render red, not silently look identical to a healthy channel."""
+    across the window must render red, not silently look identical to a
+    healthy channel."""
     mod = _load_tui()
-    _setup_recording(mod, tmp_path, log_lines="LEVEL mic=800 call=0\n")
-    mic_ok, call_ok = mod._read_rec_levels()
-    assert mic_ok is True
-    assert call_ok is False
+    lines = "".join("LEVEL mic=800 call=0\n" for _ in range(12))
+    _setup_recording(mod, tmp_path, log_lines=lines)
+    mic, call = mod._read_rec_levels()
+    assert mic == "active"
+    assert call == "dead"
     frags = mod._rec_level_dot_frags(None)
-    assert "#00d700" in frags[0][0], "mic (has signal) must read green"
-    assert "#ff5555" in frags[1][0], "call (flat zero) must read red"
+    assert frags[0][0] == ACTIVE, "mic (has signal) must read bright"
+    assert frags[1][0] == DEAD, "call (flat zero) must read red"
 
 
-def test_only_the_newest_level_line_wins(tmp_path):
-    """A dead channel that recovers must show green again — the dot reflects
-    the LATEST sample, not the first one seen in the log."""
+def test_momentary_zero_between_words_is_not_dead(tmp_path):
+    """A single 0 sample on the call leg is normal digital silence between
+    words at 4 Hz — it must dim, not flip red."""
+    mod = _load_tui()
+    _setup_recording(mod, tmp_path,
+                     log_lines="LEVEL mic=800 call=1200\nLEVEL mic=800 call=0\n")
+    mic, call = mod._read_rec_levels()
+    assert call == "quiet", "one silent sample after real signal is not a dead route"
+
+
+def test_dead_channel_recovering_flashes_again(tmp_path):
+    """A dead channel that recovers must show life again — the state reflects
+    the newest samples, not the first ones seen in the log."""
     mod = _load_tui()
     _setup_recording(mod, tmp_path,
                      log_lines="LEVEL mic=800 call=0\nLEVEL mic=800 call=0\nLEVEL mic=800 call=950\n")
-    mic_ok, call_ok = mod._read_rec_levels()
-    assert call_ok is True
+    mic, call = mod._read_rec_levels()
+    assert call == "active"
 
 
 def test_cache_ttl_avoids_rereading_log_every_render_tick(tmp_path):
     mod = _load_tui()
-    log_path = _setup_recording(mod, tmp_path, log_lines="LEVEL mic=800 call=0\n")
+    lines = "".join("LEVEL mic=800 call=0\n" for _ in range(12))
+    log_path = _setup_recording(mod, tmp_path, log_lines=lines)
     first = mod._read_rec_levels()
-    assert first == (True, False)
+    assert first == ("active", "dead")
     # Channel recovers, but within the TTL window the cached (stale) reading
     # must still be returned — the whole point of the cache is to NOT tail
     # the log on every ~0.1s repaint.
     log_path.write_text("LEVEL mic=800 call=900\n")
     cached = mod._read_rec_levels()
-    assert cached == (True, False), "should still be serving the cached value"
+    assert cached == ("active", "dead"), "should still be serving the cached value"
 
 
 def test_bottom_bar_renders_dots_next_to_mic_marker(tmp_path):
