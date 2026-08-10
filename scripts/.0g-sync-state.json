@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-10T08:00:06.406426-07:00"
+  "tasks": {
+    "at least 2 weekly updates out": {
+      "todoist_id": "6hFxCGFGjhqHF2hR",
+      "minutes": 100
+    },
+    "bball with full hiit + not chocolate": {
+      "todoist_id": "6hFxCGJQwV4rmRP2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-08-10T10:00:06.648471-07:00"
 }
