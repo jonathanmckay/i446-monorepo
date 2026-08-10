@@ -235,6 +235,15 @@ PROJECT_COLORS = {
     "家":   "#00b8d4",    # Pool Party (family)
 }
 
+# Value-tag (-1/-2/-3 media-minute tiers) chip colors — fixed neon-palette
+# backgrounds, independent of PROJECT_COLORS (user request 2026-08-10).
+# White text throughout, same chip language as NEON_PTS_STYLE.
+VALUE_TAG_COLORS = {
+    "-1": "#00bfa5",  # Miami Vice (teal)
+    "-2": "#2979ff",  # Electric Blue
+    "-3": "#0d3b66",  # Deep Sea (dark blue)
+}
+
 # Daily Dozen (hcbi sheet, Q<n> summary rows) → chip color. User-specified
 # 2026-08-07, logical food-association mapping over vault/i447/
 # neon-color-pallette.md swatches (reusing already-assigned domain colors
@@ -800,6 +809,31 @@ def _frag(style: str, text: str, handler=None) -> tuple:
     (style, text, handler) 3-tuples only when a handler is attached; this
     keeps that shape decision out of every individual append call."""
     return (style, text, handler) if handler is not None else (style, text)
+
+
+def _visible_tags(tags) -> list[str]:
+    """Entry tags worth showing as a chip on a block row: the -1/-2/-3
+    media-value tiers (VALUE_TAG_COLORS) plus any tag that's itself a
+    project/domain code (credit-sharing tags like xk87/家 on a swim that
+    also counts toward family time) — colored via PROJECT_COLORS. Anything
+    else (e.g. incidental Toggl tags with no display color) stays hidden,
+    same as the old VALUE_TAGS-only filter."""
+    return [t for t in (tags or []) if t in VALUE_TAG_COLORS or t in PROJECT_COLORS]
+
+
+def _tag_chip_style(tag: str) -> str:
+    hexv = VALUE_TAG_COLORS.get(tag) or PROJECT_COLORS.get(tag)
+    return f"bold bg:{hexv} #ffffff" if hexv else ""
+
+
+def _tag_chips_width(tags: list[str]) -> int:
+    """Display width of `tags` rendered via _tag_chip_frags (each tag
+    carries its own leading space, no more '#' prefix)."""
+    return sum(dwidth(t) + 1 for t in tags)
+
+
+def _tag_chip_frags(tags: list[str], handler=None) -> list[tuple]:
+    return [_frag(_tag_chip_style(t), f" {t}", handler) for t in tags]
 
 
 def _cursor_marker(is_sel: bool) -> list[tuple]:
@@ -2341,8 +2375,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 rec_sfx = " 📝"
             else:
                 rec_sfx = ""
-            vtags = " ".join(f"#{t}" for t in (head0.get("tags") or [])
-                             if t in VALUE_TAGS)
+            vtag_list = _visible_tags(head0.get("tags"))
+            vtags_w = _tag_chips_width(vtag_list)
             base_sty = head0.get("style") or ""
             if running:
                 base_sty = f"bold {base_sty}".strip() if base_sty else "bold class:running"
@@ -2364,7 +2398,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 gsty = f"{gsty} bg:#3a3a3a"
             tail_w = (dwidth(right) + 1) if right else 0
             space = max(1, WIDTH_HINT - dwidth(left) - 1 - dwidth(prefix)
-                        - dwidth(dur) - 1 - (dwidth(vtags) + 1 if vtags else 0)
+                        - dwidth(dur) - 1 - vtags_w
                         - tail_w)
             out.extend(head0_marker)
             out.append(_frag(left_sty, left, head0_click))
@@ -2374,8 +2408,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 out.append(_frag(sty, " " * max(0, space - dwidth(txt)) + txt, head0_click))
             else:
                 out.append(_frag(sty, prefix + pad(txt, space), head0_click))
-            if vtags:
-                out.append(_frag(dur_sty, f" {vtags}", head0_click))
+            out.extend(_tag_chip_frags(vtag_list, head0_click))
             out.append(_frag(dur_sty, f" {dur}", head0_click))
             if right:
                 out.append(_frag("class:dim", " ", head0_click))
@@ -2583,10 +2616,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 rec_sfx = " 📝"
             else:
                 rec_sfx = ""
-            vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
-                             if t in VALUE_TAGS)
+            vtag_list = _visible_tags(p.get("tags"))
             space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(prefix) - dwidth(dur) - 1
-                        - (dwidth(vtags) + 1 if vtags else 0))
+                        - _tag_chips_width(vtag_list))
             running_key = ({"kind": "entry", "start_dt": p["start_dt"], "entry_ids": p["entry_ids"]}
                           if p.get("entry_ids") else None)
             running_key = _sel_key(running_key) if running_key else None
@@ -2607,8 +2639,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append(_frag(gsty, gch, running_click))
             _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
             out.append(_frag(sty, prefix + pad(_txt, space), running_click))
-            if vtags:
-                out.append(_frag(dur_sty, f" {vtags}", running_click))
+            out.extend(_tag_chip_frags(vtag_list, running_click))
             out.append(_frag(dur_sty, f" {dur}\n", running_click))
             continue
         # A gcal event mixed into a non-future (current-block) card via its own
@@ -2616,16 +2647,16 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # not "tracked" (fmt_dur) — the block-level is_future flag alone can't
         # express "elapsed portion is real, remaining portion is a plan".
         dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
-        # Value tags (#-1/#-2/#-3 — the ones worth points) ride the right
-        # edge just before the minutes (user request 2026-07-28).
-        vtags = " ".join(f"#{t}" for t in (p.get("tags") or [])
-                         if t in VALUE_TAGS)
+        # Value/credit tags (-1/-2/-3, or a domain code like xk87/家) ride the
+        # right edge just before the minutes (user request 2026-07-28,
+        # colored chips 2026-08-10).
+        vtag_list = _visible_tags(p.get("tags"))
         # A filed d357 doc for this (past, non-running) entry → 📝 right of
         # the task name, same convention as the head0/is_running rows above.
         doc_sfx = " 📝" if (not p.get("is_event")
                             and _has_d357_doc(p.get("raw_desc"))) else ""
         space = max(1, WIDTH_HINT - dwidth(tcol) - 1 - dwidth(dur) - 1
-                    - (dwidth(vtags) + 1 if vtags else 0))
+                    - _tag_chips_width(vtag_list))
         if p.get("is_event"):
             my_key = _sel_key(p["event"])
         elif p.get("entry_ids"):
@@ -2665,8 +2696,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append(_frag(sty, " " * max(0, space - dwidth(body_txt)) + body_txt, row_click))
         else:
             out.append(_frag(sty, pad(body_txt, space), row_click))
-        if vtags:
-            out.append(_frag(dur_sty, f" {vtags}", row_click))
+        out.extend(_tag_chip_frags(vtag_list, row_click))
         out.append(_frag(dur_sty, f" {dur}\n", row_click))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
@@ -2787,6 +2817,18 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
             "is_spill": True,
         })
     return out
+
+
+def _drop_redundant_spill(spill_items: list[dict], real_picks: list[dict]) -> list[dict]:
+    """Drop a spill item whose clipped end lines up exactly with a real
+    pick's start — that pick's own timestamp already proves the earlier
+    entry ran right up until then, so the spill row would just restate it
+    (user report 2026-08-10). A spill ending mid-gap (nothing else in the
+    block starts right there) is kept — that's the original 2026-07-27 case
+    this whole mechanism exists for."""
+    real_starts = {p["start_dt"] for p in real_picks}
+    return [s for s in spill_items
+            if s["start_dt"] + dt.timedelta(minutes=s["dur_min"]) not in real_starts]
 
 
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
@@ -3230,8 +3272,16 @@ def render_morning() -> list[tuple[str, str]]:
                 continue
         picks = _past_block_picks(blk_name, merged)
         # Entries that started in an EARLIER block and flow into this one
-        # get a clipped, titled row here too — not just anonymous ◇ │ marks.
-        picks = _block_spill_items(blk_sh, blk_eh, cutoff) + picks
+        # get a clipped, titled row here too — not just anonymous ◇ │ marks
+        # (user report 2026-07-27) — UNLESS the spill's clipped end lines up
+        # exactly with a real pick already in this block: that pick's own
+        # start time already tells the reader the earlier entry ran right up
+        # until then, so a second row repeating it is just noise (user
+        # report 2026-08-10: "I don't need to show the :00 row since I know
+        # lunch started at 未:43"). A spill that ends mid-gap (nothing lines
+        # up with it) still gets its row — dropping it there would resurrect
+        # the original anonymous-◇ bug.
+        picks = _drop_redundant_spill(_block_spill_items(blk_sh, blk_eh, cutoff), picks) + picks
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
         if sleep:
             picks = ([sleep] + picks)[:4]
@@ -3704,8 +3754,10 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
     # A still-relevant entry that STARTED in the previous block (e.g. a run
     # crossing 20:00 into 亥) gets a clipped, titled, selectable row — not
-    # just anonymous ◇ │ continuation marks (user report 2026-07-27).
-    picks = _block_spill_items(blk_sh, blk_eh, now) + picks
+    # just anonymous ◇ │ continuation marks (user report 2026-07-27), unless
+    # it's redundant with a real pick already anchoring this block (user
+    # report 2026-08-10; see _drop_redundant_spill / the render_morning gate).
+    picks = _drop_redundant_spill(_block_spill_items(blk_sh, blk_eh, now), picks) + picks
     sleep = _block_sleep_item(blk_sh, blk_eh, now)
     if sleep:
         picks = ([sleep] + picks)[:FOCUS_ROWS]
