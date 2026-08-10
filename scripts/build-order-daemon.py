@@ -33,6 +33,7 @@ import re
 import smtplib
 import subprocess
 import sys
+import time
 import urllib.request
 import zoneinfo
 from email.mime.text import MIMEText
@@ -521,6 +522,61 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
     except Exception as e:
         log(f"lock {col}: ERROR {e}")
         return "ERROR"
+
+
+def neon_lock_cell_with_retry(target_date: dt.date, col: str,
+                              dry_run: bool = False, attempts: int = 3,
+                              retry_wait: int = 15) -> str:
+    """neon_lock_cell, retried on transient failure.
+
+    A single osascript_timeout at fire time used to be terminal: the fire
+    logged FAILED and moved on, leaving the block column as a live
+    `=D-SUM(...)` residual that silently swallowed every later block's
+    points for the rest of the day (2026-08-10: the 08:00 lock of H timed
+    out once, so 辰 accumulated all of 巳's points; the sheet needed a
+    hand-reconstructed retro-lock). The daemon's Excel writes elsewhere
+    already tolerate a slow excel-http daemon; the lock is the one write
+    whose failure corrupts the whole day's split, so it retries hardest.
+    """
+    status = "ERROR"
+    for attempt in range(1, attempts + 1):
+        status = neon_lock_cell(target_date, col, dry_run=dry_run)
+        # Only transient outcomes are worth retrying. EMPTY/ALREADY_LOCKED/
+        # LOCKED/DRY_RUN are all final.
+        if not (status == "FAILED" or status == "ERROR" or status.startswith("ERROR")):
+            return status
+        if attempt < attempts:
+            log(f"lock {col}: attempt {attempt}/{attempts} failed — retrying in {retry_wait}s")
+            time.sleep(retry_wait)
+    log(f"lock {col}: gave up after {attempts} attempts — next fire's self-heal sweep will retry")
+    return status
+
+
+def self_heal_unlocked_blocks(today: dt.date, hour: int, dry_run: bool = False) -> list:
+    """Lock any EARLIER fire-hour column still holding a formula.
+
+    Backstop for a lock that failed every retry at its own fire: without
+    this, the column stays a live residual until someone notices by hand
+    (the 2026-08-10 incident sat corrupting attribution for 90 minutes).
+    Locking a block late freezes it at a value inflated by the time since
+    its boundary — attribution between the two adjacent blocks is off by
+    that overlap, but the day total is conserved and every LATER block
+    measures correctly again. Returns the columns healed.
+    """
+    healed = []
+    for fire_hour, col in sorted(LOCK_AT_FIRE_HOUR.items()):
+        if fire_hour >= hour:
+            break
+        try:
+            r = neon_excel.read(NEON_SHEET, col, date=_date_str(today))
+            f = (r.get("formula") or "") if r.get("ok") else ""
+            if f.startswith("="):
+                log(f"self-heal: {col} (fire {fire_hour:02d}) still a formula — locking late")
+                status = neon_lock_cell_with_retry(today, col, dry_run=dry_run)
+                healed.append((col, status))
+        except Exception as e:  # noqa: BLE001 — healing must never block the fire
+            log(f"self-heal: {col} check skipped: {e}")
+    return healed
 
 
 def neon_set_marker(target_date: dt.date, col: str, dry_run: bool = False) -> str:
@@ -1385,7 +1441,10 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
 
     lock_col = LOCK_AT_FIRE_HOUR.get(hour)
     if lock_col:
-        neon_lock_cell(today, lock_col, dry_run=dry_run)
+        neon_lock_cell_with_retry(today, lock_col, dry_run=dry_run)
+    # Backstop: lock any earlier block whose own fire's lock failed all
+    # retries (a still-live residual corrupts every later block's split).
+    self_heal_unlocked_blocks(today, hour, dry_run=dry_run)
 
     # Phase 1: evaluate daemon-checkable habits and write emojis
     live = None

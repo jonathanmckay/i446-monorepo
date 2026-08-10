@@ -52,6 +52,13 @@ HCMC_PROJECT_ID = 109932707
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel as neon_excel  # noqa: E402
 
+# Passive media audit (ActivityWatch + Screen Time vs Toggl hcmc/hcmc2)
+_MA_PATH = Path(__file__).parent / "media_audit.py"
+_MA_SPEC = importlib.util.spec_from_file_location("media_audit", _MA_PATH)
+media_audit_mod = importlib.util.module_from_spec(_MA_SPEC)
+sys.modules["media_audit"] = media_audit_mod
+_MA_SPEC.loader.exec_module(media_audit_mod)
+
 
 def _load_toggl_key() -> str:
     """Load Toggl API key from env or ~/.claude.json MCP config."""
@@ -625,6 +632,15 @@ def main():
     except Exception as e:
         output["sleep_dock"] = f"FAILED: {e}"
         failed = True
+
+    # 4c. Media audit: passive trackers vs Toggl media time for yesterday.
+    # Informational — a flagged gap is surfaced, never written to Neon.
+    try:
+        audit = media_audit_mod.media_audit(
+            yesterday, gather_entries_local(yesterday, sleep_date), entry_local_dt)
+        output["media_audit"] = audit
+    except Exception as e:
+        output["media_audit"] = f"FAILED: {e}"
 
     # 5. Mark 0t done (0₦ + Todoist + stop timer)
     did_result = mark_done()
