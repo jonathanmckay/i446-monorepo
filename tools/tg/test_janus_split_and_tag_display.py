@@ -2,8 +2,8 @@
 
 1. Free rows right-justify with the calendar column (tracked reality keeps
    the left edge; the plan and free time share the right).
-2. Value tags worth points (#-1/#-2/#-3) show on entry rows, right side,
-   just before the minutes.
+2. Value tags worth points (-1/-2/-3) show on entry rows, right side,
+   just before the minutes, as colored chips (no "#" prefix, 2026-08-10).
 3. ^P splits the selected completed entry in two at a chosen HHMM (midpoint
    prefilled), matching dtd's ctrl-p split binding.
 """
@@ -81,10 +81,10 @@ def test_value_tags_render_before_minutes():
               "tags": ["-2", "billable"]}]
     text = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, picks, 0, ""))
     row = next(l for l in text.split("\n") if "eat" in l)
-    assert "#-2" in row
-    assert row.index("#-2") > row.index("eat")
-    assert row.index("#-2") < row.index("25m"), "tag sits before the minutes"
-    assert "#billable" not in row, "only VALUE_TAGS render"
+    assert "-2" in row
+    assert row.index("-2") > row.index("eat")
+    assert row.index("-2") < row.index("25m"), "tag sits before the minutes"
+    assert "billable" not in row, "only recognized (value/project) tags render"
 
 
 def test_merged_entries_union_tags():
