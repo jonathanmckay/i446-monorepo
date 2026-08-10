@@ -302,7 +302,11 @@ def do_append(req: dict) -> dict:
     sheet = req["sheet"]
     val = str(req.get("value", ""))
     val_esc = safe_str(val)
-    is_numeric = val.lstrip().startswith("+") or val.lstrip().startswith("=")
+    # "-" is a formula term like "+" (e.g. the 0t sleep dock appends "-7.5");
+    # without it a negative append takes the string branch and produces
+    # non-computing text on bare-number cells (same class as the 2026-07-14
+    # "+2" regression below).
+    is_numeric = val.lstrip().startswith(("+", "=", "-"))
     if is_numeric:
         empty_set = f'set formula of theCell to "={val_esc.lstrip("+")}"'
         # The existing cell may hold a bare number with no leading "="
