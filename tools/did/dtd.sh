@@ -1279,6 +1279,14 @@ try:
 except: view = ''
 
 def domain_of(t):
+    # Ritual cards carry only '-1neon' — resolve their domain the same way the
+    # color pass does (RITUAL_DOMAIN), so ctrl-t project view groups -1ibx
+    # with i9, -1g with g245, etc.
+    if '-1neon' in t.get('labels', []):
+        bare = strip_ann(t.get('content') or '').lower().replace('😈', '').strip()
+        for tag, dom in RITUAL_DOMAIN.items():
+            if bare == tag or tag in bare.split():
+                return dom
     for lbl in t.get('labels', []):
         if lbl in COLORS:
             return lbl
