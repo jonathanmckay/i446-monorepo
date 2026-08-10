@@ -209,9 +209,10 @@ def _parse_week_heading(line: str) -> dt.date | None:
 
 
 def fetch_i9_grid() -> dict:
-    """grid[(week_start, person)] = grade string (e.g. "C") or "" if a
-    #### <Person> entry exists under that week's ### Week of heading. The
-    grade is parsed from the entry's closing **JM (<grade>):** line."""
+    """grid[(week_start, person)] = {"grade": "C"|"", "late": bool} for each
+    #### <Person> entry under a ### Week of heading. The grade comes from the
+    entry's closing **JM (<grade>):** line; a "#### <Person> (late)" heading
+    marks an update that arrived after its Friday due date."""
     if not F695_DOC.exists():
         return {}
     grid: dict = {}
@@ -231,14 +232,14 @@ def fetch_i9_grid() -> dict:
             cur_week = wk
             cur_person = None
             continue
-        m = re.match(r"^#### (.+)$", line.strip())
-        if m and cur_week is not None:
+        m = re.match(r"^#### (.+?)(\s*\(late\))?$", line.strip())
+        if m and line.strip().startswith("#### ") and cur_week is not None:
             cur_person = m.group(1).strip()
-            grid[(cur_week, cur_person)] = ""
+            grid[(cur_week, cur_person)] = {"grade": "", "late": bool(m.group(2))}
             continue
         g = re.match(r"^\*\*JM \(([A-Fa-f][+-]?)\):", line.strip())
         if g and cur_week is not None and cur_person is not None:
-            grid[(cur_week, cur_person)] = g.group(1).upper()
+            grid[(cur_week, cur_person)]["grade"] = g.group(1).upper()
     return grid
 
 
@@ -279,10 +280,11 @@ def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
         for p in I9_PEOPLE:
             hit = grid.get((wk, p))
             if hit is not None:
-                grade = f" <span class='grade'>{html.escape(hit)}</span>" if hit else ""
+                grade = f" <span class='grade'>{html.escape(hit['grade'])}</span>" if hit["grade"] else ""
+                late = " <span title='arrived after the Friday due date'>⚠️</span>" if hit["late"] else ""
                 cells.append(
                     f"<td class='ok'><a href='{html.escape(F695_OBSIDIAN_URI)}' "
-                    f"title='{html.escape(p)} — logged in f695 for week of {wk.isoformat()}'>✓</a>{grade}</td>")
+                    f"title='{html.escape(p)} — logged in f695 for week of {wk.isoformat()}'>✓</a>{grade}{late}</td>")
             elif p == "Growth (JM)" and draft and draft[0] == wk:
                 cells.append(
                     f"<td class='wip'><a href='{html.escape(draft[1])}' "
@@ -301,9 +303,10 @@ def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
 {''.join(rows)}
 </table>
 <div class="note">✓ opens the f695 doc (hover for which week/person); a letter next to it
-is JM's grade for that update. An update counts for the week it COVERS (a Friday send
-covers its own week) and is due the Friday of the current week. ✍️ = JM's own update
-mid-draft (click to open the draft); — is a week with nothing logged.</div>
+is JM's grade for that update; ⚠️ = arrived after its Friday due date. An update counts
+for the week it COVERS (a Friday send covers its own week) and is due the Friday of the
+current week. ✍️ = JM's own update mid-draft (click to open the draft); — is a week with
+nothing logged.</div>
 """
 
 
