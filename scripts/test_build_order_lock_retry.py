@@ -176,6 +176,78 @@ def test_self_heal_survives_read_errors():
     assert healed == []
 
 
+
+
+# ── Empty-block gray-out (2026-08-10 feature) ─────────────────────────────
+# A block with 0 points (usually 卯, sometimes 辰) locks to a BLANK cell
+# filled JM's manual medium gray (128,128,128) instead of a literal 0 —
+# automating what he was doing by hand.
+
+def test_zero_point_block_locks_blank_and_grays():
+    mod = _load_daemon()
+    writes, fills = [], []
+
+    with patch.object(mod.neon_excel, "read", return_value={
+            "ok": True, "row": 220, "col": "G", "value": "0", "formula": "=D220-x"}), \
+         patch.object(mod.neon_excel, "write",
+                      side_effect=lambda *a, **k: writes.append(k) or {"ok": True}), \
+         patch.object(mod, "_fill_cell", side_effect=lambda r, c, rgb: fills.append((r, c, rgb))):
+        out = mod.neon_lock_cell(dt.date(2026, 8, 10), "G")
+
+    assert out == "LOCKED EMPTY"
+    assert writes and writes[0]["value"] == "", "the cell must be blanked, not written 0"
+    assert fills == [(220, "G", mod.EMPTY_BLOCK_FILL)]
+    assert mod.EMPTY_BLOCK_FILL == (128, 128, 128), "must match JM's manual gray"
+
+
+def test_negative_residual_clamps_into_the_grayed_empty_state():
+    # The negative-clamp case (transient 0n penalties) is also "nothing
+    # earned" — same blank+gray treatment.
+    mod = _load_daemon()
+    writes, fills = [], []
+    with patch.object(mod.neon_excel, "read", return_value={
+            "ok": True, "row": 220, "col": "G", "value": "-46", "formula": "=D220-x"}), \
+         patch.object(mod.neon_excel, "write",
+                      side_effect=lambda *a, **k: writes.append(k) or {"ok": True}), \
+         patch.object(mod, "_fill_cell", side_effect=lambda r, c, rgb: fills.append((r, c, rgb))):
+        out = mod.neon_lock_cell(dt.date(2026, 8, 10), "G")
+    assert out == "LOCKED EMPTY" and writes[0]["value"] == "" and fills
+
+
+def test_nonzero_block_locks_number_and_never_touches_fill():
+    mod = _load_daemon()
+    writes, fills = [], []
+    with patch.object(mod.neon_excel, "read", return_value={
+            "ok": True, "row": 220, "col": "H", "value": "87", "formula": "=D220-x"}), \
+         patch.object(mod.neon_excel, "write",
+                      side_effect=lambda *a, **k: writes.append(k) or {"ok": True}), \
+         patch.object(mod, "_fill_cell", side_effect=lambda r, c, rgb: fills.append((r, c, rgb))):
+        out = mod.neon_lock_cell(dt.date(2026, 8, 10), "H")
+    assert out == "LOCKED 87"
+    assert writes[0]["value"] == "87"
+    assert fills == [], "a scored block keeps its normal formatting"
+
+
+def test_locked_empty_is_final_for_the_retry_wrapper():
+    mod = _load_daemon()
+    calls = []
+    with patch.object(mod, "neon_lock_cell",
+                      side_effect=lambda *a, **k: calls.append(1) or "LOCKED EMPTY"), \
+         patch.object(mod.time, "sleep"):
+        out = mod.neon_lock_cell_with_retry(dt.date(2026, 8, 10), "G")
+    assert out == "LOCKED EMPTY" and len(calls) == 1
+
+
+def test_fill_failure_never_fails_the_lock():
+    mod = _load_daemon()
+    with patch.object(mod.neon_excel, "read", return_value={
+            "ok": True, "row": 220, "col": "G", "value": "0", "formula": "=D220-x"}), \
+         patch.object(mod.neon_excel, "write", return_value={"ok": True}), \
+         patch.object(mod.subprocess, "run", side_effect=RuntimeError("osascript down")):
+        out = mod.neon_lock_cell(dt.date(2026, 8, 10), "G")
+    assert out == "LOCKED EMPTY", "formatting is cosmetic — its failure must not fail the lock"
+
+
 if __name__ == "__main__":
     import sys
     import pytest

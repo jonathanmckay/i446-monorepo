@@ -61,6 +61,19 @@ def _load_env():
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
+    # Fallback: the toggl_server MCP config in ~/.claude.json (same source
+    # toggl_cli.py uses) — lets the daily cron run without a secret in the
+    # crontab or a .env file.
+    if not os.environ.get("TOGGL_API_KEY"):
+        try:
+            with open(os.path.expanduser("~/.claude.json")) as f:
+                key = (json.load(f).get("mcpServers", {})
+                       .get("toggl_server", {}).get("env", {})
+                       .get("TOGGL_API_KEY", ""))
+            if key:
+                os.environ["TOGGL_API_KEY"] = key
+        except Exception:
+            pass
 
 
 def load_cache() -> dict:
