@@ -1,7 +1,7 @@
 """Passive media-use audit for /0t.
 
 Compares what the passive trackers saw (ActivityWatch on Straylight; Apple
-Screen Time's cross-device store once Full Disk Access + Share Across Devices
+Screen Time's cross-device store on Ix, once its remote-user FDA + sharing
 are on) against what Toggl says was media time (hcmc/hcmc2), for one local day.
 The interesting output is the gap: passive media minutes with no corresponding
 Toggl entry — the honesty signal the points system runs on.
@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
+import shlex
+import subprocess
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
@@ -48,10 +48,6 @@ MEDIA_BUNDLES = {
 # Toggl media projects (hcmc, hcmc2)
 MEDIA_PROJECT_IDS = {109932707, 108359992}
 
-# Screen Time cross-device store (TCC-protected: requires Full Disk Access
-# for the shell's host app; empty of other devices until Share Across
-# Devices is enabled on the iPhone + Mac).
-_ST_STORE_GLOB = "/var/folders/*/*/0/com.apple.ScreenTimeAgent/Store/RMAdminStore-Cloud.sqlite"
 
 
 def _classify(text: str) -> str | None:
@@ -130,37 +126,48 @@ def media_minutes_from_aw(day: date) -> dict | None:
     return {k: round(v, 1) for k, v in mins.items()}
 
 
-def media_minutes_from_screentime(day: date) -> dict | None:
-    """Per-label media minutes from the Screen Time cross-device store.
+_ST_QUERY = """SELECT ti.ZBUNDLEIDENTIFIER, SUM(ti.ZTOTALTIMEINSECONDS)
+FROM ZUSAGETIMEDITEM ti
+JOIN ZUSAGECATEGORY c ON ti.ZCATEGORY = c.Z_PK
+JOIN ZUSAGEBLOCK b ON c.ZBLOCK = b.Z_PK
+WHERE b.ZSTARTDATE >= {lo} AND b.ZSTARTDATE < {hi}
+GROUP BY 1"""
 
-    Returns None when the store is unreadable (no Full Disk Access) or absent.
-    Schema per DFIR documentation of RMAdminStore (USAGE tables); verified
-    live only once FDA is granted — treat failures as absence.
+
+def media_minutes_from_screentime(day: date) -> dict | None:
+    """Per-label media minutes from the Screen Time cross-device store ON IX.
+
+    Straylight is Intune-managed (TCC/Screen Time policy-locked), so the sync
+    target is Ix — personal, un-enrolled, already /0t's ssh workhorse. Requires
+    on Ix: Remote Login's "allow full disk access for remote users" + Screen
+    Time App & Website Activity + Share Across Devices (and on the iPhone).
+    Returns None when unreadable/absent. Schema per DFIR documentation of
+    RMAdminStore (USAGE tables) — treat failures as absence.
     """
-    stores = sorted(Path("/var/folders").glob(
-        "*/*/0/com.apple.ScreenTimeAgent/Store/RMAdminStore-Cloud.sqlite"))
-    if not stores:
-        return None
     apple = 978307200  # 2001-01-01 epoch offset
-    lo = datetime.combine(day, datetime.min.time(), tzinfo=LOCAL_TZ).timestamp() - apple
-    hi = lo + 86400
-    mins: dict[str, float] = {}
+    lo = int(datetime.combine(day, datetime.min.time(), tzinfo=LOCAL_TZ).timestamp()) - apple
+    sql = _ST_QUERY.format(lo=lo, hi=lo + 86400)
+    cmd = (
+        'D=$(getconf DARWIN_USER_DIR); '
+        'S="$D/com.apple.ScreenTimeAgent/Store/RMAdminStore-Cloud.sqlite"; '
+        f'[ -r "$S" ] && sqlite3 -separator "|" "file:$S?mode=ro" {shlex.quote(sql)}'
+    )
     try:
-        con = sqlite3.connect(f"file:{stores[-1]}?mode=ro", uri=True, timeout=5)
-        rows = con.execute(
-            """SELECT ti.ZBUNDLEIDENTIFIER, SUM(ti.ZTOTALTIMEINSECONDS)
-               FROM ZUSAGETIMEDITEM ti
-               JOIN ZUSAGECATEGORY c ON ti.ZCATEGORY = c.Z_PK
-               JOIN ZUSAGEBLOCK b ON c.ZBLOCK = b.Z_PK
-               WHERE b.ZSTARTDATE >= ? AND b.ZSTARTDATE < ?
-               GROUP BY 1""", (lo, hi)).fetchall()
-        con.close()
-    except Exception:
+        res = subprocess.run(["ssh", "ix", cmd], capture_output=True, text=True, timeout=25)
+    except (subprocess.TimeoutExpired, OSError):
         return None
-    for bundle, secs in rows:
-        label = MEDIA_BUNDLES.get(bundle or "")
-        if label and secs:
-            mins[label] = mins.get(label, 0) + secs / 60
+    if res.returncode != 0:
+        return None
+    mins: dict[str, float] = {}
+    for line in res.stdout.splitlines():
+        bundle, _, secs = line.partition("|")
+        label = MEDIA_BUNDLES.get(bundle.strip())
+        try:
+            s = float(secs)
+        except ValueError:
+            continue
+        if label and s > 0:
+            mins[label] = mins.get(label, 0) + s / 60
     return {k: round(v, 1) for k, v in mins.items()}
 
 
@@ -188,7 +195,7 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
         notes.append("ActivityWatch unreachable (runs on Straylight only)")
     st = media_minutes_from_screentime(day)
     if st is None:
-        notes.append("Screen Time store unreadable (needs Full Disk Access + Share Across Devices)")
+        notes.append("Screen Time store on Ix unreadable (needs Ix remote-user FDA + Share Across Devices)")
 
     # Merge sources per label, taking the max per source-label (they overlap
     # only if the same app is measured twice, e.g. desktop YouTube in both
