@@ -216,7 +216,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
   # within ~2s. fd 3 (opened by the parent below) keeps ≥1 writer for the whole
   # session, so a failed read here is always this timeout, never real EOF.
   exec 4<>"$DTD_FIFO"
-  typeset -A reinjected
+  typeset -A reinjected stale_alerted
   while true; do
     if ! IFS= read -r -t 2 line; then
       # Durable-log reconcile + recover: any id done.sh recorded in
@@ -229,14 +229,36 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       # up the next one. Safe to replay: did-fast's Todoist close + Neon write
       # are idempotent, and the id is marked processed the instant it is
       # dequeued (below), so a recovered item is attempted exactly once.
-      lost=$(awk -F'\t' -v idsfile="$DTD_PROCESSED_IDS" '
+      #
+      # SAME-DAY ONLY (2026-08-10): replay is gated on the push carrying
+      # TODAY's date. A session left open across midnight replayed the whole
+      # previous evening's batch against the NEW day when processed-ids came
+      # up short at the next reconcile -- did-fast is only idempotent within
+      # a day, so the replay closed the new day's recurring cards (advancing
+      # their due dates, hiding them from dtd) and re-credited points into
+      # the new day's rows ("why isn't 1st hci appearing today?", plus a
+      # phantom relax +40). A stale loss is alerted once, calmly, and left
+      # for the human: yesterday's row can't be safely written by a replay
+      # that only knows how to target today. Push timestamps carry a full
+      # date for this gate (date-less legacy lines count as stale).
+      rec_today=$(date +%Y-%m-%d)
+      lost=$(awk -F'\t' -v idsfile="$DTD_PROCESSED_IDS" -v today="$rec_today" '
         BEGIN { while ((getline id < idsfile) > 0) seen[id] = 1 }
-        !($3 in seen) { print $3 "\t" $4 }
+        !($3 in seen) {
+          print (index($1, today "T") == 1 ? "live" : "stale") "\t" $3 "\t" $4
+        }
       ' "$DTD_PUSHED.log" 2>/dev/null)
       recovered=""
       if [[ -n "$lost" ]]; then
-        while IFS=$'\t' read -r rid rcontent; do
+        while IFS=$'\t' read -r rkind rid rcontent; do
           [[ -z "$rid" ]] && continue
+          if [[ "$rkind" == "stale" ]]; then
+            if [[ -z "${stale_alerted[$rid]}" ]]; then
+              stale_alerted[$rid]=1
+              echo "⚠ unprocessed completion from a previous day NOT replayed (would land on today) — $rcontent" >> "$DTD_LOG"
+            fi
+            continue
+          fi
           [[ -n "${reinjected[$rid]}" ]] && continue
           printf '%s\t%s\n' "$rid" "$rcontent" >&4 || break
           reinjected[$rid]=1
@@ -610,7 +632,7 @@ if [[ -n "\$1" ]]; then
 fi
 echo "x" >> "\$PUSHED"
 # Push audit trail — see enter.sh's twin line (2026-07-30 lost -1t/-1l).
-printf '%s\tdone\t%s\t%s\n' "\$(date +%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
+printf '%s\tdone\t%s\t%s\n' "\$(date +%Y-%m-%dT%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
 : > "\$TIMER"
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"

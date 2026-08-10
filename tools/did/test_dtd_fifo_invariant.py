@@ -32,10 +32,13 @@ recovered item is attempted exactly once. One item is re-injected per tick to
 keep the self-write far under the pipe buffer (no capacity deadlock draining
 the worker's own FIFO); the next tick recovers the next.
 """
+import datetime
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+TODAY = datetime.date.today().isoformat()
 
 HERE = Path(__file__).resolve().parent
 SRC = (HERE / "dtd.sh").read_text()
@@ -259,7 +262,7 @@ def test_lost_completion_present_only_in_the_durable_log_is_actually_processed(t
     flagged. Detection-only versions left this permanently unprocessed."""
     ids_txt, called = _run_recovery(
         tmp_path,
-        pushed_log_lines=["10:00:00\tdone\tLOSTID\t😈 -1l\n"],
+        pushed_log_lines=[f"{TODAY}T10:00:00\tdone\tLOSTID\t😈 -1l\n"],
         preprocessed_ids=[])
     assert "LOSTID" in ids_txt.split(), "the lost id must end up marked processed"
     assert "LOSTID" in called, "did-fast must actually be invoked for the recovered id"
@@ -268,7 +271,7 @@ def test_lost_completion_present_only_in_the_durable_log_is_actually_processed(t
 def test_recovered_item_is_processed_exactly_once(tmp_path):
     ids_txt, called = _run_recovery(
         tmp_path,
-        pushed_log_lines=["10:00:00\tdone\tLOSTID\t😈 -1l\n"],
+        pushed_log_lines=[f"{TODAY}T10:00:00\tdone\tLOSTID\t😈 -1l\n"],
         preprocessed_ids=[])
     assert ids_txt.split().count("LOSTID") == 1, "no double-marking"
     assert called.count("LOSTID") == 1, "did-fast must run once, not in a loop"
@@ -279,7 +282,7 @@ def test_already_processed_pushed_item_is_not_reprocessed(tmp_path):
     processed-ids (normal delivery) must never be re-run by reconcile."""
     ids_txt, called = _run_recovery(
         tmp_path,
-        pushed_log_lines=["10:00:00\tdone\tDONEID\talready done\n"],
+        pushed_log_lines=[f"{TODAY}T10:00:00\tdone\tDONEID\talready done\n"],
         preprocessed_ids=["DONEID"])
     assert "DONEID" not in called, "reconcile must not re-run an already-processed item"
 
@@ -289,8 +292,8 @@ def test_recovers_the_lost_one_while_leaving_the_delivered_one_alone(tmp_path):
     touched by reconcile (it flowed through the FIFO on its own)."""
     ids_txt, called = _run_recovery(
         tmp_path,
-        pushed_log_lines=["10:00:00\tdone\tA\tdelivered\n",
-                          "10:00:01\tdone\tB\tlost one\n"],
+        pushed_log_lines=[f"{TODAY}T10:00:00\tdone\tA\tdelivered\n",
+                          f"{TODAY}T10:00:01\tdone\tB\tlost one\n"],
         preprocessed_ids=["A"],  # A already processed via normal delivery
         deliver_via_fifo=())
     assert "B" in ids_txt.split() and "B" in called, "the lost item must be recovered"
