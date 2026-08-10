@@ -52,7 +52,8 @@ F695_OBSIDIAN_URI = "obsidian://open?path=" + urllib.parse.quote(str(F695_DOC))
 # holds only the writeups). Growth (JM) — JM's own weekly — stays rightmost.
 I9_PEOPLE = ["Elliot Silvers", "Bei Lu", "Eldon Lei", "Roberto Ruggeri",
              "Jessica Allen", "Ethan Abeles", "Growth (JM)"]
-I9_DUE_OFFSET = 5  # i9 updates are due the FRIDAY of their Sunday-anchored week
+I9_DUE_OFFSET = 5      # team updates: due the FRIDAY of the week they cover
+I9_JM_DUE_OFFSET = 8   # Growth (JM) rolls the team's Friday sends up the following MONDAY
 
 # (display, topic, drive-name tokens, email senders, subject regex, subject veto regex)
 REPORTERS = [
@@ -276,8 +277,9 @@ def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
     rows = []
     for wk in weeks:
         cells = []
-        due_day = wk + dt.timedelta(days=I9_DUE_OFFSET)
         for p in I9_PEOPLE:
+            due_day = wk + dt.timedelta(
+                days=I9_JM_DUE_OFFSET if p == "Growth (JM)" else I9_DUE_OFFSET)
             hit = grid.get((wk, p))
             if hit is not None:
                 grade = f" <span class='grade'>{html.escape(hit['grade'])}</span>" if hit["grade"] else ""
@@ -303,9 +305,9 @@ def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
 {''.join(rows)}
 </table>
 <div class="note">✓ opens the f695 doc (hover for which week/person); a letter next to it
-is JM's grade for that update; ⚠️ = arrived after its Friday due date. An update counts
-for the week it COVERS (a Friday send covers its own week) and is due the Friday of the
-current week. ✍️ = JM's own update mid-draft (click to open the draft); — is a week with
+is JM's grade for that update; ⚠️ = arrived after its due date. An update counts
+for the week it COVERS (a Friday send covers its own week); team updates are due that
+Friday, Growth (JM) the following Monday. ✍️ = JM's own update mid-draft (click to open the draft); — is a week with
 nothing logged.</div>
 """
 
