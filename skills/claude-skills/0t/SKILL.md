@@ -29,10 +29,18 @@ The script handles everything:
    `fall asleep` entry leads into sleep, the first 睡觉 start of the night is
    used). Idempotent via the neon ledger (`src: "0t sleep-dock"`); fails closed
    if the ledger is unreachable — rerun /0t to retry.
-5. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
-6. Saves Excel on Ix, refreshes dashboard points cache
+5. **Media audit** (informational, never written to Neon): compares passive
+   trackers against Toggl media time (hcmc/hcmc2) for yesterday. Sources:
+   ActivityWatch on Straylight (desktop, AFK-filtered window titles) and the
+   Apple Screen Time cross-device store (phone/iPad — requires Full Disk
+   Access and Share Across Devices; reported as a note until readable).
+   Sources merge per-label by max (not sum) to avoid double counting.
+   If `media_audit.flagged` is true (passive exceeds Toggl by >20 min),
+   surface the gap and the per-app passive breakdown prominently to the user.
+6. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
+7. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `did`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit`, `did`, `dashboard`.
 
 Note: the dashboard points cache only keeps positive day-values, so on the rare
 night where the dock pushes hcb net-negative the dashboard shows a blank for

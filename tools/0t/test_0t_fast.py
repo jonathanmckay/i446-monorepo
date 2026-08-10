@@ -354,3 +354,61 @@ def test_dock_write_appends_negative_term():
     assert kwargs["value"] == "-7.5"
     assert kwargs["date"] == "8/9"
     assert kwargs["src"] == "0t sleep-dock"
+
+
+# ── Media audit ───────────────────────────────────────────────────────────────
+
+import importlib.util as _ilu
+
+_MA_PATH = Path(__file__).parent / "media_audit.py"
+_MA_SPEC = _ilu.spec_from_file_location("media_audit_test", _MA_PATH)
+ma = _ilu.module_from_spec(_MA_SPEC)
+_MA_SPEC.loader.exec_module(ma)
+
+from datetime import datetime, timedelta, timezone as _tz
+
+
+def _aw_ev(start_utc: str, dur_s: int, **data) -> dict:
+    return {"timestamp": start_utc, "duration": dur_s, "data": data}
+
+
+def test_classify_media_titles():
+    assert ma._classify("Google Chrome — MKBHD - YouTube") == "YouTube"
+    assert ma._classify("Audible") == "Audible"
+    assert ma._classify("Obsidian — notes.md") is None
+
+
+def test_overlap_clips_to_active_intervals():
+    t0 = datetime(2026, 8, 9, 20, 0, tzinfo=_tz.utc)
+    active = [(t0, t0 + timedelta(minutes=10))]
+    ev = (t0 + timedelta(minutes=5), t0 + timedelta(minutes=30))
+    assert ma._overlap_seconds(ev, active) == 300  # only 5 min overlap
+
+
+def test_media_audit_flags_large_gap():
+    with patch.object(ma, "media_minutes_from_aw", return_value={"YouTube": 85.0}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 8, 9), [], lambda e: None)
+    assert r["passive_total_min"] == 85
+    assert r["toggl_media_min"] == 0
+    assert r["flagged"] is True
+    assert any("Screen Time" in n for n in r["notes"])
+
+
+def test_media_audit_no_flag_when_toggl_covers_it():
+    entries = [{"project_id": 109932707, "duration": 80 * 60, "start": "x"}]
+    ldt = lambda e: datetime(2026, 8, 9, 12, 0, tzinfo=ma.LOCAL_TZ)
+    with patch.object(ma, "media_minutes_from_aw", return_value={"YouTube": 85.0}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 8, 9), entries, ldt)
+    assert r["toggl_media_min"] == 80
+    assert r["flagged"] is False
+
+
+def test_media_audit_merges_sources_by_max_not_sum():
+    with patch.object(ma, "media_minutes_from_aw", return_value={"YouTube": 60.0}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value={"YouTube": 45.0, "Audible": 30.0}):
+        r = ma.media_audit(date(2026, 8, 9), [], lambda e: None)
+    assert r["passive"]["YouTube"] == 60.0   # max, not 105
+    assert r["passive"]["Audible"] == 30.0
+    assert r["passive_total_min"] == 90
