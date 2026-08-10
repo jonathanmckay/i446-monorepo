@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 import urllib.request
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -45,6 +45,12 @@ import urllib.error  # noqa: E402
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
 SLEEP_PROJECT_ID = 108358083
 HCMC_PROJECT_ID = 109932707
+
+# 0分 writes go through the excel-http daemon (lib/neon/excel) so they land in
+# the audit ledger — same ban as did-fast.py: raw AppleScript 0分 writes are
+# prohibited. Other sheets (0n) still use ix_run above.
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+from neon import excel as neon_excel  # noqa: E402
 
 
 def _load_toggl_key() -> str:
@@ -292,6 +298,114 @@ end tell'''
     return {"write": out}
 
 
+# ── Sleep dock ───────────────────────────────────────────────────────────────
+# 0.25 分 per minute still up past 22:00, capped at 30分/night, charged to hcb
+# (0分 col W) on the day the night STARTED (`yesterday`), even for post-midnight
+# bedtimes. "Up" ends at bedtime: the start of the contiguous fall-asleep → 睡觉
+# chain — an earlier "fall asleep" attempt he got up from (e.g. 21:00 attempt,
+# then youtube, then a 22:00 attempt that sticks) does not count.
+DOCK_RATE = 0.25            # 分 docked per minute past DOCK_START_HOUR
+DOCK_CAP = 30.0             # max 分 docked per night (binds at 2h past 22:00)
+DOCK_START_HOUR = 22        # local time, on `yesterday`
+DOCK_DESC = "fall asleep"   # Toggl description marking a sleep attempt
+DOCK_CHAIN_GAP_MIN = 15     # max untracked gap (min) for chain contiguity
+DOCK_COL_0FEN = "W"         # hcb column in 0分
+DOCK_SRC = "0t sleep-dock"  # ledger src label; with the date, the idempotency key
+
+
+def compute_sleep_dock(yesterday: date, sleep_date: date) -> dict | None:
+    """Bedtime and dock for the night bridging yesterday → sleep_date.
+
+    Bedtime = start of the first 睡觉 entry of the night, walked back through
+    contiguous immediately-preceding "fall asleep" entries (gap <= 15 min).
+    Mid-night wake-ups and morning naps can't inflate the dock: only entries
+    before the night's first 睡觉 start are considered. Returns None when the
+    night has no usable entries at all.
+    """
+    def in_window(ldt: datetime) -> bool:
+        return ((ldt.date() == yesterday and ldt.hour >= 20)
+                or (ldt.date() == sleep_date and ldt.hour < 14))
+
+    falls: list[tuple[datetime, datetime]] = []
+    sleeps: list[datetime] = []
+    for e in gather_entries_local(yesterday, sleep_date):
+        ldt = entry_local_dt(e)
+        if ldt is None or not in_window(ldt):
+            continue
+        dur = e.get("duration", 0)
+        end = ldt + timedelta(seconds=dur) if dur > 0 else ldt
+        if e.get("project_id") == SLEEP_PROJECT_ID:
+            sleeps.append(ldt)
+        elif (e.get("description") or "").strip().lower() == DOCK_DESC:
+            falls.append((ldt, end))
+
+    if sleeps:
+        bedtime = min(sleeps)
+        basis = "睡觉"
+        gap = timedelta(minutes=DOCK_CHAIN_GAP_MIN)
+        changed = True
+        while changed:
+            changed = False
+            for start, end in sorted(falls, reverse=True):
+                if start < bedtime and end >= bedtime - gap:
+                    bedtime = start
+                    basis = DOCK_DESC
+                    changed = True
+    elif falls:
+        # No 睡觉 tracked (data gap): the last attempt is the best signal.
+        bedtime = max(s for s, _ in falls)
+        basis = f"{DOCK_DESC} (no 睡觉 entry)"
+    else:
+        return None
+
+    cutoff = datetime.combine(yesterday, dtime(hour=DOCK_START_HOUR), tzinfo=LOCAL_TZ)
+    late = max(0, int((bedtime - cutoff).total_seconds() // 60))
+    dock = min(late * DOCK_RATE, DOCK_CAP)
+    return {"bedtime": bedtime.strftime("%m-%d %H:%M"), "basis": basis,
+            "late_minutes": late, "dock": dock}
+
+
+def _dock_already_logged(yesterday: date) -> bool | None:
+    """True if the neon ledger already holds this night's dock, False if not,
+    None if the ledger can't be read. The ledger on ix is the authority (the
+    daemon writes it); a formula-grep guard would false-positive on manual
+    negative adjustments and false-negative if Toggl edits change the value.
+    """
+    date_str = f"{yesterday.month}/{yesterday.day}"
+    cmd = ("grep -h '\"src\": \"" + DOCK_SRC + "\"' "
+           "~/vault/g245/neon-ledger/*.jsonl 2>/dev/null; true")
+    try:
+        res = subprocess.run(["ssh", "ix", cmd],
+                             capture_output=True, text=True, timeout=20)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if res.returncode != 0:
+        return None
+    needle = f'"date": "{date_str}"'
+    return any(needle in line for line in res.stdout.splitlines())
+
+
+def write_sleep_dock(dock: float, yesterday: date) -> dict:
+    """Append the dock to yesterday's hcb cell, exactly once per night.
+
+    Fail closed: if the ledger can't be checked, do NOT append — a missed dock
+    is recoverable (rerun /0t), a double dock is a silent double charge.
+    """
+    date_str = f"{yesterday.month}/{yesterday.day}"
+    seen = _dock_already_logged(yesterday)
+    if seen is None:
+        return {"error": "ledger unreachable; dock NOT written (fail closed)"}
+    if seen:
+        return {"write": f"skipped: dock already in ledger for {date_str}"}
+    term = f"-{dock:g}"
+    res = neon_excel.append("0分", DOCK_COL_0FEN, date=date_str,
+                            value=term, src=DOCK_SRC)
+    if not res.get("ok"):
+        return {"error": f"append failed: {res}"}
+    return {"write": f"{term} → 0分!{DOCK_COL_0FEN} {date_str}",
+            "hcb_after": res.get("after_value")}
+
+
 def compute_sleep(yesterday: date, today: date) -> int:
     """Last night's sleep, in LOCAL_TZ: 睡觉 minutes from yesterday >=20:00 through today <14:00.
 
@@ -494,6 +608,23 @@ def main():
             failed = True
     else:
         output["night_hcmc"] = "none"
+
+    # 4b. Sleep dock: -0.25分/min past 22:00 (cap 30) → yesterday's hcb (0分 W).
+    # Must run before step 6 so the refreshed points cache reflects the dock.
+    try:
+        dock_info = compute_sleep_dock(yesterday, sleep_date)
+        if dock_info is None:
+            output["sleep_dock"] = "no sleep entries found; nothing docked"
+        elif dock_info["dock"] <= 0:
+            output["sleep_dock"] = {**dock_info, "write": "none (in bed by 22:00)"}
+        else:
+            wr = write_sleep_dock(dock_info["dock"], yesterday)
+            output["sleep_dock"] = {**dock_info, **wr}
+            if "error" in wr:
+                failed = True
+    except Exception as e:
+        output["sleep_dock"] = f"FAILED: {e}"
+        failed = True
 
     # 5. Mark 0t done (0₦ + Todoist + stop timer)
     did_result = mark_done()

@@ -228,7 +228,11 @@ def _ssh_fallback(op: str, sheet: str, col: str,
         )
     elif op == "append":
         v = (value or "").replace("\\", "\\\\").replace('"', '\\"')
-        is_numeric = (value or "").lstrip().startswith("+") or (value or "").lstrip().startswith("=")
+        # "-" is a formula term like "+" (e.g. the 0t sleep dock appends "-7.5");
+        # without it a negative append took the string branch and produced
+        # non-computing text on bare-number cells (same class as the 2026-07-14
+        # "+2" regression below).
+        is_numeric = (value or "").lstrip().startswith(("+", "=", "-"))
         if is_numeric:
             empty_set = f'set formula of theCell to "={v.lstrip("+")}"\n'
             # The existing cell may hold a bare number with no leading "="

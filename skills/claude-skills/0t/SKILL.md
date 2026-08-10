@@ -22,10 +22,21 @@ The script handles everything:
 1. Fetches Toggl entries for yesterday + today
 2. Computes sleep (睡觉 entries: >=20:00 yesterday + <14:00 today)
 3. Writes sleep minutes to 0₦ column D (today's row)
-4. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
-5. Saves Excel on Ix, refreshes dashboard points cache
+4. **Sleep dock**: -0.25分 per minute still up past 22:00 (capped at 30分/night),
+   appended to the hcb column (0分 W) on **yesterday's** row — the day the night
+   started, even for post-midnight bedtimes. Bedtime = start of the contiguous
+   `fall asleep` → 睡觉 chain (an abandoned earlier attempt doesn't count; if no
+   `fall asleep` entry leads into sleep, the first 睡觉 start of the night is
+   used). Idempotent via the neon ledger (`src: "0t sleep-dock"`); fails closed
+   if the ledger is unreachable — rerun /0t to retry.
+5. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
+6. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `did`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `did`, `dashboard`.
+
+Note: the dashboard points cache only keeps positive day-values, so on the rare
+night where the dock pushes hcb net-negative the dashboard shows a blank for
+that day; the Excel cell (and ledger) remain the source of truth.
 
 ## Fallback
 

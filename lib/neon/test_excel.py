@@ -83,3 +83,10 @@ def test_lookup_compares_date_class_as_text_not_bare_keyword():
     assert "(class of cv) is date" not in src, (
         "raw 'is date' comparison doesn't parse inside the Excel tell block")
     assert '((class of cv) as text) is "date"' in src
+
+
+def test_fallback_append_treats_minus_as_formula_term():
+    """The 0t sleep dock appends "-7.5"; the ssh fallback must route it down
+    the numeric branch or it lands as non-computing text on bare-number cells."""
+    src = (HERE / "excel.py").read_text()
+    assert 'startswith(("+", "=", "-"))' in src

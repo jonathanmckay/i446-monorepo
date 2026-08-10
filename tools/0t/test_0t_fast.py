@@ -220,3 +220,137 @@ def test_marks_done_then_refreshes_dtd_cache():
     # and it must come AFTER mark_done() so completed-today is already written
     assert body.index("mark_done()") < body.index('"--refresh-cache"'), \
         "refresh must follow mark_done()"
+
+
+# ── Sleep dock ────────────────────────────────────────────────────────────────
+
+def _te(start_local: str, dur_min: int, project_id: int | None = None,
+        desc: str = "") -> dict:
+    """Synthetic Toggl entry with a PDT-offset ISO start."""
+    return {"id": hash((start_local, desc)), "start": start_local + "-07:00",
+            "duration": dur_min * 60, "project_id": project_id,
+            "description": desc}
+
+
+_Y = date(2026, 8, 9)
+_S = date(2026, 8, 10)
+_SLEEP = zerot_fast.SLEEP_PROJECT_ID
+_HCMC = zerot_fast.HCMC_PROJECT_ID
+
+
+def _dock_with(entries):
+    with patch.object(zerot_fast, "gather_entries_local", return_value=entries):
+        return zerot_fast.compute_sleep_dock(_Y, _S)
+
+
+def test_dock_abandoned_attempt_does_not_count():
+    """Real night 2026-08-08→09: fall asleep 21:00 abandoned (youtube after),
+    second attempt 22:00 chains into 睡觉 22:30. Bedtime = 22:00, dock 0."""
+    r = _dock_with([
+        _te("2026-08-09T21:00:00", 15, _HCMC, "fall asleep"),
+        _te("2026-08-09T21:15:00", 45, None, "youtube"),
+        _te("2026-08-09T22:00:00", 30, _HCMC, "fall asleep"),
+        _te("2026-08-09T22:30:00", 89, _SLEEP, "睡觉"),
+    ])
+    assert r["basis"] == "fall asleep"
+    assert r["late_minutes"] == 0
+    assert r["dock"] == 0
+
+
+def test_dock_abandoned_only_attempt_falls_back_to_sleep_start():
+    """fall asleep 21:30, up again, 睡觉 23:45 with no second attempt:
+    the 21:30 attempt must NOT suppress the dock."""
+    r = _dock_with([
+        _te("2026-08-09T21:30:00", 15, _HCMC, "fall asleep"),
+        _te("2026-08-09T23:45:00", 14, _SLEEP, "睡觉"),
+    ])
+    assert r["basis"] == "睡觉"
+    assert r["late_minutes"] == 105
+    assert r["dock"] == 26.25
+
+
+def test_dock_chains_through_multiple_fall_asleeps():
+    r = _dock_with([
+        _te("2026-08-09T22:10:00", 20, _HCMC, "fall asleep"),
+        _te("2026-08-09T22:30:00", 30, _HCMC, "fall asleep"),
+        _te("2026-08-09T23:00:00", 59, _SLEEP, "睡觉"),
+    ])
+    assert r["bedtime"].endswith("22:10")
+    assert r["late_minutes"] == 10
+
+
+def test_dock_cross_midnight_is_capped():
+    r = _dock_with([_te("2026-08-10T00:30:00", 300, _SLEEP, "睡觉")])
+    assert r["late_minutes"] == 150
+    assert r["dock"] == 30.0   # 150 * 0.25 = 37.5, capped
+
+
+def test_dock_midnight_wakeup_fall_asleep_ignored():
+    """A 3am re-fall-asleep after a night waking must not become the bedtime."""
+    r = _dock_with([
+        _te("2026-08-09T21:30:00", 30, _HCMC, "fall asleep"),
+        _te("2026-08-09T22:00:00", 119, _SLEEP, "睡觉"),
+        _te("2026-08-10T03:00:00", 20, _HCMC, "fall asleep"),
+        _te("2026-08-10T03:20:00", 200, _SLEEP, "睡觉"),
+    ])
+    assert r["bedtime"].endswith("21:30")
+    assert r["dock"] == 0
+
+
+def test_dock_in_bed_before_22_is_zero():
+    r = _dock_with([_te("2026-08-09T21:15:00", 400, _SLEEP, "睡觉")])
+    assert r["late_minutes"] == 0
+    assert r["dock"] == 0
+
+
+def test_dock_no_entries_returns_none():
+    assert _dock_with([_te("2026-08-09T21:00:00", 30, None, "reading")]) is None
+
+
+def test_dock_daytime_nap_not_a_bedtime():
+    """A 12:50pm weekend nap chain is outside the <14:00 guard only by luck of
+    hour; the first-睡觉-of-night rule keeps the real bedtime authoritative."""
+    r = _dock_with([
+        _te("2026-08-09T22:30:00", 60, _SLEEP, "睡觉"),
+        _te("2026-08-10T12:50:00", 10, _HCMC, "fall asleep"),
+        _te("2026-08-10T13:00:00", 40, _SLEEP, "睡觉"),
+    ])
+    assert r["bedtime"].endswith("22:30")
+
+
+def test_dock_write_goes_through_neon_excel_not_osascript():
+    """0分 writes are banned from raw AppleScript; the dock must use
+    lib/neon/excel (daemon + ledger)."""
+    src = _PATH.read_text()
+    dock_fn = src.split("def write_sleep_dock", 1)[1].split("\ndef ", 1)[0]
+    assert "neon_excel.append" in dock_fn
+    assert "ix_run" not in dock_fn
+
+
+def test_dock_write_fails_closed_when_ledger_unreachable():
+    with patch.object(zerot_fast, "_dock_already_logged", return_value=None), \
+         patch.object(zerot_fast.neon_excel, "append") as mock_append:
+        r = zerot_fast.write_sleep_dock(7.5, _Y)
+    assert "error" in r
+    mock_append.assert_not_called()
+
+
+def test_dock_write_skips_when_already_in_ledger():
+    with patch.object(zerot_fast, "_dock_already_logged", return_value=True), \
+         patch.object(zerot_fast.neon_excel, "append") as mock_append:
+        r = zerot_fast.write_sleep_dock(7.5, _Y)
+    assert "skipped" in r["write"]
+    mock_append.assert_not_called()
+
+
+def test_dock_write_appends_negative_term():
+    with patch.object(zerot_fast, "_dock_already_logged", return_value=False), \
+         patch.object(zerot_fast.neon_excel, "append",
+                      return_value={"ok": True, "after_value": "139.0"}) as mock_append:
+        r = zerot_fast.write_sleep_dock(7.5, _Y)
+    assert "-7.5" in r["write"]
+    kwargs = mock_append.call_args.kwargs
+    assert mock_append.call_args.args == ("0分", "W")
+    assert kwargs["value"] == "-7.5"
+    assert kwargs["date"] == "8/9"
+    assert kwargs["src"] == "0t sleep-dock"
