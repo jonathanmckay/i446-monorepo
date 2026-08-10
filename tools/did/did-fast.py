@@ -192,7 +192,7 @@ ONENEON_TO_0FEN: dict[str, str] = {
     "1 f694": "S", "1 xk88": "Y", "1 xk87": "X",
     "1 xk87 wknd": "X", "1 s897": "Y", "1 hcbc": "W",
     "一起饭": "X", "family": "X", "s897": "Y",
-    "relax {60}": "W", "业写": "R",
+    "relax {60}": "T", "业写": "R",
     "长冥想": "V", "长o314": "V",
 }
 

@@ -603,7 +603,8 @@
       "category": "1n+",
       "neon_header": "relax {60}",
       "domain": "hcb",
-      "todoist_label": "1neon"
+      "todoist_label": "1neon",
+      "neon_fen_header": "个"
     },
     "一起饭": {
       "name": "一起饭",
