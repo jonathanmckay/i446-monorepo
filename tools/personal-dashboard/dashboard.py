@@ -10,6 +10,7 @@ import base64
 import json
 import os
 import re
+import sys
 import subprocess
 import threading
 import time
@@ -86,14 +87,21 @@ LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 _VAULT_EXCEL = Path.home() / "OneDrive" / "vault-excel"
 
 
+_NEON_NAME_RE = r"Neon分v[\d.]+\.xlsx$"
+# Current workbook name, matching the rest of the stack (/0t,
+# refresh-points-cache.sh). Bump on the next version rename.
+_NEON_FALLBACK_NAME = "Neon分v12.2.xlsx"
+
+
 def _resolve_neon_path():
-    """Newest Neon分v*.xlsx by version number.
+    """Newest Neon分v*.xlsx by version number, else the hardcoded current name.
 
     The old hardcoded Neon-current.xlsx vanished in the v12.2 rename and every
-    xlwings read silently nulled out (load_cache_data swallows the exception),
-    so the cache card went blank. Resolving by version glob survives the next
-    rename too; the rest of the stack (/0t, refresh-points-cache.sh) hardcodes
-    the current name, so this is deliberately more lenient than those.
+    xlwings read silently nulled out, so the cache card went blank. NB: under
+    launchd this process has no Full Disk Access, so the glob lists nothing
+    and the fallback name is what actually gets used there -- the glob only
+    helps interactive runs survive a future rename. launchd reads survive a
+    rename via the open-workbook match in load_cache_data.
     """
     candidates = []
     for p in _VAULT_EXCEL.glob("Neon分v*.xlsx"):
@@ -107,7 +115,7 @@ def _resolve_neon_path():
         candidates.append((ver, p))
     if candidates:
         return max(candidates)[1]
-    return _VAULT_EXCEL / "Neon-current.xlsx"  # legacy fallback
+    return _VAULT_EXCEL / _NEON_FALLBACK_NAME
 
 
 NEON_PATH = _resolve_neon_path()
@@ -399,14 +407,21 @@ def load_cache_data():
     result = {card["label"]: None for card in CACHE_CARDS}
     try:
         import xlwings as xw
-        wb = xw.Book(str(NEON_PATH))
+        # Prefer matching an already-open workbook by name: this asks Excel
+        # (which has file access) rather than the filesystem (which this
+        # process can't list under launchd), and survives version renames.
+        wb = next((b for b in xw.books if re.match(_NEON_NAME_RE, b.name)), None)
+        if wb is None:
+            wb = xw.Book(str(NEON_PATH))
         ws = wb.sheets["0n"]
         for card in CACHE_CARDS:
             v = ws.range(f"{card['col']}{card['row']}").value
             if isinstance(v, (int, float)):
                 result[card["label"]] = round(float(v), 1)
-    except Exception:
-        pass
+    except Exception as e:
+        # Nulls on the cache card are always a plumbing failure worth a log
+        # line -- a fully silent pass here hid a broken NEON_PATH for weeks.
+        print(f"load_cache_data failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     return result
 
 
