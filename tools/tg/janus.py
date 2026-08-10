@@ -2362,7 +2362,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             else:
                 my_key = None  # synthetic pick (sleep spillover) — unselectable
             is_sel, head0_click, head0_marker = _row_selection(my_key)
-            dur = f"({head0['dur_min']})" if head0.get("is_event") else fmt_dur(head0["dur_min"])
+            dur = (f"({head0['dur_min']})" if head0.get("is_event")
+                   else _entry_dur_display(head0["dur_min"], head0.get("raw_desc")))
             prefix = "▶ " if running else ""
             # d357 recording live → 🎙 rides RIGHT of the task name
             # (user request 2026-08-02: "move the mic to be to the right
@@ -2646,7 +2647,15 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # is_event flag still reads as "scheduled" (parenthesized duration),
         # not "tracked" (fmt_dur) — the block-level is_future flag alone can't
         # express "elapsed portion is real, remaining portion is a plan".
-        dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
+        if is_future or p.get("is_event") or p.get("is_spill"):
+            # A gcal/future event keeps its parenthesized "plan" duration; a
+            # spill row's dur_min is only the clipped fragment in THIS block,
+            # not the entry's real total, so it can't be swapped for the
+            # entry's full point value without misrepresenting it — always
+            # minutes there.
+            dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
+        else:
+            dur = _entry_dur_display(p["dur_min"], p.get("raw_desc"))
         # Value/credit tags (-1/-2/-3, or a domain code like xk87/家) ride the
         # right edge just before the minutes (user request 2026-07-28,
         # colored chips 2026-08-10).
@@ -3946,6 +3955,20 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
             pts = data.get("points", {}).get(n, 0)
             return True, int(pts) if isinstance(pts, (int, float)) else 0
     return False, 0
+
+
+def _entry_dur_display(dur_min: int, raw_desc: str | None) -> str:
+    """Duration text for a past/current (non-event, non-spill) entry row:
+    its own [N] points once today's did-fast run has recorded them — the
+    point total is the more useful number at that point, and the raw
+    minutes next to it is just noise (user request 2026-08-10) — else the
+    ordinary Nm/Nh duration. Past-day views have no per-entry points record
+    (_points_recorded_today is today-only), so they always show minutes."""
+    if STATE.day_offset == 0 and raw_desc:
+        recorded, pts = _points_recorded_today(raw_desc)
+        if recorded:
+            return f"[{pts}]"
+    return fmt_dur(dur_min)
 
 
 _POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
