@@ -384,11 +384,13 @@ def load_points_data():
             if cutoff < date.fromisoformat(d) <= today}
 
 
-# Each card pulls a single cell from 0n. Headers live on row 369 (and row 1
-# for xk88). We hardcode (col, row) per card since headers span two rows.
+# Each card pulls a single cell from 0n (or the sheet named by an optional
+# "sheet" key). Headers live on row 369 (and row 1 for xk88). We hardcode
+# (col, row) per card since headers span two rows.
 CACHE_CARDS = [
-    {"label": "hcbp",   "col": "AB", "row": 372, "period": "Q3",   "color": "#f81d78"},
-    {"label": "hcbc",   "col": "AF", "row": 372, "period": "Q3",   "color": "#ff4081"},
+    # Combined hcbp+hcbc Q3 score (hcbi!X378 = SUM of the two per-domain
+    # cells) — replaced the separate hcbp/hcbc cards 2026-08-10 per JM.
+    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q3", "color": "#f81d78"},
     {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
@@ -413,8 +415,8 @@ def load_cache_data():
         wb = next((b for b in xw.books if re.match(_NEON_NAME_RE, b.name)), None)
         if wb is None:
             wb = xw.Book(str(NEON_PATH))
-        ws = wb.sheets["0n"]
         for card in CACHE_CARDS:
+            ws = wb.sheets[card.get("sheet", "0n")]
             v = ws.range(f"{card['col']}{card['row']}").value
             if isinstance(v, (int, float)):
                 result[card["label"]] = round(float(v), 1)
@@ -2635,6 +2637,10 @@ function renderEmailChart(data) {
   <a href="http://ix:5555" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ jm-ai-dash</a>
   &nbsp;·&nbsp;
   <a href="http://ix:5556" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ AI Dashboard (m5x2)</a>
+  &nbsp;·&nbsp;
+  <a href="/f695" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ f695 weekly reports</a>
+  &nbsp;·&nbsp;
+  <a href="https://m5x2.github.io/appfolio-dashboards-site/" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ m5x2 AppFolio dash</a>
 </div>
 
 </body>
@@ -2910,6 +2916,16 @@ def weekly_page():
 @app.route("/more")
 def more():
     return render_template_string(MORE_HTML)
+
+
+@app.route("/f695")
+def f695():
+    """Serve the m5x2 weekly-reports (f695) accountability grid — a static
+    page rebuilt daily by cron on ix (see m5x2-weekly-reports/build.py)."""
+    p = Path.home() / "i446-monorepo/tools/m5x2-weekly-reports/index.html"
+    if not p.exists():
+        return "f695 weekly-reports grid not found (cron builds it daily on ix)", 404
+    return p.read_text()
 
 
 if __name__ == "__main__":

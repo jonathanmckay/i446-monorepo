@@ -512,6 +512,23 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
             v = 0.0
         if v == int(v):
             v = int(v)
+        if v == 0:
+            # No points earned in the block (usually 卯, sometimes 辰): blank
+            # the cell and fill it the same medium gray JM has been applying
+            # by hand (RGB 128,128,128, per his existing manual cells — JM
+            # 2026-08-10: "I've been doing this manually but I want you to do
+            # it automatically"). A blank behaves identically to 0 in the
+            # later blocks' =D-SUM(...) residuals, and the negative-clamp
+            # case (see docstring) lands here too — visually the same
+            # "nothing earned" state.
+            w = neon_excel.write(NEON_SHEET, col, row=r["row"], value="",
+                                 src=f"block-turnover lock {col} (empty block)")
+            if not w.get("ok"):
+                log(f"lock {col}: FAILED {w.get('error', '')}")
+                return "FAILED"
+            _fill_cell(r["row"], col, EMPTY_BLOCK_FILL)
+            log(f"lock {col}: LOCKED EMPTY (no points — grayed)")
+            return "LOCKED EMPTY"
         w = neon_excel.write(NEON_SHEET, col, row=r["row"], value=str(v),
                              src=f"block-turnover lock {col}")
         if not w.get("ok"):
@@ -522,6 +539,29 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
     except Exception as e:
         log(f"lock {col}: ERROR {e}")
         return "ERROR"
+
+
+# JM's manual empty-block gray, sampled from his hand-formatted cells
+# (0分!G213-G220, 2026-08-10).
+EMPTY_BLOCK_FILL = (128, 128, 128)
+
+
+def _fill_cell(row: int, col: str, rgb: tuple) -> None:
+    """Set a 0分 cell's interior fill via local osascript. Best-effort and
+    cosmetic only — the excel-http daemon has no formatting endpoint, and a
+    fill is not a value write, so the ledger/daemon-only rule doesn't apply.
+    This script runs ON ix (launchd), so osascript is local."""
+    script = f'''
+tell application "Microsoft Excel"
+    set theCell to cell ("{col}{row}") of sheet "{NEON_SHEET}" of workbook "Neon分v12.2.xlsx"
+    set color of interior object of theCell to {{{rgb[0]}, {rgb[1]}, {rgb[2]}}}
+end tell
+'''
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True,
+                       text=True, timeout=30)
+    except Exception as e:  # noqa: BLE001 — never fail a lock over formatting
+        log(f"fill {col}{row}: skipped ({e})")
 
 
 def neon_lock_cell_with_retry(target_date: dt.date, col: str,
