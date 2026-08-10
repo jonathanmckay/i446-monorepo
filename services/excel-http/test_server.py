@@ -171,3 +171,11 @@ class TestLookupRowDateMatching:
         assert "missing value" in src, (
             "lookup_row must skip empty date cells (cv is missing value)"
         )
+
+
+def test_append_treats_minus_as_formula_term():
+    """The 0t sleep dock appends "-7.5"; without "-" in the numeric check a
+    negative append takes the string branch and produces non-computing text
+    on bare-number cells (same class as the 2026-07-14 "+2" regression)."""
+    text = open("server.py").read()
+    assert 'startswith(("+", "=", "-"))' in text
