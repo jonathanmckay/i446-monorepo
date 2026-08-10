@@ -547,7 +547,10 @@ def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) ->
     "1 m5x2") never credited today at all."""
     name = d["habit_name"]
     col = d["neon_col"]
-    fen_col = d["fen_col"]
+    # Per-habit 0分 override (registry neon_fen_header) beats the domain
+    # default — e.g. relax {60} lives in the hcb domain but credits 个
+    # (JM 2026-08-09: "relax should be pointed at the 个 column, not hcb").
+    fen_col = d.get("neon_fen_col") or d["fen_col"]
 
     try:
         mw, week_row = _calc_mw(target_date)
