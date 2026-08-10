@@ -9,6 +9,7 @@ Then open: http://localhost:5558
 import base64
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -81,7 +82,35 @@ You're on <code>{_current_host}</code> — bookmark <code>http://ix.local:5558</
 
 
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
-NEON_PATH = Path.home() / "OneDrive" / "vault-excel" / "Neon-current.xlsx"
+
+_VAULT_EXCEL = Path.home() / "OneDrive" / "vault-excel"
+
+
+def _resolve_neon_path():
+    """Newest Neon分v*.xlsx by version number.
+
+    The old hardcoded Neon-current.xlsx vanished in the v12.2 rename and every
+    xlwings read silently nulled out (load_cache_data swallows the exception),
+    so the cache card went blank. Resolving by version glob survives the next
+    rename too; the rest of the stack (/0t, refresh-points-cache.sh) hardcodes
+    the current name, so this is deliberately more lenient than those.
+    """
+    candidates = []
+    for p in _VAULT_EXCEL.glob("Neon分v*.xlsx"):
+        m = re.match(r"Neon分v([\d.]+)\.xlsx$", p.name)
+        if not m:
+            continue
+        try:
+            ver = tuple(int(x) for x in m.group(1).split("."))
+        except ValueError:
+            continue
+        candidates.append((ver, p))
+    if candidates:
+        return max(candidates)[1]
+    return _VAULT_EXCEL / "Neon-current.xlsx"  # legacy fallback
+
+
+NEON_PATH = _resolve_neon_path()
 EMAIL_GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 
 # ── Column mappings ────────────────────────────────────────────────────────────

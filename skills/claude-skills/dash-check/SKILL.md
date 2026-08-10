@@ -34,7 +34,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:5555/ 2>/dev/null
 
 ```bash
 stat -f "%m" ~/i446-monorepo/tools/personal-dashboard/.points-cache.json
-stat -f "%m" ~/OneDrive/vault-excel/Neon-current.xlsx
+stat -f "%m" ~/OneDrive/vault-excel/Neon分v*.xlsx  # dashboard.py resolves the newest version by glob
 ```
 
 - Cache newer than Excel = fresh
