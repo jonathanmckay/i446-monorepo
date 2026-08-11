@@ -31,11 +31,14 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import copy
 import datetime as _dt
 import json
+import queue
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
@@ -294,6 +297,81 @@ def dump_recovery(answers: dict, sunday: _dt.date, sheet: str | None = None) -> 
 
 
 # ---------------------------------------------------------------------------
+# Background writer (2026-08-11): each page's write_answers() call is a
+# blocking ix-osa round trip (Excel + AppleScript on ix, sometimes 15s+ when
+# the daemon is under load) that used to run between run_page() calls — the
+# user stared at "writing N fields..." before the NEXT page's form could even
+# render ("the save function takes way too long, should be non-blocking
+# while I go on to the next field"). Writes now queue onto a single
+# background worker thread and run_paginated() moves on to the next page
+# immediately; the worker processes them ONE AT A TIME (never two AppleScript
+# writes to the same open workbook concurrently — a real corruption risk, not
+# just a style choice) and the results are collected and reported only after
+# the whole interactive flow ends, when the terminal is no longer owned by a
+# prompt_toolkit full-screen Application (a background thread printing while
+# one is active would corrupt the display).
+# ---------------------------------------------------------------------------
+_write_queue: "queue.Queue" = queue.Queue()
+_write_results: list[tuple[str, bool, str, Path | None]] = []
+_write_results_lock = threading.Lock()
+_writer_thread: threading.Thread | None = None
+
+
+def _writer_loop() -> None:
+    while True:
+        item = _write_queue.get()
+        if item is None:
+            _write_queue.task_done()
+            return
+        answers, sunday, cfg = item
+        try:
+            result = write_answers(answers, sunday, sheets=[cfg])
+            with _write_results_lock:
+                _write_results.append((cfg["sheet"], True, result, None))
+        except Exception as e:  # noqa: BLE001
+            rec_path = dump_recovery(answers, sunday, sheet=cfg["sheet"])
+            with _write_results_lock:
+                _write_results.append((cfg["sheet"], False, str(e), rec_path))
+        finally:
+            _write_queue.task_done()
+
+
+def queue_write(answers: dict, sunday: _dt.date, cfg: dict) -> None:
+    """Non-blocking: snapshot `answers` (later pages mutate the live dict)
+    and hand it to the background worker, starting it lazily on first use."""
+    global _writer_thread
+    if _writer_thread is None:
+        _writer_thread = threading.Thread(target=_writer_loop, daemon=True)
+        _writer_thread.start()
+    _write_queue.put((copy.deepcopy(answers), sunday, cfg))
+
+
+def drain_writes() -> bool:
+    """Block until every queued write has finished, then report results —
+    called once, after the interactive multi-page flow ends (normal
+    completion OR cancel), never between pages. Must run before the process
+    exits: an abrupt exit while ix-osa is mid-write is the corruption risk
+    queue_write's serialization elsewhere guards against. Returns True iff
+    every queued write succeeded, so the caller can still exit non-zero on a
+    background failure even though it was discovered after moving on."""
+    if _writer_thread is None:
+        return True
+    _write_queue.join()
+    with _write_results_lock:
+        results, _write_results[:] = list(_write_results), []
+    all_ok = True
+    for sheet, ok, msg, rec_path in results:
+        if ok:
+            print("xk887 → %s ✓ %s" % (sheet, msg), flush=True)
+        else:
+            all_ok = False
+            print("xk887 → %s ✗ WRITE FAILED: %s" % (sheet, msg), flush=True)
+            print("xk887 → answers saved to %s -- replay with --from-json once fixed" % rec_path,
+                  flush=True)
+    return all_ok
+
+
+# ---------------------------------------------------------------------------
 # Full-screen form (prompt_toolkit) -- same interaction grammar as 0s.py/1s
 # ---------------------------------------------------------------------------
 
@@ -431,46 +509,43 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
 
 
 def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
-    """One page per sheet/person; each page is WRITTEN to Excel as soon as it
-    is submitted, so a crash or cancel on page 3 never loses pages 1-2.
-    S-Tab from a page's first field goes back (already-written pages can be
-    edited and re-submitted; blanks never clobber, so re-writes are safe)."""
+    """One page per sheet/person; each page is QUEUED to Excel the moment it
+    is submitted and the NEXT page renders immediately — the write itself
+    runs in the background (see queue_write/drain_writes) so a crash or
+    cancel on page 3 never loses pages 1-2, and typing never blocks on the
+    ix-osa round trip. S-Tab from a page's first field goes back
+    (already-queued pages can be edited and re-submitted; blanks never
+    clobber, so re-writes are safe). Every queued write is waited on and
+    reported exactly once, at the very end (drain_writes) — never between
+    pages, since a background thread printing while the next page's
+    full-screen Application is running would corrupt the display."""
     answers: dict = {}
     total = len(SHEETS)
-    written = []
+    queued = []
     i = 0
     while i < total:
         cfg = SHEETS[i]
         action, page = run_page(cfg, sunday, saturday, i + 1, total, answers)
         answers.update(page)
         if action is None:
+            drain_writes()
             print("xk887 cancelled on page %d/%d%s." % (
                 i + 1, total,
-                "; already written: " + ", ".join(written) if written else ""))
+                "; queued before cancel: " + ", ".join(queued) if queued else ""))
             return 1
         if action == "back":
             i -= 1
             continue
         filled = sum(1 for key, _l, _c, _k in cfg["fields"]
                      if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
-        print("xk887 → %s: writing %d fields …" % (cfg["sheet"], filled), flush=True)
-        try:
-            result = write_answers(answers, sunday, sheets=[cfg])
-        except Exception as e:  # noqa: BLE001
-            rec_path = dump_recovery(answers, sunday, sheet=cfg["sheet"])
-            print("xk887 → %s ✗ WRITE FAILED: %s" % (cfg["sheet"], e), flush=True)
-            print("xk887 → answers saved to %s -- replay with --from-json once fixed" % rec_path,
-                  flush=True)
-            if written:
-                print("xk887 → already written before this failure: %s" % ", ".join(written),
-                      flush=True)
-            return 1
-        print("xk887 → %s ✓ %s" % (cfg["sheet"], result), flush=True)
-        if cfg["sheet"] not in written:
-            written.append(cfg["sheet"])
+        print("xk887 → %s: queued %d fields …" % (cfg["sheet"], filled), flush=True)
+        queue_write(answers, sunday, cfg)
+        if cfg["sheet"] not in queued:
+            queued.append(cfg["sheet"])
         i += 1
-    print("xk887 → week %s done (%s)" % (week_row_label(sunday), ", ".join(written)))
-    return 0
+    all_ok = drain_writes()
+    print("xk887 → week %s done (%s)" % (week_row_label(sunday), ", ".join(queued)))
+    return 0 if all_ok else 1
 
 
 def main() -> int:

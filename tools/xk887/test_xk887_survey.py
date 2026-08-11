@@ -3,6 +3,8 @@
 import datetime as dt
 import importlib.util
 import sys
+import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -276,11 +278,110 @@ def test_applescript_default_still_covers_all_sheets():
 
 
 def test_paginated_entrypoint_exists_and_form_is_paged():
-    """The interactive path pages per sheet and writes at each page boundary."""
+    """The interactive path pages per sheet and QUEUES a write (non-blocking,
+    2026-08-11) at each page boundary; the background worker performs the
+    actual write scoped to that one page's sheet (sheets=[cfg])."""
     import inspect
     m = _load()
     assert callable(m.run_paginated)
     src = inspect.getsource(m.run_paginated)
-    assert "write_answers" in src and "sheets=[cfg]" in src
+    assert "queue_write" in src, \
+        "run_paginated must queue the write, not call write_answers directly (would block)"
+    worker_src = inspect.getsource(m._writer_loop)
+    assert "write_answers" in worker_src and "sheets=[cfg]" in worker_src
     page_src = inspect.getsource(m.run_page)
     assert "Dimension(min=1" in page_src  # compact rows: no reserved blank height
+
+
+# ── Non-blocking background writer (2026-08-11) ─────────────────────────────
+# "the save function takes way too long, it should be non-blocking while I go
+# on to the next field" — write_answers() is an ix-osa round trip (Excel +
+# AppleScript on ix, 15s+ when the daemon is under load) that used to run
+# synchronously between run_page() calls. It now queues onto a single
+# background worker thread so the next page renders immediately.
+
+def test_queue_write_returns_immediately_even_if_write_is_slow(monkeypatch):
+    m = _load()
+    release = threading.Event()
+    started = threading.Event()
+
+    def _slow(answers, sunday, sheets=None):
+        started.set()
+        release.wait(timeout=2)
+        return "OK"
+    monkeypatch.setattr(m, "write_answers", _slow)
+
+    t0 = time.monotonic()
+    m.queue_write({"xk88_good": "x"}, dt.date(2026, 7, 19), m.SHEETS[0])
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.2, "queue_write must return immediately, not block on write_answers"
+
+    assert started.wait(timeout=1), "the background worker should pick up the queued write"
+    release.set()
+    assert m.drain_writes() is True
+
+
+def test_writes_never_run_concurrently(monkeypatch):
+    """Two overlapping ix-osa writes to the same open workbook is a real
+    corruption risk, not just a style concern — the background worker must
+    process queued writes one at a time even though queuing itself doesn't
+    block the caller."""
+    m = _load()
+    lock = threading.Lock()
+    in_flight = []
+    max_concurrent = [0]
+
+    def _tracked(answers, sunday, sheets=None):
+        with lock:
+            in_flight.append(1)
+            max_concurrent[0] = max(max_concurrent[0], len(in_flight))
+        time.sleep(0.05)
+        with lock:
+            in_flight.pop()
+        return "OK"
+    monkeypatch.setattr(m, "write_answers", _tracked)
+
+    for cfg in m.SHEETS:
+        m.queue_write({}, dt.date(2026, 7, 19), cfg)
+    assert m.drain_writes() is True
+    assert max_concurrent[0] == 1, "queued writes must be serialized, never concurrent"
+
+
+def test_queue_write_snapshots_answers_not_a_live_reference(monkeypatch):
+    """answers is one growing dict mutated by every subsequent page
+    (answers.update(page)) — queue_write must snapshot it at queue time, or
+    a background write for page 1 could pick up page 3's data by the time
+    the worker actually gets to it."""
+    m = _load()
+    captured = {}
+    release = threading.Event()
+
+    def _capture(answers, sunday, sheets=None):
+        release.wait(timeout=2)
+        captured.update(answers)
+        return "OK"
+    monkeypatch.setattr(m, "write_answers", _capture)
+
+    answers = {"xk88_good": "before"}
+    m.queue_write(answers, dt.date(2026, 7, 19), m.SHEETS[0])
+    answers["xk88_good"] = "after-mutation"  # simulates a later page's answers.update()
+    answers["xk20_notes"] = "page 3 data"
+    release.set()
+    m.drain_writes()
+
+    assert captured["xk88_good"] == "before", \
+        "queue_write must snapshot answers at queue time, not read a live-mutated dict later"
+    assert "xk20_notes" not in captured
+
+
+def test_drain_writes_reports_failure_and_dumps_recovery(monkeypatch, tmp_path):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+
+    def _boom(answers, sunday, sheets=None):
+        raise RuntimeError("Invalid object specifier (workbook not open)")
+    monkeypatch.setattr(m, "write_answers", _boom)
+
+    m.queue_write({"xk88_good": "x"}, dt.date(2026, 7, 19), m.SHEETS[0])
+    assert m.drain_writes() is False
+    assert list(tmp_path.glob("*xk88*.json")), "a failed background write must still dump recovery"
