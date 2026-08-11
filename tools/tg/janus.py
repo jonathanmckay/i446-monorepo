@@ -3950,9 +3950,24 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
     target = _norm_done_name(desc)
     if not target:
         return False, 0
+    points_map = data.get("points", {})
     for n in data.get("names", []):
         if _norm_done_name(n) == target:
-            pts = data.get("points", {}).get(n, 0)
+            if n not in points_map:
+                # did-fast only merges a name into "points" when it actually
+                # computed a nonzero fen_points for it (mark-completed.py's
+                # `if k and pts:` guard) — most 0₦ habits deliberately get
+                # fen_points=0 (Excel's own formula rolls 0n data into 0分;
+                # writing a point value here would double-count it), so
+                # they're recorded in "names" but never make it into
+                # "points" at all. Falling back to .get(n, 0) read that
+                # absence as "confirmed worth 0 分" and _entry_dur_display
+                # showed a false "[0]" on every plain habit completion (bug
+                # 2026-08-11: "everything I've done in 辰 shows [0]").
+                # Missing-from-points means "unknown", not "zero" — treat it
+                # as unrecorded so the caller falls back to duration.
+                return False, 0
+            pts = points_map.get(n, 0)
             return True, int(pts) if isinstance(pts, (int, float)) else 0
     return False, 0
 

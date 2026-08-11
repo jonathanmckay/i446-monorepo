@@ -145,6 +145,35 @@ def test_points_recorded_today_matches_annotation_stripped_names():
     mod._COMPLETED_TODAY = ct
 
 
+def test_points_recorded_today_missing_points_entry_is_unrecorded_not_zero():
+    """Bug 2026-08-11: "everything I've done in 辰 shows [0]". did-fast only
+    merges a name into completed-today.json's "points" dict when it computed
+    a nonzero fen_points (mark-completed.py's `if k and pts:` guard) — plain
+    0₦ habit completions deliberately get fen_points=0 (Excel's own formula
+    rolls 0n data into 0分; writing a value here would double-count it), so
+    they land in "names" but are never added to "points" at all. Reading a
+    missing key as 0 via .get(n, 0) misreported "never computed" as
+    "confirmed worth 0 分", and _entry_dur_display showed a false "[0]" on
+    every ordinary habit completion instead of falling back to duration."""
+    mod = _load_tui()
+    ct = Path(mod._COMPLETED_TODAY)
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "completed-today.json"
+        # "xk20" completed today (present in names) but never got a
+        # fen_points write (absent from "points" — the standard-habit case).
+        f.write_text(json.dumps({
+            "date": dtm.date.today().isoformat(),
+            "names": ["xk20"],
+            "points": {},
+        }))
+        mod._COMPLETED_TODAY = f
+        rec, pts = mod._points_recorded_today("xk20")
+        assert not rec, "missing points entry must read as unrecorded, not a confirmed 0"
+        assert pts == 0
+    mod._COMPLETED_TODAY = ct
+
+
 def test_did_summary_pulls_points_and_agent_reasons_not_closing_brace():
     mod = _load_tui()
     blob = json.dumps({
