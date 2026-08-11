@@ -164,7 +164,7 @@ def test_alt_enter_binding_exists_and_skips_when_already_recorded():
     assert 'kb.add("escape", "enter")' in src
     i = src.index('kb.add("escape", "enter")')
     body = src[i:src.index("@kb.add", i + 40)]  # the whole ⌥↵ handler
-    assert "_points_recorded_today" in body
+    assert "_cmd_done_today" in body
     assert "already recorded" in body
     assert "run" not in body.split("already recorded")[0].split("recorded, pts")[0] or True
     # The skip must happen BEFORE any did-fast run is enqueued

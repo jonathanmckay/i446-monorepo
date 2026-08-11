@@ -3957,6 +3957,47 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
     return False, 0
 
 
+# Per-COMMAND (desc + exact time range) idempotency for ⌥↵-granting a block
+# row's points — deliberately separate from completed-today.json, which only
+# tracks by desc and therefore blocks EVERY later occurrence of a repeatable
+# shortcode once the first one's been recorded (user report 2026-08-10: hiit
+# done a second time that evening, and xk22 done for a different kid-time
+# session, both refused as "already recorded today" even though neither was
+# actually the same entry). The real risk being guarded against is a literal
+# double-press on the SAME row double-granting its points — that's fully
+# captured by the did-fast command string itself (desc+HHMM-HHMM[+@code]),
+# so keying on the command instead of the bare desc fixes the false positive
+# without losing the original protection.
+_DONE_CMDS_TODAY = Path.home() / ".local/state/jm/janus-done-cmds.json"
+
+
+def _cmd_done_today(cmd: str) -> bool:
+    try:
+        data = json.loads(_DONE_CMDS_TODAY.read_text())
+    except Exception:
+        return False
+    if data.get("date") != dt.date.today().isoformat():
+        return False
+    return cmd in data.get("cmds", [])
+
+
+def _mark_cmd_done_today(cmd: str) -> None:
+    today = dt.date.today().isoformat()
+    try:
+        data = json.loads(_DONE_CMDS_TODAY.read_text())
+        if data.get("date") != today:
+            data = {"date": today, "cmds": []}
+    except Exception:
+        data = {"date": today, "cmds": []}
+    if cmd not in data["cmds"]:
+        data["cmds"].append(cmd)
+    try:
+        _DONE_CMDS_TODAY.parent.mkdir(parents=True, exist_ok=True)
+        _DONE_CMDS_TODAY.write_text(json.dumps(data, ensure_ascii=False))
+    except OSError:
+        pass
+
+
 def _entry_dur_display(dur_min: int, raw_desc: str | None) -> str:
     """Duration text for a past/current (non-event, non-spill) entry row:
     its own [N] points once today's did-fast run has recorded them — the
@@ -4909,11 +4950,6 @@ def _(event):
         flash("no duration on this row", 3.0)
         return
     desc = item["raw_desc"]
-    if STATE.day_offset == 0:
-        recorded, pts = _points_recorded_today(desc)
-        if recorded:
-            flash(f"already recorded today: {desc} ({pts}分) — not re-running", 6.0)
-            return
     start = item["start_dt"]
     end = start + dt.timedelta(minutes=item["dur_min"])
     code = proj_code(item.get("project_id"))
@@ -4933,12 +4969,22 @@ def _(event):
             break
     for _t in _habit_tags(entry_tags):
         cmd += f", {_t} {item['dur_min']}{date_sfx}"
+    # Idempotency is keyed on the exact command (desc + time range), not the
+    # bare desc — a repeatable shortcode (hiit, xk22, …) legitimately recurs
+    # several times a day, and each occurrence has its own distinct HHMM-HHMM
+    # range, so only a literal re-press of THIS row collides here (user
+    # report 2026-08-10: desc-only matching refused a second real hiit
+    # session and a second xk22 kid-time block as "already recorded").
+    if STATE.day_offset == 0 and _cmd_done_today(cmd):
+        flash(f"already recorded today: {cmd} — not re-running", 6.0)
+        return
     STATE.event_sel = None
 
     async def _run_did_and_refresh():
         flash(f"$ did {cmd}")
         event.app.invalidate()
         res = await asyncio.to_thread(run_did_fast, cmd)
+        _mark_cmd_done_today(cmd)
         flash(res, 8.0)
         event.app.invalidate()
         await asyncio.to_thread(fetch_today, True)
