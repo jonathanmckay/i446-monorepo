@@ -19,6 +19,7 @@ Email matchers (learned from 60d of real sends, 2026-07-26):
   Leeroy    leeroy@ or dulce@    "Turns Weekly Update" / "Turn Operations Update"
   Florencia florencia@m5c7       "Maintenance Service Weekly Update - <range>"
   Lawrence  lawrence@m5c7        "Weekly Projects Update – <date>"
+  Olga      olga@m5c7            "Weekly Ancillary (Income) Recap"
 
 Auth: reuses the workspace-mcp OAuth store (drive + gmail.readonly scopes).
 Local page only. Rebuilt every 2h by Straylight cron.
@@ -71,6 +72,8 @@ REPORTERS = [
      ("florencia@m5c7.com",), r"(maintenance|service).*weekly\s+update", None),
     ("Lawrence", "Projects", ("lawrence",),
      ("lawrence@m5c7.com",), r"(weekly\s+)?projects\s+update", None),
+    ("Olga", "Property Management", ("olga",),
+     ("olga@m5c7.com",), r"weekly\s+ancillary", None),
 ]
 REPLY_PREFIXES = ("re:", "fwd:", "fw:", "accepted:", "declined:", "invitation")
 
@@ -112,6 +115,7 @@ SUBJECT_QUERY = {
     "Andie": 'subject:"leasing weekly update"', "Stef": "subject:trs",
     "Leeroy": "subject:(turn OR turns)",
     "Florencia": 'subject:"weekly update"', "Lawrence": 'subject:"projects update"',
+    "Olga": "subject:ancillary",
 }
 
 

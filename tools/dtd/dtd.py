@@ -31,6 +31,7 @@ PORT = 5560
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
+DEFER_FAST = Path.home() / "i446-monorepo/tools/did/defer-fast.py"
 STATE_DIR = Path.home() / ".local/state/jm"
 CACHE = STATE_DIR / "task-queue.json"
 DONE_FILE = STATE_DIR / "completed-today.json"
@@ -53,6 +54,11 @@ COLORS = {
     "睡觉": "#666666",
 }
 DEFAULT_COLOR = "#bdbdbd"  # unlabelled / f693 / i446 → terminal default fg
+
+# 地支 block → start hour. Shared by build_tasks() (block-label hide) and
+# snooze_to_next_block() (delay-to-next-block button) — mirrors dtd.sh.
+BLOCK_HOURS = {"卯": 4, "辰": 6, "巳": 8, "午": 10, "未": 12,
+              "申": 14, "酉": 16, "戌": 18, "亥": 20}
 
 # ---------------------------------------------------------------------------
 # Parsing helpers (mirror dtd.sh)
@@ -243,8 +249,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     snoozed_ids = _snoozed_ids()
     # Block labels (地支 glyph from /todo, 2026-07-27): hidden until that
     # block's hour arrives — mirrors the desktop dtd list generator.
-    block_hours = {"卯": 4, "辰": 6, "巳": 8, "午": 10, "未": 12,
-                   "申": 14, "酉": 16, "戌": 18, "亥": 20}
+    block_hours = BLOCK_HOURS
     now_hour = _dt.datetime.now().hour
     seen = set()
     out = []
@@ -388,6 +393,56 @@ def start_timer(raw: str) -> dict:
     return {"ok": True, "clean": bare, "project": project}
 
 # ---------------------------------------------------------------------------
+# Delay (day) / delay (block): swipe-left menu actions #2 and #3, mirroring
+# terminal dtd's ctrl-d (defer) and ctrl-v (block-snooze) bindings.
+# ---------------------------------------------------------------------------
+def defer_task(task_id: str) -> dict:
+    """ctrl-d equivalent: shell out to defer-fast.py, which owns all the
+    recurring-vs-non-recurring branching, dated-copy creation, etc. — with no
+    extra args it defers to today+1 day at 2 claimed points, its own
+    documented default (same as a terminal ctrl-d with a blank prompt)."""
+    try:
+        proc = subprocess.run(["/usr/bin/python3", str(DEFER_FAST), "--id", task_id],
+                              capture_output=True, text=True, timeout=20)
+        if proc.returncode != 0:
+            return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:]}
+        data = json.loads(proc.stdout)
+        return {"ok": True, "target_date": data.get("target_date", "")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def snooze_to_next_block(task_id: str) -> dict:
+    """ctrl-v equivalent, scoped to just the NEXT block (terminal dtd offers
+    a picker across every remaining block today; the web menu is three flat
+    buttons, not a picker-within-a-picker — see the feature plan). Writes
+    the exact same ~/.local/state/jm/dtd-block-snooze.json shape
+    _snoozed_ids() already reads, so this round-trips with terminal dtd
+    either direction. Falls back to defer_task (delay a day) if there's no
+    next block left today (already in 亥, 20:00-21:59)."""
+    hours = sorted(BLOCK_HOURS.values())
+    now_hour = _dt.datetime.now().hour
+    next_hour = next((h for h in hours if h > now_hour), None)
+    if next_hour is None:
+        return defer_task(task_id)
+    try:
+        try:
+            sn = json.loads(SNOOZE_FILE.read_text())
+        except Exception:
+            sn = {}
+        today = _dt.date.today().isoformat()
+        if sn.get("date") != today:
+            sn = {"date": today, "snoozes": {}}
+        sn.setdefault("snoozes", {})[str(task_id)] = next_hour
+        SNOOZE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SNOOZE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sn))
+        tmp.replace(SNOOZE_FILE)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "hour": next_hour}
+
+# ---------------------------------------------------------------------------
 # Day totals for the header: points so far today + tasks completed today.
 # Both derived from cross-machine-durable sources (Excel Σ on Ix + Todoist +
 # the Todoist-due-date cache) rather than the machine-local completed-today.json,
@@ -522,6 +577,22 @@ def api_start():
         return jsonify({"ok": False, "error": "no content"}), 400
     return jsonify(start_timer(content))
 
+@app.route("/api/delay-day", methods=["POST"])
+def api_delay_day():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    return jsonify(defer_task(task_id))
+
+@app.route("/api/delay-block", methods=["POST"])
+def api_delay_block():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    return jsonify(snooze_to_next_block(task_id))
+
 @app.route("/api/add", methods=["POST"])
 def api_add():
     body = request.get_json(force=True, silent=True) or {}
@@ -571,10 +642,12 @@ PAGE = r"""<!doctype html>
     display:flex; align-items:center; padding-left:16px; opacity:0; }
   .row .track::before { content:"✓ done  +" ; white-space:pre; }
   .row .track .p { font-weight:800; }
-  .row .trackStart { position:absolute; inset:0; background:var(--start); color:#001a26;
-    font-weight:800; display:flex; align-items:center; justify-content:flex-end;
-    padding-right:16px; opacity:0; }
-  .row .trackStart::before { content:"▶ start"; white-space:pre; }
+  .row .actions { position:absolute; top:0; right:0; bottom:0; display:flex; z-index:0; }
+  .row .actions .act { width:60px; border:none; color:#fff; font:700 11px/1.3 inherit;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; }
+  .act-day { background:#546e7a; }
+  .act-block { background:#8e6fce; }
+  .act-start { background:var(--start); color:#001a26; }
   .line { position:relative; display:flex; align-items:center; gap:10px;
     padding:10px 14px; background:var(--bg); min-height:40px;
     transform:translateX(0); transition:transform .05s linear; will-change:transform;
@@ -673,9 +746,16 @@ function makeRow(t){
   track.className = 'track';
   track.innerHTML = '<span class="p">'+(t.points||0)+' 分</span>';
   row.appendChild(track);
-  const trackStart = document.createElement('div');
-  trackStart.className = 'trackStart';
-  row.appendChild(trackStart);
+
+  // Swipe-left reveal panel: three buttons mirroring terminal dtd's ctrl-d
+  // (delay a day) / ctrl-v (delay to next block) / enter (start) bindings.
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  actions.innerHTML =
+    '<button class="act act-day">🗓<br>+1d</button>' +
+    '<button class="act act-block">⏰<br>next</button>' +
+    '<button class="act act-start">▶<br>start</button>';
+  row.appendChild(actions);
 
   const line = document.createElement('div');
   line.className = 'line';
@@ -689,27 +769,46 @@ function makeRow(t){
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 
-  bindSwipe(row, line, track, trackStart, t);
+  const panel = bindSwipe(row, line, track, actions, t);
+  actions.querySelector('.act-day').onclick = ()=> runDelay('day', row, t, panel);
+  actions.querySelector('.act-block').onclick = ()=> runDelay('block', row, t, panel);
+  actions.querySelector('.act-start').onclick = ()=> runStart(t, panel);
   return row;
 }
 
-function bindSwipe(row, line, track, trackStart, t){
-  let x0=null, dx=0, dragging=false;
+// Swipe RIGHT keeps the original threshold-fly gesture (unchanged) — one
+// clear action, decisive fling. Swipe LEFT is a reveal panel instead: drag
+// exposes the action buttons underneath `line`, release snaps fully open or
+// closed depending on how far you dragged (no in-between). Dragging always
+// starts from wherever the row currently sits (`baseX`), so closing an
+// open panel with a rightward drag doesn't get mistaken for the done-fly
+// gesture — that's only reachable from the fully-closed resting position.
+// Returns {close()} so button handlers (defined in makeRow, outside this
+// closure) can snap the panel shut after their action completes.
+function bindSwipe(row, line, track, actions, t){
+  let x0=null, dx=0, dragging=false, baseX=0, moved=false;
   const W = () => row.offsetWidth;
-  const start = x=>{ x0=x; dx=0; dragging=true; line.classList.remove('snap'); };
+  const AW = () => actions.offsetWidth || 192;
+  const start = x=>{ x0=x; dragging=true; moved=false; line.classList.remove('snap'); };
   const move = x=>{
     if(!dragging) return;
-    dx = x - x0;
+    if(Math.abs(x-x0) > 4) moved = true;
+    dx = Math.min(W()*0.9, Math.max(-AW(), baseX + (x - x0)));
     line.style.transform = 'translateX('+dx+'px)';
     track.style.opacity = dx>0 ? Math.min(1, dx/(W()*0.4)) : 0;
-    trackStart.style.opacity = dx<0 ? Math.min(1, -dx/(W()*0.4)) : 0;
   };
   const end = ()=>{
     if(!dragging) return; dragging=false;
     line.classList.add('snap');
-    if(dx > W()*0.42){ fly(row, line, t); }
-    else if(dx < -W()*0.42){ flyLeft(row, line, trackStart, t); }
-    else { line.style.transform='translateX(0)'; track.style.opacity=0; trackStart.style.opacity=0; }
+    if(!moved){
+      if(baseX !== 0){ baseX = 0; line.style.transform='translateX(0)'; }
+      track.style.opacity = 0;
+      return;
+    }
+    if(dx > W()*0.42){ fly(row, line, t); return; }
+    baseX = (dx < -AW()*0.4) ? -AW() : 0;
+    line.style.transform = 'translateX('+baseX+'px)';
+    track.style.opacity = 0;
   };
   line.addEventListener('touchstart', e=>start(e.touches[0].clientX), {passive:true});
   line.addEventListener('touchmove',  e=>move(e.touches[0].clientX),  {passive:true});
@@ -718,30 +817,25 @@ function bindSwipe(row, line, track, trackStart, t){
     const mm=ev=>move(ev.clientX), mu=()=>{end();
       document.removeEventListener('mousemove',mm);document.removeEventListener('mouseup',mu);};
     document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);});
+  return { close(){ baseX = 0; line.classList.add('snap'); line.style.transform = 'translateX(0)'; } };
+}
+
+function collapseRow(row){
+  row.style.height = row.offsetHeight+'px';
+  requestAnimationFrame(()=>{ row.style.transition='.2s'; row.style.height='0'; row.style.opacity='0'; });
+  setTimeout(()=>{ row.remove();
+    if(!document.querySelector('.row')) list.innerHTML='<div class="empty">🎉 nothing left for today</div>';
+  }, 210);
 }
 
 function fly(row, line, t){
   line.style.transform = 'translateX('+(row.offsetWidth+40)+'px)';
-  setTimeout(()=>{ row.style.height=row.offsetHeight+'px';
-    requestAnimationFrame(()=>{ row.style.transition='.2s'; row.style.height='0'; row.style.opacity='0'; });
-    setTimeout(()=>{ row.remove();
-      if(!document.querySelector('.row')) list.innerHTML='<div class="empty">🎉 nothing left for today</div>';
-    }, 210);
-  }, 170);
+  setTimeout(()=>collapseRow(row), 170);
   commit(t);
 }
 
-// Starting a timer doesn't complete the task (unlike fly/commit above), so
-// the row springs back into its resting position instead of being removed —
-// mirrors terminal dtd, where `enter` starts a timer but leaves the task in
-// the list.
-function flyLeft(row, line, trackStart, t){
-  line.style.transform = 'translateX(0)';
-  trackStart.style.opacity = 0;
-  commitStart(t);
-}
-
-async function commitStart(t){
+async function runStart(t, panel){
+  panel.close();
   try {
     const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({content:t.raw})});
@@ -749,6 +843,22 @@ async function commitStart(t){
     if(!d.ok){ toast(d.error||'start failed', true); return; }
     toast('▶ '+d.clean+(d.project?' → '+d.project:''));
   } catch(e){ toast('offline · not started', true); }
+}
+
+// Unlike start (task stays), delaying a day/block hides the task until its
+// delayed time — the row is removed, same as completing it.
+async function runDelay(kind, row, t, panel){
+  panel.close();
+  try {
+    const url = kind==='day' ? '/api/delay-day' : '/api/delay-block';
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:t.id})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'delay failed', true); return; }
+    toast(kind==='day' ? ('🗓 → '+(d.target_date||'tomorrow'))
+                        : ('⏰ → '+String(d.hour).padStart(2,'0')+':00'));
+    collapseRow(row);
+  } catch(e){ toast('offline · not delayed', true); }
 }
 
 async function commit(t){
