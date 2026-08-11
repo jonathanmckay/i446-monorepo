@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-11T06:00:06.330246-07:00"
+  "tasks": {
+    "touch every i9 task": {
+      "todoist_id": "6hG8GxJ88RH39rM2",
+      "minutes": 80
+    },
+    "draft for asha": {
+      "todoist_id": "6hG8GxPq5jQ8RJp2",
+      "minutes": 20
+    },
+    "5 small things that make the day great": {
+      "todoist_id": "6hG8GxWmVmcpr9FR",
+      "minutes": 50
+    },
+    "155分 hcb": {
+      "todoist_id": "6hG8GxcCrppXrHFR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-08-11T08:00:06.888368-07:00"
 }
