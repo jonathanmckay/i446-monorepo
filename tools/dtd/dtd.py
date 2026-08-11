@@ -377,10 +377,13 @@ def _todoist_completed_today() -> int:
     with urllib.request.urlopen(req, timeout=10) as r:
         return len(json.loads(r.read()).get("items", []))
 
-def day_summary(force: bool = False) -> dict:
-    now = time.time()
-    if not force and _SUMMARY["val"] is not None and now - _SUMMARY["at"] < SUMMARY_MAX_AGE:
-        return _SUMMARY["val"]
+_summary_lock = threading.Lock()
+
+def _compute_summary() -> dict:
+    """The actual (slow, Excel/Todoist-bound) computation — always runs to
+    completion and updates _SUMMARY. Split out of day_summary() so force=True
+    can call it directly (blocking, as before) while the stale/background
+    case below can run it off-thread."""
     today = _dt.date.today()
     iso = today.isoformat()
 
@@ -411,8 +414,38 @@ def day_summary(force: bool = False) -> dict:
         print("WARN day_summary advanced:", e, file=sys.stderr)
 
     val = {"points": points, "done": done}
-    _SUMMARY.update(at=now, val=val)
+    _SUMMARY.update(at=time.time(), val=val)
     return val
+
+def _compute_summary_async():
+    try:
+        _compute_summary()
+    finally:
+        _summary_lock.release()
+
+def day_summary(force: bool = False) -> dict:
+    """force=True: compute synchronously, as before (the caller is
+    deliberately waiting on fresh data).
+
+    force=False once the SUMMARY_MAX_AGE cache expires: never block the
+    request on this either (2026-08-11, same bug class/fix as
+    _refresh_cache_if_stale above). Confirmed live: even after fixing the
+    Todoist refresh path, /api/tasks was STILL taking 15s+, because this
+    function's excel.read() call blocks on the excel-http daemon on ix,
+    which itself was taking ~15s just to return its own osascript_timeout
+    error. A slow/wedged Excel daemon must not translate into a hung page
+    load — recompute in the background (deduped, at most one in flight) and
+    serve the last known value, or a zeroed fallback on a cold start with
+    nothing computed yet (matches the existing graceful-degrade contract)."""
+    now = time.time()
+    fresh = _SUMMARY["val"] is not None and now - _SUMMARY["at"] < SUMMARY_MAX_AGE
+    if not force and fresh:
+        return _SUMMARY["val"]
+    if force:
+        return _compute_summary()
+    if _summary_lock.acquire(blocking=False):
+        threading.Thread(target=_compute_summary_async, daemon=True).start()
+    return _SUMMARY["val"] or {"points": 0, "done": 0}
 
 # ---------------------------------------------------------------------------
 # Flask
