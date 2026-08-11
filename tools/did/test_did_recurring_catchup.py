@@ -11,6 +11,17 @@ done-overlay, masking the drift; mobile (no overlay) shows it every day.
 
 Fix: on completion, an overdue recurring task is rescheduled to its next
 occurrence (preserving recurrence) instead of a plain /close.
+
+Bug 2 (2026-08-11): the fast-forward left zero record of the stale
+occurrence — a days-overdue habit caught up via /did just silently jumped
+its due date forward (e.g. xk20 8/12→8/16 in one call) with nothing to show
+for it, unlike explicit /defer which always leaves a dated child behind.
+Fix: catch_up_recurring now creates a dated, already-closed CHILD copy of
+the stale occurrence (reusing defer-fast.py's create_task/
+_dated_copy_content) before rescheduling the parent — same shape an
+explicit defer leaves, just closed immediately since the habit really was
+done. Only the child it creates is ever closed; the parent is only ever
+rescheduled, never completed.
 """
 import ast
 from pathlib import Path
@@ -31,10 +42,29 @@ def test_catch_up_helper_reschedules_preserving_recurrence():
     assert '"due_date": target_iso' in body, "must set a new due date"
     assert 'body["due_string"] = due_string' in body, (
         "must pass the recurrence string so the repeat isn't dropped")
-    # It must reschedule via the plain task endpoint, NOT /close (which only
-    # advances one interval and can't catch up).
+    # It must reschedule the PARENT via the plain task endpoint, NOT /close
+    # (which only advances one interval and can't catch up).
     assert '/tasks/{task_id}",' in body
-    assert "/close" not in body.split('"""')[-1], "the code must not hit /close"
+
+
+def test_catch_up_leaves_a_closed_dated_child_not_a_silent_skip():
+    body = _func_src("catch_up_recurring")
+    # Reuses defer-fast.py's own dated-copy + create helpers rather than
+    # reimplementing them, so the child is shaped exactly like an explicit
+    # /defer's one-off copy.
+    assert "_df._dated_copy_content(content, occurrence)" in body
+    assert "_df.create_task(" in body
+    # The child is closed — that's the "real completion happened" record.
+    assert "close_todoist_task(copy[\"id\"])" in body
+    # The parent's own reschedule call must be a bare due_date/due_string
+    # POST on task_id, never a close — completing the parent directly would
+    # be wrong (it advances via due_date already) and would conflate "the
+    # parent was closed" with "the child was closed".
+    parent_reschedule = body.split("body = {\"due_date\": target_iso}")[-1]
+    assert "close_todoist_task" not in parent_reschedule, (
+        "only the child copy may be closed — the parent must only ever be "
+        "rescheduled, never completed, even if a stray child from an "
+        "earlier explicit defer already exists for this habit")
 
 
 def test_completion_routes_overdue_daily_recurring_to_catch_up():
@@ -44,9 +74,14 @@ def test_completion_routes_overdue_daily_recurring_to_catch_up():
     assert "_is_daily_recurrence(r.todoist_task.get(\"due_string\", \"\"))" in m, (
         "catch-up must be scoped to DAILY recurrences — 'tomorrow' is only the "
         "correct next occurrence for a daily habit")
-    assert 'catch_up.append((tid, r.todoist_task.get("due_string", ""))' in m
-    assert "catch_up_recurring(_tid, _due_string, tomorrow_str)" in m, (
-        "collected catch-ups must be fast-forwarded to tomorrow")
+    # The full task dict is passed through now (not just due_string) so
+    # catch_up_recurring has the content/labels/stale due date it needs to
+    # build the dated child copy.
+    assert "catch_up.append((tid, r.todoist_task))" in m
+    assert "catch_up_recurring(" in m
+    assert 'content=_task.get("content", "")' in m
+    assert 'labels=_task.get("labels", [])' in m
+    assert 'stale_due=_task.get("due", "")' in m
 
 
 def test_is_daily_recurrence_scoping():

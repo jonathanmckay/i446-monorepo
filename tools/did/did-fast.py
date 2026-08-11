@@ -62,6 +62,17 @@ _MC_SPEC = importlib.util.spec_from_file_location("mark_completed", _MC_PATH)
 mc = importlib.util.module_from_spec(_MC_SPEC)
 _MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 
+# Import defer-fast (hyphenated filename → importlib) — reused for its
+# create_task()/_dated_copy_content() helpers so an overdue-habit catch-up
+# (below) can leave the same dated-child audit trail an explicit /defer
+# would, instead of silently discarding the skipped occurrence. main() is
+# guarded by `if __name__ == "__main__":` there, so importing it this way
+# never touches sys.argv or runs its CLI.
+_DF_PATH = Path(__file__).parent / "defer-fast.py"
+_DF_SPEC = importlib.util.spec_from_file_location("defer_fast", _DF_PATH)
+_df = importlib.util.module_from_spec(_DF_SPEC)
+_DF_SPEC.loader.exec_module(_df)  # type: ignore[union-attr]
+
 # ---------------------------------------------------------------------------
 # Routing constants (from test_did_routing.py)
 # ---------------------------------------------------------------------------
@@ -2045,7 +2056,9 @@ def _is_daily_recurrence(due_string: str) -> bool:
             or bool(re.search(r"\bevery (morning|afternoon|evening|night)\b", s)))
 
 
-def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[bool, str | None]:
+def catch_up_recurring(task_id: str, due_string: str, target_iso: str,
+                        content: str = "", labels: list | None = None,
+                        stale_due: str = "") -> tuple[bool, str | None]:
     """Reschedule an OVERDUE recurring task forward to `target_iso`, preserving
     its recurrence, instead of a plain /close.
 
@@ -2054,7 +2067,44 @@ def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[
     overdue and lingers in the Todoist mobile Today view forever (2026-07-13:
     '2nd hci' stuck at 2026-06-29). Passing due_date + the bare recurrence
     due_string re-anchors the date to the next occurrence without dropping the
-    repeat (same shape defer-fast uses for recurring parents)."""
+    repeat (same shape defer-fast uses for recurring parents).
+
+    Completing an OVERDUE daily habit through /did means the stale occurrence
+    really did happen — the previous version of this function silently
+    discarded it with zero record (2026-08-11 bug: the due date just jumped
+    forward with nothing to show for the skipped day, e.g. xk20 8/12→8/16 in
+    one call). It now leaves a dated, already-closed CHILD copy of the stale
+    occurrence behind first — the same one-off-copy shape an explicit /defer
+    creates (defer-fast.py's handle_recurring/_dated_copy_content, reused
+    directly), just closed immediately instead of left open, since the habit
+    really was done. Only that CHILD is ever closed here: the parent is only
+    ever rescheduled via the due_date POST below, never completed, so even if
+    a stray child from an earlier explicit defer already exists for this
+    habit, this call can't touch it or the parent — it only closes the copy
+    it itself just created."""
+    child_ok, child_err = True, None
+    if content and stale_due:
+        try:
+            occurrence = date.fromisoformat(stale_due[:10])
+            copy_content = _df._dated_copy_content(content, occurrence)
+            # Full GET for project_id/priority — the trimmed task dicts used
+            # elsewhere in this file don't carry them, but the child should
+            # land in the same project as the parent, same as /defer would.
+            project_id, priority = None, None
+            try:
+                status, raw = _todoist_request(f"{TODOIST_BASE}/tasks/{task_id}")
+                if status == 200:
+                    src = json.loads(raw)
+                    project_id = src.get("project_id")
+                    priority = src.get("priority")
+            except Exception:
+                pass
+            copy = _df.create_task(copy_content, labels or [], project_id,
+                                    stale_due, priority)
+            close_todoist_task(copy["id"])
+        except Exception as e:  # noqa: BLE001
+            child_ok, child_err = False, str(e)
+
     body = {"due_date": target_iso}
     if due_string:
         body["due_string"] = due_string
@@ -2065,9 +2115,9 @@ def catch_up_recurring(task_id: str, due_string: str, target_iso: str) -> tuple[
             headers={"Authorization": f"Bearer {TODOIST_TOKEN}",
                      "Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15)
-        return True, None
     except Exception as e:  # noqa: BLE001
         return False, str(e)
+    return child_ok, child_err
 
 
 def _on_ix() -> bool:
@@ -2886,17 +2936,24 @@ def main():
                 # tomorrow instead. Scoped to daily because tomorrow is only the
                 # correct next occurrence for a daily recurrence; weekly/monthly
                 # tasks self-heal via a normal /close (advances one interval).
-                catch_up.append((tid, r.todoist_task.get("due_string", "")))
+                catch_up.append((tid, r.todoist_task))
             else:
                 task_ids.append(tid)
 
     close_results = close_todoist_tasks(task_ids)
 
-    # Fast-forward OVERDUE recurring habits to their next occurrence (see
-    # catch_up_recurring) so they stop lingering overdue in Todoist mobile.
+    # Fast-forward OVERDUE recurring habits to their next occurrence, leaving
+    # a closed dated child behind for the stale occurrence (see
+    # catch_up_recurring) so they stop lingering overdue in Todoist mobile
+    # AND the real catch-up completion leaves an audit trail instead of
+    # silently vanishing.
     catch_up_results = {}
-    for _tid, _due_string in catch_up:
-        catch_up_results[_tid] = catch_up_recurring(_tid, _due_string, tomorrow_str)
+    for _tid, _task in catch_up:
+        catch_up_results[_tid] = catch_up_recurring(
+            _tid, _task.get("due_string", ""), tomorrow_str,
+            content=_task.get("content", ""),
+            labels=_task.get("labels", []),
+            stale_due=_task.get("due", ""))
 
     # Defer tasks (reschedule + deduct points)
     defer_results = {}
