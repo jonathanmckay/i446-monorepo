@@ -31,11 +31,14 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import copy
 import datetime as _dt
 import json
+import queue
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
@@ -291,6 +294,76 @@ def dump_recovery(answers: dict, sunday: _dt.date, sheet: str | None = None) -> 
     path = RECOVERY_DIR / ("%s%s-%s.json" % (week_row_label(sunday), suffix, ts))
     path.write_text(json.dumps(answers, ensure_ascii=False, indent=2))
     return path
+
+
+# ---------------------------------------------------------------------------
+# Background writer (2026-08-11): each page's write_answers() call is a
+# blocking ix-osa round trip (Excel + AppleScript on ix, sometimes 15s+ when
+# the daemon is under load) that used to run between run_page() calls — the
+# user stared at "writing N fields..." before the NEXT page's form could even
+# render ("the save function takes way too long, should be non-blocking
+# while I go on to the next field"). Writes now queue onto a single
+# background worker thread and run_paginated() moves on to the next page
+# immediately; the worker processes them ONE AT A TIME (never two AppleScript
+# writes to the same open workbook concurrently — a real corruption risk, not
+# just a style choice) and the results are collected and reported only after
+# the whole interactive flow ends, when the terminal is no longer owned by a
+# prompt_toolkit full-screen Application (a background thread printing while
+# one is active would corrupt the display).
+# ---------------------------------------------------------------------------
+_write_queue: "queue.Queue" = queue.Queue()
+_write_results: list[tuple[str, bool, str, Path | None]] = []
+_write_results_lock = threading.Lock()
+_writer_thread: threading.Thread | None = None
+
+
+def _writer_loop() -> None:
+    while True:
+        item = _write_queue.get()
+        if item is None:
+            _write_queue.task_done()
+            return
+        answers, sunday, cfg = item
+        try:
+            result = write_answers(answers, sunday, sheets=[cfg])
+            with _write_results_lock:
+                _write_results.append((cfg["sheet"], True, result, None))
+        except Exception as e:  # noqa: BLE001
+            rec_path = dump_recovery(answers, sunday, sheet=cfg["sheet"])
+            with _write_results_lock:
+                _write_results.append((cfg["sheet"], False, str(e), rec_path))
+        finally:
+            _write_queue.task_done()
+
+
+def queue_write(answers: dict, sunday: _dt.date, cfg: dict) -> None:
+    """Non-blocking: snapshot `answers` (later pages mutate the live dict)
+    and hand it to the background worker, starting it lazily on first use."""
+    global _writer_thread
+    if _writer_thread is None:
+        _writer_thread = threading.Thread(target=_writer_loop, daemon=True)
+        _writer_thread.start()
+    _write_queue.put((copy.deepcopy(answers), sunday, cfg))
+
+
+def drain_writes() -> None:
+    """Block until every queued write has finished, then report results —
+    called once, after the interactive multi-page flow ends (normal
+    completion OR cancel), never between pages. Must run before the process
+    exits: an abrupt exit while ix-osa is mid-write is the corruption risk
+    queue_write's serialization elsewhere guards against."""
+    if _writer_thread is None:
+        return
+    _write_queue.join()
+    with _write_results_lock:
+        results, _write_results[:] = list(_write_results), []
+    for sheet, ok, msg, rec_path in results:
+        if ok:
+            print("xk887 → %s ✓ %s" % (sheet, msg), flush=True)
+        else:
+            print("xk887 → %s ✗ WRITE FAILED: %s" % (sheet, msg), flush=True)
+            print("xk887 → answers saved to %s -- replay with --from-json once fixed" % rec_path,
+                  flush=True)
 
 
 # ---------------------------------------------------------------------------
