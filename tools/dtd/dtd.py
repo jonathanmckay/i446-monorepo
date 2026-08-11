@@ -17,6 +17,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -107,7 +108,35 @@ def _prank(p) -> int:
 # ---------------------------------------------------------------------------
 # Cache load + section ordering (mirror dtd.sh list build)
 # ---------------------------------------------------------------------------
+_refresh_lock = threading.Lock()
+
+def _run_refresh_subprocess():
+    try:
+        subprocess.run(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"],
+                       capture_output=True, text=True, timeout=25)
+    except Exception as e:
+        print("WARN refresh-cache:", e, file=sys.stderr)
+    finally:
+        _refresh_lock.release()
+
 def _refresh_cache_if_stale(force: bool = False):
+    """force=True (↻ button, post-add reload): the caller is explicitly
+    waiting on fresh data, so refresh synchronously as before.
+
+    force=False (every normal page load once the cache passes
+    CACHE_MAX_AGE): NEVER block the request on this. It used to call the
+    same synchronous subprocess.run here, so any request landing on a stale
+    cache waited on a live Todoist refresh (with its own internal retries)
+    before the page could render at all — "dtd web hangs on loading (>20s)"
+    (2026-08-11). Reproduced live: consecutive calls measured 18.2s, 15.7s,
+    then 66.8s — WORSE each time, because nothing stopped overlapping
+    requests from each spawning their own refresh subprocess, piling
+    concurrent Todoist calls into rate limiting and slowing every one of
+    them down together (the plain script alone takes ~2s run directly).
+    Now the stale case kicks the refresh off in a background thread (deduped
+    by _refresh_lock — at most one in flight) and returns immediately; the
+    request serves whatever's already cached (at most a few minutes old),
+    and the next request picks up the freshened cache once it lands."""
     stale = force
     if not stale:
         try:
@@ -116,12 +145,19 @@ def _refresh_cache_if_stale(force: bool = False):
             stale = (_dt.datetime.now() - upd).total_seconds() > CACHE_MAX_AGE
         except Exception:
             stale = True
-    if stale:
+    if not stale:
+        return
+    if force:
         try:
             subprocess.run(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"],
                            capture_output=True, text=True, timeout=25)
         except Exception as e:
             print("WARN refresh-cache:", e, file=sys.stderr)
+        return
+    if _refresh_lock.acquire(blocking=False):
+        threading.Thread(target=_run_refresh_subprocess, daemon=True).start()
+    # else: a refresh is already in flight — don't stack another, just serve
+    # the current cache below.
 
 def _completed_ids() -> set[str]:
     """Todoist ids completed today (from completed-today.json `ids` map).
@@ -665,4 +701,9 @@ load(false);
 </html>"""
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    # threaded=True: Werkzeug's dev server is single-threaded by default, so
+    # a single slow request (a force=True refresh, or /api/done's did-fast
+    # subprocess) blocked every OTHER client's request behind it too —
+    # contributing to "dtd web hangs on loading" across tabs/devices even
+    # after the staleness-triggered refresh above stopped blocking on its own.
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
