@@ -829,6 +829,26 @@ def _refresh_task_queue_inner() -> dict:
             pass
     old_today = old_cache.get("today", [])
 
+    # Ids already completed today (e.g. -1neon rituals closed via run_ritual,
+    # which records into completed-today.json). Computed once here and reused
+    # below by the -1neon union's own candidate check. Applied to old_today
+    # BEFORE it can become a blind fallback (below): unlike the -1neon
+    # union's carry-forward, which re-verifies each candidate's live status,
+    # a flaky/empty fetch_today() previously fell back to old_today wholesale
+    # with no such check, silently resurrecting already-closed tasks —
+    # including -1neon rituals — every refresh thereafter (2026-08-11 bug:
+    # "-1n tasks rendering in dtd web even though I've done them").
+    _today_str = datetime.now().strftime("%Y-%m-%d")
+    closed_today_ids: set = set()
+    try:
+        _ctj = mc._load(mc.COMPLETED)
+        if _ctj.get("date") == _today_str:
+            closed_today_ids = {str(v) for v in (_ctj.get("ids") or {}).values()}
+    except Exception:
+        pass
+    if closed_today_ids:
+        old_today = [t for t in old_today if str(t.get("id")) not in closed_today_ids]
+
     # Keep-old guard for the label buckets (2026-07-26): under rate limiting
     # Todoist intermittently returns EMPTY results with a 200 — the exact
     # failure mode fetch_today already guards. An empty label bucket written

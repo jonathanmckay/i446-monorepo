@@ -31,6 +31,8 @@ DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 STATE_DIR = Path.home() / ".local/state/jm"
 CACHE = STATE_DIR / "task-queue.json"
 DONE_FILE = STATE_DIR / "completed-today.json"
+SNOOZE_FILE = STATE_DIR / "dtd-block-snooze.json"
+DEFERRED_DIR = Path.home() / ".cache/jm"
 CACHE_MAX_AGE = 180  # seconds; refresh from Todoist if staler
 SUMMARY_MAX_AGE = 45  # seconds; day-total (points + done) cache
 
@@ -128,6 +130,33 @@ def _completed_ids() -> set[str]:
         return set()
     return {str(v) for v in (d.get("ids") or {}).values()}
 
+def _snoozed_ids() -> set[str]:
+    """Ids block-snoozed (ctrl-v) in the desktop dtd, hidden until their
+    chosen 地支 block's hour arrives. Mirrors tools/did/dtd.sh's read of the
+    same file — without this, a task delayed to later today in the terminal
+    view reappeared immediately here since dtd web never read this file
+    (2026-08-11 bug). File is {date, snoozes: {id: start_hour}}; a stale
+    date (leftover from a previous day) voids it, same as dtd.sh."""
+    try:
+        sn = json.loads(SNOOZE_FILE.read_text())
+    except Exception:
+        return set()
+    if sn.get("date") != _dt.date.today().isoformat():
+        return set()
+    now_hour = _dt.datetime.now().hour
+    return {str(k) for k, v in (sn.get("snoozes") or {}).items()
+            if now_hour < int(v)}
+
+def _deferred_habit_ids() -> set[str]:
+    """Recurring 0neon/夜neon habit-parent ids deferred (/defer) today,
+    hidden for the rest of today. Mirrors tools/did/dtd.sh's read of the same
+    per-day marker file (same gap as _snoozed_ids above)."""
+    p = DEFERRED_DIR / f"habits-deferred-{_dt.date.today().isoformat()}.ids"
+    try:
+        return {l.strip() for l in p.read_text().splitlines() if l.strip()}
+    except OSError:
+        return set()
+
 def build_tasks(force_refresh: bool = False) -> list[dict]:
     _refresh_cache_if_stale(force=force_refresh)
     try:
@@ -149,7 +178,9 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
 
     rituals = [t for t in today_tasks if has(t, "-1neon")]
     neg1g = [t for t in today_tasks if has(t, "#-1g") and not has(t, "-1neon")]
-    zeroneon = sec("0neon", tomorrow) + sec("夜neon", tomorrow)
+    _deferred_ids = _deferred_habit_ids()
+    zeroneon = [t for t in sec("0neon", tomorrow) + sec("夜neon", tomorrow)
+                if t.get("id") not in _deferred_ids]
     oneneon = sec("1neon", today)
     zerog = [t for t in today_tasks
              if has(t, "#0g") and not has(t, "-1neon") and not has(t, "#-1g")]
@@ -160,6 +191,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     ordered = rituals + neg1g + zeroneon + oneneon + zerog + critical + rest
 
     completed_ids = _completed_ids()
+    snoozed_ids = _snoozed_ids()
     # Block labels (地支 glyph from /todo, 2026-07-27): hidden until that
     # block's hour arrives — mirrors the desktop dtd list generator.
     block_hours = {"卯": 4, "辰": 6, "巳": 8, "午": 10, "未": 12,
@@ -173,6 +205,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             continue
         seen.add(tid)
         if tid is not None and str(tid) in completed_ids:
+            continue
+        # Block-snoozed (ctrl-v in desktop dtd): hidden until the chosen
+        # block's hour arrives — same file/semantics as terminal dtd.
+        if tid is not None and str(tid) in snoozed_ids:
             continue
         blk = next((block_hours[l] for l in t.get("labels", []) if l in block_hours), None)
         if blk is not None and now_hour < blk:
