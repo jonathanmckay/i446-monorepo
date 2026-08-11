@@ -29,6 +29,8 @@ from flask import Flask, jsonify, render_template_string, request
 # ---------------------------------------------------------------------------
 PORT = 5560
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
+TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 STATE_DIR = Path.home() / ".local/state/jm"
 CACHE = STATE_DIR / "task-queue.json"
 DONE_FILE = STATE_DIR / "completed-today.json"
@@ -352,6 +354,40 @@ def create_todoist_task(content: str, labels: list[str]) -> dict:
         return {"ok": False, "error": str(e)}
 
 # ---------------------------------------------------------------------------
+# Start timer (swipe left): exactly mirrors terminal dtd's `enter` binding
+# (tools/did/dtd.sh's DTD_START heredoc) — same project resolution, same
+# stop-then-start via the same toggl_cli.py, so behavior can't drift between
+# the two UIs. Needs only the task's raw content, no Todoist label lookup.
+# ---------------------------------------------------------------------------
+def start_timer(raw: str) -> dict:
+    clean = strip_ann(raw)
+    bare = clean.replace("😈", "").strip()
+    project = ""
+    for tag, dom in RITUAL_DOMAIN.items():
+        if bare == tag or tag in bare.split():
+            project = dom
+            break
+    if not project:
+        try:
+            proc = subprocess.run(["/usr/bin/python3", str(TG_FAST), "--resolve", bare],
+                                  capture_output=True, text=True, timeout=15)
+            project = proc.stdout.strip()
+        except Exception as e:
+            print("WARN start_timer resolve:", e, file=sys.stderr)
+    try:
+        subprocess.run(["/usr/bin/python3", str(TOGGL_CLI), "stop"],
+                       capture_output=True, text=True, timeout=15)
+        args = ["/usr/bin/python3", str(TOGGL_CLI), "start", bare]
+        if project:
+            args.append(project)
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        if proc.returncode != 0:
+            return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "clean": bare, "project": project}
+
+# ---------------------------------------------------------------------------
 # Day totals for the header: points so far today + tasks completed today.
 # Both derived from cross-machine-durable sources (Excel Σ on Ix + Todoist +
 # the Todoist-due-date cache) rather than the machine-local completed-today.json,
@@ -478,6 +514,14 @@ def api_done():
     res["points"] = parse_est(content)[1]
     return jsonify(res)
 
+@app.route("/api/start", methods=["POST"])
+def api_start():
+    body = request.get_json(force=True, silent=True) or {}
+    content = (body.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "no content"}), 400
+    return jsonify(start_timer(content))
+
 @app.route("/api/add", methods=["POST"])
 def api_add():
     body = request.get_json(force=True, silent=True) or {}
@@ -505,7 +549,7 @@ PAGE = r"""<!doctype html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>dtd</title>
 <style>
-  :root { --bg:#1b1b1b; --dim:#777; --go:#00e676; }
+  :root { --bg:#1b1b1b; --dim:#777; --go:#00e676; --start:#29b6f6; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; background:var(--bg); color:#cfcfcf;
     font:15px/1.2 ui-monospace,"SF Mono",Menlo,Monaco,"Cascadia Mono",monospace;
@@ -527,6 +571,10 @@ PAGE = r"""<!doctype html>
     display:flex; align-items:center; padding-left:16px; opacity:0; }
   .row .track::before { content:"✓ done  +" ; white-space:pre; }
   .row .track .p { font-weight:800; }
+  .row .trackStart { position:absolute; inset:0; background:var(--start); color:#001a26;
+    font-weight:800; display:flex; align-items:center; justify-content:flex-end;
+    padding-right:16px; opacity:0; }
+  .row .trackStart::before { content:"▶ start"; white-space:pre; }
   .line { position:relative; display:flex; align-items:center; gap:10px;
     padding:10px 14px; background:var(--bg); min-height:40px;
     transform:translateX(0); transition:transform .05s linear; will-change:transform;
@@ -625,6 +673,9 @@ function makeRow(t){
   track.className = 'track';
   track.innerHTML = '<span class="p">'+(t.points||0)+' 分</span>';
   row.appendChild(track);
+  const trackStart = document.createElement('div');
+  trackStart.className = 'trackStart';
+  row.appendChild(trackStart);
 
   const line = document.createElement('div');
   line.className = 'line';
@@ -638,25 +689,27 @@ function makeRow(t){
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 
-  bindSwipe(row, line, track, t);
+  bindSwipe(row, line, track, trackStart, t);
   return row;
 }
 
-function bindSwipe(row, line, track, t){
+function bindSwipe(row, line, track, trackStart, t){
   let x0=null, dx=0, dragging=false;
   const W = () => row.offsetWidth;
   const start = x=>{ x0=x; dx=0; dragging=true; line.classList.remove('snap'); };
   const move = x=>{
     if(!dragging) return;
-    dx = Math.max(0, x - x0);
+    dx = x - x0;
     line.style.transform = 'translateX('+dx+'px)';
-    track.style.opacity = Math.min(1, dx/(W()*0.4));
+    track.style.opacity = dx>0 ? Math.min(1, dx/(W()*0.4)) : 0;
+    trackStart.style.opacity = dx<0 ? Math.min(1, -dx/(W()*0.4)) : 0;
   };
   const end = ()=>{
     if(!dragging) return; dragging=false;
     line.classList.add('snap');
     if(dx > W()*0.42){ fly(row, line, t); }
-    else { line.style.transform='translateX(0)'; track.style.opacity=0; }
+    else if(dx < -W()*0.42){ flyLeft(row, line, trackStart, t); }
+    else { line.style.transform='translateX(0)'; track.style.opacity=0; trackStart.style.opacity=0; }
   };
   line.addEventListener('touchstart', e=>start(e.touches[0].clientX), {passive:true});
   line.addEventListener('touchmove',  e=>move(e.touches[0].clientX),  {passive:true});
@@ -676,6 +729,26 @@ function fly(row, line, t){
     }, 210);
   }, 170);
   commit(t);
+}
+
+// Starting a timer doesn't complete the task (unlike fly/commit above), so
+// the row springs back into its resting position instead of being removed —
+// mirrors terminal dtd, where `enter` starts a timer but leaves the task in
+// the list.
+function flyLeft(row, line, trackStart, t){
+  line.style.transform = 'translateX(0)';
+  trackStart.style.opacity = 0;
+  commitStart(t);
+}
+
+async function commitStart(t){
+  try {
+    const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({content:t.raw})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'start failed', true); return; }
+    toast('▶ '+d.clean+(d.project?' → '+d.project:''));
+  } catch(e){ toast('offline · not started', true); }
 }
 
 async function commit(t){
