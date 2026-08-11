@@ -70,5 +70,30 @@ def test_stale_completed_file_from_prior_day_hides_nothing(monkeypatch, tmp_path
     assert "NEW1G" in ids  # yesterday's completions never gate today's list
 
 
+def test_ritual_card_gets_domain_color_not_default(monkeypatch, tmp_path):
+    """2026-08-11 bug: "-1n tasks don't correspond to project colors". Ritual
+    cards carry only the '-1neon' label (no domain label like i9/g245/n156/
+    hcm), so color_of() fell straight through to DEFAULT_COLOR (flat grey) for
+    every ritual regardless of which one it was. Fix: resolve the color from
+    the ritual tag in the card's own name via RITUAL_DOMAIN, mirroring
+    tools/did/dtd.sh's own RITUAL_DOMAIN table exactly."""
+    cache = {
+        "updated": _dt.datetime.now().isoformat(),
+        "today": [_ritual("r1", "-1g"), _ritual("r2", "-1ibx"),
+                  _ritual("r3", "-1t"), _ritual("r4", "-1l"),
+                  _ritual("r5", "سمش")],
+        "0neon": [], "1neon": [], "夜neon": [], "关键路径": [],
+    }
+    _setup(monkeypatch, tmp_path, cache, {})
+    tasks = {t["id"]: t for t in dtd.build_tasks()}
+    assert tasks["r1"]["color"] == dtd.COLORS["g245"]
+    assert tasks["r2"]["color"] == dtd.COLORS["i9"]
+    assert tasks["r3"]["color"] == dtd.COLORS["n156"]
+    assert tasks["r4"]["color"] == dtd.COLORS["g245"]
+    assert tasks["r5"]["color"] == dtd.COLORS["hcm"]
+    for t in tasks.values():
+        assert t["color"] != dtd.DEFAULT_COLOR, "no ritual card should fall back to flat grey"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

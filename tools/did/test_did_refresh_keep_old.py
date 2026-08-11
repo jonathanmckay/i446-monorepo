@@ -87,6 +87,37 @@ def test_empty_label_fetches_keep_old_buckets_and_rituals(df, monkeypatch):
         "empty -1neon fetch must carry the old cache's ritual cards forward"
 
 
+def test_closed_ritual_not_resurrected_by_stale_today_fallback(df, monkeypatch, tmp_path):
+    """2026-08-11 bug: "-1n tasks rendering in dtd web even though I've done
+    them". A flaky/empty fetch_today() (both the initial call and its retry)
+    fell back to the ENTIRE old 'today' list with zero filtering — unlike the
+    -1neon union's own carry-forward, which re-verifies each candidate's live
+    status before carrying it. A ritual already closed via run_ritual (which
+    records into completed-today.json) was silently resurrected by this
+    fallback, and stayed resurrected on every subsequent refresh since each
+    refresh's carry-forward becomes the next refresh's old_cache.
+    """
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    rit, hab, plain = _old_cache(df, today)
+    completed_path = tmp_path / "completed-today.json"
+    completed_path.write_text(json.dumps(
+        {"date": today, "names": ["-1g"], "ids": {"-1g": "r2"}}))
+    monkeypatch.setattr(df.mc, "COMPLETED", completed_path)
+    # Both fetch_today calls (initial + retry) return empty — forces the
+    # old_today fallback path this test targets.
+    monkeypatch.setattr(df.urllib.request, "urlopen", _fake_urlopen({
+        "label": {"results": []},
+        "filter": {"results": []},
+    }))
+    monkeypatch.setattr("time.sleep", lambda *_: None)  # skip the retry's real delay
+    cache = df._refresh_task_queue_inner()
+    today_ids = {t["id"] for t in cache["today"]}
+    assert "r2" not in today_ids, \
+        "an already-closed ritual must not be resurrected by the stale-today fallback"
+    assert "p1" in today_ids, "a non-completed task must still be carried forward"
+
+
 def test_healthy_fetch_still_replaces_buckets(df, monkeypatch):
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
