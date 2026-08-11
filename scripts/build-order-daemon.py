@@ -1110,10 +1110,16 @@ def evaluate_and_mark_block(block_name: str, hour: int, target_date: dt.date,
 def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
     """Decide whether a marker earns its points for a block header `line`.
 
-    The emoji must be present on the header. Only GOAL_MARKER (🎯) is
-    live-gated: `live` must confirm goals actually exist for the block,
-    stripping a stale cross-day stamp. ☀️/📧/⏱️/✅ are trusted on header
-    presence alone, no daemon-side audit.
+    The emoji must be present on the header — that's the only requirement.
+    ☀️/📧/⏱️/✅/🎯 are all trusted on header presence alone, no daemon-side
+    audit strips any of them.
+
+    🎯 was previously live-gated against `_block_has_goals` (a goal-presence
+    check that could strip the marker even after a manual ritual
+    completion) — removed 2026-08-11 per JM: "-1g should always give me the
+    points and audit should not revoke them." Completing the 😈 -1g card is
+    itself the attestation; it doesn't need separate goal text on file to
+    count, matching how -1t/-1l already work below.
 
     ⏱️/✅ are deliberately NOT audited (⏱️'s audit added 2026-07-30, removed
     2026-08-01 per JM: "If I manually mark -1l or -1t there shouldn't be an
@@ -1130,20 +1136,19 @@ def _marker_earned(emoji: str, line: str, live: dict | None) -> bool:
         return False
     if LOCK_MARKER in line:
         return True
-    if emoji in (TODOIST_MARKER, TOGGL_MARKER):
+    if emoji in (TODOIST_MARKER, TOGGL_MARKER, GOAL_MARKER):
         return True
     if live is not None and emoji in live and not live[emoji]:
         return False
     return True
 
 
-# Only 🎯 is audited: a goal-presence check that comes back False strips
-# the marker (and its points) even if it was stamped by a manual completion
-# — the stale-cross-day-goal protection. ☀️/📧 have no daemon-side
-# validator; ⏱️/✅ have validators but those are AUTO-AWARD only (stamp on
-# pass, never strip — 2026-08-01, see _marker_earned): a manual -1t/-1l
-# completion is a final first-person attestation, not a provisional claim.
-DAEMON_OWNED_MARKERS = {GOAL_MARKER}
+# No marker is stripped from a header once stamped (2026-08-11: 🎯's
+# goal-presence strip was removed per JM, same reasoning as _marker_earned
+# above — completing a ritual card is itself the attestation). Kept as an
+# explicit empty set, not deleted outright, so _strip_unearned_markers stays
+# wired in if a future marker ever needs this kind of audit again.
+DAEMON_OWNED_MARKERS: set[str] = set()
 
 
 def score_block_from_emojis(block_name: str, live: dict | None = None) -> int:
