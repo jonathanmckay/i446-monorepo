@@ -965,6 +965,41 @@ def _refresh_task_queue_inner() -> dict:
     except Exception as e:
         print(f"WARN: -1neon union skipped: {e}", file=sys.stderr)
 
+    # Final -1neon verification pass (2026-08-11 bug: "dtd web shows -1n
+    # tasks when they are already finished in the main dtd"). Reproduced
+    # live: a ritual closed via run_ritual at 08:48 was STILL coming back
+    # from fetch_today (and/or the -1neon label fetch above) as open an
+    # entire HOUR later — worse than the "minutes" of index lag the union
+    # logic above was built to tolerate, and this time on tasks that were
+    # NEVER carry-forward candidates (they came straight from a "healthy",
+    # non-empty fetch, so none of the carry-forward guards above ever ran).
+    # completed-today.json couldn't have caught it either: it only held an
+    # EARLIER block's ritual ids — completions from a later block are a
+    # different id generation entirely (cards are deleted+recreated every 2h)
+    # and there's no guarantee every completion path re-populates it.
+    # -1neon cards are always few (usually <=5/day), so unconditionally
+    # re-verifying each one individually right before the cache write is
+    # cheap and removes the dependency on any list-style endpoint being
+    # fresh — mirrors the per-card re-GET already used above for carry-
+    # forward candidates, just applied to every -1neon card, not only those.
+    try:
+        verified_today = []
+        for t in results["today"]:
+            if "-1neon" not in (t.get("labels") or []):
+                verified_today.append(t)
+                continue
+            try:
+                status, body = _todoist_request(f"{TODOIST_BASE}/tasks/{t['id']}", "GET")
+                live = json.loads(body) if status == 200 else {}
+                if status == 200 and not live.get("checked"):
+                    verified_today.append(t)
+                # else: confirmed closed — drop it
+            except Exception:
+                verified_today.append(t)  # can't verify — don't drop on ambiguity
+        results["today"] = verified_today
+    except Exception as e:
+        print(f"WARN: -1neon verification pass skipped: {e}", file=sys.stderr)
+
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": datetime.now().isoformat()}
