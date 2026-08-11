@@ -60,6 +60,7 @@ _VAL = re.compile(r"\[(\d+)G?\]")
 _BONUS = re.compile(r"\{(\d+)\}")
 
 _MDLINK = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
+_TAG = re.compile(r"@(\S+)")
 
 
 def strip_ann(s: str) -> str:
@@ -81,7 +82,17 @@ def parse_est(content: str) -> tuple[str, int]:
     pts = int(vm.group(1)) if vm else (int(bm.group(1)) if bm else 0)
     return " ".join(toks), pts
 
-def color_of(labels: list[str]) -> tuple[str, str]:
+# Ritual cards (label '-1neon') carry no domain label of their own — resolve
+# their color from the ritual tag in the name instead. Mirrors dtd.sh's own
+# RITUAL_DOMAIN (tools/did/dtd.sh:1120,1352-1355) exactly.
+RITUAL_DOMAIN = {"-1ibx": "i9", "-1g": "g245", "-1l": "g245", "-1t": "n156", "سمش": "hcm"}
+
+def color_of(labels: list[str], content: str = "") -> tuple[str, str]:
+    if "-1neon" in labels:
+        bare = strip_ann(content).lower().replace("😈", "").strip()
+        for tag, dom in RITUAL_DOMAIN.items():
+            if bare == tag or tag in bare.split():
+                return COLORS[dom], dom
     for lbl in labels:
         if lbl in COLORS:
             return COLORS[lbl], lbl
@@ -226,7 +237,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         display = t.get("short") or raw
         title = strip_ann(display) or raw
         est, pts = parse_est(raw)
-        color, dom = color_of(t.get("labels", []))
+        color, dom = color_of(t.get("labels", []), raw)
         out.append({
             "id": tid,
             "raw": raw,
@@ -268,6 +279,41 @@ def complete(content: str) -> dict:
         "future_skipped": bool(data and data.get("future_skipped")) if data else False,
         "stderr_tail": proc.stderr.strip()[-300:],
     }
+
+# ---------------------------------------------------------------------------
+# Quick-add (+ button): same (N)/[N]/@tag syntax as /todo, parsed with plain
+# regex — this is a bare Flask process with no LLM access, so unlike /todo's
+# own inference of missing time/value/domain, omitted modifiers here just
+# stay omitted rather than being guessed. Explicit only.
+# ---------------------------------------------------------------------------
+def parse_add_input(raw: str) -> tuple[str, list[str]]:
+    """('description (N) [N]', ['tag', ...]) — tags stripped from content,
+    (N)/[N] left in place (dtd's own parse_est reads them back out for
+    display, same as every other task in the list)."""
+    labels = _TAG.findall(raw)
+    content = re.sub(r"  +", " ", _TAG.sub("", raw)).strip()
+    return content, labels
+
+def create_todoist_task(content: str, labels: list[str]) -> dict:
+    """POST a new task: Inbox (no project_id), due today, priority 1 (=p4,
+    Todoist's default/lowest — confirmed against a live task's raw API
+    value, not assumed)."""
+    try:
+        tok = TODOIST_TOKEN_FILE.read_text().strip()
+    except Exception:
+        return {"ok": False, "error": "no Todoist token"}
+    body = json.dumps({"content": content, "labels": labels,
+                       "due_string": "today", "priority": 1}).encode()
+    req = urllib.request.Request(
+        "https://api.todoist.com/api/v1/tasks", data=body, method="POST",
+        headers={"Authorization": "Bearer " + tok,
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            json.loads(resp.read())  # validate it's a real task response
+        return {"ok": True, "content": content}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 # ---------------------------------------------------------------------------
 # Day totals for the header: points so far today + tasks completed today.
@@ -363,6 +409,17 @@ def api_done():
     res["points"] = parse_est(content)[1]
     return jsonify(res)
 
+@app.route("/api/add", methods=["POST"])
+def api_add():
+    body = request.get_json(force=True, silent=True) or {}
+    raw = (body.get("content") or "").strip()
+    if not raw:
+        return jsonify({"ok": False, "error": "no content"}), 400
+    content, labels = parse_add_input(raw)
+    if not content:
+        return jsonify({"ok": False, "error": "no content"}), 400
+    return jsonify(create_todoist_task(content, labels))
+
 @app.route("/")
 def index():
     return render_template_string(PAGE)
@@ -415,6 +472,27 @@ PAGE = r"""<!doctype html>
     z-index:20; font-family:inherit; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .toast.err { background:#ff4081; color:#2a0010; }
+  #fab { position:fixed; right:calc(env(safe-area-inset-right) + 18px);
+    bottom:calc(env(safe-area-inset-bottom) + 22px); width:52px; height:52px;
+    border-radius:50%; background:var(--go); color:#003; border:none;
+    font:400 26px/52px ui-monospace,monospace; text-align:center; padding:0;
+    box-shadow:0 3px 10px #0007; z-index:15; }
+  #fab:active { transform:scale(.94); }
+  #addWrap { position:fixed; inset:0; background:#000a; z-index:25;
+    display:flex; align-items:flex-end; opacity:0; pointer-events:none;
+    transition:opacity .18s; }
+  #addWrap.show { opacity:1; pointer-events:auto; }
+  #addSheet { width:100%; background:#232323; border-top:1px solid #333;
+    padding:16px 14px calc(env(safe-area-inset-bottom) + 16px);
+    transform:translateY(12px); transition:transform .18s; }
+  #addWrap.show #addSheet { transform:translateY(0); }
+  #addInput { width:100%; background:#1b1b1b; color:#cfcfcf; border:1px solid #3a3a3a;
+    border-radius:8px; padding:11px 12px; font:15px/1.3 inherit; }
+  #addInput:focus { outline:none; border-color:var(--go); }
+  #addRow { display:flex; gap:10px; margin-top:10px; }
+  #addRow button { flex:1; padding:10px; border-radius:8px; border:1px solid #3a3a3a;
+    background:#1b1b1b; color:#cfcfcf; font:700 15px inherit; }
+  #addRow button.go { background:var(--go); color:#003; border-color:var(--go); }
 </style>
 </head>
 <body>
@@ -424,6 +502,16 @@ PAGE = r"""<!doctype html>
   <button id="reload">↻</button>
 </header>
 <main id="list"><div class="loading">loading…</div></main>
+<button id="fab">+</button>
+<div id="addWrap">
+  <div id="addSheet">
+    <input id="addInput" placeholder="task (10) [5] @tag" autocomplete="off" autocapitalize="off">
+    <div id="addRow">
+      <button id="addCancel">cancel</button>
+      <button id="addGo" class="go">add</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 <script>
 const list = document.getElementById('list');
@@ -537,6 +625,40 @@ async function commit(t){
 }
 
 document.getElementById('reload').onclick = ()=> load(true);
+
+const addWrap = document.getElementById('addWrap');
+const addInput = document.getElementById('addInput');
+
+function openAdd(){
+  addWrap.classList.add('show');
+  addInput.value = '';
+  setTimeout(()=>addInput.focus(), 50);
+}
+function closeAdd(){ addWrap.classList.remove('show'); addInput.blur(); }
+
+document.getElementById('fab').onclick = openAdd;
+document.getElementById('addCancel').onclick = closeAdd;
+addWrap.addEventListener('click', e=>{ if(e.target===addWrap) closeAdd(); });
+addInput.addEventListener('keydown', e=>{
+  if(e.key==='Enter') submitAdd();
+  if(e.key==='Escape') closeAdd();
+});
+document.getElementById('addGo').onclick = submitAdd;
+
+async function submitAdd(){
+  const content = addInput.value.trim();
+  if(!content) return;
+  closeAdd();
+  try {
+    const r = await fetch('/api/add', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({content})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'add failed', true); return; }
+    toast('+ added');
+    load(true);
+  } catch(e){ toast('offline · not added', true); }
+}
+
 load(false);
 </script>
 </body>
