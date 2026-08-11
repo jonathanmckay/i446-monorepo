@@ -537,14 +537,14 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     return 0
 
 
-def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) -> int:
+def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optional[int] = None) -> int:
     """2026-07-27 redesign: the 1n+ week cell records the MINUTES the habit
-    took (explicit > today's matching Toggl entries > 1); the habit's POINTS
-    (row-5 expected points, or the cumulative increment) are appended to
-    today's 0分 domain column as a literal. Previously the cell got the
-    points and 0分 got a reference to the cell — so a minutes-cell would have
-    double-counted, and habits missing from the fen map (bug 2026-07-27:
-    "1 m5x2") never credited today at all."""
+    took (explicit > typed HHMM-HHMM range > today's matching Toggl entries
+    > 1); the habit's POINTS (row-5 expected points, or the cumulative
+    increment) are appended to today's 0分 domain column as a literal.
+    Previously the cell got the points and 0分 got a reference to the cell —
+    so a minutes-cell would have double-counted, and habits missing from the
+    fen map (bug 2026-07-27: "1 m5x2") never credited today at all."""
     name = d["habit_name"]
     col = d["neon_col"]
     # Per-habit 0分 override (registry neon_fen_header) beats the domain
@@ -559,8 +559,18 @@ def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) ->
         return 1
 
     toggl = d.get("toggl") or {}
-    minutes = explicit_minutes or _auto_detect_minutes(
-        toggl.get("desc", name), toggl.get("project", "")) or 1
+    # Compute minutes — explicit > time range > Toggl auto-detect > 1 (same
+    # priority as run_0n). Bug 2026-08-11: this previously ignored time_range
+    # entirely (the caller didn't even pass it in), so a typed HHMM-HHMM
+    # range on a 1n+ habit (e.g. "一起饭 0830-0846") silently fell through to
+    # auto-detect/1 — the week cell recorded "1m" instead of the real
+    # duration, and no Toggl entry was created for the session.
+    if explicit_minutes is not None:
+        minutes = explicit_minutes
+    elif time_range:
+        minutes = _minutes_from_time_range(time_range)
+    else:
+        minutes = _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", "")) or 1
 
     inc = d.get("cumulative_increment")
     if inc:
@@ -587,6 +597,18 @@ def run_1n(d: dict, target_date: str, explicit_minutes: Optional[int] = None) ->
 
     # Close 1neon Todoist
     closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
+
+    # Toggl entry if time range (same as run_0n)
+    if time_range and toggl.get("desc"):
+        s, e = time_range
+        try:
+            subprocess.run(
+                ["python3", str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"),
+                 "create", toggl["desc"], s, e, toggl.get("project", "")],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:
+            pass
 
     _append_completed(name, closed_id)
     _fire_refresh()
@@ -764,7 +786,7 @@ def main() -> int:
         if step == "0n":
             rc |= run_0n(d, item, target, time_range, explicit_minutes)
         elif step == "1n+":
-            rc |= run_1n(d, target, explicit_minutes)
+            rc |= run_1n(d, target, time_range, explicit_minutes)
         else:
             # Step 5: try one-off Todoist match before deferring to agent
             sub_rc = run_one_off(d.get("query_after_strip") or query, target, item)
