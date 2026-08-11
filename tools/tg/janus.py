@@ -101,6 +101,11 @@ else:
     DESC_MAX = 24    # max display width for task/event descriptions
     EVENT_SHORT_COLS = 33  # event titles wider than this get a Haiku short name
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
+NO_TIMER_FLASH_DELAY = 15  # s with no running timer before the idle nag starts
+# flashing (user request 2026-08-11: switching tasks always has a beat of no
+# timer running between stop and the next start, and the whole-screen invert
+# firing instantly during that beat felt like the UI panicking over a normal
+# transition rather than an actual "you forgot to start a timer" nag).
 EVENT_SHORTS = Path("~/.cache/janus/event-shortnames.json").expanduser()
 # Earthly branch blocks (name, start_hour, end_hour inclusive). Local table:
 # carries end-hours and the 子 sleep block for layout. Canonical start schedule
@@ -372,6 +377,11 @@ class State:
         # TIME ENTRY) only fires when we've confirmed no timer — never when we
         # simply couldn't reach Toggl, which used to flash over a live timer.
         self.current_known = False
+        # monotonic() timestamp of the first confirmed "no timer running"
+        # observation since the last time a timer WAS running; None while a
+        # timer is running or before that's ever been confirmed. Gates the
+        # idle-nag flash's NO_TIMER_FLASH_DELAY grace period.
+        self.no_timer_since: float | None = None
         self.boot_time = time.monotonic()  # refreshed in main(); gates the
         # enter handler so tty text queued before startup (e.g. the command
         # line cmux types when respawning the pane) can't start a junk timer
@@ -548,6 +558,10 @@ def fetch_current(cached=False):
                          else toggl_api.get_current())
         STATE.current_known = True
         STATE.last_current_fetch = time.monotonic()
+        if STATE.current:
+            STATE.no_timer_since = None
+        elif STATE.no_timer_since is None:
+            STATE.no_timer_since = time.monotonic()
     except Exception as e:
         # Fetch failed → we no longer know the timer state. Leave STATE.current
         # as-is (last known) but mark it unconfirmed so the idle nag stays off.
@@ -5455,8 +5469,13 @@ def _no_timer_flash_on() -> bool:
     """Whole-screen flash cue: true during the first half of each second
     while no Toggl timer is running — a nag to go start one. Only fires once
     we've CONFIRMED no timer (current_known); a rate-limited / failed fetch is
-    'unknown', not 'idle', so it must not flash over a live timer."""
+    'unknown', not 'idle', so it must not flash over a live timer. Also holds
+    off for NO_TIMER_FLASH_DELAY after the timer stops, so a normal task
+    switch (stop, type the next command, start) doesn't trigger it."""
     if STATE.current or not STATE.current_known:
+        return False
+    if STATE.no_timer_since is None or \
+            time.monotonic() - STATE.no_timer_since < NO_TIMER_FLASH_DELAY:
         return False
     return dt.datetime.now(TZ).microsecond < 500_000
 

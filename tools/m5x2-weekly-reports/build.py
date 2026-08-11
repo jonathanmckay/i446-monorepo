@@ -51,7 +51,7 @@ F695_DOC = Path.home() / "vault" / "h335" / "f693" / "1-f695-weekly-updates.md"
 F695_OBSIDIAN_URI = "obsidian://open?path=" + urllib.parse.quote(str(F695_DOC))
 # Fixed roster (the doc's summary tables were removed 2026-08-10; the doc now
 # holds only the writeups). Growth (JM) — JM's own weekly — stays rightmost.
-I9_PEOPLE = ["Elliot Silvers", "Bei Lu", "Eldon Lei", "Roberto Ruggeri",
+I9_PEOPLE = ["Elliot Silvers", "Bei Lu", "Data Infra",
              "Jessica Allen", "Ethan Abeles", "Growth (JM)"]
 I9_DUE_OFFSET = 5      # team updates: due the FRIDAY of the week they cover
 I9_JM_DUE_OFFSET = 8   # Growth (JM) rolls the team's Friday sends up the following MONDAY
