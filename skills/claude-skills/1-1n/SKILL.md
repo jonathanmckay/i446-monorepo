@@ -1,6 +1,6 @@
 ---
 name: "1-1n"
-description: "Generate the weekly -1₦ block-ritual heatmap: a day-by-block table showing which build-order ritual icons (☀️ prayer, 📧 inbox, 🎯 goal set, ⏱️ time-log, ✓ task done) were hit in each 2-hour Earthly-Branch block. Pulls from Toggl, the build-order archives, and Todoist, then writes a report to vault/g245 and opens it. Usage: /1-1n [START END]"
+description: "Generate the weekly -1₦ block-ritual heatmap: a day-by-block table showing which build-order ritual icons (☀️ prayer, 📧 inbox, 🎯 goal set, ⏱️ time-log, ✓ task done) were hit in each 2-hour Earthly-Branch block. Pulls from Toggl, the build-order archives, and Todoist, then writes a report to vault/g245/5e-1/1e-1n and opens it. Usage: /1-1n [START END]"
 ---
 
 # -1₦ Block Ritual Heatmap (/1-1n)
@@ -20,12 +20,13 @@ python3 ~/.copilot/skills/1-1n/make_heatmap.py 2026-06-01 2026-06-10   # explici
 Then write the output to the vault with frontmatter and open it:
 
 ```bash
-OUT=~/vault/g245/$(date +%Y.%m.%d)-block-ritual-heatmap.md
+mkdir -p ~/vault/g245/5e-1/1e-1n
+OUT=~/vault/g245/5e-1/1e-1n/$(date +%Y.%m.%d)-block-ritual-heatmap.md
 {
   printf -- '---\ntitle: "-1₦ Block Ritual Heatmap"\ndate: %s\ntype: report\ntags: [g245, neon, -1n, rituals]\n---\n\n' "$(date +%Y-%m-%d)"
   python3 ~/.copilot/skills/1-1n/make_heatmap.py <START> <END>
 } > "$OUT"
-open "obsidian://open?vault=vault&file=g245%2F$(basename "$OUT")&newTab=true"
+open "obsidian://open?vault=vault&file=g245%2F5e-1%2F1e-1n%2F$(basename "$OUT")&newTab=true"
 ```
 
 Optionally append a short Commentary section (phase shifts, weakest rituals, week-over-week density). Keep it factual and brief.
@@ -49,4 +50,4 @@ Optionally append a short Commentary section (phase shifts, weakest rituals, wee
 - Times are bucketed in America/Los_Angeles (PDT, −07:00). Adjust `PT` in the script for PST.
 - Toggl key loads via `~/i446-monorepo/mcp/toggl_server/toggl_cli.py`; Neon path is `~/OneDrive/vault-excel/Neon分v12.2.xlsx` (read-only open is safe even while Excel has it open); Todoist token is embedded.
 - If a source fails, the script still renders and appends an HTML comment with the warning.
-- The report is a sibling of the prior `g245/YYYY.MM.DD-block-ritual-heatmap.md` files. Each run writes a new dated file.
+- All reports live in `vault/g245/5e-1/1e-1n/YYYY.MM.DD-block-ritual-heatmap.md`. Each run writes a new dated file.

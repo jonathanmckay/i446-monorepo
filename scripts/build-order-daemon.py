@@ -1882,7 +1882,16 @@ def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
             if not start_str:
                 continue
             start_dt = dt.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            minutes = int((now_ts - start_dt).total_seconds()) // 60
+            # Toggl returns the still-open entry even if it started before the
+            # queried day (an open entry has no stop time to filter on) — clamp
+            # to target_date's local midnight so a stale/forgotten timer from an
+            # earlier day can't dump its ENTIRE elapsed time into today's column
+            # (regression 2026-08-11: a >1-day-old open "fall asleep" timer read
+            # as AV=1493min — the whole morning showing as asleep).
+            day_start = dt.datetime.combine(
+                target_date, dt.time.min, tzinfo=zoneinfo.ZoneInfo("America/Los_Angeles"))
+            effective_start = max(start_dt, day_start)
+            minutes = max(0, int((now_ts - effective_start).total_seconds()) // 60)
         else:
             continue
 
