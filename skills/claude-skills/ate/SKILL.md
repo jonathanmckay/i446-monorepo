@@ -88,6 +88,25 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, prot
   in each triad. Existing labels (Early Morning / Breakfast / …) get overwritten
   on first run.
 
+## Tracking points (0s / col T)
+
+Every `/ate` call recomputes today's food-tracking score from total tracked
+calories (`hcbi!U`, header `cal` — a live `=SUM` over all seven band kcal
+cells) and bumps `hcbi!T` (header `0s`) if the tier increased:
+
+| Condition                  | Points |
+|-----------------------------|--------|
+| Tracked anything (>0 kcal)  | 10     |
+| Tracked >800 kcal            | +5     |
+| Tracked >1200 kcal           | +5     |
+| **Max**                      | **20** |
+
+`T` is a plain literal (not a formula) that already flows into `hcbi!AA` →
+`0分!W` (the `hcb` domain column) via existing formulas — no separate `0分`
+write is needed. The write only fires when the new tier exceeds the current
+`T` value, so repeated `/ate` calls never double-count and a manually-set
+higher value (e.g. a one-off bonus) is never clobbered downward.
+
 ## Steps
 
 1. **Parse args.** First, peel off an optional leading **branch glyph**: if the
@@ -129,10 +148,27 @@ Each branch maps to a triad of columns in `hcbi`. Triad = (food name, kcal, prot
 
    Note: the **name column** is a string append, not arithmetic — first write should be plain (no leading "+"); the daemon's /append handles that automatically (sets `=name` then concats `, name` thereafter). For correctness, special-case empty-cell vs concat in the caller, or use `/write` for empties.
 
-3. **Report.** Echo the script's one-line confirmation, e.g.:
+3. **Update tracking points.** Recompute today's food-tracking tier from the
+   post-write calorie total and bump `hcbi!T` if it increased (see
+   [Tracking points](#tracking-points-0s--col-t) above):
+
+   ```python
+   cal_col = cols.col("hcbi", "cal")   # U
+   pts_col = cols.col("hcbi", "0s")    # T
+
+   cal_today = float(excel.read("hcbi", cal_col, date=today)["value"] or 0)
+   tier = 0 if cal_today <= 0 else 10 + (5 if cal_today > 800 else 0) + (5 if cal_today > 1200 else 0)
+
+   current_pts = float(excel.read("hcbi", pts_col, date=today)["value"] or 0)
+   if tier > current_pts:
+       excel.write("hcbi", pts_col, date=today, value=str(tier), src="ate-tier")
+   ```
+
+4. **Report.** Echo the script's one-line confirmation, e.g.:
    ```
    ate raspberries (80 kcal, 2g protein) → hcbi 巳 band (AQ/AR/AS), row 113
    ```
+   If step 3 bumped the tier, mention it: `+5 tracking pts (now 15/20)`.
 
 ## Failure modes
 
