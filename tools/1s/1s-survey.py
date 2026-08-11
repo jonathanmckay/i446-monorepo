@@ -29,10 +29,17 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from review_form_writer import BackgroundWriter  # noqa: E402
+
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "Neon分v12.2.xlsx"
 SHEET = "1分+1s"
 DAILY_SHEET = "0s897"
+# Recovery dump for answers that fail to reach Excel -- 1s had NO durability
+# here before 2026-08-11, same gap 0s had. Same shape as xk887's.
+RECOVERY_DIR = Path.home() / ".cache/1s-recovery"
+_writer = BackgroundWriter(recovery_dir=RECOVERY_DIR)
 
 # (key, label, column in 1分+1s, kind, context_key)
 # kind: text | textml | num. context_key names the daily-answer list shown
@@ -560,31 +567,44 @@ def main() -> int:
         return 0
 
     filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
-    result = write_answers(answers, sunday)
-    # write_answers() raises on failure, so reaching this line means the
-    # Neon write already succeeded — say so plainly (user decision
-    # 2026-08-02: finishing the survey should make the Neon write obvious,
-    # not just log a terse AppleScript return value).
-    msg = "✓ 1s saved to Neon — %s week %s, %d field%s written (%s)" % (
-        SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s", result)
+
+    def _write_neon():
+        return write_answers(answers, sunday)
+
+    # Re-reads RECOVERY_DIR each call (rather than trusting whatever _writer
+    # was constructed with) so tests that monkeypatch it after module load
+    # still take effect — same reasoning as xk887-survey.py's queue_write.
+    _writer.recovery_dir = RECOVERY_DIR
+    _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
 
     # Completing the survey IS completing the weekly 1s task (user decision
     # 2026-07-21: "I need to complete the survey before task is complete") —
-    # mark it here, not in the /1s skill flow.
+    # mark it here, not in the /1s skill flow. Queued onto the SAME
+    # background writer as the Neon write above (serialized, not concurrent,
+    # per JM 2026-08-11 — see 0s.py's identical comment for why).
     if not args.no_mark:
-        try:
+        def _mark_1s_done():
             subprocess.run(["/usr/bin/python3",
                             str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
                            capture_output=True, text=True, timeout=120)
-            msg += " · 1s marked done"
-        except Exception as e:  # noqa: BLE001
-            msg += " · 1s mark FAILED: %s" % e
+            return "1s marked done"
+        _writer.queue(_mark_1s_done, tag="1s-mark")
 
-    print(msg)
+    all_ok = _writer.drain()
+    # write_answers() raising is caught by the writer now, not this function
+    # — reaching here means either it succeeded or the failure was already
+    # reported by drain(). Keep the explicit success line too (user decision
+    # 2026-08-02: finishing the survey should make the Neon write obvious,
+    # not just log a terse AppleScript return value).
+    if all_ok:
+        print("✓ 1s saved to Neon — %s week %s, %d field%s written" % (
+            SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s"))
 
     # Interactive runs (the form, not scripted --from-json) close their own
     # cmux tab after a successful save, so the survey doesn't leave a stray
-    # pane sitting at a shell prompt (user decision 2026-08-02).
+    # pane sitting at a shell prompt (user decision 2026-08-02). Must run
+    # AFTER drain() — closing the pane while a queued write might still need
+    # the terminal to report its result would hide a failure from the user.
     if not args.from_json:
         time.sleep(1.5)
         try:
@@ -593,7 +613,7 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass  # not running in a cmux pane, or cmux unavailable — fine
 
-    return 0
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":

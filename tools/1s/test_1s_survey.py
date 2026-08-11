@@ -154,6 +154,47 @@ def test_daily_context_uses_string_value_for_dates():
     assert 'string value of range "B3:B600"' in script
 
 
+# ── Shared BackgroundWriter adoption (2026-08-11) ───────────────────────────
+# 1s had NO recovery mechanism before this, same gap 0s had. Adopting
+# lib/review_form_writer.py's BackgroundWriter (the same module xk887/0s use)
+# backfills that. No wall-clock speedup here either (single-page form, no
+# "next page" to advance into) — the Neon write and the 1s-mark-done call
+# stay serialized on purpose (JM 2026-08-11), same reasoning as 0s.
+
+def test_main_uses_shared_background_writer():
+    m = _load()
+    assert isinstance(m._writer, m.BackgroundWriter)
+
+
+def test_drain_happens_before_cmux_close_in_source():
+    """close-surface tears down the pane; it must never fire while a queued
+    write might still need the terminal to report its result."""
+    import inspect
+    m = _load()
+    src = inspect.getsource(m.main)
+    drain_idx = src.index("_writer.drain()")
+    close_idx = src.index('"cmux", "close-surface"')
+    assert drain_idx < close_idx, "drain() must run before cmux close-surface"
+
+
+def test_write_failure_dumps_recovery_and_returns_nonzero(monkeypatch, tmp_path):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(m, "fetch_context", lambda dates: {k: [] for k in m.DAILY_COLS})
+
+    def _boom(answers, sunday):
+        raise RuntimeError("Invalid object specifier (workbook not open)")
+    monkeypatch.setattr(m, "write_answers", _boom)
+
+    f = tmp_path / "answers.json"
+    f.write_text('{"good": "typed answer"}')
+    monkeypatch.setattr("sys.argv", ["1s-survey.py", "--from-json", str(f), "--no-mark"])
+
+    rc = m.main()
+    assert rc == 1, "a failed Neon write must make main() exit non-zero"
+    assert list(tmp_path.glob("recovery*.json")), "expected a recovery dump for the failed write"
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

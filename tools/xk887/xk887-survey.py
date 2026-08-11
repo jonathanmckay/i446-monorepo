@@ -31,15 +31,15 @@ from __future__ import annotations
 
 import argparse
 import calendar
-import copy
 import datetime as _dt
 import json
-import queue
 import re
 import subprocess
 import sys
-import threading
 from pathlib import Path
+
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from review_form_writer import BackgroundWriter  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "xk887.xlsx"
@@ -302,48 +302,26 @@ def dump_recovery(answers: dict, sunday: _dt.date, sheet: str | None = None) -> 
 # the daemon is under load) that used to run between run_page() calls — the
 # user stared at "writing N fields..." before the NEXT page's form could even
 # render ("the save function takes way too long, should be non-blocking
-# while I go on to the next field"). Writes now queue onto a single
-# background worker thread and run_paginated() moves on to the next page
-# immediately; the worker processes them ONE AT A TIME (never two AppleScript
-# writes to the same open workbook concurrently — a real corruption risk, not
-# just a style choice) and the results are collected and reported only after
-# the whole interactive flow ends, when the terminal is no longer owned by a
+# while I go on to the next field"). Writes now queue onto BackgroundWriter
+# (lib/review_form_writer.py, shared with 0s.py/1s-survey.py) and
+# run_paginated() moves on to the next page immediately; the shared writer
+# processes queued calls ONE AT A TIME (never two AppleScript writes to the
+# same open workbook concurrently) and results are reported only after the
+# whole interactive flow ends, when the terminal is no longer owned by a
 # prompt_toolkit full-screen Application (a background thread printing while
 # one is active would corrupt the display).
 # ---------------------------------------------------------------------------
-_write_queue: "queue.Queue" = queue.Queue()
-_write_results: list[tuple[str, bool, str, Path | None]] = []
-_write_results_lock = threading.Lock()
-_writer_thread: threading.Thread | None = None
-
-
-def _writer_loop() -> None:
-    while True:
-        item = _write_queue.get()
-        if item is None:
-            _write_queue.task_done()
-            return
-        answers, sunday, cfg = item
-        try:
-            result = write_answers(answers, sunday, sheets=[cfg])
-            with _write_results_lock:
-                _write_results.append((cfg["sheet"], True, result, None))
-        except Exception as e:  # noqa: BLE001
-            rec_path = dump_recovery(answers, sunday, sheet=cfg["sheet"])
-            with _write_results_lock:
-                _write_results.append((cfg["sheet"], False, str(e), rec_path))
-        finally:
-            _write_queue.task_done()
+_writer = BackgroundWriter(recovery_dir=RECOVERY_DIR)
 
 
 def queue_write(answers: dict, sunday: _dt.date, cfg: dict) -> None:
     """Non-blocking: snapshot `answers` (later pages mutate the live dict)
-    and hand it to the background worker, starting it lazily on first use."""
-    global _writer_thread
-    if _writer_thread is None:
-        _writer_thread = threading.Thread(target=_writer_loop, daemon=True)
-        _writer_thread.start()
-    _write_queue.put((copy.deepcopy(answers), sunday, cfg))
+    and hand it to the shared background worker. Re-reads RECOVERY_DIR each
+    call (rather than trusting whatever _writer was constructed with) so
+    tests that monkeypatch it after module load still take effect."""
+    _writer.recovery_dir = RECOVERY_DIR
+    _writer.queue(write_answers, answers, sunday, sheets=[cfg],
+                  tag=cfg["sheet"], recovery_payload=answers)
 
 
 def drain_writes() -> bool:
@@ -354,21 +332,7 @@ def drain_writes() -> bool:
     queue_write's serialization elsewhere guards against. Returns True iff
     every queued write succeeded, so the caller can still exit non-zero on a
     background failure even though it was discovered after moving on."""
-    if _writer_thread is None:
-        return True
-    _write_queue.join()
-    with _write_results_lock:
-        results, _write_results[:] = list(_write_results), []
-    all_ok = True
-    for sheet, ok, msg, rec_path in results:
-        if ok:
-            print("xk887 → %s ✓ %s" % (sheet, msg), flush=True)
-        else:
-            all_ok = False
-            print("xk887 → %s ✗ WRITE FAILED: %s" % (sheet, msg), flush=True)
-            print("xk887 → answers saved to %s -- replay with --from-json once fixed" % rec_path,
-                  flush=True)
-    return all_ok
+    return _writer.drain()
 
 
 # ---------------------------------------------------------------------------

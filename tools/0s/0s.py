@@ -33,10 +33,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from review_form_writer import BackgroundWriter  # noqa: E402
+
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 WORKBOOK = "Neon分v12.2.xlsx"
 SHEET = "0s897"
+# Recovery dump for answers that fail to reach Excel -- 0s had NO durability
+# here before 2026-08-11 (an ix-osa hiccup meant an unhandled RuntimeError
+# and the user's typed answers were just gone). Same shape as xk887's.
+RECOVERY_DIR = Path.home() / ".cache/0s-recovery"
+_writer = BackgroundWriter(recovery_dir=RECOVERY_DIR)
 
 # (key, label, column, target, kind)   kind: text | textml (multiline) | num
 FIELDS = [
@@ -276,14 +284,26 @@ def main() -> int:
     # terminal (user report 2026-07-25). Say what's happening, immediately.
     print("0s → writing %d fields to Neon %s (%s) …" % (filled, SHEET, target),
           flush=True)
-    result = write_answers(answers, target)
-    msg = "0s → %s (%d fields) · %s" % (SHEET, filled, result)
+
+    def _write_neon():
+        return write_answers(answers, target)
+
+    # Re-reads RECOVERY_DIR each call (rather than trusting whatever _writer
+    # was constructed with) so tests that monkeypatch it after module load
+    # still take effect — same reasoning as xk887-survey.py's queue_write.
+    _writer.recovery_dir = RECOVERY_DIR
+    _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
 
     # "Points checked" is not a neon column: 1 marks 0l done via did-fast;
-    # 0/blank leaves it alone.
+    # 0/blank leaves it alone. Queued onto the SAME background writer as the
+    # Neon write above (serialized, not concurrent, per JM 2026-08-11 — both
+    # ultimately touch the same open workbook, just via different paths
+    # (raw AppleScript here vs. did-fast's daemon-routed writes), so true
+    # parallelism between them isn't proven race-safe).
     if (answers.get("points_checked") or "").strip() == "1":
         print("0s → marking 0l done …", flush=True)
-        try:
+
+        def _mark_0l():
             # 0l's did-fast path does two sequential Excel round-trips (0n
             # write + 0l-completion-time write, ~30s+15s budget) plus a
             # Todoist search/close — 60s left too little margin and was
@@ -309,14 +329,13 @@ def main() -> int:
             except (json.JSONDecodeError, AttributeError):
                 fail_reason = (proc.stderr or proc.stdout or "unknown").strip()[:200]
             if wrote_ok:
-                msg += " · 0l marked done"
-            else:
-                msg += " · 0l mark FAILED: %s" % fail_reason
-        except Exception as e:  # noqa: BLE001
-            msg += " · 0l mark FAILED: %s" % e
+                return "0l marked done"
+            raise RuntimeError(fail_reason)
 
-    print(msg)
-    return 0
+        _writer.queue(_mark_0l, tag="0l")
+
+    all_ok = _writer.drain()
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":
