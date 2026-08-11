@@ -146,17 +146,27 @@ def test_prefill_includes_current_range_for_single_completed_entry():
     assert mod._entry_edit_prefill(item) == "eat 0745-0800"
 
 
-def test_prefill_omits_range_for_merged_and_running_rows():
+def test_prefill_omits_range_for_merged_rows():
     mod = _load_tui()
     today = _midnight()
     merged = {"kind": "entry", "start_dt": today.replace(hour=7),
               "entry_ids": [1, 2], "raw_desc": "eat", "project_id": None,
               "dur_min": 30, "running": False}
+    assert mod._entry_edit_prefill(merged) == "eat", "merged rows can't retime"
+
+
+def test_prefill_open_ended_for_running_row():
+    """2026-08-11: a running row's prefill used to omit the range entirely
+    ("eat"), which read exactly like typing a brand-new command — no
+    signal that Enter would edit the entry that's live right now. It now
+    carries the start time with a dangling dash ("eat 0700-"); blank end
+    means "now" once resubmitted (see _parse_edit_text)."""
+    mod = _load_tui()
+    today = _midnight()
     running = {"kind": "entry", "start_dt": today.replace(hour=7),
                "entry_ids": [3], "raw_desc": "eat", "project_id": None,
                "dur_min": 5, "running": True}
-    assert mod._entry_edit_prefill(merged) == "eat", "merged rows can't retime"
-    assert mod._entry_edit_prefill(running) == "eat", "running rows have no end yet"
+    assert mod._entry_edit_prefill(running) == "eat 0700-"
 
 
 # ─── calendar right-justification ───────────────────────────────────────────
