@@ -317,6 +317,57 @@ def test_enter_with_armed_edit_and_valid_text_flashes_edit_command():
     assert mod.STATE.flash.startswith("$ edit carolina 1:1 sync @i9")
 
 
+# ─── Open-ended ("HHMM-", blank end = now) retime of the running entry ─────
+# (user request 2026-08-11: "bring in the start time, but end time should be
+# blank, which implicitly means now" — replaces the old range-less prefill
+# for a running row, which read exactly like starting a brand-new command)
+
+def test_enter_on_selected_running_entry_prefills_open_ended_range():
+    mod = _load_tui()
+    today = _midnight()
+    _setup_common(mod)
+    item = {"kind": "entry", "start_dt": today.replace(hour=7, minute=0),
+            "entry_ids": [9], "raw_desc": "eat", "project_id": None,
+            "dur_min": 5, "running": True}
+    mod.STATE.visible_events = [item]
+    mod.STATE.event_sel = mod._sel_key(item)
+    mod.input_buffer.text = ""
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target == {"ids": [9], "date": today.date()}
+    assert mod.input_buffer.text == "eat 0700-"
+
+
+def test_open_ended_edit_rejected_for_a_non_running_entry():
+    """A stray dangling dash on a COMPLETED entry (fat-fingered-away end
+    digits) must not silently strip its stop time and turn it back into a
+    live timer — open-ended only applies to the entry that's actually
+    running."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [_entry("eat", today.replace(hour=7), today.replace(hour=7, minute=30),
+                                id=9, running=False)]
+    mod.STATE.entries_yday = []
+    mod.STATE.edit_target = {"ids": [9], "date": today.date()}
+    mod.input_buffer.text = "eat 0700-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert "open-ended time only applies to the running entry" in mod.STATE.flash
+
+
+def test_open_ended_edit_accepted_for_the_running_entry():
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [_entry("eat", today.replace(hour=7), today.replace(hour=7, minute=5),
+                                id=9, running=True)]
+    mod.STATE.entries_yday = []
+    mod.STATE.edit_target = {"ids": [9], "date": today.date()}
+    mod.input_buffer.text = "eat 0700-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert mod.STATE.flash.startswith("$ edit eat")
+    assert "0700-now" in mod.STATE.flash
+
+
 # ─── Time-range retype retimes, doesn't pollute the description ────────────
 # (user request 2026-07-18: "if I edit an event with a new time seris [sic]
 # (i.e. hhmm-hhmm) it updates the time not the description")
@@ -335,6 +386,35 @@ def test_parse_edit_text_extracts_time_range_alongside_desc_and_code():
     assert desc == "carolina sync"
     assert code == "i9"
     assert time_range == ("0930", "1000")
+
+
+# ─── Open-ended "HHMM-" retime (blank end = now) for the running entry ──────
+# (user request 2026-08-11: editing the running entry's prefill should carry
+# its start time with the end left blank, since "now" is implicit)
+
+def test_parse_edit_text_extracts_open_ended_range_leaves_desc_none():
+    mod = _load_tui()
+    desc, code, time_range, _tags = mod._parse_edit_text("0700-")
+    assert desc is None
+    assert time_range == ("0700", None)
+
+
+def test_parse_edit_text_extracts_open_ended_range_alongside_desc_and_code():
+    mod = _load_tui()
+    desc, code, time_range, _tags = mod._parse_edit_text("eat @hcb 0700-")
+    assert desc == "eat"
+    assert code == "hcb"
+    assert time_range == ("0700", None)
+
+
+def test_parse_edit_text_rejects_malformed_partial_end():
+    """A dash followed by fewer than 4 digits (not open-ended, not a full
+    range — e.g. a fat-fingered "0700-1" with two digits missing) must not
+    be misread as either form; the text falls through untouched."""
+    mod = _load_tui()
+    desc, code, time_range, _tags = mod._parse_edit_text("eat 0700-1 more")
+    assert time_range is None
+    assert desc == "eat 0700-1 more"
 
 
 def test_enter_with_armed_edit_bare_time_range_updates_time_only():

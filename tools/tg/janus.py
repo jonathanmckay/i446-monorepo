@@ -880,20 +880,31 @@ def _row_selection(key) -> tuple[bool, object | None, list[tuple]]:
 
 def _entry_edit_prefill(item: dict) -> str:
     """The editable text Enter loads into the input line for a selected real
-    entry: "<desc> @<code> HHMM-HHMM" (range only for a single completed
-    entry — a merged row can't retime and a running one has no end yet),
-    matching what the user would type to recreate it via the ordinary
-    typed-command path. Having the CURRENT times in the line makes retiming
-    a matter of editing digits (user request 2026-07-28: "change the start /
-    end times of a task"); resubmitting unchanged re-applies the same range,
-    which is a harmless no-op (trim excludes the entry's own ids)."""
+    entry: "<desc> @<code> HHMM-HHMM" for a single completed entry, or
+    "<desc> @<code> HHMM-" (open-ended — blank end means "now" on submit) for
+    the running one — a merged row gets no range at all, since there's no
+    single well-defined time to retime all of it to. Matches what the user
+    would type to recreate it via the ordinary typed-command path. Having the
+    CURRENT times in the line makes retiming a matter of editing digits (user
+    request 2026-07-28: "change the start / end times of a task"); resubmitting
+    unchanged re-applies the same range, which is a harmless no-op (trim
+    excludes the entry's own ids).
+
+    The open-ended form (2026-08-11) replaces the old running-entry behavior
+    of showing no range at all: "<desc> @<code>" alone read exactly like a
+    brand-new command line, with nothing to signal "you are editing what's
+    running now" (bug report: "prefills the text bar as if I'm doing a new
+    task"). A start time with a dangling dash carries that signal without
+    needing an end that doesn't exist yet."""
     code = proj_code(item.get("project_id"))
     suffix = f" @{code}" if code else ""
     rng = ""
-    if (len(item.get("entry_ids") or []) == 1 and not item.get("running")
-            and item.get("dur_min")):
-        end = item["start_dt"] + dt.timedelta(minutes=item["dur_min"])
-        rng = f" {item['start_dt']:%H%M}-{end:%H%M}"
+    if len(item.get("entry_ids") or []) == 1:
+        if item.get("running"):
+            rng = f" {item['start_dt']:%H%M}-"
+        elif item.get("dur_min"):
+            end = item["start_dt"] + dt.timedelta(minutes=item["dur_min"])
+            rng = f" {item['start_dt']:%H%M}-{end:%H%M}"
     return f"{item['raw_desc']}{suffix}{rng}"
 
 
@@ -908,11 +919,17 @@ def _empty_gap_prefill(item: dict) -> str:
     return f"{item['start_dt']:%H%M}-{end:%H%M} "
 
 
-_TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
+# Group 2 is optional: a dangling "HHMM-" (nothing after the dash) means
+# open-ended — "now" — the form _entry_edit_prefill hands back for the
+# running entry (2026-08-11). Can't close the optional group with \b since
+# "-" and whitespace/end-of-string are both non-word chars (no boundary
+# between them); a lookahead for whitespace-or-end does the same job for
+# both the full and open-ended forms.
+_TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})?(?=\s|$)")
 
 
 def _parse_edit_text(text: str) -> tuple[str | None, str | None,
-                                         tuple[str, str] | None, list[str]]:
+                                         tuple[str, str | None] | None, list[str]]:
     """Parse retyped edit text into (description, project_code, time_range,
     tags) — the first three can be None, meaning "leave that field alone"
     (user request 2026-07-18: "if I edit an event with a new time series
@@ -923,11 +940,13 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     ... to the current 'eat' entry" — value tags -1/-2/-3 also trigger the
     媒分 credit, see TAG_POINTS). A trailing "@code" is stripped next (only
     ever the last token — an entry edit doesn't need tg-fast's fuller
-    shortcode grammar). An embedded "HHMM-HHMM" is then pulled out of
-    whatever remains, from anywhere in the string, since the natural retype
-    is either "0930-1000" alone (time only) or "new desc 0930-1000" (both).
-    Whatever text is left is the new description — empty means "unchanged",
-    not "clear the description"."""
+    shortcode grammar). An embedded "HHMM-HHMM" (or open-ended "HHMM-") is
+    then pulled out of whatever remains, from anywhere in the string, since
+    the natural retype is either "0930-1000" alone (time only) or "new desc
+    0930-1000" (both) — same for the open-ended "0930-" form. time_range's
+    second element is None for the open-ended case, meaning "now" once
+    applied. Whatever text is left is the new description — empty means
+    "unchanged", not "clear the description"."""
     tags = re.findall(r"(?:^|\s)#(\S+)", text)
     text = re.sub(r"(?:^|\s)#\S+", "", text).strip()
     # Range BEFORE the trailing-@code match: the retime prefill is
@@ -936,7 +955,7 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     time_range = None
     m_time = _TIME_RANGE_RE.search(text)
     if m_time:
-        time_range = (m_time.group(1), m_time.group(2))
+        time_range = (m_time.group(1), m_time.group(2))  # group(2) None → open-ended
         text = (text[:m_time.start()] + " " + text[m_time.end():]).strip()
     m_code = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
     body = (m_code.group(1) or "").strip() if m_code else text.strip()
@@ -4715,6 +4734,14 @@ def _(event):
             # to every id behind it, but time is not.
             flash("can't retime a merged multi-entry row", 4.0)
             return
+        if time_range and time_range[1] is None and not (_find_entry(ids) or {}).get("running"):
+            # Open-ended ("HHMM-", blank end = now) only makes sense on the
+            # entry that's actually still running — applying it to a
+            # completed entry would silently strip its stop time and turn it
+            # back into a live timer, which is not what a fat-fingered-away
+            # end digit means.
+            flash("open-ended time only applies to the running entry", 4.0)
+            return
         fields = {}
         if desc:
             fields["description"] = desc
@@ -4730,12 +4757,22 @@ def _(event):
                               if t in VALUE_TAGS and t not in existing]
         if time_range:
             start_dt = _hhmm_to_dt(edit_date, time_range[0])
-            end_dt = _hhmm_to_dt(edit_date, time_range[1])
-            if end_dt <= start_dt:
-                end_dt += dt.timedelta(days=1)
-            fields["start"] = start_dt.isoformat()
-            fields["stop"] = end_dt.isoformat()
-            fields["duration"] = int((end_dt - start_dt).total_seconds())
+            if time_range[1] is None:
+                # Open-ended: retime the running entry's start, leave it
+                # running. duration follows Toggl's own convention for a live
+                # entry (negative start-epoch) so the record stays correct in
+                # Toggl itself, not just in janus's own display (which reads
+                # "start" directly and never depended on this).
+                end_dt = dt.datetime.now(TZ)
+                fields["start"] = start_dt.isoformat()
+                fields["duration"] = -int(start_dt.timestamp())
+            else:
+                end_dt = _hhmm_to_dt(edit_date, time_range[1])
+                if end_dt <= start_dt:
+                    end_dt += dt.timedelta(days=1)
+                fields["start"] = start_dt.isoformat()
+                fields["stop"] = end_dt.isoformat()
+                fields["duration"] = int((end_dt - start_dt).total_seconds())
         if not fields:
             flash("nothing to update", 4.0)
             return
@@ -4743,7 +4780,7 @@ def _(event):
         if code:
             parts.append(f"@{code}")
         if time_range:
-            parts.append(f"{time_range[0]}-{time_range[1]}")
+            parts.append(f"{time_range[0]}-{time_range[1] or 'now'}")
         parts += [f"#{t}" for t in tags]
         flash("$ edit " + " ".join(parts))
 
