@@ -172,3 +172,68 @@ def test_fetch_current_marks_known_on_success(monkeypatch):
     m.fetch_current()
     assert m.STATE.current_known is True
     assert m.STATE.current is entry
+
+
+# ─── no-timer flash grace period (2026-08-11) ──────────────────────────────
+# A normal task switch (stop, type the next command, start) always has a
+# beat with no timer running. Flashing instantly during that beat read as
+# the UI panicking over a routine transition rather than nagging about an
+# actually-forgotten timer, so the whole-screen flash now waits
+# NO_TIMER_FLASH_DELAY after the first confirmed "no timer" observation.
+
+def test_fetch_current_sets_no_timer_since_on_first_idle_observation(monkeypatch):
+    m = _load()
+    m.STATE.current = {"description": "work", "project_id": None, "start": "x"}
+    m.STATE.no_timer_since = None
+    monkeypatch.setattr(m.toggl_api, "get_current", lambda: None)
+    m.fetch_current()
+    assert m.STATE.current is None
+    assert m.STATE.no_timer_since is not None, \
+        "must stamp the moment idle was first confirmed"
+
+
+def test_fetch_current_does_not_rewind_no_timer_since_on_repeat_idle_polls(monkeypatch):
+    m = _load()
+    m.STATE.current = None
+    m.STATE.current_known = True
+    first = 12345.0
+    m.STATE.no_timer_since = first
+    monkeypatch.setattr(m.toggl_api, "get_current", lambda: None)
+    m.fetch_current()
+    assert m.STATE.no_timer_since == first, \
+        "a later idle poll must not reset the grace-period clock"
+
+
+def test_fetch_current_clears_no_timer_since_when_timer_starts(monkeypatch):
+    m = _load()
+    m.STATE.current = None
+    m.STATE.no_timer_since = 12345.0
+    entry = {"description": "work", "project_id": None, "start": "x"}
+    monkeypatch.setattr(m.toggl_api, "get_current", lambda: entry)
+    m.fetch_current()
+    assert m.STATE.no_timer_since is None
+
+
+def test_no_flash_within_grace_period_after_stopping(monkeypatch):
+    m = _load()
+    m.STATE.current = None
+    m.STATE.current_known = True
+    m.STATE.no_timer_since = m.time.monotonic() - 5  # 5s idle, under the 15s grace
+    assert m._no_timer_flash_on() is False, \
+        "must not flash yet — still inside the transition grace period"
+
+
+def test_flash_resumes_after_grace_period_elapses(monkeypatch):
+    m = _load()
+    m.STATE.current = None
+    m.STATE.current_known = True
+    m.STATE.no_timer_since = m.time.monotonic() - (m.NO_TIMER_FLASH_DELAY + 1)
+
+    class _FixedDT(m.dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return super().now(tz).replace(microsecond=0)
+
+    monkeypatch.setattr(m.dt, "datetime", _FixedDT)
+    assert m._no_timer_flash_on() is True, \
+        "grace period elapsed — the idle nag should flash again"
