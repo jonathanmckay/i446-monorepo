@@ -127,6 +127,24 @@ def hour_to_block(h: int) -> tuple[str, int, int] | None:
     return None
 
 
+def _same_block(a: dt.datetime, b: dt.datetime) -> bool:
+    """True when `a` and `b` fall in the same Earthly-Branch block.
+
+    Used to gate the same-desc entry merge in render_morning/
+    _current_block_lines: without this, two genuinely separate Toggl entries
+    with the same desc (e.g. two distinct xk22 kid-time sessions, one ending
+    right before a block boundary and the next starting right after it) get
+    glued into a single span whose block attribution is decided by the
+    EARLIER entry's hour alone — so the later entry's own block loses it
+    entirely (not picked as "started here", not caught by the spill-clip
+    logic either, since neither raw entry individually straddles the
+    boundary). Bug 2026-08-11: "at the 辰/巳 boundary, janus should be
+    showing the xk22 time entry... not sure why it's not" — a 07:50-07:59
+    xk22 entry and a 08:00-08:29 xk22 entry merged into one 辰-attributed
+    span, and 巳's real 29-minute entry never rendered anywhere."""
+    return hour_to_block(a.hour) == hour_to_block(b.hour)
+
+
 def prev_block(h: int) -> tuple[str, int, int] | None:
     """Return the block before the one containing hour h."""
     for i, (name, sh, eh) in enumerate(BLOCKS):
@@ -3251,7 +3269,11 @@ def render_morning() -> list[tuple[str, str]]:
     merged: list[dict] = []
     for e in items:
         end = min(e["end_dt"], cutoff)
-        if merged and merged[-1]["desc"] == e["desc"]:
+        # Never merge across a block boundary — see _same_block (bug
+        # 2026-08-11: a same-desc entry starting in the NEXT block would
+        # otherwise vanish, glued onto the earlier block's span).
+        if merged and merged[-1]["desc"] == e["desc"] \
+                and _same_block(merged[-1]["start_dt"], e["start_dt"]):
             merged[-1]["end_dt"] = end
             merged[-1]["ids"].append(e["id"])
             merged[-1]["tags"] = sorted(set(merged[-1].get("tags") or [])
@@ -3749,7 +3771,11 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     merged: list[dict] = []
     for e in items:
         end = min(e["end_dt"], now)
-        if merged and merged[-1]["desc"] == e["desc"]:
+        # Never merge across a block boundary — see _same_block (bug
+        # 2026-08-11: a same-desc entry starting in the NEXT block would
+        # otherwise vanish, glued onto the earlier block's span).
+        if merged and merged[-1]["desc"] == e["desc"] \
+                and _same_block(merged[-1]["start_dt"], e["start_dt"]):
             merged[-1]["end_dt"] = end
             merged[-1]["running"] = merged[-1].get("running") or e.get("running")
             merged[-1]["ids"].append(e["id"])
