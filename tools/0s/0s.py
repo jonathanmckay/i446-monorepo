@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -286,10 +287,16 @@ def main() -> int:
             # 0l's did-fast path does two sequential Excel round-trips (0n
             # write + 0l-completion-time write, ~30s+15s budget) plus a
             # Todoist search/close — 60s left too little margin and was
-            # timing out (2026-08-04 bug report: 0s wrote to Neon but 0l
-            # silently stayed unmarked).
+            # timing out (2026-08-04 bug report). Bumping THIS timeout to 120
+            # wasn't enough on its own (2026-08-11 bug report): did-fast.py
+            # also self-kills via a 60s SIGALRM watchdog (DIDFAST_WATCHDOG_SECS,
+            # os._exit(124)) meant to stop a hung dtd worker from wedging —
+            # that internal ceiling still cut 0l off before it finished, so
+            # stdout came back empty. Override it to match this call's budget.
+            env = dict(os.environ, DIDFAST_WATCHDOG_SECS="110")
             proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
-                                   capture_output=True, text=True, timeout=120)
+                                   capture_output=True, text=True, timeout=120,
+                                   env=env)
             # did-fast always exits 0 and reports per-write ok/error in its
             # JSON stdout — a clean subprocess return does NOT mean the 0n
             # write actually succeeded, so it must be checked explicitly

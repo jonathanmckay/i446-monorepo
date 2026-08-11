@@ -132,6 +132,57 @@ def test_did_fast_0l_timeout_has_headroom():
     assert timeout_kw.value.value >= 120, "0l subprocess timeout must have headroom past 60s"
 
 
+def test_did_fast_0l_call_overrides_internal_watchdog():
+    """Bug 2026-08-11: raising THIS subprocess.run's own timeout to 120
+    (2026-08-04 fix) wasn't sufficient — did-fast.py separately installs a
+    60s SIGALRM self-kill (DIDFAST_WATCHDOG_SECS, default 60) that hard-exits
+    the process with os._exit(124) regardless of how long the caller is
+    willing to wait. 0l's known ~45s+ write path routinely exceeds that 60s
+    default, so did-fast.py was still killing itself mid-write and 0s.py saw
+    empty stdout — 0l silently stayed unmarked again. The subprocess call
+    must pass DIDFAST_WATCHDOG_SECS in its env, raised well past the 60s
+    default (and comfortably under this call's own 120s timeout)."""
+    import ast
+    src = open(z.__file__).read()
+    main_fn = [n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "main"][0]
+
+    def _has_0l(arg):
+        if isinstance(arg, ast.Constant):
+            return arg.value == "0l"
+        if isinstance(arg, ast.List):
+            return any(_has_0l(e) for e in arg.elts)
+        return False
+
+    calls = [n for n in ast.walk(main_fn) if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", None) == "run"
+             and any(_has_0l(a) for a in n.args)]
+    assert calls, "expected a subprocess.run(...) call passing \"0l\""
+    call = calls[0]
+    env_kw = next((kw for kw in call.keywords if kw.arg == "env"), None)
+    assert env_kw is not None, "did-fast 0l call must pass env= to override DIDFAST_WATCHDOG_SECS"
+
+    # env= may reference a local variable (env = dict(...)) rather than an
+    # inline dict — resolve it to the nearest preceding assignment in main().
+    env_node = env_kw.value
+    if isinstance(env_node, ast.Name):
+        assigns = [n for n in ast.walk(main_fn) if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == env_node.id for t in n.targets)]
+        assert assigns, f"no assignment found for env variable {env_node.id!r}"
+        env_node = assigns[-1].value
+
+    env_src = ast.get_source_segment(src, env_node)
+    assert "DIDFAST_WATCHDOG_SECS" in env_src
+
+    watchdog_val = ast.literal_eval(
+        [n for n in ast.walk(env_node) if isinstance(n, ast.Constant)
+         and isinstance(n.value, str) and n.value.isdigit()][-1])
+    timeout_kw = next(kw for kw in call.keywords if kw.arg == "timeout")
+    assert int(watchdog_val) > 60, "must exceed did-fast's 60s default watchdog"
+    assert int(watchdog_val) < timeout_kw.value.value, \
+        "watchdog override must stay under this call's own subprocess timeout"
+
+
 def test_marked_done_requires_actual_write_success():
     """The did-fast 0l subprocess always exits 0 and reports success/failure
     inside its JSON stdout — a clean subprocess return is not proof the 0n
