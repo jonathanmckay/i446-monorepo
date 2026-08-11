@@ -1,0 +1,3 @@
+--- crontab ---
+# export-claude-transcripts
+15 * * * * python3 $HOME/i446-monorepo/scripts/export-claude-transcripts.py >> $HOME/vault/i447/i446/ai-transcripts/claude-export.log 2>&1

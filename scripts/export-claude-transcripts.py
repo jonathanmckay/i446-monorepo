@@ -349,7 +349,10 @@ def main():
         total_exported += exp
         total_skipped += skip
 
-    print(f"Exported {total_exported} file(s), skipped {total_skipped} session(s).")
+    if total_exported > 0:
+        print(f"Exported {total_exported} file(s), skipped {total_skipped} session(s).")
+    elif args.verbose:
+        print(f"Up to date ({total_skipped} cached session(s), nothing to export).")
 
 
 if __name__ == "__main__":
