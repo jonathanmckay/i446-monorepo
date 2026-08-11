@@ -1,10 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "at least 2 weekly updates out": {
-      "todoist_id": "6hFxCGFGjhqHF2hR",
-      "minutes": 100
-    }
-  },
-  "last_sync": "2026-08-10T20:00:07.182058-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-10T22:00:05.693839-07:00"
 }
