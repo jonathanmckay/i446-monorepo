@@ -128,12 +128,19 @@ def _load_daemon():
     return mod
 
 
-def test_marker_earned_rejects_stale_daemon_marker():
+def test_marker_earned_trusts_goal_marker_on_presence():
+    """2026-08-11 (JM): "-1g should always give me the points and audit
+    should not revoke them." Completing the 😈 -1g card is itself the
+    attestation, same as -1t/-1l below — it no longer needs a separate
+    goal-presence check to keep its points. (Previously this asserted the
+    OPPOSITE: that a live goal-presence check of False stripped 🎯 even
+    after a manual completion — that was the bug reported live: "I did all
+    -1n habits in 辰 and 巳 but janus only showing 10 each" instead of 13,
+    because no goal TEXT existed for either block even though the ritual
+    CARD was completed for both.)"""
     mod = _load_daemon()
     line = "- 巳 🎯 😈"
-    # Live says no goals today → stale 🎯 must not earn
-    assert mod._marker_earned("🎯", line, {"🎯": False}) is False
-    # Live confirms goals → earns
+    assert mod._marker_earned("🎯", line, {"🎯": False}) is True
     assert mod._marker_earned("🎯", line, {"🎯": True}) is True
 
 
@@ -155,7 +162,10 @@ def test_marker_earned_legacy_trust_when_live_none():
     assert mod._marker_earned("🎯", line, None) is True
 
 
-def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
+def test_score_block_scores_goal_marker_regardless_of_live(tmp_path, monkeypatch):
+    """2026-08-11: 🎯 scores on header presence alone now, same as ⏱️/✅ —
+    a stamped 🎯 with no goal text still counts (see
+    test_marker_earned_trusts_goal_marker_on_presence for the full story)."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     # 😈 (fired stamp) is written in Phase 3, after scoring, so the header has
@@ -163,15 +173,14 @@ def test_score_block_ignores_stale_goal_marker(tmp_path, monkeypatch):
     build.write_text(
         "## -1₲\n\n"
         "- 巳 🎯\n"
-        "    - [ ] \n"          # empty goal: 🎯 is stale
+        "    - [ ] \n"          # empty goal — no longer matters for scoring
         "- 午 ✅\n"
         "    - [ ] real goal\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "BUILD_ORDER", build)
-    # Live results for 巳: no goals, no toggl, no todoist → score 0 despite 🎯
-    assert mod.score_block_from_emojis("巳", live={"🎯": False, "⏱️": False, "✅": False}) == 0
-    # With live confirming goals, the 🎯 earns its 3
+    # Live results for 巳: no goals, no toggl, no todoist → 🎯 still scores 3
+    assert mod.score_block_from_emojis("巳", live={"🎯": False, "⏱️": False, "✅": False}) == 3
     assert mod.score_block_from_emojis("巳", live={"🎯": True, "⏱️": False, "✅": False}) == 3
 
 
@@ -194,13 +203,12 @@ def test_block_has_goals_rejects_whitespace_only_bullet(tmp_path, monkeypatch):
     assert mod._block_has_goals("辰") is True
 
 
-def test_strip_unearned_markers_removes_phantom_goal_and_toggl_but_not_todoist(tmp_path, monkeypatch):
-    """_strip_unearned_markers drops GOAL_MARKER/TOGGL_MARKER (🎯/⏱️) when the
-    live data says they weren't earned; ✅ (TODOIST_MARKER) is deliberately
-    exempt (see _marker_earned's docstring — too aggressive in practice,
-    reverted 2026-07-30 after one round of use) and ☀️/📧 have no validator
-    at all. live=None is a no-op (an API failure must not destroy a
-    genuinely-earned mark)."""
+def test_strip_unearned_markers_is_now_a_no_op_for_every_marker(tmp_path, monkeypatch):
+    """2026-08-11: DAEMON_OWNED_MARKERS is now empty (🎯's strip audit was
+    removed per JM — see test_marker_earned_trusts_goal_marker_on_presence),
+    so _strip_unearned_markers never removes anything regardless of what
+    `live` says. The function stays wired in (not deleted) in case a future
+    marker needs this kind of audit again."""
     mod = _load_daemon()
     build = tmp_path / "build.md"
     original = (
@@ -215,16 +223,8 @@ def test_strip_unearned_markers_removes_phantom_goal_and_toggl_but_not_todoist(t
     mod._strip_unearned_markers("辰", None)
     assert build.read_text(encoding="utf-8") == original
 
-    # Nothing earned → strip 🎯 only; ✅/☀️ stay.
+    # Even a live result saying nothing was earned strips nothing now.
     mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False})
-    line = next(l for l in build.read_text(encoding="utf-8").split("\n")
-                if l.startswith("- 辰"))
-    assert "🎯" not in line and "☀️" in line and "✅" in line
-
-    # dry_run leaves the file untouched
-    build.write_text(original, encoding="utf-8")
-    mod._strip_unearned_markers("辰", {"🎯": False, "⏱️": False, "✅": False},
-                                dry_run=True)
     assert build.read_text(encoding="utf-8") == original
 
 
@@ -242,31 +242,34 @@ def test_strip_unearned_markers_removes_phantom_goal_and_toggl_but_not_todoist(t
 # narrow a proxy for "-1l" (a first-person attestation), unlike ⏱️'s
 # Toggl-minute-coverage check, which stayed audited.
 
-def test_marker_earned_trusts_toggl_and_todoist_on_presence():
+def test_marker_earned_trusts_toggl_todoist_and_goal_on_presence():
     """2026-08-01 (JM): "If I manually mark -1l or -1t there shouldn't be an
     audit." ⏱️ joined ✅ as trusted-on-presence; the live checks are
-    auto-award only. Only 🎯 keeps the strip audit (stale cross-day goals)."""
+    auto-award only. 2026-08-11: 🎯 joined them too (JM: "-1g should always
+    give me the points and audit should not revoke them") — all three
+    manual-completion markers are now trusted the same way."""
     mod = _load_daemon()
-    # ⏱️/✅ trusted on presence regardless of live — a manual claim is final.
+    # ⏱️/✅/🎯 all trusted on presence regardless of live — a manual claim is final.
     assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": False}) is True
     assert mod._marker_earned("⏱️", "- 巳 ⏱️", {"⏱️": True}) is True
     assert mod._marker_earned("✅", "- 巳 ✅", {"✅": False}) is True
     assert mod._marker_earned("✅", "- 巳 ✅", {"✅": True}) is True
-    # 🎯 still audited: stamped but no goals on file — must NOT earn.
-    assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": False}) is False
+    assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": False}) is True
     assert mod._marker_earned("🎯", "- 巳 🎯", {"🎯": True}) is True
     # Absent marker never earns regardless of live.
     assert mod._marker_earned("✅", "- 巳", {"✅": True}) is False
     assert mod._marker_earned("⏱️", "- 巳", {"⏱️": True}) is False
-    # 🔒 overrides even the 🎯 audit — a deliberate user lock is never stripped.
+    assert mod._marker_earned("🎯", "- 巳", {"🎯": True}) is False
+    # 🔒 still overrides everything — a deliberate user lock is never stripped.
     assert mod._marker_earned("🎯", "- 巳 🎯 🔒", {"🎯": False}) is True
 
 
-def test_daemon_owned_markers_is_goal_only():
-    """Strip set = {🎯} only (2026-08-01): ⏱️ left it when its audit became
-    auto-award-only; ✅ was never in it."""
+def test_daemon_owned_markers_is_empty():
+    """Strip set is empty (2026-08-11): 🎯 was the last marker in it, and its
+    strip audit was removed per JM. Kept as an explicit empty set rather
+    than deleted so _strip_unearned_markers stays wired in for future use."""
     mod = _load_daemon()
-    assert mod.DAEMON_OWNED_MARKERS == {mod.GOAL_MARKER}
+    assert mod.DAEMON_OWNED_MARKERS == set()
 
 
 def test_block_matchers_tolerate_inline_annotations(tmp_path, monkeypatch):
