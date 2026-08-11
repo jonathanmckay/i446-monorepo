@@ -66,11 +66,11 @@ timer doesn't earn points).
    removal or tally changes.
 
 ## Test plan
-- [ ] `start_timer()` on a ritual card's raw content (`"😈 -1g (15) [15]"`) resolves project `g245` via the ritual table, never calls tg-fast
-- [ ] `start_timer()` on a plain task shells out to `tg-fast.py --resolve` with the annotation-stripped name
-- [ ] `start_timer()` always stops the current timer before starting the new one (call order)
-- [ ] `POST /api/start` with empty content → 400
-- [ ] `POST /api/start` surfaces a subprocess failure as `{ok: false, error: ...}`, not a 500
+- [x] `start_timer()` on a ritual card's raw content (`"😈 -1g (15) [15]"`) resolves project `g245` via the ritual table, never calls tg-fast
+- [x] `start_timer()` on a plain task shells out to `tg-fast.py --resolve` with the annotation-stripped name
+- [x] `start_timer()` always stops the current timer before starting the new one (call order)
+- [x] `POST /api/start` with empty content → 400
+- [x] `POST /api/start` surfaces a subprocess failure as `{ok: false, error: ...}`, not a 500
 
 ## Risks / open questions
 - `tg-fast.py --resolve` can return an empty project (unmapped shortcode) —
@@ -78,3 +78,25 @@ timer doesn't earn points).
   guessing); not treated as an error.
 - No offline handling beyond the existing toast-on-failure pattern already
   used by `/api/done` and `/api/add`.
+
+## Result
+- **Status:** Complete
+- **Tests:** 6 new (`test_dtd_swipe_start.py`), all mocked at the
+  `subprocess.run` boundary; full `tools/dtd` suite 28/28
+- **Live verification:** skipped on purpose. The user had a real timer
+  running ("small things that make the day @g245" since 09:56) at deploy
+  time — unlike the earlier disposable-task smoke test for the quick-add
+  feature, exercising `/api/start` live would stop and replace that running
+  entry, and restarting it afterward would splice an artificial gap into
+  their actual time record rather than cleanly restoring prior state. Relied
+  on the unit tests instead, which cover the resolution logic, the
+  stop-then-start ordering, and error surfacing against a mocked
+  `toggl_cli.py`/`tg-fast.py`.
+- **Deployed:** restarted `com.jm.dtd` on ix (`launchctl kickstart -k`);
+  server boots and serves normally with the new code loaded.
+- **Notes:** implementation matched the plan with no deviations. The
+  frontend swipe gesture itself (bidirectional drag, second track layer)
+  isn't independently pytest-covered — no browser automation was available
+  in this environment (same limitation noted on the quick-add feature
+  earlier today) — but its logic is a direct, symmetric mirror of the
+  already-shipped and working swipe-right-to-complete gesture.

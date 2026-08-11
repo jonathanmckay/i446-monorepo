@@ -673,6 +673,9 @@ function makeRow(t){
   track.className = 'track';
   track.innerHTML = '<span class="p">'+(t.points||0)+' 分</span>';
   row.appendChild(track);
+  const trackStart = document.createElement('div');
+  trackStart.className = 'trackStart';
+  row.appendChild(trackStart);
 
   const line = document.createElement('div');
   line.className = 'line';
@@ -686,25 +689,27 @@ function makeRow(t){
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 
-  bindSwipe(row, line, track, t);
+  bindSwipe(row, line, track, trackStart, t);
   return row;
 }
 
-function bindSwipe(row, line, track, t){
+function bindSwipe(row, line, track, trackStart, t){
   let x0=null, dx=0, dragging=false;
   const W = () => row.offsetWidth;
   const start = x=>{ x0=x; dx=0; dragging=true; line.classList.remove('snap'); };
   const move = x=>{
     if(!dragging) return;
-    dx = Math.max(0, x - x0);
+    dx = x - x0;
     line.style.transform = 'translateX('+dx+'px)';
-    track.style.opacity = Math.min(1, dx/(W()*0.4));
+    track.style.opacity = dx>0 ? Math.min(1, dx/(W()*0.4)) : 0;
+    trackStart.style.opacity = dx<0 ? Math.min(1, -dx/(W()*0.4)) : 0;
   };
   const end = ()=>{
     if(!dragging) return; dragging=false;
     line.classList.add('snap');
     if(dx > W()*0.42){ fly(row, line, t); }
-    else { line.style.transform='translateX(0)'; track.style.opacity=0; }
+    else if(dx < -W()*0.42){ flyLeft(row, line, trackStart, t); }
+    else { line.style.transform='translateX(0)'; track.style.opacity=0; trackStart.style.opacity=0; }
   };
   line.addEventListener('touchstart', e=>start(e.touches[0].clientX), {passive:true});
   line.addEventListener('touchmove',  e=>move(e.touches[0].clientX),  {passive:true});
@@ -724,6 +729,26 @@ function fly(row, line, t){
     }, 210);
   }, 170);
   commit(t);
+}
+
+// Starting a timer doesn't complete the task (unlike fly/commit above), so
+// the row springs back into its resting position instead of being removed —
+// mirrors terminal dtd, where `enter` starts a timer but leaves the task in
+// the list.
+function flyLeft(row, line, trackStart, t){
+  line.style.transform = 'translateX(0)';
+  trackStart.style.opacity = 0;
+  commitStart(t);
+}
+
+async function commitStart(t){
+  try {
+    const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({content:t.raw})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'start failed', true); return; }
+    toast('▶ '+d.clean+(d.project?' → '+d.project:''));
+  } catch(e){ toast('offline · not started', true); }
 }
 
 async function commit(t){
