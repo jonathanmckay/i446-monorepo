@@ -32,6 +32,8 @@ def _load():
 
 
 class _Resp(io.BytesIO):
+    status = 200  # _todoist_request reads resp.status; plain BytesIO has none
+
     def __enter__(self):
         return self
 
@@ -45,6 +47,21 @@ def _fake_urlopen(payload_by_kind):
         url = req.full_url if hasattr(req, "full_url") else str(req)
         kind = "filter" if "/tasks/filter" in url else "label"
         return _Resp(json.dumps(payload_by_kind[kind]).encode())
+    return urlopen
+
+
+def _fake_urlopen_with_individual(payload_by_kind, individual_by_id):
+    """Like _fake_urlopen, but also answers individual `/tasks/<id>` GETs
+    (no '/filter', no '?label=') from `individual_by_id` — used to fake the
+    live re-GET verification pass's ground truth for a specific card."""
+    def urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "/tasks/filter" in url:
+            return _Resp(json.dumps(payload_by_kind["filter"]).encode())
+        if "label=" in url:
+            return _Resp(json.dumps(payload_by_kind["label"]).encode())
+        tid = url.rstrip("/").rsplit("/", 1)[-1]
+        return _Resp(json.dumps(individual_by_id.get(tid, {"checked": False})).encode())
     return urlopen
 
 
@@ -116,6 +133,38 @@ def test_closed_ritual_not_resurrected_by_stale_today_fallback(df, monkeypatch, 
     assert "r2" not in today_ids, \
         "an already-closed ritual must not be resurrected by the stale-today fallback"
     assert "p1" in today_ids, "a non-completed task must still be carried forward"
+
+
+def test_stale_healthy_fetch_ritual_verified_and_dropped_if_actually_closed(df, monkeypatch):
+    """2026-08-11 bug: "dtd web shows -1n tasks when they are already
+    finished in the main dtd". Reproduced live: a ritual closed via
+    run_ritual a full HOUR earlier still came back from a HEALTHY
+    (non-empty) today|overdue filter fetch as open — worse than the
+    "minutes" of index lag the carry-forward guards were built to tolerate,
+    and this card was never a carry-forward candidate in the first place
+    (it came straight from a non-empty fetch, so none of those guards ever
+    ran). completed-today.json couldn't have caught it either: it only held
+    ids from an EARLIER block's rituals — -1neon cards are deleted and
+    recreated every 2h, so a later block's completions are a different id
+    generation entirely. Fix: every -1neon card is individually re-verified
+    against a live GET right before the cache write, regardless of which
+    fetch it came from."""
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    stale_open_ritual = {"id": "r9", "content": "😈 -1g", "labels": ["-1neon"],
+                         "priority": "p1", "due": {"date": today}}
+    plain = {"id": "p1", "content": "plain task [5]", "labels": ["i9"],
+             "priority": "p3", "due": {"date": today}}
+    monkeypatch.setattr(df.urllib.request, "urlopen", _fake_urlopen_with_individual(
+        {"filter": {"results": [plain, stale_open_ritual]},
+         "label": {"results": [stale_open_ritual]}},
+        {"r9": {"checked": True}},  # ground truth: actually closed
+    ))
+    cache = df._refresh_task_queue_inner()
+    today_ids = {t["id"] for t in cache["today"]}
+    assert "r9" not in today_ids, \
+        "a -1neon card confirmed closed via live re-GET must be dropped, even from a healthy fetch"
+    assert "p1" in today_ids, "a non-ritual task must be unaffected by the verification pass"
 
 
 def test_healthy_fetch_still_replaces_buckets(df, monkeypatch):
