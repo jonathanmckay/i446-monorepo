@@ -102,5 +102,69 @@ def test_overlapping_stale_refreshes_are_deduped(monkeypatch, tmp_path):
         "a refresh already in flight must not be duplicated by an overlapping request"
 
 
+@pytest.fixture(autouse=True)
+def _reset_summary():
+    if dtd._summary_lock.locked():
+        dtd._summary_lock.release()
+    old = dict(dtd._SUMMARY)
+    dtd._SUMMARY["at"] = 0.0
+    dtd._SUMMARY["val"] = None
+    yield
+    if dtd._summary_lock.locked():
+        dtd._summary_lock.release()
+    dtd._SUMMARY.update(old)
+
+
+def test_stale_summary_does_not_block_the_caller(monkeypatch):
+    """day_summary() had the identical bug: a slow/wedged excel-http daemon
+    (confirmed live: ~15s just to return ITS OWN timeout error) blocked
+    /api/tasks even after the Todoist refresh path above was fixed."""
+    release = threading.Event()
+    on_main_thread = []
+
+    def slow_compute():
+        on_main_thread.append(threading.current_thread() is threading.main_thread())
+        release.wait(timeout=2)
+        dtd._SUMMARY.update(at=time.time(), val={"points": 42, "done": 3})
+
+    monkeypatch.setattr(dtd, "_compute_summary", slow_compute)
+
+    t0 = time.monotonic()
+    val = dtd.day_summary(force=False)
+    elapsed = time.monotonic() - t0
+    release.set()
+    time.sleep(0.05)
+
+    assert elapsed < 0.5, "a stale summary must return immediately, not block on the computation"
+    assert on_main_thread and on_main_thread[0] is False, \
+        "the slow computation must run off the request-handling thread"
+    assert val == {"points": 0, "done": 0}, \
+        "with nothing computed yet, a zeroed fallback must be served instead of blocking"
+
+
+def test_stale_summary_serves_last_known_value_while_recomputing(monkeypatch):
+    dtd._SUMMARY["at"] = time.time() - dtd.SUMMARY_MAX_AGE - 10  # expired
+    dtd._SUMMARY["val"] = {"points": 100, "done": 7}
+    release = threading.Event()
+    monkeypatch.setattr(dtd, "_compute_summary", lambda: release.wait(timeout=2))
+
+    val = dtd.day_summary(force=False)
+    release.set()
+    assert val == {"points": 100, "done": 7}, \
+        "the last known summary must be served while a fresh one recomputes in the background"
+
+
+def test_force_summary_still_blocks_synchronously(monkeypatch):
+    on_main_thread = []
+    monkeypatch.setattr(dtd, "_compute_summary",
+                        lambda: (on_main_thread.append(
+                            threading.current_thread() is threading.main_thread()),
+                                 {"points": 5, "done": 1})[1])
+    val = dtd.day_summary(force=True)
+    assert on_main_thread == [True], \
+        "force=True must still compute synchronously on the caller's thread"
+    assert val == {"points": 5, "done": 1}
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
