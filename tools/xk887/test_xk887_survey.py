@@ -279,16 +279,18 @@ def test_applescript_default_still_covers_all_sheets():
 
 def test_paginated_entrypoint_exists_and_form_is_paged():
     """The interactive path pages per sheet and QUEUES a write (non-blocking,
-    2026-08-11) at each page boundary; the background worker performs the
-    actual write scoped to that one page's sheet (sheets=[cfg])."""
+    2026-08-11) at each page boundary onto the shared BackgroundWriter
+    (lib/review_form_writer.py) -- the actual write is scoped to that one
+    page's sheet (sheets=[cfg])."""
     import inspect
     m = _load()
     assert callable(m.run_paginated)
     src = inspect.getsource(m.run_paginated)
     assert "queue_write" in src, \
         "run_paginated must queue the write, not call write_answers directly (would block)"
-    worker_src = inspect.getsource(m._writer_loop)
-    assert "write_answers" in worker_src and "sheets=[cfg]" in worker_src
+    qw_src = inspect.getsource(m.queue_write)
+    assert "write_answers" in qw_src and "sheets=[cfg]" in qw_src
+    assert isinstance(m._writer, m.BackgroundWriter)
     page_src = inspect.getsource(m.run_page)
     assert "Dimension(min=1" in page_src  # compact rows: no reserved blank height
 

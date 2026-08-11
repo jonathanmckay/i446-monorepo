@@ -48,6 +48,35 @@ def test_non_numeric_num_field_skipped():
     assert '"K" &' not in s
 
 
+# ── Shared BackgroundWriter adoption (2026-08-11) ───────────────────────────
+# 0s had NO recovery mechanism before this — an ix-osa hiccup meant an
+# unhandled RuntimeError straight out of main() and the user's typed answers
+# were just gone. Adopting lib/review_form_writer.py's BackgroundWriter (the
+# same module xk887 now uses) backfills that, at the cost of no wall-clock
+# speedup here (0s is single-page, so unlike xk887 there's no "next page" to
+# usefully advance into — see the shared plan doc for why the Neon write and
+# the 0l mark-done call stay serialized rather than running concurrently).
+
+def test_main_uses_shared_background_writer():
+    assert isinstance(z._writer, z.BackgroundWriter)
+
+
+def test_write_failure_dumps_recovery_and_returns_nonzero(monkeypatch, tmp_path):
+    import argparse
+    monkeypatch.setattr(z, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(z, "run_form", lambda target: {"title": "typed answer"})
+
+    def _boom(answers, target):
+        raise RuntimeError("Invalid object specifier (workbook not open)")
+    monkeypatch.setattr(z, "write_answers", _boom)
+    monkeypatch.setattr(
+        "sys.argv", ["0s.py"])
+
+    rc = z.main()
+    assert rc == 1, "a failed Neon write must make main() exit non-zero"
+    assert list(tmp_path.glob("*.json")), "expected a recovery dump for the failed write"
+
+
 if __name__ == "__main__":
     import sys, pytest
     sys.exit(pytest.main([__file__, "-v"]))
@@ -96,15 +125,19 @@ def test_points_checked_1_marks_0l_done():
 def test_progress_line_printed_before_slow_neon_write():
     """User report 2026-07-25: after ^S the form restores the shell and the
     ssh Excel write runs silently for seconds — it looked like a frozen
-    terminal. main() must announce the write (flushed) BEFORE write_answers
-    runs, and announce the 0l mark before its did-fast call."""
+    terminal. main() must announce the write (flushed) BEFORE it's queued
+    (2026-08-11: the write itself now runs on a background thread via
+    BackgroundWriter, so "before write_answers runs" became "before it's
+    queued" — the announcement ordering guarantee is unchanged, if anything
+    stronger now since queuing never blocks), and announce the 0l mark
+    before its did-fast call."""
     import pathlib
     src = pathlib.Path(__file__).with_name("0s.py").read_text()
     main_src = src[src.index("def main()"):]
     announce = main_src.index("writing %d fields to Neon")
-    write = main_src.index("result = write_answers(")
-    assert announce < write, "progress line must precede the Excel write"
-    assert "flush=True" in main_src[:write]
+    queued = main_src.index("_writer.queue(_write_neon")
+    assert announce < queued, "progress line must precede queuing the Excel write"
+    assert "flush=True" in main_src[:queued]
     assert main_src.index("marking 0l done") < main_src.index("subprocess.run")
 
 
