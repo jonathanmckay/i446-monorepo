@@ -2698,7 +2698,18 @@ def main():
     fen_appends = []
     fen_names = []
     for r in fast:
-        if r.fen_col and r.fen_points > 0 and not (r.step == "1n" and not r.is_variable_1n):
+        # HCBI_HABITS items (e.g. "bball") already reach their 0分 column
+        # through the hcbi write below (step 5b): 0分!W is a FORMULA
+        # (=hcbi!AA224+hcbi!Y224+...), not a plain accumulator, and this
+        # item's own minutes just landed in hcbi!Y224 — one of that formula's
+        # own terms. Raw-appending fen_points onto W too would double-count
+        # the same session (bug 2026-08-10: "did bball" put +52 in BOTH
+        # hcbi!Y and directly on 0分!W, whose formula already sums hcbi!Y).
+        # {N} curly points (0g bonus, column Q) are a separate, unrelated
+        # mechanism and still apply regardless of HCBI_HABITS membership.
+        is_hcbi_habit = r.item.name.lower() in HCBI_HABITS
+        if (not is_hcbi_habit and r.fen_col and r.fen_points > 0
+                and not (r.step == "1n" and not r.is_variable_1n)):
             fen_appends.append((r.fen_col, r.fen_points))
             fen_names.append(r.item.name)
         # {N} curly points → 0分 column Q (0g bonus)
