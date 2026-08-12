@@ -165,20 +165,31 @@ def test_teams_check_repeats_not_oneshot():
     )
 
 
-def test_teams_warnings_send_notification():
-    """Bug: warnings only went to nohup log file, user never saw them.
-    Fix: _notify() sends macOS notification for each warning.
-    """
+def test_teams_live_audio_warnings_do_not_popup():
+    """2026-08-12: the live audio-health _notify() popups (both-silent,
+    call-audio-silent, mic-only fallback) were removed — janus's rec-level
+    dots (janus.py's _read_rec_levels/_rec_level_dot_frags) already surface
+    a dead channel in real time, so a 60-180s-later dialog was redundant
+    noise. These three branches must still print to the terminal/log (the
+    dots tail that log), just not pop a notification/dialog. This inverts
+    the old test_teams_warnings_send_notification, which required _notify()
+    here before the dots existed."""
     source = Path(__file__).parent.joinpath("meet.py").read_text()
     assert "def _notify" in source, "meet.py must define _notify function"
     assert "display notification" in source, "_notify must use osascript display notification"
-    # _notify must be called in the teams warning branches
-    # Count calls in the recording function
-    in_record = source[source.index("def record_audio"):]
-    notify_calls = in_record.count("_notify(")
-    assert notify_calls >= 3, (
-        f"Expected >=3 _notify calls (both-silent, mic-only, bh-only), got {notify_calls}"
-    )
+    in_record = source[source.index("def record_audio"):source.index("\ndef ", source.index("def record_audio") + 1)]
+    both_silent = in_record[in_record.index('f"NO SPEECH on either channel'):]
+    both_silent = both_silent[:both_silent.index("elif")]
+    assert "_notify(" not in both_silent, "both-channels-silent warning must not popup"
+    call_silent = in_record[in_record.index('f"CALL AUDIO HAS NO SPEECH'):]
+    call_silent = call_silent[:call_silent.index("elif")]
+    assert "_notify(" not in call_silent, "call-audio-silent warning must not popup"
+    mic_fallback = in_record[in_record.index("Call audio silent"):]
+    mic_fallback = mic_fallback[:mic_fallback.index("bh_frames.clear()")]
+    assert "_notify(" not in mic_fallback, "mic-only fallback must not popup"
+    # Unrelated _notify uses (auto-stop, AirPods HFP) must survive untouched.
+    assert '_notify("Recording Auto-Stopped"' in in_record
+    assert '_notify("⚠ Recording: AirPods HFP"' in in_record
 
 
 def test_graceful_stop_handles_sigint_and_sigterm_without_keyboardinterrupt():
