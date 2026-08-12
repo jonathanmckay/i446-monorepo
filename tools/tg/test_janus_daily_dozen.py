@@ -2,8 +2,14 @@
 showing this quarter's hcbi "Daily Dozen" category totals as bare-number
 chips (DAILY_DOZEN_COLORS) — only categories currently BEHIND (negative;
 neutral/positive ones are omitted) — plus a labeled "behind" chip for any
-HCBI_BEHIND_DOMAINS total (hcbc/hcbp) that's currently negative — e.g.
-"hcbc is currently behind -834分 in q3".
+HCBI_BEHIND_DOMAINS total (hcb/hcbp) that's currently negative — e.g.
+"hcb is currently behind -834分 in q3".
+
+2026-08-12: "hcb" was renamed from "hcbc" and switched from the hcbi
+label row's column X (food-only subtotal) to that same column's SECOND
+row (=SUM(X<label>:Y<label>), the combined hcbc+hcbp total) — the
+persistent header chip should reflect overall hcb standing, not just
+food. See test_hcb_behind_reads_column_x_second_row below.
 
 Same turn also: (1) done-row chips no longer always carry a trailing space —
 _pack_number_chips drops the gap between differently-colored chips and keeps
@@ -86,27 +92,27 @@ def test_dozen_chips_pack_like_the_done_row():
 def test_behind_chip_shown_only_when_negative():
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0)]
-    mod.STATE.hcbi_behind = {"hcbc": -834.0, "hcbp": 243.0}
+    mod.STATE.hcbi_behind = {"hcb": -834.0, "hcbp": 243.0}
     text = "".join(t for _, t, *_ in mod.render_habits_today())
-    assert "hcbc" in text and "-834" in text
+    assert "hcb" in text and "-834" in text
     assert "hcbp" not in text and "243" not in text
 
 
 def test_behind_chip_uses_its_domain_color():
     mod = _load_tui()
-    mod.STATE.hcbi_behind = {"hcbc": -834.0}
+    mod.STATE.hcbi_behind = {"hcb": -834.0}
     frags = mod.render_habits_today()
-    style, text = next((s, t) for s, t, *_ in frags if "hcbc" in t)
-    assert f"bg:{mod.HCBI_BEHIND_DOMAINS['hcbc']}" in style
+    style, text = next((s, t) for s, t, *_ in frags if "hcb" in t)
+    assert f"bg:{mod.HCBI_BEHIND_DOMAINS['hcb']}" in style
     assert "-834" in text
 
 
 def test_no_behind_chips_when_all_positive():
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0)]
-    mod.STATE.hcbi_behind = {"hcbc": 10.0, "hcbp": 243.0}
+    mod.STATE.hcbi_behind = {"hcb": 10.0, "hcbp": 243.0}
     text = "".join(t for _, t, *_ in mod.render_habits_today())
-    assert "hcbc" not in text and "hcbp" not in text
+    assert "hcb" not in text and "hcbp" not in text
 
 
 # ── fetch_habits_today: hcbi wiring (structural) ────────────────────────────
@@ -126,6 +132,32 @@ def test_fetch_reads_hcbi_sheet_for_the_current_quarter():
 def test_quarter_label_is_computed_from_the_month_not_hardcoded():
     src = (HERE / "janus.py").read_text()
     assert 'q_label = f"Q{(now.month - 1) // 3 + 1}"' in src
+
+
+class _Proc:
+    def __init__(self, stdout):
+        self.returncode = 0
+        self.stdout = stdout
+
+
+def test_hcb_behind_reads_column_x_second_row_not_the_label_row(monkeypatch):
+    """hcb (offset 20, column X) must read the row BELOW the quarter label
+    row — the combined hcbc+hcbp SUM formula (e.g. X378 for Q3 2026) — not
+    the label row's own food-only subtotal (e.g. X377). hcbp (column Y)
+    keeps reading the label row, unaffected."""
+    mod = _load_tui()
+    row1 = [""] * 21
+    row1[19] = "-840.9"   # label row (X377-equivalent): food-only subtotal
+    row1[20] = "243.0"    # label row Y (hcbp)
+    row2 = [""] * 21
+    row2[19] = "-439.9"   # row below (X378-equivalent): combined SUM total
+    dozen_raw = ",".join(row1) + "|" + ",".join(row2)
+    stdout = "||" + "||" + dozen_raw
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
+    mod.fetch_habits_today()
+    assert mod.STATE.hcbi_behind.get("hcb") == -439.9, \
+        "hcb must read the combined-total row, not the label row's food subtotal"
+    assert mod.STATE.hcbi_behind.get("hcbp") == 243.0
 
 
 if __name__ == "__main__":

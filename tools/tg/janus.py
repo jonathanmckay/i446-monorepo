@@ -290,11 +290,15 @@ DAILY_DOZEN_COLORS = {
     "wtr": "#2979ff",  # Electric Blue — water (blue)
 }
 DAILY_DOZEN_ORDER = ["bn", "br", "fr", "cr", "gr", "vg", "fx", "g", "nt", "sp", "wtr"]
-# hcbi columns X (food 分, user calls it "hcbc") / Y (hcbp) hold each
-# domain's running Q<n> total — rendered as a labeled "behind" chip only
-# when negative (same "only show what's owed" convention as
-# HABIT_YTD_COLORS below), in that domain's own PROJECT_COLORS hue.
-HCBI_BEHIND_DOMAINS = {"hcbc": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
+# hcbi columns X (food 分) / Y (hcbp) hold each domain's running Q<n>
+# total — rendered as a labeled "behind" chip only when negative (same
+# "only show what's owed" convention as HABIT_YTD_COLORS below), in that
+# domain's own PROJECT_COLORS hue. "hcb" reads column X's SECOND row
+# (e.g. X378 in Q3 2026), which is =SUM(X<label row>:Y<label row>) — the
+# combined hcbc+hcbp total — not the label row's food-only subtotal
+# (switched 2026-08-12: the persistent header chip should track overall
+# hcb standing, not just food).
+HCBI_BEHIND_DOMAINS = {"hcb": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
 
 # Radioactive — the palette's one unassigned signature neon. The ₦ accent:
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
@@ -426,7 +430,7 @@ class State:
         # in DAILY_DOZEN_ORDER, categories with no value yet omitted. Third
         # line of the habit strip (user request 2026-08-07).
         self.daily_dozen: list[tuple[str, float]] = []
-        # {"hcbc": v, "hcbp": v} Q<n> running totals (hcbi!X/Y), rendered as
+        # {"hcb": v, "hcbp": v} Q<n> running totals (hcbi!X row2/Y), rendered as
         # a "behind" chip only when negative — see HCBI_BEHIND_DOMAINS.
         self.hcbi_behind: dict[str, float] = {}
         self.last_toggl_fetch = 0.0
@@ -1707,8 +1711,11 @@ def _dozen_applescript_lines(q_label: str) -> str:
     the current quarter's Daily Dozen summary row — and reads E:Y of that
     row plus the row below. The sheet splits the 11 Daily Dozen categories'
     Q<n> values across the two rows (odd E:O columns on the label row, even
-    E:O columns on the row below); columns X/Y on the label row hold the
-    hcbc/hcbp running Q<n> point totals (HCBI_BEHIND_DOMAINS). Best-effort:
+    E:O columns on the row below); column Y on the label row holds the
+    hcbp running Q<n> total, while column X's row BELOW the label
+    (=SUM(X<label>:Y<label>), the combined hcbc+hcbp total) is read as
+    "hcb" (HCBI_BEHIND_DOMAINS) — the label row's own X cell is the
+    food-only subtotal and is deliberately not used here. Best-effort:
     a missing/renamed row just leaves this segment empty, same tolerance as
     the rest of this fetch."""
     return f'''    try
@@ -1855,7 +1862,16 @@ end tell'''
                 except ValueError:
                     pass
         behind: dict[str, float] = {}
-        for key, offset in (("hcbc", 20), ("hcbp", 21)):
+        # "hcb" reads column X's row2 specifically (the label row's own X is
+        # the food-only subtotal, not the combined total this chip wants —
+        # see _dozen_applescript_lines) — no v1-or-v2 fallback.
+        raw_hcb = dozen_row2[19].strip() if len(dozen_row2) > 19 else ""
+        if raw_hcb:
+            try:
+                behind["hcb"] = float(raw_hcb)
+            except ValueError:
+                pass
+        for key, offset in (("hcbp", 21),):
             raw_v = _dozen_cell(offset)
             if raw_v:
                 try:
