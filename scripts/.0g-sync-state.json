@@ -1,10 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "touch every i9 task": {
-      "todoist_id": "6hGHhW637c6x2G92",
-      "minutes": 80
-    }
-  },
-  "last_sync": "2026-08-12T02:00:06.001248-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-12T05:30:07.467357-07:00"
 }
