@@ -78,6 +78,37 @@ def strip_ann(s: str) -> str:
     s = _MDLINK.sub(lambda m: m.group(1) or "(link)", s)
     return re.sub(r"  +", " ", _ANN.sub("", s)).strip()
 
+# Variable-input tasks (2026-08-11): terminal dtd prompts for a value on
+# completion for these — the typed number gets appended to the name and
+# routed to the task's own 0n column (e.g. "hiit" -> "hiit 25"). dtd web had
+# NO equivalent at all: swiping any of these complete silently dropped the
+# value. Mirrors did-fast.py's VARIABLE_0N (daily 0neon habits whose points
+# derive from duration) plus dtd.sh's cpap/i444, which use a different KIND
+# of prompt (quality 1-3 / count) so aren't in VARIABLE_0N itself. Scoped to
+# DAILY habits only — the WEEKLY 1n+ variable-rate set (VARIABLE_1N: relax,
+# 业写, s897, ...) isn't covered here yet, a separate case needing dynamic
+# alias resolution (did-fast.py's ONENEON_ALIASES).
+VARIABLE_INPUT = {
+    "cpap": "CPAP quality (1-3)",
+    "xk20": "xk20 minutes (Theo)",
+    "xk22": "xk22 minutes (Ren)",
+    "xk26": "xk26 minutes (Rori)",
+    "xk88": "xk88 minutes",
+    "i444": "i444 count (0 = none today)",
+    "hiit": "hiit minutes",
+    "新闻": "新闻 minutes",
+    "night hcmc": "night hcmc minutes",
+    "evening hcmc": "night hcmc minutes",
+    "冥想": "冥想 minutes",
+    "o314": "o314 minutes",
+    "hcmr": "hcmr minutes",
+    "其他人": "其他人 minutes",
+}
+
+def variable_prompt(raw: str) -> str | None:
+    """The prompt label if `raw` is a variable-input task, else None."""
+    return VARIABLE_INPUT.get(strip_ann(raw).lower().strip())
+
 def parse_est(content: str) -> tuple[str, int]:
     """Return ('(30) [20]' canonical string, points)."""
     tm, vm, bm = _TIME.search(content), _VAL.search(content), _BONUS.search(content)
@@ -290,6 +321,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "color": color,
             "domain": dom,
             "recurring": bool(t.get("recurring")),
+            "variablePrompt": variable_prompt(raw),
         })
     return out
 
@@ -668,21 +700,22 @@ PAGE = r"""<!doctype html>
     font:400 26px/52px ui-monospace,monospace; text-align:center; padding:0;
     box-shadow:0 3px 10px #0007; z-index:15; }
   #fab:active { transform:scale(.94); }
-  #addWrap { position:fixed; inset:0; background:#000a; z-index:25;
+  .sheetWrap { position:fixed; inset:0; background:#000a; z-index:25;
     display:flex; align-items:flex-end; opacity:0; pointer-events:none;
     transition:opacity .18s; }
-  #addWrap.show { opacity:1; pointer-events:auto; }
-  #addSheet { width:100%; background:#232323; border-top:1px solid #333;
+  .sheetWrap.show { opacity:1; pointer-events:auto; }
+  .sheet { width:100%; background:#232323; border-top:1px solid #333;
     padding:16px 14px calc(env(safe-area-inset-bottom) + 16px);
     transform:translateY(12px); transition:transform .18s; }
-  #addWrap.show #addSheet { transform:translateY(0); }
-  #addInput { width:100%; background:#1b1b1b; color:#cfcfcf; border:1px solid #3a3a3a;
+  .sheetWrap.show .sheet { transform:translateY(0); }
+  .sheetLabel { color:var(--dim); font-size:13px; margin-bottom:8px; }
+  .sheetInput { width:100%; background:#1b1b1b; color:#cfcfcf; border:1px solid #3a3a3a;
     border-radius:8px; padding:11px 12px; font:15px/1.3 inherit; }
-  #addInput:focus { outline:none; border-color:var(--go); }
-  #addRow { display:flex; gap:10px; margin-top:10px; }
-  #addRow button { flex:1; padding:10px; border-radius:8px; border:1px solid #3a3a3a;
+  .sheetInput:focus { outline:none; border-color:var(--go); }
+  .sheetRow { display:flex; gap:10px; margin-top:10px; }
+  .sheetRow button { flex:1; padding:10px; border-radius:8px; border:1px solid #3a3a3a;
     background:#1b1b1b; color:#cfcfcf; font:700 15px inherit; }
-  #addRow button.go { background:var(--go); color:#003; border-color:var(--go); }
+  .sheetRow button.go { background:var(--go); color:#003; border-color:var(--go); }
 </style>
 </head>
 <body>
@@ -693,12 +726,22 @@ PAGE = r"""<!doctype html>
 </header>
 <main id="list"><div class="loading">loading…</div></main>
 <button id="fab">+</button>
-<div id="addWrap">
-  <div id="addSheet">
-    <input id="addInput" placeholder="task (10) [5] @tag" autocomplete="off" autocapitalize="off">
-    <div id="addRow">
+<div id="addWrap" class="sheetWrap">
+  <div class="sheet">
+    <input id="addInput" class="sheetInput" placeholder="task (10) [5] @tag" autocomplete="off" autocapitalize="off">
+    <div class="sheetRow">
       <button id="addCancel">cancel</button>
       <button id="addGo" class="go">add</button>
+    </div>
+  </div>
+</div>
+<div id="valWrap" class="sheetWrap">
+  <div class="sheet">
+    <div class="sheetLabel" id="valLabel">value</div>
+    <input id="valInput" class="sheetInput" inputmode="numeric" autocomplete="off" autocapitalize="off">
+    <div class="sheetRow">
+      <button id="valSkip">skip</button>
+      <button id="valGo" class="go">log</button>
     </div>
   </div>
 </div>
@@ -805,7 +848,11 @@ function bindSwipe(row, line, track, actions, t){
       track.style.opacity = 0;
       return;
     }
-    if(dx > W()*0.42){ fly(row, line, t); return; }
+    if(dx > W()*0.42){
+      if(t.variablePrompt){ line.style.transform='translateX(0)'; track.style.opacity=0; openVal(t, row, line); }
+      else fly(row, line, t);
+      return;
+    }
     baseX = (dx < -AW()*0.4) ? -AW() : 0;
     line.style.transform = 'translateX('+baseX+'px)';
     track.style.opacity = 0;
@@ -910,6 +957,48 @@ async function submitAdd(){
     load(true);
   } catch(e){ toast('offline · not added', true); }
 }
+
+// Variable-input tasks (2026-08-11): terminal dtd prompts for a value on
+// completion (e.g. "hiit" -> minutes) and appends it to the name before
+// routing to did-fast, which credits the task's own 0n column. Swipe-right
+// past the complete threshold opens this instead of flying immediately when
+// t.variablePrompt is set (see build_tasks()'s VARIABLE_INPUT map).
+const valWrap = document.getElementById('valWrap');
+const valInput = document.getElementById('valInput');
+const valLabel = document.getElementById('valLabel');
+let valCtx = null;
+
+function openVal(t, row, line){
+  valCtx = {t, row, line};
+  valLabel.textContent = t.variablePrompt;
+  valInput.value = '';
+  valWrap.classList.add('show');
+  setTimeout(()=>valInput.focus(), 50);
+}
+// Cancel (tap outside): abort the completion entirely, snap the row back —
+// distinct from "skip", which still completes with no value (matches
+// terminal dtd's documented "blank -> completes with no score").
+function cancelVal(){
+  if(!valCtx) return;
+  const {line} = valCtx;
+  valWrap.classList.remove('show'); valInput.blur(); valCtx = null;
+  line.classList.add('snap'); line.style.transform = 'translateX(0)';
+}
+function submitVal(skip){
+  if(!valCtx) return;
+  const {t, row, line} = valCtx;
+  const v = skip ? '' : valInput.value.replace(/[^0-9]/g, '').trim();
+  valWrap.classList.remove('show'); valInput.blur(); valCtx = null;
+  fly(row, line, {...t, raw: v ? (t.title + ' ' + v) : t.title});
+}
+
+document.getElementById('valSkip').onclick = ()=> submitVal(true);
+document.getElementById('valGo').onclick = ()=> submitVal(false);
+valWrap.addEventListener('click', e=>{ if(e.target===valWrap) cancelVal(); });
+valInput.addEventListener('keydown', e=>{
+  if(e.key==='Enter') submitVal(false);
+  if(e.key==='Escape') cancelVal();
+});
 
 load(false);
 </script>
