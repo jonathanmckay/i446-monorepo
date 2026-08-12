@@ -407,7 +407,9 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                         msg = "Call audio silent — falling back to mic-only recording."
                         print("AUDIO_VERDICT degraded reason=fell-back-to-mic-only", flush=True)
                         print(f"\n⚠  {msg}")
-                        _notify("⚠ Recording: mic-only fallback", msg)
+                        # No popup notification here (removed 2026-08-12) — janus's
+                        # live rec-level dots already surface a dead call channel
+                        # in real time; a 3-minutes-later dialog was redundant.
                         # Stop and discard the system audio stream
                         for s in streams:
                             if hasattr(s, 'device') or True:
@@ -424,14 +426,15 @@ def record_audio(teams_mode: bool = False, max_duration: int = 0,
                     print(f"\n⚠  {msg}")
                     print("   Both mic and system audio lack speech.")
                     print("   Check: is the call connected? Is system output set to 'Meet Output'?\n")
-                    _notify("⚠ Recording Problem", msg)
+                    # No popup notification (removed 2026-08-12) — see mic-only
+                    # fallback comment above; janus's dots cover this live.
                 elif mic_has_speech and not bh_has_speech:
                     teams_warn_count += 1
                     msg = f"CALL AUDIO HAS NO SPEECH ({int(elapsed)}s, #{teams_warn_count})"
                     print(f"\n⚠  {msg}")
                     print("   Your mic is picking up speech, but system audio is not.")
                     print("   Check: system output → 'Meet Output'? Is the other person talking?\n")
-                    _notify("⚠ Recording Problem", msg)
+                    # No popup notification (removed 2026-08-12) — see above.
                 elif not mic_has_speech and bh_has_speech:
                     # MIC HAS NO SPEECH suppressed (2026-06-15): this is the normal
                     # "you're listening while others talk" state — call audio is being
