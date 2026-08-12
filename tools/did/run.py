@@ -66,6 +66,16 @@ _MC_SPEC = importlib.util.spec_from_file_location("mark_completed", _MC_PATH)
 mc = importlib.util.module_from_spec(_MC_SPEC)
 _MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 
+# Variable-rate cumulative 1n+ habits: points = base + rate×minutes, NOT the
+# registry's flat cumulative_increment. Must mirror did-fast.py's
+# VARIABLE_1N_BASES/VARIABLE_1N_RATES (2026-07-25 restructure) — run.py's
+# cumulative branch was never updated when that restructure landed, so it
+# kept writing the pre-restructure flat increment (e.g. 一起饭 → always +30
+# instead of 15 + minutes). Habits not in either dict fall back to the
+# registry's flat cumulative_increment.
+_VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
+_VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+
 TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")
 BRACKET_N_RE = re.compile(r"\[(\d+)\]")
@@ -582,7 +592,12 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         except (TypeError, ValueError):
             old = 0
         excel.write("1n+", col, row=week_row, value=str(old + minutes))
-        points = inc
+        if name in _VARIABLE_1N_BASES or name in _VARIABLE_1N_RATES:
+            base = _VARIABLE_1N_BASES.get(name, 0)
+            rate = _VARIABLE_1N_RATES.get(name, 1.0)
+            points = base + int(round(rate * minutes))
+        else:
+            points = inc
     else:
         excel.write("1n+", col, row=week_row, value=str(minutes))
         row5 = excel.read("1n+", col, row=5)
