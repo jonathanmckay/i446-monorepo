@@ -4428,5 +4428,55 @@
     "unit": "A11",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-12",
+    "effective": "2026-10-01",
+    "kind": "leased",
+    "unit_id": "1240",
+    "prop": "tc68",
+    "unit": "D091",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-12",
+    "effective": "2026-08-12",
+    "kind": "movein",
+    "unit_id": "1268",
+    "prop": "kn47-k3",
+    "unit": "Maintenance Garages (2)",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-12",
+    "effective": "2026-08-17",
+    "kind": "leased",
+    "unit_id": "1213",
+    "prop": "tc68",
+    "unit": "C64",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-12",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "367",
+    "prop": "ps25",
+    "unit": "B9",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-12",
+    "effective": "2026-09-04",
+    "kind": "ntv",
+    "unit_id": "549",
+    "prop": "rl16",
+    "unit": "B12",
+    "tenant": null,
+    "baseline": false
   }
 ]
