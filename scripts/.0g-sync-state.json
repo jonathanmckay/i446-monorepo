@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-12T05:30:07.467357-07:00"
+  "tasks": {
+    "write asha report": {
+      "todoist_id": "6hGP4MwgW4Wxcv22",
+      "minutes": 30
+    },
+    "roles and expectations": {
+      "todoist_id": "6hGP4P2XRhWmM6RR",
+      "minutes": 40
+    },
+    "rob update": {
+      "todoist_id": "6hGP4P4g522cpGm2",
+      "minutes": 40
+    },
+    "minecraft followup": {
+      "todoist_id": "6hGP4P87w6hGFjwR",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-08-12T10:00:04.256140-07:00"
 }
