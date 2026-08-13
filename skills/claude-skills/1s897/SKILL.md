@@ -1,6 +1,6 @@
 ---
 name: "1s897"
-description: "Weekly social review. Reads Toggl s897+家+#s897-tagged entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis. Usage: /1s897 [M.W or YYYY-MM-DD]"
+description: "Weekly social review. Reads Toggl s897+家+#s897/#家-tagged entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis. Usage: /1s897 [M.W or YYYY-MM-DD]"
 user-invocable: true
 ---
 
