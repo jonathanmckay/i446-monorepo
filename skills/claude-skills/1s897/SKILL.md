@@ -9,12 +9,18 @@ user-invocable: true
 Review a week's social activities from Toggl, write raw data to the Neon spreadsheet, then provide improvement analysis.
 
 **Target week**: defaults to the most recent complete week. An optional arg
-picks a different week instead: an `M.W` label (e.g. `7.4`) — the
-Sunday-anchored week-of-month convention used elsewhere in this system
-(1分+1s, 1n+, xk887) — or a plain `YYYY-MM-DD` date. Both resolve to the
-Wed-Tue week that *contains* the corresponding date (see Step 1). Whichever
-week gets resolved, Step 4's row lookup writes into *that* week's row — never
-just today's.
+picks a different week instead: an `M.W` label (e.g. `7.4`) — the canonical
+fiscal-week label (Sunday-keyed): fiscal week 1 starts the Sunday on/after
+Jan 1, and every 13-week quarter splits into fiscal months of 4, 4, then 5
+weeks (the quarter's 3rd month absorbs the extra week). `M` = fiscal month
+(1-12), `W` = week within that fiscal month. **This is NOT the same as "which
+Sunday falls in calendar month M"** — that simpler rule (still used by
+`/did`'s 1n+ Step 1n) silently disagrees at every quarter boundary; see
+`week_calc.py`'s docstring for the 2026-08-13 bug this caused. Only 2026 has
+a confirmed fiscal-week-1 anchor. Or pass a plain `YYYY-MM-DD` date. Both
+resolve to the Wed-Tue week that *contains* the corresponding date (see Step
+1). Whichever week gets resolved, Step 4's row lookup writes into *that*
+week's row — never just today's.
 
 ## Response style
 
@@ -39,11 +45,11 @@ Pass the user's argument (if any) verbatim as `[ARG]`:
   week ended **yesterday**, NOT the week starting today — this exact
   off-by-one is what caused the 2026-04-22 bug (see the regression test).
   **Do NOT target the week starting today.**
-- **`M.W` label** (e.g. `7.4`): the Sunday-anchored week-of-month label used
-  elsewhere in this system (1分+1s, 1n+, xk887 — `M` = the Sunday's month,
-  `W` = which Sunday of that month). Resolves to the Wed-Tue week that
-  *contains* that Sunday. No year in the label → current year; pass
-  `--year YYYY` to override.
+- **`M.W` label** (e.g. `7.4`): the canonical fiscal-week label — `M` = fiscal
+  month (1-12), `W` = week within it, per the 4-4-5 quarterly split (see
+  above). Resolves to the Wed-Tue week that *contains* that fiscal week's
+  Sunday. No year in the label → current year; pass `--year YYYY` to
+  override (only 2026 has a confirmed anchor so far).
 - **`YYYY-MM-DD`**: the Wed-Tue week that *contains* that date.
 
 The script prints `week_start<TAB>week_end` (both ISO dates); parse that
@@ -62,6 +68,7 @@ Filter to only entries that match **any** of these criteria:
 - Project is **s897** (project ID 109719141)
 - Project is **家** (project ID 108547409)
 - Entry has the **tag `s897`** (shown as `#s897` in toggl_date output) — this captures social physical activities tracked under other projects like hcbp
+- Entry has the **tag `家`** (shown as `#家`, possibly comma-joined with other tags like `#xk87,家`) — same idea for family activities tracked under an unrelated project (added 2026-08-13: a `swimming` entry tagged `#xk87,家` under project hcbp fell through the filter entirely since only the `s897` tag was special-cased)
 
 Keep only entries with duration **> 20 minutes**.
 
