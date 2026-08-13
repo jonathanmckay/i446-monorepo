@@ -633,7 +633,20 @@ fi
 echo "x" >> "\$PUSHED"
 # Push audit trail — see enter.sh's twin line (2026-07-30 lost -1t/-1l).
 printf '%s\tdone\t%s\t%s\n' "\$(date +%Y-%m-%dT%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
-: > "\$TIMER"
+# Only clear the running-timer cache when the task just completed is the one
+# it's tracking — matched by id like the list generator's own running-highlight
+# (falling back to name when id-less). Clearing it unconditionally blanked the
+# footer for ~5-12s (until the next Toggl poll reconciled it) any time an
+# UNRELATED task was completed while a different timer kept running (bug
+# 2026-08-13: "timer goes blank for 5 seconds ... if I'm not changing the
+# timer, it shouldn't flash").
+_timer_id=\$(cut -f3 "\$TIMER" 2>/dev/null)
+if [[ -n "\$1" && -n "\$_timer_id" ]]; then
+  [[ "\$_timer_id" == "\$1" ]] && : > "\$TIMER"
+elif [[ -z "\$1" ]]; then
+  _timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  [[ -n "\$_timer_desc" && "\$_timer_desc" == "\$clean_lower" ]] && : > "\$TIMER"
+fi
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 # Reset stray mouse-tracking modes AND drain tty input queued during the
