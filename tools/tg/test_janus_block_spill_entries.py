@@ -108,9 +108,11 @@ def test_spill_item_never_rides_the_header():
     """User report 2026-08-07: 戌's header showed "戌:00 bball 9m" — bball
     was really 酉:47's entry spilling 9 minutes into 戌, already shown with
     its full duration in 酉's own row. Repeating it as 戌's header is a
-    double entry. The header must promote PAST a spill item to the first
-    genuinely NEW entry of the block (冥想 at :10) — the spill item still
-    renders, just as an ordinary body row, not the header."""
+    double entry. A spill item must never itself become the header — the
+    header only ever promotes to a genuinely NEW (non-spill) entry, and
+    never past an earlier spill (see test_head0_never_promotes_past_an_
+    earlier_spill_item, 2026-08-13, for what happens when the only
+    candidate NEW entry starts after the spill)."""
     mod = _load_tui()
     _setup(mod)
     today = _midnight()
@@ -123,10 +125,47 @@ def test_spill_item_never_rides_the_header():
     frags = mod._compact_block_lines("戌", 18, [spill, new_entry], 0, "")
     text = "".join(t for _, t, *_ in frags)
     header_line = text.split("\n")[0]
-    assert "冥想" in header_line, f"header must promote to the new entry: {header_line!r}"
-    assert "戌:10" in header_line
-    assert "bball" not in header_line, f"the spill item must not ride the header: {header_line!r}"
+    assert "bball" not in header_line, f"the spill item must never ride the header: {header_line!r}"
     assert "bball" in text, "the spill item must still render as a body row"
+
+
+def test_head0_never_promotes_past_an_earlier_spill_item():
+    """User report 2026-08-13: janus's 未 card showed "未:05 ▶ -1t" as its
+    FIRST line, with "  :00 XTECH huddle" as its second — the header (a
+    LATER time) drawn above an earlier spill row reads as running backward
+    in time. head0 (-1t, the block's only genuinely new entry) started
+    AFTER the spill (XTECH huddle, spilling in from the previous block) —
+    promoting it to the header put a later time above an earlier one. The
+    header must fall back to bare (":00", no promoted entry) whenever doing
+    so would draw an earlier spill BELOW it; both items then render as
+    ordinary chronological body rows, earliest first.
+
+    (This supersedes the 2026-08-07 fix's original test scenario, which
+    happened to have the same shape — a spill immediately followed by a
+    promotable entry — and accepted the same backward-time header. See
+    test_spill_item_never_rides_the_header, updated the same day, for the
+    surviving half of that fix: a spill must still never itself BECOME the
+    header.)"""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    spill = {"start_dt": today.replace(hour=12, minute=0), "time_str": "12:00",
+             "label": "XTECH huddle", "style": "", "dur_min": 4, "entry_ids": [1],
+             "raw_desc": "XTECH huddle", "project_id": None, "is_spill": True}
+    head0_candidate = {"start_dt": today.replace(hour=12, minute=5), "time_str": "12:05",
+                       "label": "-1t", "style": "", "dur_min": 28, "entry_ids": [2],
+                       "raw_desc": "-1t", "project_id": None, "is_running": True}
+    frags = mod._compact_block_lines("未", 12, [spill, head0_candidate], 28, "")
+    text = "".join(t for _, t, *_ in frags)
+    lines = text.split("\n")
+    header_line = lines[0]
+    assert "未:00" in header_line, f"header must stay bare, not promote past the spill: {header_line!r}"
+    assert "XTECH huddle" not in header_line and "-1t" not in header_line
+    huddle_idx = next(i for i, l in enumerate(lines) if "XTECH huddle" in l)
+    t_idx = next(i for i, l in enumerate(lines) if "-1t" in l)
+    assert huddle_idx < t_idx, \
+        f"the earlier spill must render above the later entry:\n{text}"
+    assert "▶" in lines[t_idx], "the running marker must survive falling back to a body row"
 
 
 def test_row_cap_keeps_biggest_not_earliest():
