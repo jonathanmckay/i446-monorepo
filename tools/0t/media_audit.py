@@ -35,6 +35,15 @@ MEDIA_PATTERNS = [
     ("Audible", re.compile(r"audible", re.I)),
     ("Netflix", re.compile(r"netflix", re.I)),
     ("Twitch", re.compile(r"twitch", re.I)),
+    ("Memeorandum", re.compile(r"memeorandum", re.I)),
+    ("Techmeme", re.compile(r"techmeme", re.I)),
+]
+# Domain classification for aw-watcher-web events (active-tab URLs). Matched
+# against the URL host only, so a YouTube link in a title doesn't count.
+SITE_PATTERNS = [
+    ("YouTube", re.compile(r"(^|\.)youtube\.com$", re.I)),
+    ("Memeorandum", re.compile(r"(^|\.)memeorandum\.com$", re.I)),
+    ("Techmeme", re.compile(r"(^|\.)techmeme\.com$", re.I)),
 ]
 # iOS/macOS bundle ids for the Screen Time store, same labels.
 MEDIA_BUNDLES = {
@@ -126,6 +135,74 @@ def media_minutes_from_aw(day: date) -> dict | None:
     return {k: round(v, 1) for k, v in mins.items()}
 
 
+def _classify_url(url: str) -> str | None:
+    try:
+        host = urllib.parse.urlparse(url).netloc.split(":")[0]
+    except ValueError:
+        return None
+    for label, rx in SITE_PATTERNS:
+        if rx.search(host):
+            return label
+    return None
+
+
+def _intersect_intervals(a: list[tuple[datetime, datetime]],
+                         b: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    out = []
+    for x in a:
+        for y in b:
+            lo, hi = max(x[0], y[0]), min(x[1], y[1])
+            if hi > lo:
+                out.append((lo, hi))
+    return out
+
+
+def media_minutes_from_aw_web(day: date) -> dict | None:
+    """Per-label minutes from aw-watcher-web (Chrome extension) active-tab URLs.
+
+    A tab counts only where its event intersects BOTH not-AFK time and
+    Chrome-is-frontmost window time — a background tab, an idle machine, or
+    Chrome behind another app all don't count. Returns None when the web
+    bucket doesn't exist (extension not installed / not reporting).
+    """
+    lo, hi = _day_bounds_utc(day)
+    rng = urllib.parse.urlencode(
+        {"start": lo.isoformat(), "end": hi.isoformat(), "limit": -1})
+    try:
+        buckets = _aw_get("/buckets/")
+        web_ids = [b for b in buckets if b.startswith("aw-watcher-web")]
+        if not web_ids:
+            return None
+        afk = _aw_get(f"/buckets/aw-watcher-afk_{AW_HOST}/events?{rng}")
+        win = _aw_get(f"/buckets/aw-watcher-window_{AW_HOST}/events?{rng}")
+        web = []
+        for bid in web_ids:
+            web.extend(_aw_get(f"/buckets/{bid}/events?{rng}"))
+    except Exception:
+        return None
+    active = _intervals_from_events(
+        [e for e in afk if e.get("data", {}).get("status") == "not-afk"])
+    chrome = _intervals_from_events(
+        [e for e in win if "chrome" in e.get("data", {}).get("app", "").lower()])
+    countable = _intersect_intervals(active, chrome)
+    mins: dict[str, float] = {}
+    for e in web:
+        label = _classify_url(e.get("data", {}).get("url", ""))
+        if label is None:
+            continue
+        try:
+            start = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        dur = float(e.get("duration") or 0)
+        if dur <= 0:
+            continue
+        secs = _overlap_seconds((start, start + timedelta(seconds=dur)), countable)
+        if secs > 0:
+            mins[label] = mins.get(label, 0) + secs / 60
+    return {k: round(v, 1) for k, v in mins.items()}
+
+
 _ST_QUERY = """SELECT ti.ZBUNDLEIDENTIFIER, SUM(ti.ZTOTALTIMEINSECONDS)
 FROM ZUSAGETIMEDITEM ti
 JOIN ZUSAGECATEGORY c ON ti.ZCATEGORY = c.Z_PK
@@ -193,6 +270,9 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
     aw = media_minutes_from_aw(day)
     if aw is None:
         notes.append("ActivityWatch unreachable (runs on Straylight only)")
+    aww = media_minutes_from_aw_web(day)
+    if aww is None:
+        notes.append("aw-watcher-web bucket missing (Chrome extension not installed/reporting)")
     st = media_minutes_from_screentime(day)
     if st is None:
         notes.append("Screen Time store on Ix unreadable (needs Ix remote-user FDA + Share Across Devices)")
@@ -201,7 +281,7 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
     # only if the same app is measured twice, e.g. desktop YouTube in both
     # AW and Mac Screen Time — max avoids double counting, sum would inflate).
     passive: dict[str, float] = {}
-    for src in (aw or {}), (st or {}):
+    for src in (aw or {}), (aww or {}), (st or {}):
         for k, v in src.items():
             passive[k] = max(passive.get(k, 0), v)
 

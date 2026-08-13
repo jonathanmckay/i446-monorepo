@@ -1,12 +1,20 @@
 ---
 name: "1s897"
-description: "Weekly social review. Reads Toggl s897+家+#s897-tagged entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis."
+description: "Weekly social review. Reads Toggl s897+家+#s897-tagged entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis. Usage: /1s897 [M.W or YYYY-MM-DD]"
 user-invocable: true
 ---
 
 # Weekly Social Review (1s897)
 
-Review the most recent complete week's social activities from Toggl, write raw data to the Neon spreadsheet, then provide improvement analysis.
+Review a week's social activities from Toggl, write raw data to the Neon spreadsheet, then provide improvement analysis.
+
+**Target week**: defaults to the most recent complete week. An optional arg
+picks a different week instead: an `M.W` label (e.g. `7.4`) — the
+Sunday-anchored week-of-month convention used elsewhere in this system
+(1分+1s, 1n+, xk887) — or a plain `YYYY-MM-DD` date. Both resolve to the
+Wed-Tue week that *contains* the corresponding date (see Step 1). Whichever
+week gets resolved, Step 4's row lookup writes into *that* week's row — never
+just today's.
 
 ## Response style
 
