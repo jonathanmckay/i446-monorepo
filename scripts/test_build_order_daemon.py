@@ -654,3 +654,110 @@ def test_compute_toggl_totals_clamps_stale_running_entry(monkeypatch):
     # 360 minutes can legitimately belong to today — far below the ~1667
     # minutes an unclamped (now - stale_start) would have produced.
     assert totals.get("AV") == 360
+
+
+# ── #xk88 tag -> 0分 points, 1pt/min (JM 2026-08-13) ────────────────────────
+# Different write model from the 0n minute totals above: 0分!X accumulates via
+# a shared +N append (other point sources write there too), so re-syncing the
+# same tagged minutes every 2h cycle would double-count. A per-day minute
+# baseline (TOGGL_POINT_STATE_PATH) is diffed each cycle so only the DELTA
+# since the last sync gets appended.
+
+def test_compute_toggl_point_tag_minutes_sums_only_configured_tags(monkeypatch):
+    mod = _load_daemon()
+    target_date = dt.date(2026, 8, 13)
+    monkeypatch.setattr(mod, "_toggl_get", lambda path: [
+        {"duration": 600, "tags": ["xk88"], "project_id": 1},   # 10m, counts
+        {"duration": 1200, "tags": ["xk88"], "project_id": 2},  # 20m, counts
+        {"duration": 300, "tags": ["-1"], "project_id": 3},     # not a point tag
+        {"duration": 300, "tags": [], "project_id": 4},         # no tags at all
+    ])
+    totals = mod.compute_toggl_point_tag_minutes(target_date)
+    assert totals == {"xk88": 30}
+
+
+def test_toggl_point_sync_appends_full_amount_on_first_cycle(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "dt", dt)  # real clock; today's date only matters for keys
+    monkeypatch.setattr(mod, "TOGGL_POINT_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(mod, "compute_toggl_point_tag_minutes", lambda d: {"xk88": 12})
+    calls = []
+    monkeypatch.setattr(mod.neon_excel, "append",
+                         lambda sheet, col, date, value, src: calls.append((sheet, col, value)))
+    mod.run_toggl_point_sync()
+    assert calls == [("0分", "X", "+12")]
+
+
+def test_toggl_point_sync_appends_only_delta_on_later_cycle(monkeypatch, tmp_path):
+    """Regression for the double-count trap: cycle 1 sees 12 tagged minutes
+    (+12 appended); cycle 2 re-fetches the SAME entries plus 8 new minutes
+    (20 total) -- it must append only +8, not +20."""
+    mod = _load_daemon()
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(mod, "TOGGL_POINT_STATE_PATH", state_path)
+
+    monkeypatch.setattr(mod, "compute_toggl_point_tag_minutes", lambda d: {"xk88": 12})
+    calls = []
+    monkeypatch.setattr(mod.neon_excel, "append",
+                         lambda sheet, col, date, value, src: calls.append((sheet, col, value)))
+    mod.run_toggl_point_sync()
+
+    monkeypatch.setattr(mod, "compute_toggl_point_tag_minutes", lambda d: {"xk88": 20})
+    mod.run_toggl_point_sync()
+
+    assert calls == [("0分", "X", "+12"), ("0分", "X", "+8")]
+
+
+def test_toggl_point_sync_skips_write_when_minutes_unchanged(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "TOGGL_POINT_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(mod, "compute_toggl_point_tag_minutes", lambda d: {"xk88": 12})
+    calls = []
+    monkeypatch.setattr(mod.neon_excel, "append",
+                         lambda sheet, col, date, value, src: calls.append((sheet, col, value)))
+    mod.run_toggl_point_sync()
+    mod.run_toggl_point_sync()  # same 12 minutes again -- delta is 0
+    assert calls == [("0分", "X", "+12")]
+
+
+def test_toggl_point_sync_dry_run_makes_no_writes_and_no_state(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(mod, "TOGGL_POINT_STATE_PATH", state_path)
+    monkeypatch.setattr(mod, "compute_toggl_point_tag_minutes", lambda d: {"xk88": 12})
+    calls = []
+    monkeypatch.setattr(mod.neon_excel, "append",
+                         lambda sheet, col, date, value, src: calls.append((sheet, col, value)))
+    mod.run_toggl_point_sync(dry_run=True)
+    assert calls == []
+    assert not state_path.exists()
+
+
+def test_toggl_point_sync_failed_append_does_not_update_baseline(monkeypatch, tmp_path):
+    """A failed Excel write must not be recorded as synced, or the delta for
+    those minutes is lost forever instead of retried next cycle."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod, "TOGGL_POINT_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(mod, "compute_toggl_point_tag_minutes", lambda d: {"xk88": 12})
+
+    def _boom(*a, **k):
+        raise RuntimeError("daemon unreachable")
+    monkeypatch.setattr(mod.neon_excel, "append", _boom)
+    mod.run_toggl_point_sync()  # must not raise
+
+    calls = []
+    monkeypatch.setattr(mod.neon_excel, "append",
+                         lambda sheet, col, date, value, src: calls.append((sheet, col, value)))
+    mod.run_toggl_point_sync()
+    assert calls == [("0分", "X", "+12")], "retry must resend the full 12, not 0"
+
+
+def test_toggl_point_sync_wired_into_lock_and_mark_same_cadence():
+    """run_toggl_point_sync must fire alongside run_toggl_sync inside
+    run_lock_and_mark, not just exist as an unused standalone function."""
+    src = DAEMON.read_text(encoding="utf-8")
+    idx = src.index("def run_lock_and_mark")
+    next_def = src.index("\ndef ", idx + 1)
+    body = src[idx:next_def]
+    assert "run_toggl_sync(dry_run=dry_run)" in body
+    assert "run_toggl_point_sync(dry_run=dry_run)" in body
