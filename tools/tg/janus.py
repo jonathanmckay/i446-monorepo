@@ -2391,6 +2391,17 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         head0 = next(
             (p for p in picks if not p.get("is_free") and not p.get("is_gap")
              and not p.get("is_spill")), None)
+        # A spill item still renders as an ordinary (chronological) body row
+        # below the header — if one starts EARLIER than the head0 just
+        # picked, promoting head0 would draw a later time above an earlier
+        # one (bug 2026-08-13: "未:05 ▶ -1t" heading a card whose very next
+        # line reads "  :00 XTECH huddle", the huddle's spilled-in tail).
+        # Fall back to a bare header instead, so every real item — the spill
+        # AND head0's own entry — renders in true chronological body order.
+        if head0 is not None and any(
+                p.get("is_spill") and p["start_dt"] < head0["start_dt"]
+                for p in picks):
+            head0 = None
         # Tracks the block's own :00 slot when head0 was promoted from a
         # LATER slot, so the mark-fill grid below (FOCUS_ROWS' include_00)
         # doesn't re-materialize a phantom "  :00" row under a header that
