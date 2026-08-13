@@ -24,18 +24,35 @@ Terse. No preamble. Do the work, report results.
 
 ### Step 1: Calculate the target week (W-Tu)
 
-Weeks run **Wednesday through Tuesday**. Find the most recent **complete** W-Tu week.
+Weeks run **Wednesday through Tuesday**. Run the helper — do NOT hand-derive
+the dates with ad-hoc `python3 -c` arithmetic (that's exactly what caused the
+2026-04-22 Wednesday bug below):
 
-**Always target a week that has already ended.** Never target a week that includes today (unless today is Tuesday, the last day of the week).
+```bash
+python3 ~/.claude/skills/1s897/week_calc.py [ARG]
+```
 
-Rule by weekday of today:
-- **Tuesday**: target week ends today. `week_end = today`, `week_start = today - 6`.
-- **Wednesday**: target week ended *yesterday*. `week_end = today - 1`, `week_start = today - 7`. **Do NOT target the week starting today.**
-- **Thursday – Monday**: target week ended on the most recent Tuesday before today. `week_end = today - ((weekday - Tue) % 7)`, `week_start = week_end - 6`.
+Pass the user's argument (if any) verbatim as `[ARG]`:
+- **No arg**: the most recent **complete** week. **Always a week that has
+  already ended** — never one that includes today (unless today is Tuesday,
+  the last day of the week). In particular: on a **Wednesday**, the target
+  week ended **yesterday**, NOT the week starting today — this exact
+  off-by-one is what caused the 2026-04-22 bug (see the regression test).
+  **Do NOT target the week starting today.**
+- **`M.W` label** (e.g. `7.4`): the Sunday-anchored week-of-month label used
+  elsewhere in this system (1分+1s, 1n+, xk887 — `M` = the Sunday's month,
+  `W` = which Sunday of that month). Resolves to the Wed-Tue week that
+  *contains* that Sunday. No year in the label → current year; pass
+  `--year YYYY` to override.
+- **`YYYY-MM-DD`**: the Wed-Tue week that *contains* that date.
 
-Compute the dates with actual date arithmetic (e.g. `python3 -c "from datetime import date,timedelta; t=date.today(); ..."`); do not eyeball them.
+The script prints `week_start<TAB>week_end` (both ISO dates); parse that
+directly, do not recompute it. It also prints a `WARN:` line to stderr (and
+still succeeds) if the resolved week ends in the future — an explicit arg
+can legitimately point at an unfinished week, but flag it to the user rather
+than silently reviewing a week with partial data.
 
-**Sanity check before writing**: state out loud `today=YYYY-MM-DD (Day), week=Wed YYYY-MM-DD → Tue YYYY-MM-DD`. The Tuesday in `week_end` MUST be ≤ today. If `week_end > today`, you have computed the wrong week — recompute.
+**Sanity check before writing**: state out loud `today=YYYY-MM-DD (Day), week=Wed YYYY-MM-DD → Tue YYYY-MM-DD`. For the no-arg (default) case, the Tuesday in `week_end` MUST be ≤ today — if `week_end > today`, the script or its input was wrong; recheck before continuing.
 
 ### Step 2: Fetch Toggl entries
 

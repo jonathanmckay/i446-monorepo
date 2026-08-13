@@ -185,7 +185,11 @@ def media_minutes_from_aw_web(day: date) -> dict | None:
     chrome = _intervals_from_events(
         [e for e in win if "chrome" in e.get("data", {}).get("app", "").lower()])
     countable = _intersect_intervals(active, chrome)
-    mins: dict[str, float] = {}
+    # Union each label's intervals across ALL web buckets before measuring:
+    # several Chrome profiles (and the extension's legacy + hostname bucket
+    # pair) report into the same server, so the same wall-clock second can
+    # appear in more than one event — summing per event would double-count it.
+    by_label: dict[str, list[tuple[datetime, datetime]]] = {}
     for e in web:
         label = _classify_url(e.get("data", {}).get("url", ""))
         if label is None:
@@ -195,12 +199,21 @@ def media_minutes_from_aw_web(day: date) -> dict | None:
         except (KeyError, ValueError):
             continue
         dur = float(e.get("duration") or 0)
-        if dur <= 0:
-            continue
-        secs = _overlap_seconds((start, start + timedelta(seconds=dur)), countable)
+        if dur > 0:
+            by_label.setdefault(label, []).append((start, start + timedelta(seconds=dur)))
+    mins: dict[str, float] = {}
+    for label, ivs in by_label.items():
+        ivs.sort()
+        merged: list[tuple[datetime, datetime]] = []
+        for iv in ivs:
+            if merged and iv[0] <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], iv[1]))
+            else:
+                merged.append(iv)
+        secs = sum(_overlap_seconds(iv, countable) for iv in merged)
         if secs > 0:
-            mins[label] = mins.get(label, 0) + secs / 60
-    return {k: round(v, 1) for k, v in mins.items()}
+            mins[label] = round(secs / 60, 1)
+    return mins
 
 
 _ST_QUERY = """SELECT ti.ZBUNDLEIDENTIFIER, SUM(ti.ZTOTALTIMEINSECONDS)
