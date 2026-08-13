@@ -45,7 +45,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-VAULT_DIR = Path.home() / "vault" / "g245" / "5e4" / "moral-audit"
+VAULT_DIR = Path.home() / "vault" / "hcmp" / "moral-audit"
 RECOVERY_DIR = Path.home() / ".cache" / "moralaudit-recovery"
 
 ROWS = [
@@ -162,7 +162,7 @@ def build_note(answers: dict, target: _dt.date) -> str:
         f'title: "Moral Audit {_quarter_label(target)}"',
         f"date: {target.isoformat()}",
         "type: moral-audit",
-        "tags: [g245]",
+        "tags: [hcmp]",
         "source: moralaudit",
         "---",
         "",

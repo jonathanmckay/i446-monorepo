@@ -31,7 +31,48 @@ LOOKBACK_DAYS = 30
 MATCH_WINDOW_HOURS = 72
 
 
+STVERSIONS_DIR = Path.home() / "vault" / ".stversions" / "i447" / "i446"
+
+
+def _is_valid_sqlite(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        with open(path, "rb") as f:
+            if f.read(16) != b"SQLite format 3\x00":
+                return False
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+        return ok
+    except (sqlite3.Error, OSError):
+        return False
+
+
+def _quarantine_and_restore():
+    """The response DB is corrupt (seen 2026-07-22: file replaced with zeroed
+    bytes, every run since crashed on open). Quarantine it and restore the
+    freshest valid Syncthing version so history survives; scanning refills
+    the LOOKBACK_DAYS tail either way."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    quarantine = RESPONSE_DB.with_suffix(f".corrupt-{stamp}")
+    RESPONSE_DB.rename(quarantine)
+    print(f"WARNING: {RESPONSE_DB.name} corrupt — quarantined to {quarantine.name}")
+    candidates = sorted(STVERSIONS_DIR.glob("imsg-responses~*.db"), reverse=True)
+    for cand in candidates:
+        if _is_valid_sqlite(cand):
+            import shutil
+            shutil.copy2(cand, RESPONSE_DB)
+            print(f"Restored from {cand.name}")
+            return
+    print("No valid .stversions backup found — starting a fresh DB")
+
+
 def init_db():
+    if RESPONSE_DB.exists() and not _is_valid_sqlite(RESPONSE_DB):
+        _quarantine_and_restore()
     conn = sqlite3.connect(str(RESPONSE_DB))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS response_pairs (

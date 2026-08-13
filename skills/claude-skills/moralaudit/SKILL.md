@@ -10,7 +10,7 @@ A full-screen prompt_toolkit form for the quarterly moral audit — same
 skeleton as `/0s`/`/1s`/`/xk887`. Every (row, column) cell gets a free-text
 reflection plus a 1-7 rating (or `n/a`); the rating sets that cell's fill
 color in the rendered grid. On submit, writes a dated note to
-`~/vault/g245/5e4/moral-audit/YYYY-MM-DD-moral-audit.md` with an inline-styled
+`~/vault/hcmp/moral-audit/YYYY-MM-DD-moral-audit.md` with an inline-styled
 HTML table (renders natively in Obsidian) and opens it.
 
 ## Design (settled 2026-08-13, do not re-litigate without JM)
@@ -81,11 +81,12 @@ naming the offending cells.
 
 ## Output
 
-- Path: `~/vault/g245/5e4/moral-audit/YYYY-MM-DD-moral-audit.md` (5e4 =
-  quarterly cadence folder, matching this ritual's origin under "5^4 ₦" in
-  the old neon-rituals doc)
+- Path: `~/vault/hcmp/moral-audit/YYYY-MM-DD-moral-audit.md` (hcmp — this
+  ritual's actual journal home; JM has been writing "moral audit" entries
+  under `hcmp/o314/` since 2011, and a standalone `hcmp/Morals + Audit.md`
+  predates this skill. Moved 2026-08-13 from an initial `g245/5e4/` guess.)
 - Frontmatter: `title: "Moral Audit YYYY-Qn"`, `date`, `type: moral-audit`,
-  `tags: [g245]`
+  `tags: [hcmp]`
 - Body: one HTML `<table>`, dark theme, section header rows for Stewardship /
   Externalities, row labels in a left column, cell background interpolated
   red (1) → gray (4) → green (7); `n/a`/blank cells render near-black with
