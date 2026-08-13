@@ -166,8 +166,8 @@ The user-typed value is final — if they type `[30]` and the build order says `
 
 **5a-write. Write points to 0分:**
 
-- `[N]` → domain column per label map: `i9`/`i447`/`f693`/`f694` → AA, `m5x2` → AB, `g245`/`infra`/`cc` → AC, `hcmc` → AD, `xk87`/`xk88` → AG, `s897` → AH, `hcb`/`hcbp` → AF, `hcm`/`hcmp` → AE
-- `{N}` → **always AC** (the 0g column), regardless of task labels
+- `[N]` → domain column via `cols.domain_col("0分", domain)` (from `~/i446-monorepo/lib/neon/cols.py`, backed by `config/neon-cols.json`'s `domain_aliases` — never hardcode letters here again; the 2026-04-28 column removal already silently broke a prior hardcoded table, most recently caught 2026-08-13 when a `[20]` write landed in a dead column AA instead of `i9`'s real column R). As of 2026-08-13 the live map is: `i9`/`i447`/`f693`/`f694` → R, `m5x2` → S, `g245`/`infra`/`cc`/`0g` → Q, `hcmc` → U, `hcm`/`hcmp` → V, `hcb`/`hcbp` → W, `xk87`/`xk88` → X, `s897` → Y, `n156` → Z — but treat `neon-cols.json` as authoritative over this list, which WILL drift again.
+- `{N}` → **always the `0g` domain alias** (currently column Q — NOT a fixed letter; resolve the same way as `[N]` above, using domain `"0g"`)
 - If both `[N]` and `{N}` are present, do TWO sequential writes (one per column).
 - If both are 0 / missing, skip the Excel write entirely.
 
@@ -197,7 +197,7 @@ Convention: `d359/<slug>` labels mark Todoist tasks (and Toggl tags) as outreach
 
 No 0₦ or Todoist match. Number = **points** not minutes.
 
-1. Infer domain (or use `projectOverride`): social→s897(AH), family→xk87(AG), health→hcb(AF), work→m5x2(AB), tech→i9(AA), media→hcmc(AD), goals→g245(AC). Ambiguous → ask.
+1. Infer domain (or use `projectOverride`): social→s897, family→xk87/xk88, health→hcb/hcbp, work→m5x2, tech→i9, media→hcmc, goals→g245. Resolve the actual column via `cols.domain_col("0分", domain)` — do not hardcode a letter (see Step 5a-write note on the 2026-08-13 stale-column bug). Ambiguous → ask.
 2. Append points to 0分.
 3. Create posthoc Todoist task: `content + " @posthoc @YYYY-MM-DD"`, labels `["posthoc", "<domain>"]`, due `targetDate`. Immediately close it.
 
@@ -214,7 +214,7 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
    Read points from row 3. Write points to cell. Use "1n+ write" template.
    - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template — read old value, add increment, write sum). Fixed increments: `一起饭` = 30.
-2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`. Use "1n+ → 0分" template. For 一起饭 → 0分 column AG (xk).
+2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`, resolved through `cols.domain_col("0分", domain)` (not a hardcoded letter). For 一起饭 → domain xk87/xk88 → 0分 column X (xk).
 3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1–2).
 
 ## Step 6b: Posthoc Habit
@@ -250,6 +250,6 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did hiit` then `/did 0l` | completed-today filters hiit from suggestions | Must NOT re-suggest completed recurring tasks |
 | `/did 1 xk88` — 1n+ header is "1 xk88" | Step 0.2 matches 1n+ header → Step 1n, closes 1neon Todoist task | Must NOT treat leading "1" as points and route to Step 6 |
 | `/did 1 i9` — 1n+ header is "1 i9" | Step 0.2 matches 1n+ header → Step 1n | Must NOT route to Step 6 as "1 point to i9" |
-| `/did PTC` — Todoist match "PTC feedback [180]" with label xk87 | Step 5: extract [180] from task, write +180 to 0分 AG | Must NOT use 0 pts just because user input had no [N] — always extract from the matched Todoist task |
-| `/did Use /inbound to keep response times low.` — Todoist task content has no `{N}`, but build order line has `Use /inbound to keep response times low.{30}` (user added post-sync) | Step 5a: extract `{30}` from BUILD ORDER line, write +30 to 0分 AC (0g column), close Todoist, flip checkbox | Must NOT use 0 pts because Todoist task lacks `{30}` — build order is the points source of truth |
+| `/did PTC` — Todoist match "PTC feedback [180]" with label xk87 | Step 5: extract [180] from task, write +180 to 0分 col X (xk87/xk88, via `cols.domain_col`) | Must NOT use 0 pts just because user input had no [N] — always extract from the matched Todoist task. Must NOT hardcode "AG" — that column is dead post-2026-04-28. |
+| `/did Use /inbound to keep response times low.` — Todoist task content has no `{N}`, but build order line has `Use /inbound to keep response times low.{30}` (user added post-sync) | Step 5a: extract `{30}` from BUILD ORDER line, write +30 to 0分 col Q (0g domain alias, via `cols.domain_col`), close Todoist, flip checkbox | Must NOT use 0 pts because Todoist task lacks `{30}` — build order is the points source of truth. Must NOT hardcode "AC" — that column is now headered "1₲" (something else), not 0g. |
 | `/did 1 hcb` on Fri 2026-04-24 — 1n+ Step 1n flow | Compute M.W from the Sunday starting that calendar week (Sun Apr 19 → `4.3`, row 19). Write to U19. | Must NOT use `ceil(day/7)` (gives 4.4, row 20 = NEXT WEEK). 1n+ column B labels are Sunday-anchored Sun–Sat weeks. |
