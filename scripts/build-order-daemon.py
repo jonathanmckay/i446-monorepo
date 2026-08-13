@@ -1515,6 +1515,7 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
 
     # Toggl tag/project aggregation (same 2h cadence)
     run_toggl_sync(dry_run=dry_run)
+    run_toggl_point_sync(dry_run=dry_run)
 
     # -1neon card lifecycle: retire the just-ended block's leftover cards
     # (auto -1t/-1l close-if-earned per `live`) and spawn the new block's full
@@ -1869,6 +1870,30 @@ def _toggl_get(path: str):
         return json.loads(resp.read())
 
 
+def _entry_effective_minutes(e: dict, target_date: dt.date, now_ts: dt.datetime):
+    """Minutes `e` counts toward `target_date`, or None to skip it entirely
+    (duration==0, or a running entry with no start time). Clamps a still-open
+    entry's start to target_date's local midnight so a stale/forgotten timer
+    from an earlier day can't dump its ENTIRE elapsed time into today's total
+    (regression 2026-08-11: a >1-day-old open "fall asleep" timer read as
+    AV=1493min — the whole morning showing as asleep). Shared by every
+    Toggl-tag aggregator (0n minute totals, 0分 point totals) so this clamp
+    only has to be fixed in one place."""
+    dur = e.get("duration", 0)
+    if dur > 0:
+        return dur // 60
+    if dur < 0:
+        start_str = e.get("start", "")
+        if not start_str:
+            return None
+        start_dt = dt.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        day_start = dt.datetime.combine(
+            target_date, dt.time.min, tzinfo=zoneinfo.ZoneInfo("America/Los_Angeles"))
+        effective_start = max(start_dt, day_start)
+        return max(0, int((now_ts - effective_start).total_seconds()) // 60)
+    return None
+
+
 def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
     """Fetch today's Toggl entries, return {column_letter: minutes} for tags and projects."""
     start = target_date.isoformat()
@@ -1879,25 +1904,8 @@ def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
     now_ts = dt.datetime.now(dt.timezone.utc)
 
     for e in entries:
-        dur = e.get("duration", 0)
-        if dur > 0:
-            minutes = dur // 60
-        elif dur < 0:
-            start_str = e.get("start", "")
-            if not start_str:
-                continue
-            start_dt = dt.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            # Toggl returns the still-open entry even if it started before the
-            # queried day (an open entry has no stop time to filter on) — clamp
-            # to target_date's local midnight so a stale/forgotten timer from an
-            # earlier day can't dump its ENTIRE elapsed time into today's column
-            # (regression 2026-08-11: a >1-day-old open "fall asleep" timer read
-            # as AV=1493min — the whole morning showing as asleep).
-            day_start = dt.datetime.combine(
-                target_date, dt.time.min, tzinfo=zoneinfo.ZoneInfo("America/Los_Angeles"))
-            effective_start = max(start_dt, day_start)
-            minutes = max(0, int((now_ts - effective_start).total_seconds()) // 60)
-        else:
+        minutes = _entry_effective_minutes(e, target_date, now_ts)
+        if minutes is None:
             continue
 
         # Sleep is column D, not a tag column — exclude it so its -3 tag never
@@ -1916,6 +1924,97 @@ def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
             col_totals[col] = col_totals.get(col, 0) + minutes
 
     return col_totals
+
+
+# --- Tag -> 0分 POINTS (not 0n minutes), 1pt/min (JM 2026-08-13: "#xk88") ---
+# Different write model from TOGGL_TAG_COLS above: those SET an absolute 0n
+# minute total each cycle (idempotent by construction — same total every
+# time until minutes change). 0分!<col> instead ACCUMULATES via a +N append,
+# shared with every other point source for that domain, so blindly
+# re-appending the day's full tagged-minute count every 2h cycle would
+# double-, triple-, ...-count it. Instead a per-day minute BASELINE is kept
+# in TOGGL_POINT_STATE_PATH and only the delta since the last cycle is
+# appended -- e.g. cycle 1 sees 12 tagged minutes and appends +12; cycle 2
+# sees 20 (12 old + 8 new) and appends only +8, not +20.
+TOGGL_POINT_TAG_COLS = {"xk88": "X"}  # tag -> 0分 column, 1pt/min
+TOGGL_POINT_STATE_PATH = Path.home() / ".cache" / "jm" / "toggl-point-tags-state.json"
+
+
+def _load_point_tag_state() -> dict:
+    try:
+        return json.loads(TOGGL_POINT_STATE_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_point_tag_state(state: dict) -> None:
+    TOGGL_POINT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TOGGL_POINT_STATE_PATH.write_text(json.dumps(state))
+
+
+def compute_toggl_point_tag_minutes(target_date: dt.date) -> dict[str, int]:
+    """{tag: minutes} for today's entries carrying a TOGGL_POINT_TAG_COLS tag.
+    Unlike compute_toggl_totals, this does NOT exclude the sleep project --
+    none of the point tags are sleep-adjacent today, and excluding it
+    unconditionally would silently misbehave if a future point tag ever were."""
+    start = target_date.isoformat()
+    end = (target_date + dt.timedelta(days=1)).isoformat()
+    entries = _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+    now_ts = dt.datetime.now(dt.timezone.utc)
+    tag_minutes: dict[str, int] = {}
+    for e in entries:
+        minutes = _entry_effective_minutes(e, target_date, now_ts)
+        if minutes is None:
+            continue
+        for tag in (e.get("tags") or []):
+            if tag in TOGGL_POINT_TAG_COLS:
+                tag_minutes[tag] = tag_minutes.get(tag, 0) + minutes
+    return tag_minutes
+
+
+def run_toggl_point_sync(dry_run=False):
+    """Append +1pt per net-new tagged minute to 0分 (delta-tracked per day —
+    see TOGGL_POINT_TAG_COLS docstring above)."""
+    today = dt.date.today()
+    today_key = today.isoformat()
+    try:
+        tag_minutes = compute_toggl_point_tag_minutes(today)
+    except Exception as e:
+        log(f"toggl-point-sync: ERROR fetching Toggl: {e}")
+        return
+    if not tag_minutes:
+        log("toggl-point-sync: no point-tagged entries for today")
+        return
+
+    state = _load_point_tag_state()
+    day_state = dict(state.get(today_key, {}))
+    changed = False
+    for tag, minutes in tag_minutes.items():
+        prev = day_state.get(tag, 0)
+        delta = minutes - prev
+        if delta <= 0:
+            continue
+        col = TOGGL_POINT_TAG_COLS[tag]
+        if dry_run:
+            log(f"[DRY RUN] toggl-point-sync: would append +{delta} to 0分!{col} for #{tag}")
+            continue
+        try:
+            result = neon_excel.append(
+                "0分", col, date=f"{today.month}/{today.day}", value=f"+{delta}",
+                src=f"toggl #{tag} tag (+{delta}m)")
+            log(f"toggl-point-sync: #{tag} +{delta}pt -> 0分!{col} ({result})")
+            day_state[tag] = minutes
+            changed = True
+        except Exception as e:
+            log(f"toggl-point-sync: #{tag} append FAILED: {e}")
+            # Don't update day_state[tag] on failure -- retry the full delta
+            # next cycle rather than silently losing it.
+
+    if changed and not dry_run:
+        # Only today's entry is ever read, so drop older days rather than
+        # letting the state file grow forever.
+        state[today_key] = day_state
+        _save_point_tag_state({today_key: day_state})
 
 
 def write_toggl_totals_to_0n(col_totals: dict[str, int], target_date: dt.date,
@@ -1990,7 +2089,7 @@ def run_toggl_sync(dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description="Build-order daemon")
     parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive",
-                                         "toggl-sync", "compute-p"])
+                                         "toggl-sync", "toggl-point-sync", "compute-p"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hour", type=int, default=None,
                         help="(lock-and-mark/compute-p only) override current hour for testing")
@@ -2002,6 +2101,8 @@ def main():
         run_lock_and_mark(dry_run=args.dry_run, force_hour=args.hour)
     elif args.mode == "toggl-sync":
         run_toggl_sync(dry_run=args.dry_run)
+    elif args.mode == "toggl-point-sync":
+        run_toggl_point_sync(dry_run=args.dry_run)
     elif args.mode == "compute-p":
         # On-demand: print today's -1₦ score from currently-stamped emojis so a
         # caller (did-fast run_ritual) can SET col P immediately. Log lines land
