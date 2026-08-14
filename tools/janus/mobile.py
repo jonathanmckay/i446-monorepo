@@ -2,23 +2,37 @@
 """
 janus mobile — iPhone-first mirror of the `janus` timeline TUI.
 
-Same data source (Toggl), same domain colors, same 地支 block structure — but
-as a swipeable web list of today's timeline. Two swipe actions:
+Same data source (Toggl + gcal/outlook), same domain colors, same 地支 block
+structure — as a swipeable web list of today's timeline. Right-swipe actions
+(the ⌥↵ desktop gesture, ported piecemeal by row type):
 
-  · swipe an UNTRACKED GAP right  → dialog with start/end prefilled; saving
-    creates the Toggl entry (optional @code picks the project, like /tg).
-  · swipe a TIME ENTRY right      → logs its minutes through the real /did
-    (did-fast.py "<desc> <minutes> [@code]"), which routes exactly like the
-    desktop: 0n habit → minutes to its 0n column; variable/1n+ → base+rate;
-    Todoist word-overlap match → its [N]; otherwise the variable path writes
+  · UNTRACKED GAP    → dialog with start/end prefilled; saving creates the
+    Toggl entry (optional @code picks the project, like /tg).
+  · TIME ENTRY       → logs its minutes through the real /did (did-fast.py
+    "<desc> <minutes> [@code]"), which routes exactly like the desktop: 0n
+    habit → minutes to its 0n column; variable/1n+ → base+rate; Todoist
+    word-overlap match → its [N]; otherwise the variable path writes
     minutes-as-points to the inferred domain column + a posthoc task. A
     per-day ledger prevents double-logging the same entry.
+  · CALENDAR EVENT   → not yet ended: starts a live tg-fast timer (backdated
+    if the meeting already began). Already ended: backfills a completed
+    Toggl entry AND grants its points in one did-fast call. Events already
+    covered/tracked by a real Toggl entry never show (2026-08-14).
+  · RUNNING TIMER (the pinned open entry) → stops it AND grants its points
+    in one shot (did-fast's completed-range trim_range() closes the still-
+    open entry itself — mirrors desktop's _run_current_timer_done, minus
+    its d357-recording-finalize branch and interactive "no resolvable
+    points" prompt, both left to the desktop timer per 2026-08-14 request).
+
+Left-swipe an entry to edit/split (desc/time/project) — gaps, events, and
+the running row have nothing left-swipeable.
 
 Run:   python3 mobile.py           (binds 0.0.0.0:5561)
 Open:  http://ix:5561              (from the phone, same as dtd/dashboard)
 """
 from __future__ import annotations
 
+import concurrent.futures
 import datetime as _dt
 import json
 import os
@@ -176,65 +190,289 @@ def _fetch_today() -> list[dict]:
     return out
 
 
+def _safe_title(title: str) -> str:
+    """did-fast.py and tg-fast.py both split multi-item input on
+    [,;，；] — an event title with a comma ("CosmosDB Deprecation, Part 3")
+    would otherwise silently become two bogus items (the exact bug
+    tools/tg/janus.py's _safe_event_title fixed 2026-07-29). Mirrors that
+    function verbatim."""
+    return re.sub(r"\s+", " ", re.sub(r"[,;，；]", " ", title or "")).strip()
+
+
+def gcal_project_code(event: dict) -> str:
+    """Mirrors tools/tg/janus.py's gcal_project_code verbatim."""
+    title_lower = (event.get("title") or "").lower()
+    if "m5x2" in title_lower:
+        return "m5x2"
+    code = CALENDAR_PROJECT_MAP.get(event.get("calendar", ""))
+    if code:
+        return code
+    for keywords, kw_code in EVENT_KEYWORDS:
+        if any(kw in title_lower for kw in keywords):
+            return kw_code
+    return ""
+
+
+def _norm_meeting_title(s: str) -> str:
+    return _safe_title(s).lower()
+
+
+TRACKED_EARLY_START_MIN = 15  # mirrors janus.py's own constant
+
+
+def _event_covered(ev: dict, entries: list[dict]) -> bool:
+    """True if ANY Toggl entry today overlaps this event's window at all —
+    mirrors janus.py's _event_covered. Deliberately NOT porting janus.py's
+    fuller _event_reclaimable (a covered-but-swallowed-by-a-runaway-clock
+    recovery path) — out of scope for the mobile MVP; a covered event just
+    stays hidden here rather than offering to reclaim it."""
+    return any(e["start"] < ev["end_dt"] and e["end"] > ev["start_dt"] for e in entries)
+
+
+def _event_tracked(ev: dict, entries: list[dict]) -> bool:
+    """A same-titled Toggl entry is already tracking THIS event instance —
+    mirrors janus.py's _event_tracked. Without this, an event you already
+    started a running timer for up to TRACKED_EARLY_START_MIN early still
+    shows as untracked; swiping it would fire an un-backdated tg-fast start
+    that stops your real running timer and starts a duplicate."""
+    t = _norm_meeting_title(ev.get("title") or "")
+    if not t:
+        return False
+    for e in entries:
+        if _norm_meeting_title(e.get("desc") or "") != t:
+            continue
+        if e["start"] < ev["end_dt"] and e["end"] > ev["start_dt"]:
+            return True
+        if (e.get("running")
+                and 0 <= (ev["start_dt"] - e["start"]).total_seconds()
+                <= TRACKED_EARLY_START_MIN * 60):
+            return True
+    return False
+
+
+CAL_FETCH_TIMEOUT_SEC = 10  # per source; see _fetch_calendar_source
+
+
+def _fetch_calendar_source(client_name: str, day_start: _dt.datetime,
+                           day_end: _dt.datetime) -> list[dict]:
+    """Fetch one calendar source (gcal_client or outlook_client) in a
+    SEPARATE PROCESS with a hard kill-on-timeout.
+
+    Discovered live (2026-08-14): outlook_client.list_events()'s own
+    internal `mcp.call_tool(..., timeout=15)` does NOT reliably enforce that
+    timeout from this daemon's environment — a direct call hung 25s+ with no
+    error, which took the ENTIRE daemon down (its dev-server default is
+    single-threaded, so one wedged request blocks every other endpoint
+    behind it, gap-fill/log/edit included, not just calendar rows). A Python
+    thread can't be forcibly killed once it's stuck in a hung network call,
+    so a thread-based timeout would just abandon the hang in place — it
+    would stop blocking THIS request but the leaked thread (and, at
+    high-enough request volume, eventually every thread in the pool) stays
+    stuck forever. A subprocess CAN be killed outright: subprocess.run's own
+    `timeout=` reliably terminates the child, so a hang here costs at most
+    CAL_FETCH_TIMEOUT_SEC and leaks nothing."""
+    script = (
+        "import sys, json, datetime\n"
+        f"import {client_name}\n"
+        f"s = datetime.datetime.fromisoformat({day_start.isoformat()!r})\n"
+        f"e = datetime.datetime.fromisoformat({day_end.isoformat()!r})\n"
+        f"evs = {client_name}.list_events(s, e)\n"
+        "for ev in evs:\n"
+        "    ev['start_dt'] = ev['start_dt'].isoformat()\n"
+        "    ev['end_dt'] = ev['end_dt'].isoformat()\n"
+        "print(json.dumps(evs))\n"
+    )
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/python3", "-c", script],
+            capture_output=True, text=True, timeout=CAL_FETCH_TIMEOUT_SEC,
+            cwd=str(Path.home() / "i446-monorepo/tools/tg"))
+    except subprocess.TimeoutExpired:
+        print(f"WARN {client_name} fetch timed out after {CAL_FETCH_TIMEOUT_SEC}s",
+              file=sys.stderr)
+        return []
+    if proc.returncode != 0:
+        print(f"WARN {client_name} fetch failed:", proc.stderr.strip()[-300:], file=sys.stderr)
+        return []
+    try:
+        raw = json.loads(proc.stdout)
+    except Exception as e:
+        print(f"WARN {client_name} fetch: bad output ({e}):", proc.stdout[:200], file=sys.stderr)
+        return []
+    for ev in raw:
+        ev["start_dt"] = _parse_iso(ev["start_dt"])
+        ev["end_dt"] = _parse_iso(ev["end_dt"])
+    return raw
+
+
+def _fetch_events_today(entries: list[dict]) -> list[dict]:
+    """Today's gcal + outlook events, deduped and filtered to ones actually
+    worth showing as a convertible row: not all-day, not transparent
+    ("free" holds), not already covered/tracked by a real Toggl entry.
+    Best-effort — a calendar fetch failure just means no event rows, same
+    tolerance tools/tg/janus.py's own fetch_gcal gives itself. Both sources
+    fetched concurrently (each in its own subprocess, see
+    _fetch_calendar_source) so a slow/hung one doesn't double the wait."""
+    today = _dt.datetime.now(TZ).date()
+    day_start = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+    day_end = day_start + _dt.timedelta(days=1)
+    sources = [n for n, mod in (("gcal_client", gcal_client),
+                                ("outlook_client", outlook_client)) if mod is not None]
+    raw: list[dict] = []
+    if sources:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            futs = {pool.submit(_fetch_calendar_source, name, day_start, day_end): name
+                   for name in sources}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    raw += fut.result()
+                except Exception as e:
+                    print(f"WARN {futs[fut]} fetch:", e, file=sys.stderr)
+    raw.sort(key=lambda e: e["start_dt"])
+    seen = set()
+    deduped = []
+    for e in raw:
+        k = ((e.get("title") or "").strip().lower(), e["start_dt"], e["end_dt"])
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(e)
+    now = _dt.datetime.now(TZ)
+    out = []
+    for ev in deduped:
+        if ev.get("all_day") or ev.get("transparency") == "transparent":
+            continue
+        if _event_covered(ev, entries) or _event_tracked(ev, entries):
+            continue
+        code = gcal_project_code(ev)
+        out.append({
+            "title": _safe_title(ev.get("title") or "(no title)"),
+            "start_dt": ev["start_dt"], "end_dt": ev["end_dt"],
+            "code": code, "color": COLORS.get(code, DEFAULT_COLOR),
+            "is_past": ev["end_dt"] <= now,
+            "started": ev["start_dt"] <= now,
+        })
+    return out
+
+
+def _split_gaps_around_events(gaps: list[dict], events: list[dict]) -> list[dict]:
+    """Carve each event's own window out of any gap it falls inside —
+    mirrors tools/tg/janus.py's _split_gaps_around_events. Operates on plain
+    (start_dt, end_dt) gap dicts (see _raw_gaps), same shape the caller
+    builds."""
+    if not events:
+        return gaps
+    out = []
+    for g in gaps:
+        segments = [(g["start_dt"], g["end_dt"])]
+        for ev in events:
+            next_segments = []
+            for s, e in segments:
+                ev_s, ev_e = max(ev["start_dt"], s), min(ev["end_dt"], e)
+                if ev_s >= ev_e:
+                    next_segments.append((s, e))
+                    continue
+                if ev_s > s:
+                    next_segments.append((s, ev_s))
+                if ev_e < e:
+                    next_segments.append((ev_e, e))
+            segments = next_segments
+        out += [{"start_dt": s, "end_dt": e} for s, e in segments]
+    return out
+
+
+def _split_gap_at_boundaries(start_dt: _dt.datetime, end_dt: _dt.datetime,
+                             day0: _dt.datetime) -> list[tuple]:
+    """Split [start_dt, end_dt) at every 地支 block boundary it crosses, so
+    a divider can land BETWEEN the pieces instead of the whole span
+    rendering as one gap with dividers stacked before/after it."""
+    cuts = sorted(day0 + _dt.timedelta(hours=h) for h, _ in BLOCKS
+                 if start_dt < day0 + _dt.timedelta(hours=h) < end_dt)
+    pts = [start_dt] + cuts + [end_dt]
+    return [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
+
+
 def build_timeline() -> dict:
     today = _dt.datetime.now(TZ).date()
     now = _dt.datetime.now(TZ)
     entries = _fetch_today()
+    events = _fetch_events_today(entries)
     logged = _ledger(today)
-
-    rows: list[dict] = []
-    tracked_min = 0
+    day0 = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
 
     def hhmm(dt: _dt.datetime) -> str:
         return dt.strftime("%H:%M")
 
-    def add_dividers(upto: _dt.datetime, cursor_holder: list):
-        """Emit 地支 dividers for block starts crossed before `upto`."""
-        while cursor_holder[0] < len(BLOCKS):
-            h, name = BLOCKS[cursor_holder[0]]
-            bdt = _dt.datetime.combine(today, _dt.time(0, 0), TZ) + _dt.timedelta(hours=h)
-            if bdt > upto or bdt > now:
-                break
-            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
-            cursor_holder[0] += 1
-
-    bidx = [0]
-    day0 = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
-
-    def emit_gap(a: _dt.datetime, b: _dt.datetime):
-        """Emit the untracked span (a, b), split at 地支 block boundaries so
-        dividers land inside long gaps instead of stacking above them."""
-        cur = a
-        while bidx[0] < len(BLOCKS):
-            h, name = BLOCKS[bidx[0]]
-            bdt = day0 + _dt.timedelta(hours=h)
-            if bdt >= b or bdt > now:
-                break
-            if (bdt - cur).total_seconds() >= MIN_GAP_MIN * 60:
-                rows.append({"type": "gap", "start": hhmm(cur), "end": hhmm(bdt),
-                             "minutes": int((bdt - cur).total_seconds() // 60)})
-            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
-            bidx[0] += 1
-            cur = max(cur, bdt)
-        if (b - cur).total_seconds() >= MIN_GAP_MIN * 60:
-            rows.append({"type": "gap", "start": hhmm(cur), "end": hhmm(b),
-                         "minutes": int((b - cur).total_seconds() // 60)})
-
-    cursor = _dt.datetime.combine(today, _dt.time(DAY_START_HOUR, 0), TZ)
+    # 1. Raw untracked spans from Toggl entries alone (events don't count as
+    # "tracked" — the whole point of showing them is to nudge conversion).
+    raw_gaps = []
+    cursor = day0
     for e in entries:
-        emit_gap(cursor, e["start"])
-        add_dividers(e["start"], bidx)
-        mins = int(round((e["end"] - e["start"]).total_seconds() / 60))
-        tracked_min += mins
-        rows.append({"type": "entry", "id": e["id"], "desc": e["desc"],
-                     "project": e["project"], "color": e["color"],
-                     "tags": e.get("tags") or [],
-                     "start": hhmm(e["start"]), "end": ("now" if e["running"] else hhmm(e["end"])),
-                     "minutes": mins, "running": e["running"],
-                     "logged": e["id"] in logged})
+        if e["start"] > cursor:
+            raw_gaps.append({"start_dt": cursor, "end_dt": e["start"]})
         cursor = max(cursor, e["end"])
-    emit_gap(cursor, now)
-    add_dividers(now, bidx)
+    if now > cursor:
+        raw_gaps.append({"start_dt": cursor, "end_dt": now})
+
+    # 2. Carve each event's window out of whatever gap it falls inside, then
+    # 3. split what's left at 地支 boundaries, dropping anything now under
+    # MIN_GAP_MIN.
+    leaf_gaps = []
+    for g in _split_gaps_around_events(raw_gaps, events):
+        for s, e in _split_gap_at_boundaries(g["start_dt"], g["end_dt"], day0):
+            mins = int((e - s).total_seconds() // 60)
+            if mins >= MIN_GAP_MIN:
+                leaf_gaps.append({"start_dt": s, "end_dt": e, "minutes": mins})
+
+    # 4. Merge entries + leaf gaps + events into one time-ordered stream, then
+    # walk it inserting a 地支 divider row wherever a block boundary is
+    # crossed between one item and the next (uniform regardless of WHY
+    # there's a time gap between them — entry→gap, gap→event, event→gap...).
+    stream = ([{"kind": "gap", "start_dt": g["start_dt"], "data": g} for g in leaf_gaps]
+             + [{"kind": "entry", "start_dt": e["start"], "data": e} for e in entries]
+             + [{"kind": "event", "start_dt": ev["start_dt"], "data": ev} for ev in events])
+    stream.sort(key=lambda it: it["start_dt"])
+
+    rows: list[dict] = []
+    tracked_min = 0
+    bidx = 0
+
+    def emit_dividers_before(t: _dt.datetime):
+        nonlocal bidx
+        while bidx < len(BLOCKS):
+            h, name = BLOCKS[bidx]
+            bdt = day0 + _dt.timedelta(hours=h)
+            if bdt > t or bdt > now:
+                break
+            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
+            bidx += 1
+
+    for it in stream:
+        emit_dividers_before(it["start_dt"])
+        if it["kind"] == "gap":
+            g = it["data"]
+            rows.append({"type": "gap", "start": hhmm(g["start_dt"]), "end": hhmm(g["end_dt"]),
+                         "minutes": g["minutes"]})
+        elif it["kind"] == "entry":
+            e = it["data"]
+            mins = int(round((e["end"] - e["start"]).total_seconds() / 60))
+            tracked_min += mins
+            rows.append({"type": "entry", "id": e["id"], "desc": e["desc"],
+                         "project": e["project"], "color": e["color"],
+                         "tags": e.get("tags") or [],
+                         "start": hhmm(e["start"]), "end": ("now" if e["running"] else hhmm(e["end"])),
+                         "minutes": mins, "running": e["running"],
+                         "logged": e["id"] in logged})
+        else:  # event
+            ev = it["data"]
+            mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
+            rows.append({"type": "event", "title": ev["title"], "project": ev["code"],
+                         "color": ev["color"], "start": hhmm(ev["start_dt"]),
+                         "end": hhmm(ev["end_dt"]), "minutes": mins,
+                         "is_past": ev["is_past"], "started": ev["started"],
+                         "start_iso": ev["start_dt"].isoformat(),
+                         "end_iso": ev["end_dt"].isoformat()})
+    emit_dividers_before(now)
 
     # Σ points for the header (same source as mobile dtd: 0分 col D on Ix).
     points = None
@@ -490,19 +728,10 @@ def habit_tags(tags: list[str]) -> list[str]:
         return []
 
 
-def log_entry(entry_id: str, desc: str, minutes: int, project: str,
-              tags: list[str] | None = None) -> dict:
-    today = _dt.datetime.now(TZ).date()
-    if str(entry_id) in _ledger(today):
-        return {"ok": True, "already": True}
-    text = f"{desc} {minutes}"
-    if project:
-        text += f" @{project}"
-    # Habit tags ride along as extra comma-separated /did items — did-fast
-    # processes each independently (其他人 61 → 其他人 0n column, etc.).
-    extra = habit_tags(tags or [])
-    for t in extra:
-        text += f", {t} {minutes}"
+def _run_did_fast(text: str) -> dict:
+    """Shell did-fast.py and parse its JSON-in-stdout result. Shared by
+    log_entry, convert_event (past-event branch) and done_current — all
+    three just build a different did-fast command string."""
     try:
         proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
                               capture_output=True, text=True, timeout=90)
@@ -524,14 +753,119 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
                      for r in data["results"][1:]]
     needs_agent = bool(data and data.get("agent_needed"))
     ok = proc.returncode == 0 and step is not None
-    if ok:
-        note = f"{desc} {minutes} → {step}"
-        if tag_steps:
-            note += " + " + ", ".join(tag_steps)
-        _ledger_add(today, entry_id, note)
     return {"ok": ok, "step": step, "tag_steps": tag_steps,
             "needs_agent": needs_agent,
             "stderr_tail": proc.stderr.strip()[-200:]}
+
+
+def log_entry(entry_id: str, desc: str, minutes: int, project: str,
+              tags: list[str] | None = None) -> dict:
+    today = _dt.datetime.now(TZ).date()
+    if str(entry_id) in _ledger(today):
+        return {"ok": True, "already": True}
+    text = f"{desc} {minutes}"
+    if project:
+        text += f" @{project}"
+    # Habit tags ride along as extra comma-separated /did items — did-fast
+    # processes each independently (其他人 61 → 其他人 0n column, etc.).
+    extra = habit_tags(tags or [])
+    for t in extra:
+        text += f", {t} {minutes}"
+    r = _run_did_fast(text)
+    if r["ok"]:
+        note = f"{desc} {minutes} → {r['step']}"
+        if r["tag_steps"]:
+            note += " + " + ", ".join(r["tag_steps"])
+        _ledger_add(today, entry_id, note)
+    return r
+
+
+# In-flight guard for the two actions below: did-fast's point-writing is an
+# ACCUMULATING formula append (not idempotent like log_entry's pre-check
+# against the ledger, since there's no natural id to ledger a not-yet-
+# existing Toggl entry against before the call completes) — a double-tap
+# or retry landing while the first request is still in flight would credit
+# points twice. Keyed per action+identity; removed in a finally so a failed
+# call doesn't wedge future attempts.
+_INFLIGHT: set[str] = set()
+
+
+def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: bool) -> dict:
+    """Convert a calendar event into Toggl — mirrors tools/tg/janus.py's
+    _convert_selected_event. An ALREADY-ENDED event backfills as a
+    completed Toggl entry AND grants its points in one did-fast call (its
+    Step 5.5 Toggl-entry-creation is keyed off the HHMM-HHMM range). A
+    still-open/future event just starts a live tg-fast timer instead —
+    there's nothing to grant points for yet."""
+    # Sanitize independently of _fetch_events_today's own _safe_title call —
+    # this is a public POST endpoint, not guaranteed to only ever receive a
+    # title this server already cleaned.
+    title = _safe_title(title)
+    key = f"event:{title}|{start_iso}|{end_iso}"
+    if key in _INFLIGHT:
+        return {"ok": False, "error": "already converting"}
+    _INFLIGHT.add(key)
+    try:
+        start_dt = _parse_iso(start_iso)
+        suffix = f" @{code}" if code else ""
+        if is_past:
+            end_dt = _parse_iso(end_iso)
+            text = f"{title} {start_dt:%H%M}-{end_dt:%H%M}{suffix}"
+            r = _run_did_fast(text)
+            return {"ok": r["ok"], "mode": "logged", "step": r.get("step"),
+                    "needs_agent": r.get("needs_agent"), "stderr_tail": r.get("stderr_tail")}
+        now = _dt.datetime.now(TZ)
+        text = (f"{start_dt:%H%M} {title}{suffix}" if start_dt <= now
+               else f"{title}{suffix}")
+        try:
+            proc = subprocess.run(["/usr/bin/python3", str(TG_FAST), text],
+                                  capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "tg-fast timeout"}
+        return {"ok": proc.returncode == 0, "mode": "started",
+                "stderr_tail": proc.stderr.strip()[-200:]}
+    finally:
+        _INFLIGHT.discard(key)
+
+
+def done_current(entry_id: str, desc: str, project: str) -> dict:
+    """The /done action for the running timer: stop it AND grant its points
+    in one shot — mirrors tools/tg/janus.py's _run_current_timer_done. A
+    completed HHMM-nowHHMM did-fast command's Toggl-creation step calls
+    trim_range() under the hood, which finds the still-open running entry
+    covering that exact window and closes/trims it — no separate stop call
+    needed. (Desktop's d357-recording-finalize branch and its interactive
+    "no resolvable points, ask the user" prompt are both deliberately not
+    ported here — out of scope per 2026-08-14 request; an unresolvable
+    entry just logs 0分 same as a regular swiped entry already can.)"""
+    key = f"done:{entry_id}"
+    if key in _INFLIGHT:
+        return {"ok": False, "error": "already logging"}
+    _INFLIGHT.add(key)
+    try:
+        e = _get_entry(entry_id)
+        if not e:
+            return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
+        running = (e.get("duration") or 0) < 0 or not e.get("stop")
+        if not running:
+            return {"ok": False, "error": "not running anymore — reload"}
+        try:
+            start = _parse_iso(e["start"])
+        except Exception:
+            return {"ok": False, "error": "bad start time"}
+        now = _dt.datetime.now(TZ)
+        if (now - start).total_seconds() < 60:
+            return {"ok": False, "error": "just started — give it a minute"}
+        text = f"{desc} {start:%H%M}-{now:%H%M}"
+        if project:
+            text += f" @{project}"
+        r = _run_did_fast(text)
+        if r["ok"]:
+            _ledger_add(_dt.datetime.now(TZ).date(), entry_id,
+                       f"{desc} done {start:%H%M}-{now:%H%M} → {r['step']}")
+        return r
+    finally:
+        _INFLIGHT.discard(key)
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +917,23 @@ def api_split():
     if not b.get("id") or b.get("mode") not in ("top", "bottom"):
         return jsonify({"ok": False, "error": "id+mode(top|bottom) required"}), 400
     return jsonify(split_entry(str(b["id"]), b["mode"]))
+
+
+@app.route("/api/convert-event", methods=["POST"])
+def api_convert_event():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("title") or not b.get("start_iso") or not b.get("end_iso"):
+        return jsonify({"ok": False, "error": "title+start_iso+end_iso required"}), 400
+    return jsonify(convert_event(b["title"], b["start_iso"], b["end_iso"],
+                                 (b.get("code") or "").strip(), bool(b.get("is_past"))))
+
+
+@app.route("/api/done-current", methods=["POST"])
+def api_done_current():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("id") or not b.get("desc"):
+        return jsonify({"ok": False, "error": "id+desc required"}), 400
+    return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip()))
 
 
 @app.route("/api/projects")
@@ -642,6 +993,9 @@ PAGE = r"""<!doctype html>
   .logged .ttl::after { content:" ✓"; color:var(--go); }
   .logged { opacity:.45; }
   .running .ttl::before { content:"▶ "; color:var(--go); }
+  .eventrow { border-left:2px dashed currentColor; padding-left:12px; }
+  .eventrow .ttl::before { content:"◇ "; }
+  .converting { opacity:.45; pointer-events:none; }
   .empty,.loading { text-align:center; color:var(--dim); padding:60px 20px; }
   .toast { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 20px);
     transform:translateX(-50%) translateY(16px); background:var(--go); color:#003;
@@ -755,15 +1109,23 @@ function render(rows){
   window.scrollTo(0, document.body.scrollHeight);
 }
 
+function trackLabel(r){
+  if(r.type === 'gap') return '+ fill';
+  if(r.type === 'event') return r.is_past ? 'log 分 ('+r.minutes+'m)' : (r.started ? 'resume tracking' : 'start tracking');
+  if(r.running) return 'done ✓ (stop + log)';
+  return 'neon log 分 ('+r.minutes+'m)';
+}
+
 function makeRow(r){
   const row = document.createElement('div');
   row.className = 'row';
   const track = document.createElement('div');
   track.className = 'track';
-  track.textContent = r.type==='gap' ? '+ fill' : 'neon log 分 ('+r.minutes+'m)';
+  track.textContent = trackLabel(r);
   row.appendChild(track);
 
-  // Left-swipe reveal (edit) — entries only; a gap has nothing to edit.
+  // Left-swipe reveal (edit) — entries only; gaps and calendar events have
+  // nothing to edit (an event isn't a Toggl entry yet).
   let trackEdit = null;
   if(r.type === 'entry'){
     trackEdit = document.createElement('div');
@@ -773,12 +1135,12 @@ function makeRow(r){
   }
 
   const line = document.createElement('div');
-  line.className = 'line' + (r.type==='gap'?' gaprow':'') +
+  line.className = 'line' + (r.type==='gap'?' gaprow':'') + (r.type==='event'?' eventrow':'') +
     (r.logged?' logged':'') + (r.running?' running':'');
-  if(r.type==='entry') line.style.color = r.color;
+  if(r.type==='entry' || r.type==='event') line.style.color = r.color;
   const ttl = document.createElement('span');
   ttl.className = 'ttl';
-  ttl.textContent = r.type==='gap' ? '· empty ·' : r.desc;
+  ttl.textContent = r.type==='gap' ? '· empty ·' : (r.type==='event' ? r.title : r.desc);
   const meta = document.createElement('span');
   meta.className = 'meta';
   meta.textContent = r.start+'–'+r.end+' · '+r.minutes+'m';
@@ -833,9 +1195,46 @@ function act(row, line, r){
     setTimeout(()=>document.getElementById('d-desc').focus(), 60);
     return;
   }
-  if(r.running){ toast('still running', true); return; }
+  if(r.type === 'event'){ commitConvert(line, r); return; }
+  if(r.running){ commitDone(line, r); return; }
   if(r.logged){ toast('already logged', true); return; }
   commitLog(line, r);
+}
+
+async function commitConvert(line, r){
+  line.classList.add('converting');  // lock immediately — did-fast's point
+                                      // write isn't idempotent like commitLog's ledger pre-check
+  try {
+    const resp = await fetch('/api/convert-event', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({title:r.title, start_iso:r.start_iso, end_iso:r.end_iso,
+        code:r.project, is_past:r.is_past})});
+    const d = await resp.json();
+    if(!d.ok){
+      line.classList.remove('converting');
+      toast(d.needs_agent ? 'no route — use /did on desktop' : (d.error||'convert failed'), true);
+      return;
+    }
+    toast(d.mode === 'logged' ? ('+'+r.minutes+'m → '+(d.step||'neon')+' ✓') : 'tracking started ✓');
+    load();  // the event's slot is now covered by a real Toggl entry
+  } catch(e){ line.classList.remove('converting'); toast('offline', true); }
+}
+
+async function commitDone(line, r){
+  line.classList.add('converting');
+  try {
+    const resp = await fetch('/api/done-current', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:r.id, desc:r.desc, project:r.project})});
+    const d = await resp.json();
+    if(!d.ok){
+      line.classList.remove('converting');
+      toast(d.needs_agent ? 'no route — use /did on desktop' : (d.error||'done failed'), true);
+      return;
+    }
+    toast('stopped + logged → '+(d.step||'neon')+' ✓');
+    load();  // the running row is now a completed, logged entry
+  } catch(e){ line.classList.remove('converting'); toast('offline', true); }
 }
 
 async function commitLog(line, r){

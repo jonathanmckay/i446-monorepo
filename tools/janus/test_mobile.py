@@ -323,3 +323,262 @@ def test_split_refuses_already_logged(jm, monkeypatch):
     jm._ledger_add(dt.datetime.now(jm.TZ).date(), "1", "already credited")
     r = jm.split_entry("1", "top")
     assert not r["ok"] and "logged" in r["error"]
+
+
+# ---------------------------------------------------------------------------
+# Calendar events → convertible rows (2026-08-14 feature: ports janus.py's
+# ⌥↵ branches 1 and 3 — "convert a calendar event" and "stop + log the
+# running timer" — to a swipe gesture. Branch 2 (d357 recording finalize)
+# stays desktop-only per user request.)
+# ---------------------------------------------------------------------------
+
+def _ev(jm, sh, sm, eh, em, title="Meeting", calendar="Outlook",
+       all_day=False, transparency="opaque"):
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    return {"title": title, "start_dt": mk(sh, sm), "end_dt": mk(eh, em),
+            "calendar": calendar, "all_day": all_day, "transparency": transparency}
+
+
+def test_event_covered_by_any_overlapping_entry(jm):
+    ev = _ev(jm, 10, 0, 10, 30)
+    entries = [_entry(jm, 10, 10, 10, 20, desc="unrelated")]
+    assert jm._event_covered(ev, entries)
+
+
+def test_event_not_covered_when_no_overlap(jm):
+    ev = _ev(jm, 10, 0, 10, 30)
+    entries = [_entry(jm, 11, 0, 11, 30, desc="later")]
+    assert not jm._event_covered(ev, entries)
+
+
+def test_event_tracked_by_same_title_overlap(jm):
+    ev = _ev(jm, 10, 0, 10, 30, title="Standup")
+    entries = [_entry(jm, 10, 5, 10, 25, desc="Standup")]
+    assert jm._event_tracked(ev, entries)
+
+
+def test_event_tracked_by_early_running_start(jm):
+    """A running timer started up to TRACKED_EARLY_START_MIN before the
+    event's own start still counts as tracking it — without this, swiping
+    the still-shown event would fire an un-backdated tg-fast start that
+    stops the real running timer and starts a duplicate."""
+    ev = _ev(jm, 10, 0, 10, 30, title="Standup")
+    e = _entry(jm, 9, 50, 9, 50, desc="Standup")
+    e["running"] = True
+    assert jm._event_tracked(ev, [e])
+
+
+def test_event_not_tracked_when_running_started_too_early(jm):
+    ev = _ev(jm, 10, 0, 10, 30, title="Standup")
+    e = _entry(jm, 9, 40, 9, 40, desc="Standup")  # 20min early > 15min threshold
+    e["running"] = True
+    assert not jm._event_tracked(ev, [e])
+
+
+class _FakeCal:
+    def __init__(self, events):
+        self._events = events
+
+    def list_events(self, start, end):
+        return self._events
+
+
+def test_fetch_events_filters_all_day_and_transparent(jm, monkeypatch):
+    all_day = _ev(jm, 0, 0, 23, 59, title="Someone's Birthday", all_day=True)
+    free = _ev(jm, 9, 0, 10, 0, title="Focus block", transparency="transparent")
+    real = _ev(jm, 11, 0, 11, 30, title="Standup")
+    monkeypatch.setattr(jm, "gcal_client", _FakeCal([all_day, free, real]))
+    monkeypatch.setattr(jm, "outlook_client", _FakeCal([]))
+    out = jm._fetch_events_today([])
+    assert len(out) == 1 and out[0]["title"] == "Standup"
+
+
+def test_fetch_events_excludes_covered_and_tracked(jm, monkeypatch):
+    covered = _ev(jm, 10, 0, 10, 30, title="Covered mtg")
+    tracked = _ev(jm, 11, 0, 11, 30, title="Standup")
+    monkeypatch.setattr(jm, "gcal_client", _FakeCal([covered, tracked]))
+    monkeypatch.setattr(jm, "outlook_client", _FakeCal([]))
+    entries = [
+        _entry(jm, 10, 5, 10, 20, desc="unrelated"),   # overlaps `covered`
+        _entry(jm, 11, 0, 11, 30, desc="Standup"),      # same title as `tracked`
+    ]
+    assert jm._fetch_events_today(entries) == []
+
+
+def test_fetch_events_dedupes_gcal_outlook_mirror(jm, monkeypatch):
+    ev = _ev(jm, 13, 0, 13, 30, title="Sync")
+    monkeypatch.setattr(jm, "gcal_client", _FakeCal([dict(ev)]))
+    monkeypatch.setattr(jm, "outlook_client", _FakeCal([dict(ev)]))
+    out = jm._fetch_events_today([])
+    assert len(out) == 1
+
+
+def test_split_gaps_around_events_carves_out_event_window(jm):
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    gap = {"start_dt": mk(9, 0), "end_dt": mk(11, 0)}
+    ev = {"start_dt": mk(9, 45), "end_dt": mk(10, 15)}
+    out = jm._split_gaps_around_events([gap], [ev])
+    assert [(g["start_dt"], g["end_dt"]) for g in out] == [
+        (mk(9, 0), mk(9, 45)), (mk(10, 15), mk(11, 0))]
+
+
+def test_split_gaps_around_events_drops_fully_covered_gap(jm):
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    gap = {"start_dt": mk(9, 0), "end_dt": mk(9, 30)}
+    ev = {"start_dt": mk(8, 0), "end_dt": mk(10, 0)}  # fully swallows the gap
+    assert jm._split_gaps_around_events([gap], [ev]) == []
+
+
+def test_split_gap_at_boundaries(jm):
+    today = dt.datetime.now(jm.TZ).date()
+    day0 = dt.datetime.combine(today, dt.time(0, 0), jm.TZ)
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    out = jm._split_gap_at_boundaries(mk(3, 0), mk(7, 0), day0)
+    assert out == [(mk(3, 0), mk(4, 0)), (mk(4, 0), mk(6, 0)), (mk(6, 0), mk(7, 0))]
+
+
+def test_convert_past_event_shells_did_fast_with_time_range(jm, monkeypatch):
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    r = jm.convert_event("Standup", mk(9, 0).isoformat(), mk(9, 30).isoformat(), "i9", True)
+    assert r["ok"] and r["mode"] == "logged" and r["step"] == "variable"
+    assert seen["text"] == "Standup 0900-0930 @i9"
+
+
+def test_convert_past_event_sanitizes_comma_in_title(jm, monkeypatch):
+    """did-fast splits multi-item input on [,;，；] — an event title with a
+    comma must not silently become two bogus items (same bug janus.py's
+    _safe_event_title fixed on desktop, 2026-07-29)."""
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    jm.convert_event("CosmosDB Deprecation, Part 3", mk(9, 0).isoformat(),
+                     mk(9, 30).isoformat(), "", True)
+    assert "," not in seen["text"]
+
+
+def test_convert_started_event_backdates_tg_fast(jm, monkeypatch):
+    """An event already in progress (start <= now) backdates the tg-fast
+    start — mirrors janus.py's _event_to_tg_command."""
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        class P:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    now = dt.datetime.now(jm.TZ)
+    start = now - dt.timedelta(minutes=5)
+    end = now + dt.timedelta(minutes=25)
+    r = jm.convert_event("Standup", start.isoformat(), end.isoformat(), "i9", False)
+    assert r["ok"] and r["mode"] == "started"
+    assert str(jm.TG_FAST) in seen["cmd"]
+    assert seen["cmd"][-1] == f"{start:%H%M} Standup @i9"
+
+
+def test_convert_future_event_not_yet_started_omits_backdate(jm, monkeypatch):
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    now = dt.datetime.now(jm.TZ)
+    start = now + dt.timedelta(minutes=10)
+    end = now + dt.timedelta(minutes=40)
+    jm.convert_event("Standup", start.isoformat(), end.isoformat(), "i9", False)
+    assert seen["text"] == "Standup @i9"
+
+
+def test_convert_event_inflight_guard_rejects_concurrent_duplicate(jm):
+    """did-fast's point write is an accumulating formula append, not
+    idempotent like log_entry's ledger pre-check — a double-tap before the
+    first call returns must not fire did-fast twice."""
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    key = f"event:Standup|{mk(9, 0).isoformat()}|{mk(9, 30).isoformat()}"
+    jm._INFLIGHT.add(key)
+    try:
+        r = jm.convert_event("Standup", mk(9, 0).isoformat(), mk(9, 30).isoformat(), "", True)
+        assert not r["ok"] and "already" in r["error"]
+    finally:
+        jm._INFLIGHT.discard(key)
+
+
+# ---------------------------------------------------------------------------
+# done_current — /done for the pinned running timer (2026-08-14)
+# ---------------------------------------------------------------------------
+
+def test_done_current_not_found(jm, monkeypatch):
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [])
+    r = jm.done_current("999", "work", "i9")
+    assert not r["ok"] and "not found" in r["error"]
+
+
+def test_done_current_refuses_when_not_actually_running(jm, monkeypatch):
+    e = _raw_entry(jm, 9, 0, 9, 30, eid=1)  # a completed entry, not running
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    r = jm.done_current("1", "work", "i9")
+    assert not r["ok"] and "not running" in r["error"]
+
+
+def test_done_current_refuses_just_started(jm, monkeypatch):
+    now = dt.datetime.now(jm.TZ)
+    e = _raw_running(jm, now.hour, now.minute, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    r = jm.done_current("1", "work", "i9")
+    assert not r["ok"] and "just started" in r["error"]
+
+
+def test_done_current_stops_and_logs(jm, monkeypatch):
+    now = dt.datetime.now(jm.TZ)
+    start = now - dt.timedelta(minutes=5)
+    e = _raw_running(jm, start.hour, start.minute, desc="deep work", eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    r = jm.done_current("1", "deep work", "i9")
+    assert r["ok"] and r["step"] == "variable"
+    assert seen["text"].startswith("deep work ") and seen["text"].endswith("@i9")
+    assert "1" in jm._ledger(dt.datetime.now(jm.TZ).date())
+
+
+def test_done_current_inflight_guard(jm):
+    jm._INFLIGHT.add("done:1")
+    try:
+        r = jm.done_current("1", "work", "i9")
+        assert not r["ok"] and "already" in r["error"]
+    finally:
+        jm._INFLIGHT.discard("done:1")
