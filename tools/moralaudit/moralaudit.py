@@ -212,21 +212,27 @@ def run_form(target: _dt.date) -> dict | None:
     areas = {}
     rows = []
     last_section = None
-    row_iter = {f"{rk}__{ck}": (rk, rl, sec) for rk, rl, sec in ROWS for ck, _cl in COLS}
-    for key, label, kind in FIELDS:
-        rk_ck = key.rsplit("__", 1)[0]
-        rk, _rl, section = row_iter[rk_ck]
+    for rkey, rlabel, section in ROWS:
         if section != last_section:
             rows.append(Window(FormattedTextControl(SECTION_LABEL[section]),
                                 height=1, style="class:section"))
             last_section = section
-        ml = kind == "textml"
-        area = TextArea(multiline=ml, height=(2 if ml else 1), wrap_lines=True,
-                        style="class:input", scrollbar=ml)
-        areas[key] = (area, kind, label)
-        lbl = Window(FormattedTextControl(label), width=30, style="class:label",
-                     dont_extend_width=True)
-        rows.append(VSplit([lbl, Window(width=1, char=" "), area]))
+        for ckey, clabel in COLS:
+            tkey, rkey_ = f"{rkey}__{ckey}__t", f"{rkey}__{ckey}__r"
+            tlabel = f"{rlabel} · {clabel}"
+            t_area = TextArea(multiline=True, height=1, wrap_lines=True,
+                              style="class:input", scrollbar=True)
+            r_area = TextArea(multiline=False, height=1, width=4,
+                              style="class:input")
+            areas[tkey] = (t_area, "textml", tlabel)
+            areas[rkey_] = (r_area, "rating", f"{tlabel} (1-7/n/a)")
+            lbl = Window(FormattedTextControl(tlabel), width=30, style="class:label",
+                        dont_extend_width=True)
+            rows.append(VSplit([
+                lbl, Window(width=1, char=" "),
+                t_area, Window(width=1, char=" "),
+                r_area,
+            ], height=1))
 
     msg = {"text": ""}
     status = Window(FormattedTextControl(
