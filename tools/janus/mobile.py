@@ -45,18 +45,60 @@ os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo"))
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/tg"))
 
 from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 
 from mcp.toggl_server import toggl_api  # noqa: E402
 from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
 
+# Calendar clients (2026-08-14): both self-contained (gcal_client reads OAuth
+# tokens straight off disk, no MCP server needed at runtime; outlook_client
+# needs agency_mcp from tools/ibx/, already optional inside outlook_client
+# itself). Neither import may take the whole daemon down — wrap both, not
+# just outlook's (a missing googleapiclient in this venv used to be able to
+# kill every timeline request, calendar-related or not).
+try:
+    import gcal_client  # noqa: E402
+except Exception as _e:  # noqa: BLE001
+    gcal_client = None
+    print("WARN gcal_client import failed:", _e, file=sys.stderr)
+try:
+    import outlook_client  # noqa: E402
+except Exception as _e:  # noqa: BLE001
+    outlook_client = None
+    print("WARN outlook_client import failed:", _e, file=sys.stderr)
+
 PORT = 5561
 TZ = ZoneInfo("America/Los_Angeles")
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 STATE_DIR = Path.home() / ".local/state/jm"
 MIN_GAP_MIN = 5          # gaps shorter than this are not shown
 DAY_START_HOUR = 0       # timeline from midnight (睡觉 entries live there)
+
+# Calendar → project resolution — mirrors tools/tg/janus.py's own copies
+# (CALENDAR_PROJECT_MAP / EVENT_KEYWORDS / gcal_project_code) verbatim.
+# Not imported directly: janus.py is a prompt_toolkit TUI whose top-level
+# code builds an Application/key-bindings at import time — importing it into
+# this Flask daemon would try to do all of that too.
+CALENDAR_PROJECT_MAP = {
+    "m5x2 Cal": "m5x2",
+    "3494 House": "m5x2",
+    "CAIS School": "xk87",
+    "Habits": "hcm",
+    "lx@m5c7.com": "xk88",
+    "lxu888": "xk88",
+    "Calendar": "infra",
+    "jonathan.b.mckay@gmail.com": "infra",
+    "Outlook": "i9",
+}
+EVENT_KEYWORDS = [
+    (["1:1", "1|1", "standup", "sprint", "retro", "slt", "metrics"], "i9"),
+    (["m5x2", "property", "tenant", "lease", "appfolio"], "m5x2"),
+    (["school", "cais", "pta", "ptc"], "xk87"),
+    (["bball", "basketball", "gym", "hiit"], "hcbp"),
+]
 
 # Neon domain palette — mirrors tools/dtd/dtd.py / tools/did/dtd.sh COLORS.
 COLORS = {

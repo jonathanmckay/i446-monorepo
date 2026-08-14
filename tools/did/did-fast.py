@@ -1241,6 +1241,34 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                     error=f"{item.name}: {minutes or 0}m today < "
                           f"{threshold['min']}m threshold — no credit"))
                 continue
+            # Long-session threshold habits (长冥想/长o314) also credit the
+            # BASE 0₦ habit (冥想/o314) with the same minutes. The base habit
+            # has no daily Todoist card of its own -- the weekly "长" card is
+            # the only real-world reminder -- so without this, completing
+            # only that card leaves the base habit's own 0n column at 0 even
+            # after a real, threshold-clearing session (bug 2026-08-14:
+            # "neon shows +30 points 冥想, jm dash shows -4" -- the
+            # dashboard's 冥想 tile sums the base habit's 0n column, which
+            # stayed empty all day despite a 35-minute session and the long
+            # bonus firing correctly).
+            if threshold and minutes and minutes >= threshold["min"]:
+                base_toggl = threshold["toggl"]
+                base_name = base_toggl[0] if isinstance(base_toggl, tuple) else base_toggl
+                base_norm = header_normalize(ZERO_N_ALIASES.get(base_name, base_name))
+                if base_norm in h0n_norm:
+                    base_item = ParsedItem(raw=base_name, name=base_name,
+                                            target_date=item.target_date)
+                    base_r = RouteResult(item=base_item, step="0n",
+                                          col_num=h0n_norm[base_norm],
+                                          write_value=minutes)
+                    base_neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
+                    base_matched = match_todoist_task(
+                        base_name, base_neon_tasks,
+                        require_labels={"0neon", "夜neon"})
+                    if base_matched and str(base_matched.get("id")) not in claimed_task_ids:
+                        claimed_task_ids.add(str(base_matched.get("id")))
+                        base_r.todoist_task = base_matched
+                    results.append(base_r)
             cell_minutes = minutes if minutes else 1
             var_val = None
             if is_var:

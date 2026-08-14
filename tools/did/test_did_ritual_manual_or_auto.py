@@ -49,11 +49,14 @@ end-to-end needs live Todoist + Excel/SSH access.
 """
 from __future__ import annotations
 
+import datetime as dtm
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 DID_FAST = HERE / "did-fast.py"
+TZ = ZoneInfo("America/Los_Angeles")
 
 sys.path.insert(0, str(HERE.parent.parent / "lib"))
 import neon_blocks as nb  # noqa: E402
@@ -119,6 +122,12 @@ def test_score_day_groups_all_stamped_blocks_into_one_term_each():
     # Directly demonstrates the fix for the observed bug: a block (巳) with
     # ALL 5 rituals stamped must score as ONE term (13), not fragment across
     # multiple terms the way append-only accumulation could leave it.
+    #
+    # `now` is pinned to 11:00 (午, start hour 10, has begun) — score_day
+    # excludes not-yet-started blocks (see test_neon_blocks_future_block_gate.py),
+    # so this must stay >= 午's own start hour or the assertion below would be
+    # time-of-day flaky depending on when the suite runs.
+    now = dtm.datetime.now(TZ).replace(hour=11, minute=0, second=0, microsecond=0)
     text = (
         "## -1₲\n\n"
         "- 卯 ⏱️ ✅\n"
@@ -130,7 +139,7 @@ def test_score_day_groups_all_stamped_blocks_into_one_term_each():
         "- 午 ☀️ \U0001f3af \U0001f4e7\n"
         "    - [ ] d\n"
     )
-    parts, total, formula = nb.score_day(text)
+    parts, total, formula = nb.score_day(text, now=now)
     assert dict(parts) == {"卯": 6, "辰": 3, "巳": 13, "午": 7}
     assert total == 29
     assert formula == "=6+3+13+7", (
