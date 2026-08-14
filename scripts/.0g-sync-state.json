@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-14T05:30:05.757483-07:00"
+  "tasks": {
+    "480分": {
+      "todoist_id": "6hGrvrFgGW3P7cvR",
+      "minutes": 100
+    },
+    "enjoy the evening": {
+      "todoist_id": "6hGrvrJjFwPQMpr2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-08-14T10:00:07.378792-07:00"
 }
