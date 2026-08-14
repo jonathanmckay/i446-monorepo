@@ -18,12 +18,21 @@ trusted (the right behavior for the completion-time preview).
 """
 from __future__ import annotations
 
+import datetime as dt
 import fcntl
 import json
 import re
+import sys as _sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
+
+# Self-locating: guarantees `blocks` resolves regardless of whether the
+# caller already put lib/ on sys.path (production) or loaded this file
+# directly via importlib (tests) — see lib/blocks.py, the shared
+# "has this block started yet?" gate every -1₦ reader must use.
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from blocks import BLOCK_START, is_future_block  # noqa: E402
 
 # 地支 waking blocks, 04:00-anchored, 2h each (shifted −1h from traditional 時辰).
 BRANCHES = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]  # 04–06 … 20–22
@@ -261,6 +270,7 @@ def score_day(
     text: str,
     emoji_pts: Optional[dict[str, int]] = None,
     validate: Optional[Callable[[str, str], bool]] = None,
+    now: Optional[dt.datetime] = None,
 ) -> tuple[list[tuple[str, int]], int, str]:
     """Score every block from its header emojis. Returns (parts, total, formula)
     where parts is [(block, score), …] and formula is the '=0+a+b' SET string
@@ -271,11 +281,24 @@ def score_day(
     daemon refuses stale 🎯/⏱️/✅). When omitted, header presence is trusted —
     the correct behavior for the completion-time preview, where the stamp was
     just written by the very ritual being completed.
+
+    Blocks that haven't started yet are always excluded via `is_future_block`
+    (lib/blocks.py), `now` defaulting to the real current time — the build
+    order pre-stamps/auto-awards markers onto blocks ahead of their start, and
+    a ritual cannot legitimately be earned in a block that hasn't begun. This
+    is the same gate tools/tg/janus.py and skills/1-1n's heatmap already apply
+    when reading the header for display; before this fix, score_day was the
+    one reader of this file that skipped it, so a future block carrying any
+    marker made the live-credited 0分!P total (did-fast.py's immediate
+    provisional write, the only caller of score_day) run ahead of what Janus
+    showed until the next daemon boundary fire self-healed it back down.
     """
     if emoji_pts is None:
         emoji_pts = emoji_points()
     parts: list[tuple[str, int]] = []
     for block, line in iter_block_lines(text):
+        if is_future_block(BLOCK_START.get(block, 0), now):
+            continue
         score = 0
         for emoji, pts in emoji_pts.items():
             if emoji in line and (validate is None or validate(block, emoji)):
