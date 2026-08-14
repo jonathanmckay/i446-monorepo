@@ -480,6 +480,20 @@ def main():
         if d != datetime.now(TZ).date():
             _DATE_OVERRIDE = d
 
+    # 'yesterday' prefix (bare word, case-insensitive) is shorthand for
+    # --date <yesterday's ISO date>. Stripped and applied here, BEFORE the
+    # comma-split below, so it covers every entry in a multi-entry command —
+    # not just the one it happens to sit in. Bug (2026-08-14): "yesterday run
+    # @hcbp #其他人 2005-2045， 2045-2058 1st hci @hci" had no handling for this
+    # word at all, so it stayed stuck in the first entry's description via
+    # resolve() and BOTH entries silently landed on today's date instead of
+    # yesterday's.
+    if not date_m:
+        yesterday_m = re.match(r"(?i)^yesterday\b\s*", raw)
+        if yesterday_m:
+            raw = raw[yesterday_m.end():].strip()
+            _DATE_OVERRIDE = datetime.now(TZ).date() - timedelta(days=1)
+
     # Simple commands
     if raw.lower().startswith("--resolve "):
         _, project, _ = resolve(raw[10:])
