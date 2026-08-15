@@ -179,3 +179,38 @@ def test_append_treats_minus_as_formula_term():
     on bare-number cells (same class as the 2026-07-14 "+2" regression)."""
     text = open("server.py").read()
     assert 'startswith(("+", "=", "-"))' in text
+
+
+class TestExplicitSaveWatchdog:
+    """Regression (2026-07-19, 07-20, 08-13, 08-14/15): the daemon never
+    called Save — every /write and /append kept returning 200 OK (the cell
+    really updated in the open workbook) while Excel's AutoSave-to-OneDrive
+    silently wedged for up to a full day, so nothing reached disk/cloud until
+    a human noticed the workbook's on-disk mtime hadn't moved. A periodic
+    explicit save bounds that wedge to SAVE_INTERVAL instead of 'however long
+    until someone checks'."""
+
+    def test_save_workbook_function_exists_and_pins_workbook(self):
+        src = _load_func_source("save_workbook")
+        assert 'save workbook "{WORKBOOK}"' in src, (
+            "save_workbook must explicitly save the pinned Neon workbook, "
+            "not rely on AutoSave"
+        )
+
+    def test_save_loop_runs_on_a_timer_under_the_lock(self):
+        src = _load_func_source("save_loop")
+        assert "time.sleep(SAVE_INTERVAL)" in src, (
+            "save_loop must force a save periodically, not just once at startup"
+        )
+        assert "with EXCEL_LOCK:" in src, (
+            "save_loop must serialize its save call with other Excel-touching "
+            "requests via EXCEL_LOCK"
+        )
+        assert "save_workbook()" in src
+
+    def test_main_starts_save_loop_as_daemon_thread(self):
+        src = _load_func_source("main")
+        assert re.search(r"threading\.Thread\(target=save_loop,\s*daemon=True\)\.start\(\)", src), (
+            "main() must start save_loop as a daemon thread, or the watchdog "
+            "never runs"
+        )
