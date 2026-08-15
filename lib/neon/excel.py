@@ -18,7 +18,13 @@ DAEMON_PORT = 9876
 # The daemon binds 127.0.0.1 on ix; when this client is already running ON ix
 # (build-order-daemon, janus-mobile, dtd-web) an ssh hop to ourselves is pure
 # waste and can wedge on a stale MagicSock — curl localhost directly instead.
-IS_IX = "mac-mini" in socket.gethostname().lower()
+# Hostname was "mac-mini.local" historically, then renamed to "ix.local" —
+# the old substring check silently stopped matching (confirmed 2026-08-15:
+# every call from ix's own janus-mobile daemon was paying a needless
+# ssh-to-self round trip, ~4.2s vs ~30ms direct, the dominant cost behind a
+# ~30s mobile page-load report).
+_HOSTNAME = socket.gethostname().lower()
+IS_IX = _HOSTNAME == DAEMON_HOST or _HOSTNAME == f"{DAEMON_HOST}.local"
 LEDGER_DIR = "/Users/mckay/vault/g245/neon-ledger"
 # Covers a fresh ssh handshake on a congested tailnet path (~10s observed
 # 2026-07-20 at ~630ms RTT) plus curl's own -m 20. At 5s every call fell

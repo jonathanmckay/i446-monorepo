@@ -185,17 +185,25 @@ def lookup_row(sheet: str, date_str: str) -> int | None:
     if not dc:
         return None
     target = safe_str(date_str)
+    # Bulk-fetch the whole date column in ONE Apple Event, then match locally
+    # in the AppleScript interpreter (no further IPC to Excel per row).
+    # The old version did `value of cell` in a `repeat ... to 800` loop — up
+    # to 799 separate Apple Event round trips, one per row. At row 225 (a
+    # typical mid-year date row) that alone cost ~4.2s and dominated janus
+    # mobile's ~30s page-load report (confirmed 2026-08-15). Bulk-range read
+    # + local scan resolves the same row in ~0.18s.
     script = f'''
 tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
-    repeat with i from 2 to 800
-        set cv to value of cell ("{dc}" & i) of theSheet
+    set colVals to value of range ("{dc}2:{dc}800") of theSheet
+    repeat with i from 1 to count of colVals
+        set cv to item 1 of item i of colVals
         if cv is not missing value then
             if ((class of cv) as text) is "date" then
                 set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
-                if md = "{target}" then return i
+                if md = "{target}" then return (i + 1)
             else
-                if (cv as text) = "{target}" then return i
+                if (cv as text) = "{target}" then return (i + 1)
             end if
         end if
     end repeat
