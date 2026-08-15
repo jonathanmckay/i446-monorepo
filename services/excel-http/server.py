@@ -42,6 +42,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION = "1.2.0"
@@ -49,6 +50,15 @@ ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
 WORKBOOK = "Neon分v12.2.xlsx"
+# Regression (2026-07-19, 07-20, 08-13, 08-14/15): every /write and /append
+# kept returning 200 OK — cells really were updating in the open workbook —
+# while Excel's AutoSave-to-OneDrive silently wedged for up to a full day.
+# Nothing in this daemon ever called Save; it relied entirely on AutoSave, so
+# a stalled AutoSave meant writes never reached disk/cloud until a human
+# noticed the workbook's mtime hadn't moved. Force an explicit save on a
+# timer so a wedge is bounded to SAVE_INTERVAL, not "however long until
+# someone checks".
+SAVE_INTERVAL = 120  # seconds
 
 DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
 
@@ -141,6 +151,26 @@ def osascript(script: str) -> tuple[int, str, str]:
         capture_output=True, text=True, timeout=TIMEOUT,
     )
     return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+def save_workbook() -> tuple[int, str, str]:
+    script = f'''
+tell application "Microsoft Excel"
+    save workbook "{WORKBOOK}"
+end tell
+'''
+    return osascript(script)
+
+
+def save_loop() -> None:
+    """Background watchdog, started as a daemon thread from main(). Forces an
+    explicit save every SAVE_INTERVAL seconds instead of trusting AutoSave."""
+    while True:
+        time.sleep(SAVE_INTERVAL)
+        with EXCEL_LOCK:
+            rc, _, err = save_workbook()
+        if rc != 0:
+            sys.stderr.write(f"save_loop: save failed: {err}\n")
 
 
 def lookup_row(sheet: str, date_str: str) -> int | None:
@@ -460,6 +490,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     seed_chain_index()
     print(f"ledger chain index seeded: {len(CHAIN_INDEX)} cells", flush=True)
+    threading.Thread(target=save_loop, daemon=True).start()
     # ThreadingHTTPServer so one stuck/slow request (a stalled client, a slow
     # Excel call) can't block every other request behind it — see Handler.timeout.
     srv = ThreadingHTTPServer(ADDR, Handler)
