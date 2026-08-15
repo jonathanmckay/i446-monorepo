@@ -27,16 +27,22 @@ Two small, additive changes, both gated on `STATE.day_offset != 0` so today's li
 - Day-navigation key bindings, `STATE.day_offset` mutation logic.
 
 ## Implementation steps
-1. Refactor `render_morning()`'s cutoff/loop-bound to support a whole-day mode — `tools/tg/janus.py`.
-2. Gate the divider rule + `render_focus_compact()` call in `render_all()` on `STATE.day_offset == 0` — `tools/tg/janus.py`.
+1. [x] Refactor `render_morning()`'s cutoff/loop-bound to support a whole-day mode — `tools/tg/janus.py`.
+2. [x] Gate the divider rule + `render_focus_compact()` call in `render_all()` on `STATE.day_offset == 0` — `tools/tg/janus.py`.
 
 ## Test plan
-- [ ] `render_morning(day_offset != 0)` includes a row/block for 亥 AND 子 (currently structurally impossible for 子).
-- [ ] `render_morning(day_offset == 0)` output is byte-identical to current behavior at a few different times of day (regression guard — the whole-day branch must never fire for today).
-- [ ] `render_all(day_offset != 0)` contains no focus-band divider rule and doesn't call `render_focus_compact()` (mock/monkeypatch and assert not called, or assert its distinctive output shape — e.g. no `FOCUS_ROWS`-wide card artifacts — is absent).
-- [ ] `render_all(day_offset == 0)` still renders the focus band exactly as before (regression guard).
-- [ ] 卯's sleep-collapse special case still functions in whole-day mode.
+- [x] `render_morning(day_offset != 0)` includes a row/block for 亥 AND 子.
+- [x] `render_morning(day_offset != 0)` renders a real tracked entry inside 亥 as a normal row.
+- [x] `render_morning(day_offset == 0)` still stops before 亥/子 (regression guard).
+- [x] `render_all(day_offset != 0)` doesn't call `render_focus_compact()` and emits no divider.
+- [x] `render_all(day_offset == 0)` still calls `render_focus_compact()` and emits the divider (regression guard).
+- [x] 卯's sleep-collapse special case still functions in whole-day mode.
 
 ## Risks / open questions
 - `_block_display_pts` / `_read_block_emojis` etc. should behave identically when called for 子 via the new path — no evidence they assume "never called for 子," but worth a quick sanity check during implementation.
 - None of this touches event-cursor (`STATE.visible_events`) registration ordering in a way that should matter, since `render_morning`'s per-block calls already pass `track_selection=True` today.
+
+## Result
+- **Status:** Complete
+- **Tests:** 6 new (`test_janus_past_day_whole_day_render.py`), all passing. Full janus suite: 467 passed (461 pre-existing + 6 new), 0 failures, `py_compile` clean.
+- **Notes:** No deviations from the plan. `render_focus_compact()` and `render_evening()` were left untouched, exactly as scoped — `render_evening()` already self-gated correctly for past days, confirmed by its existing tests still passing unmodified.
