@@ -24,6 +24,15 @@ def _load():
 def jm(tmp_path, monkeypatch):
     mod = _load()
     monkeypatch.setattr(mod, "STATE_DIR", tmp_path)
+    # Isolate from the REAL ~/.local/state/jm/task-queue.json (2026-08-15:
+    # _resolvable_points reads it directly) — without this every test using
+    # log_entry/done_current implicitly depended on today's live task queue
+    # NOT happening to contain a matching description, which is exactly the
+    # kind of coincidental-pass this suite shouldn't rely on. Points at a
+    # nonexistent path by default (_resolvable_points treats a read failure
+    # as "no match", same as an empty queue); tests that need a real match
+    # write their own file at this path.
+    monkeypatch.setattr(mod, "TASK_QUEUE", tmp_path / "task-queue.json")
     return mod
 
 
@@ -636,3 +645,110 @@ def test_done_current_inflight_guard(jm):
         assert not r["ok"] and "already" in r["error"]
     finally:
         jm._INFLIGHT.discard("done:1")
+
+
+# ---------------------------------------------------------------------------
+# _resolvable_points — dtd-task point value carried through to the swipe
+# (2026-08-15 user report: "we are not passing the number of points that a
+# task is worth when I start them in dtd" — a dtd-started task's [N] wasn't
+# reliably landing, since the swipe just sent raw elapsed minutes and hoped
+# did-fast's own fuzzy Todoist re-match happened to find the same task and
+# override it).
+# ---------------------------------------------------------------------------
+
+def _write_task_queue(jm, contents):
+    jm.TASK_QUEUE.parent.mkdir(parents=True, exist_ok=True)
+    jm.TASK_QUEUE.write_text(json.dumps(
+        {"today": [{"id": str(i), "content": c} for i, c in enumerate(contents)]}))
+
+
+def test_resolvable_points_reads_inline_bracket_without_touching_queue(jm):
+    assert jm._resolvable_points("write recap [12]") == 12
+
+
+def test_resolvable_points_matches_task_queue_by_exact_normalized_key(jm):
+    _write_task_queue(jm, ["Odyssey Prep [30]", "unrelated task [5]"])
+    assert jm._resolvable_points("odyssey prep") == 30
+    # tolerant of dash/whitespace drift, same as did-fast's own _norm
+    assert jm._resolvable_points("Odyssey  -  Prep") == 30
+
+
+def test_resolvable_points_none_when_no_match(jm):
+    _write_task_queue(jm, ["something else entirely [30]"])
+    assert jm._resolvable_points("odyssey prep") is None
+
+
+def test_resolvable_points_none_when_matched_task_has_no_bracket(jm):
+    _write_task_queue(jm, ["odyssey prep"])  # no [N] at all
+    assert jm._resolvable_points("odyssey prep") is None
+
+
+def test_log_entry_uses_resolved_points_not_elapsed_minutes(jm, monkeypatch):
+    """The whole point of this fix: a dtd task worth [30] must be credited
+    30, not however many minutes the Toggl entry happened to run for."""
+    _write_task_queue(jm, ["odyssey prep [30]"])
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    jm.log_entry("e1", "odyssey prep", 83, "i9")
+    assert seen["text"] == "odyssey prep [30] @i9", \
+        "must send the resolved [30], not the 83 elapsed minutes"
+
+
+def test_log_entry_still_falls_back_to_minutes_when_unresolved(jm, monkeypatch):
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    jm.log_entry("e2", "unmatched activity", 40, "i9")
+    assert seen["text"] == "unmatched activity 40 @i9"
+
+
+def test_done_current_uses_resolved_points_explicitly(jm, monkeypatch):
+    _write_task_queue(jm, ["odyssey prep [30]"])
+    now = dt.datetime.now(jm.TZ)
+    start = now - dt.timedelta(minutes=5)
+    e = _raw_running(jm, start.hour, start.minute, desc="odyssey prep", eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    r = jm.done_current("1", "odyssey prep", "i9")
+    assert r["ok"]
+    assert "[30]" in seen["text"]
+
+
+def test_build_timeline_surfaces_resolved_points_on_entry_row(jm, monkeypatch):
+    _write_task_queue(jm, ["odyssey prep [30]"])
+    e = _entry(jm, 9, 0, 9, 30, desc="odyssey prep")
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
+    monkeypatch.setattr(jm, "_fetch_events_today", lambda entries: [])
+    tl = jm.build_timeline()
+    row = next(r for r in tl["rows"] if r["type"] == "entry")
+    assert row["points"] == 30
+
+
+def test_build_timeline_points_none_when_unresolved(jm, monkeypatch):
+    e = _entry(jm, 9, 0, 9, 30, desc="unmatched activity")
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
+    monkeypatch.setattr(jm, "_fetch_events_today", lambda entries: [])
+    tl = jm.build_timeline()
+    row = next(r for r in tl["rows"] if r["type"] == "entry")
+    assert row["points"] is None

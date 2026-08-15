@@ -131,6 +131,77 @@ BLOCKS = [(4, "卯"), (6, "辰"), (8, "巳"), (10, "午"), (12, "未"),
 
 _AT = re.compile(r"\s*@(\S+)")
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+import state_paths  # noqa: E402
+TASK_QUEUE = state_paths.TASK_QUEUE
+_POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
+
+
+def _clean_annotations(s: str) -> str:
+    """Strip dtd/Todoist annotations: (30) time, [40] points, {60} estimate,
+    and any trailing @project tag — leaving the bare task name. Mirrors
+    tools/tg/janus.py's own copy."""
+    s = re.sub(r"\s*\(\d+\)", "", s)
+    s = re.sub(r"\s*\[\d+\]", "", s)
+    s = re.sub(r"\s*\{\d+\}", "", s)
+    s = re.sub(r"\s*@\S+", "", s)
+    return s.strip()
+
+
+def _norm_key(s: str) -> str:
+    """Normalization key tolerant of dash/whitespace/case drift between the
+    Toggl timer name and the task content. Mirrors janus.py's own copy and
+    did-fast's _norm."""
+    return re.sub(r"[\s\-—–]+", " ", _clean_annotations(s)).strip().lower()
+
+
+def _resolvable_points(desc: str) -> int | None:
+    """The points value did-fast would resolve for `desc` on its own — an
+    inline [N] already in `desc` itself, or a [N] on a matching OPEN task in
+    the cached task queue (same file did-fast's own Todoist-content lookup
+    reads). None when neither exists, meaning did-fast would fall back to
+    minutes-as-points (the variable-task path) rather than the task's real
+    value. Mirrors tools/tg/janus.py's own _resolvable_points verbatim —
+    2026-08-15: mobile's swipe-to-log lacked this pre-check entirely, so a
+    dtd-started task worth e.g. [30] silently risked being credited by raw
+    elapsed minutes instead, if did-fast's own fuzzy Todoist word-overlap
+    match (Step 5, threshold 0.6/0.4) didn't independently re-find the same
+    task. This exact-normalized-key match against the SAME cache dtd itself
+    populates is strictly more reliable than re-deriving the match via fuzzy
+    text search after the fact."""
+    m = _POINTS_BRACKET_RE.search(desc or "")
+    if m:
+        return int(m.group(1))
+    try:
+        data = json.loads(TASK_QUEUE.read_text())
+    except Exception:
+        return None
+    target = _norm_key(desc)
+    if not target:
+        return None
+    found = None
+
+    def walk(o):
+        nonlocal found
+        if found is not None:
+            return
+        if isinstance(o, dict):
+            c = o.get("content")
+            if c and _norm_key(c) == target:
+                found = c
+                return
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(data)
+    if not found:
+        return None
+    m = _POINTS_BRACKET_RE.search(found)
+    return int(m.group(1)) if m else None
+
 
 def _ledger_path(day: _dt.date) -> Path:
     return STATE_DIR / f"janus-mobile-logged-{day.isoformat()}.json"
@@ -493,7 +564,13 @@ def build_timeline() -> dict:
                          "tags": e.get("tags") or [],
                          "start": hhmm(e["start"]), "end": ("now" if e["running"] else hhmm(e["end"])),
                          "minutes": mins, "running": e["running"],
-                         "logged": e["id"] in logged})
+                         "logged": e["id"] in logged,
+                         # A resolved dtd-task point value, if this entry's
+                         # description exact-matches one (see
+                         # _resolvable_points) — lets the swipe label show
+                         # what will ACTUALLY be credited (2026-08-15) rather
+                         # than always implying "minutes = points".
+                         "points": _resolvable_points(e["desc"])})
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
@@ -794,17 +871,31 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     today = _dt.datetime.now(TZ).date()
     if str(entry_id) in _ledger(today):
         return {"ok": True, "already": True}
-    text = f"{desc} {minutes}"
+    # A dtd-started task carries its OWN point value (e.g. [30]), which is
+    # generally NOT the same number as the entry's elapsed minutes. Passing
+    # a bare number here only ever means anything to did-fast's Step 6
+    # (variable, points=minutes) — a real Todoist-task match (Step 5)
+    # ignores it entirely and re-derives points from whatever task its own
+    # fuzzy word-overlap search happens to land on. Resolving it explicitly
+    # here (exact match against the same task-queue cache dtd populates,
+    # strictly more reliable than re-deriving via fuzzy search after the
+    # fact) and passing it as an explicit [N] makes crediting deterministic
+    # instead of dependent on did-fast re-finding the identical task
+    # (2026-08-15 user report: dtd-started points weren't reliably landing).
+    pts = _resolvable_points(desc)
+    text = f"{desc} [{pts}]" if pts is not None else f"{desc} {minutes}"
     if project:
         text += f" @{project}"
     # Habit tags ride along as extra comma-separated /did items — did-fast
     # processes each independently (其他人 61 → 其他人 0n column, etc.).
+    # These are always minutes (0n habit columns track time, not the
+    # matched task's points), regardless of the main item's resolution.
     extra = habit_tags(tags or [])
     for t in extra:
         text += f", {t} {minutes}"
     r = _run_did_fast(text)
     if r["ok"]:
-        note = f"{desc} {minutes} → {r['step']}"
+        note = f"{desc} {pts if pts is not None else minutes} → {r['step']}"
         if r["tag_steps"]:
             note += " + " + ", ".join(r["tag_steps"])
         _ledger_add(today, entry_id, note)
@@ -868,7 +959,11 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
     needed. (Desktop's d357-recording-finalize branch and its interactive
     "no resolvable points, ask the user" prompt are both deliberately not
     ported here — out of scope per 2026-08-14 request; an unresolvable
-    entry just logs 0分 same as a regular swiped entry already can.)"""
+    entry just logs 0分 same as a regular swiped entry already can. When
+    the running entry DOES match a dtd task (_resolvable_points, see
+    log_entry for why this is more reliable than did-fast's own re-match),
+    its [N] rides the command explicitly — 2026-08-15 fix, same reasoning
+    as log_entry."""
     key = f"done:{entry_id}"
     if key in _INFLIGHT:
         return {"ok": False, "error": "already logging"}
@@ -887,7 +982,10 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
         now = _dt.datetime.now(TZ)
         if (now - start).total_seconds() < 60:
             return {"ok": False, "error": "just started — give it a minute"}
+        pts = _resolvable_points(desc)
         text = f"{desc} {start:%H%M}-{now:%H%M}"
+        if pts is not None:
+            text += f" [{pts}]"
         if project:
             text += f" @{project}"
         r = _run_did_fast(text)
@@ -1143,8 +1241,12 @@ function render(rows){
 function trackLabel(r){
   if(r.type === 'gap') return '+ fill';
   if(r.type === 'event') return r.is_past ? 'log 分 ('+r.minutes+'m)' : (r.started ? 'resume tracking' : 'start tracking');
-  if(r.running) return 'done ✓ (stop + log)';
-  return 'neon log 分 ('+r.minutes+'m)';
+  // r.points is set when this entry's description exact-matches a real
+  // dtd/Todoist task's [N] — show what will ACTUALLY be credited, not the
+  // elapsed minutes (2026-08-15: those two numbers are frequently
+  // different, and the swipe used to always imply minutes = points).
+  if(r.running) return r.points != null ? 'done ✓ ('+r.points+'分)' : 'done ✓ (stop + log)';
+  return r.points != null ? 'log '+r.points+'分' : 'neon log 分 ('+r.minutes+'m)';
 }
 
 function makeRow(r){
