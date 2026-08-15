@@ -834,6 +834,52 @@ class HciLabelMapping(unittest.TestCase):
         self.assertEqual(r.fen_points, 26)
 
 
+class NoProjectFallsBackTo个Tests(unittest.TestCase):
+    """User report 2026-08-15: a Todoist task matched via Step 0.3/0.35 with
+    NO project tag at all (Todoist calls them "labels", but every other
+    tool here — dtd, /tg, /todo's @code — calls them projects, so that's
+    the right word) got its points silently swallowed: fen_col stayed None,
+    the fen_appends collector's `if r.fen_col and r.fen_points > 0` guard
+    skipped the write, and nothing ever signaled the failure — Todoist
+    still closed fine, so it looked like success. Concrete instance: "add
+    ability to right swipe time entries (30) [30]" had labels=[], closed in
+    Todoist, never wrote its 30 points to Neon.
+
+    Fix: an untagged task's points now fall back to 个 (self/personal),
+    resolved via neon_cols.domain_col (never hardcoded — see
+    _project_fen_col's own docstring for the 2026-08-13 hardcoding bug this
+    exact pattern already caused once)."""
+
+    def test_no_project_tag_falls_back_to_ge(self):
+        task = {"id": "1", "content": "add ability to right swipe time entries [30]",
+                "labels": []}
+        tq = {"0neon": [task], "1neon": [], "夜neon": []}
+        item = _df_module.ParsedItem(raw="add ability to right swipe time entries",
+                                     name="add ability to right swipe time entries")
+        r = _df_module.route_items([item], {"0n": {}, "1n": {}}, tq)[0]
+        self.assertEqual(r.step, "todoist")
+        self.assertEqual(r.fen_points, 30, "the [30] must still be extracted")
+        self.assertIsNotNone(r.fen_col, "an untagged task's points must not vanish")
+        self.assertEqual(r.fen_col, _df_module.neon_cols.domain_col("0分", "个"))
+
+    def test_a_recognized_project_tag_still_wins_over_the_fallback(self):
+        """Regression guard: the 个 fallback must only apply when NO tag
+        resolves — a normally-tagged task (e.g. hcb) must keep going to its
+        own column, not to 个."""
+        task = {"id": "1", "content": "some hcb task [15]", "labels": ["hcb"]}
+        tq = {"0neon": [task], "1neon": [], "夜neon": []}
+        item = _df_module.ParsedItem(raw="some hcb task", name="some hcb task")
+        r = _df_module.route_items([item], {"0n": {}, "1n": {}}, tq)[0]
+        self.assertEqual(r.fen_col, "W")  # hcb's real column, not 个's
+
+    def test_project_fen_col_helper_directly(self):
+        self.assertEqual(_df_module._project_fen_col(["hcb"]), "W")
+        self.assertEqual(_df_module._project_fen_col([]),
+                         _df_module.neon_cols.domain_col("0分", "个"))
+        self.assertEqual(_df_module._project_fen_col(["not-a-real-project"]),
+                         _df_module.neon_cols.domain_col("0分", "个"))
+
+
 class PastDatePreferredIdTests(unittest.TestCase):
     """Regression (2026-07-19): "I've marked the ibx i9 tasks done twice but
     they are still here."
