@@ -251,6 +251,14 @@ def _event_tracked(ev: dict, entries: list[dict]) -> bool:
 
 
 CAL_FETCH_TIMEOUT_SEC = 10  # per source; see _fetch_calendar_source
+CAL_FAIL_COOLDOWN_SEC = 120  # after a timeout/failure, skip retrying this
+# source for this long — outlook_client has been observed FAILING EVERY
+# CALL from ix's daemon environment (2026-08-14), and this app's timeline
+# reloads on every swipe action, so without a cooldown a known-broken
+# source taxes every single page load with the full CAL_FETCH_TIMEOUT_SEC
+# wait for nothing. Cleared immediately on the next success, so a source
+# that recovers isn't held back by a stale cooldown.
+_CAL_FAIL_UNTIL: dict[str, float] = {}
 
 
 def _fetch_calendar_source(client_name: str, day_start: _dt.datetime,
@@ -270,7 +278,10 @@ def _fetch_calendar_source(client_name: str, day_start: _dt.datetime,
     high-enough request volume, eventually every thread in the pool) stays
     stuck forever. A subprocess CAN be killed outright: subprocess.run's own
     `timeout=` reliably terminates the child, so a hang here costs at most
-    CAL_FETCH_TIMEOUT_SEC and leaks nothing."""
+    CAL_FETCH_TIMEOUT_SEC and leaks nothing. Records/clears a cooldown on
+    failure/success (see CAL_FAIL_COOLDOWN_SEC) — _fetch_calendar_raw is the
+    one that actually SKIPS a source during its cooldown, so this function
+    can still be called directly (e.g. from tests) without that gate."""
     script = (
         "import sys, json, datetime\n"
         f"import {client_name}\n"
@@ -290,34 +301,39 @@ def _fetch_calendar_source(client_name: str, day_start: _dt.datetime,
     except subprocess.TimeoutExpired:
         print(f"WARN {client_name} fetch timed out after {CAL_FETCH_TIMEOUT_SEC}s",
               file=sys.stderr)
+        _CAL_FAIL_UNTIL[client_name] = time.time() + CAL_FAIL_COOLDOWN_SEC
         return []
     if proc.returncode != 0:
         print(f"WARN {client_name} fetch failed:", proc.stderr.strip()[-300:], file=sys.stderr)
+        _CAL_FAIL_UNTIL[client_name] = time.time() + CAL_FAIL_COOLDOWN_SEC
         return []
     try:
         raw = json.loads(proc.stdout)
     except Exception as e:
         print(f"WARN {client_name} fetch: bad output ({e}):", proc.stdout[:200], file=sys.stderr)
+        _CAL_FAIL_UNTIL[client_name] = time.time() + CAL_FAIL_COOLDOWN_SEC
         return []
     for ev in raw:
         ev["start_dt"] = _parse_iso(ev["start_dt"])
         ev["end_dt"] = _parse_iso(ev["end_dt"])
+    _CAL_FAIL_UNTIL.pop(client_name, None)
     return raw
 
 
-def _fetch_events_today(entries: list[dict]) -> list[dict]:
-    """Today's gcal + outlook events, deduped and filtered to ones actually
-    worth showing as a convertible row: not all-day, not transparent
-    ("free" holds), not already covered/tracked by a real Toggl entry.
-    Best-effort — a calendar fetch failure just means no event rows, same
-    tolerance tools/tg/janus.py's own fetch_gcal gives itself. Both sources
-    fetched concurrently (each in its own subprocess, see
-    _fetch_calendar_source) so a slow/hung one doesn't double the wait."""
-    today = _dt.datetime.now(TZ).date()
-    day_start = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
-    day_end = day_start + _dt.timedelta(days=1)
+def _fetch_calendar_raw(day_start: _dt.datetime, day_end: _dt.datetime) -> list[dict]:
+    """Both calendar sources, fetched concurrently (each in its own
+    subprocess — see _fetch_calendar_source) so a slow/hung one doesn't
+    double the wait, deduped by (title, start, end) to collapse the same
+    meeting mirrored across gcal and outlook. Best-effort: a source that's
+    unavailable or fails just contributes nothing. A source still inside its
+    post-failure cooldown (CAL_FAIL_COOLDOWN_SEC) is skipped outright — no
+    subprocess spawned, no wait — rather than re-paying the full
+    CAL_FETCH_TIMEOUT_SEC on every single timeline reload for a source
+    that's already known to be down right now."""
+    now = time.time()
     sources = [n for n, mod in (("gcal_client", gcal_client),
-                                ("outlook_client", outlook_client)) if mod is not None]
+                                ("outlook_client", outlook_client))
+              if mod is not None and _CAL_FAIL_UNTIL.get(n, 0) <= now]
     raw: list[dict] = []
     if sources:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
@@ -337,9 +353,17 @@ def _fetch_events_today(entries: list[dict]) -> list[dict]:
             continue
         seen.add(k)
         deduped.append(e)
+    return deduped
+
+
+def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
+    """Raw calendar events → ones actually worth showing as a convertible
+    row: not all-day, not transparent ("free" holds), not already
+    covered/tracked by a real Toggl entry. Pure — no I/O — so it's testable
+    without touching the calendar sources at all."""
     now = _dt.datetime.now(TZ)
     out = []
-    for ev in deduped:
+    for ev in raw:
         if ev.get("all_day") or ev.get("transparency") == "transparent":
             continue
         if _event_covered(ev, entries) or _event_tracked(ev, entries):
@@ -353,6 +377,13 @@ def _fetch_events_today(entries: list[dict]) -> list[dict]:
             "started": ev["start_dt"] <= now,
         })
     return out
+
+
+def _fetch_events_today(entries: list[dict]) -> list[dict]:
+    today = _dt.datetime.now(TZ).date()
+    day_start = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+    day_end = day_start + _dt.timedelta(days=1)
+    return _filter_events(_fetch_calendar_raw(day_start, day_end), entries)
 
 
 def _split_gaps_around_events(gaps: list[dict], events: list[dict]) -> list[dict]:

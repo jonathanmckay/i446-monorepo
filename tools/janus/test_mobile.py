@@ -376,42 +376,96 @@ def test_event_not_tracked_when_running_started_too_early(jm):
     assert not jm._event_tracked(ev, [e])
 
 
-class _FakeCal:
-    def __init__(self, events):
-        self._events = events
-
-    def list_events(self, start, end):
-        return self._events
-
-
-def test_fetch_events_filters_all_day_and_transparent(jm, monkeypatch):
+def test_filter_events_drops_all_day_and_transparent(jm):
+    """Pure filtering logic — no calendar I/O involved (see
+    _fetch_calendar_source for why the fetch itself is subprocess-isolated
+    and not exercised by this unit test)."""
     all_day = _ev(jm, 0, 0, 23, 59, title="Someone's Birthday", all_day=True)
     free = _ev(jm, 9, 0, 10, 0, title="Focus block", transparency="transparent")
     real = _ev(jm, 11, 0, 11, 30, title="Standup")
-    monkeypatch.setattr(jm, "gcal_client", _FakeCal([all_day, free, real]))
-    monkeypatch.setattr(jm, "outlook_client", _FakeCal([]))
-    out = jm._fetch_events_today([])
+    out = jm._filter_events([all_day, free, real], [])
     assert len(out) == 1 and out[0]["title"] == "Standup"
 
 
-def test_fetch_events_excludes_covered_and_tracked(jm, monkeypatch):
+def test_filter_events_excludes_covered_and_tracked(jm):
     covered = _ev(jm, 10, 0, 10, 30, title="Covered mtg")
     tracked = _ev(jm, 11, 0, 11, 30, title="Standup")
-    monkeypatch.setattr(jm, "gcal_client", _FakeCal([covered, tracked]))
-    monkeypatch.setattr(jm, "outlook_client", _FakeCal([]))
     entries = [
         _entry(jm, 10, 5, 10, 20, desc="unrelated"),   # overlaps `covered`
         _entry(jm, 11, 0, 11, 30, desc="Standup"),      # same title as `tracked`
     ]
-    assert jm._fetch_events_today(entries) == []
+    assert jm._filter_events([covered, tracked], entries) == []
 
 
-def test_fetch_events_dedupes_gcal_outlook_mirror(jm, monkeypatch):
+def test_fetch_calendar_raw_dedupes_gcal_outlook_mirror(jm, monkeypatch):
+    """Same meeting mirrored across both calendar sources collapses to one
+    (title, start, end) match — each source fetched via its own isolated
+    subprocess (_fetch_calendar_source), stubbed out here so the test
+    doesn't spawn real processes or touch real credentials."""
     ev = _ev(jm, 13, 0, 13, 30, title="Sync")
-    monkeypatch.setattr(jm, "gcal_client", _FakeCal([dict(ev)]))
-    monkeypatch.setattr(jm, "outlook_client", _FakeCal([dict(ev)]))
-    out = jm._fetch_events_today([])
+
+    def fake_fetch(client_name, day_start, day_end):
+        return [dict(ev)]
+
+    monkeypatch.setattr(jm, "gcal_client", object())     # just needs to be non-None
+    monkeypatch.setattr(jm, "outlook_client", object())
+    monkeypatch.setattr(jm, "_fetch_calendar_source", fake_fetch)
+    today = dt.datetime.now(jm.TZ).date()
+    day0 = dt.datetime.combine(today, dt.time(0, 0), jm.TZ)
+    out = jm._fetch_calendar_raw(day0, day0 + dt.timedelta(days=1))
     assert len(out) == 1
+
+
+def test_fetch_calendar_source_kills_hung_subprocess_on_timeout(jm, monkeypatch):
+    """2026-08-14 incident: outlook_client's own internal timeout did not
+    reliably fire from this daemon's environment, and a hung request wedged
+    the entire (single-threaded dev-server) app — not just calendar rows.
+    _fetch_calendar_source must return [] rather than propagate/hang when
+    the underlying subprocess.run times out."""
+    def fake_run(cmd, **kw):
+        assert kw.get("timeout") == jm.CAL_FETCH_TIMEOUT_SEC
+        raise jm.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    today = dt.datetime.now(jm.TZ).date()
+    day0 = dt.datetime.combine(today, dt.time(0, 0), jm.TZ)
+    out = jm._fetch_calendar_source("outlook_client", day0, day0 + dt.timedelta(hours=1))
+    assert out == []
+
+
+def test_fetch_calendar_source_records_and_clears_cooldown(jm, monkeypatch):
+    monkeypatch.setattr(jm, "_CAL_FAIL_UNTIL", {})
+    monkeypatch.setattr(jm.subprocess, "run",
+                        lambda cmd, **kw: (_ for _ in ()).throw(
+                            jm.subprocess.TimeoutExpired(cmd, kw.get("timeout"))))
+    today = dt.datetime.now(jm.TZ).date()
+    day0 = dt.datetime.combine(today, dt.time(0, 0), jm.TZ)
+    jm._fetch_calendar_source("outlook_client", day0, day0 + dt.timedelta(hours=1))
+    assert "outlook_client" in jm._CAL_FAIL_UNTIL, "a timeout must start a cooldown"
+
+    class _OKProc:
+        returncode = 0
+        stdout = "[]"
+        stderr = ""
+    monkeypatch.setattr(jm.subprocess, "run", lambda cmd, **kw: _OKProc())
+    jm._fetch_calendar_source("outlook_client", day0, day0 + dt.timedelta(hours=1))
+    assert "outlook_client" not in jm._CAL_FAIL_UNTIL, "a success must clear the cooldown"
+
+
+def test_fetch_calendar_raw_skips_source_during_cooldown(jm, monkeypatch):
+    """A source still inside CAL_FAIL_COOLDOWN_SEC of its last failure must
+    not be re-fetched at all — 2026-08-14: without this, a known-broken
+    source (outlook_client hung on every single call from ix) taxed every
+    timeline reload with the full CAL_FETCH_TIMEOUT_SEC wait for nothing."""
+    monkeypatch.setattr(jm, "gcal_client", None)
+    monkeypatch.setattr(jm, "outlook_client", object())
+    monkeypatch.setattr(jm, "_CAL_FAIL_UNTIL", {"outlook_client": jm.time.time() + 100})
+    called = []
+    monkeypatch.setattr(jm, "_fetch_calendar_source",
+                        lambda *a: called.append(a) or [])
+    today = dt.datetime.now(jm.TZ).date()
+    day0 = dt.datetime.combine(today, dt.time(0, 0), jm.TZ)
+    out = jm._fetch_calendar_raw(day0, day0 + dt.timedelta(days=1))
+    assert out == [] and called == [], "cooling-down source must not be fetched at all"
 
 
 def test_split_gaps_around_events_carves_out_event_window(jm):
