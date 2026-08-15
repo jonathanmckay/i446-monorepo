@@ -3322,9 +3322,21 @@ def _mao_line(emojis) -> list[tuple[str, str]]:
 
 def render_morning() -> list[tuple[str, str]]:
     """Past blocks (00:00 → detail-band start), Toggl-filled, one row per
-    important allocation. Same compact format as the future (evening) view."""
+    important allocation. Same compact format as the future (evening) view.
+
+    On a PAST-DAY view (STATE.day_offset != 0) this covers the WHOLE day
+    instead, all the way through 子 — render_all() skips render_focus_compact()
+    entirely there (2026-08-15: that function's "last block of the day"
+    fallback, written for TODAY's live view past 22:00, was firing on every
+    past-day view too and rendering 亥/子 in the wide "current block" focus
+    style — meaningless once the whole day is already elapsed, and it read
+    as "亥 becomes the focus block just because it's last"). whole_day drops
+    the loop's early-break (which can never reach 子 anyway: its own eh=23
+    would need cutoff.hour >= 24) so every block renders through the same
+    plain past-card pipeline as the rest of the day."""
+    whole_day = STATE.day_offset != 0
     start, _ = detail_window()
-    cutoff = start
+    cutoff = view_now() if whole_day else start
     items = [e for e in STATE.entries if e["start_dt"] < cutoff]
     merged: list[dict] = []
     for e in items:
@@ -3347,7 +3359,7 @@ def render_morning() -> list[tuple[str, str]]:
     bo_emojis = _read_block_emojis()
     out: list[tuple[str, str]] = []
     for blk_name, blk_sh, blk_eh in BLOCKS:
-        if blk_eh + 1 > cutoff.hour:
+        if not whole_day and blk_eh + 1 > cutoff.hour:
             break  # rest handled by the detail band
         pts = _block_display_pts(blk_name)  # clamped to Σ, same as the focus rules
         if blk_name == "卯":
@@ -3936,13 +3948,19 @@ def render_all() -> list[tuple[str, str]]:
     parts += render_header()
     parts += render_habits_today()
     parts += render_morning()
-    # The rule that used to mark a fixed 22:00 sleep boundary (removed
-    # 2026-07-19 — a clock-time marker made little sense once focus blocks
-    # already carry their own visual weight) moves here instead: a plain
-    # divider marking where "now" actually is, right before the current/next
-    # focus band — the boundary a glance actually needs.
-    parts.append(("class:rule", "─" * WIDTH_HINT + "\n"))
-    parts += render_focus_compact()
+    # The focus band (divider + render_focus_compact) only means anything on
+    # TODAY's live view — "where now is" and the current/next block cards.
+    # On a past day render_morning() above already covers the whole day
+    # (2026-08-15, see its own docstring), so there's no "now" to mark and
+    # nothing left for render_focus_compact to add.
+    if STATE.day_offset == 0:
+        # The rule that used to mark a fixed 22:00 sleep boundary (removed
+        # 2026-07-19 — a clock-time marker made little sense once focus blocks
+        # already carry their own visual weight) moves here instead: a plain
+        # divider marking where "now" actually is, right before the current/next
+        # focus band — the boundary a glance actually needs.
+        parts.append(("class:rule", "─" * WIDTH_HINT + "\n"))
+        parts += render_focus_compact()
     parts += render_evening()
     if STATE.current:
         # The pinned bottom-bar mirror of the running timer (render_current_
