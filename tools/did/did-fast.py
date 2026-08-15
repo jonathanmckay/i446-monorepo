@@ -55,6 +55,7 @@ ix_run = _ix_mod.run
 # the no-raw-0fen regression test scans this file to enforce the ban. Reads
 # and other sheets (0n/1n+/hcbi) still use ix_run.
 from neon import excel as neon_excel  # noqa: E402 (path inserted above)
+from neon import cols as neon_cols  # noqa: E402
 
 # Import mark-completed
 _MC_PATH = Path(__file__).parent / "mark-completed.py"
@@ -222,7 +223,11 @@ def calc_week_mw(d: date) -> str:
     week_num = ((week_start.day - 1) // 7) + 1
     return f"{week_start.month}.{week_num}"
 
-# Label → 0分 column mapping (updated 2026.04.28 after 9-column removal)
+# Project tag → 0分 column mapping (updated 2026.04.28 after 9-column
+# removal). Stored as Todoist "labels" in the API, but functionally these
+# are project/domain codes (i9, m5x2, ...) — call them "project tags" or
+# "projects" in prose, not "labels", to match how every other tool here
+# (dtd, /tg, /todo's @code) already talks about them.
 LABEL_TO_0FEN = {
     "i9": "R", "i447": "R", "f693": "R", "f694": "R",
     "m5x2": "S",
@@ -233,6 +238,24 @@ LABEL_TO_0FEN = {
     "xk87": "X", "xk88": "X",
     "s897": "Y",
 }
+
+
+def _project_fen_col(labels) -> str:
+    """0分 column for a matched Todoist task's project tag(s). Falls back to
+    个 (self/personal — the catch-all for a task with NO project tag
+    attached at all) when none of the task's tags resolve, so an untagged
+    task's points still land somewhere instead of silently vanishing
+    (2026-08-15 user report: "add ability to right swipe time entries [30]"
+    had zero project tags — Todoist closed fine, but the 30 points were
+    never written to Neon, no error, nothing, because fen_col stayed None
+    and the write was just skipped). The fallback's column is resolved via
+    neon_cols.domain_col — never hardcode it: this exact file already got
+    burned once hardcoding a 0分 letter (the 2026-08-13 "[20] landed in
+    dead column AA instead of i9's real column R" bug)."""
+    for lbl in labels:
+        if lbl in LABEL_TO_0FEN:
+            return LABEL_TO_0FEN[lbl]
+    return neon_cols.domain_col("0分", "个")
 
 
 # ---------------------------------------------------------------------------
@@ -1326,12 +1349,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             if item.curly_points is None:
                 pts_match = POINTS_RE.search(matched["content"])
                 points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
-
-                # Map label to 0分 column
-                for lbl in matched.get("labels", []):
-                    if lbl in LABEL_TO_0FEN:
-                        fen_col = LABEL_TO_0FEN[lbl]
-                        break
+                fen_col = _project_fen_col(matched.get("labels", []))
 
             r = RouteResult(item=item, step="todoist", todoist_task=matched,
                             fen_col=fen_col, fen_points=points)
@@ -1357,10 +1375,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             if item.curly_points is None:
                 pts_match = POINTS_RE.search(live_matched["content"])
                 points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
-                for lbl in live_matched.get("labels", []):
-                    if lbl in LABEL_TO_0FEN:
-                        fen_col = LABEL_TO_0FEN[lbl]
-                        break
+                fen_col = _project_fen_col(live_matched.get("labels", []))
             r = RouteResult(item=item, step="todoist", todoist_task=live_matched,
                             fen_col=fen_col, fen_points=points)
             results.append(r)
