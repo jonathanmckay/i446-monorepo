@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-15T05:30:05.179696-07:00"
+  "tasks": {
+    "160分 hcb": {
+      "todoist_id": "6hH79q3Cr46fm9jR",
+      "minutes": 40
+    },
+    "watch some of the meetings": {
+      "todoist_id": "6hH79q7H5mWmmXh2",
+      "minutes": 30
+    },
+    "use both the ride down and the ride up": {
+      "todoist_id": "6hH79q69Gj9whPP2",
+      "minutes": 30
+    },
+    "have real side conversation with either kathy or ming": {
+      "todoist_id": "6hH79q8jQXj4mcwR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-08-15T10:00:05.593558-07:00"
 }
