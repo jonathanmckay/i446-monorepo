@@ -257,6 +257,42 @@
    ],
    "priority": 4,
    "project_id": "6XQ3GMQRVmPgPM4W"
+  },
+  "xk20": {
+   "match": "xk20",
+   "content": "xk20 (30) [35]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "xk20",
+    "xk87"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5QFg895Mcw"
+  },
+  "xk22": {
+   "match": "xk22",
+   "content": "xk22 (20) [25]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "xk22",
+    "xk87"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5QFg895Mcw"
+  },
+  "xk26": {
+   "match": "xk26",
+   "content": "xk26 (10) [10]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "xk26",
+    "xk87"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5QFg895Mcw"
   }
  }
 }
