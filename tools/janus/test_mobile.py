@@ -745,6 +745,23 @@ def test_build_timeline_surfaces_resolved_points_on_entry_row(jm, monkeypatch):
     assert row["points"] == 30
 
 
+def test_resolvable_points_never_overrides_a_registered_habit(jm, monkeypatch):
+    """Caught live (2026-08-15) before this ever shipped: "0l" is a
+    registered 0n habit — did-fast routes it entirely by REGISTRY match
+    (Steps 1-4), where [N]/points play no part at all. Its own 0neon
+    Todoist reminder card can still carry an unrelated [N] (verified live:
+    resolved to 20, meaningless for the 0n column write) — if that were
+    passed through, did-fast would strip it as an annotation before the
+    registry lookup, silently losing the real elapsed-minutes duration.
+    A description that names a registered habit must never resolve here,
+    inline bracket or not, regardless of what's cached in the task queue."""
+    _write_task_queue(jm, ["0l reminder card [20]"])
+    monkeypatch.setattr(jm, "registered_habit_names", lambda: {"0l"})
+    assert jm._resolvable_points("0l") is None
+    # even an inline bracket on a registered habit's own description
+    assert jm._resolvable_points("0l [20]") is None
+
+
 def test_build_timeline_points_none_when_unresolved(jm, monkeypatch):
     e = _entry(jm, 9, 0, 9, 30, desc="unmatched activity")
     monkeypatch.setattr(jm, "_fetch_today", lambda: [e])

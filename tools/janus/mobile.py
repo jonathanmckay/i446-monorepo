@@ -155,7 +155,7 @@ def _norm_key(s: str) -> str:
     return re.sub(r"[\s\-—–]+", " ", _clean_annotations(s)).strip().lower()
 
 
-def _resolvable_points(desc: str) -> int | None:
+def _resolvable_points(desc: str, registered: set[str] | None = None) -> int | None:
     """The points value did-fast would resolve for `desc` on its own — an
     inline [N] already in `desc` itself, or a [N] on a matching OPEN task in
     the cached task queue (same file did-fast's own Todoist-content lookup
@@ -168,7 +168,24 @@ def _resolvable_points(desc: str) -> int | None:
     match (Step 5, threshold 0.6/0.4) didn't independently re-find the same
     task. This exact-normalized-key match against the SAME cache dtd itself
     populates is strictly more reliable than re-deriving the match via fuzzy
-    text search after the fact."""
+    text search after the fact.
+
+    GUARD (2026-08-15, caught before ever shipping): a registered 0n/1n+
+    habit (e.g. "0l", "0g") routes through did-fast's REGISTRY match (Steps
+    1-4 / 1n) entirely by name — [N]/points are not part of that path at
+    all, and a habit's own 0neon/1neon Todoist reminder card can carry an
+    unrelated [N] of its own (verified live: "0l"'s cached card resolved to
+    20, which is not what its 0n column write means). Passing that [N]
+    through would get stripped as an annotation before did-fast's registry
+    lookup, silently swapping the real elapsed-minutes duration for nothing
+    useful. So: never resolve/override for a description that names a
+    registered habit — pass `registered` (registered_habit_names()) to skip
+    recomputing it per call from build_timeline's per-row loop; computed
+    fresh here if omitted (log_entry/done_current's single-call use)."""
+    if registered is None:
+        registered = registered_habit_names()
+    if _norm_key(desc) in registered:
+        return None
     m = _POINTS_BRACKET_RE.search(desc or "")
     if m:
         return int(m.group(1))
@@ -500,6 +517,7 @@ def build_timeline() -> dict:
     entries = _fetch_today()
     events = _fetch_events_today(entries)
     logged = _ledger(today)
+    known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
 
     def hhmm(dt: _dt.datetime) -> str:
@@ -570,7 +588,7 @@ def build_timeline() -> dict:
                          # _resolvable_points) — lets the swipe label show
                          # what will ACTUALLY be credited (2026-08-15) rather
                          # than always implying "minutes = points".
-                         "points": _resolvable_points(e["desc"])})
+                         "points": _resolvable_points(e["desc"], known_habits)})
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
@@ -808,28 +826,49 @@ def split_entry(entry_id: str, mode: str) -> dict:
 _DF_MOD = None  # lazy did-fast module (for habit-name lookups only)
 
 
+def _load_df_mod():
+    global _DF_MOD
+    if _DF_MOD is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("df_tags", DID_FAST)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["df_tags"] = mod
+        spec.loader.exec_module(mod)
+        _DF_MOD = mod
+    return _DF_MOD
+
+
+def registered_habit_names() -> set[str]:
+    """Every 0n/1n+ habit's header + alias, normalized — habits that route
+    through did-fast's registry match (Steps 1-4 / 1n), NOT the Todoist-
+    task-match/variable path (Step 5/6) _resolvable_points targets. Shared
+    by habit_tags (existing) and _resolvable_points's guard (2026-08-15,
+    see there for why the guard exists). Best-effort: an import/read
+    failure returns an empty set (the guard just no-ops, same tolerance
+    habit_tags already had)."""
+    try:
+        df = _load_df_mod()
+        h = df.load_headers()
+        known = {df.header_normalize(k)
+                 for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
+        known |= {df.header_normalize(a) for a in df.ONENEON_ALIASES}
+        return known
+    except Exception as e:
+        print("WARN registered_habit_names:", e, file=sys.stderr)
+        return set()
+
+
 def habit_tags(tags: list[str]) -> list[str]:
     """The subset of a Toggl entry's tags that name known habits (0n or 1n+
     headers/aliases) — those get a secondary minutes log on swipe (user
     request 2026-07-27: a run tagged 其他人 should credit both ledgers).
     Meta tags (-1/-2/-3/2, project codes, …) resolve to nothing and are
     ignored. Best-effort: an import failure just skips secondaries."""
-    global _DF_MOD
     if not tags:
         return []
     try:
-        if _DF_MOD is None:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("df_tags", DID_FAST)
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules["df_tags"] = mod
-            spec.loader.exec_module(mod)
-            _DF_MOD = mod
-        df = _DF_MOD
-        h = df.load_headers()
-        known = {df.header_normalize(k)
-                 for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
-        known |= {df.header_normalize(a) for a in df.ONENEON_ALIASES}
+        known = registered_habit_names()
+        df = _load_df_mod()
         return [t for t in tags if df.header_normalize(str(t)) in known]
     except Exception as e:
         print("WARN habit_tags:", e, file=sys.stderr)
