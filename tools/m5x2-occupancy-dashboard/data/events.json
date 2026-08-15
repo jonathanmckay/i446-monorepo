@@ -4588,5 +4588,65 @@
     "unit": "C76",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-15",
+    "effective": "2026-08-13",
+    "kind": "moveout",
+    "unit_id": "1299",
+    "prop": "c702",
+    "unit": "B301",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-15",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "1151",
+    "prop": "tc68",
+    "unit": "A02",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-15",
+    "effective": "2026-08-15",
+    "kind": "movein",
+    "unit_id": "356",
+    "prop": "k104- LeFevre",
+    "unit": "314-12",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-15",
+    "effective": "2026-09-04",
+    "kind": "leased",
+    "unit_id": "548",
+    "prop": "rl16",
+    "unit": "B11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-15",
+    "effective": "2026-08-14",
+    "kind": "moveout",
+    "unit_id": "756",
+    "prop": "rl21",
+    "unit": "2",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-15",
+    "effective": "2026-08-15",
+    "kind": "movein",
+    "unit_id": "459",
+    "prop": "c302",
+    "unit": "5",
+    "tenant": null,
+    "baseline": false
   }
 ]
