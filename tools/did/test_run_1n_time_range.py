@@ -52,6 +52,20 @@ def _route_for(habit_query: str, target_date: str = "8/11") -> dict:
     return json.loads(r.stdout)
 
 
+def test_yiqifan_domain_is_nuclear_family_not_extended():
+    """Bug 2026-08-15: config/tasks.json's registry entry for 一起饭 carried
+    "domain": "家" (extended family) instead of "xk87" (nuclear family/kids)
+    — xk87 vs 家 is exactly that distinction (user report: "xk87 is nuclear
+    family and 家 is extended family"). The 0分 points write itself was
+    unaffected (neon_fen_header is the separate, already-correct "xk"), but
+    route.py's "domain" field feeds toggl.project directly — so a /did
+    backfill with a time range (Step 5.5's Toggl-entry creation) was
+    silently filing 一起饭 under the wrong Toggl project."""
+    d = _route_for("一起饭")
+    assert d["domain"] == "xk87"
+    assert d["toggl"]["project"] == "xk87"
+
+
 def test_run_1n_time_range_drives_minutes_not_default_one():
     """一起饭 is cumulative_increment=30: the week cell accumulates real
     minutes (old + this session's length), not old + 1."""
