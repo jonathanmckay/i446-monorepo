@@ -5092,7 +5092,9 @@ def _(event):
     desc = item["raw_desc"]
     start = item["start_dt"]
     end = start + dt.timedelta(minutes=item["dur_min"])
-    code = proj_code(item.get("project_id"))
+    code = toggl_project_code(item.get("project_id"), desc)
+    if not code:
+        code = _calendar_fallback_code(desc, start, end)
     date_sfx = f" {start.month}/{start.day}" if STATE.day_offset != 0 else ""
     cmd = f"{desc} {start:%H%M}-{end:%H%M}"
     if code:
