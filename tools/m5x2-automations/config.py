@@ -8,6 +8,7 @@ from pathlib import Path
 AUTOSIGN_SENDERS = [
     "stefanie@m5c7.com",
     "andrea@m5c7.com",
+    "karyn@m5c7.com",
 ]
 
 # AppFolio credentials (env var AF_PASSWORD or ~/.config/m5x2/af_password)
