@@ -106,10 +106,18 @@ day digit (`3`, or `2,5`) as the whole answer expands to that day's text on
 save. Finishing the last field (Tab off it, Escape, or a blank Enter) writes
 the answers to the review week's row (col A M.W label), saves, and **marks
 the weekly 1s task done** (survey completion IS task completion; `--no-mark`
-suppresses that for reruns). On a successful save it prints an explicit
-`✓ 1s saved to Neon — ...` confirmation, then (for interactive form runs,
-not `--from-json`) auto-closes its own cmux tab ~1.5s later via `cmux
-close-surface` — no stray pane left sitting at a shell prompt.
+suppresses that for reruns). The write happens while the full-screen form is
+still on screen: the status line switches to `Saving to Neon…` for the
+AppleScript round trip, then to an explicit `✓ saved to Neon — N field(s)
+written` or `✗ save FAILED` right there in the form (2026-08-16 — previously
+the form exited immediately and the confirmation only showed up in the plain
+terminal after a multi-second gap, which could read as nothing happening at
+all). After the form exits, `main()` reprints the per-write detail (and the
+`✓ 1s saved to Neon — ...` summary) to the terminal, then (for interactive
+form runs, not `--from-json`) auto-closes its own cmux tab ~1s later via
+`cmux close-surface` — no stray pane left sitting at a shell prompt. On
+failure the pane is left open instead, so the error and any recovery-file
+path stay visible.
 
 It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
 
