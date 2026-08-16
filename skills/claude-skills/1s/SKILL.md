@@ -76,7 +76,7 @@ python3, and /1s already runs weekly in a terminal with full access.
 
 **Skip this step entirely if the review week is not the most recent completed week** (i.e. the user passed a `week` argument targeting an older week for backfill). The `1g` sheet resets every week (`/1g` overwrites it), so `1g!A1` only ever holds the *current* week's tldr — copying it into an old week's row writes that day's placeholder/garbage text into historical data (regression 2026-08-02: copied "u" into week 6.3's row, ~6 weeks stale). There is no way to recover a past week's tldr from the live sheet; leave the cell as-is for backfills.
 
-Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (ISO week number for the review week).
+Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the review week's row, found by scanning col A for the M.W label (e.g. `8.2`; see `week_row_label` in `1s-survey.py` for the exact `month.((day-1)//7+1)` formula) — never a hardcoded row number.
 
 ```applescript
 tell application "Microsoft Excel"
@@ -84,13 +84,26 @@ tell application "Microsoft Excel"
     set sheet1g to sheet "1g" of wb
     set sheet1s to sheet "1分+1s" of wb
     set tldr to string value of range "A1" of sheet1g
-    set weekRow to WEEK_ROW
+    set weekRow to 0
+    set r to 2
+    repeat while r < 400
+        set aVal to string value of range ("A" & r) of sheet1s
+        if aVal is "M.W_LABEL" then
+            set weekRow to r
+            exit repeat
+        end if
+        if aVal is "" then
+            exit repeat
+        end if
+        set r to r + 1
+    end repeat
+    if weekRow = 0 then return "ERROR: week M.W_LABEL not found in 1分+1s col A"
     set value of range ("D" & weekRow) of sheet1s to tldr
     return "OK: wrote 1g tldr to D" & weekRow
 end tell
 ```
 
-Replace `WEEK_ROW` with the ISO week number for the review week.
+Replace `M.W_LABEL` with the review week's M.W label (e.g. `8.2`).
 
 #### Step 0b: Launch the weekly survey form
 
