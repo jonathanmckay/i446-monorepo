@@ -2225,10 +2225,12 @@ def _on_ix() -> bool:
     return "mac-mini" in socket.gethostname().lower()
 
 
-def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
+def _stamp_on_ix(block: str, emoji: str) -> Optional[tuple[bool, str]]:
     """Apply a block-header stamp on IX's build-order copy (single writer).
-    Returns True = freshly stamped, False = already present, None = ssh
-    failed (caller falls back to the local write).
+    Returns (changed, resulting_text): changed=True means freshly stamped,
+    False means already present; resulting_text is Ix's own canonical
+    post-stamp file content. None = ssh failed (caller falls back to the
+    local write).
 
     Multiple rituals are routinely completed within seconds of each other
     (dtd batch-completions), each spawning its OWN ssh call here. Without a
@@ -2237,7 +2239,19 @@ def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
     every other call's stamp (2026-07-29: 4 of 申's 5 rituals were completed
     within a 4-second window and only one -- the one call that happened to
     run in isolation -- survived). flock serializes the read-modify-write so
-    concurrent stamps queue and accumulate instead of clobbering each other."""
+    concurrent stamps queue and accumulate instead of clobbering each other.
+
+    Returning the text (not just the bool) matters just as much as the lock:
+    run_ritual's step 4 recomputes the day's P total from a text snapshot,
+    and it used to reuse the STALE pre-ssh local copy read on the caller's
+    own machine even after this call succeeded remotely. Two rituals 8s
+    apart on 2026-08-16 (巳's 🎯 then ✅) exposed it live: the second call's
+    local copy hadn't synced the first call's just-landed stamp yet, so its
+    recompute silently dropped one ritual's points from the day's P write —
+    invisible because ☀️/📧/⏱️/🎯/✅ are 1/3/3/3/3, so a 4-emoji undercount
+    can coincidentally equal the true prior total and slide past the
+    `computed_total >= live_total` guard. Handing back Ix's own fresh read
+    (same ssh round trip, no extra cost) closes the gap."""
     py = (
         "import sys, fcntl; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
         "import neon_blocks as nb\n"
@@ -2250,9 +2264,11 @@ def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
         "        t = bo.read_text(encoding='utf-8')\n"
         f"        nt, ch = nb.stamp_emoji(t, {block!r}, {emoji!r})\n"
         "        if ch: bo.write_text(nt, encoding='utf-8')\n"
+        "        else: nt = t\n"
         "    finally:\n"
         "        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)\n"
         "print('CH' if ch else 'NC')\n"
+        "print(nt)\n"
     )
     try:
         r = subprocess.run(
@@ -2261,11 +2277,12 @@ def _stamp_on_ix(block: str, emoji: str) -> Optional[bool]:
             input=py, capture_output=True, text=True, timeout=15)
     except Exception:
         return None
-    outp = (r.stdout or "").strip().splitlines()
-    tokenized = outp[-1] if outp else ""
-    if r.returncode != 0 or tokenized not in ("CH", "NC"):
+    out = r.stdout or ""
+    token, _, text = out.partition("\n")
+    token = token.strip()
+    if r.returncode != 0 or token not in ("CH", "NC"):
         return None
-    return tokenized == "CH"
+    return token == "CH", text
 
 
 def _flip_checkboxes_on_ix(bare_matches: list[str]) -> Optional[bool]:
@@ -2480,8 +2497,12 @@ def run_ritual(tag: str) -> dict:
         else:
             # Ix's copy is the truth: credit points only if IX stamped fresh
             # (a local-stale "would change" must not double-credit a ritual
-            # another machine already stamped and credited).
-            changed = remote
+            # another machine already stamped and credited). Also adopt Ix's
+            # own post-stamp text for step 4's score recompute below — NOT
+            # the pre-ssh `new_text` from line ~2454, which can be Syncthing-
+            # stale and silently undercount a ritual another call just
+            # stamped on Ix moments earlier (see _stamp_on_ix's docstring).
+            changed, new_text = remote
     out["stamped"] = changed
     out["auto"] = is_auto
 

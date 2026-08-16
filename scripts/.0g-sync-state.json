@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-16T08:00:05.768799-07:00"
+  "tasks": {
+    "get to at least drafts of 2/3 written artifacts": {
+      "todoist_id": "6hHJCMw83f6wfmqR",
+      "minutes": 60
+    },
+    "something with family": {
+      "todoist_id": "6hHJCMwX9fPfjFRR",
+      "minutes": 60
+    },
+    "bend the meetings towards a rob that i like": {
+      "todoist_id": "6hHJCMwvPf6cxRV2",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-08-16T10:00:07.818720-07:00"
 }

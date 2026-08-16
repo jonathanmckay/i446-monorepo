@@ -42,15 +42,19 @@ def test_stamp_on_ix_parses_ch_nc_and_failure(monkeypatch):
 
     def fake_run(cmd, **kw):
         calls.append((cmd, kw.get("input", "")))
-        return _P("CH\n")
+        return _P("CH\n- 午 🎯\n    - [ ] some goal\n")
     monkeypatch.setattr(df.subprocess, "run", fake_run)
-    assert df._stamp_on_ix("午", "🎯") is True
+    result = df._stamp_on_ix("午", "🎯")
+    assert result == (True, "- 午 🎯\n    - [ ] some goal\n"), (
+        "must return (changed, resulting_text) -- the caller's immediate P "
+        "recompute needs Ix's own post-stamp text, not just a bool"
+    )
     cmd, payload = calls[0]
     assert cmd[:2] == ["ssh", "-o"] and "ix" in cmd
     assert "stamp_emoji" in payload and "午" in payload and "🎯" in payload
 
-    monkeypatch.setattr(df.subprocess, "run", lambda *a, **k: _P("NC\n"))
-    assert df._stamp_on_ix("午", "🎯") is False
+    monkeypatch.setattr(df.subprocess, "run", lambda *a, **k: _P("NC\nunchanged text\n"))
+    assert df._stamp_on_ix("午", "🎯") == (False, "unchanged text\n")
 
     monkeypatch.setattr(df.subprocess, "run", lambda *a, **k: _P("", rc=255))
     assert df._stamp_on_ix("午", "🎯") is None
@@ -70,7 +74,56 @@ def test_run_ritual_routes_stamps_through_ix():
         "Ix-unreachable fallback must be noted in the result"
     # Remote truth gates the credit: a remote NC must zero `changed` so the
     # P credit can't double-fire for a ritual another machine already stamped.
-    assert "changed = remote" in body
+    # It must also adopt Ix's own post-stamp text (not the stale pre-ssh
+    # local copy) for the immediate P recompute -- see _stamp_on_ix's
+    # docstring for the 2026-08-16 undercount this closes.
+    assert "changed, new_text = remote" in body
+    # And the reassignment must land BEFORE the immediate-credit recompute
+    # reads new_text, or the fix is present but wired to the wrong variable.
+    reassign_idx = body.index("changed, new_text = remote")
+    score_idx = body.index("nb.score_day(new_text)")
+    assert reassign_idx < score_idx, (
+        "new_text must be reassigned from Ix's authoritative post-stamp text "
+        "BEFORE score_day recomputes P from it"
+    )
+
+
+def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text():
+    """Direct reproduction of the 2026-08-16 bug: 巳's 🎯 then ✅ completed
+    8s apart from Straylight. By the time ✅'s run_ritual call started, its
+    OWN pre-ssh local read of build-order.md hadn't yet synced 🎯's stamp
+    (Syncthing lag) -- but _stamp_on_ix's ssh call reads/writes/returns
+    Ix's OWN fresh copy, which has both. Using the OLD stale local text for
+    the score_day recompute undercounts by one ritual's points (10 instead
+    of 13, coincidentally NOT flagged by the `computed_total >= live_total`
+    guard since 4-emoji subsets can total the same either way); using the
+    text _stamp_on_ix now returns gets the correct 13."""
+    df = _load()
+    import neon_blocks as nb
+
+    # Straylight's local copy is missing 🎯 (Syncthing hasn't caught it up
+    # yet); Ix's own copy already has it, and its remote stamp_emoji call
+    # adds ✅ on top, so the text it hands back has all 5.
+    stale_local_text = "## -1₲\n\n- 巳 ☀️ 📧 ⏱️ (0min)\n    - [ ] x\n"
+    ix_post_stamp_text = "## -1₲\n\n- 巳 ☀️ 📧 ⏱️ 🎯 ✅ (0min)\n    - [ ] x\n"
+
+    def fake_run(cmd, **kw):
+        return _P(f"CH\n{ix_post_stamp_text}")
+    df.subprocess.run = fake_run
+
+    # The stale local copy alone (pre-fix behavior) would stamp ✅ onto a
+    # text that's missing 🎯, undercounting 巳 by 3.
+    stale_new_text, _ = nb.stamp_emoji(stale_local_text, "巳", "✅")
+    _, stale_total, _ = nb.score_day(stale_new_text)
+    assert stale_total == 10, "sanity: the stale local copy undercounts, as observed live"
+
+    # _stamp_on_ix's returned text is Ix's own copy, WITH 🎯 -- stamping ✅
+    # onto that (what the fix now uses) recovers the correct total.
+    result = df._stamp_on_ix("巳", "✅")
+    changed, ix_text = result
+    assert changed is True
+    _, fixed_total, _ = nb.score_day(ix_text)
+    assert fixed_total == 13, "the fix must score off Ix's authoritative text, not the stale local copy"
 
 
 def test_stamp_on_ix_remote_script_uses_a_lock():
