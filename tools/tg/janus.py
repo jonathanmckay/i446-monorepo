@@ -5035,6 +5035,31 @@ def _habit_tags(tags: list) -> list:
         return []
 
 
+def _calendar_fallback_code(desc: str, start: dt.datetime, end: dt.datetime) -> str:
+    """Last-resort project code for a tracked Toggl entry whose OWN
+    project_id doesn't resolve to anything (missing/stale — the same class
+    of gap toggl_project_code's literal-title fallback exists for, just for
+    entries whose title doesn't happen to contain "m5x2" literally): if a
+    calendar event with the same title overlaps this entry's time range,
+    borrow ITS resolved code. The entry usually mirrors a meeting Janus
+    already colored correctly on screen via that meeting's calendar (e.g.
+    "IM|JM 1|1" lives on "m5x2 Cal" — CALENDAR_PROJECT_MAP resolves that to
+    m5x2 via gcal_project_code), so granting its points shouldn't need to
+    re-derive that from scratch and fail with "needs domain disambiguation"
+    when it's already known (user report 2026-08-16)."""
+    desc_l = desc.strip().lower()
+    for ev in STATE.events:
+        if (ev.get("title") or "").strip().lower() != desc_l:
+            continue
+        ev_start, ev_end = ev.get("start_dt"), ev.get("end_dt")
+        if ev_start is None or ev_end is None or ev_start >= end or ev_end <= start:
+            continue
+        code = gcal_project_code(ev)
+        if code:
+            return code
+    return ""
+
+
 @kb.add("escape", "enter")  # opt/alt+enter
 def _(event):
     """opt+enter on a selected TRACKED entry: run /did for it — grant its
@@ -5092,7 +5117,9 @@ def _(event):
     desc = item["raw_desc"]
     start = item["start_dt"]
     end = start + dt.timedelta(minutes=item["dur_min"])
-    code = proj_code(item.get("project_id"))
+    code = toggl_project_code(item.get("project_id"), desc)
+    if not code:
+        code = _calendar_fallback_code(desc, start, end)
     date_sfx = f" {start.month}/{start.day}" if STATE.day_offset != 0 else ""
     cmd = f"{desc} {start:%H%M}-{end:%H%M}"
     if code:

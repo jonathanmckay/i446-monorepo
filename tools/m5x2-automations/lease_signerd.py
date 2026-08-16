@@ -114,8 +114,31 @@ def get_service():
 
 
 def fetch_unread(service) -> list[dict]:
-    """Fetch unread inbox messages."""
-    return _ibx.fetch_inbox(service, unread_only=True)
+    """Fetch unread inbox messages from the autosign senders specifically.
+
+    Deliberately NOT _ibx.fetch_inbox(unread_only=True): that pulls only the
+    50 most-recent unread inbox messages *before* filtering by sender, so any
+    autosign email buried under other unread mail (or older than the top 50)
+    was permanently invisible to the daemon no matter how many poll cycles
+    ran — the actual reason a backlog of countersign requests going back to
+    at least 2026-07-24 sat unprocessed even before the 2026-08-06 crash-loop
+    bug (found/fixed 2026-08-16). Querying Gmail directly, scoped to the
+    autosign senders, reaches the full backlog regardless of general inbox
+    clutter, and paginates so no cap silently drops old messages.
+    """
+    sender_query = " OR ".join(f"from:{s}" for s in AUTOSIGN_SENDERS)
+    query = f"in:inbox is:unread ({sender_query})"
+    messages: list[dict] = []
+    page_token = None
+    while True:
+        resp = service.users().messages().list(
+            userId="me", q=query, maxResults=100, pageToken=page_token,
+        ).execute()
+        messages.extend(resp.get("messages", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return messages
 
 
 def normalize(msg, service) -> dict | None:
@@ -289,17 +312,26 @@ def process_email(service, item: dict) -> str:
         error = str(exc)
         log.error(f"Exception during signing: {exc}")
 
-    _autodb.log_signing(
-        DB_PATH,
-        property=meta.get("property", ""),
-        unit=meta.get("unit", ""),
-        tenants=meta.get("tenants", ""),
-        lease_type=meta.get("lease_type", "renewal"),
-        source_sender=item.get("from", ""),
-        source_subject=item.get("preview", ""),
-        appfolio_url=url,
-        status=status,
-    )
+    # Never let a Sheets-logging hiccup crash the daemon or block archiving —
+    # this exact failure mode (missing ~/.config/m5x2/sheets_token.json on Ix)
+    # silently broke the daemon for 10 days (2026-08-06→08-16): every poll
+    # crashed on log_signing() before reaching the archive-on-success step
+    # below, so successful (and failed) signings never got archived and the
+    # backlog piled up unread in the inbox.
+    try:
+        _autodb.log_signing(
+            DB_PATH,
+            property=meta.get("property", ""),
+            unit=meta.get("unit", ""),
+            tenants=meta.get("tenants", ""),
+            lease_type=meta.get("lease_type", "renewal"),
+            source_sender=item.get("from", ""),
+            source_subject=item.get("preview", ""),
+            appfolio_url=url,
+            status=status,
+        )
+    except Exception as e:
+        log.error(f"Failed to log signing to Sheets (continuing anyway): {e}")
 
     email_id = item.get("_data", {}).get("email", {}).get("id", "")
 
@@ -361,7 +393,17 @@ def poll_once(service) -> int:
             continue
         if not _signer.is_autosign_email(item, AUTOSIGN_SENDERS):
             continue
-        status = process_email(service, item)
+        try:
+            status = process_email(service, item)
+        except Exception as e:
+            # An unexpected exception here must never kill the whole poll
+            # cycle — that's what turned one bad email into a 10-day, ~7000-
+            # restart crash loop stuck on a single message while the rest of
+            # the backlog piled up unread (2026-08-06→08-16). Log it and move
+            # on to the next message; this one stays unread for manual review.
+            log.error(f"Unexpected error processing email "
+                      f"{item.get('_data', {}).get('email', {}).get('id', '?')}: {e}")
+            continue
         processed += 1
         if status == "auth_failed":
             # Every remaining email would fail identically. Stop this cycle so
