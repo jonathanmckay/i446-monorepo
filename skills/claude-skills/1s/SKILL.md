@@ -439,4 +439,4 @@ the user submits it (rerun `1s-survey.py` directly if needed).
 - Toggl CLI `date` command returns entries for a single day. Must call 7 times.
 - 0分 column mapping must match exactly. If columns shift, the review will have wrong data.
 - AppleScript calls sequential (no parallel Excel access).
-- The `reviews/` folder uses ISO week numbers: `YYYY-WNN` (e.g. `2026-W16`).
+- The `reviews/` folder uses M.W labels, not ISO week numbers: `YYYY-M.W-1s.md` (e.g. `2026-8.2-1s.md`), matching `1分+1s`/`1n+`'s own week labeling.
