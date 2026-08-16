@@ -76,7 +76,7 @@ python3, and /1s already runs weekly in a terminal with full access.
 
 **Skip this step entirely if the review week is not the most recent completed week** (i.e. the user passed a `week` argument targeting an older week for backfill). The `1g` sheet resets every week (`/1g` overwrites it), so `1g!A1` only ever holds the *current* week's tldr — copying it into an old week's row writes that day's placeholder/garbage text into historical data (regression 2026-08-02: copied "u" into week 6.3's row, ~6 weeks stale). There is no way to recover a past week's tldr from the live sheet; leave the cell as-is for backfills.
 
-Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the current week's row (ISO week number for the review week).
+Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the review week's row, found by scanning col A for the M.W label (e.g. `8.2`; see `week_row_label` in `1s-survey.py` for the exact `month.((day-1)//7+1)` formula) — never a hardcoded row number.
 
 ```applescript
 tell application "Microsoft Excel"
@@ -84,13 +84,26 @@ tell application "Microsoft Excel"
     set sheet1g to sheet "1g" of wb
     set sheet1s to sheet "1分+1s" of wb
     set tldr to string value of range "A1" of sheet1g
-    set weekRow to WEEK_ROW
+    set weekRow to 0
+    set r to 2
+    repeat while r < 400
+        set aVal to string value of range ("A" & r) of sheet1s
+        if aVal is "M.W_LABEL" then
+            set weekRow to r
+            exit repeat
+        end if
+        if aVal is "" then
+            exit repeat
+        end if
+        set r to r + 1
+    end repeat
+    if weekRow = 0 then return "ERROR: week M.W_LABEL not found in 1分+1s col A"
     set value of range ("D" & weekRow) of sheet1s to tldr
     return "OK: wrote 1g tldr to D" & weekRow
 end tell
 ```
 
-Replace `WEEK_ROW` with the ISO week number for the review week.
+Replace `M.W_LABEL` with the review week's M.W label (e.g. `8.2`).
 
 #### Step 0b: Launch the weekly survey form
 
@@ -238,6 +251,66 @@ end tell
 
 Parse into `points_by_domain = {"i9": 245, "m5x2": 180, ...}`.
 
+### Step 4b: Pull 1n+ weekly-habit completion (% of 1n done)
+
+Score how much of this week's named weekly habits (the `1neon` recurring
+cards in the `1n+` sheet) actually got done, weighted by each habit's own
+point value — a single number for "how much 1n did I get done this week."
+
+**Row layout** (`1n+` sheet, one habit per column, C:AL):
+- Row 1 = habit header/name
+- Row 2 = expected time (min)
+- Row 3 = weekday the card recurs (1=Sun…7=Sat)
+- Row 4 = target 分 (the habit's "worth" — use this as the weight)
+- Row 5 = expected-points formula: a **plain number** = completionist
+  (marking it done once earns full row-4 points); a `base+rate/m` string
+  (e.g. `1/m`, `.5/m`, `15+1/m`) = rate-based (points scale with minutes)
+
+**Week row lookup**: unlike `1分+1s`, the M.W label here lives in **column
+B**, not A, starting at row 6.
+
+**Reading actual points per column** — the raw cell's meaning depends on
+habit type, per `did-fast.py`'s write semantics. Before scoring, grep
+`VARIABLE_1N_RATES`, `VARIABLE_1N_BASES`, `THRESHOLD_1N` in
+`~/i446-monorepo/tools/did/did-fast.py` — these are live dicts that can
+change; don't hardcode stale copies here (verified against that file
+2026-08-16: `VARIABLE_1N_RATES={"长冥想":0.5,"长o314":0.5}`,
+`VARIABLE_1N_BASES={"一起饭":15,"aos":15}`, `THRESHOLD_1N` keys
+`长o314`/`长冥想`).
+
+1. **Completionist** (row 5 is a plain integer): cell blank → 0 points;
+   cell non-blank (any value, often just `1`) → full row-4 points. The
+   stored number is metadata (usually minutes or a default `1`), not the
+   point value.
+2. **Threshold rate habits** (habit name is a key in `THRESHOLD_1N`): the
+   cell already holds the final computed points (0/blank if under the
+   minimum-minutes threshold, else `base + rate×minutes`) — use the cell
+   value directly.
+3. **Other rate habits** (row 5 has a `/m` formula, name not in
+   `THRESHOLD_1N`): the cell holds raw **minutes**, not points. Compute
+   `points = base + rate × cell_value`, with `base`/`rate` from
+   `VARIABLE_1N_BASES`/`VARIABLE_1N_RATES` (default rate `1.0`, default
+   base `0` if the habit isn't in either dict).
+
+**Target (weight)**: use row 4 directly when it's a clean number. If row 4
+is itself non-numeric text (some rate columns mirror row 5's formula string
+into row 4 instead of a computed number — seen on `一起饭` W33), fall back
+to `base + rate × row2` (expected time) as the target.
+
+**Weighted completion %**:
+```
+1n_actual_total = Σ actual points across all C:AL columns for the week row
+1n_target_total = Σ target points across all C:AL columns for the week row
+1n_pct = 1n_actual_total / 1n_target_total
+```
+This is already a weighted average of each habit's own %-done, weighted by
+its point value — no separate weighting pass needed once actual/target are
+summed per column.
+
+Also collect the **below-target habits** (`target - actual` > 0, biggest
+gaps first) and **overperformers** (`actual > target`) — these are more
+informative in the report than the raw percentage alone.
+
 ### Step 5: Build comparison table
 
 For each domain, compute:
@@ -301,6 +374,11 @@ source: /1s
 | ...    |       |           |           |       |      |     |
 | **Total** | **N** | **T** | **A** | **H** | **Δ%** | **E** |
 
+**1n Completion:** {1n_pct}% ({1n_actual_total}分 / {1n_target_total}分)
+
+Below-target habits: {habit} ({actual}/{target}), ...
+Overperformers: {habit} ({actual}/{target}), ...
+
 ### Goals Detail
 
 #### i9
@@ -338,7 +416,8 @@ Ask the user which action to take for each stale entry.
 
 ### Step 8: Report
 
-Show the comparison table and narrative to the user. Do NOT run `/did 1s`
+Show the comparison table, the 1n Completion % (with below-target/
+overperformer habits from Step 4b), and narrative to the user. Do NOT run `/did 1s`
 here — the weekly 1s task is marked done by the survey form on `^S` (the
 task is not complete until the survey is; user decision 2026-07-21). If the
 survey is still open, say so; if it was cancelled, the task stays open until
