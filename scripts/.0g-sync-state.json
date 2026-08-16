@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "watch some of the meetings": {
-      "todoist_id": "6hH79q7H5mWmmXh2",
-      "minutes": 30
-    },
-    "use both the ride down and the ride up": {
-      "todoist_id": "6hH79q69Gj9whPP2",
-      "minutes": 30
-    },
-    "have real side conversation with either kathy or ming": {
-      "todoist_id": "6hH79q8jQXj4mcwR",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-08-15T18:00:06.606194-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-16T06:00:06.318875-07:00"
 }

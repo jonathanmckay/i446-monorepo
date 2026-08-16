@@ -544,7 +544,7 @@
     "property_name": "tc68",
     "unit": "D105",
     "tenant_name": "Estrada, Sean V.",
-    "status": "Pending",
+    "status": "Eligible",
     "lease_sign_date": null,
     "move_in": "2025-08-15",
     "renewal_start_date": null,
@@ -1438,18 +1438,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1028.50"
-  },
-  {
-    "unit_id": 440,
-    "property_name": "w226",
-    "unit": "7",
-    "tenant_name": "Delahaye, Matthew P.",
-    "status": "Eligible",
-    "lease_sign_date": "2024-03-28",
-    "move_in": "2024-04-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1128.00"
   },
   {
     "unit_id": 441,

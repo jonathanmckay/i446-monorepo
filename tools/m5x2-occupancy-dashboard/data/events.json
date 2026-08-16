@@ -4648,5 +4648,35 @@
     "unit": "5",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-16",
+    "effective": "2026-09-09",
+    "kind": "leased",
+    "unit_id": "1255",
+    "prop": "tc68",
+    "unit": "D106",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-16",
+    "effective": "2026-09-17",
+    "kind": "leased",
+    "unit_id": "664",
+    "prop": "s129",
+    "unit": "13",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-16",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "1220",
+    "prop": "tc68",
+    "unit": "C71",
+    "tenant": null,
+    "baseline": false
   }
 ]
