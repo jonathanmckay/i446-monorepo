@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import datetime as _dt
 import json
 import subprocess
@@ -395,7 +396,8 @@ def _ctx_lines(ctx_list: list[tuple[int, str]], dates: list[_dt.date]) -> str:
     return "\n".join(lines)
 
 
-def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
+def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
+             no_mark: bool = False) -> dict | None:
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import HSplit, Layout, ScrollablePane, VSplit, Window
@@ -441,20 +443,74 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
                 return i
         return None
 
-    def _submit(app):
+    submitting = {"active": False}
+
+    async def _submit(app):
         bad = [lbl for _k, (a, kind, lbl) in areas.items()
                if kind == "num" and a.text.strip() and not _is_num(a.text.strip())]
         if bad:
             msg["text"] = "Not a number: " + ", ".join(bad)
             return
-        app.exit(result="submit")
+
+        # The form stays alive (and listening for keys) through the whole
+        # write below, so a second Escape/^S/Enter while "Saving to Neon…"
+        # is showing would otherwise re-run this and double-write.
+        if submitting["active"]:
+            return
+        submitting["active"] = True
+
+        answers = expand_selections(
+            {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}, ctx)
+        filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS
+                     if (answers.get(k) or "").strip())
+
+        # Keep the form on screen through the whole write instead of exiting
+        # immediately: exiting drops back to the plain terminal (which can be
+        # showing anything left over from before this pane's shell started —
+        # a login MOTD, a stray "You have mail.", whatever) and the AppleScript
+        # round trip to Ix can take 15s+, so a blank/stale-looking screen sat
+        # there with no sign anything was happening (JM 2026-08-16: saved 1s,
+        # screen just showed "you have mail", no indication of what was going
+        # on or whether the Neon write actually succeeded).
+        msg["text"] = "Saving to Neon…"
+        app.invalidate()
+
+        def _do_write():
+            _writer.recovery_dir = RECOVERY_DIR
+            _writer.queue(write_answers, answers, sunday, tag=SHEET,
+                          recovery_payload=answers)
+            if not no_mark:
+                def _mark_1s_done():
+                    subprocess.run(["/usr/bin/python3",
+                                    str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
+                                   capture_output=True, text=True, timeout=120)
+                    return "1s marked done"
+                _writer.queue(_mark_1s_done, tag="1s-mark")
+            # report=False: a background thread printing while this
+            # full-screen Application still owns the terminal corrupts the
+            # display (see review_form_writer.py) — the status line above is
+            # this form's report instead. main() prints the detailed
+            # per-write lines from _writer.last_results once the app exits.
+            return _writer.drain(report=False)
+
+        loop = asyncio.get_running_loop()
+        all_ok = await loop.run_in_executor(None, _do_write)
+
+        if all_ok:
+            msg["text"] = "✓ saved to Neon — %d field%s written" % (
+                filled, "" if filled == 1 else "s")
+        else:
+            msg["text"] = "✗ save FAILED — details after this closes"
+        app.invalidate()
+        await asyncio.sleep(1.5 if all_ok else 3.0)
+        app.exit(result={"answers": answers, "all_ok": all_ok, "filled": filled})
 
     kb = KeyBindings()
 
     @kb.add("tab", eager=True)
-    def _(e):
+    async def _(e):
         if _focused_idx(e.app) == last_idx:
-            _submit(e.app)
+            await _submit(e.app)
         else:
             e.app.layout.focus_next()
 
@@ -463,7 +519,7 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
         e.app.layout.focus_previous()
 
     @kb.add("enter", eager=True)
-    def _(e):
+    async def _(e):
         idx = _focused_idx(e.app)
         if idx is None:
             return
@@ -474,21 +530,21 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
                 # field finishes the form instead of adding another newline
                 before = e.current_buffer.document.text_before_cursor.split("\n")
                 if len(before) >= 2 and before[-1] == "" and before[-2] == "":
-                    _submit(e.app)
+                    await _submit(e.app)
                     return
             e.current_buffer.insert_text("\n")
         elif idx == last_idx:
-            _submit(e.app)
+            await _submit(e.app)
         else:
             e.app.layout.focus_next()
 
     @kb.add("escape")
-    def _(e):
-        _submit(e.app)
+    async def _(e):
+        await _submit(e.app)
 
     @kb.add("c-s")
-    def _(e):
-        _submit(e.app)
+    async def _(e):
+        await _submit(e.app)
 
     @kb.add("c-q")
     @kb.add("c-c")
@@ -506,9 +562,10 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict) -> dict | None:
     app = Application(layout=Layout(root, focused_element=areas[FIELDS[0][0]][0]),
                       key_bindings=kb, full_screen=True, style=style,
                       mouse_support=True)
-    if app.run() != "submit":
-        return None
-    return {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
+    # None on cancel (^Q/^C); on submit, _submit() has already written to
+    # Neon (and printed live progress in the status line) before exiting, so
+    # this returns {"answers", "all_ok", "filled"} rather than a bare marker.
+    return app.run()
 
 
 def main() -> int:
@@ -544,74 +601,105 @@ def main() -> int:
     if args.from_json:
         answers = json.loads(Path(args.from_json).read_text())
         ctx = fetch_context(dates) if not args.print_script else {k: [] for k in DAILY_COLS}
-    else:
-        ctx = fetch_context(dates)
-        # Hard gate (user decision 2026-07-21): the weekly review may not run
-        # on an incomplete week — missing daily surveys / time recording / 0l
-        # must be backfilled first. --force is the deliberate escape hatch.
-        if not args.force:
-            blockers = check_week(dates, ctx)
-            if any(blockers.values()):
-                print("1s blocked — backfill the week first:")
-                print(format_blockers(blockers))
-                print("(rerun with --force to fill the survey anyway)")
-                return 3
-        answers = run_form(sunday, dates, ctx)
-        if answers is None:
-            print("1s survey cancelled.")
-            return 1
-    answers = expand_selections(answers, ctx)
+        answers = expand_selections(answers, ctx)
 
-    if args.print_script:
-        print(build_applescript(answers, sunday))
-        return 0
+        if args.print_script:
+            print(build_applescript(answers, sunday))
+            return 0
 
-    filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
+        filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
 
-    def _write_neon():
-        return write_answers(answers, sunday)
+        def _write_neon():
+            return write_answers(answers, sunday)
 
-    # Re-reads RECOVERY_DIR each call (rather than trusting whatever _writer
-    # was constructed with) so tests that monkeypatch it after module load
-    # still take effect — same reasoning as xk887-survey.py's queue_write.
-    _writer.recovery_dir = RECOVERY_DIR
-    _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
+        # Re-reads RECOVERY_DIR each call (rather than trusting whatever
+        # _writer was constructed with) so tests that monkeypatch it after
+        # module load still take effect — same reasoning as
+        # xk887-survey.py's queue_write.
+        _writer.recovery_dir = RECOVERY_DIR
+        _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
 
-    # Completing the survey IS completing the weekly 1s task (user decision
-    # 2026-07-21: "I need to complete the survey before task is complete") —
-    # mark it here, not in the /1s skill flow. Queued onto the SAME
-    # background writer as the Neon write above (serialized, not concurrent,
-    # per JM 2026-08-11 — see 0s.py's identical comment for why).
-    if not args.no_mark:
-        def _mark_1s_done():
-            subprocess.run(["/usr/bin/python3",
-                            str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
-                           capture_output=True, text=True, timeout=120)
-            return "1s marked done"
-        _writer.queue(_mark_1s_done, tag="1s-mark")
+        # Completing the survey IS completing the weekly 1s task (user
+        # decision 2026-07-21: "I need to complete the survey before task is
+        # complete") — mark it here, not in the /1s skill flow. Queued onto
+        # the SAME background writer as the Neon write above (serialized,
+        # not concurrent, per JM 2026-08-11 — see 0s.py's identical comment
+        # for why).
+        if not args.no_mark:
+            def _mark_1s_done():
+                subprocess.run(["/usr/bin/python3",
+                                str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
+                               capture_output=True, text=True, timeout=120)
+                return "1s marked done"
+            _writer.queue(_mark_1s_done, tag="1s-mark")
 
-    all_ok = _writer.drain()
-    # write_answers() raising is caught by the writer now, not this function
-    # — reaching here means either it succeeded or the failure was already
-    # reported by drain(). Keep the explicit success line too (user decision
-    # 2026-08-02: finishing the survey should make the Neon write obvious,
-    # not just log a terse AppleScript return value).
+        all_ok = _writer.drain()
+        if all_ok:
+            print("✓ 1s saved to Neon — %s week %s, %d field%s written" % (
+                SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s"))
+        return 0 if all_ok else 1
+
+    ctx = fetch_context(dates)
+    # Hard gate (user decision 2026-07-21): the weekly review may not run
+    # on an incomplete week — missing daily surveys / time recording / 0l
+    # must be backfilled first. --force is the deliberate escape hatch.
+    if not args.force:
+        blockers = check_week(dates, ctx)
+        if any(blockers.values()):
+            print("1s blocked — backfill the week first:")
+            print(format_blockers(blockers))
+            print("(rerun with --force to fill the survey anyway)")
+            return 3
+
+    # run_form() writes to Neon (and marks 1s done) itself, from inside the
+    # still-live full-screen app — see _submit() there. That's what puts
+    # "Saving to Neon…" and the ✓/✗ result on screen for the whole AppleScript
+    # round trip, instead of exiting to a blank/stale terminal and leaving the
+    # user guessing whether anything happened (JM 2026-08-16).
+    result = run_form(sunday, dates, ctx, no_mark=args.no_mark)
+    if result is None:
+        print("1s survey cancelled.")
+        return 1
+
+    all_ok = result["all_ok"]
+    filled = result["filled"]
+
+    # The form suppressed its own report (report=False, to avoid a
+    # background thread printing over a live full-screen Application) — print
+    # the per-write detail now that the screen is back to normal.
+    for tag, ok, msg_, rec_path in _writer.last_results:
+        label = tag or "write"
+        if ok:
+            print("→ %s ✓ %s" % (label, msg_))
+        else:
+            print("→ %s ✗ FAILED: %s" % (label, msg_))
+            if rec_path:
+                print("→ answers saved to %s -- replay once fixed" % rec_path)
+
+    # Belt-and-braces: run_form() already drained the writer while the form
+    # was still on screen, so this is normally a fast no-op — but it's the
+    # same guard the interactive path has always had against closing the
+    # pane while a queued write might still need the terminal to report its
+    # result.
+    _writer.drain()
+
     if all_ok:
         print("✓ 1s saved to Neon — %s week %s, %d field%s written" % (
             SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s"))
-
-    # Interactive runs (the form, not scripted --from-json) close their own
-    # cmux tab after a successful save, so the survey doesn't leave a stray
-    # pane sitting at a shell prompt (user decision 2026-08-02). Must run
-    # AFTER drain() — closing the pane while a queued write might still need
-    # the terminal to report its result would hide a failure from the user.
-    if not args.from_json:
-        time.sleep(1.5)
+        # Interactive runs close their own cmux tab after a successful save,
+        # so the survey doesn't leave a stray pane sitting at a shell prompt
+        # (user decision 2026-08-02).
+        time.sleep(1.0)
         try:
             subprocess.run(["cmux", "close-surface"], capture_output=True,
                             text=True, timeout=10)
         except Exception:  # noqa: BLE001
             pass  # not running in a cmux pane, or cmux unavailable — fine
+    else:
+        # Leave the pane open on failure so the recovery-file path above
+        # (and the raw AppleScript error) stay readable instead of vanishing
+        # with the tab.
+        print("→ leaving this pane open — close it once you've handled the failure.")
 
     return 0 if all_ok else 1
 

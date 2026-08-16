@@ -42,6 +42,12 @@ class BackgroundWriter:
         self._results: list[tuple[str, bool, str, Path | None]] = []
         self._results_lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        # Snapshot of the most recent drain()'s per-call results, kept around
+        # even when drain(report=False) is used so a caller that suppressed
+        # the printed report (e.g. to avoid corrupting a still-live
+        # full-screen Application) can print it itself once the screen is
+        # safe to write to.
+        self.last_results: list[tuple[str, bool, str, Path | None]] = []
 
     def _loop(self) -> None:
         while True:
@@ -97,10 +103,12 @@ class BackgroundWriter:
         one owns the terminal corrupts the display. Returns True iff every
         queued call succeeded."""
         if self._thread is None:
+            self.last_results = []
             return True
         self._queue.join()
         with self._results_lock:
             results, self._results[:] = list(self._results), []
+        self.last_results = results
         all_ok = True
         for tag, ok, msg, rec_path in results:
             if not ok:
