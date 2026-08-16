@@ -352,11 +352,14 @@ Keep it under 200 words total. No hedging.
 
 ### Step 7: Write to vault
 
-Create `~/vault/g245/reviews/YYYY-WNN-1s.md`:
+Create `~/vault/g245/reviews/YYYY-M.W-1s.md`, where `M.W` is the review
+week's label (e.g. `2026-8.2-1s.md` — same `month.((day-1)//7+1)` label used
+everywhere else in this skill and in `1分+1s`/`1n+`; never an ISO week
+number — JM doesn't use W-numbering and doesn't want to start):
 
 ```markdown
 ---
-title: "Week NN Strategic Review"
+title: "Week M.W Strategic Review"
 date: {week_end date}
 type: review
 tags: [g245, 1s, review]
@@ -364,7 +367,7 @@ week: {week_start} – {week_end}
 source: /1s
 ---
 
-## Week {N} ({week_start_short}–{week_end_short})
+## Week {M.W} ({week_start_short}–{week_end_short})
 
 ### Comparison
 
