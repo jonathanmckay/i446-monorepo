@@ -63,6 +63,23 @@ def test_header_badges_past_day_but_not_today():
     assert "today" in past_hdr, "past-day header hints ⎋ resets to today"
 
 
+def test_header_shows_date_and_pins_clock_to_the_right():
+    """2026-08-16 user request: the header previously showed only weekday +
+    clock, left-aligned, with no date at all on today's view. Date now sits
+    with the weekday on the left; the HH:MM:SS clock moves to the right edge
+    of the rule line instead of trailing the weekday."""
+    m = _load_tui()
+    m.STATE.today_points = 0
+    m.STATE.day_offset = 0
+    now = dtm.datetime.now(m.TZ)
+    text = "".join(t for _, t, *_ in m.render_header())
+    assert f"{now:%-m/%-d}" in text, "today's header must show the date, not just weekday"
+    clock = f"{now:%H:%M:%S}"
+    assert text.rstrip("\n").rstrip().endswith(clock), "clock must be pinned to the right edge"
+    assert not text.split("·", 1)[1].lstrip().startswith(clock), \
+        "clock must not still be the first thing after 'janus ·'"
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

@@ -1628,20 +1628,23 @@ def render_header() -> list[tuple[str, str]]:
     # reads as concatenated garbage digits on the rule line.
     pts = STATE.today_points
     pts_str = f" · {int(round(pts))}分" if pts else ""
+    # Wall clock pinned to the right edge of the rule line (moved off the
+    # left side 2026-08-16 per user request — date now lives there instead).
+    clock = f"{now:%H:%M:%S} "
     # The running process is behind the file on disk → tell the user to restart;
     # the whole header goes red so it can't be missed.
     if _code_is_stale():
         title = f" janus · ⚠ RESTART — code updated{pts_str} "
-        line = title + "─" * max(0, WIDTH_HINT - len(title))
+        line = title + "─" * max(0, WIDTH_HINT - len(title) - len(clock)) + clock
         return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
-        title = f" janus · {now:%a %H:%M:%S}{pts_str} "
-        line = title + "─" * max(0, WIDTH_HINT - len(title))
+        title = f" janus · {now:%a %-m/%-d}{pts_str} "
+        line = title + "─" * max(0, WIDTH_HINT - len(title) - len(clock)) + clock
         return [("class:header", line + "\n")]
     # Viewing a past day: badge the date so it's never mistaken for today.
     viewed = view_now()
     title = f" janus · ◀ {viewed:%a %-m/%-d}{pts_str} · ⎋ today "
-    line = title + "─" * max(0, WIDTH_HINT - len(title))
+    line = title + "─" * max(0, WIDTH_HINT - len(title) - len(clock)) + clock
     return [("class:no_entry", line + "\n")]
 
 
