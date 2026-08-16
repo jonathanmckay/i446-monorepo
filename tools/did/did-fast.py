@@ -84,7 +84,11 @@ ALIASES = {"math": "问学", "skin2skin": "问学", "stats m5x2": "stats m5x2",
            # "night hcmc" (registry alias since 2026-07-25 — mirrored here so
            # DIRECT did-fast invocations, e.g. dtd's worker, route it too).
            "evening hcmc": "night hcmc"}
-CUMULATIVE_0N = {"问学"}
+# xk20/xk22/xk26 (kid-time with Theo/Ren/Rori) can legitimately fire several
+# times a day (multiple play sessions) — each write must add to the day's
+# running total, not overwrite it (bug 2026-08-16: a second same-day xk22
+# completion was clobbering the first instead of accumulating).
+CUMULATIVE_0N = {"问学", "xk20", "xk22", "xk26"}
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values

@@ -39,6 +39,7 @@ MEDIA_PATTERNS = [
     ("Techmeme", re.compile(r"techmeme", re.I)),
     ("Economist", re.compile(r"economist", re.I)),
     ("The Verge", re.compile(r"the verge", re.I)),
+    ("Reddit", re.compile(r"reddit", re.I)),
 ]
 # Domain classification for aw-watcher-web events (active-tab URLs). Matched
 # against the URL host only, so a YouTube link in a title doesn't count.
@@ -48,6 +49,7 @@ SITE_PATTERNS = [
     ("Techmeme", re.compile(r"(^|\.)techmeme\.com$", re.I)),
     ("Economist", re.compile(r"(^|\.)economist\.com$", re.I)),
     ("The Verge", re.compile(r"(^|\.)theverge\.com$", re.I)),
+    ("Reddit", re.compile(r"(^|\.)reddit\.com$", re.I)),
 ]
 # iOS/macOS bundle ids for the Screen Time store, same labels.
 MEDIA_BUNDLES = {
