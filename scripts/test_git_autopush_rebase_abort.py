@@ -66,46 +66,52 @@ def conflicted_clone(tmp_path):
     seed = tmp_path / "seed"
     _clone(origin, seed)
     target = seed / "shared.md"
-    target.write_text("- 未 ☀️\n")
+    target.write_text("line1\n- 未 ☀️\nline3\n")
     _git(seed, "add", "-A")
     _git(seed, "commit", "-m", "seed")
     _git(seed, "push", "origin", "main")
 
-    # "Ix": pushes a change to origin first.
+    # Both clone from the SAME seed commit BEFORE either diverges -- cloning
+    # straylight only after ix has already pushed (the bug in an earlier
+    # draft of this fixture) makes straylight's clone a descendant of ix's
+    # commit already, so there's nothing left to conflict on rebase.
     ix = tmp_path / "ix_clone"
     _clone(origin, ix)
-    (ix / "shared.md").write_text("- 未 ☀️ 🎯\n")
+    straylight = tmp_path / "straylight_clone"
+    _clone(origin, straylight)
+
+    # "Ix": diverges and pushes first.
+    (ix / "shared.md").write_text("line1\n- 未 ☀️ 🎯\nline3\n")
     _git(ix, "add", "-A")
     _git(ix, "commit", "-m", "ix: added 🎯")
     r = _git(ix, "push", "origin", "main")
     assert r.returncode == 0, r.stderr
 
-    # "Straylight": still on the seed commit, makes a CONFLICTING change to
-    # the same line -- its pull --rebase against origin/main will fail.
-    straylight = tmp_path / "straylight_clone"
-    _clone(origin, straylight)
-    (straylight / "shared.md").write_text("- 未 ☀️ 📧\n")
-    _git(straylight, "add", "-A")
-    _git(straylight, "commit", "-m", "straylight: added 📧")
+    # "Straylight": diverges independently from the pre-push seed, changing
+    # the SAME line -- left UNCOMMITTED, since the script under test does
+    # its own `git add -A; git commit` (mirroring cron finding a dirty
+    # working tree). Pre-committing here would make the script's own
+    # `git diff --cached --quiet` check see nothing new to stage, so it
+    # would exit via the "no changes" branch and never reach pull --rebase
+    # at all -- the conflict wouldn't reproduce.
+    (straylight / "shared.md").write_text("line1\n- 未 ☀️ 📧\nline3\n")
 
     return straylight
 
 
-def test_failed_rebase_leaves_clean_working_tree(conflicted_clone, monkeypatch):
+def test_failed_rebase_leaves_clean_working_tree(conflicted_clone):
     """The actual regression: after a failed pull --rebase, the repo must
     NOT be left mid-rebase, and the working tree file must read back as
     either straylight's own pre-rebase content or a clean abort -- never an
     intermediate replayed state that a file-sync daemon could pick up and
     propagate as if it were a genuine, intentional change."""
     repo = conflicted_clone
-    monkeypatch.setenv("HOME", str(repo.parent))  # script defaults REPO_DIR to $HOME/i446-monorepo; we pass it explicitly anyway
 
     r = subprocess.run(
         ["bash", str(SCRIPT), str(repo), "test"],
         capture_output=True, text=True,
     )
 
-    status = _git(repo, "status", "--porcelain=v1", "-b").stdout
     assert "rebase" not in _git(repo, "status").stdout.lower(), (
         f"repo left mid-rebase after a failed pull -- script output:\n{r.stdout}\n{r.stderr}\n"
         f"git status:\n{_git(repo, 'status').stdout}"
@@ -137,23 +143,24 @@ def test_unmodified_script_would_have_left_a_dirty_tree(tmp_path):
     origin = _init_bare_origin(tmp_path)
     seed = tmp_path / "seed"
     _clone(origin, seed)
-    (seed / "shared.md").write_text("- 未 ☀️\n")
+    (seed / "shared.md").write_text("line1\n- 未 ☀️\nline3\n")
     _git(seed, "add", "-A")
     _git(seed, "commit", "-m", "seed")
     _git(seed, "push", "origin", "main")
 
+    # Clone both BEFORE either diverges (see conflicted_clone's docstring).
     ix = tmp_path / "ix"
     _clone(origin, ix)
-    (ix / "shared.md").write_text("- 未 ☀️ 🎯\n")
+    straylight = tmp_path / "straylight"
+    _clone(origin, straylight)
+
+    (ix / "shared.md").write_text("line1\n- 未 ☀️ 🎯\nline3\n")
     _git(ix, "add", "-A")
     _git(ix, "commit", "-m", "ix")
     _git(ix, "push", "origin", "main")
 
-    straylight = tmp_path / "straylight"
-    _clone(origin, straylight)
-    (straylight / "shared.md").write_text("- 未 ☀️ 📧\n")
-    _git(straylight, "add", "-A")
-    _git(straylight, "commit", "-m", "straylight")
+    (straylight / "shared.md").write_text("line1\n- 未 ☀️ 📧\nline3\n")
+    # Left uncommitted -- see conflicted_clone's docstring for why.
 
     buggy = tmp_path / "buggy-git-autopush.sh"
     buggy.write_text(
