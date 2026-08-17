@@ -189,7 +189,14 @@ def write_report(errors, warns, n_entries):
     except FileNotFoundError:
         old = "# Neon Ledger Audit\n\nNightly/hourly chain + live checks of ~/vault/g245/neon-ledger/. Newest first.\n\n"
     head, _, tail = old.partition("\n## ")
-    body = head + "\n" + section + ("\n## " + tail if tail else "")
+    # Cap retained history: unbounded prepend grew the report to 14.5 MB by
+    # 2026-08-16, which crashes Obsidian's renderer on vault index (found via
+    # bisection). Keep the newest MAX_SECTIONS runs; the ledger JSONL remains
+    # the full history.
+    MAX_SECTIONS = 48
+    old_sections = ("## " + tail).split("\n## ") if tail else []
+    kept = "\n## ".join(old_sections[:MAX_SECTIONS - 1])
+    body = head + "\n" + section + ("\n" + kept if kept else "")
     with open(REPORT, "w", encoding="utf-8") as f:
         f.write(body)
 
