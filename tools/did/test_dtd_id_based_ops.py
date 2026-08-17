@@ -53,6 +53,25 @@ def test_delete_uses_id_not_name_match():
     assert r'tid="\$1"' in DTD
 
 
+def test_delete_hides_by_id_not_name():
+    # Regression 2026-08-17: the actual Todoist DELETE was already
+    # id-scoped (test above), but the client-side hide list it fed was
+    # name-based ($REMOVED) — so deleting one of two identically-named
+    # open tasks suppressed BOTH rows from the dtd view (until the next
+    # full cache refresh), even though only one was actually deleted.
+    # Must hide by id ($REMOVED.ids), the same mechanism enter.sh/done.sh/
+    # defer already use for this exact reason.
+    assert r'echo "\$tid" >> "\$REMOVED.ids"' in DTD
+    assert r'echo "\${fullname:-\$clean}" >> "\$REMOVED"' not in DTD
+
+
+def test_delete_journal_record_carries_task_id():
+    # ctrl-z undo strips the id from $REMOVED.ids via
+    # clean_filter_files(..., task_id=record.get("task_id")); the delete
+    # journal record must populate task_id for that path to work.
+    assert "'task_id': tid" in DTD
+
+
 def test_fifo_carries_id_tab_content():
     # enter.sh / done.sh send "id<TAB>content" so the worker can pass --task-id.
     # Heredoc source keeps `\$` escaping and plain quotes.

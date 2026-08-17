@@ -1574,19 +1574,25 @@ for s in d.values():
   code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
   if [[ "\$code" == 2* ]]; then
-    echo "\${fullname:-\$clean}" >> "\$REMOVED"
+    # Hide by id (\$REMOVED.ids), NOT by name (\$REMOVED): delete already
+    # resolves the exact task via \$tid (collision-proof, 2026-07-12), but
+    # hiding by its annotation-stripped name suppressed EVERY task sharing
+    # that name — two identically-named open tasks, delete one, both vanish
+    # from the list until the next full cache refresh (2026-08-17). Same
+    # mechanism enter.sh/done.sh/defer already use for this exact reason.
+    echo "\$tid" >> "\$REMOVED.ids"
     printf '%s' "\$pre" | python3 -c "
 import json, sys
-name, fallback = sys.argv[1], sys.argv[2]
+name, fallback, tid = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     task = json.load(sys.stdin)
 except Exception:
     task = {}
 if not isinstance(task, dict) or not task.get('content'):
     task = {'content': fallback}
-print(json.dumps({'type': 'delete', 'names': [name], 'task': task},
+print(json.dumps({'type': 'delete', 'names': [name], 'task': task, 'task_id': tid},
                  ensure_ascii=False))
-" "\${fullname:-\$clean}" "\$clean" | python3 "$UNDO_FAST" --append "$DTD_JOURNAL"
+" "\${fullname:-\$clean}" "\$clean" "\$tid" | python3 "$UNDO_FAST" --append "$DTD_JOURNAL"
     # Daily habit (0neon/夜neon) deleted = N/A for today: write an explicit 0
     # to its 0n Neon column (blank = not done yet; 0 = didn't apply/happen —
     # Janus hides explicit-0 habits from its strip) and record the name in the
