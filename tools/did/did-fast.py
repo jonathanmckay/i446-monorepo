@@ -3295,6 +3295,14 @@ def main():
             "name": r.item.name,
             "raw": r.item.raw,
             "reason": r.error,
+            # target_date was already resolved (incl. a trailing "yesterday"/
+            # M-D on the original command) at parse time -- surface it here
+            # too, or an agent picking up this deferred item has nothing but
+            # `raw` (the date token is already stripped out of it) to go on
+            # and can silently default to today (bug found 2026-08-17: a
+            # 5-item /did with a trailing "yesterday" deferred 4 items to
+            # Step 5/6 with no date field at all in this payload).
+            "target_date": r.item.target_date,
         })
 
     if future_skipped:

@@ -480,19 +480,31 @@ def main():
         if d != datetime.now(TZ).date():
             _DATE_OVERRIDE = d
 
-    # 'yesterday' prefix (bare word, case-insensitive) is shorthand for
-    # --date <yesterday's ISO date>. Stripped and applied here, BEFORE the
-    # comma-split below, so it covers every entry in a multi-entry command —
-    # not just the one it happens to sit in. Bug (2026-08-14): "yesterday run
-    # @hcbp #其他人 2005-2045， 2045-2058 1st hci @hci" had no handling for this
-    # word at all, so it stayed stuck in the first entry's description via
-    # resolve() and BOTH entries silently landed on today's date instead of
-    # yesterday's.
+    # 'yesterday' (bare word, case-insensitive, leading OR trailing) is
+    # shorthand for --date <yesterday's ISO date>. Stripped and applied here,
+    # BEFORE the comma-split below, so it covers every entry in a multi-entry
+    # command — not just the one it happens to sit in. Bug (2026-08-14):
+    # "yesterday run @hcbp #其他人 2005-2045， 2045-2058 1st hci @hci" had no
+    # handling for this word at all, so it stayed stuck in the first entry's
+    # description via resolve() and BOTH entries silently landed on today's
+    # date instead of yesterday's.
+    #
+    # Trailing form added 2026-08-17: /did's own convention is a TRAILING
+    # "yesterday" (last token of the whole command), and a user moving
+    # between the two skills by habit had no reason to expect the position
+    # to matter in one but not the other. Checked as a whole trailing word
+    # (\byesterday\b\s*$), matching /did's parts[-1] == "yesterday" check —
+    # never a substring inside a longer word.
     if not date_m:
         yesterday_m = re.match(r"(?i)^yesterday\b\s*", raw)
         if yesterday_m:
             raw = raw[yesterday_m.end():].strip()
             _DATE_OVERRIDE = datetime.now(TZ).date() - timedelta(days=1)
+        else:
+            yesterday_trailing_m = re.search(r"(?i)\byesterday\b\s*$", raw)
+            if yesterday_trailing_m:
+                raw = raw[:yesterday_trailing_m.start()].strip()
+                _DATE_OVERRIDE = datetime.now(TZ).date() - timedelta(days=1)
 
     # Simple commands
     if raw.lower().startswith("--resolve "):

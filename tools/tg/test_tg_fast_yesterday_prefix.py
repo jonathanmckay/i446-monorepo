@@ -132,5 +132,85 @@ def test_bare_yesterday_word_regex_is_case_insensitive_and_word_bounded():
         "must not match when followed immediately by another word char"
 
 
+def test_trailing_yesterday_sets_date_override_and_is_stripped():
+    """Regression (2026-08-17): /did's own convention is a TRAILING
+    'yesterday' (last token of the command), unlike /tg's original
+    leading-only check. A user moving between the two skills by habit
+    shouldn't have the position matter -- /tg must recognize a trailing
+    'yesterday' too, same as /did's parts[-1] == "yesterday" check, and
+    apply it to every entry in a comma-separated batch."""
+    mod = _load()
+    mod._DATE_OVERRIDE = None
+    fake = _FakeTogglApi()
+    created = []
+
+    def fake_cli(*args):
+        created.append(args)
+        return "Created: x [id:9001]"
+
+    import unittest.mock as um
+    with um.patch.object(mod, "_toggl_api", lambda: fake), \
+         um.patch.object(mod, "_run_cli", fake_cli), \
+         um.patch.object(sys, "argv",
+                          ["tg-fast.py",
+                           "run @hcbp #其他人 2005-2045， 2045-2058 1st hci @hci yesterday"]):
+        mod.main()
+
+    assert mod._DATE_OVERRIDE is not None
+    assert mod._DATE_OVERRIDE.isoformat() == _yesterday_iso(), (
+        "trailing 'yesterday' must resolve to (today - 1 day) in America/Los_Angeles")
+
+    assert len(created) == 2, f"both batch entries must create, got: {created!r}"
+    entry1, entry2 = created
+
+    assert "yesterday" not in entry1[1].lower(), (
+        f"'yesterday' must be stripped, not leak into any entry: {entry1[1]!r}")
+    assert "--date" in entry1 and _yesterday_iso() in entry1, (
+        f"first entry must carry --date <yesterday>: {entry1!r}")
+    assert "--date" in entry2 and _yesterday_iso() in entry2, (
+        "second entry must ALSO carry --date <yesterday> -- the whole batch "
+        f"must share one date: {entry2!r}")
+
+
+def test_trailing_yesterday_word_inside_a_larger_word_is_not_stripped():
+    """Only a standalone trailing 'yesterday' token counts -- must not match
+    e.g. a description that merely ENDS with '...yesterdays'."""
+    mod = _load()
+    mod._DATE_OVERRIDE = None
+    fake = _FakeTogglApi()
+    created = []
+
+    import unittest.mock as um
+    with um.patch.object(mod, "_toggl_api", lambda: fake), \
+         um.patch.object(mod, "_run_cli",
+                          lambda *a: (created.append(a), "Created: x [id:1]")[1]), \
+         um.patch.object(sys, "argv", ["tg-fast.py", "plan 9-10 memories of yesterdays"]):
+        mod.main()
+
+    assert mod._DATE_OVERRIDE is None, (
+        "'yesterdays' is not the word 'yesterday' -- must not set an override")
+
+
+def test_leading_yesterday_still_wins_when_both_positions_present():
+    """Sanity: if 'yesterday' somehow appears at both ends (pathological
+    input), the existing leading check runs first and the trailing branch
+    is skipped entirely (guarded by the same `if not date_m` / else chain) —
+    it must not double-strip or error."""
+    mod = _load()
+    mod._DATE_OVERRIDE = None
+    fake = _FakeTogglApi()
+    created = []
+
+    import unittest.mock as um
+    with um.patch.object(mod, "_toggl_api", lambda: fake), \
+         um.patch.object(mod, "_run_cli",
+                          lambda *a: (created.append(a), "Created: x [id:1]")[1]), \
+         um.patch.object(sys, "argv", ["tg-fast.py", "yesterday plan 9-10"]):
+        mod.main()
+
+    assert mod._DATE_OVERRIDE.isoformat() == _yesterday_iso()
+    assert created and "yesterday" not in created[0][1].lower()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

@@ -953,6 +953,48 @@ class PastDatePreferredIdTests(unittest.TestCase):
         self.assertEqual(results[0].step, "needs_agent")
 
 
+class AgentNeededCarriesTargetDateTests(unittest.TestCase):
+    """Regression (2026-08-17): a multi-item /did with a trailing "yesterday"
+    (e.g. "1930-2000 冥想, 2000-2035 stuart call [35], ... yesterday") strips
+    that date ONCE at parse time and stamps it onto every split item's
+    ParsedItem.target_date correctly -- but main()'s agent_needed payload
+    only surfaced {name, raw, reason}, dropping target_date entirely. `raw`
+    has the date token already stripped out by parse_input, so an agent (or
+    a future session) picking up a deferred item had no reliable field to
+    read the resolved date from and could silently default to today.
+
+    Can't exercise main()'s full I/O-heavy CLI path here (matches this
+    file's existing convention -- see PastDatePreferredIdTests and
+    test_ritual_single_writer_stamp.py for the same tradeoff elsewhere in
+    this codebase); this pins the fix structurally: the exact dict literal
+    that builds each agent_needed entry must include target_date, sourced
+    from the RouteResult's own ParsedItem (which route_items already
+    threads target_date through correctly -- verified below)."""
+
+    def test_route_items_preserves_target_date_into_needs_agent(self):
+        headers = {"0n": {}, "1n": {}}
+        tq = {"0neon": [], "1neon": [], "夜neon": []}
+        item = _df_module.ParsedItem(raw="stuart call [35]", name="stuart call",
+                                     target_date="8/16")
+        results = _df_module.route_items([item], headers, tq)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "needs_agent")
+        self.assertEqual(results[0].item.target_date, "8/16",
+            "route_items must not lose target_date on the way to needs_agent")
+
+    def test_agent_needed_dict_literal_includes_target_date(self):
+        src = (_HERE / "did-fast.py").read_text(encoding="utf-8")
+        i = src.index("for r in agent_needed:")
+        j = src.index("\n\n", i)
+        block = src[i:j]
+        self.assertIn('"raw": r.item.raw', block)
+        self.assertIn('"target_date": r.item.target_date', block,
+            "agent_needed entries must surface target_date -- raw already "
+            "has the date token stripped out by parse_input, so this is "
+            "the only field an agent can reliably read the resolved date "
+            "from")
+
+
 class VariableStepPosthocSkipsExistingTaskTests(unittest.TestCase):
     """Step 6c must not fabricate a duplicate posthoc record for a "variable"
     RouteResult that already carries a real todoist_task (the preferred_id
@@ -1105,6 +1147,7 @@ def main() -> int:
         HciLabelMapping,
         DeferFlagParsingTests,
         PastDatePreferredIdTests,
+        AgentNeededCarriesTargetDateTests,
         VariableStepPosthocSkipsExistingTaskTests,
         BuildOrderCheckboxTests,
         PreferredIdMissingFromBucket,
