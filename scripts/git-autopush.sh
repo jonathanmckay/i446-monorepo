@@ -30,7 +30,23 @@ echo "[$TS] committed: $CHANGED"
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Only rebase if the remote branch already exists (first push creates it).
 if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-    git pull --rebase origin "$BRANCH" -q 2>&1 || echo "[$TS] WARNING: pull failed"
+    if ! git pull --rebase origin "$BRANCH" -q 2>&1; then
+        # A failed rebase leaves the working tree mid-replay -- some files can
+        # show an OLDER commit's content, not this run's true pre-rebase
+        # state. Left uncleaned (as this branch used to), that stale content
+        # sits on disk where Syncthing's filewatcher (this repo's ~/vault
+        # folder is bidirectionally synced with Ix, unaware of git entirely)
+        # picks it up as "the file changed" and propagates it to Ix,
+        # silently overwriting live, correctly-written data there -- bypassing
+        # every application-level lock (confirmed 2026-08-16: a build-order.md
+        # ritual stamp made on Ix vanished this way after landing here mid a
+        # failed rebase). Ix's own vault-autopush.sh already aborts on
+        # failure; this script must too, and skip the push below entirely
+        # (pushing a mid-rebase HEAD would fail or push garbage anyway).
+        git rebase --abort 2>/dev/null
+        echo "[$TS] WARNING: pull --rebase failed, skipping push. See git status."
+        exit 1
+    fi
 fi
 git push -u origin "$BRANCH" -q 2>&1 || echo "[$TS] WARNING: push failed"
 echo "[$TS] pushed → $BRANCH"
