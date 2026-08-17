@@ -516,6 +516,18 @@
     "rent": "0.00"
   },
   {
+    "unit_id": 1299,
+    "property_name": "c702",
+    "unit": "B301",
+    "tenant_name": "Holman, Jessica",
+    "status": "Eligible",
+    "lease_sign_date": null,
+    "move_in": "2025-08-15",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "0.00"
+  },
+  {
     "unit_id": 1276,
     "property_name": "c702",
     "unit": "A106",
