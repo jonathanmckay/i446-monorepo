@@ -577,6 +577,23 @@ def _process_entry(raw: str) -> str:
         return cmd_create_range(desc or _strip_tag_tokens(desc_part),
                                 project, tags, start_t, end_t)
 
+    # Bare trailing N, 1-99, no unit: "I've been doing this for the last N
+    # minutes" (2026-08-18 user request) -- a completed entry from (now - N)
+    # to now, via the same cmd_create_range/trim_range path as an explicit
+    # range, so it correctly trims/stops whatever's currently running.
+    # Exactly 1-2 digits only, so this can never collide with the 4-digit
+    # HHMM backdate below ("1823 o314") or the dash-based ranges above.
+    duration_match = re.search(r'(?<!\S)(\d{1,2})$', raw)
+    if duration_match:
+        n = int(duration_match.group(1))
+        desc_part = (raw[:duration_match.start()].strip() + project_suffix).strip()
+        if 1 <= n <= 99 and desc_part:
+            desc, project, tags = resolve(desc_part)
+            now_dt = datetime.now(TZ)
+            start_dt = now_dt - timedelta(minutes=n)
+            return cmd_create_range(desc or _strip_tag_tokens(desc_part), project, tags,
+                                    start_dt.strftime("%H:%M"), now_dt.strftime("%H:%M"))
+
     # No range matched — restore the @project suffix for the backdate/default
     # paths below, which already handle @ anywhere in the string via resolve().
     raw = raw + project_suffix
