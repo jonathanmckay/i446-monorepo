@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-17T16:00:09.204292-07:00"
+  "tasks": {
+    "200分 酉 block for hcb": {
+      "todoist_id": "6hHgFmqC6J528p62",
+      "minutes": 30
+    },
+    "work down email queues": {
+      "todoist_id": "6hHgGQ5qvgvMp5cR",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-08-17T18:00:07.948715-07:00"
 }
