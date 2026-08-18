@@ -83,6 +83,22 @@ def test_worker_passes_task_id_to_did_fast():
     assert r'"$DID_FAST" --task-id "$task_id"' in DTD
 
 
+def test_worker_restores_optimistic_hide_on_ambiguous_completion():
+    # Regression 2026-08-18: enter.sh/done.sh hide $task_id from the list the
+    # instant Enter is pressed (before did-fast runs). If did-fast then
+    # returns with no results entry carrying todoist.closed:true (e.g. it
+    # fell through to needs_agent, which dtd's synchronous worker can't
+    # service), NOTHING was actually completed — but the optimistic hide was
+    # never rolled back, so the task vanished from dtd for the rest of the
+    # day even though Todoist still showed it open ("ibx i9" — user report:
+    # "I don't see 1 ibx for @i9 today"). Delete/defer already roll back
+    # their own optimistic hides on failure; the ambiguous-completion branch
+    # must do the same.
+    assert 'removed_ids_path="/tmp/dtd-$DTD_ID.removed.ids"' in DTD
+    assert 'grep -v -x -F -- "$task_id" "$removed_ids_path"' in DTD
+    assert '(restored to list)' in DTD
+
+
 # ── did-fast: completion honours the id ──────────────────────────────────────
 
 def test_did_fast_match_has_preferred_id():

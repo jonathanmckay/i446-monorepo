@@ -153,6 +153,63 @@ def test_partial_fetch_same_block_carries_missing_rituals(tmp_path, monkeypatch)
     assert "R4" not in ids, "a ritual recorded closed in completed-today must be pruned"
 
 
+def test_exception_on_one_label_does_not_abort_other_labels_refresh(tmp_path, monkeypatch):
+    """Regression (2026-08-18): "2nd hci" stayed missing from dtd all day even
+    though it was due today in Todoist.
+
+    The 2026-08-08 empty-fetch guard only covers a label whose find_tasks()
+    call RETURNS an empty list. It never covers a label whose call RAISES
+    (e.g. Todoist 502/503) -- that exception propagated straight out of
+    fetch() through dict(pool.map(...)), aborting main() before the guard
+    loop ever ran and discarding the WHOLE cycle's write, including labels
+    that fetched fine. A transient error on any one of the four labels
+    (关键径路/夜neon/0neon/1neon) therefore silently froze 0neon (where
+    '1st hci'/'2nd hci' live) at whatever stale due date the last successful
+    cycle wrote, for as long as the flaky label kept failing. Fix: fetch()
+    catches and returns (key, None) so the existing per-label guard handles
+    it exactly like an empty result.
+    """
+    m = _load()
+    cache = tmp_path / "task-queue.json"
+    cache.write_text(json.dumps({
+        "updated": "2026-08-17T09:00:00",
+        "0neon": [
+            {"id": "H1", "content": "1st hci (15) [15]", "labels": ["0neon", "hci"],
+             "due": "2026-08-17", "recurring": True},
+            {"id": "H2", "content": "2nd hci (15) [15]", "labels": ["0neon", "hci"],
+             "due": "2026-08-17", "recurring": True},
+        ],
+        "1neon": [
+            {"id": "W1", "content": "1 hcb", "labels": ["1neon", "hcb"],
+             "due": "2026-08-17", "recurring": True},
+        ],
+    }))
+    monkeypatch.setattr(m, "CACHE", cache)
+
+    def fake_find(labels=None, limit=200):
+        if labels == ["关键径路"]:
+            raise RuntimeError("Todoist GET /tasks -> 502: Bad Gateway")
+        if labels == ["0neon"]:
+            # Fresh fetch succeeds and has today's rolled-over due dates.
+            return [
+                {"id": "H1", "content": "1st hci (15) [15]", "labels": ["0neon", "hci"],
+                 "due": {"date": "2026-08-18"}, "recurring": True},
+                {"id": "H2", "content": "2nd hci (15) [15]", "labels": ["0neon", "hci"],
+                 "due": {"date": "2026-08-18"}, "recurring": True},
+            ]
+        return []
+    monkeypatch.setattr(m.todoist, "find_tasks", fake_find)
+    monkeypatch.setattr(m, "_nudge_janus", lambda: None)
+
+    m.main()  # must not raise despite the 关键径路 fetch blowing up
+    written = json.loads(cache.read_text())
+    due_by_id = {t["id"]: t["due"] for t in written.get("0neon", [])}
+    assert due_by_id.get("H2") == "2026-08-18", (
+        "an exception on an UNRELATED label must not prevent 0neon's own "
+        f"successful fetch from being written -- got {due_by_id!r}")
+    assert due_by_id.get("H1") == "2026-08-18"
+
+
 def test_partial_fetch_previous_block_trusts_fresh(tmp_path, monkeypatch):
     """Old cache written in an EARLIER 2h block: the daemon has retired and
     recreated the cards at the boundary, so the fresh fetch is authoritative

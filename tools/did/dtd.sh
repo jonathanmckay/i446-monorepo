@@ -414,8 +414,23 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
     else
-      echo "? $task_clean" > "$DTD_HDR"
-      echo "? $task_clean" >> "$DTD_LOG"
+      # Restore the optimistic id-hide (enter.sh/done.sh hid $task_id from
+      # the list the instant Enter was pressed, before this call ran) — an
+      # empty $ok means did-fast produced NO results entry with
+      # todoist.closed:true (e.g. it fell through to needs_agent, which dtd's
+      # synchronous worker can't service), so nothing was actually completed
+      # and the task must not vanish from view. Regression 2026-08-18: "ibx
+      # i9" hit exactly this path, its id stayed in $REMOVED.ids all day even
+      # though Todoist still showed it open — the same class of bug already
+      # fixed for delete/defer failures (which DO restore on failure), just
+      # never applied to this ambiguous-completion branch.
+      if [[ -n "$task_id" ]]; then
+        removed_ids_path="/tmp/dtd-$DTD_ID.removed.ids"
+        grep -v -x -F -- "$task_id" "$removed_ids_path" > "$removed_ids_path.tmp" 2>/dev/null
+        mv "$removed_ids_path.tmp" "$removed_ids_path" 2>/dev/null
+      fi
+      echo "? $task_clean (restored to list)" > "$DTD_HDR"
+      echo "? $task_clean (restored to list)" >> "$DTD_LOG"
     fi
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
