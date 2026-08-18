@@ -1,6 +1,6 @@
 ---
 name: "ate"
-description: "Log a food entry to today's hcbi row, into the time-of-day triad picked by current hour (Earthly Branches 卯辰巳午未申戌). Usage: /ate <name>, <kcal>, <servings> [(group count, ...)]"
+description: "Log a food entry to today's hcbi row, into the time-of-day triad picked by current hour (Earthly Branches 卯辰巳午未申戌). Any of kcal/protein/food-groups you omit gets filled in with a best estimate. Usage: /ate <name>[, <kcal>[, <protein_g>]] [(group count, ...)]"
 user-invocable: true
 ---
 
