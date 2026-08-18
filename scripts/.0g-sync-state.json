@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "work down email queues": {
-      "todoist_id": "6hHgGQ5qvgvMp5cR",
-      "minutes": 20
-    },
-    "in reasonable position to present mbrs tomorrow": {
-      "todoist_id": "6hHhPPHgvgv8X35R",
-      "minutes": 75
-    }
-  },
-  "last_sync": "2026-08-18T03:55:02.057995-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-18T04:00:12.647937-07:00"
 }
