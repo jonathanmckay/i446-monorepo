@@ -4688,5 +4688,45 @@
     "unit": "B301",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-18",
+    "effective": "2026-08-17",
+    "kind": "moveout",
+    "unit_id": "1341",
+    "prop": "c702",
+    "unit": "D301",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-18",
+    "effective": "2026-08-18",
+    "kind": "movein",
+    "unit_id": "448",
+    "prop": "w117",
+    "unit": "7",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-18",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "405",
+    "prop": "ps17",
+    "unit": "A3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-18",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "1242",
+    "prop": "tc68",
+    "unit": "D093",
+    "tenant": null,
+    "baseline": false
   }
 ]
