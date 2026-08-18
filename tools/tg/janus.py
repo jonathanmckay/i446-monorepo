@@ -6,7 +6,7 @@ Sits next to dtd in the right half of a terminal. Three jobs:
   2. Show ±2h around now in 15-min detail (Toggl past + gcal future)
   3. Show rest-of-day overview (morning = Toggl, evening = gcal)
 
-Keys: c=change  s=stop  r=refresh  j/k=scroll detail  [/]=prev/next day  q=quit
+Keys: c=change  s=stop  r=refresh  j/k=scroll detail  ^_/^= prev/next day  q=quit
 """
 from __future__ import annotations
 
@@ -3817,7 +3817,7 @@ def render_footer() -> list[tuple[str, str]]:
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · [/] day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -5368,16 +5368,33 @@ _input_empty = Condition(lambda: not input_buffer.text)
 # Alias the two sequences onto spare function keys and bind those too.
 ANSI_SEQUENCES["\x1b[61;5u"] = Keys.F23  # Ctrl+=
 ANSI_SEQUENCES["\x1b[45;5u"] = Keys.F24  # Ctrl+-
+# Ctrl+/ (back), same CSI-u shape (47 = ord("/")) — added 2026-08-18 to
+# replace bare "[" as the back-day key (see below) with something that can
+# never collide with typed content. F25 doesn't exist in prompt_toolkit
+# (F24 is the last spare function key), so this reuses F22 — otherwise
+# unused in this file — as the alias target instead. Unverified against a
+# live keypress in cmux/Ghostty the way F23/F24 were on 2026-07-24; bound
+# alongside the plain "c-_" name below (prompt_toolkit's own name for the
+# raw 0x1F byte, which — unlike Ctrl+-/Ctrl+=  — IS a standard control-code
+# encoding for Ctrl+/ in many terminals) so whichever encoding this
+# terminal actually sends has a matching binding.
+ANSI_SEQUENCES["\x1b[47;5u"] = Keys.F22  # Ctrl+/
 
 
 # Bare "-"/"=" are NOT bound: even gated on an empty command line they
 # swallowed the FIRST keystroke of any "-"-leading description — typing
 # "-1l" or "#-2" into an idle janus navigated a day back instead (user
-# report 2026-07-29). Day nav keeps Ctrl+←/→, [ / ], and real Ctrl+-/=
-# (the CSI-u aliases below); plain characters always type.
+# report 2026-07-29). Bare "["/"]" had the exact same problem, just never
+# reported until it blocked typing "[10]"-style point annotations (user
+# request 2026-08-18) — removed for the same reason, replaced by the Ctrl+//
+# Ctrl+= chords (f22/c-_/f23 bindings above and below), which can never
+# collide with typed text since they're never literal characters. Day nav
+# is now Ctrl+←/→ and Ctrl+//Ctrl+= only; plain characters always type.
 @kb.add("c-left")   # view the previous day (to fill in missed time entries)
-@kb.add("[")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
-@kb.add("f24")      # Ctrl+- via CSI-u (see ANSI_SEQUENCES alias above)
+@kb.add("f22")      # Ctrl+/ via CSI-u (see ANSI_SEQUENCES alias above)
+@kb.add("c-_")      # Ctrl+/ via the standard raw-byte encoding, if this
+                     # terminal sends that instead of the CSI-u sequence
+@kb.add("f24")      # Ctrl+- via CSI-u (kept alongside Ctrl+/ — see ANSI_SEQUENCES alias above)
 def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
@@ -5394,7 +5411,6 @@ def _day_back(event):
 
 
 @kb.add("c-right")  # view the next day, capped at today
-@kb.add("]")        # alias: macOS grabs Ctrl+←/→ for Mission Control spaces
 @kb.add("f23")      # Ctrl+= via CSI-u (see ANSI_SEQUENCES alias above)
 def _day_forward(event):
     if STATE.day_offset >= 0:
