@@ -76,8 +76,40 @@ def test_header_shows_date_and_pins_clock_to_the_right():
     assert f"{now:%-m/%-d}" in text, "today's header must show the date, not just weekday"
     clock = f"{now:%H:%M:%S}"
     assert text.rstrip("\n").rstrip().endswith(clock), "clock must be pinned to the right edge"
-    assert not text.split("·", 1)[1].lstrip().startswith(clock), \
-        "clock must not still be the first thing after 'janus ·'"
+
+
+def test_header_pairs_date_immediately_left_of_clock():
+    """2026-08-17 user request: date moved off the left side entirely and
+    now sits paired with the clock at the right edge, immediately to its
+    left (not just "somewhere in the trailing half")."""
+    m = _load_tui()
+    m.STATE.today_points = 0
+    m.STATE.day_offset = 0
+    now = dtm.datetime.now(m.TZ)
+    text = "".join(t for _, t, *_ in m.render_header())
+    date_str = f"{now:%a %-m/%-d}"
+    clock = f"{now:%H:%M:%S}"
+    right = text.rstrip("\n").rstrip()
+    assert right.endswith(f"{date_str} {clock}"), (
+        f"date must sit immediately left of the clock at the right edge, got: {right!r}"
+    )
+
+
+def test_header_pins_points_to_the_upper_left_corner():
+    """2026-08-17 user request: points chip leads the whole line, ahead of
+    even the "janus" label -- the number you care about most gets first
+    billing in the upper-left corner."""
+    m = _load_tui()
+    m.STATE.today_points = 42
+    m.STATE.day_offset = 0
+    text = "".join(t for _, t, *_ in m.render_header())
+    stripped = text.lstrip()
+    assert stripped.startswith("42分"), (
+        f"points must be the first thing on the line, got: {stripped[:20]!r}"
+    )
+    assert stripped.index("42分") < stripped.index("janus"), (
+        "points must precede the 'janus' label, not follow it"
+    )
 
 
 if __name__ == "__main__":
