@@ -26,18 +26,23 @@ If `ssh ix` fails (timeout/unreachable), fall back to local `osascript` and warn
 ## Usage
 
 ```
-/ate [<branch>] <name>, <kcal>, <protein_g> [(<group> <count>, ...)]
+/ate [<branch>] <name>[, <kcal>[, <protein_g>]] [(<group> <count>, ...)]
 ```
 
 Optional leading **branch glyph** (one of 卯辰巳午未申戌) forces the time band
 instead of picking by the current hour. Still lands in today's row.
 
+**Any of `<kcal>`, `<protein_g>`, or the `(<group> ...)` groups can be omitted** —
+whatever's missing gets filled in with a best-effort estimate from nutritional
+knowledge of the named food (portion size inferred from the name, e.g. "2 eggs"
+vs "1 egg"), not asked for. A field the user DID type is never overridden.
+
 Examples:
 ```
-/ate raspberries, 80, 1 (berries 3)
-/ate oatmeal with flax, 350, 2 (grains 1, flax 1)
-/ate salad, 200, 1 (greens 2, cruciferous 1, vegetables 1)
-/ate 1 cup oat milk, 120, 1
+/ate raspberries, 80, 1 (berries 3)          # fully specified, nothing estimated
+/ate 2 eggs and toast                        # kcal, protein, groups all estimated
+/ate chicken caesar salad, 450                # kcal given; protein + groups estimated
+/ate oatmeal with flax (grains 1, flax 1)     # groups given; kcal/protein estimated
 /ate 卯 leftover oatmeal, 300, 1     # force the 卯 (early morning) band
 ```
 
@@ -119,13 +124,69 @@ higher value (e.g. a one-off bonus) is never clobbered downward.
    if parts and parts[0] in BRANCHES:
        forced_branch, user_input = parts[0], parts[1]
    ```
-   Then split the remainder on the **last two commas** (so the name may itself
-   contain commas):
+   Next, peel off a trailing parenthesized groups list if present (e.g.
+   `(berries 3)`, `(grains 1, flax 1)`) and strip it from the remainder:
    ```python
-   name, kcal, protein = [s.strip() for s in user_input.rsplit(",", 2)]
+   import re
+   groups_match = re.search(r'\(([^)]*)\)\s*$', user_input)
+   groups_str = groups_match.group(1) if groups_match else None
+   if groups_match:
+       user_input = user_input[:groups_match.start()].rstrip()
    ```
-   Validate that `kcal` and `protein` parse as numbers (arithmetic expressions like 300+200+60 are fine — evaluate them). If not, ask the user to
-   reformat.
+   Then split the remainder on the **last two commas** (so the name may itself
+   contain commas), and classify how many TRAILING segments are actually
+   numeric — `kcal`/`protein` are always the last one or two comma-separated
+   fields when given, but either or both may be absent entirely:
+   ```python
+   segments = [s.strip() for s in user_input.rsplit(",", 2)]
+
+   def is_numeric(s):
+       try:
+           eval(s, {"__builtins__": {}})  # arithmetic like 300+200+60 is fine
+           return True
+       except Exception:
+           return False
+
+   trailing = []
+   while segments and len(trailing) < 2 and is_numeric(segments[-1]):
+       trailing.insert(0, segments.pop())
+
+   name = ",".join(segments).strip()
+   kcal    = trailing[0] if len(trailing) >= 1 else None
+   protein = trailing[1] if len(trailing) >= 2 else None
+   ```
+   `kcal`/`protein` end up `None` exactly when the user didn't type them —
+   evaluate any arithmetic expression that IS present (e.g. `300+200+60`).
+   `groups_str` is `None` when no parenthesized groups were given.
+
+1b. **Estimate whatever the user left out.** Do this yourself from nutritional
+   knowledge of `name` — never ask the user to fill in numbers you can
+   reasonably estimate, and never override a value the user actually typed.
+   - **`kcal` is `None`** → estimate total calories for the named food/portion
+     (infer serving size from the name itself — "2 eggs" vs "1 egg" vs a bare
+     "eggs" defaulting to a typical single serving). Round to the nearest 5–10
+     kcal; don't fabricate false precision.
+   - **`protein` is `None`** → estimate grams of protein for the same
+     food/portion, consistent with the kcal estimate (a food that's mostly
+     carbs/fat should get a correspondingly low protein estimate). Round to
+     the nearest 1g.
+   - **`groups_str` is `None`** → infer plausible Daily Dozen groups (the
+     table below) from the food itself, using the same `abbrev:count` shape
+     the explicit syntax uses. Only tag a group with genuine confidence —
+     animal proteins, oils, refined grains, etc. often map to ZERO groups,
+     and that's the correct answer, not a gap to force-fill. When in doubt,
+     under-tag rather than over-tag.
+   Track which of the three you estimated (vs. user-supplied) — Step 4's
+   report calls them out explicitly so the log stays honest about what's a
+   measurement and what's a guess.
+
+   Whether `groups_str` came from the user or from your own estimate here,
+   parse it into the `(abbrev, count)` pairs Step 2 writes — split on commas,
+   split each piece on the last space into `(name_or_abbrev, count)`, and map
+   full names to abbreviations via the table above (e.g. `"berries 3"` →
+   `("br", 3)`; already-abbreviated input like `"br 3"` passes through
+   unchanged). An empty/absent `groups_str` (including a genuine zero-group
+   estimate) just means `groups = []` — no column writes for that entry.
 
 2. **Run the writer.** Excel must be open with `Neon分v12.2.xlsx` loaded on **ix**. Use the `neon.excel` client (which routes through the excel-http daemon on ix at `localhost:9876`, falling back to `ssh ix osascript` if the daemon is down):
 
@@ -169,6 +230,12 @@ higher value (e.g. a one-off bonus) is never clobbered downward.
    ate raspberries (80 kcal, 2g protein) → hcbi 巳 band (AQ/AR/AS), row 113
    ```
    If step 3 bumped the tier, mention it: `+5 tracking pts (now 15/20)`.
+   If anything from step 1b was estimated rather than user-supplied, flag it
+   inline with `~` and a trailing note, e.g.:
+   ```
+   ate 2 eggs and toast (~140 kcal, ~13g protein, ~grains 1) → hcbi 辰 band (AN/AO/AP), row 113
+   (kcal/protein/groups estimated — say the actual numbers to correct)
+   ```
 
 ## Failure modes
 

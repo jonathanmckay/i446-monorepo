@@ -1,6 +1,6 @@
 ---
 name: "早餐"
-description: "Thin alias for /ate that forces the 辰 (breakfast) time band. Usage: /早餐 <name>, <kcal>, <protein_g> [(<group> <count>, ...)]"
+description: "Thin alias for /ate that forces the 辰 (breakfast) time band. Any of kcal/protein/food-groups you omit gets filled in with a best estimate. Usage: /早餐 <name>[, <kcal>[, <protein_g>]] [(<group> <count>, ...)]"
 user-invocable: true
 ---
 
@@ -17,7 +17,10 @@ the parsing/writing logic here — keep `/ate` the single source of truth so
 future edits to food-logging behavior only need to happen in one place.
 
 Example: `/早餐 oatmeal with flax, 350, 2 (grains 1, flax 1)` is equivalent
-to `/ate 辰 oatmeal with flax, 350, 2 (grains 1, flax 1)`.
+to `/ate 辰 oatmeal with flax, 350, 2 (grains 1, flax 1)`. Kcal/protein/groups
+are all optional here too — `/早餐 2 eggs and toast` is equivalent to
+`/ate 辰 2 eggs and toast`, and `/ate`'s own estimation step fills in
+whatever's missing.
 
 After `/ate`'s write succeeds, mark the `早餐` 0₦ habit done — `/ate` only
 logs macros to `hcbi`, it has no knowledge of the `早餐` habit column, so this
