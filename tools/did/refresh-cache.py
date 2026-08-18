@@ -66,9 +66,22 @@ def _nudge_janus() -> None:
         pass
 
 
-def fetch(label: str) -> tuple[str, list]:
-    """Fetch all open tasks for a label, project-shaped for the cache."""
-    raw = todoist.find_tasks(labels=[label], limit=200)
+def fetch(label: str) -> tuple[str, list | None]:
+    """Fetch all open tasks for a label, project-shaped for the cache.
+
+    Returns (key, None) on a raised error instead of propagating it: an
+    uncaught exception from ANY one label used to blow up dict(pool.map(...))
+    before the per-label empty-fetch guard below ever ran, discarding the
+    WHOLE cycle's write -- including the other labels that fetched fine
+    (bug 2026-08-18: '2nd hci' stuck on a stale due date in 0neon because a
+    502 on an unrelated label crashed refresh-cache.py before it could write
+    the fresh 0neon fetch it already had in hand). None is falsy like an
+    empty list, so it flows into the same old-cache fallback below.
+    """
+    try:
+        raw = todoist.find_tasks(labels=[label], limit=200)
+    except Exception:
+        return CACHE_KEY[label], None
     return CACHE_KEY[label], [_shape(t) for t in raw]
 
 
@@ -102,6 +115,8 @@ def main() -> int:
         key = CACHE_KEY[lbl]
         if not results.get(key) and old_cache.get(key):
             results[key] = old_cache[key]
+        elif results.get(key) is None:
+            results[key] = []  # no old cache to fall back to either
 
     data: dict = {"updated": datetime.now().isoformat(timespec="seconds")}
     data.update(results)
