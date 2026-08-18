@@ -5,9 +5,14 @@ History: Ctrl+-/Ctrl+= transmit the PLAIN character in most terminals, so
 Superseded 2026-07-29 (user report: '"-" goes to the previous day rather
 than typing the character'): the empty-line gate is exactly the state you
 are in when you START typing a "-"-leading description — "-1l", "-1g",
-"#-2" — so the first keystroke navigated instead of typing. Bare characters
-must ALWAYS type; day nav keeps Ctrl+←/→, [ / ], and real Ctrl+-/= via the
-CSI-u aliases (f23/f24)."""
+"#-2" — so the first keystroke navigated instead of typing. Bare "["/"]"
+were bound instead (aliasing Ctrl+←/→, which macOS grabs for Mission
+Control spaces) — but had the exact same collision problem, just never
+reported until it blocked typing "[10]"-style point annotations (user
+request 2026-08-18). Bare characters must ALWAYS type; day nav is now
+Ctrl+←/→ and Ctrl+//Ctrl+= only, reached via the CSI-u aliases (f22/f23)
+plus "c-_" (Ctrl+/'s standard raw-byte name) since it's unverified which
+encoding this terminal actually sends for Ctrl+/."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -45,23 +50,35 @@ def test_bare_minus_and_equals_are_not_bound():
     assert _bindings(mod, "=") == [], 'bare "=" must type, not scrub days'
 
 
+def test_bare_brackets_are_not_bound():
+    """2026-08-18 regression guard: bare "["/"]" used to drive day nav and
+    had the exact same typing-collision problem "-"/"=" did (blocked typing
+    "[10]"-style point annotations). Removed in favor of Ctrl+//Ctrl+= —
+    any future rebind of the bare characters reintroduces the collision."""
+    mod = _load_tui()
+    assert _bindings(mod, "[") == [], 'bare "[" must type, not scrub days'
+    assert _bindings(mod, "]") == [], 'bare "]" must type, not scrub days'
+
+
 def test_day_nav_alternatives_stay_bound():
     mod = _load_tui()
-    for key, handler in (("c-left", mod._day_back), ("[", mod._day_back),
-                         ("f24", mod._day_back), ("c-right", mod._day_forward),
-                         ("]", mod._day_forward), ("f23", mod._day_forward)):
+    for key, handler in (("c-left", mod._day_back), ("f22", mod._day_back),
+                         ("c-_", mod._day_back), ("f24", mod._day_back),
+                         ("c-right", mod._day_forward), ("f23", mod._day_forward)):
         hits = _bindings(mod, key)
         assert hits and hits[0].handler is handler, f"{key!r} must drive day nav"
 
 
 def test_csiu_ctrl_sequences_still_aliased():
-    """Real Ctrl+-/Ctrl+= arrive as CSI-u sequences (verified 2026-07-24);
-    the ANSI_SEQUENCES aliases are what make f23/f24 reachable at all."""
+    """Real Ctrl+-/Ctrl+=/Ctrl+/ arrive as CSI-u sequences (verified for
+    -/= on 2026-07-24); the ANSI_SEQUENCES aliases are what make f22/f23/f24
+    reachable at all."""
     mod = _load_tui()
     from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
     from prompt_toolkit.keys import Keys
     assert ANSI_SEQUENCES.get("\x1b[61;5u") == Keys.F23
     assert ANSI_SEQUENCES.get("\x1b[45;5u") == Keys.F24
+    assert ANSI_SEQUENCES.get("\x1b[47;5u") == Keys.F22
 
 
 def test_forward_returns_to_today_and_caps():
@@ -80,10 +97,10 @@ def test_back_goes_back_a_day():
     assert mod.STATE.day_offset == -1
 
 
-def test_footer_hint_names_the_bracket_keys():
+def test_footer_hint_names_the_ctrl_keys():
     mod = _load_tui()
     src = (HERE / "janus.py").read_text()
-    assert "[/] day" in src and "-/= day" not in src, \
+    assert "^_/^= day" in src and "[/] day" not in src, \
         "the footer hint must advertise the keys that actually navigate"
 
 
