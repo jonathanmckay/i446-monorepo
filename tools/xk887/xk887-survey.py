@@ -362,6 +362,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
         ml = kind == "textml"
         area = TextArea(multiline=ml,
                         height=Dimension(min=1, max=6) if ml else 1,
+                        dont_extend_height=True,
                         wrap_lines=True, style="class:input", scrollbar=False,
                         text=initial.get(fkey, ""))
         areas[fkey] = (area, kind, label)
