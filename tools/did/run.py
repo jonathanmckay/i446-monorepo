@@ -464,6 +464,12 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     sheet = d["neon_sheet"]
     col = d["neon_col"]
     is_past = target_date != _today_md()
+    # "night hcmc" is inherently a past-evening habit -- the user is asleep
+    # when it happens, so every legitimate completion is technically "for
+    # yesterday" even though it's recorded as today (mirrors the same
+    # exemption in did-fast.py, 2026-08-19).
+    if name.lower() in ("night hcmc", "evening hcmc"):
+        is_past = False
 
     # Past-date 0n → Step 6b posthoc (skip Neon write, just create+close posthoc Todoist)
     if is_past:
