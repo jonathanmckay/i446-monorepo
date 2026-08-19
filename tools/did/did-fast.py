@@ -2835,6 +2835,15 @@ def main():
     # confirmed successful 0n write, and never allowed to fail the habit
     # completion itself -- a Toggl-side miss just means the placement
     # didn't happen this time, reported in the result, not an error.
+    #
+    # The habit is completed the MORNING AFTER the listening (JM: "I record
+    # it as today since this is the only time I could record it" -- no
+    # "yesterday" suffix, target_date defaults to today). So the Neon write
+    # correctly lands on target_date's row (the recording day), but the
+    # sleep/placeholder block to carve from is always the EVENING BEFORE
+    # that -- one calendar day earlier than target_date, never target_date
+    # itself (which, searched same-morning, is an evening that hasn't
+    # happened yet).
     night_hcmc_results: dict[str, dict] = {}
     if on_result and on_result.returncode == 0:
         for r in on_writes:
@@ -2843,7 +2852,8 @@ def main():
             try:
                 import night_hcmc_toggl as _nh
                 td_parts = target_date.split("/")
-                td = date(date.today().year, int(td_parts[0]), int(td_parts[1]))
+                td = (date(date.today().year, int(td_parts[0]), int(td_parts[1]))
+                      - timedelta(days=1))
                 night_hcmc_results[r.item.name] = _nh.apply_placement(
                     int(r.write_value), td)
             except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
