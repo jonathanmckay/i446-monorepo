@@ -1,14 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "maximize time in mbr": {
-      "todoist_id": "6hHvMxGXJW985452",
-      "minutes": 70
-    },
     "focus on reducing i9 tasks, overall below 50": {
       "todoist_id": "6hHvP5xM87cMwhmR",
       "minutes": 60
     }
   },
-  "last_sync": "2026-08-18T16:00:06.258762-07:00"
+  "last_sync": "2026-08-18T18:00:04.926892-07:00"
 }
