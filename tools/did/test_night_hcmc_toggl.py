@@ -216,5 +216,16 @@ def test_did_fast_attaches_result_to_the_item_entry():
     assert 'entry["night_hcmc_toggl"] = night_hcmc_results[r.item.name]' in DIDFAST
 
 
+def test_did_fast_searches_the_evening_before_target_date():
+    # Regression 2026-08-19: JM completes "night hcmc" the morning after,
+    # attributed to TODAY (no "yesterday" suffix -- "I record it as today
+    # since this is the only time I could record it"). The Neon write
+    # correctly lands on target_date's row, but the sleep/placeholder block
+    # to search is always the evening BEFORE that, one day earlier -- never
+    # target_date's own evening (which, searched the same morning, hasn't
+    # happened yet).
+    assert "- timedelta(days=1))" in DIDFAST
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
