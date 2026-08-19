@@ -94,6 +94,14 @@ CUMULATIVE_1N = {}  # fixed increment per occurrence
 # Variable tasks: points derived from timer duration, not fixed row-3 values
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "hcmr", "其他人", "新闻",
                "night hcmc", "evening hcmc", "hiit"}  # evening hcmc = the card's name
+# 0₦ habits exempt from the past-date→posthoc-flow rule (Step 0.1 below):
+# every legitimate completion of these IS for the previous evening -- the
+# user is asleep when the habit happens, so there's no same-day path at all.
+# Forcing them through the generic past-date caution (designed to stop
+# silent writes to old, possibly-forgotten rows) would make the ONLY way to
+# log them the raw-AppleScript bypass 0t-fast.py's mark_night_hcmc already
+# needed for exactly this reason (2026-08-19).
+PAST_DATE_ALLOWED_0N = {"night hcmc", "evening hcmc"}
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
                "长冥想", "长o314", "aos", "1 kids nature"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
@@ -1161,7 +1169,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # and close that specific task instead; no Neon write (same as
             # the agent's Step 6b) since it's not today's occurrence.
             target_parts = today_md.split("/")
-            if len(target_parts) == 2:
+            if len(target_parts) == 2 and name_lower not in PAST_DATE_ALLOWED_0N:
                 t_month, t_day = int(target_parts[0]), int(target_parts[1])
                 if (t_month, t_day) != (today_date.month, today_date.day):
                     fetched = _fetch_task_by_id(preferred_id) if preferred_id else None
@@ -2821,6 +2829,26 @@ def main():
         if script:
             on_result = ix_run(script, timeout=30.0)
 
+    # 4a-i. "night hcmc" side effect: carve a real Toggl entry for the
+    # pre-sleep audiobook listening out of the 睡觉/"generic placeholder"
+    # block it's currently buried inside (2026-08-19). Only after a
+    # confirmed successful 0n write, and never allowed to fail the habit
+    # completion itself -- a Toggl-side miss just means the placement
+    # didn't happen this time, reported in the result, not an error.
+    night_hcmc_results: dict[str, dict] = {}
+    if on_result and on_result.returncode == 0:
+        for r in on_writes:
+            if r.item.name.lower() != "night hcmc" or not r.write_value:
+                continue
+            try:
+                import night_hcmc_toggl as _nh
+                td_parts = target_date.split("/")
+                td = date(date.today().year, int(td_parts[0]), int(td_parts[1]))
+                night_hcmc_results[r.item.name] = _nh.apply_placement(
+                    int(r.write_value), td)
+            except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
+                night_hcmc_results[r.item.name] = {"ok": False, "reason": str(e)}
+
     # 4a-ii. 0l special case: write completion time to "N Color" column (AF)
     if any(r.item.name.lower() == "0l" for r in on_writes):
         ol_time_result = ix_run(build_0l_time_script(target_date), timeout=15.0)
@@ -3283,6 +3311,8 @@ def main():
             entry["0fen"] = fen_entry
         if r.item.time_range and r.item.name in toggl_created:
             entry["toggl"] = toggl_created[r.item.name]
+        if r.item.name in night_hcmc_results:
+            entry["night_hcmc_toggl"] = night_hcmc_results[r.item.name]
         output["results"].append(entry)
 
     for r in threshold_skipped:
