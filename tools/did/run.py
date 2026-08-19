@@ -517,6 +517,29 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
         return 1
     verify = result.get("value")
 
+    # "night hcmc" side effect: carve a real Toggl entry for the pre-sleep
+    # audiobook listening out of the 睡觉/"generic placeholder" block it's
+    # buried inside (2026-08-19). Best-effort -- never fails the habit
+    # completion. The habit is always recorded the MORNING AFTER the
+    # listening as "today" (JM: "I record it as today since this is the
+    # only time I could record it"), so the evening to search is always one
+    # calendar day before target_date, never target_date's own evening.
+    if name.lower() in ("night hcmc", "evening hcmc") and minutes:
+        try:
+            import night_hcmc_toggl as _nh
+            td_parts = target_date.split("/")
+            td = (datetime(datetime.now().year, int(td_parts[0]), int(td_parts[1])).date()
+                  - timedelta(days=1))
+            nh_result = _nh.apply_placement(minutes, td)
+            if nh_result.get("ok"):
+                seg_desc = ", ".join(f"{s['description']} {s['start'][11:16]}-{s['stop'][11:16]}"
+                                     for s in nh_result["created"])
+                print(f"  ✓ night hcmc toggl: {seg_desc}")
+            else:
+                print(f"  · night hcmc toggl: not placed ({nh_result.get('reason')})")
+        except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
+            print(f"  · night hcmc toggl: error ({e})", file=sys.stderr)
+
     # Close Todoist
     closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "0neon", name, d.get("aliases", []))
 
