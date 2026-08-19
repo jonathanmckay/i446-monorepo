@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-19T06:00:05.804057-07:00"
+  "tasks": {
+    "plan for europe": {
+      "todoist_id": "6hJ4VH76xHR3QVmR",
+      "minutes": 60
+    },
+    "write two newsletters": {
+      "todoist_id": "6hJ4VHGC2j5P7fw2",
+      "minutes": 80
+    },
+    "tennis with lx": {
+      "todoist_id": "6hJ4VHQXMj6pFjx2",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-08-19T08:00:06.771194-07:00"
 }
