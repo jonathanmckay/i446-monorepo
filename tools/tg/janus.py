@@ -56,7 +56,7 @@ from prompt_toolkit.keys import Keys  # noqa: E402
 from prompt_toolkit.layout import Layout, Window, HSplit  # noqa: E402
 from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  # noqa: E402
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
-from prompt_toolkit.styles import Style, StyleTransformation  # noqa: E402
+from prompt_toolkit.styles import Style  # noqa: E402
 from prompt_toolkit.mouse_events import MouseEventType  # noqa: E402
 from prompt_toolkit.application.current import get_app  # noqa: E402
 
@@ -5531,8 +5531,14 @@ rule_window_below = Window(content=FormattedTextControl(render_input_rule), heig
 input_window = Window(
     content=BufferControl(buffer=input_buffer, focusable=True),
     height=1,
+    # Lambda, not a direct function ref: _no_timer_flash_style is defined
+    # further down the file, and Window's `style` callable is only invoked
+    # at render time — a direct ref would resolve the name (and raise
+    # NameError) right here at module-load time instead.
+    style=lambda: _no_timer_flash_style(),
 )
-prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1, width=Dimension.exact(3))
+prompt_window = Window(content=FormattedTextControl(render_input_prompt), height=1,
+                       width=Dimension.exact(3), style=lambda: _no_timer_flash_style())
 
 # Key-hint / flash line pinned BELOW the input box (Claude Code style).
 footer_window = Window(content=FormattedTextControl(render_footer), height=1, wrap_lines=False)
@@ -5565,12 +5571,18 @@ style = Style.from_dict({
 })
 
 def _no_timer_flash_on() -> bool:
-    """Whole-screen flash cue: true during the first half of each second
+    """Text-entry-box flash cue: true during the first half of each second
     while no Toggl timer is running — a nag to go start one. Only fires once
     we've CONFIRMED no timer (current_known); a rate-limited / failed fetch is
     'unknown', not 'idle', so it must not flash over a live timer. Also holds
     off for NO_TIMER_FLASH_DELAY after the timer stops, so a normal task
-    switch (stop, type the next command, start) doesn't trigger it."""
+    switch (stop, type the next command, start) doesn't trigger it.
+
+    Scoped to just the input row (prompt_window/input_window's `style`
+    callable below) since 2026-08-20 — was previously a whole-screen
+    StyleTransformation (attrs.reverse on every rendered cell), which the
+    user found too intrusive; the entry box itself is the thing you're
+    actually meant to look at and use to start a new timer."""
     if STATE.current or not STATE.current_known:
         return False
     if STATE.no_timer_since is None or \
@@ -5579,19 +5591,11 @@ def _no_timer_flash_on() -> bool:
     return dt.datetime.now(TZ).microsecond < 500_000
 
 
-class _NoTimerFlash(StyleTransformation):
-    """Invert fg/bg across the entire screen during the flash 'on' phase.
-    Toggled at 1 Hz by the wall clock; the app's 0.1s refresh animates it."""
-
-    def transform_attrs(self, attrs):
-        if _no_timer_flash_on():
-            return attrs._replace(reverse=not attrs.reverse)
-        return attrs
-
-    def invalidation_hash(self):
-        # Flip the style cache key when the phase changes so each 0.1s
-        # refresh actually redraws the inverted/normal frame.
-        return _no_timer_flash_on()
+def _no_timer_flash_style() -> str:
+    """Window `style` callable (re-evaluated every 0.1s refresh_interval
+    tick, same cadence the old whole-screen transform relied on) — reverse
+    video only for whichever window uses this, not the whole app."""
+    return "reverse" if _no_timer_flash_on() else ""
 
 
 # mouse_support=True so prompt_toolkit OWNS the terminal mouse mode (enables
@@ -5602,7 +5606,6 @@ class _NoTimerFlash(StyleTransformation):
 # Code avoid this the same way: by claiming the mouse rather than ignoring it.
 app = Application(layout=Layout(root, focused_element=input_window),
                   key_bindings=kb, full_screen=True, style=style,
-                  style_transformation=_NoTimerFlash(),
                   mouse_support=True,
                   refresh_interval=0.1)
 
