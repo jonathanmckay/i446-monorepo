@@ -593,6 +593,21 @@ clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ 
 # so alt-enter is bound with execute (not execute-silent). Blank input just
 # completes with no score.
 clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
+# Deferred/catch-up copies of these habits get their origin date stamped into
+# the name (defer-fast.py's _dated_copy_content, e.g. "xk26 7.21") so they
+# don't silently re-claim the habit's own 0n/1n+ column on completion -- but
+# the stamp also hid them from the case match below entirely, so completing a
+# delayed xk20/xk22/xk26/... card silently used the card's static default
+# points instead of asking (bug 2026-08-20: delayed number-input habits
+# didn't prompt). Match on the name with any trailing "M.D" stamp stripped;
+# \$_dated remembers whether one was present so the typed value routes as an
+# explicit [N] points override below instead of a bare number -- dated copies
+# fall through to the generic Todoist path (Step 5), not the habit's own
+# variable-0n/1n+ handling, so a bare trailing number would silently be
+# discarded as an unused time_value instead of becoming points.
+clean_base=\$(echo "\$clean_lower" | sed -E 's/ [0-9]{1,2}\.[0-9]{1,2}\$//')
+_dated=""
+[[ "\$clean_base" != "\$clean_lower" ]] && _dated=1
 # Tasks that ask for a value on completion (like cpap). The typed number is
 # appended so did-fast writes it to the task's own 0n column: cpap = 1-3 sleep
 # quality; xk20/xk22/xk26 = minutes with Theo/Ren/Rori; i444 = count, where an
@@ -600,7 +615,7 @@ clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
 # Needs a tty, so the router (below) sends these to execute, not
 # execute-silent. Blank input just completes with no number.
 _ip=""
-case "\$clean_lower" in
+case "\$clean_base" in
   cpap) _ip="CPAP quality (1-3)";;
   xk20) _ip="xk20 minutes (Theo)";;
   xk22) _ip="xk22 minutes (Ren)";;
@@ -609,7 +624,7 @@ case "\$clean_lower" in
   hiit) _ip="hiit minutes";;
   新闻) _ip="新闻 minutes";;
   "evening hcmc"|"night hcmc") _ip="night hcmc minutes";;
-  ${DTD_VAR1N_PAT}) _ip="\$clean_lower minutes (blank = base points)";;
+  ${DTD_VAR1N_PAT}) _ip="\$clean_base minutes (blank = base points)";;
 esac
 if [[ -n "\$_ip" && -r /dev/tty ]]; then
   # fzf leaves the alternate screen for execute(), but what the terminal shows
@@ -624,7 +639,13 @@ if [[ -n "\$_ip" && -r /dev/tty ]]; then
   # which would ride into the completion name ("CPAP ␛") and break did-fast's
   # task match. Any garbage → empty → completes with no score, as documented.
   _iv=\${_iv//[^0-9]/}
-  [[ -n "\$_iv" ]] && clean="\$clean \$_iv"
+  if [[ -n "\$_iv" ]]; then
+    if [[ -n "\$_dated" ]]; then
+      clean="\$clean [\$_iv]"
+    else
+      clean="\$clean \$_iv"
+    fi
+  fi
 fi
 echo "\$clean_for_filter" >> "\$SESSION"
 # Optimistic hide by ID, never by name (see enter.sh — bug 2026-07-24:
@@ -762,7 +783,13 @@ cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
 _id="\$1"
 _t=\$(jq -r --arg id "\$_id" '([.[] | select(type=="array")[] | select(.id == \$id) | .content] | first) // \$id' "$DTD_CACHE_FILE" 2>/dev/null | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//' | tr '[:upper:]' '[:lower:]')
-case "\$_t" in
+# Strip a deferred/catch-up copy's stamped origin date ("xk26 7.21" -> "xk26")
+# before matching -- see the matching comment in \$DTD_DONE above. Without
+# this the router sent dated copies through execute-silent (no tty), so even
+# after \$DTD_DONE learned to prompt for these, there was never a terminal to
+# prompt on.
+_t_base=\$(echo "\$_t" | sed -E 's/ [0-9]{1,2}\.[0-9]{1,2}\$//')
+case "\$_t_base" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf 'execute(%s %s)' "$DTD_DONE" "\$_id" ;;
   *)
@@ -2358,7 +2385,16 @@ while true; do
   # Tasks that need args (e.g. cpap needs a score; xk20/xk22/xk26 need
   # minutes; i444 needs a count, 0 meaning "none needed today")
   clean_lower=$(echo "$clean" | tr '[:upper:]' '[:lower:]')
-  case "$clean_lower" in
+  # Strip a deferred/catch-up copy's stamped origin date ("xk26 7.21" ->
+  # "xk26") before matching -- see the matching comment in $DTD_DONE. $_dated
+  # remembers whether one was present so the timer-detected minutes route as
+  # an explicit [N] points override instead of a bare number, same reasoning
+  # as $DTD_DONE (dated copies fall through to the generic Todoist path, not
+  # the habit's own variable-0n/1n+ handling).
+  clean_base=$(echo "$clean_lower" | sed -E 's/ [0-9]{1,2}\.[0-9]{1,2}$//')
+  _dated=""
+  [[ "$clean_base" != "$clean_lower" ]] && _dated=1
+  case "$clean_base" in
     cpap|ibx\ s897|ibx\ i9|ibx\ m5x2|xk20|xk22|xk26|i444|hiit|新闻)
       # If a Toggl timer for this exact task is running, use its elapsed
       # minutes as the value instead of prompting. Stop it here to read the
@@ -2375,7 +2411,11 @@ while true; do
         fi
       fi
       if [[ -n "$timer_mins" ]]; then
-        clean="$clean $timer_mins"
+        if [[ -n "$_dated" ]]; then
+          clean="$clean [$timer_mins]"
+        else
+          clean="$clean $timer_mins"
+        fi
         echo "▶ $clean (from timer)" > "$DTD_HDR"
       else
         REPLY="$clean "
