@@ -4968,7 +4968,32 @@ def _(event):
     # Toggl calls racing to trim/split each other's entries.
     parts = [p.strip() for p in text.split(",") if p.strip()] or [text]
 
-    def _resolve_part(part: str) -> str | None:
+    def _has_completed_range(part: str) -> bool:
+        """True if `part` types an explicit HH:MM-HH:MM / HHMM-HHMM completed
+        range, as opposed to a live-start command (bare description, or a
+        backdated "HHMM desc" start with no end yet). Shared by the
+        day-offset --date routing and the did-vs-tg points routing below —
+        both care about the same "is this a completed interval" question."""
+        return bool(re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
+                              re.sub(r"\s@\S+\s*$", "", part)))
+
+    def _resolve_part(part: str) -> tuple[str, bool] | None:
+        """Returns (resolved_command, use_did) or None to drop the part
+        (rejected while viewing a past day). use_did routes a completed
+        range carrying an explicit [N] points annotation through did-fast
+        instead of tg-fast (user request 2026-08-20): tg-fast has no concept
+        of points at all, so a typed "1815-1843 desc [30]" previously
+        created a Toggl entry whose description literally contained the
+        text "[30]" and silently credited nothing to 0分. did-fast's own
+        Step 5.5 already creates the identical Toggl entry AND writes the
+        points in one call — mirrors _convert_selected_event's existing
+        is_past → did-fast routing for calendar-event conversion, just for
+        the plain typed-command path instead. A bare backdated start
+        ("1823 desc [30]", no completed end) is deliberately excluded — the
+        activity isn't done yet, so crediting points immediately would be
+        premature; that still goes through tg-fast exactly as before."""
+        has_range = _has_completed_range(part)
+        use_did = has_range and bool(re.search(r"\[-?\d+\]", part))
         if STATE.day_offset != 0:
             # Viewing another day: typed commands apply to THAT day (user
             # request 2026-07-27 — "tg calls go to yesterday if I'm viewing
@@ -4979,38 +5004,51 @@ def _(event):
             viewed = view_now().date()
             low = part.lower()
             live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
-            has_range = re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
-                                  re.sub(r"\s@\S+\s*$", "", part))
             if has_range:
-                part = f"{part} --date {viewed.isoformat()}"
+                # did-fast and tg-fast take the target date in different
+                # shapes — did-fast reads a trailing "M/D" token, tg-fast a
+                # "--date YYYY-MM-DD" flag.
+                part = (f"{part} {viewed.month}/{viewed.day}" if use_did
+                        else f"{part} --date {viewed.isoformat()}")
             elif not live_ok:
                 flash(f"viewing {viewed:%-m/%-d} — use '<desc> HHMM-HHMM' to log that day "
                       "(start/stop act on today)", 6.0)
                 return None
-        return part
+        return part, use_did
 
-    resolved = [r for r in (_resolve_part(p) for p in parts) if r is not None]
-    if not resolved:
+    resolved_pairs = [r for r in (_resolve_part(p) for p in parts) if r is not None]
+    if not resolved_pairs:
         return
-    flash(f"$ tg {' | '.join(resolved)}" if len(resolved) > 1 else f"$ tg {resolved[0]}")
+    resolved = [c for c, _ in resolved_pairs]
+    labels = [f"{'did' if d else 'tg'} {c}" for c, d in resolved_pairs]
+    flash(f"$ {' | '.join(labels)}" if len(labels) > 1 else f"$ {labels[0]}")
 
     async def _run_and_refresh():
         results = []
-        for cmd in resolved:
-            results.append(await asyncio.to_thread(run_tg_fast, cmd))
+        for cmd, is_did in resolved_pairs:
+            runner = run_did_fast if is_did else run_tg_fast
+            results.append(await asyncio.to_thread(runner, cmd))
             event.app.invalidate()
         flash(" | ".join(results) if len(results) > 1 else results[0], 6.0)
         event.app.invalidate()
-        # Toggl /current has propagation lag; poll it a few times. The entries
-        # list only needs ONE (forced) read — fetch it on the last poll so a
-        # rapid run of commands doesn't trip the rate limit with 3× get_entries.
-        polls = (0.4, 0.8, 1.5)
-        for i, delay in enumerate(polls):
-            await asyncio.sleep(delay)
-            await asyncio.to_thread(fetch_current)
-            if i == len(polls) - 1:
-                await asyncio.to_thread(fetch_today, True)
+        if any(d for _, d in resolved_pairs):
+            # did-fast's own Excel write + Toggl create has already landed
+            # by the time the subprocess returns (mirrors
+            # _convert_selected_event's is_past refresh) — no propagation-lag
+            # poll needed for those parts, just a forced re-read of both.
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_points)
             event.app.invalidate()
+        if any(not d for _, d in resolved_pairs):
+            # At least one part went through tg-fast, which still has
+            # Toggl's own propagation lag to poll through.
+            polls = (0.4, 0.8, 1.5)
+            for i, delay in enumerate(polls):
+                await asyncio.sleep(delay)
+                await asyncio.to_thread(fetch_current)
+                if i == len(polls) - 1:
+                    await asyncio.to_thread(fetch_today, True)
+                event.app.invalidate()
 
     event.app.create_background_task(_run_and_refresh())
 
