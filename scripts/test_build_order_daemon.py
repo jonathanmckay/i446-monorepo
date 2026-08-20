@@ -563,6 +563,133 @@ def test_create_block_rituals_still_creates_on_genuinely_empty_fetch(monkeypatch
     assert len(created) == 5
 
 
+# ── Transient Todoist failures (5xx/429) must retry, not silently drop the
+# ritual card ─────────────────────────────────────────────────────────────
+# Bug (2026-08-20): a Todoist-side outage at exactly the 巳 turnover made
+# create_block_rituals' single unretried write attempt fail for سمش and -1g
+# specifically (502/503), while -1ibx/-1t/-1l -- created seconds later in
+# the SAME daemon run once Todoist recovered -- all succeeded. Confirmed in
+# /tmp/neon-lock-and-mark.log on Ix: "rituals: create '😈 سمش' ERROR HTTP
+# Error 502: Bad Gateway" / "rituals: create '😈 -1g' ERROR HTTP Error 503:
+# Service Unavailable" immediately followed by three successful "rituals: +
+# ..." lines. Neither card was ever created, so the user had nothing to
+# complete for 2 of the 5 rituals -- "I think I did all -1n" was literally
+# true for everything actually visible to them, and 巳 was permanently
+# stuck at 9/13 points with no card left to close for the other 4.
+
+def test_is_transient_todoist_error_classifies_5xx_and_429_as_retriable():
+    mod = _load_daemon()
+    for code in (429, 500, 502, 503, 504):
+        err = mod.urllib.error.HTTPError("http://x", code, "err", None, None)
+        assert mod._is_transient_todoist_error(err), f"{code} must be retriable"
+    for code in (400, 401, 403, 404):
+        err = mod.urllib.error.HTTPError("http://x", code, "err", None, None)
+        assert not mod._is_transient_todoist_error(err), f"{code} must NOT be retried"
+    assert mod._is_transient_todoist_error(mod.urllib.error.URLError("timed out"))
+    assert not mod._is_transient_todoist_error(ValueError("unrelated"))
+
+
+def test_todoist_write_retry_recovers_from_one_transient_failure(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)  # don't actually wait in tests
+    calls = []
+
+    def flaky(path, payload, token, method="POST"):
+        calls.append(1)
+        if len(calls) == 1:
+            raise mod.urllib.error.HTTPError("http://x", 502, "Bad Gateway", None, None)
+        return 200, b'{"id": "created", "labels": []}'
+
+    monkeypatch.setattr(mod, "_todoist_write", flaky)
+    status, body = mod._todoist_write_retry("/tasks", {"content": "x"}, "tok")
+    assert status == 200
+    assert len(calls) == 2, "must retry exactly once after the transient failure, then succeed"
+
+
+def test_todoist_write_retry_gives_up_after_max_attempts(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    calls = []
+
+    def always_502(path, payload, token, method="POST"):
+        calls.append(1)
+        raise mod.urllib.error.HTTPError("http://x", 502, "Bad Gateway", None, None)
+
+    monkeypatch.setattr(mod, "_todoist_write", always_502)
+    import pytest
+    with pytest.raises(mod.urllib.error.HTTPError):
+        mod._todoist_write_retry("/tasks", {"content": "x"}, "tok")
+    assert len(calls) == 3, "must give up after the configured attempt count, not retry forever"
+
+
+def test_todoist_write_retry_does_not_retry_non_transient_error(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    calls = []
+
+    def bad_request(path, payload, token, method="POST"):
+        calls.append(1)
+        raise mod.urllib.error.HTTPError("http://x", 400, "Bad Request", None, None)
+
+    monkeypatch.setattr(mod, "_todoist_write", bad_request)
+    import pytest
+    with pytest.raises(mod.urllib.error.HTTPError):
+        mod._todoist_write_retry("/tasks", {"content": "x"}, "tok")
+    assert len(calls) == 1, "a non-transient error must fail immediately, not waste retries"
+
+
+def test_create_block_rituals_recovers_missing_card_from_transient_502(monkeypatch):
+    """The actual reported bug, reproduced end-to-end: سمش's create fails
+    once with a transient 502, then must succeed on retry so the card
+    actually exists for the user to complete -- not silently vanish."""
+    mod = _load_daemon()
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mod, "_todoist_token", lambda: "tok")
+    monkeypatch.setattr(mod, "_todoist_open_rituals", lambda token: [])
+    created = []
+    attempts_for_semesh = []
+
+    def flaky_write(path, payload, token, method="POST"):
+        content = (payload or {}).get("content", "")
+        if "سمش" in content:
+            attempts_for_semesh.append(1)
+            if len(attempts_for_semesh) == 1:
+                raise mod.urllib.error.HTTPError("http://x", 502, "Bad Gateway", None, None)
+        created.append(payload)
+        return 200, json.dumps({"id": "created", "labels": (payload or {}).get("labels", [])}).encode()
+
+    monkeypatch.setattr(mod, "_todoist_write", flaky_write)
+    mod.create_block_rituals()
+    created_tags = [p["content"].replace("😈", "").strip() for p in created]
+    assert "سمش" in created_tags, "the card must still get created after the transient failure retries"
+    assert len(created_tags) == 5, "all 5 rituals must end up created, none silently dropped"
+
+
+def test_todoist_open_rituals_retries_transient_error_then_succeeds(monkeypatch):
+    mod = _load_daemon()
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    calls = []
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return b'{"results": []}'
+
+    def flaky_urlopen(req, timeout=10):
+        calls.append(1)
+        if len(calls) == 1:
+            raise mod.urllib.error.HTTPError("http://x", 503, "Service Unavailable", None, None)
+        return _FakeResp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", flaky_urlopen)
+    result = mod._todoist_open_rituals("tok")
+    assert result == [], "must recover to the genuinely-empty result after retrying, not None"
+    assert len(calls) == 2
+
+
 # ── Created ritual card must have its label verified, and repaired if the
 # creation write dropped it (bug 2026-07-30: 3 of 5 cards created in the same
 # batch came back from Todoist with labels=[] -- an apparent write flake on

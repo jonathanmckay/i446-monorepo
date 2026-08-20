@@ -34,6 +34,7 @@ import smtplib
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import zoneinfo
 from email.mime.text import MIMEText
@@ -1291,6 +1292,40 @@ def _ritual_bare_tag(content: str, marker: str, tags: list[str]) -> str | None:
     return None
 
 
+def _is_transient_todoist_error(e: Exception) -> bool:
+    """5xx/429 and network-level failures are worth retrying (Todoist-side
+    hiccup); 4xx like a bad token or malformed payload are not — retrying
+    those just wastes time before failing the same way."""
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code in (429, 500, 502, 503, 504)
+    if isinstance(e, urllib.error.URLError):
+        return True  # covers socket.timeout too (URLError's reason chain)
+    return False
+
+
+def _todoist_write_retry(path: str, payload: dict | None, token: str, method: str = "POST",
+                         attempts: int = 3, delay: float = 2.0) -> tuple[int, bytes]:
+    """_todoist_write with retry on transient failures (2026-08-20: a
+    Todoist-side 502/503 blip at exactly the 巳 turnover meant
+    create_block_rituals' single unretried attempt silently skipped
+    creating the سمش and -1g cards for the whole block -- the OTHER 3
+    cards, created seconds later in the same daemon run once Todoist
+    recovered, all succeeded. Nothing surfaced this to the user; the block
+    scored 9/13 with no card ever existing to close for the missing 4
+    points, and "I did all -1n" was literally true for what was visible."""
+    last_err: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _todoist_write(path, payload, token, method=method)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if attempt < attempts and _is_transient_todoist_error(e):
+                time.sleep(delay)
+                continue
+            raise
+    raise last_err  # pragma: no cover — loop always returns or raises above
+
+
 def _todoist_open_rituals(token: str) -> list | None:
     """All currently-open tasks carrying the -1neon label. None on fetch
     failure — distinct from an empty list (genuinely nothing open) — so
@@ -1301,13 +1336,23 @@ def _todoist_open_rituals(token: str) -> list | None:
     url = f"https://api.todoist.com/api/v1/tasks?label={quote('-1neon')}&limit=200"
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        return data.get("results", data) if isinstance(data, dict) else data
-    except Exception as e:
-        log(f"rituals: fetch open ERROR {e}")
-        return None
+    # Retry on transient failures too (same class of Todoist-side blip that
+    # hit create_block_rituals' own writes on 2026-08-20) — this fetch
+    # gating ALL card creation for the fire means an unretried hiccup here
+    # is even more consequential: it skips creating every ritual card for
+    # the block, not just some.
+    attempts, delay = 3, 2.0
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            return data.get("results", data) if isinstance(data, dict) else data
+        except Exception as e:
+            if attempt < attempts and _is_transient_todoist_error(e):
+                time.sleep(delay)
+                continue
+            log(f"rituals: fetch open ERROR {e}")
+            return None
 
 
 def _todoist_write(path: str, payload: dict | None, token: str, method: str = "POST") -> tuple[int, bytes]:
@@ -1354,7 +1399,7 @@ def create_block_rituals(dry_run: bool = False) -> None:
             log(f"[DRY RUN] create card {content!r} @{label}")
             continue
         try:
-            status, body = _todoist_write("/tasks", {"content": content, "labels": [label],
+            status, body = _todoist_write_retry("/tasks", {"content": content, "labels": [label],
                                       "due_string": "today"}, token)
             log(f"rituals: + {content}")
             # Verify the label actually persisted (bug 2026-07-30: 3 of 5
