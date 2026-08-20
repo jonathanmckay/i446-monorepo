@@ -167,6 +167,24 @@ def test_resolve_shortcode_takes_priority_over_cache():
     assert project == "hcmc"
 
 
+def test_resolve_sleep_shortcode_carries_no_tags():
+    """Regression (2026-08-20 user report): 睡觉 entries created via /tg were
+    tagged "-3", which they should never carry.
+
+    Worse than cosmetic: tools/0t/0t-fast.py's compute_tag_minutes() has to
+    explicitly skip SLEEP_PROJECT_ID entries when summing "-3"-tagged
+    minutes into the AX column, specifically because 睡觉's own "-3" tag
+    used to pollute that sum with a full night's sleep (regression
+    2026-06-28, AX=439 -- see the comment there). That skip is keyed on
+    project id, not the tag, so it still protects historical entries
+    already carrying "-3" -- but nothing should be generating fresh
+    "-3"-tagged 睡觉 entries going forward."""
+    mod = _import_tg_fast()
+    desc, project, tags = mod.resolve("睡觉")
+    assert project == "睡觉"
+    assert tags == [], f"睡觉 must carry no tags by default, got {tags!r}"
+
+
 def test_resolve_no_project_when_label_not_in_toggl():
     """Tasks whose labels don't exist in Toggl PROJECT_MAP should return empty project."""
     fake_cache = {

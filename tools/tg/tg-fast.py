@@ -56,7 +56,7 @@ JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
 SHORTCODES = {
     # High frequency
-    "الفاتحة": ("hcm", []), "睡觉": ("睡觉", ["-3"]), "fall asleep": ("hcmc", ["-1"]),
+    "الفاتحة": ("hcm", []), "睡觉": ("睡觉", []), "fall asleep": ("hcmc", ["-1"]),
     "0t": ("n156", []), "新闻": ("hcmc", ["-3"]), "work": ("i9", []),
     "family time": ("xk87", []), "read": ("xk87", ["-3"]), "0l": ("g245", []),
     "math": ("xk87", []), "冥想": ("hcm", []), "day hci": ("hci", []),
