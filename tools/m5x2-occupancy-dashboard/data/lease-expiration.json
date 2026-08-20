@@ -552,18 +552,6 @@
     "rent": "1304.00"
   },
   {
-    "unit_id": 1061,
-    "property_name": "kn47 K2",
-    "unit": "E106",
-    "tenant_name": "Hanson, Shameka C.",
-    "status": "Pending",
-    "lease_sign_date": "2025-08-06",
-    "move_in": "2025-08-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 1254,
     "property_name": "tc68",
     "unit": "D105",
@@ -1216,7 +1204,7 @@
     "property_name": "rl16",
     "unit": "A14",
     "tenant_name": "Noyola, Mackenzie",
-    "status": "Eligible",
+    "status": "Notice Given",
     "lease_sign_date": null,
     "move_in": "2024-03-27",
     "renewal_start_date": null,
@@ -1372,7 +1360,7 @@
     "property_name": "v202",
     "unit": "3",
     "tenant_name": "Russell, Carol",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2024-08-01",
     "renewal_start_date": null,
@@ -1384,7 +1372,7 @@
     "property_name": "v202",
     "unit": "4",
     "tenant_name": "Akins, Karen",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2024-08-01",
     "renewal_start_date": null,
@@ -1510,18 +1498,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1175.00"
-  },
-  {
-    "unit_id": 684,
-    "property_name": "j312",
-    "unit": "3112",
-    "tenant_name": "Ramak, Raezhelle  R.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-16",
-    "move_in": "2025-10-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1265.00"
   },
   {
     "unit_id": 311,
@@ -1701,6 +1677,18 @@
     "move_in": "2019-10-17",
     "renewal_start_date": null,
     "last_lease_renewal": null,
+    "rent": "1089.00"
+  },
+  {
+    "unit_id": 1061,
+    "property_name": "kn47 K2",
+    "unit": "E106",
+    "tenant_name": "Hanson, Shameka C.",
+    "status": "Renewed",
+    "lease_sign_date": "2025-08-06",
+    "move_in": "2025-08-07",
+    "renewal_start_date": "2026-09-01",
+    "last_lease_renewal": "2026-09-01",
     "rent": "1089.00"
   },
   {
@@ -3640,7 +3628,7 @@
     "property_name": "p705",
     "unit": "13",
     "tenant_name": "Davis, Kara N.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-14",
     "move_in": "2026-01-15",
     "renewal_start_date": null,
