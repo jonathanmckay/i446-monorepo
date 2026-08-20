@@ -214,13 +214,15 @@ def test_gap_fill_helper_dashes_not_spaces():
 
 
 def test_gap_style_never_uses_reverse_attribute():
-    """The gap alarm must not use prompt_toolkit's 'reverse' attribute: the
-    whole-screen _NoTimerFlash transformation also toggles 'reverse' (on the
-    exact same wall-clock phase, since both derive from the sub-second clock),
-    so a gap row styled with 'reverse' would cancel back to normal — or
-    scramble — right when no timer is running, i.e. exactly when the user is
-    most likely to be staring at gaps to backfill. Solid explicit fg/bg colors
-    (no_entry / no_entry_bg) compose safely instead."""
+    """The gap alarm must not use prompt_toolkit's 'reverse' attribute.
+    Historically (pre-2026-08-20) the no-timer nag was a whole-screen
+    _NoTimerFlash StyleTransformation that also toggled 'reverse' on the
+    exact same wall-clock phase, so a gap row styled with 'reverse' would
+    cancel back to normal — or scramble — right when no timer is running.
+    That transform is gone (the nag is scoped to just the input row's own
+    `style` now, via _no_timer_flash_style), but solid explicit fg/bg colors
+    (no_entry / no_entry_bg) remain the right choice for gap rows regardless
+    — 'reverse' composes unpredictably with whatever's already there."""
     src = (HERE / "janus.py").read_text()
     i = src.index('"no_entry_bg":')
     line = src[i:src.index("\n", i)]

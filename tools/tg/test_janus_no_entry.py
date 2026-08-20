@@ -128,7 +128,7 @@ def test_flash_cursor_toggles_every_half_second():
 def test_no_flash_when_timer_state_unknown():
     """Bug: starting a 2nd hci while Toggl was rate-limiting (402) left the TUI
     flashing 'no timer' over a live entry. When current is unconfirmed
-    (current_known False), neither the whole-screen flash nor the red NO TIME
+    (current_known False), neither the input-row flash nor the red NO TIME
     ENTRY alarm may fire."""
     m = _load()
     now = dt.datetime.now(m.TZ)
@@ -142,7 +142,7 @@ def test_no_flash_when_timer_state_unknown():
         "end_dt": now - dt.timedelta(minutes=7),
         "desc": "push", "project_id": None, "running": False,
     }]
-    assert m._no_timer_flash_on() is False, "must not whole-screen flash when unknown"
+    assert m._no_timer_flash_on() is False, "must not flash the input row when unknown"
     txt_all = "".join(t for _, t, *_ in m.render_detail())
     assert "NO TIME ENTRY" not in txt_all, "must not nag when timer state is unconfirmed"
 
@@ -237,3 +237,36 @@ def test_flash_resumes_after_grace_period_elapses(monkeypatch):
     monkeypatch.setattr(m.dt, "datetime", _FixedDT)
     assert m._no_timer_flash_on() is True, \
         "grace period elapsed — the idle nag should flash again"
+
+
+def test_no_timer_flash_style_reflects_flash_state(monkeypatch):
+    """_no_timer_flash_style (the Window `style` callable) must return
+    'reverse' exactly when _no_timer_flash_on() is True, and nothing
+    otherwise — this is what actually drives the visible flash now that
+    it's scoped to a single window instead of a StyleTransformation."""
+    m = _load()
+    monkeypatch.setattr(m, "_no_timer_flash_on", lambda: True)
+    assert m._no_timer_flash_style() == "reverse"
+    monkeypatch.setattr(m, "_no_timer_flash_on", lambda: False)
+    assert m._no_timer_flash_style() == ""
+
+
+def test_no_timer_flash_scoped_to_input_row_not_whole_screen():
+    """Regression (2026-08-20 user request): the no-timer nag used to be a
+    whole-screen StyleTransformation (attrs.reverse on every rendered
+    cell). Now it must be scoped to just the input row — prompt_window and
+    input_window carry the flash style, and Application must no longer be
+    given a style_transformation at all."""
+    m = _load()
+    assert m.input_window.style is not None and callable(m.input_window.style), \
+        "input_window must carry a dynamic style (the flash callable)"
+    assert m.prompt_window.style is not None and callable(m.prompt_window.style), \
+        "prompt_window must carry a dynamic style (the flash callable)"
+
+    src = (HERE / "janus.py").read_text()
+    assert "style_transformation" not in src, (
+        "the whole-screen style_transformation mechanism must be gone entirely — "
+        "the flash lives on the input row's own `style` now"
+    )
+    assert "class _NoTimerFlash" not in src, \
+        "the old whole-screen StyleTransformation class must be removed, not just unused"
