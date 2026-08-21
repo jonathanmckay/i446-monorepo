@@ -12,6 +12,7 @@ Reports tasks missing:
 import os
 import sys
 import re
+import time
 
 try:
     import requests
@@ -31,6 +32,19 @@ HEADERS = {
 }
 
 
+def _get_with_retry(url, params, max_attempts=4):
+    """GET with retry on transient Todoist 5xx errors (seen 2026-08-21: a bare
+    503 killed the scheduled hygiene-check run with no retry). Exponential
+    backoff, same shape as refresh-cache.py's per-label fallback for the
+    same failure class."""
+    for attempt in range(1, max_attempts + 1):
+        response = requests.get(url, headers=HEADERS, params=params)
+        if response.status_code < 500 or attempt == max_attempts:
+            response.raise_for_status()
+            return response
+        time.sleep(2 ** (attempt - 1))
+
+
 def get_all_tasks():
     """Get all active tasks from Todoist, handling pagination."""
     all_tasks = []
@@ -39,8 +53,7 @@ def get_all_tasks():
         params = {"limit": 200}
         if cursor:
             params["cursor"] = cursor
-        response = requests.get(f"{TODOIST_API_BASE}/tasks", headers=HEADERS, params=params)
-        response.raise_for_status()
+        response = _get_with_retry(f"{TODOIST_API_BASE}/tasks", params)
         data = response.json()
         # v1 API returns {"results": [...], "next_cursor": "..."}
         if isinstance(data, list):
