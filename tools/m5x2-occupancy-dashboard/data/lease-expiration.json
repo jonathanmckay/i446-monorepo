@@ -528,18 +528,6 @@
     "rent": "0.00"
   },
   {
-    "unit_id": 1276,
-    "property_name": "c702",
-    "unit": "A106",
-    "tenant_name": "Takam, Komta",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-08-22",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "0.00"
-  },
-  {
     "unit_id": 834,
     "property_name": "kn47 K1",
     "unit": "A204",
@@ -742,18 +730,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1130.00"
-  },
-  {
-    "unit_id": 312,
-    "property_name": "k104- LeFevre",
-    "unit": "519-101",
-    "tenant_name": "Conant, Joshua D.",
-    "status": "Pending",
-    "lease_sign_date": "2024-05-16",
-    "move_in": "2024-05-24",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1295.00"
   },
   {
     "unit_id": 319,
@@ -1200,18 +1176,6 @@
     "rent": "1415.00"
   },
   {
-    "unit_id": 527,
-    "property_name": "rl16",
-    "unit": "A14",
-    "tenant_name": "Noyola, Mackenzie",
-    "status": "Notice Given",
-    "lease_sign_date": null,
-    "move_in": "2024-03-27",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1415.00"
-  },
-  {
     "unit_id": 552,
     "property_name": "rl16",
     "unit": "B15",
@@ -1284,18 +1248,6 @@
     "rent": "1542.20"
   },
   {
-    "unit_id": 655,
-    "property_name": "s129",
-    "unit": "4",
-    "tenant_name": "Jeffreys, Susan",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2016-06-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1345.00"
-  },
-  {
     "unit_id": 657,
     "property_name": "s129",
     "unit": "6",
@@ -1354,18 +1306,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-04-01",
     "rent": "1295.00"
-  },
-  {
-    "unit_id": 789,
-    "property_name": "v202",
-    "unit": "3",
-    "tenant_name": "Russell, Carol",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-08-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1089.00"
   },
   {
     "unit_id": 790,
@@ -1791,7 +1731,7 @@
     "unit_id": 391,
     "property_name": "ps25",
     "unit": "E33",
-    "tenant_name": "Castille, Angela",
+    "tenant_name": "Castillo, Angela",
     "status": "Pending",
     "lease_sign_date": "2025-11-26",
     "move_in": "2025-11-28",
