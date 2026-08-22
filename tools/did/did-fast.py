@@ -776,6 +776,19 @@ def _refresh_task_queue_inner() -> dict:
     keys = ["0neon", "1neon", "夜neon", "关键路径"]
     results = {}
 
+    # Cross-host completions (2026-08-21 bug: "dtd on ix web still shows daily
+    # tasks I finished in dtd on Straylight"). A task closed in dtd on ANOTHER
+    # machine mirrors its completed-today record into the synced vault; pull
+    # those in NOW, before closed_today_ids is computed below, so a habit closed
+    # on one host is hidden in dtd served from another. Without this, ix's
+    # closed_today_ids only ever holds ix-local completions, and a recurring
+    # habit (whose Todoist due merely advances to tomorrow on close — it's never
+    # marked `checked`) is caught by neither the id-hide nor the due-hide.
+    try:
+        mc.absorb_remote()
+    except Exception as e:  # noqa: BLE001 — a sync-merge miss must not fail refresh
+        print(f"WARN: absorb_remote skipped: {e}", file=sys.stderr)
+
     def fetch_label(label):
         url = f"{TODOIST_BASE}/tasks?label={label}&limit=200"
         req = urllib.request.Request(url, headers={
@@ -1039,15 +1052,19 @@ def _refresh_task_queue_inner() -> dict:
     # already done"). closed_today_ids is applied above ONLY to old_today (the
     # flaky-fetch fallback), and the verification pass just above re-checks ONLY
     # -1neon ritual cards. A plain daily/recurring task completed today (its id
-    # recorded in completed-today.json by the completion path, steps 3/7) can
-    # still come back from a fresh, non-empty fetch_today when Todoist's
-    # today|overdue index lags the close — the same lag the ritual pass was
-    # built for, never applied to non-ritual cards on the fresh path. Drop any
-    # today row whose id is in today's completed set, matching how dtd's own
-    # list-gen already hides by completed id.
+    # recorded in completed-today.json — this host's OR, via absorb_remote
+    # above, another host's) can still come back from a fresh fetch: fetch_today
+    # under today|overdue index lag, or the 0neon/夜neon label buckets holding a
+    # recurring habit whose Todoist due only just advanced. Drop every rendered
+    # bucket's rows whose id is in today's completed set, matching how dtd's own
+    # list-gen already hides by completed id — but on the refresh host, so it
+    # works cross-host and for the daily-habit buckets, not just `today`.
     if closed_today_ids:
-        results["today"] = [t for t in results["today"]
-                            if str(t.get("id")) not in closed_today_ids]
+        for _bk, _bv in list(results.items()):
+            if isinstance(_bv, list):
+                results[_bk] = [t for t in _bv
+                                if not (isinstance(t, dict)
+                                        and str(t.get("id")) in closed_today_ids)]
 
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
