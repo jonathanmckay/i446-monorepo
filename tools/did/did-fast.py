@@ -1035,6 +1035,20 @@ def _refresh_task_queue_inner() -> dict:
     except Exception as e:
         print(f"WARN: -1neon verification pass skipped: {e}", file=sys.stderr)
 
+    # General already-done guard (2026-08-21 bug: "dtd showing daily tasks I've
+    # already done"). closed_today_ids is applied above ONLY to old_today (the
+    # flaky-fetch fallback), and the verification pass just above re-checks ONLY
+    # -1neon ritual cards. A plain daily/recurring task completed today (its id
+    # recorded in completed-today.json by the completion path, steps 3/7) can
+    # still come back from a fresh, non-empty fetch_today when Todoist's
+    # today|overdue index lags the close — the same lag the ritual pass was
+    # built for, never applied to non-ritual cards on the fresh path. Drop any
+    # today row whose id is in today's completed set, matching how dtd's own
+    # list-gen already hides by completed id.
+    if closed_today_ids:
+        results["today"] = [t for t in results["today"]
+                            if str(t.get("id")) not in closed_today_ids]
+
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": datetime.now().isoformat()}

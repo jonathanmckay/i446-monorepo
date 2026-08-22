@@ -1077,6 +1077,27 @@ def _hhmm_to_dt(ref_date: dt.date, hhmm: str) -> dt.datetime:
                        int(hhmm[:2]), int(hhmm[2:]), tzinfo=TZ)
 
 
+def _norm_hhmm(text: str) -> str | None:
+    """Normalize a lone user-typed time token to canonical 'HHMM', or None if
+    it isn't a valid time-of-day. Accepts colon and short-hour forms so a
+    single-time input isn't locked to exactly four bare digits — a half-asleep
+    thumb typing '9:07', '907', or '0907' all mean 09:07 (bug: the ^P split
+    cut-point flashed "not an HHMM time" on anything but HHMM, and an
+    out-of-range 4-digit like '2599' reached _hhmm_to_dt and crashed the key
+    handler with an uncaught ValueError). Deliberately validates the range
+    (00-23 / 00-59) so a bad time is a clean cancel, never a crash. Lone-token
+    only: this is NOT wired into the entry-retime range grammar, which stays
+    4-digit to keep a colon like the '1:1' in a description out of the time
+    field (see _parse_edit_text / test_parse_edit_text_splits_trailing_code)."""
+    m = re.fullmatch(r"(\d{1,2}):?([0-5]\d)", text.strip())
+    if not m:
+        return None
+    h = int(m.group(1))
+    if h > 23:
+        return None
+    return f"{h:02d}{m.group(2)}"
+
+
 def _load_event_shorts() -> dict:
     try:
         return json.loads(EVENT_SHORTS.read_text())
@@ -4740,11 +4761,11 @@ def _(event):
         STATE.split_target = None
         text = input_buffer.text.strip()
         input_buffer.reset()
-        m = re.fullmatch(r"(\d{2})(\d{2})", text) if text else None
-        if not m:
-            flash("split cancelled" if not text else f"not an HHMM time: {text}", 4.0)
+        norm = _norm_hhmm(text) if text else None
+        if not norm:
+            flash("split cancelled" if not text else f"not a valid time: {text}", 4.0)
             return
-        cut = _hhmm_to_dt(sp["date"], text)
+        cut = _hhmm_to_dt(sp["date"], norm)
         if not (sp["start_dt"] < cut < sp["end_dt"]):
             flash(f"split point must be inside {sp['start_dt']:%H%M}-{sp['end_dt']:%H%M}", 5.0)
             return
