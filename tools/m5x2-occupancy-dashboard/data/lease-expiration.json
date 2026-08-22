@@ -216,18 +216,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 985,
-    "property_name": "kn47 K1",
-    "unit": "M202",
-    "tenant_name": "Lewis, Tennille A.",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2023-03-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 997,
     "property_name": "kn47 K2",
     "unit": "A106",
@@ -1780,7 +1768,7 @@
     "property_name": "rl16",
     "unit": "A06",
     "tenant_name": "Salgado, Divine L.",
-    "status": "Pending",
+    "status": "Notice Given",
     "lease_sign_date": "2025-11-17",
     "move_in": "2025-11-22",
     "renewal_start_date": null,
