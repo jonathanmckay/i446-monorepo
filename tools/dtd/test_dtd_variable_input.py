@@ -33,6 +33,25 @@ def test_variable_prompt_none_for_ordinary_task():
     assert dtd.variable_prompt("😈 -1g (15) [15]") is None
 
 
+def test_variable_prompt_strips_deferred_date_suffix():
+    """Regression (2026-08-22): a deferred one-off copy of a daily variable
+    habit carries a trailing ' M.D' date suffix (defer-fast / "AoS 7.20"
+    convention). The suffix broke the VARIABLE_INPUT lookup, so dtd web
+    silently completed it with NO numeric prompt while terminal did-fast (which
+    parses the date off first) still prompted. The suffix must be stripped."""
+    assert dtd.variable_prompt("xk20 7.26 (30) [35]") == "xk20 minutes (Theo)"
+    assert dtd.variable_prompt("hiit 8.20 (10) [23]") == "hiit minutes"
+    assert dtd.variable_prompt("新闻 12.3") == "新闻 minutes"
+
+
+def test_variable_prompt_deferred_suffix_no_false_positive():
+    """A deferred copy of a NON-variable task must still return None — stripping
+    the date must not turn an ordinary dated task into a variable one."""
+    assert dtd.variable_prompt("call dentist 7.26 (10) [5]") is None
+    # A bare 'xk20' with no date is unaffected (base case still works).
+    assert dtd.variable_prompt("xk20 (30) [35]") == "xk20 minutes (Theo)"
+
+
 def test_build_tasks_exposes_variable_prompt_field(monkeypatch, tmp_path):
     import datetime as dt
     import json
