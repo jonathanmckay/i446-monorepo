@@ -617,6 +617,26 @@ def build_timeline() -> dict:
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
+def _hhmm_parts(s: str) -> tuple[int, int]:
+    """Parse a user-typed time to (hour, minute), accepting BOTH 'HH:MM' and a
+    bare 'HHMM'/'HMM' (plus their short-hour 'H:MM' forms).
+
+    The edit/gap dialogs use inputmode="numeric": iOS shows a number pad with NO
+    colon key, so once the prefilled colon is deleted it can't be retyped and a
+    colon-less '1512' was reaching _dt.time(*map(int, "1512".split(":"))) →
+    time(1512) → ValueError → "bad time format" (bug 2026-08-21, user report:
+    "it allows me to delete the colon, but then is a number pad so I can't add
+    it back then it doesn't parse"). Raising ValueError on a genuinely invalid
+    time keeps the callers' existing "bad time" guards intact."""
+    m = re.fullmatch(r"\s*(\d{1,2}):?([0-5]\d)\s*", s or "")
+    if not m:
+        raise ValueError(f"bad time: {s!r}")
+    h = int(m.group(1))
+    if h > 23:
+        raise ValueError(f"hour out of range: {s!r}")
+    return h, int(m.group(2))
+
+
 def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     m = _AT.search(desc)
     code = m.group(1) if m else ""
@@ -624,8 +644,8 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     pid = PROJECT_MAP.get(code)
     today = _dt.datetime.now(TZ).date()
     try:
-        st = _dt.datetime.combine(today, _dt.time(*map(int, start_hhmm.split(":"))), TZ)
-        en = _dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), TZ)
+        st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), TZ)
+        en = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(end_hhmm)), TZ)
     except Exception:
         return {"ok": False, "error": "bad time format (HH:MM)"}
     if en <= st:
@@ -724,6 +744,22 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
         if pid is None:
             return {"ok": False, "error": f"unknown project @{project_code}"}
         fields["project_id"] = pid
+
+    # Normalize colon-less numpad input to canonical HH:MM up front (see
+    # _hhmm_parts): the inputmode=numeric fields can't retype a deleted colon,
+    # so '1512' must read as 15:12. Normalizing here also keeps the
+    # change-detection below honest — a colon-less resubmit of an unchanged time
+    # collapses to the same HH:MM and is correctly seen as "unchanged".
+    if start_hhmm and start_hhmm not in ("now",):
+        try:
+            start_hhmm = "%02d:%02d" % _hhmm_parts(start_hhmm)
+        except ValueError:
+            return {"ok": False, "error": "bad start time (HH:MM)"}
+    if end_hhmm and end_hhmm not in ("now",):
+        try:
+            end_hhmm = "%02d:%02d" % _hhmm_parts(end_hhmm)
+        except ValueError:
+            return {"ok": False, "error": "bad end time (HH:MM)"}
 
     cur_start_hhmm = true_start.strftime("%H:%M")
     cur_end_hhmm = "now" if running else true_end.strftime("%H:%M")
