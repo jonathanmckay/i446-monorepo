@@ -1,5 +1,10 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-21T20:00:05.238275-07:00"
+  "tasks": {
+    "spend time with family": {
+      "todoist_id": "6hJg3f984XFcJpW2",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-08-21T22:00:08.516508-07:00"
 }
