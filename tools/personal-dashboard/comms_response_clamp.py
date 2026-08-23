@@ -7,10 +7,14 @@ Outlook / Gmail / Teams sync scripts and the dashboard renderer so that
 an unanswered message that has been sitting in the queue for days.
 """
 
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-PST = ZoneInfo("America/Los_Angeles")
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
 MAX_RESPONSE_HOURS = 24.0  # 1440 min
 
 
@@ -18,10 +22,15 @@ def clamp_response_hours_unix(sent_ts: float, recv_ts: float) -> float:
     """Compute response hours from unix-second timestamps with the daily reset.
 
     The effective received time is `max(actual_recv, last_local_midnight_at_or_before(sent))`,
-    so any message older than the most recent PST midnight is treated as if
+    so any message older than the most recent local midnight is treated as if
     it had just been received at midnight. Result is clamped to [0, 24].
+
+    Uses the live /travel-aware zone (lib/daytime.py), not a fixed PT
+    reference: this is an ongoing response-time tracker for messages
+    arriving right now, so "today's effective wait" should reset at MY
+    actual local midnight while traveling, not a stale home-zone one.
     """
-    sent_local = datetime.fromtimestamp(sent_ts, tz=PST)
+    sent_local = datetime.fromtimestamp(sent_ts, tz=daytime.active_zone())
     midnight_ts = sent_local.replace(
         hour=0, minute=0, second=0, microsecond=0
     ).timestamp()

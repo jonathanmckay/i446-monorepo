@@ -34,12 +34,27 @@ MY_EMAIL = "jomckay@microsoft.com"
 MY_ALIASES = {"jomckay@microsoft.com", "jonathan.mckay@microsoft.com"}
 # Original cap on the matching window; replies beyond this are considered
 # new threads, not responses. Final response_hours is clamped daily via
-# comms_response_clamp (max 24h, resets at PST midnight).
+# comms_response_clamp (max 24h, resets at local midnight).
 MATCH_WINDOW_HOURS = 72
-# Assume Outlook "Sent:" timestamps in bodyPreview are Pacific time
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
-# Shared midnight-PST clamp lives next to this script
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz():
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import. Used to parse Outlook "Sent:"
+    timestamps embedded in bodyPreview text (Outlook doesn't reliably
+    report what zone those were originally in — this was already an
+    approximation under the old fixed-PT constant); this script is a live,
+    recurring sync of recent items, not a historical backfill, so it
+    follows the same /travel-aware convention as gen_email_stats.py and
+    comms_response_clamp.py."""
+    return daytime.active_zone()
+
+
+# Shared midnight-reset clamp lives next to this script
 sys.path.insert(0, str(Path(__file__).parent))
 from comms_response_clamp import clamp_response_hours_dt
 
@@ -102,7 +117,9 @@ def parse_outlook_sent_date(sent_str):
     """Parse the 'Sent:' timestamp from Outlook's quoted reply header.
 
     Outlook formats: 'Friday, April 10, 2026 4:35 PM' or 'Thursday, April 10, 2026 10:32:15 PM'
-    These are in the sender's local timezone. We assume Pacific for Microsoft internal.
+    These are in the sender's local timezone, which Outlook doesn't report —
+    we assume the active zone (lib/daytime.py: /travel override, else system
+    local; previously always hardcoded Pacific).
     """
     if not sent_str:
         return None
@@ -120,8 +137,7 @@ def parse_outlook_sent_date(sent_str):
     ]:
         try:
             naive = datetime.strptime(sent_str, fmt)
-            # Localize to Pacific and convert to UTC
-            localized = naive.replace(tzinfo=LOCAL_TZ)
+            localized = naive.replace(tzinfo=_tz())
             return localized
         except ValueError:
             continue

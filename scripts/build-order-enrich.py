@@ -18,9 +18,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-TZ = ZoneInfo("America/Los_Angeles")
 BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+import daytime as _daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import (this runs on a 2h timer)."""
+    return _daytime.active_zone()
+
+
 COMPLETED_TODAY = _sp.COMPLETED_TODAY
 COMPLETED_ARCHIVE_DIR = Path.home() / "vault/z_ibx/completed-archive"
 D357_DIR = Path.home() / "vault/d357"  # files live in week subfolders (D357_DIR/<M.W>/...) — glob recursively
@@ -47,7 +56,7 @@ MARKERS = ["☀️", "📧", "😈", "🎯", "✅", "⏱️"]
 
 
 def get_current_block_idx():
-    now = datetime.now(TZ)
+    now = datetime.now(_tz())
     return max(0, min(8, (now.hour - 4) // 2))
 
 
@@ -116,7 +125,7 @@ def get_completed_today():
     """Read completed tasks for today.
     Reads from completed-today.json (live) and merges with the archive.
     Returns (names, points_dict, timestamps_dict)."""
-    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    today = datetime.now(_tz()).strftime("%Y-%m-%d")
     names = []
     points = {}
     timestamps = {}
@@ -165,7 +174,7 @@ def get_d357_docs_today():
     Hour is extracted from the matching WAV file in recordings/ (which has HHMM
     in the filename), or from file mtime as fallback.
     """
-    now = datetime.now(TZ)
+    now = datetime.now(_tz())
     today_hyphen = now.strftime("%Y-%m-%d")
     today_dot = now.strftime("%Y.%m.%d")
     recordings_dir = Path.home() / "vault/h335/i9/recordings"
@@ -205,7 +214,7 @@ def get_d357_docs_today():
 
         if hour is None:
             # Fallback 3: use file mtime (least accurate)
-            mtime = datetime.fromtimestamp(f.stat().st_mtime, TZ)
+            mtime = datetime.fromtimestamp(f.stat().st_mtime, _tz())
             hour = mtime.hour
 
         docs.append((slug, title, hour))
@@ -246,7 +255,7 @@ def entries_in_block(entries, block_start_hour, block_end_hour):
             continue  # sleep excluded from block view
         s_min = time_to_minutes(start)
         if end == "running":
-            e_min = datetime.now(TZ).hour * 60 + datetime.now(TZ).minute
+            e_min = datetime.now(_tz()).hour * 60 + datetime.now(_tz()).minute
         else:
             e_min = time_to_minutes(end)
         if e_min > block_s and s_min < block_e:
@@ -297,7 +306,7 @@ def _block_total_minutes(block_entries):
     total = 0
     for start, end, desc, proj in block_entries:
         if end == "running":
-            now = datetime.now(TZ)
+            now = datetime.now(_tz())
             e_min = now.hour * 60 + now.minute
         else:
             e_min = time_to_minutes(end)

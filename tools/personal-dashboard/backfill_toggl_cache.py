@@ -33,9 +33,18 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
 HERE = Path(__file__).parent
 CACHE_PATH = HERE / ".toggl-daily-cache.json"
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+# Deliberately HOME_TZ, not the live /travel-aware zone: this buckets
+# historical Toggl entries into daily-cache rows, and the cache must bucket
+# the SAME entry into the SAME local day every time it's regenerated —
+# switching to whatever zone happens to be active mid-trip would make a
+# persistent cache reshuffle historical entries across day boundaries each
+# time it's rebuilt.
+LOCAL_TZ = daytime.HOME_TZ
 WORKSPACE_ID = int(os.environ.get("TOGGL_WORKSPACE_ID", "2092616"))
 WINDOW_DAYS = 60  # keeps each Reports v3 request fast (~1-2s, confirmed live)
 
