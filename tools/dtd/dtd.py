@@ -105,9 +105,20 @@ VARIABLE_INPUT = {
     "其他人": "其他人 minutes",
 }
 
+# A deferred one-off copy of a daily habit carries a trailing " M.D" date
+# suffix (e.g. "xk20 7.26", "长冥想 7.31" — see defer-fast / CLAUDE.md's
+# "AoS 7.20" convention). did-fast parses that date off before matching
+# (did-fast.py ~1194), so it still prompts; dtd web didn't, so a deferred
+# variable habit swiped complete on the phone silently dropped its value
+# (bug 2026-08-22: "tasks that should ask for numeric input ... don't").
+_DEFER_DATE = re.compile(r"\s+\d{1,2}\.\d{1,2}$")
+
 def variable_prompt(raw: str) -> str | None:
-    """The prompt label if `raw` is a variable-input task, else None."""
-    return VARIABLE_INPUT.get(strip_ann(raw).lower().strip())
+    """The prompt label if `raw` is a variable-input task, else None. A trailing
+    " M.D" defer-copy date suffix is stripped first so a deferred variable habit
+    (xk20 7.26 → xk20) still prompts, matching the terminal path."""
+    key = _DEFER_DATE.sub("", strip_ann(raw).lower().strip()).strip()
+    return VARIABLE_INPUT.get(key)
 
 def parse_est(content: str) -> tuple[str, int]:
     """Return ('(30) [20]' canonical string, points)."""
