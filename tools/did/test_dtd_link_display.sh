@@ -6,6 +6,7 @@ set -e
 cd "$(dirname "$0")"
 fail() { echo "FAIL: $1"; exit 1; }
 
+REAL_LIB_DIR="$HOME/i446-monorepo/lib"  # captured BEFORE any HOME override below
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
 python3 - dtd.sh "$TMP/gen.py" <<'PY'
 import re, sys
@@ -20,7 +21,7 @@ cat > "$TMP/c.json" <<JSON
 JSON
 echo '{"date":"'$TODAY'","names":[]}' > "$TMP/done.json"
 : > "$TMP/rm"; : > "$TMP/sk"; : > "$TMP/tm"; echo default > "$TMP/v"
-out=$(HOME="$TMP" python3 "$TMP/gen.py" "$TMP/c.json" "$TMP/done.json" "$TMP/rm" \
+out=$(HOME="$TMP" PYTHONPATH="$REAL_LIB_DIR" python3 "$TMP/gen.py" "$TMP/c.json" "$TMP/done.json" "$TMP/rm" \
   "$TODAY" 80 "$TMP/sk" "$TMP/tm" "$TMP/v" "$TMP/np")
 printf '%s' "$out" | grep -q '(link)' || fail "visible text must be (link)"
 printf '%s' "$out" | grep -qF $']8;;https://example.com/x?a=1&b=2' \

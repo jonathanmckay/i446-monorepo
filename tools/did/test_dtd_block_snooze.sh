@@ -37,6 +37,7 @@ grep -q '"\$1" "\$2" "\$3" "\$4" "\$5" "\$6" "\$7" "\$8" "\$9"' "$DTD" \
   || fail "list wrapper must forward the 9th (blockpick) arg"
 
 # ── 2. Functional: generator becomes the picker when armed ───────────────────
+REAL_LIB_DIR="$HOME/i446-monorepo/lib"  # captured BEFORE any HOME override below
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
 python3 - "$DTD" "$TMP/gen.py" <<'PY'
 import re, sys
@@ -61,7 +62,7 @@ echo '{"date":"'$TODAY'","names":[]}' > "$TMP/done.json"
 : > "$TMP/rm"; : > "$TMP/sk"; : > "$TMP/tm"; echo default > "$TMP/v"
 
 gen() {  # $1 = optional blockpick file
-  HOME="$TMP" python3 "$TMP/gen.py" "$TMP/c.json" "$TMP/done.json" "$TMP/rm" \
+  HOME="$TMP" PYTHONPATH="$REAL_LIB_DIR" python3 "$TMP/gen.py" "$TMP/c.json" "$TMP/done.json" "$TMP/rm" \
     "$TODAY" 100 "$TMP/sk" "$TMP/tm" "$TMP/v" "${1:-$TMP/nope}" \
     | sed -E 's/\x1b\[[0-9;]*m//g'
 }
