@@ -11,7 +11,20 @@ import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-TZ = ZoneInfo("America/Los_Angeles")
+# Self-locating: guarantees `daytime` resolves regardless of whether the
+# caller (janus.py) already put lib/ on sys.path — see lib/daytime.py, the
+# shared "now"/"today" resolution every DTD/Janus TZ read must go through.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
+import daytime  # noqa: E402
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
+
+
 CACHE_DIR = Path.home() / ".cache" / "janus"
 WINDOWS_TZ_MAP = {
     "UTC": "UTC",
@@ -134,14 +147,14 @@ def _parse_graph_dt(s: str, timezone_name: str = "") -> dt.datetime:
         s = f"{head}.{frac[:6]}"
     parsed = dt.datetime.fromisoformat(s)
     if parsed.tzinfo is not None:
-        return parsed.astimezone(TZ)
+        return parsed.astimezone(_tz())
 
     zone_key = WINDOWS_TZ_MAP.get(timezone_name, timezone_name)
     try:
         event_tz = ZoneInfo(zone_key) if zone_key else dt.timezone.utc
     except Exception:
         event_tz = dt.timezone.utc
-    return parsed.replace(tzinfo=event_tz).astimezone(TZ)
+    return parsed.replace(tzinfo=event_tz).astimezone(_tz())
 
 
 def _normalize(raw_events: list[dict]) -> list[dict]:
