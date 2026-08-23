@@ -23,6 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+from neon_blocks import current_block_index  # noqa: E402  canonical 地支 block schedule
 import todoist  # noqa: E402
 
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
@@ -118,7 +120,7 @@ def main() -> int:
         elif results.get(key) is None:
             results[key] = []  # no old cache to fall back to either
 
-    data: dict = {"updated": datetime.now().isoformat(timespec="seconds")}
+    data: dict = {"updated": daytime.local_now().isoformat(timespec="seconds")}
     data.update(results)
     # Preserve the "today" bucket from the existing cache if present.
     # The "today" bucket is populated by did-fast.py --refresh-cache (which
