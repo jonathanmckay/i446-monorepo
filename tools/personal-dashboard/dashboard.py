@@ -21,7 +21,15 @@ from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import (this server is long-lived)."""
+    return daytime.active_zone()
 
 import openpyxl
 from flask import Flask, render_template_string, jsonify, request
@@ -81,8 +89,6 @@ You're on <code>{_current_host}</code> — bookmark <code>http://ix.local:5558</
         {"Content-Type": "text/html; charset=utf-8"},
     )
 
-
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 _VAULT_EXCEL = Path.home() / "OneDrive" / "vault-excel"
 
@@ -459,7 +465,7 @@ def load_toggl_data():
         if not start_str:
             continue
         try:
-            start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
+            start_dt = datetime.fromisoformat(start_str).astimezone(_tz())
         except (ValueError, TypeError):
             continue
         d = start_dt.date()
@@ -575,7 +581,7 @@ def load_toggl_range(days, return_counts=False):
         if not start_str:
             continue
         try:
-            start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
+            start_dt = datetime.fromisoformat(start_str).astimezone(_tz())
         except (ValueError, TypeError):
             continue
         d = start_dt.date()
@@ -800,7 +806,7 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
         if not start_str:
             continue
         try:
-            start_dt = datetime.fromisoformat(start_str).astimezone(LOCAL_TZ)
+            start_dt = datetime.fromisoformat(start_str).astimezone(_tz())
         except (ValueError, TypeError):
             continue
         end_dt = start_dt + timedelta(seconds=dur)
@@ -820,7 +826,7 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
                 idx = bucket_index(d, branch)
                 if idx is None:
                     continue
-                block_start_dt = datetime(d.year, d.month, d.day, block_start_hour, 0, tzinfo=LOCAL_TZ)
+                block_start_dt = datetime(d.year, d.month, d.day, block_start_hour, 0, tzinfo=_tz())
                 block_end_dt = block_start_dt + timedelta(hours=2)
                 overlap_start = max(start_dt, block_start_dt)
                 overlap_end = min(end_dt, block_end_dt)
@@ -1129,8 +1135,8 @@ def _fetch_tasks_for_day(day, token):
     it falls in the 22:00-04:00 sleep gap) — read alongside the day-level
     counts above since both come from the same API response.
     """
-    since_dt = datetime.combine(day, datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
-    until_dt = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=PACIFIC).astimezone(timezone.utc)
+    since_dt = datetime.combine(day, datetime.min.time(), tzinfo=_tz()).astimezone(timezone.utc)
+    until_dt = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=_tz()).astimezone(timezone.utc)
     since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     until = until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     url = f"https://api.todoist.com/api/v1/tasks/completed?since={since}&until={until}&limit=200"
@@ -1161,7 +1167,7 @@ def _fetch_tasks_for_day(day, token):
         if completed_str:
             try:
                 completed_dt = datetime.fromisoformat(
-                    completed_str.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+                    completed_str.replace("Z", "+00:00")).astimezone(_tz())
                 bi = _block_index_for_hour(completed_dt.hour)
                 if bi is not None:
                     by_block[BRANCH_BLOCKS[bi][0]][cat] += 1
@@ -1616,7 +1622,7 @@ def _build_email_by_account_blocked(email_raw, day_list):
             }
             for d in day_list:
                 for branch, start_hour, _ in BRANCH_BLOCKS:
-                    block_start = datetime(d.year, d.month, d.day, start_hour, 0, tzinfo=LOCAL_TZ)
+                    block_start = datetime(d.year, d.month, d.day, start_hour, 0, tzinfo=_tz())
                     block_end = block_start + timedelta(hours=2)
                     rows = _aconn.execute(
                         "SELECT message_type, COUNT(DISTINCT item_uid), AVG(response_min) "

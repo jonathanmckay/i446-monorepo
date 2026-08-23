@@ -20,7 +20,6 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 # Add project paths for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -28,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools" / "personal
 
 from comms_response_clamp import clamp_response_hours_unix
 
-TZ = ZoneInfo("America/Los_Angeles")
 ARCHIVE_DB = Path.home() / ".config" / "ibx" / "archive_log.db"
 
 LOG_PREFIX = "sync-ext"

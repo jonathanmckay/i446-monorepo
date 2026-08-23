@@ -33,11 +33,24 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
-# Daily-reset clamp for individual response timers (max 24h, resets at PST midnight)
+# Daily-reset clamp for individual response timers (max 24h, resets at local midnight)
 sys.path.insert(0, str(Path(__file__).parent))
 from comms_response_clamp import clamp_response_hours_unix
 
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz():
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import (this is a periodic cron script). This
+    is a live, ongoing stats generator (last-30-days), unlike the backfill
+    scripts in this directory, which stay anchored to daytime.HOME_TZ —
+    see their comments for why the distinction matters."""
+    return daytime.active_zone()
+
+
 GIST_ID = "7c08fd1a83c8f3bbab3917bdb3d33df1"
 DAYS = 30
 
@@ -169,7 +182,7 @@ def compute_response_times(service, account_name, days=DAYS):
             if sent_ts < since_ts:
                 continue
 
-            sent_dt = datetime.fromtimestamp(sent_ts / 1000, tz=LOCAL_TZ)
+            sent_dt = datetime.fromtimestamp(sent_ts / 1000, tz=_tz())
             day_str = sent_dt.date().isoformat()
             sent_by_day[day_str] += 1
 
@@ -196,7 +209,7 @@ def compute_response_times(service, account_name, days=DAYS):
 
             delta_hours = clamp_response_hours_unix(sent_ts / 1000, received_ts / 1000)
 
-            recv_hour = datetime.fromtimestamp(received_ts / 1000, tz=LOCAL_TZ).hour
+            recv_hour = datetime.fromtimestamp(received_ts / 1000, tz=_tz()).hour
             response_times.append({"date": day_str, "hours": round(delta_hours, 2), "recv_hour": recv_hour})
 
     return response_times, dict(sent_by_day)
@@ -414,7 +427,7 @@ def compute_imessage_response_times(days=DAYS):
                         delta_hours = clamp_response_hours_unix(
                             msg["unix_ts"], msgs_list[j]["unix_ts"]
                         )
-                        recv_hour = datetime.fromtimestamp(msgs_list[j]["unix_ts"], tz=LOCAL_TZ).hour
+                        recv_hour = datetime.fromtimestamp(msgs_list[j]["unix_ts"], tz=_tz()).hour
                         response_times.append({
                             "date": msg["day_str"],
                             "hours": round(delta_hours, 2),
@@ -499,7 +512,7 @@ def compute_slack_response_times(days=DAYS):
                     if msg.get("user") != self_id:
                         continue
                     sent_ts = float(msg["ts"])
-                    sent_dt = datetime.fromtimestamp(sent_ts, tz=LOCAL_TZ)
+                    sent_dt = datetime.fromtimestamp(sent_ts, tz=_tz())
                     sent_by_day[sent_dt.date().isoformat()] += 1
                     # Find preceding message from someone else
                     for j in range(i - 1, -1, -1):
@@ -507,7 +520,7 @@ def compute_slack_response_times(days=DAYS):
                             recv_ts = float(msgs[j]["ts"])
                             delta_hours = (sent_ts - recv_ts) / 3600
                             if 0 < delta_hours <= 72:
-                                recv_hour = datetime.fromtimestamp(recv_ts, tz=LOCAL_TZ).hour
+                                recv_hour = datetime.fromtimestamp(recv_ts, tz=_tz()).hour
                                 response_times.append({
                                     "date": sent_dt.date().isoformat(),
                                     "hours": round(delta_hours, 2),
@@ -533,13 +546,13 @@ def parse_teams_replies(raw, days=DAYS, now=None):
     response_times.db never sees, because ibx only records actions taken
     through ibx itself).
 
-    Returns list of {"date", "hours", "recv_hour"} dicts (LOCAL_TZ days).
+    Returns list of {"date", "hours", "recv_hour"} dicts (_tz() days).
     """
     if not raw:
         return []
 
     now = now or datetime.now(timezone.utc)
-    today = now.astimezone(LOCAL_TZ).date()
+    today = now.astimezone(_tz()).date()
     cutoff = today - timedelta(days=days)
 
     try:
@@ -594,8 +607,8 @@ def parse_teams_replies(raw, days=DAYS, now=None):
                 last_their_ts = None
                 continue
             delta = clamp_response_hours_unix(ts.timestamp(), last_their_ts.timestamp())
-            local_sent = ts.astimezone(LOCAL_TZ)
-            local_recv = last_their_ts.astimezone(LOCAL_TZ)
+            local_sent = ts.astimezone(_tz())
+            local_recv = last_their_ts.astimezone(_tz())
             day = local_sent.date()
             if day <= cutoff or day > today:
                 last_their_ts = None
@@ -663,7 +676,7 @@ def compute_teams_response_times(days=DAYS):
     response_times = []
     for action_at, hours in rows:
         try:
-            sent_dt = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            sent_dt = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(_tz())
             recv_dt = sent_dt - timedelta(hours=hours)
             response_times.append({"date": sent_dt.date().isoformat(), "hours": round(hours, 2), "recv_hour": recv_dt.hour})
         except Exception:
@@ -678,7 +691,7 @@ def parse_teams_sent_counts(raw, days=DAYS, now=None):
         return {}
 
     now = now or datetime.now(timezone.utc)
-    today = now.astimezone(LOCAL_TZ).date()
+    today = now.astimezone(_tz()).date()
     cutoff = today - timedelta(days=days)
 
     try:
@@ -704,7 +717,7 @@ def parse_teams_sent_counts(raw, days=DAYS, now=None):
             continue
 
         try:
-            sent_dt = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            sent_dt = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(_tz())
         except (ValueError, TypeError):
             continue
 
@@ -773,7 +786,7 @@ def compute_outlook_response_times(days=DAYS):
     response_times = []
     for action_at, hours in rows:
         try:
-            sent_dt = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            sent_dt = datetime.fromisoformat(action_at.replace("Z", "+00:00")).astimezone(_tz())
             recv_dt = sent_dt - timedelta(hours=hours)
             response_times.append({"date": sent_dt.date().isoformat(), "hours": round(hours, 2), "recv_hour": recv_dt.hour})
         except Exception:
@@ -799,7 +812,7 @@ def compute_outlook_sent_counts(days=DAYS):
         return {}
 
     now = datetime.now(timezone.utc)
-    today = now.astimezone(LOCAL_TZ).date()
+    today = now.astimezone(_tz()).date()
     cutoff_date = today - timedelta(days=recent_days)
 
     counts = defaultdict(int)
@@ -817,7 +830,7 @@ def compute_outlook_sent_counts(days=DAYS):
         if not created:
             continue
         try:
-            sent_dt = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            sent_dt = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(_tz())
         except (ValueError, TypeError):
             continue
         day = sent_dt.date()

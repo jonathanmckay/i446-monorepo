@@ -15,12 +15,33 @@ import json
 import re
 import shlex
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _local_tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
+
+
+def __getattr__(name):
+    # PEP 562 module __getattr__: `media_audit.LOCAL_TZ` used to be a
+    # constant frozen at import. Tests and any external caller that still
+    # reach for `.LOCAL_TZ` get the same live-resolved zone as every
+    # internal `_local_tz()` call.
+    if name == "LOCAL_TZ":
+        return daytime.active_zone()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 AW_BASE = "http://localhost:5600/api/0"
 AW_HOST = "Straylight-Refit.local"
@@ -75,7 +96,7 @@ def _classify(text: str) -> str | None:
 
 
 def _day_bounds_utc(day: date) -> tuple[datetime, datetime]:
-    start = datetime.combine(day, datetime.min.time(), tzinfo=LOCAL_TZ)
+    start = datetime.combine(day, datetime.min.time(), tzinfo=_local_tz())
     return start.astimezone(ZoneInfo("UTC")), (start + timedelta(days=1)).astimezone(ZoneInfo("UTC"))
 
 
@@ -243,7 +264,7 @@ def media_minutes_from_screentime(day: date) -> dict | None:
     RMAdminStore (USAGE tables) — treat failures as absence.
     """
     apple = 978307200  # 2001-01-01 epoch offset
-    lo = int(datetime.combine(day, datetime.min.time(), tzinfo=LOCAL_TZ).timestamp()) - apple
+    lo = int(datetime.combine(day, datetime.min.time(), tzinfo=_local_tz()).timestamp()) - apple
     sql = _ST_QUERY.format(lo=lo, hi=lo + 86400)
     cmd = (
         'D=$(getconf DARWIN_USER_DIR); '

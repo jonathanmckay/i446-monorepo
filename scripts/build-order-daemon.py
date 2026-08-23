@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel as neon_excel
 import neon_blocks as nb  # build_order_lock() — centralized 2026-08-02 after
 # three separate incidents of the same unlocked build-order.md race
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 
 # --- Paths ---
 
@@ -1039,7 +1040,7 @@ def _todoist_l_satisfied(target_date: dt.date, start_hour: int, end_hour: int) -
         log("-1l: no API token in env or keychain")
         return False
 
-    tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+    tz = daytime.active_zone()
     block_start = dt.datetime(target_date.year, target_date.month, target_date.day,
                               start_hour, 0, tzinfo=tz)
     block_end = dt.datetime(target_date.year, target_date.month, target_date.day,
@@ -1933,7 +1934,7 @@ def _entry_effective_minutes(e: dict, target_date: dt.date, now_ts: dt.datetime)
             return None
         start_dt = dt.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
         day_start = dt.datetime.combine(
-            target_date, dt.time.min, tzinfo=zoneinfo.ZoneInfo("America/Los_Angeles"))
+            target_date, dt.time.min, tzinfo=daytime.active_zone())
         effective_start = max(start_dt, day_start)
         return max(0, int((now_ts - effective_start).total_seconds()) // 60)
     return None

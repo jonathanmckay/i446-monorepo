@@ -2,11 +2,16 @@ import datetime
 import re
 import sqlite3
 import subprocess
+import sys
 import time
 import os
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
+
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 
 mcp = FastMCP(
     "iMessage",
@@ -19,7 +24,13 @@ mcp = FastMCP(
 """,
 )
 
-TZ = ZoneInfo("America/Los_Angeles")
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import (this server is long-lived)."""
+    return daytime.active_zone()
+
+
 DB_PATH = os.path.expanduser("~/Library/Messages/chat.db")
 
 # Apple's epoch starts 2001-01-01; messages use nanoseconds on modern macOS
@@ -33,7 +44,7 @@ def _apple_ts_to_dt(ts: int) -> datetime.datetime:
         seconds = ts / 1e9
     else:
         seconds = float(ts)
-    return (APPLE_EPOCH + datetime.timedelta(seconds=seconds)).astimezone(TZ)
+    return (APPLE_EPOCH + datetime.timedelta(seconds=seconds)).astimezone(_tz())
 
 
 def _parse_typedstream_string(blob: bytes) -> str | None:

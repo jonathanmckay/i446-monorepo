@@ -11,6 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from comms_response_clamp import clamp_response_hours_dt
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
 MATCH_WINDOW_HOURS = 72
 
 
@@ -63,12 +66,18 @@ def backfill(db_path: Path, table: str):
 
 def backfill_imsg(db_path: Path):
     """The iMessage DB stores recv_time/sent_time as ISO local strings.
-    We assume LOCAL_TZ = America/Los_Angeles for those (matches scan_chatdb)."""
+    We assume home_tz = America/Los_Angeles for those (matches scan_chatdb).
+
+    Deliberately HOME_TZ, not the live /travel-aware zone: these are
+    historical timestamps being reinterpreted, and scan_chatdb wrote them
+    assuming PT at the time. Using whatever zone happens to be active when
+    this backfill runs would reinterpret old, already-PT-anchored data
+    through today's location — and regenerating the backfill mid-trip would
+    bucket the SAME historical row into a different local day each time."""
     if not db_path.exists():
         print(f"  skip: {db_path} not found")
         return
-    from zoneinfo import ZoneInfo
-    LOCAL = ZoneInfo("America/Los_Angeles")
+    LOCAL = daytime.HOME_TZ
     conn = sqlite3.connect(str(db_path))
     rows = conn.execute(
         "SELECT id, recv_time, sent_time, response_hours, day FROM response_pairs"

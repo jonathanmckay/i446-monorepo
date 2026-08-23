@@ -113,11 +113,18 @@ def get_toggl_entries(d: date) -> list[dict]:
 
 
 # Toggl returns timestamps in UTC; all hour/date logic must be done in local time.
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _local_tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
 
 
 def entry_local_dt(e: dict) -> datetime | None:
-    """Parse a Toggl entry's start into a LOCAL_TZ-aware datetime (None if unparseable)."""
+    """Parse a Toggl entry's start into a local-tz-aware datetime (None if unparseable)."""
     s = e.get("start", "")
     if not s:
         return None
@@ -127,7 +134,7 @@ def entry_local_dt(e: dict) -> datetime | None:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(LOCAL_TZ)
+    return dt.astimezone(_local_tz())
 
 
 def gather_entries_local(*days: date) -> list[dict]:
@@ -226,7 +233,7 @@ end tell'''
 
 def detect_night_hcmc(yesterday: date) -> int | None:
     """If an hcmc entry ends right when sleep begins (yesterday evening, local >=20:00),
-    return its minutes. Times are evaluated in LOCAL_TZ; bedtime (e.g. 23:xx PDT) lands in
+    return its minutes. Times are evaluated in local tz; bedtime (e.g. 23:xx PDT) lands in
     the next UTC bucket, so both day-buckets are gathered."""
     today = yesterday + timedelta(days=1)
     timed = []
@@ -365,7 +372,7 @@ def compute_sleep_dock(yesterday: date, sleep_date: date) -> dict | None:
     else:
         return None
 
-    cutoff = datetime.combine(yesterday, dtime(hour=DOCK_START_HOUR), tzinfo=LOCAL_TZ)
+    cutoff = datetime.combine(yesterday, dtime(hour=DOCK_START_HOUR), tzinfo=_local_tz())
     late = max(0, int((bedtime - cutoff).total_seconds() // 60))
     dock = min(late * DOCK_RATE, DOCK_CAP)
     return {"bedtime": bedtime.strftime("%m-%d %H:%M"), "basis": basis,
@@ -414,11 +421,11 @@ def write_sleep_dock(dock: float, yesterday: date) -> dict:
 
 
 def compute_sleep(yesterday: date, today: date) -> int:
-    """Last night's sleep, in LOCAL_TZ: 睡觉 minutes from yesterday >=20:00 through today <14:00.
+    """Last night's sleep, in local tz: 睡觉 minutes from yesterday >=20:00 through today <14:00.
 
     Evaluated in local time so PDT bedtimes (which Toggl stores as next-day UTC) classify
     correctly. Entries are deduped across both UTC day-buckets."""
-    now_local = datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    now_local = datetime.now(timezone.utc).astimezone(_local_tz())
     total = 0
     for e in gather_entries_local(yesterday, today):
         if e.get("project_id") != SLEEP_PROJECT_ID:

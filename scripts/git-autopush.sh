@@ -30,7 +30,7 @@ echo "[$TS] committed: $CHANGED"
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Only rebase if the remote branch already exists (first push creates it).
 if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-    if ! git pull --rebase origin "$BRANCH" -q 2>&1; then
+    if ! git pull --rebase --autostash origin "$BRANCH" -q 2>&1; then
         # A failed rebase leaves the working tree mid-replay -- some files can
         # show an OLDER commit's content, not this run's true pre-rebase
         # state. Left uncleaned (as this branch used to), that stale content

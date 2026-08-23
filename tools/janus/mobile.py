@@ -84,7 +84,25 @@ except Exception as _e:  # noqa: BLE001
     print("WARN outlook_client import failed:", _e, file=sys.stderr)
 
 PORT = 5561
-TZ = ZoneInfo("America/Los_Angeles")
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
+
+
+def __getattr__(name):
+    # PEP 562 module __getattr__: `mobile.TZ` used to be a constant frozen
+    # at import. Tests and any external caller that still reach for `.TZ`
+    # get the same live-resolved zone as every internal `_tz()` call.
+    if name == "TZ":
+        return daytime.active_zone()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 STATE_DIR = Path.home() / ".local/state/jm"
@@ -241,15 +259,15 @@ def _ledger_add(day: _dt.date, entry_id: str, note: str) -> None:
 
 
 def _parse_iso(s: str) -> _dt.datetime:
-    return _dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(TZ)
+    return _dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(_tz())
 
 
 def _fetch_today() -> list[dict]:
-    today = _dt.datetime.now(TZ).date()
+    today = _dt.datetime.now(_tz()).date()
     raw = toggl_api.get_entries(
         start_date=(today - _dt.timedelta(days=1)).isoformat(),
         end_date=(today + _dt.timedelta(days=1)).isoformat()) or []
-    now = _dt.datetime.now(TZ)
+    now = _dt.datetime.now(_tz())
     out = []
     for e in raw:
         try:
@@ -261,7 +279,7 @@ def _fetch_today() -> list[dict]:
         # keep the part that falls inside today
         if en.date() < today or st.date() > today:
             continue
-        day_start = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+        day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
         st_c, en_c = max(st, day_start), min(en, now)
         if en_c <= st_c:
             continue
@@ -449,7 +467,7 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
     row: not all-day, not transparent ("free" holds), not already
     covered/tracked by a real Toggl entry. Pure — no I/O — so it's testable
     without touching the calendar sources at all."""
-    now = _dt.datetime.now(TZ)
+    now = _dt.datetime.now(_tz())
     out = []
     for ev in raw:
         if ev.get("all_day") or ev.get("transparency") == "transparent":
@@ -468,8 +486,8 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
 
 
 def _fetch_events_today(entries: list[dict]) -> list[dict]:
-    today = _dt.datetime.now(TZ).date()
-    day_start = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+    today = _dt.datetime.now(_tz()).date()
+    day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     day_end = day_start + _dt.timedelta(days=1)
     return _filter_events(_fetch_calendar_raw(day_start, day_end), entries)
 
@@ -512,13 +530,13 @@ def _split_gap_at_boundaries(start_dt: _dt.datetime, end_dt: _dt.datetime,
 
 
 def build_timeline() -> dict:
-    today = _dt.datetime.now(TZ).date()
-    now = _dt.datetime.now(TZ)
+    today = _dt.datetime.now(_tz()).date()
+    now = _dt.datetime.now(_tz())
     entries = _fetch_today()
     events = _fetch_events_today(entries)
     logged = _ledger(today)
     known_habits = registered_habit_names()  # computed once, not per row
-    day0 = _dt.datetime.combine(today, _dt.time(0, 0), TZ)
+    day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
 
     def hhmm(dt: _dt.datetime) -> str:
         return dt.strftime("%H:%M")
@@ -642,10 +660,10 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     code = m.group(1) if m else ""
     desc_clean = _AT.sub("", desc).strip()
     pid = PROJECT_MAP.get(code)
-    today = _dt.datetime.now(TZ).date()
+    today = _dt.datetime.now(_tz()).date()
     try:
-        st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), TZ)
-        en = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(end_hhmm)), TZ)
+        st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), _tz())
+        en = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(end_hhmm)), _tz())
     except Exception:
         return {"ok": False, "error": "bad time format (HH:MM)"}
     if en <= st:
@@ -670,7 +688,7 @@ def _get_entry(entry_id: str) -> dict | None:
     built from a clipped row (bug 2026-08-06: a 睡觉 entry starting 23:30
     yesterday displays as start=00:00 today; blindly resubmitting that would
     silently delete the real overnight minutes)."""
-    today = _dt.datetime.now(TZ).date()
+    today = _dt.datetime.now(_tz()).date()
     entries = toggl_api.get_entries(
         start_date=(today - _dt.timedelta(days=1)).isoformat(),
         end_date=(today + _dt.timedelta(days=2)).isoformat()) or []
@@ -711,7 +729,7 @@ def _would_touch_logged(entry_id: str, start_dt: _dt.datetime, end_dt: _dt.datet
         except Exception:
             continue
         running = (e.get("duration") or 0) < 0
-        e_end = _dt.datetime.now(TZ) if running else (
+        e_end = _dt.datetime.now(_tz()) if running else (
             _parse_iso(e["stop"]) if e.get("stop") else None)
         if e_end is None or e_end <= start_dt or e_start >= end_dt:
             continue
@@ -730,7 +748,7 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
     e = _get_entry(entry_id)
     if not e:
         return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
-    today = _dt.datetime.now(TZ).date()
+    today = _dt.datetime.now(_tz()).date()
     true_start = _parse_iso(e["start"])
     running = (e.get("duration") or 0) < 0 or not e.get("stop")
     true_end = None if running else _parse_iso(e["stop"])
@@ -773,19 +791,19 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
         if true_start.date() != today or (true_end is not None and true_end.date() != today):
             return {"ok": False, "error": "cross-midnight entry — retime from desktop"}
         try:
-            new_start = (_dt.datetime.combine(today, _dt.time(*map(int, start_hhmm.split(":"))), TZ)
+            new_start = (_dt.datetime.combine(today, _dt.time(*map(int, start_hhmm.split(":"))), _tz())
                         if start_changed else true_start)
         except Exception:
             return {"ok": False, "error": "bad start time (HH:MM)"}
 
         if running:
             # No fixed end to reason about yet — just move the start.
-            if new_start >= _dt.datetime.now(TZ):
+            if new_start >= _dt.datetime.now(_tz()):
                 return {"ok": False, "error": "start must be in the past"}
             fields["start"] = new_start.strftime(_FMT)
         else:
             try:
-                new_end = (_dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), TZ)
+                new_end = (_dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), _tz())
                           if end_changed else true_end)
             except Exception:
                 return {"ok": False, "error": "bad end time (HH:MM)"}
@@ -829,7 +847,7 @@ def split_entry(entry_id: str, mode: str) -> dict:
     running = (e.get("duration") or 0) < 0 or not e.get("stop")
     if running:
         return {"ok": False, "error": "still running — stop it first"}
-    today = _dt.datetime.now(TZ).date()
+    today = _dt.datetime.now(_tz()).date()
     start = _parse_iso(e["start"])
     end = _parse_iso(e["stop"])
     if start.date() != today or end.date() != today:
@@ -943,7 +961,7 @@ def _run_did_fast(text: str) -> dict:
 
 def log_entry(entry_id: str, desc: str, minutes: int, project: str,
               tags: list[str] | None = None) -> dict:
-    today = _dt.datetime.now(TZ).date()
+    today = _dt.datetime.now(_tz()).date()
     if str(entry_id) in _ledger(today):
         return {"ok": True, "already": True}
     # A dtd-started task carries its OWN point value (e.g. [30]), which is
@@ -1011,7 +1029,7 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
             r = _run_did_fast(text)
             return {"ok": r["ok"], "mode": "logged", "step": r.get("step"),
                     "needs_agent": r.get("needs_agent"), "stderr_tail": r.get("stderr_tail")}
-        now = _dt.datetime.now(TZ)
+        now = _dt.datetime.now(_tz())
         text = (f"{start_dt:%H%M} {title}{suffix}" if start_dt <= now
                else f"{title}{suffix}")
         try:
@@ -1054,7 +1072,7 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
             start = _parse_iso(e["start"])
         except Exception:
             return {"ok": False, "error": "bad start time"}
-        now = _dt.datetime.now(TZ)
+        now = _dt.datetime.now(_tz())
         if (now - start).total_seconds() < 60:
             return {"ok": False, "error": "just started — give it a minute"}
         pts = _resolvable_points(desc)
@@ -1065,7 +1083,7 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
             text += f" @{project}"
         r = _run_did_fast(text)
         if r["ok"]:
-            _ledger_add(_dt.datetime.now(TZ).date(), entry_id,
+            _ledger_add(_dt.datetime.now(_tz()).date(), entry_id,
                        f"{desc} done {start:%H%M}-{now:%H%M} → {r['step']}")
         return r
     finally:

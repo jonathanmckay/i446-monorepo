@@ -23,7 +23,15 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-TZ = ZoneInfo("America/Los_Angeles")
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
 # Set by main() from a `--date YYYY-MM-DD` arg (janus viewing a past day);
 # only ever a NON-today date. Range creates honor it; live-timer forms error.
 _DATE_OVERRIDE: date | None = None
@@ -348,11 +356,11 @@ def cmd_create_range(desc, project, tags, start_t, end_t):
 
     A `--date YYYY-MM-DD` in the input (janus viewing a past day) retargets
     the whole thing — trim window and created entry — to that date."""
-    today = _DATE_OVERRIDE or datetime.now(TZ).date()
+    today = _DATE_OVERRIDE or datetime.now(_tz()).date()
 
     def _parse(t):
         h, m = int(t[:2]), int(t[3:5])
-        return datetime(today.year, today.month, today.day, h, m, tzinfo=TZ)
+        return datetime(today.year, today.month, today.day, h, m, tzinfo=_tz())
 
     start_dt, end_dt = _parse(start_t), _parse(end_t)
     if end_dt <= start_dt:
@@ -477,7 +485,7 @@ def main():
             print(f"err: bad --date {date_m.group(1)}")
             sys.exit(1)
         raw = (raw[:date_m.start()] + raw[date_m.end():]).strip()
-        if d != datetime.now(TZ).date():
+        if d != datetime.now(_tz()).date():
             _DATE_OVERRIDE = d
 
     # 'yesterday' (bare word, case-insensitive, leading OR trailing) is
@@ -499,12 +507,12 @@ def main():
         yesterday_m = re.match(r"(?i)^yesterday\b\s*", raw)
         if yesterday_m:
             raw = raw[yesterday_m.end():].strip()
-            _DATE_OVERRIDE = datetime.now(TZ).date() - timedelta(days=1)
+            _DATE_OVERRIDE = datetime.now(_tz()).date() - timedelta(days=1)
         else:
             yesterday_trailing_m = re.search(r"(?i)\byesterday\b\s*$", raw)
             if yesterday_trailing_m:
                 raw = raw[:yesterday_trailing_m.start()].strip()
-                _DATE_OVERRIDE = datetime.now(TZ).date() - timedelta(days=1)
+                _DATE_OVERRIDE = datetime.now(_tz()).date() - timedelta(days=1)
 
     # Simple commands
     if raw.lower().startswith("--resolve "):
@@ -589,7 +597,7 @@ def _process_entry(raw: str) -> str:
         desc_part = (raw[:duration_match.start()].strip() + project_suffix).strip()
         if 1 <= n <= 99 and desc_part:
             desc, project, tags = resolve(desc_part)
-            now_dt = datetime.now(TZ)
+            now_dt = datetime.now(_tz())
             start_dt = now_dt - timedelta(minutes=n)
             return cmd_create_range(desc or _strip_tag_tokens(desc_part), project, tags,
                                     start_dt.strftime("%H:%M"), now_dt.strftime("%H:%M"))

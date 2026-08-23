@@ -531,12 +531,13 @@ def display_card(item, idx, total):
     date_str = item.get("_data", {}).get("date", "")
     if date_str:
         try:
-            from zoneinfo import ZoneInfo
+            sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
         except ImportError:
-            from backports.zoneinfo import ZoneInfo
+            daytime = None
         try:
             dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            local_dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
+            local_dt = dt.astimezone(daytime.active_zone() if daytime else None)
             header.append(f"\nDATE:    ", style="bold dim")
             header.append(local_dt.strftime("%a %b %d, %I:%M %p %Z"), style="dim white")
         except Exception:
