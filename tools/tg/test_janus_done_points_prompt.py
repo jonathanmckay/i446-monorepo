@@ -53,12 +53,12 @@ def _binding(mod, keys):
     return hits[0]
 
 
-def _freeze_now(mod, when):
+def _freeze_now(mod, when, monkeypatch):
     class _DT(dtm.datetime):
         @classmethod
         def now(cls, tz=None):
             return when
-    mod.dt.datetime = _DT
+    monkeypatch.setattr(mod.dt, "datetime", _DT)
 
 
 def _setup(mod, desc="fix the parser bug", tmp_path=None):
@@ -117,10 +117,10 @@ def test_missing_task_queue_file_is_unresolved_not_a_crash(tmp_path):
 
 # ─── _run_current_timer_done arms the prompt when unresolvable ────────────
 
-def test_unresolvable_points_arms_done_target_not_did_fast(tmp_path):
+def test_unresolvable_points_arms_done_target_not_did_fast(tmp_path, monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
     mod._run_current_timer_done(_FakeApp())
     assert mod.STATE.queued_cmds == set(), "must not run did-fast blind"
@@ -135,10 +135,10 @@ def test_unresolvable_points_arms_done_target_not_did_fast(tmp_path):
     assert mod.STATE.event_sel is None
 
 
-def test_resolvable_points_runs_immediately_no_prompt(tmp_path):
+def test_resolvable_points_runs_immediately_no_prompt(tmp_path, monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug [30]", tmp_path=tmp_path)
     mod._run_current_timer_done(_FakeApp())
     assert mod.STATE.done_target is None
@@ -149,10 +149,10 @@ def test_resolvable_points_runs_immediately_no_prompt(tmp_path):
 
 # ─── Enter consumes done_target ────────────────────────────────────────────
 
-def test_enter_with_typed_number_completes_done_with_that_value(tmp_path):
+def test_enter_with_typed_number_completes_done_with_that_value(tmp_path, monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
     start = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
     mod.STATE.done_target = {"desc": "fix the parser bug", "start_dt": start, "code": "i9"}
@@ -164,12 +164,12 @@ def test_enter_with_typed_number_completes_done_with_that_value(tmp_path):
     assert cmd == "fix the parser bug 1400-1430 @i9 [25]"
 
 
-def test_enter_with_blank_input_defaults_to_zero_not_cancel(tmp_path):
+def test_enter_with_blank_input_defaults_to_zero_not_cancel(tmp_path, monkeypatch):
     """Blank matches did-fast's own silent-0 default — chosen deliberately
     via the prompt, not skipped."""
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
     start = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
     mod.STATE.done_target = {"desc": "fix the parser bug", "start_dt": start, "code": None}
@@ -180,10 +180,10 @@ def test_enter_with_blank_input_defaults_to_zero_not_cancel(tmp_path):
     assert cmd == "fix the parser bug 1400-1430 [0]"
 
 
-def test_enter_with_non_numeric_input_cancels_without_running_did_fast(tmp_path):
+def test_enter_with_non_numeric_input_cancels_without_running_did_fast(tmp_path, monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
     start = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
     mod.STATE.done_target = {"desc": "fix the parser bug", "start_dt": start, "code": None}
@@ -195,13 +195,13 @@ def test_enter_with_non_numeric_input_cancels_without_running_did_fast(tmp_path)
     assert "still running" in mod.STATE.flash
 
 
-def test_done_target_is_consumed_before_normal_empty_enter_handling(tmp_path):
+def test_done_target_is_consumed_before_normal_empty_enter_handling(tmp_path, monkeypatch):
     """The chokepoint must fire even when the input line is otherwise empty
     and nothing is selected — done_target alone is enough to route here,
     same discipline as split_target/edit_target."""
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
     mod.STATE.event_sel = None
     mod.STATE.visible_events = []
@@ -214,10 +214,10 @@ def test_done_target_is_consumed_before_normal_empty_enter_handling(tmp_path):
 
 # ─── Reached via the real ⌥↵ / swipe gestures, not just a direct call ─────
 
-def test_alt_enter_on_current_row_arms_prompt_when_unresolvable(tmp_path):
+def test_alt_enter_on_current_row_arms_prompt_when_unresolvable(tmp_path, monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
     _binding(mod, ("escape", "c-m")).handler(_FakeEvent())
     assert mod.STATE.done_target is not None

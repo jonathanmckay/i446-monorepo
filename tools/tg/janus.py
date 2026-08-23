@@ -66,6 +66,7 @@ import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 import outlook_client  # noqa: E402
 from blocks import is_future_block  # noqa: E402  shared future-block gate
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 
 # dtd's Haiku title shortener, reused for long calendar event titles. Optional:
 # janus must still boot if the did tooling (or lib/state_paths) is broken.
@@ -75,7 +76,25 @@ try:
 except Exception:
     _dtd_shorten = None
 
-TZ = ZoneInfo("America/Los_Angeles")
+def _tz() -> ZoneInfo:
+    """The active timezone for every 'now'/'today' computation in this file.
+    Live call, not a cached constant — see lib/daytime.py. Resolves to an
+    explicit /travel override if one is active, else the OS's own local
+    zone (so the tool follows wherever the laptop physically is, the common
+    case), never a hardcoded home zone."""
+    return daytime.active_zone()
+
+
+def __getattr__(name):
+    # PEP 562 module __getattr__: `janus.TZ` used to be a constant frozen at
+    # import (ZoneInfo("America/Los_Angeles")). Tests and any external
+    # caller that still reach for `.TZ` get the same live-resolved zone as
+    # every internal `_tz()` call, instead of a stale/wrong hardcoded one.
+    if name == "TZ":
+        return daytime.active_zone()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 TG_FAST = str(Path("~/i446-monorepo/tools/tg/tg-fast.py").expanduser())
 DID_FAST = str(Path("~/i446-monorepo/tools/did/did-fast.py").expanduser())
 # Layout widths track the actual pane. janus is the narrow companion to dtd:
@@ -602,16 +621,16 @@ def fetch_today(force=False):
         yout = []
         for e in raw:
             try:
-                st = dt.datetime.fromisoformat(e.get("start", "")).astimezone(TZ)
+                st = dt.datetime.fromisoformat(e.get("start", "")).astimezone(_tz())
             except Exception:
                 continue
             if st.date() != today and st.date() != yday:
                 continue
             stop_raw = e.get("stop")
             if stop_raw:
-                en = dt.datetime.fromisoformat(stop_raw).astimezone(TZ)
+                en = dt.datetime.fromisoformat(stop_raw).astimezone(_tz())
             else:
-                en = dt.datetime.now(TZ)
+                en = dt.datetime.now(_tz())
             (out if st.date() == today else yout).append({
                 "start_dt": st,
                 "end_dt": en,
@@ -680,7 +699,7 @@ def _hide_event(ev: dict) -> None:
     HIDDEN_EVENTS_KEEP_DAYS so the file can't grow without bound."""
     keys = set(_load_hidden_events())
     keys.add(_hidden_event_key(ev))
-    cutoff = (dt.datetime.now(TZ).date() - dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
+    cutoff = (dt.datetime.now(_tz()).date() - dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
     keep = [list(k) for k in sorted(keys) if k[1] >= cutoff]
     HIDDEN_EVENTS.parent.mkdir(parents=True, exist_ok=True)
     HIDDEN_EVENTS.write_text(json.dumps({"hidden": keep}))
@@ -1000,11 +1019,11 @@ TAG_CREDITS = Path.home() / ".local/state/jm/janus-tag-credits.json"
 def _tag_credit_load() -> dict:
     try:
         d = json.loads(TAG_CREDITS.read_text())
-        if d.get("date") == dt.datetime.now(TZ).date().isoformat():
+        if d.get("date") == dt.datetime.now(_tz()).date().isoformat():
             return d
     except Exception:
         pass
-    return {"date": dt.datetime.now(TZ).date().isoformat(), "credited": [], "pending": []}
+    return {"date": dt.datetime.now(_tz()).date().isoformat(), "credited": [], "pending": []}
 
 
 def _tag_credit_save(d: dict) -> None:
@@ -1074,7 +1093,7 @@ def _resolve_pending_tag_credits() -> None:
 
 def _hhmm_to_dt(ref_date: dt.date, hhmm: str) -> dt.datetime:
     return dt.datetime(ref_date.year, ref_date.month, ref_date.day,
-                       int(hhmm[:2]), int(hhmm[2:]), tzinfo=TZ)
+                       int(hhmm[:2]), int(hhmm[2:]), tzinfo=_tz())
 
 
 def _norm_hhmm(text: str) -> str | None:
@@ -1364,7 +1383,7 @@ end tell'''
                 # in flight): keep last good values and leave evidence for diagnosis.
                 try:
                     with open(POINTS_REJECTED_LOG, "a") as fh:
-                        fh.write(f"{dt.datetime.now(TZ):%F %T} total_ok={total_ok} "
+                        fh.write(f"{dt.datetime.now(_tz()):%F %T} total_ok={total_ok} "
                                  f"cand={candidate} D={STATE.today_points} "
                                  f"bp={bp_excel} raw={raw_out!r}\n")
                 except OSError:
@@ -1490,8 +1509,8 @@ def view_now() -> dt.datetime:
     the layout for filling in missed time entries. Only the day-view fetch +
     render use this; the live clock and running-timer mirror keep real now."""
     if STATE.day_offset == 0:
-        return dt.datetime.now(TZ)
-    base = dt.datetime.now(TZ) + dt.timedelta(days=STATE.day_offset)
+        return dt.datetime.now(_tz())
+    base = dt.datetime.now(_tz()) + dt.timedelta(days=STATE.day_offset)
     return base.replace(hour=23, minute=59, second=59, microsecond=0)
 
 
@@ -1642,7 +1661,7 @@ def display_desc(desc: str) -> str:
 # ─── Renderers ─────────────────────────────────────────────────────────────
 
 def render_header() -> list[tuple[str, str]]:
-    now = dt.datetime.now(TZ)
+    now = dt.datetime.now(_tz())
     # int(round()) at every 分 render site: the sheet now carries fractional
     # cells (variable-task minutes/7 → D=695.357142857143 live 2026-07-07), and
     # a float leaking into an f-string prints its full repr next to 分 — which
@@ -1989,7 +2008,7 @@ def _habit_deferred(name: str) -> bool:
     dues = HABIT_DUES.get(_norm_key(name))
     if not dues:
         return False
-    today = dt.datetime.now(TZ).date().isoformat()
+    today = dt.datetime.now(_tz()).date().isoformat()
     return all(d[:10] > today for d in dues)
 
 
@@ -2007,7 +2026,7 @@ def _load_block_snoozes() -> dict[str, int]:
     if _snooze_cache["mtime"] != mtime:
         try:
             data = json.loads(BLOCK_SNOOZE.read_text())
-            ok = data.get("date") == dt.datetime.now(TZ).date().isoformat()
+            ok = data.get("date") == dt.datetime.now(_tz()).date().isoformat()
             _snooze_cache["map"] = ({str(k): int(v) for k, v in
                                      (data.get("snoozes") or {}).items()}
                                     if ok else {})
@@ -2029,12 +2048,12 @@ def _habit_block_snoozed(name: str) -> bool:
     snoozes = _load_block_snoozes()
     if not snoozes:
         return False
-    today = dt.datetime.now(TZ).date().isoformat()
+    today = dt.datetime.now(_tz()).date().isoformat()
     todays = [cid for cid, due in HABIT_CARDS.get(_norm_key(name), [])
               if cid and (due or "")[:10] <= today]
     if not todays:
         return False
-    now_h = dt.datetime.now(TZ).hour
+    now_h = dt.datetime.now(_tz()).hour
     return all(cid in snoozes and now_h < snoozes[cid] for cid in todays)
 
 
@@ -2149,8 +2168,8 @@ def render_current() -> list[tuple[str, str]]:
     pid = cur.get("project_id")
     code = toggl_project_code(pid, desc)
     try:
-        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
-        elapsed_s = int((dt.datetime.now(TZ) - st).total_seconds())
+        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
+        elapsed_s = int((dt.datetime.now(_tz()) - st).total_seconds())
     except Exception:
         elapsed_s = 0
     line = f" ▶ {desc}"
@@ -2219,7 +2238,7 @@ def _gap_alarm_on(now: dt.datetime | None = None) -> bool:
     the app's 0.1s refresh_interval — same cadence as the NO TIME ENTRY cursor.
     Past empty stretches pulse a solid red block↔plain red text on this so
     untracked time nags."""
-    t = (now or dt.datetime.now(TZ)).timestamp()
+    t = (now or dt.datetime.now(_tz())).timestamp()
     return int(t * 2) % 2 == 0
 
 
@@ -3608,7 +3627,7 @@ def _detail_past_rows(win_start, win_end, now, live) -> list[tuple[str, str]]:
     # Live tail (today, now inside the window).
     if STATE.current:
         try:
-            rs = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
+            rs = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(_tz())
         except Exception:
             rs = tail_cursor
         rs = max(rs, win_start)
@@ -3791,7 +3810,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     _row_click — so a swipe-right gesture anywhere on the line (MOUSE_DOWN
     here, MOUSE_UP far enough to the right) runs the /done action directly
     instead of just selecting."""
-    now = dt.datetime.now(TZ)
+    now = dt.datetime.now(_tz())
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
     if not cur:
@@ -3804,7 +3823,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     pid = cur.get("project_id")
     code = toggl_project_code(pid, cur.get("description"))
     try:
-        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
+        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
         elapsed = (now - st).total_seconds()
     except Exception:
         elapsed = 0.0
@@ -4014,9 +4033,9 @@ def render_all() -> list[tuple[str, str]]:
         # being recorded, instead of double-firing did-fast.
         cur_id = STATE.current.get("id")
         try:
-            cur_start = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(TZ)
+            cur_start = dt.datetime.fromisoformat(STATE.current.get("start", "")).astimezone(_tz())
         except Exception:
-            cur_start = dt.datetime.now(TZ)
+            cur_start = dt.datetime.now(_tz())
         STATE.visible_events.append({
             "kind": "current",
             "raw_desc": STATE.current.get("description") or "",
@@ -4081,7 +4100,7 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
         data = json.loads(_COMPLETED_TODAY.read_text())
     except Exception:
         return False, 0
-    if data.get("date") != dt.datetime.now(TZ).date().isoformat():
+    if data.get("date") != dt.datetime.now(_tz()).date().isoformat():
         return False, 0
     target = _norm_done_name(desc)
     if not target:
@@ -4127,13 +4146,13 @@ def _cmd_done_today(cmd: str) -> bool:
         data = json.loads(_DONE_CMDS_TODAY.read_text())
     except Exception:
         return False
-    if data.get("date") != dt.datetime.now(TZ).date().isoformat():
+    if data.get("date") != dt.datetime.now(_tz()).date().isoformat():
         return False
     return cmd in data.get("cmds", [])
 
 
 def _mark_cmd_done_today(cmd: str) -> None:
-    today = dt.datetime.now(TZ).date().isoformat()
+    today = dt.datetime.now(_tz()).date().isoformat()
     try:
         data = json.loads(_DONE_CMDS_TODAY.read_text())
         if data.get("date") != today:
@@ -4389,11 +4408,11 @@ def _load_recording_state() -> None:
             return
         os.kill(int(pid), 0)
         started = dt.datetime.fromisoformat(st["started"])
-        if started.date() != dt.datetime.now(TZ).date():
+        if started.date() != dt.datetime.now(_tz()).date():
             return
         STATE.recording = {"desc": st.get("name") or "meeting",
-                           "start_dt": started.astimezone(TZ) if started.tzinfo
-                           else started.replace(tzinfo=TZ)}
+                           "start_dt": started.astimezone(_tz()) if started.tzinfo
+                           else started.replace(tzinfo=_tz())}
     except Exception:
         pass
 
@@ -4515,7 +4534,7 @@ def _slug_tokens(stem: str) -> list[str]:
 
 
 def _load_d357_tokens_for_today() -> list[list[str]]:
-    today = dt.datetime.now(TZ).date()
+    today = dt.datetime.now(_tz()).date()
     now = time.monotonic()
     if (_d357_doc_cache["date"] != today
             or now - _d357_doc_cache["checked"] > _D357_DOC_CACHE_TTL):
@@ -4581,7 +4600,7 @@ async def _finalize_recording(app) -> None:
     rec = STATE.recording
     if not rec:
         return
-    now = dt.datetime.now(TZ)
+    now = dt.datetime.now(_tz())
     did_cmd = _finalize_recording_cmd(now)
     STATE.recording = None
     _spawn_d357_stop()
@@ -4618,11 +4637,11 @@ def _run_current_timer_done(app) -> None:
                       lambda: _finalize_recording(app), key=f"finalize:{rec_desc}")
         return
     try:
-        start = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(TZ)
+        start = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
     except Exception:
         flash("current timer: bad start time", 4.0)
         return
-    now = dt.datetime.now(TZ)
+    now = dt.datetime.now(_tz())
     if (now - start).total_seconds() < 60:
         flash("timer just started — give it a minute before /done", 3.0)
         return
@@ -4680,7 +4699,7 @@ def _convert_selected_event(ev: dict, app) -> None:
     STATE.event_sel = None
     label = f"{'did' if is_past else 'tg'} {cmd}"
     title = _safe_event_title(ev.get("title"))
-    ev_minutes = max(0, int((ev["end_dt"] - dt.datetime.now(TZ)).total_seconds() // 60))
+    ev_minutes = max(0, int((ev["end_dt"] - dt.datetime.now(_tz())).total_seconds() // 60))
 
     async def _run_event_and_refresh():
         flash(f"$ {label}")
@@ -4711,7 +4730,7 @@ def _convert_selected_event(ev: dict, app) -> None:
             out = (r.stdout or "").strip().splitlines()
             line = out[-1] if out else ""
             if line.startswith("REC|"):
-                STATE.recording = {"desc": title, "start_dt": dt.datetime.now(TZ)}
+                STATE.recording = {"desc": title, "start_dt": dt.datetime.now(_tz())}
                 flash(f"🎙 recording: {title} — {line.split('|', 2)[2]}", 8.0)
             else:
                 flash(f"⚠ d357 did NOT start: {line or 'no output'}", 10.0)
@@ -4746,7 +4765,7 @@ def _(event):
         except ValueError:
             flash(f"not a number: {text!r} — done cancelled, timer still running", 4.0)
             return
-        now = dt.datetime.now(TZ)
+        now = dt.datetime.now(_tz())
         cmd = f"{dtgt['desc']} {dtgt['start_dt']:%H%M}-{now:%H%M}"
         if dtgt.get("code"):
             cmd += f" @{dtgt['code']}"
@@ -4854,7 +4873,7 @@ def _(event):
                 # entry (negative start-epoch) so the record stays correct in
                 # Toggl itself, not just in janus's own display (which reads
                 # "start" directly and never depended on this).
-                end_dt = dt.datetime.now(TZ)
+                end_dt = dt.datetime.now(_tz())
                 fields["start"] = start_dt.isoformat()
                 fields["duration"] = -int(start_dt.timestamp())
             else:
@@ -5647,7 +5666,7 @@ def _no_timer_flash_on() -> bool:
     if STATE.no_timer_since is None or \
             time.monotonic() - STATE.no_timer_since < NO_TIMER_FLASH_DELAY:
         return False
-    return dt.datetime.now(TZ).microsecond < 500_000
+    return dt.datetime.now(_tz()).microsecond < 500_000
 
 
 def _no_timer_flash_style() -> str:
