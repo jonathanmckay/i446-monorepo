@@ -4968,5 +4968,15 @@
     "unit": "4",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-23",
+    "effective": "2026-08-23",
+    "kind": "movein",
+    "unit_id": "524",
+    "prop": "rl16",
+    "unit": "A11",
+    "tenant": null,
+    "baseline": false
   }
 ]
