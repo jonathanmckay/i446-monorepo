@@ -27,15 +27,22 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-TZ = ZoneInfo("America/Los_Angeles")
-
 # ---------------------------------------------------------------------------
 # Paths & constants
 # ---------------------------------------------------------------------------
 
 HEADERS_PATH = Path.home() / ".claude/skills/did/headers.json"
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+import daytime as _daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 TASK_QUEUE_PATH = _sp.TASK_QUEUE
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Replaces the old
+    TZ = ZoneInfo("America/Los_Angeles") constant, which stayed PT-anchored
+    even when the device (and date.today() calls elsewhere in this file)
+    followed local time while traveling — the two could disagree by hours."""
+    return _daytime.active_zone()
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24
@@ -575,12 +582,14 @@ def parse_input(raw: str) -> list[ParsedItem]:
             if (len(name_parts[-1]) == 4
                     and 0 <= num // 100 <= 23 and 0 <= num % 100 <= 59
                     and remaining_name in {v.lower() for v in VARIABLE_0N}):
-                from datetime import datetime as _dt
-                now = _dt.now()
+                now = _daytime.local_now()
                 start_h, start_m = num // 100, num % 100
                 start_min = start_h * 60 + start_m
                 now_min = now.hour * 60 + now.minute
-                item.time_value = max(1, now_min - start_min)
+                delta_min = now_min - start_min
+                if delta_min < 0:  # crossed midnight since the HHMM was typed
+                    delta_min += 24 * 60
+                item.time_value = max(1, delta_min)
             else:
                 item.time_value = num
             chunk = " ".join(name_parts[:-1])
@@ -593,12 +602,14 @@ def parse_input(raw: str) -> list[ParsedItem]:
             if remainder in {v.lower() for v in VARIABLE_0N}:
                 num = int(name_parts[0])
                 if len(name_parts[0]) == 4 and 0 <= num // 100 <= 23 and 0 <= num % 100 <= 59:
-                    from datetime import datetime as _dt
-                    now = _dt.now()
+                    now = _daytime.local_now()
                     start_h, start_m = num // 100, num % 100
                     start_min = start_h * 60 + start_m
                     now_min = now.hour * 60 + now.minute
-                    item.time_value = max(1, now_min - start_min)
+                    delta_min = now_min - start_min
+                    if delta_min < 0:  # crossed midnight since the HHMM was typed
+                        delta_min += 24 * 60
+                    item.time_value = max(1, delta_min)
                 else:
                     item.time_value = num
                 chunk = " ".join(name_parts[1:])
@@ -3176,16 +3187,16 @@ def main():
     if toggl_items:
         def _create_toggl(args):
             name, tr, proj, td, tags = args
-            today_str = date.today().isoformat()
+            today_str = _daytime.today_iso()
             # If target_date differs from today, compute ISO date
             if td:
                 parts = td.split("/")
                 if len(parts) == 2:
-                    today_str = f"{date.today().year}-{int(parts[0]):02d}-{int(parts[1]):02d}"
+                    today_str = f"{_daytime.today().year}-{int(parts[0]):02d}-{int(parts[1]):02d}"
             ref_date = date.fromisoformat(today_str)
             def _parse_hhmm(t):
                 h, m = int(t[:2]), int(t[2:4])
-                return datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=TZ)
+                return datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=_tz())
             start_dt, end_dt = _parse_hhmm(tr[0]), _parse_hhmm(tr[1])
             if end_dt <= start_dt:
                 end_dt += timedelta(days=1)

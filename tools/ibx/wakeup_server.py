@@ -31,7 +31,7 @@ import subprocess
 import sys
 import time
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, render_template_string
@@ -72,42 +72,66 @@ def _no_store(resp):
 # ── Toggl helpers ─────────────────────────────────────────────────────────
 
 
-def _running_timer():
-    """Return (desc, start_hhmm) of the active Toggl entry, or (None, None)."""
+def _running_timer_entry():
+    """Return the raw Toggl entry dict for the running timer, or None.
+
+    Uses `toggl_cli.py current --json` for the entry's real ISO start
+    timestamp — NOT the human-text "current" output, which only carries an
+    HH:MM string with no date. Reconstructing a date from a bare HH:MM (the
+    old approach) has to guess whether a start time "later than now" means
+    "started yesterday" or "the wall clock moved backward since it started"
+    (e.g. a westward flight can set the clock back mid-session) — those are
+    different situations and the ISO timestamp resolves them exactly."""
     try:
         r = subprocess.run(
-            ["python3", str(_TOGGL_CLI), "current"],
+            ["python3", str(_TOGGL_CLI), "current", "--json"],
             capture_output=True, text=True, timeout=6,
         )
     except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        entry = json.loads(r.stdout)
+    except Exception:
+        return None
+    return entry or None
+
+
+def _running_timer():
+    """Return (desc, start_iso) of the active Toggl entry, or (None, None)."""
+    entry = _running_timer_entry()
+    if not entry:
         return None, None
-    if r.returncode != 0 or not r.stdout.startswith("Running:"):
-        return None, None
-    line = r.stdout.split("Running:", 1)[1].strip()
-    # e.g. "15:28-running c702 loan @m5x2 (running) [id:4443348139]"
-    m = re.match(r"(\d{1,2}:\d{2})", line)
-    start = m.group(1) if m else None
-    desc = re.sub(r"^\d{1,2}:\d{2}-\S+\s*", "", line)
-    desc = re.sub(r"\s*\(running\)\s*", " ", desc)
-    desc = re.sub(r"\s*\[id:[^\]]*\]\s*$", "", desc).strip()
-    return (desc or "running timer"), start
+    desc = entry.get("description") or "running timer"
+    return desc, entry.get("start")
 
 
 def _timer_fresh():
     """True if a timer is running AND started within TIMER_FRESH_MIN minutes.
 
-    A stale overnight timer must NOT auto-complete the activation step."""
-    desc, start = _running_timer()
-    if not start:
+    A stale overnight timer must NOT auto-complete the activation step.
+    Elapsed time is computed from the entry's real (UTC, epoch-comparable)
+    start timestamp — never from reconstructing a wall-clock date, which
+    breaks the moment local time isn't monotonic (a TZ change, a backward
+    clock jump while traveling)."""
+    desc, start_iso = _running_timer()
+    if not start_iso:
         return False, desc
     try:
-        sh, sm = (int(x) for x in start.split(":"))
-        now = datetime.now()
-        started = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-        if started > now:  # clock crossed midnight → started yesterday
-            started -= timedelta(days=1)
+        started = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        # Passing started's own tzinfo makes `now` an absolute-instant
+        # comparison independent of the OS's currently-configured local
+        # timezone — datetime.now(tz) converts the real clock reading into
+        # tz rather than trusting the OS's local-wall-clock offset, so this
+        # stays correct across a TZ change even if the OS's zone hasn't
+        # settled yet.
+        now = datetime.now(started.tzinfo) if started.tzinfo else datetime.now()
         age_min = (now - started).total_seconds() / 60.0
-        return (age_min <= TIMER_FRESH_MIN), desc
+        # A small negative tolerance absorbs ordinary clock skew between this
+        # machine and Toggl's server; a large negative age (real backward
+        # jump) or one past TIMER_FRESH_MIN both correctly read as not fresh.
+        return (-2 <= age_min <= TIMER_FRESH_MIN), desc
     except Exception:
         return (desc is not None), desc
 

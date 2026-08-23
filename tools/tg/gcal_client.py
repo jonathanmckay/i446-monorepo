@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import sys as _sys
 import time
 import warnings
 from pathlib import Path
@@ -23,7 +24,20 @@ from google.oauth2.credentials import Credentials  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
-TZ = ZoneInfo("America/Los_Angeles")
+# Self-locating: guarantees `daytime` resolves regardless of whether the
+# caller (janus.py) already put lib/ on sys.path — see lib/daytime.py, the
+# shared "now"/"today" resolution every DTD/Janus TZ read must go through.
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
+import daytime  # noqa: E402
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
+
+
 TOKENS_PATH = Path("~/.config/google-calendar-mcp/tokens.json").expanduser()
 KEYS_PATH = Path("~/.config/google-calendar-mcp/gcp-oauth.keys.json").expanduser()
 CACHE_DIR = Path("~/.cache/janus").expanduser()
@@ -89,7 +103,7 @@ def _calendar_filtered(cal_summary: str, cal_id: str) -> bool:
 
 def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) -> list[dict]:
     """Return events overlapping [start, end). Times are tz-aware."""
-    cache = _cache_path(start.astimezone(TZ).date())
+    cache = _cache_path(start.astimezone(_tz()).date())
     if not force and cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL:
         try:
             cached = json.loads(cache.read_text())
@@ -158,17 +172,17 @@ def _hydrate(raw: Iterable[dict], start: dt.datetime, end: dt.datetime) -> list[
             continue
         if s.tzinfo is None:
             # all-day event
-            s = s.replace(tzinfo=TZ)
-            e = e.replace(tzinfo=TZ)
+            s = s.replace(tzinfo=_tz())
+            e = e.replace(tzinfo=_tz())
         if e <= start or s >= end:
             continue
-        result.append({**ev, "start_dt": s.astimezone(TZ), "end_dt": e.astimezone(TZ)})
+        result.append({**ev, "start_dt": s.astimezone(_tz()), "end_dt": e.astimezone(_tz())})
     result.sort(key=lambda x: x["start_dt"])
     return result
 
 
 if __name__ == "__main__":
-    now = dt.datetime.now(TZ)
+    now = dt.datetime.now(_tz())
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + dt.timedelta(days=1)
     for ev in list_events(day_start, day_end, force=True):

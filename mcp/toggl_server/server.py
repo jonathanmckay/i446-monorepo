@@ -1,12 +1,21 @@
 import datetime
 import re
-from zoneinfo import ZoneInfo
+import sys
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 from . import toggl_api
-from .config import PROJECT_MAP, PROJECT_NAMES, TIMEZONE
+from .config import PROJECT_MAP, PROJECT_NAMES
+
+# Self-locating: guarantees `daytime` resolves regardless of the caller's own
+# sys.path — see lib/daytime.py, the shared "now"/"today" resolution every
+# DTD/Janus TZ read must go through (this file used to hardcode a TZ constant
+# from config.TIMEZONE, frozen once at import — wrong the moment the device
+# follows local time while traveling, and this server is long-lived).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
+import daytime  # noqa: E402
 
 mcp = FastMCP(
     "Toggl Time Tracker",
@@ -35,7 +44,20 @@ If the description clearly matches a domain, always pass the inferred project co
 )
 
 
-TZ = ZoneInfo(TIMEZONE)
+def _tz():
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import (this server is long-lived)."""
+    return daytime.active_zone()
+
+
+def __getattr__(name):
+    # PEP 562 module __getattr__: `server.TZ` used to be a constant frozen
+    # at import. Anything (tests included) that still reaches for `.TZ`
+    # gets the same live-resolved zone as every internal call.
+    if name == "TZ":
+        return daytime.active_zone()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _resolve_project(code: str) -> Optional[int]:
@@ -55,13 +77,13 @@ def _parse_time(time_str: str, ref_date: datetime.date = None) -> datetime.datet
     """Parse flexible time formats into a timezone-aware datetime."""
     time_str = time_str.strip()
     if ref_date is None:
-        ref_date = datetime.datetime.now(TZ).date()
+        ref_date = datetime.datetime.now(_tz()).date()
 
     # "HH:MM" -> today at that time
     if len(time_str) <= 5 and ":" in time_str:
         parts = time_str.split(":")
         h, m = int(parts[0]), int(parts[1])
-        return datetime.datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=TZ)
+        return datetime.datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=_tz())
 
     # "YYYY-MM-DD HH:MM"
     if " " in time_str and len(time_str) >= 10:
@@ -69,10 +91,10 @@ def _parse_time(time_str: str, ref_date: datetime.date = None) -> datetime.datet
         d = datetime.date.fromisoformat(date_part)
         parts = time_part.split(":")
         h, m = int(parts[0]), int(parts[1])
-        return datetime.datetime(d.year, d.month, d.day, h, m, tzinfo=TZ)
+        return datetime.datetime(d.year, d.month, d.day, h, m, tzinfo=_tz())
 
     # ISO 8601 passthrough
-    return datetime.datetime.fromisoformat(time_str).replace(tzinfo=TZ)
+    return datetime.datetime.fromisoformat(time_str).replace(tzinfo=_tz())
 
 
 def _filter_entries_by_local_date(entries: list[dict], target_date: datetime.date) -> list[dict]:
@@ -90,7 +112,7 @@ def _filter_entries_by_local_date(entries: list[dict], target_date: datetime.dat
         if not start_str:
             continue
         try:
-            start_dt = datetime.datetime.fromisoformat(start_str).astimezone(TZ)
+            start_dt = datetime.datetime.fromisoformat(start_str).astimezone(_tz())
         except (ValueError, TypeError):
             continue
         if start_dt.date() == target_date:
@@ -98,13 +120,13 @@ def _filter_entries_by_local_date(entries: list[dict], target_date: datetime.dat
         elif start_dt.date() < target_date:
             stop_raw = e.get("stop")
             try:
-                end_dt = (datetime.datetime.fromisoformat(stop_raw).astimezone(TZ)
-                          if stop_raw else datetime.datetime.now(TZ))
+                end_dt = (datetime.datetime.fromisoformat(stop_raw).astimezone(_tz())
+                          if stop_raw else datetime.datetime.now(_tz()))
             except (ValueError, TypeError):
                 continue
             if end_dt.date() >= target_date:
                 midnight = datetime.datetime.combine(
-                    target_date, datetime.time(0, 0), tzinfo=TZ)
+                    target_date, datetime.time(0, 0), tzinfo=_tz())
                 day_end = midnight + datetime.timedelta(days=1)
                 clipped = dict(e)
                 clipped["start"] = midnight.isoformat()
@@ -134,7 +156,7 @@ def _format_entry(e: dict) -> str:
     start = e.get("start", "")
     if start:
         try:
-            st = datetime.datetime.fromisoformat(start).astimezone(TZ)
+            st = datetime.datetime.fromisoformat(start).astimezone(_tz())
             start = st.strftime("%H:%M")
         except (ValueError, TypeError):
             pass
@@ -142,7 +164,7 @@ def _format_entry(e: dict) -> str:
     stop = e.get("stop", "")
     if stop:
         try:
-            sp = datetime.datetime.fromisoformat(stop).astimezone(TZ)
+            sp = datetime.datetime.fromisoformat(stop).astimezone(_tz())
             stop = sp.strftime("%H:%M")
         except (ValueError, TypeError):
             stop = "running"
@@ -163,7 +185,7 @@ def _create_single_entry(
 ) -> list[str]:
     """Create one entry, splitting at midnight if needed. Returns list of result strings."""
     results = []
-    midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, 0, tzinfo=TZ)
+    midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, 0, tzinfo=_tz())
     next_midnight = midnight + datetime.timedelta(minutes=1)
 
     if start_dt.date() != end_dt.date():
@@ -221,7 +243,7 @@ def toggl_create_entry(
 def _resolve_date(date_str: str) -> datetime.date:
     """Resolve 'yesterday', 'today', or YYYY-MM-DD to a date object."""
     date_str = date_str.strip().lower()
-    today = datetime.datetime.now(TZ).date()
+    today = datetime.datetime.now(_tz()).date()
     if not date_str or date_str == "today":
         return today
     if date_str == "yesterday":
@@ -356,7 +378,7 @@ def toggl_current() -> str:
 def toggl_today() -> str:
     """List all time entries for today."""
     try:
-        today = datetime.datetime.now(TZ).date()
+        today = datetime.datetime.now(_tz()).date()
         raw_entries = toggl_api.get_entries(
             start_date=(today - datetime.timedelta(days=1)).isoformat(),
             end_date=(today + datetime.timedelta(days=2)).isoformat(),

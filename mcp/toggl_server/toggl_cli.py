@@ -15,6 +15,15 @@ import json
 import signal
 import datetime
 
+# Self-locating: guarantees `daytime` resolves regardless of the caller's
+# own sys.path — see lib/daytime.py, the shared "now"/"today" resolution
+# every DTD/Janus TZ read must go through (this file used to hardcode
+# ZoneInfo("America/Los_Angeles") for the day-barrier midnight split, wrong
+# the moment the device follows local time while traveling).
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "lib"))
+import daytime  # noqa: E402
+
 # Load API key from ~/.claude.json MCP config if not already set
 def _load_api_key():
     try:
@@ -42,7 +51,21 @@ from toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
 from toggl_server import toggl_api  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
-TZ = ZoneInfo("America/Los_Angeles")
+def _tz():
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import. Governs the day-barrier midnight split
+    in cmd_create and the 'today' window in cmd_today."""
+    return daytime.active_zone()
+
+
+def __getattr__(name):
+    # PEP 562 module __getattr__: `toggl_cli.TZ` used to be a constant
+    # frozen at import. Anything (tests included) that still reaches for
+    # `.TZ` gets the same live-resolved zone as every internal call.
+    if name == "TZ":
+        return daytime.active_zone()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _resolve_project(code):
@@ -65,11 +88,11 @@ def _fmt(e):
     start = e.get("start", "")
     stop = e.get("stop") or ""
     try:
-        start = datetime.datetime.fromisoformat(start).astimezone(TZ).strftime("%H:%M")
+        start = datetime.datetime.fromisoformat(start).astimezone(_tz()).strftime("%H:%M")
     except Exception:
         pass
     try:
-        stop = datetime.datetime.fromisoformat(stop).astimezone(TZ).strftime("%H:%M")
+        stop = datetime.datetime.fromisoformat(stop).astimezone(_tz()).strftime("%H:%M")
     except Exception:
         stop = "running"
     proj_str = f" @{proj}" if proj else ""
@@ -85,14 +108,13 @@ def cmd_start(args):
     if "--at" in args:
         at_idx = args.index("--at")
         if at_idx + 1 < len(args):
-            from datetime import datetime, timezone
+            from datetime import timezone
             hhmm = args[at_idx + 1]
             if ":" not in hhmm and len(hhmm) == 4:
                 hhmm = hhmm[:2] + ":" + hhmm[2:]
-            today = datetime.now().strftime("%Y-%m-%d")
-            local_dt = datetime.fromisoformat(f"{today}T{hhmm}:00")
-            from zoneinfo import ZoneInfo
-            local_dt = local_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            today = datetime.datetime.now(_tz()).strftime("%Y-%m-%d")
+            local_dt = datetime.datetime.fromisoformat(f"{today}T{hhmm}:00")
+            local_dt = local_dt.replace(tzinfo=_tz())
             start_time = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             args = args[:at_idx] + args[at_idx + 2:]
     desc = args[0]
@@ -114,8 +136,17 @@ def cmd_stop(_args):
     print(f"Stopped: {_fmt(entry)}")
 
 
-def cmd_current(_args):
+def cmd_current(args):
     current = toggl_api.get_current()
+    if "--json" in args:
+        # Raw entry (real ISO "start", not a reconstructed HH:MM) for
+        # callers that need to compute elapsed time correctly across a
+        # midnight crossing or a backward clock jump (e.g. wakeup_server.py's
+        # freshness check) — parsing _fmt's human text loses the timestamp's
+        # actual date and can't tell "started earlier today" from "the clock
+        # moved backward since it started."
+        print(json.dumps(current or {}))
+        return
     if not current:
         print("No timer running.")
         return
@@ -123,7 +154,7 @@ def cmd_current(_args):
 
 
 def cmd_today(_args):
-    today = datetime.datetime.now(TZ).date()
+    today = datetime.datetime.now(_tz()).date()
     raw = toggl_api.get_entries(
         start_date=(today - datetime.timedelta(days=1)).isoformat(),
         end_date=(today + datetime.timedelta(days=2)).isoformat(),
@@ -131,7 +162,7 @@ def cmd_today(_args):
     entries = []
     for e in raw:
         try:
-            st = datetime.datetime.fromisoformat(e.get("start", "")).astimezone(TZ)
+            st = datetime.datetime.fromisoformat(e.get("start", "")).astimezone(_tz())
         except Exception:
             continue
         if st.date() == today:
@@ -143,12 +174,12 @@ def cmd_today(_args):
             # coverage (gap checks, etc.) sees the morning portion.
             stop_raw = e.get("stop")
             try:
-                en = (datetime.datetime.fromisoformat(stop_raw).astimezone(TZ)
-                      if stop_raw else datetime.datetime.now(TZ))
+                en = (datetime.datetime.fromisoformat(stop_raw).astimezone(_tz())
+                      if stop_raw else datetime.datetime.now(_tz()))
             except Exception:
                 continue
             if en.date() >= today:
-                midnight = datetime.datetime.combine(today, datetime.time(0, 0), tzinfo=TZ)
+                midnight = datetime.datetime.combine(today, datetime.time(0, 0), tzinfo=_tz())
                 clipped = dict(e)
                 clipped["start"] = midnight.isoformat()
                 if e.get("duration", 0) > 0:
@@ -169,7 +200,7 @@ def cmd_create(args):
     project = ""
     project_consumed = False
     tags = []
-    ref_date = datetime.datetime.now(TZ).date()
+    ref_date = datetime.datetime.now(_tz()).date()
     i = 3
     while i < len(args):
         if args[i] == "--date" and i + 1 < len(args):
@@ -191,7 +222,7 @@ def cmd_create(args):
     def parse_t(t):
         t = t.replace(":", "")
         h, m = int(t[:2]), int(t[2:4])
-        return datetime.datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=TZ)
+        return datetime.datetime(ref_date.year, ref_date.month, ref_date.day, h, m, tzinfo=_tz())
 
     start_dt = parse_t(start_str)
     end_dt = parse_t(end_str)
@@ -199,7 +230,7 @@ def cmd_create(args):
         end_dt += datetime.timedelta(days=1)
 
     # Split at midnight if needed
-    midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, tzinfo=TZ)
+    midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, tzinfo=_tz())
     next_min = midnight + datetime.timedelta(minutes=1)
     project_id = _resolve_project(project)
     tag_list = tags or None
