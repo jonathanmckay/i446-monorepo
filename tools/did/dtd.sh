@@ -1307,7 +1307,14 @@ try:
     with open(_os.path.expanduser('~/.local/state/jm/dtd-block-snooze.json')) as _sf:
         _sn = json.load(_sf)
     _nw = _dt.datetime.now()
-    if _sn.get('date') == _nw.date().isoformat():
+    # Forward-only: a stored date equal-or-newer than today is still valid,
+    # matching the writer's fix (DTD_BLOCKAPPLY, above) — a plain equality
+    # check here would silently un-hide every snoozed task the moment the
+    # writer started preserving them across a backward date move instead of
+    # wiping them, since a backward move means this reader's freshly-
+    # computed 'today' no longer equals the (correctly preserved) newer
+    # stored date.
+    if _nw.date().isoformat() <= _sn.get('date', ''):
         _sn_all = {str(k) for k in (_sn.get('snoozes') or {})}
         _snoozed = {str(k) for k, v in (_sn.get('snoozes') or {}).items()
                     if _nw.hour < int(v)}
@@ -1316,8 +1323,11 @@ except Exception:
 # Block LABELS (feature 2026-07-27): a task carrying a 地支 glyph label
 # (/todo ... 戌) hides until that block starts — the durable, task-level
 # analog of the ctrl-v snooze. Uses the current clock, same as above.
-_BLOCK_LABEL_HOURS = {'卯': 4, '辰': 6, '巳': 8, '午': 10, '未': 12,
-                      '申': 14, '酉': 16, '戌': 18, '亥': 20}
+# Canonical schedule import (was a 3rd independent copy of this table,
+# consolidated 2026-08-23 — see lib/blocks.py).
+import sys as _sys
+_sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/lib'))
+from blocks import BLOCK_START as _BLOCK_LABEL_HOURS
 _now_hour = _dt.datetime.now().hour
 
 # ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending

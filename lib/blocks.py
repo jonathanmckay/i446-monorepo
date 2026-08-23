@@ -44,6 +44,24 @@ def is_future_block(start_hour: int, now: dt.datetime | None = None) -> bool:
     Hour-of-day based: callers apply it to today's daytime blocks, matching how
     the build order and the 0分 sheet bucket rituals. Pass a timezone-aware
     ``now`` from the caller's own clock; the bare-local default is a fallback.
+
+    KNOWN GAP (found auditing for international-travel hardening,
+    2026-08-23): this is pure hour-of-day, with no date component. build-
+    order.md carries no date of its own — the daemon (scripts/build-order-
+    daemon.py) is responsible for regenerating/reconciling it once per
+    calendar day, and this function trusts that its content always belongs
+    to "today." If a reader calls this with `now` from a subjective day that
+    has rolled over WEST (a westward flight: local time moves backward
+    relative to blocks already stamped earlier that same subjective day)
+    before the daemon has reconciled the file, an already-completed block's
+    `start_hour` can compare greater than the new, earlier `now.hour`, so it
+    reads as "future" again and its earned rituals are dropped from
+    score_day() — a temporary undercount, not a double-count, and it
+    self-corrects once the daemon's next regeneration catches up. Fixing
+    this properly means the daemon (the file's single writer) stamping an
+    explicit day anchor the reader can check — deliberately not attempted
+    here without auditing that 1600+ line daemon's regeneration contract
+    first.
     """
     if now is None:
         now = dt.datetime.now().astimezone()
