@@ -30,7 +30,15 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "mcp"))
 from toggl_server.config import PROJECT_MAP  # noqa: E402
 
-TZ = ZoneInfo("America/Los_Angeles")
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+
+
+def _tz() -> ZoneInfo:
+    """Live-resolved active timezone — see lib/daytime.py. Not cached: an
+    in-progress /travel change or an OS TZ change must be picked up on the
+    next call, not frozen at import."""
+    return daytime.active_zone()
 
 SLEEP_PROJECT_ID = PROJECT_MAP["睡觉"]
 INFRA_PROJECT_ID = PROJECT_MAP["infra"]
@@ -46,7 +54,7 @@ WINDOW_END_HOUR = 23    # exclusive -- up to but not including 23:00 (11pm)
 
 
 def _local(dt_iso: str) -> datetime.datetime:
-    return datetime.datetime.fromisoformat(dt_iso).astimezone(TZ)
+    return datetime.datetime.fromisoformat(dt_iso).astimezone(_tz())
 
 
 def find_candidate(entries: list[dict], target_date: datetime.date):
@@ -111,7 +119,7 @@ def plan_placement(entries: list[dict], target_date: datetime.date, minutes: int
 
     hcmc_end = start + datetime.timedelta(minutes=minutes)
     midnight = datetime.datetime.combine(
-        target_date + datetime.timedelta(days=1), datetime.time(0, 0), tzinfo=TZ)
+        target_date + datetime.timedelta(days=1), datetime.time(0, 0), tzinfo=_tz())
 
     breakpoints = sorted({start, hcmc_end, midnight, end})
     segments = []
