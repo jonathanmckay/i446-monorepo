@@ -13,21 +13,29 @@ CLI: `python3 prayer_marker.py` stamps the live build order for the current bloc
 """
 from __future__ import annotations
 
+import sys as _sys
 from datetime import datetime
 from pathlib import Path
 
+_sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+# Single source of truth for the 地支 block schedule (was independently
+# duplicated here, in dtd.sh x2, and in refresh-cache.py with a THIRD,
+# inconsistent hour//2 formula — found consolidating for international-
+# travel hardening, 2026-08-23). BRANCHES kept as a re-export: existing
+# callers/tests reach for prayer_marker.BRANCHES.
+from neon_blocks import BRANCHES, current_block_index  # noqa: E402
+
 BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 PRAYER_MARKER = "☀️"
-# 地支 blocks, two hours each starting at 卯 (04:00). Mirrors did-fast §5c and
-# build-order-enrich's index math so the marker lands on the same block those
-# readers expect: (hour - 4) // 2, clamped to the 卯..亥 range.
-BRANCHES = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
 
 
 def current_block(now: datetime | None = None) -> str:
-    """Return the 地支 branch char for the block containing `now` (local time)."""
-    h = (now or datetime.now()).hour
-    return BRANCHES[max(0, min(len(BRANCHES) - 1, (h - 4) // 2))]
+    """Return the 地支 branch char for the block containing `now` (local time).
+    Defaults to the live-resolved active timezone (lib/daytime.py), not a
+    naive datetime.now() that silently follows whatever the OS reports."""
+    h = (now or daytime.local_now()).hour
+    return BRANCHES[current_block_index(h)]
 
 
 def stamp_prayer_marker(bo_path: Path | str = BUILD_ORDER,

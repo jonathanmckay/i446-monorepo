@@ -26,30 +26,49 @@ if echo "$CLEANUP" | grep -q 'DTD_SKIPPED'; then
 fi
 echo "PASS: exit cleanup preserves the skipped file"
 
-# 3. Date-guard behavior: stale date resets the file, same date preserves it
+# 3. Date-guard behavior: stale (older) date resets the file, same date
+# preserves it, and — the 2026-08-23 travel-hardening fix — a BACKWARD date
+# move (an OS TZ correction, an International Date Line crossing while
+# traveling) must NOT reset it either. This snippet is kept in lockstep with
+# the actual gate in dtd.sh (search for DTD_SKIPPED.date there); mirroring
+# it inline is the established pattern in this test rather than sourcing the
+# whole fzf-launching script.
+GATE='
+_dtd_skipped_stored="$(cat "$DTD_SKIPPED.date" 2>/dev/null)"
+if [[ -z "$_dtd_skipped_stored" || "$LOCAL_TODAY" > "$_dtd_skipped_stored" ]]; then
+  rm -f "$DTD_SKIPPED"
+  echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
+fi
+unset _dtd_skipped_stored
+'
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 RESULT=$(zsh -c '
 LOCAL_TODAY="2026-06-06"
 DTD_SKIPPED="'"$TMP"'/dtd-skipped-today.txt"
 echo "old skip" > "$DTD_SKIPPED"
 echo "2026-06-05" > "$DTD_SKIPPED.date"
-if [[ -f "$DTD_SKIPPED.date" && "$(cat "$DTD_SKIPPED.date" 2>/dev/null)" != "$LOCAL_TODAY" ]]; then
-  rm -f "$DTD_SKIPPED"
-fi
-echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
+'"$GATE"'
 touch "$DTD_SKIPPED"
 [[ -s "$DTD_SKIPPED" ]] && echo "stale-kept" || echo "stale-cleared"
 # Same-day second session
 echo "todays skip" >> "$DTD_SKIPPED"
-if [[ -f "$DTD_SKIPPED.date" && "$(cat "$DTD_SKIPPED.date" 2>/dev/null)" != "$LOCAL_TODAY" ]]; then
-  rm -f "$DTD_SKIPPED"
-fi
-echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
+'"$GATE"'
 touch "$DTD_SKIPPED"
-grep -q "todays skip" "$DTD_SKIPPED" && echo "same-day-kept" || echo "same-day-lost"')
+grep -q "todays skip" "$DTD_SKIPPED" && echo "same-day-kept" || echo "same-day-lost"
+# Backward date move (travel): stored date is AHEAD of LOCAL_TODAY — must
+# NOT reset, and the stamp must not regress either.
+LOCAL_TODAY="2026-06-05"
+'"$GATE"'
+touch "$DTD_SKIPPED"
+grep -q "todays skip" "$DTD_SKIPPED" && echo "backward-kept" || echo "backward-lost"
+[[ "$(cat "$DTD_SKIPPED.date")" == "2026-06-06" ]] && echo "stamp-not-regressed" || echo "stamp-regressed"')
 echo "$RESULT" | grep -q "stale-cleared" || { echo "FAIL: yesterday's skips not cleared"; exit 1; }
 echo "PASS: stale (yesterday) skips cleared on new day"
 echo "$RESULT" | grep -q "same-day-kept" || { echo "FAIL: same-day skips lost between sessions"; exit 1; }
 echo "PASS: same-day skips survive a second session"
+echo "$RESULT" | grep -q "backward-kept" || { echo "FAIL: a backward date move wiped the skip list"; exit 1; }
+echo "PASS: a backward date move (travel TZ correction) does not wipe skips"
+echo "$RESULT" | grep -q "stamp-not-regressed" || { echo "FAIL: the stored date regressed on a backward move"; exit 1; }
+echo "PASS: the stored date does not regress on a backward move"
 
 echo "All tests passed."

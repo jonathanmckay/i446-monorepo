@@ -25,6 +25,15 @@ def _tz() -> ZoneInfo:
     return daytime.active_zone()
 
 
+def __getattr__(name):
+    # PEP 562 module __getattr__: `outlook_client.TZ` used to be a constant
+    # frozen at import. Anything that still reaches for `.TZ` gets the same
+    # live-resolved zone as every internal `_tz()` call.
+    if name == "TZ":
+        return daytime.active_zone()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 CACHE_DIR = Path.home() / ".cache" / "janus"
 WINDOWS_TZ_MAP = {
     "UTC": "UTC",

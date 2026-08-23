@@ -28,10 +28,10 @@ import json
 import os
 import re
 import sys
-from datetime import date, datetime
 from pathlib import Path
 
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 COMPLETED = _sp.COMPLETED_TODAY
 
 # Annotation + punctuation strip for duplicate-detection key (Step 6 posthoc guard).
@@ -118,7 +118,7 @@ def append_names(new_names: list[str], *, today: str | None = None,
     omitted. Re-reading it via the module means tests can monkey-patch
     `mc.COMPLETED` and have both CLI and library paths honor the override.
     """
-    today = today or date.today().isoformat()
+    today = today or daytime.today_iso()
     if path is None:
         path = COMPLETED
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,8 +129,19 @@ def append_names(new_names: list[str], *, today: str | None = None,
         fcntl.flock(fd, fcntl.LOCK_EX)
         data = _load(path)
 
-        # Date gate: different date → reset names.
-        if data.get("date") != today:
+        # Date gate: only a genuinely NEWER date resets names — a stored date
+        # that is equal-or-newer than `today` is kept as-is. ISO YYYY-MM-DD
+        # strings compare lexicographically the same as chronologically, so
+        # plain string `>` is a correct forward-only check without needing a
+        # real date parse. This used to be `!=`, which wiped the day's
+        # completions on ANY mismatch, including a date moving BACKWARD
+        # (an OS TZ correction, an International Date Line crossing, or the
+        # two-machine clock disagreement absorb_remote() below also has to
+        # tolerate) — during travel this fired routinely and silently
+        # re-opened already-completed habits for re-completion, double-
+        # crediting Neon points. A day only truly ends when `today` moves
+        # strictly past what's stored.
+        if today > data.get("date", ""):
             data = {"date": today, "names": [], "points": {}, "ids": {}}
 
         # Ensure points/timestamps/ids dicts exist (backwards compat)
@@ -144,7 +155,7 @@ def append_names(new_names: list[str], *, today: str | None = None,
         # Dedup existing names first (self-heal any pre-existing dupes).
         data["names"] = _dedup_preserve_order(data["names"])
 
-        now_hhmm = datetime.now().strftime("%H:%M")
+        now_hhmm = daytime.local_now().strftime("%H:%M")
         existing_keys = {_normalize(n) for n in data["names"]}
         for raw in new_names:
             k = _normalize(raw)
@@ -231,10 +242,12 @@ def is_duplicate_today(name: str, *, today: str | None = None, path: Path | None
     `talk with richard [20]` matches `talk with richard` already stored.
 
     Returns the matched stored name on duplicate, None otherwise. Date-gated:
-    entries stored under a different date are treated as absent (a new day
-    clears the dup-set).
+    entries stored under a date OLDER than today are treated as absent (a new
+    day clears the dup-set) — but a stored date that is equal-or-newer than
+    `today` still applies (matches append_names' forward-only gate below;
+    see its comment for why this can't be a plain equality check).
     """
-    today = today or date.today().isoformat()
+    today = today or daytime.today_iso()
     if path is None:
         path = COMPLETED
     if not path.exists():
@@ -243,7 +256,7 @@ def is_duplicate_today(name: str, *, today: str | None = None, path: Path | None
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    if not isinstance(data, dict) or data.get("date") != today:
+    if not isinstance(data, dict) or today > data.get("date", ""):
         return None
     stored = data.get("names", [])
     if not isinstance(stored, list):
@@ -283,10 +296,16 @@ def absorb_remote(today: str | None = None) -> int:
     """Merge OTHER hosts' synced completed-today-*.json into the local file.
 
     Returns how many names were newly absorbed. Date-gated: a remote file
-    from a previous day is ignored. Called by dtd's watcher when a remote
-    mirror's mtime advances (a completion on another machine just synced in).
+    dated strictly OLDER than this machine's `today` is ignored — but a
+    remote date that is equal-or-newer still merges (see append_names'
+    forward-only gate comment). Two travel machines routinely disagree on
+    the calendar date for hours at a time (Ix stays home, Straylight follows
+    local time); a plain equality check silently dropped every legitimate
+    cross-machine completion for that whole window. Called by dtd's watcher
+    when a remote mirror's mtime advances (a completion on another machine
+    just synced in).
     """
-    today = today or date.today().isoformat()
+    today = today or daytime.today_iso()
     own = _mirror_path().name
     absorbed = 0
     for p in sorted(MIRROR_DIR.glob("completed-today-*.json")):
@@ -297,7 +316,7 @@ def absorb_remote(today: str | None = None) -> int:
                 remote = json.load(f)
         except Exception:
             continue
-        if not isinstance(remote, dict) or remote.get("date") != today:
+        if not isinstance(remote, dict) or today > remote.get("date", ""):
             continue
         names = [n for n in remote.get("names", []) if n]
         if not names:

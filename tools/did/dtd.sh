@@ -31,6 +31,20 @@ mkdir -p "$STATE_DIR"
 CACHE="$STATE_DIR/task-queue.json"
 DONE="$STATE_DIR/completed-today.json"
 
+# /travel override (see lib/daytime.py, the Python side of this same
+# resolution): every `date`/`datetime.now()` call in this file and its
+# Python helpers is naive/system-local, which is correct by default (the
+# laptop follows wherever it physically is) but blind to an explicit
+# /travel override (e.g. deliberately staying on home time while abroad).
+# Exporting TZ once here, before any date-dependent logic runs, makes every
+# subsequent `date` call in this script AND its background subshells (they
+# inherit exported vars) — plus every Python helper's naive datetime.now()/
+# date.today() — honor the override with no per-call plumbing. Absent or
+# malformed travel.json is silently a no-op (TZ stays whatever the OS has).
+_travel_tz=$(jq -r '.active_tz // empty' "$STATE_DIR/travel.json" 2>/dev/null)
+[[ -n "$_travel_tz" ]] && export TZ="$_travel_tz"
+unset _travel_tz
+
 # Per-launch id for all temp paths. dtd.sh is *sourced*, so $$ is the
 # (long-lived) shell PID and is identical on every re-run. A bare $$ made
 # re-entrant launches (suspend an open picker, re-source) collide on the same
@@ -111,7 +125,14 @@ cache_age=$(python3 -c "
 import json, sys, datetime as dt
 try:
     u = json.load(open(sys.argv[1])).get('updated')
-    print(int((dt.datetime.now() - dt.datetime.fromisoformat(u)).total_seconds()) if u else 10**9)
+    # .astimezone() on BOTH sides makes this safe whether the stored stamp
+    # is naive (old cache, pre-daytime.py) or tz-aware (current
+    # refresh-cache.py) — a bare subtraction of one naive + one aware
+    # datetime raises TypeError, which this except swallowed into 'always
+    # stale' rather than crashing, but that meant every dtd launch forced
+    # an unnecessary refresh once refresh-cache.py started writing aware
+    # timestamps (2026-08-23 travel hardening).
+    print(int((dt.datetime.now().astimezone() - dt.datetime.fromisoformat(u).astimezone()).total_seconds()) if u else 10**9)
 except Exception:
     print(10**9)
 " "$CACHE" 2>/dev/null || echo 1000000000)
@@ -132,7 +153,11 @@ import json, sys, datetime as dt
 def blk(t): return (t.date().isoformat(), max(0, min(8, (t.hour - 4) // 2)))
 try:
     u = json.load(open(sys.argv[1])).get('updated')
-    print('1' if (not u or blk(dt.datetime.fromisoformat(u)) != blk(dt.datetime.now())) else '0')
+    # .astimezone() normalizes both sides to the current local zone whether
+    # the stored stamp is naive or tz-aware (see cache_age's comment above)
+    # — .hour on an aware datetime otherwise reflects ITS OWN attached zone,
+    # not necessarily the zone 'now' is being read in.
+    print('1' if (not u or blk(dt.datetime.fromisoformat(u).astimezone()) != blk(dt.datetime.now().astimezone())) else '0')
 except Exception:
     print('1')
 " "$CACHE" 2>/dev/null || echo 1)
@@ -452,12 +477,19 @@ DTD_BLOCKAPPLY="/tmp/dtd-$DTD_ID.blockapply.sh"
 DTD_VIEW="/tmp/dtd-$DTD_ID.view"
 DTD_VIEWTOGGLE="/tmp/dtd-$DTD_ID.view-toggle.sh"
 # Skips persist across dtd sessions for the duration of one day (stable
-# path + date guard), unlike the other per-session temp files
+# path + date guard), unlike the other per-session temp files. Forward-only:
+# reset (and advance the stamp) only when LOCAL_TODAY is strictly newer than
+# what's stored — never on a backward move (an OS TZ correction, an
+# International Date Line crossing), matching mark-completed.py's date gate.
+# Relaunching dtd mid-trip must not wipe a skip list set earlier the same
+# subjective day just because the calendar date briefly went backward.
 DTD_SKIPPED="$STATE_DIR/dtd-skipped-today.txt"
-if [[ -f "$DTD_SKIPPED.date" && "$(cat "$DTD_SKIPPED.date" 2>/dev/null)" != "$LOCAL_TODAY" ]]; then
+_dtd_skipped_stored="$(cat "$DTD_SKIPPED.date" 2>/dev/null)"
+if [[ -z "$_dtd_skipped_stored" || "$LOCAL_TODAY" > "$_dtd_skipped_stored" ]]; then
   rm -f "$DTD_SKIPPED"
+  echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
 fi
-echo "$LOCAL_TODAY" > "$DTD_SKIPPED.date"
+unset _dtd_skipped_stored
 DTD_DONE_FILE="/tmp/dtd-$DTD_ID.done.json"
 echo "$CACHE_SNAPSHOT" > "$DTD_CACHE_FILE"
 touch "$DTD_REMOVED"
@@ -983,17 +1015,24 @@ if [[ "\$glyph" == "cancel" || \${#ids[@]} -eq 0 ]]; then
 fi
 msg=\$(python3 - "\$SNOOZE" "\$glyph" "\${ids[@]}" <<'PYWRITE'
 import datetime, json, os, sys
+sys.path.insert(0, os.path.expanduser('~/i446-monorepo/lib'))
+from blocks import BLOCK_START as HOURS  # canonical 地支 schedule, not a local copy
 path, glyph = sys.argv[1], sys.argv[2]
 ids = [str(t) for t in sys.argv[3:]]
-HOURS = {'卯':4,'辰':6,'巳':8,'午':10,'未':12,'申':14,'酉':16,'戌':18,'亥':20}
+# TZ already resolves via dtd.sh's exported TZ (/travel override or system
+# local) — naive datetime.date.today() picks that up automatically. The
+# date gate is forward-only: a stored date equal-or-newer than today is
+# kept, matching mark-completed.py's fix (never wipe on a backward date
+# move — an OS TZ correction, an International Date Line crossing).
 today = datetime.date.today().isoformat()
 try:
     data = json.load(open(path))
-    if data.get('date') != today:
+    if today > data.get('date', ''):
         data = {}
 except Exception:
     data = {}
-data['date'] = today
+if today > data.get('date', ''):
+    data['date'] = today
 sn = data.setdefault('snoozes', {})
 if glyph == 'now':
     for i in ids:
@@ -1268,7 +1307,14 @@ try:
     with open(_os.path.expanduser('~/.local/state/jm/dtd-block-snooze.json')) as _sf:
         _sn = json.load(_sf)
     _nw = _dt.datetime.now()
-    if _sn.get('date') == _nw.date().isoformat():
+    # Forward-only: a stored date equal-or-newer than today is still valid,
+    # matching the writer's fix (DTD_BLOCKAPPLY, above) — a plain equality
+    # check here would silently un-hide every snoozed task the moment the
+    # writer started preserving them across a backward date move instead of
+    # wiping them, since a backward move means this reader's freshly-
+    # computed 'today' no longer equals the (correctly preserved) newer
+    # stored date.
+    if _nw.date().isoformat() <= _sn.get('date', ''):
         _sn_all = {str(k) for k in (_sn.get('snoozes') or {})}
         _snoozed = {str(k) for k, v in (_sn.get('snoozes') or {}).items()
                     if _nw.hour < int(v)}
@@ -1277,8 +1323,11 @@ except Exception:
 # Block LABELS (feature 2026-07-27): a task carrying a 地支 glyph label
 # (/todo ... 戌) hides until that block starts — the durable, task-level
 # analog of the ctrl-v snooze. Uses the current clock, same as above.
-_BLOCK_LABEL_HOURS = {'卯': 4, '辰': 6, '巳': 8, '午': 10, '未': 12,
-                      '申': 14, '酉': 16, '戌': 18, '亥': 20}
+# Canonical schedule import (was a 3rd independent copy of this table,
+# consolidated 2026-08-23 — see lib/blocks.py).
+import sys as _sys
+_sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/lib'))
+from blocks import BLOCK_START as _BLOCK_LABEL_HOURS
 _now_hour = _dt.datetime.now().hour
 
 # ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending
