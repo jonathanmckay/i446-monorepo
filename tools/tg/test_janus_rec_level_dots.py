@@ -42,12 +42,15 @@ def _load_tui():
     return mod
 
 
-def _freeze_now(mod, when):
+def _freeze_now(mod, when, monkeypatch):
+    # mod.dt IS the real stdlib `datetime` module (janus.py does `import
+    # datetime as dt`), so patching mod.dt.datetime leaks into every other
+    # test in the process unless monkeypatch restores it on teardown.
     class _DT(dtm.datetime):
         @classmethod
         def now(cls, tz=None):
             return when
-    mod.dt.datetime = _DT
+    monkeypatch.setattr(mod.dt, "datetime", _DT)
 
 
 def _setup_recording(mod, tmp_path, desc="team sync", log_lines=""):
@@ -162,10 +165,10 @@ def test_cache_ttl_avoids_rereading_log_every_render_tick(tmp_path):
     assert cached == ("active", "dead"), "should still be serving the cached value"
 
 
-def test_bottom_bar_renders_dots_next_to_mic_marker(tmp_path):
+def test_bottom_bar_renders_dots_next_to_mic_marker(tmp_path, monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 10, 33, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup_recording(mod, tmp_path, desc="team sync", log_lines="LEVEL mic=800 call=0\n")
     frags = mod.render_current_bottom()
     flat = "".join(t for _s, t, *_ in frags)
@@ -176,12 +179,12 @@ def test_bottom_bar_renders_dots_next_to_mic_marker(tmp_path):
     assert len(dot_frags) == 2
 
 
-def test_bottom_bar_shows_no_dots_for_a_different_running_entry(tmp_path):
+def test_bottom_bar_shows_no_dots_for_a_different_running_entry(tmp_path, monkeypatch):
     """The 🎙/dots must only appear for the entry that's ACTUALLY being
     recorded, not any arbitrary running timer."""
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 9, 10, 33, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup_recording(mod, tmp_path, desc="team sync", log_lines="LEVEL mic=800 call=0\n")
     mod.STATE.current = {"description": "unrelated task",
                          "start": "2026-08-09T17:00:00+00:00", "project_id": None}

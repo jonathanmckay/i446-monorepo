@@ -74,12 +74,12 @@ def _binding(mod, keys):
     return hits[0]
 
 
-def _freeze_now(mod, when):
+def _freeze_now(mod, when, monkeypatch):
     class _DT(dtm.datetime):
         @classmethod
         def now(cls, tz=None):
             return when
-    mod.dt.datetime = _DT
+    monkeypatch.setattr(mod.dt, "datetime", _DT)
 
 
 def _setup(mod, current=None, recording=None):
@@ -130,10 +130,10 @@ def test_current_row_sel_key_is_a_stable_singleton():
     assert mod._sel_key({"kind": "current"}) == ("current",)
 
 
-def test_bottom_bar_click_handler_and_selected_highlight():
+def test_bottom_bar_click_handler_and_selected_highlight(monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, current={"description": "x", "start": "2026-08-08T14:00:00+00:00",
                           "project_id": None})
     frags = mod.render_current_bottom()
@@ -190,10 +190,10 @@ def test_enter_on_main_pane_running_entry_still_arms_edit():
 
 # ─── opt+enter = /done ───────────────────────────────────────────────────
 
-def test_alt_enter_on_current_row_builds_and_queues_did_command():
+def test_alt_enter_on_current_row_builds_and_queues_did_command(monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, current={"description": "writing code",
                           "start": "2026-08-08T14:00:00+00:00", "project_id": None})
     _current_item(mod, desc="writing code")
@@ -205,10 +205,10 @@ def test_alt_enter_on_current_row_builds_and_queues_did_command():
     assert mod.STATE.event_sel is None
 
 
-def test_alt_enter_on_current_row_refuses_a_just_started_timer():
+def test_alt_enter_on_current_row_refuses_a_just_started_timer(monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 0, 30, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     # now is 14:00:30 Pacific (PDT, UTC-7) = 21:00:30 UTC; start 30s earlier.
     _setup(mod, current={"description": "writing code",
                           "start": "2026-08-08T21:00:00+00:00", "project_id": None})
@@ -218,13 +218,13 @@ def test_alt_enter_on_current_row_refuses_a_just_started_timer():
     assert "give it a minute" in mod.STATE.flash
 
 
-def test_alt_enter_on_current_row_defers_to_recording_finalize_when_it_matches():
+def test_alt_enter_on_current_row_defers_to_recording_finalize_when_it_matches(monkeypatch):
     """If a d357 recording is live for the SAME entry, /done must route
     through the existing finalize-notes-then-grant flow instead of a second,
     plainer did-fast call for the same minutes (double-grant risk)."""
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     _setup(mod, current={"description": "writing code",
                           "start": "2026-08-08T14:00:00+00:00", "project_id": None},
            recording={"desc": "writing code", "start_dt": now})
@@ -238,10 +238,10 @@ def test_alt_enter_on_current_row_defers_to_recording_finalize_when_it_matches()
 
 # ─── swipe right = /done ─────────────────────────────────────────────────
 
-def test_swipe_right_past_threshold_runs_done():
+def test_swipe_right_past_threshold_runs_done(monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     mod.get_app = lambda: _FakeApp()
     _setup(mod, current={"description": "writing code",
                           "start": "2026-08-08T14:00:00+00:00", "project_id": None})
@@ -253,10 +253,10 @@ def test_swipe_right_past_threshold_runs_done():
     assert mod.STATE.current_swipe_start is None, "gesture state must reset after firing"
 
 
-def test_short_drag_or_plain_click_just_selects_no_done():
+def test_short_drag_or_plain_click_just_selects_no_done(monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     mod.get_app = lambda: _FakeApp()
     _setup(mod, current={"description": "writing code",
                           "start": "2026-08-08T14:00:00+00:00", "project_id": None})
@@ -268,10 +268,10 @@ def test_short_drag_or_plain_click_just_selects_no_done():
     assert mod.STATE.event_sel == key, "falls back to ordinary click-to-select"
 
 
-def test_swipe_state_does_not_leak_across_gestures():
+def test_swipe_state_does_not_leak_across_gestures(monkeypatch):
     mod = _load_tui()
     now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
-    _freeze_now(mod, now)
+    _freeze_now(mod, now, monkeypatch)
     mod.get_app = lambda: _FakeApp()
     _setup(mod, current={"description": "writing code",
                           "start": "2026-08-08T14:00:00+00:00", "project_id": None})
