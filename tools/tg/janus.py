@@ -680,7 +680,7 @@ def _hide_event(ev: dict) -> None:
     HIDDEN_EVENTS_KEEP_DAYS so the file can't grow without bound."""
     keys = set(_load_hidden_events())
     keys.add(_hidden_event_key(ev))
-    cutoff = (dt.date.today() - dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
+    cutoff = (dt.datetime.now(TZ).date() - dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
     keep = [list(k) for k in sorted(keys) if k[1] >= cutoff]
     HIDDEN_EVENTS.parent.mkdir(parents=True, exist_ok=True)
     HIDDEN_EVENTS.write_text(json.dumps({"hidden": keep}))
@@ -1000,11 +1000,11 @@ TAG_CREDITS = Path.home() / ".local/state/jm/janus-tag-credits.json"
 def _tag_credit_load() -> dict:
     try:
         d = json.loads(TAG_CREDITS.read_text())
-        if d.get("date") == dt.date.today().isoformat():
+        if d.get("date") == dt.datetime.now(TZ).date().isoformat():
             return d
     except Exception:
         pass
-    return {"date": dt.date.today().isoformat(), "credited": [], "pending": []}
+    return {"date": dt.datetime.now(TZ).date().isoformat(), "credited": [], "pending": []}
 
 
 def _tag_credit_save(d: dict) -> None:
@@ -2007,7 +2007,7 @@ def _load_block_snoozes() -> dict[str, int]:
     if _snooze_cache["mtime"] != mtime:
         try:
             data = json.loads(BLOCK_SNOOZE.read_text())
-            ok = data.get("date") == dt.date.today().isoformat()
+            ok = data.get("date") == dt.datetime.now(TZ).date().isoformat()
             _snooze_cache["map"] = ({str(k): int(v) for k, v in
                                      (data.get("snoozes") or {}).items()}
                                     if ok else {})
@@ -2029,7 +2029,7 @@ def _habit_block_snoozed(name: str) -> bool:
     snoozes = _load_block_snoozes()
     if not snoozes:
         return False
-    today = dt.date.today().isoformat()
+    today = dt.datetime.now(TZ).date().isoformat()
     todays = [cid for cid, due in HABIT_CARDS.get(_norm_key(name), [])
               if cid and (due or "")[:10] <= today]
     if not todays:
@@ -4081,7 +4081,7 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
         data = json.loads(_COMPLETED_TODAY.read_text())
     except Exception:
         return False, 0
-    if data.get("date") != dt.date.today().isoformat():
+    if data.get("date") != dt.datetime.now(TZ).date().isoformat():
         return False, 0
     target = _norm_done_name(desc)
     if not target:
@@ -4127,13 +4127,13 @@ def _cmd_done_today(cmd: str) -> bool:
         data = json.loads(_DONE_CMDS_TODAY.read_text())
     except Exception:
         return False
-    if data.get("date") != dt.date.today().isoformat():
+    if data.get("date") != dt.datetime.now(TZ).date().isoformat():
         return False
     return cmd in data.get("cmds", [])
 
 
 def _mark_cmd_done_today(cmd: str) -> None:
-    today = dt.date.today().isoformat()
+    today = dt.datetime.now(TZ).date().isoformat()
     try:
         data = json.loads(_DONE_CMDS_TODAY.read_text())
         if data.get("date") != today:
@@ -4389,7 +4389,7 @@ def _load_recording_state() -> None:
             return
         os.kill(int(pid), 0)
         started = dt.datetime.fromisoformat(st["started"])
-        if started.date() != dt.date.today():
+        if started.date() != dt.datetime.now(TZ).date():
             return
         STATE.recording = {"desc": st.get("name") or "meeting",
                            "start_dt": started.astimezone(TZ) if started.tzinfo
@@ -4515,7 +4515,7 @@ def _slug_tokens(stem: str) -> list[str]:
 
 
 def _load_d357_tokens_for_today() -> list[list[str]]:
-    today = dt.date.today()
+    today = dt.datetime.now(TZ).date()
     now = time.monotonic()
     if (_d357_doc_cache["date"] != today
             or now - _d357_doc_cache["checked"] > _D357_DOC_CACHE_TTL):
