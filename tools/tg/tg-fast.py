@@ -199,7 +199,7 @@ def _project_from_task_cache(content: str) -> str:
 def _run_cli(*args):
     r = subprocess.run(
         ["python3", CLI, *args],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=30,
     )
     out = (r.stdout.strip() + "\n" + r.stderr.strip()).strip()
     return out
