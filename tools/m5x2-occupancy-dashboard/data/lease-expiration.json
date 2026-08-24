@@ -1128,18 +1128,6 @@
     "rent": "1595.00"
   },
   {
-    "unit_id": 564,
-    "property_name": "rl16",
-    "unit": "C03",
-    "tenant_name": "Stewart, Hannah F.",
-    "status": "Pending",
-    "lease_sign_date": "2025-08-13",
-    "move_in": "2025-09-19",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1275.00"
-  },
-  {
     "unit_id": 520,
     "property_name": "rl16",
     "unit": "A07",
@@ -1656,18 +1644,6 @@
     "rent": "1275.00"
   },
   {
-    "unit_id": 255,
-    "property_name": "m405",
-    "unit": "9",
-    "tenant_name": "Antonio Castro, Luis M.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-20",
-    "move_in": "2025-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "925.00"
-  },
-  {
     "unit_id": 259,
     "property_name": "m405",
     "unit": "14",
@@ -1810,18 +1786,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-11-20",
     "rent": "1415.00"
-  },
-  {
-    "unit_id": 652,
-    "property_name": "s129",
-    "unit": "1",
-    "tenant_name": "Lake, Jacey L.",
-    "status": "Pending",
-    "lease_sign_date": "2025-09-24",
-    "move_in": "2025-10-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1325.00"
   },
   {
     "unit_id": 656,
@@ -2026,18 +1990,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1265.00"
-  },
-  {
-    "unit_id": 333,
-    "property_name": "k104- LeFevre",
-    "unit": "507-1",
-    "tenant_name": "Cooley, Corylynne  C.",
-    "status": "Pending",
-    "lease_sign_date": "2023-11-02",
-    "move_in": "2023-11-03",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-06-01",
-    "rent": "1267.00"
   },
   {
     "unit_id": 355,
@@ -3909,6 +3861,18 @@
     "move_in": "2026-03-10",
     "renewal_start_date": null,
     "last_lease_renewal": null,
+    "rent": "1267.00"
+  },
+  {
+    "unit_id": 333,
+    "property_name": "k104- LeFevre",
+    "unit": "507-1",
+    "tenant_name": "Cooley, Corylynne  C.",
+    "status": "Renewed",
+    "lease_sign_date": "2023-11-02",
+    "move_in": "2023-11-03",
+    "renewal_start_date": "2026-12-01",
+    "last_lease_renewal": "2026-12-01",
     "rent": "1267.00"
   },
   {
