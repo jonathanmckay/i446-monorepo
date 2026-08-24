@@ -564,7 +564,7 @@ def mark_done() -> dict:
     """Run did-fast.py to mark 0t done in 0₦ + Todoist."""
     proc = subprocess.run(
         ["python3", str(DID_FAST), "0t"],
-        capture_output=True, text=True, timeout=45,
+        capture_output=True, text=True, timeout=90,
     )
     if proc.returncode == 0:
         return json.loads(proc.stdout)
