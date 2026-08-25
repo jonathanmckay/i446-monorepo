@@ -528,6 +528,18 @@
     "rent": "1304.00"
   },
   {
+    "unit_id": 521,
+    "property_name": "rl16",
+    "unit": "A08",
+    "tenant_name": "Elgin, Ashley R.",
+    "status": "Pending",
+    "lease_sign_date": "2024-08-16",
+    "move_in": "2024-08-21",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2025-09-01",
+    "rent": "1595.00"
+  },
+  {
     "unit_id": 1254,
     "property_name": "tc68",
     "unit": "D105",
@@ -676,7 +688,7 @@
     "property_name": "c702",
     "unit": "C104",
     "tenant_name": "Juitt, Linda",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2021-08-04",
     "renewal_start_date": null,
@@ -1168,7 +1180,7 @@
     "property_name": "rl16",
     "unit": "B16",
     "tenant_name": "Bahadur Poudel Chhetri, Tej",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2023-10-23",
     "renewal_start_date": null,
@@ -1372,7 +1384,7 @@
     "property_name": "c313",
     "unit": "22",
     "tenant_name": "Hyatt, Jacob A.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-02-27",
     "move_in": "2025-03-01",
     "renewal_start_date": null,
@@ -2640,18 +2652,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 879,
-    "property_name": "kn47 K1",
-    "unit": "E101",
-    "tenant_name": "Velic, Nermina",
-    "status": "Eligible",
-    "lease_sign_date": "2025-12-09",
-    "move_in": "2025-12-11",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
-  },
-  {
     "unit_id": 901,
     "property_name": "kn47 K1",
     "unit": "F107",
@@ -3468,18 +3468,6 @@
     "rent": "1036.00"
   },
   {
-    "unit_id": 272,
-    "property_name": "m405",
-    "unit": "DB",
-    "tenant_name": "Geddes, Dan",
-    "status": "Eligible",
-    "lease_sign_date": "2023-10-30",
-    "move_in": "2022-04-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "981.00"
-  },
-  {
     "unit_id": 1139,
     "property_name": "o155-Elm",
     "unit": "L",
@@ -3795,7 +3783,7 @@
     "unit_id": 1325,
     "property_name": "c702",
     "unit": "D101",
-    "tenant_name": "Total*, Frank",
+    "tenant_name": "Total, Frank",
     "status": "Eligible",
     "lease_sign_date": null,
     "move_in": "2014-08-01",
