@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from neon import cols, excel  # noqa: E402
+import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 
 # AppleScript's `as number` (and the daemon's float()) only coerce ASCII
 # digits — `/ص ٨` used to fail silently. Normalize before validating.
@@ -51,7 +51,7 @@ def main() -> int:
             print(f"ص: cannot parse {sys.argv[1]!r} as a number")
             return 1
 
-    now = datetime.now()
+    now = daytime.local_now()
     today = f"{now.month}/{now.day}"
     col = cols.maybe_col("0n", "ص") or "AP"
 

@@ -86,7 +86,7 @@ def test_no_early_return_before_stamping_for_auto_mode():
 def test_all_rituals_including_auto_target_the_current_block():
     body = _run_ritual_body()
     assert "is_auto = " in body
-    assert "nb.current_block(datetime.now().hour)" in body, (
+    assert "nb.current_block(_daytime.local_now().hour)" in body, (
         "ALL rituals — including ⏱️/✅ — must stamp the CURRENT block, "
         "matching the daemon's own convention (its retrospective CHECK looks "
         "at the previous block, but the STAMP lands on the block being "

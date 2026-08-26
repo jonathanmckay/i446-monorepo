@@ -40,8 +40,16 @@ TASK_QUEUE_PATH = _sp.TASK_QUEUE
 def _tz() -> ZoneInfo:
     """Live-resolved active timezone — see lib/daytime.py. Replaces the old
     TZ = ZoneInfo("America/Los_Angeles") constant, which stayed PT-anchored
-    even when the device (and date.today() calls elsewhere in this file)
-    followed local time while traveling — the two could disagree by hours."""
+    even when the device followed local time while traveling. Every
+    date.today()/datetime.now() call in this file also routes through
+    _daytime (today()/local_now()) for the same reason: a naive call
+    reads whichever machine's OS clock actually executes it — correct on
+    the traveler's own laptop if its OS TZ follows location, but wrong
+    for any call that happens to run on ix (the home server, which never
+    travels and stays on Pacific time) — e.g. janus-mobile invoking
+    did-fast.py locally on ix. Found live 2026-08-26: Neon writes and
+    /did defer-date resolution were landing on Ix's Pacific "today"
+    instead of the traveler's actual current day."""
     return _daytime.active_zone()
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 TODOIST_BASE = "https://api.todoist.com/api/v1"
@@ -345,7 +353,7 @@ def toggl_minutes_for(name) -> Optional[int]:
             sys.path.insert(0, str(Path.home() / "i446-monorepo"))
             _ensure_toggl_key()
             from mcp.toggl_server import toggl_api
-            today = date.today()
+            today = _daytime.today()
             _TOGGL_TODAY = toggl_api.get_entries(
                 start_date=today.isoformat(),
                 end_date=(today + timedelta(days=1)).isoformat()) or []
@@ -461,7 +469,7 @@ class ParsedItem:
 
 def parse_input(raw: str) -> list[ParsedItem]:
     """Split on comma/semicolon, parse each item."""
-    today = date.today()
+    today = _daytime.today()
     today_md = f"{today.month}/{today.day}"
 
     # Check for trailing date
@@ -491,7 +499,7 @@ def parse_input(raw: str) -> list[ParsedItem]:
             defer_raw = defer_match.group(1).strip()
             chunk = chunk[:defer_match.start()].strip()
             # Resolve defer date
-            _today = date.today()
+            _today = _daytime.today()
             dl = defer_raw.lower()
             if dl in ("tmrw", "tomorrow"):
                 item.defer_date = (_today + timedelta(days=1)).isoformat()
@@ -636,10 +644,16 @@ def load_headers() -> dict:
         refreshed = data.get("refreshed", "")
         if refreshed:
             try:
-                age = datetime.now() - datetime.fromisoformat(refreshed)
+                age = _daytime.local_now() - datetime.fromisoformat(refreshed)
                 if age.total_seconds() < HEADERS_MAX_AGE_HOURS * 3600:
                     return data
-            except ValueError:
+            except (ValueError, TypeError):
+                # TypeError: an existing headers.json on disk may still carry
+                # a naive "refreshed" timestamp written before this file's
+                # datetime.now() calls were switched to the tz-aware
+                # _daytime.local_now() — naive minus aware raises TypeError,
+                # not ValueError. Treat it as stale (falls through to a
+                # refresh) rather than crashing the caller.
                 pass
     return refresh_headers()
 
@@ -701,7 +715,7 @@ end tell'''
             headers_1n[name.lower()] = key  # column letter
 
     data = {
-        "refreshed": datetime.now().isoformat(),
+        "refreshed": _daytime.local_now().isoformat(),
         "0n": headers_0n,
         "1n": headers_1n,
     }
@@ -874,7 +888,7 @@ def _refresh_task_queue_inner() -> dict:
     # Filter out tasks with due date in the future — Todoist's "today | overdue"
     # returns recurring tasks whose next occurrence is future, inflating the count.
     if today_result:
-        today_iso = datetime.now().strftime("%Y-%m-%d")
+        today_iso = _daytime.local_now().strftime("%Y-%m-%d")
         today_result = [t for t in today_result
                         if t.get("due") and t["due"] <= today_iso]
 
@@ -897,7 +911,7 @@ def _refresh_task_queue_inner() -> dict:
     # with no such check, silently resurrecting already-closed tasks —
     # including -1neon rituals — every refresh thereafter (2026-08-11 bug:
     # "-1n tasks rendering in dtd web even though I've done them").
-    _today_str = datetime.now().strftime("%Y-%m-%d")
+    _today_str = _daytime.local_now().strftime("%Y-%m-%d")
     closed_today_ids: set = set()
     try:
         _ctj = mc._load(mc.COMPLETED)
@@ -948,7 +962,7 @@ def _refresh_task_queue_inner() -> dict:
     # deliberately NOT a top-level cache key (dtd reads ritual cards from
     # `today`), so union rather than add a bucket.
     try:
-        today_iso = datetime.now().strftime("%Y-%m-%d")
+        today_iso = _daytime.local_now().strftime("%Y-%m-%d")
         # Block-boundary gate for BOTH carry-forward paths below (empty and
         # partial fetch): cards the daemon retired at a boundary must never
         # outlive their block, no matter how the flaky fetch failed. Originally
@@ -960,7 +974,7 @@ def _refresh_task_queue_inner() -> dict:
         # -1neon fetch right after a boundary carried the just-retired
         # (and separately auto-triage-mangled) previous block's -1g/-1ibx/-1l
         # forward alongside the new block's freshly created bare cards.
-        _now = datetime.now()
+        _now = _daytime.local_now()
         try:
             _upd = datetime.fromisoformat(old_cache.get("updated", ""))
             same_block = (_upd.date() == _now.date()
@@ -1079,7 +1093,7 @@ def _refresh_task_queue_inner() -> dict:
 
     # Atomic file write: write to temp, then rename
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
-    cache = {"updated": datetime.now().isoformat()}
+    cache = {"updated": _daytime.local_now().isoformat()}
     cache.update(results)
     # Attach Haiku short names so a ctrl-r / startup refresh keeps the compact
     # display instead of reverting to the long names (which overflow the border).
@@ -1195,8 +1209,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
         # Step 0.1: 0₦ match (hyphen/space-insensitive)
         if name_norm in h0n_norm and not pref_is_1neon:
-            today_md = item.target_date or f"{date.today().month}/{date.today().day}"
-            today_date = date.today()
+            today_md = item.target_date or f"{_daytime.today().month}/{_daytime.today().day}"
+            today_date = _daytime.today()
             # Past date → needs agent (posthoc flow), UNLESS dtd passed a
             # specific task_id (preferred_id): that means the user is
             # completing an EXACT, already-open Todoist task they're looking
@@ -2383,9 +2397,9 @@ def _log_ritual(out: dict) -> None:
     try:
         log_dir = Path.home() / ".cache" / "jm"
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / f"ritual-completions-{datetime.now():%Y-%m-%d}.jsonl"
+        log_path = log_dir / f"ritual-completions-{_daytime.local_now():%Y-%m-%d}.jsonl"
         entry = dict(out)
-        entry["ts"] = datetime.now().isoformat(timespec="seconds")
+        entry["ts"] = _daytime.local_now().isoformat(timespec="seconds")
         with open(log_path, "a") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001 — logging must never block a ritual
@@ -2473,7 +2487,7 @@ def run_ritual(tag: str) -> dict:
             out["healed_stamps"] = healed["merged"]
     except Exception as e:  # noqa: BLE001 — healing must never block a ritual
         out["heal_error"] = str(e)
-    block = nb.current_block(datetime.now().hour)
+    block = nb.current_block(_daytime.local_now().hour)
     out["block"] = block
     if not bo.exists():
         out["error"] = "build-order.md not found"
@@ -2599,7 +2613,7 @@ def run_ritual(tag: str) -> dict:
     #    append instead, so P can still grow but never drops.
     pts = int(r.get("points") or 0)
     if pts and changed:
-        now = datetime.now()
+        now = _daytime.local_now()
         _, computed_total, computed_formula = nb.score_day(new_text)
 
         # Read + write via the excel-http daemon (audit ledger + chain check)
@@ -2863,7 +2877,7 @@ def main():
 
     # 4. Batch 0₦ writes
     on_writes = [r for r in fast if r.step == "0n" and r.col_num]
-    target_date = items[0].target_date or f"{date.today().month}/{date.today().day}"
+    target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
 
     on_result = None
     if on_writes:
@@ -2894,7 +2908,7 @@ def main():
             try:
                 import night_hcmc_toggl as _nh
                 td_parts = target_date.split("/")
-                td = (date(date.today().year, int(td_parts[0]), int(td_parts[1]))
+                td = (date(_daytime.today().year, int(td_parts[0]), int(td_parts[1]))
                       - timedelta(days=1))
                 night_hcmc_results[r.item.name] = _nh.apply_placement(
                     int(r.write_value), td)
@@ -2912,7 +2926,7 @@ def main():
     one_n_result = None
     week_row = None
     if one_n_writes:
-        week_mw = calc_week_mw(date.today())
+        week_mw = calc_week_mw(_daytime.today())
         script = build_1n_script(one_n_writes, week_mw)
         if script:
             one_n_result = ix_run(script, timeout=30.0)
@@ -3007,7 +3021,7 @@ def main():
             import sys as _s3
             _s3.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
             import neon_blocks as _nb3
-            _now_h = datetime.now().hour
+            _now_h = _daytime.local_now().hour
             _bname = _nb3.current_block(_now_h)
             if _on_ix():
                 _bo = Path.home() / "vault/g245/5e-1/build-order.md"
@@ -3075,8 +3089,8 @@ def main():
     catch_up = []  # (tid, due_string) for OVERDUE recurring habits to fast-forward
     # 0neon recurring tasks that may be completed in advance
     ADVANCE_ALLOWED = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
-    today_str = date.today().isoformat()
-    tomorrow_str = (date.today() + timedelta(days=1)).isoformat()
+    today_str = _daytime.today().isoformat()
+    tomorrow_str = (_daytime.today() + timedelta(days=1)).isoformat()
     # Idempotency source of truth: a recurring habit already in today's
     # completed-today.json must NOT be closed again. Each close advances an
     # "every day" recurrence by a day, so a same-day double-tap drifts the due
@@ -3234,8 +3248,8 @@ def main():
     variable_items = [] if points_only else [
         r for r in fast if r.step == "variable" and r.todoist_task is None]
     if variable_items:
-        today_iso = date.today().isoformat()
-        target_md = variable_items[0].item.target_date or f"{date.today().month}/{date.today().day}"
+        today_iso = _daytime.today().isoformat()
+        target_md = variable_items[0].item.target_date or f"{_daytime.today().month}/{_daytime.today().day}"
 
         def _create_posthoc(r):
             domain_label = r.error  # stashed domain label
