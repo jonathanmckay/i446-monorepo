@@ -81,6 +81,24 @@ def test_block_convention_consistent_across_tools():
     assert [(lo, b) for lo, hi, b, _ in check.BLOCKS] == daemon_blocks
 
 
+def test_run_lock_and_mark_uses_travel_aware_now():
+    """2026-08-26 bug: run_lock_and_mark computed 'now' via raw
+    dt.datetime.now() (ix's own fixed-PT system clock) instead of
+    daytime.local_now(), unlike every other 'now'/'today' read in this
+    file. During international travel this pins the -1neon ritual-card
+    create/retire cadence (and block scoring) to ix's home timezone even
+    once an explicit /travel override is active, so a traveling user's
+    current 地支 block never gets a fresh set of ritual cards."""
+    import inspect
+    mod = _load()
+    src = inspect.getsource(mod.run_lock_and_mark)
+    assert "daytime.local_now()" in src, (
+        "run_lock_and_mark must resolve 'now' via daytime.local_now() so it "
+        "honors an active /travel override, like the rest of this module"
+    )
+    assert "dt.datetime.now()" not in src
+
+
 def test_neon_blocks_build_order_path_matches_daemon():
     """lib/neon/blocks.py must point at the live build-order.md, not the old
     missing '-1₦ , 0₦ - Neon {Build Order}.md' — flip_checkbox/parse_block_goals

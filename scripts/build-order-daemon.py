@@ -1502,7 +1502,7 @@ def run_block_ritual_cards(hour: int, dry_run: bool = False,
 
 def run_lock_and_mark(dry_run=False, force_hour=None):
     """Score the just-ended block based on sub-habit emojis, write to -1₦ (P)."""
-    now = dt.datetime.now()
+    now = daytime.local_now()
     hour = force_hour if force_hour is not None else now.hour
     today = now.date()
 
