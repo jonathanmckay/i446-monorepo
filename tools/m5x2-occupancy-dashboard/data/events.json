@@ -5028,5 +5028,105 @@
     "unit": "31",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-09-13",
+    "kind": "leased",
+    "unit_id": "1272",
+    "prop": "c702",
+    "unit": "A102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "519",
+    "prop": "rl16",
+    "unit": "A06",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-09-19",
+    "kind": "leased",
+    "unit_id": "1224",
+    "prop": "tc68",
+    "unit": "C75",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-08-31",
+    "kind": "ntv",
+    "unit_id": "349",
+    "prop": "k104- LeFevre",
+    "unit": "107-5",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-08-25",
+    "kind": "moveout",
+    "unit_id": "930",
+    "prop": "kn47 K1",
+    "unit": "H204",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-08-27",
+    "kind": "leased",
+    "unit_id": "171",
+    "prop": "b101",
+    "unit": "8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-08-31",
+    "kind": "leased",
+    "unit_id": "1240",
+    "prop": "tc68",
+    "unit": "D091",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-08-26",
+    "kind": "movein",
+    "unit_id": "327",
+    "prop": "k104- LeFevre",
+    "unit": "506-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "868",
+    "prop": "kn47 K1",
+    "unit": "D106",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-26",
+    "effective": "2026-08-25",
+    "kind": "moveout",
+    "unit_id": "985",
+    "prop": "kn47 K1",
+    "unit": "M202",
+    "tenant": null,
+    "baseline": false
   }
 ]
