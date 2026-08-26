@@ -21,7 +21,17 @@ must never wedge the picker.
 Usage: dtd-ticker.py <port_file> [timer_file]
   <port_file> is written by fzf's `start` binding (echo $FZF_PORT > file).
   [timer_file] is dtd's $DTD_TIMER (desc<TAB>start_epoch); optional for back-compat.
-Exits when the port file disappears (picker gone) or POSTs fail persistently.
+Exits when: the port file disappears; dtd.sh (our direct parent — see dtd.sh's
+`python3 "$DTD_TICKER" ... &`, TICKER_PID capture) exits abnormally and we get
+reparented; POSTs fail persistently; or MAX_RUNTIME is hit regardless of the
+above (regression 2026-08-26: an orphaned ticker pinned ~100% CPU for 3 days.
+dtd.sh only kills it via an explicit `kill "$TICKER_PID"` at normal cleanup —
+nothing catches a crash/force-close, and fzf binds an OS-assigned ephemeral
+port, so a LATER, unrelated fzf --listen session can be reassigned the exact
+same port number; the stale ticker's change-footer() POST is valid to any fzf
+--listen instance, so it silently "succeeds" against the wrong picker and
+resets `fails` to 0 before it ever crosses the exit threshold — the port-file
+check alone can't tell "my picker" from "a picker").
 """
 from __future__ import annotations
 
@@ -53,6 +63,10 @@ TICK = 0.1   # seconds between footer repaints
 # picker — the single biggest contributor to Toggl 429s. 12s detection lag is
 # imperceptible for a footer and cuts this source ~75%.
 POLL = 12.0  # seconds between Toggl API reads (to catch a changed timer)
+MAX_RUNTIME = 6 * 3600  # insurance ceiling: force-exit regardless of the
+# liveness/fails checks below, in case some failure mode we haven't seen
+# defeats both of them too (as port-reuse defeated the fails-only check for
+# 3 days — see module docstring). No real dtd session runs anywhere near 6h.
 
 # Footer line color by project (feature 2026-07-24). COPY of janus.py's
 # PROJECT_COLORS, which is the color SOURCE (vault/i447/neon-color-pallette.md)
@@ -185,8 +199,20 @@ def main() -> None:
     last_timer_mtime = None
     fails = 0
 
+    # dtd.sh backgrounds us directly (`python3 "$DTD_TICKER" ... &`), so we are
+    # its child, not fzf's — if dtd.sh exits without reaching its cleanup-path
+    # `kill "$TICKER_PID"` (crash, force-close, kill -9), the kernel reparents
+    # us to launchd and getppid() changes. That's a kernel-guaranteed signal
+    # with no PID-reuse race, unlike polling an external PID by number.
+    parent_pid = os.getppid()
+    proc_start = time.time()
+
     while True:
         if not port_file.exists():   # picker exited and cleaned up
+            return
+        if os.getppid() != parent_pid:   # dtd.sh gone, we've been orphaned
+            return
+        if time.time() - proc_start > MAX_RUNTIME:   # insurance ceiling
             return
         port = _read_port(port_file)
         now = time.time()
