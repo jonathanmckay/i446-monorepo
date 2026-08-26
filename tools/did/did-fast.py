@@ -1669,7 +1669,19 @@ def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
 def build_0l_time_script(target_date: str) -> str:
     """0l special case: stamp the completion time (HHMM) into 0n's
     "N Color" column (cell 32) for the target date's row. 0n write —
-    stays raw AppleScript (only 0fen writes are daemon-routed)."""
+    stays raw AppleScript (only 0fen writes are daemon-routed).
+
+    The stamped time value is computed HERE (via _daytime.local_now(),
+    the traveler's actual current time), not inside the AppleScript via
+    `current date` — that read Ix's own system clock (Ix is the always-on
+    home server and never travels, so it stays on Pacific time), stamping
+    the wrong completion time whenever this script executes on Ix (e.g.
+    janus-mobile invoking did-fast.py locally there) or under an active
+    /travel override that diverges from Ix's clock. Found live 2026-08-26
+    alongside the parse_input date bug — same root cause, same fix.
+    """
+    now = _daytime.local_now()
+    time_str = now.hour * 100 + now.minute
     return f'''tell application "Microsoft Excel"
     set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set targetMonth to {target_date.split("/")[0]}
@@ -1689,9 +1701,7 @@ def build_0l_time_script(target_date: str) -> str:
         end if
     end repeat
     if todayRow = 0 then return "SKIP: date not found"
-    set h to hours of (current date)
-    set mn to minutes of (current date)
-    set timeStr to (h * 100 + mn)
+    set timeStr to {time_str}
     set value of cell 32 of row todayRow of theSheet to timeStr
     return "OK: N Color=" & timeStr & " row=" & todayRow
 end tell'''

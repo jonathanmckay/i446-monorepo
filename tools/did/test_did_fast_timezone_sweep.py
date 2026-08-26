@@ -73,6 +73,28 @@ def test_defer_date_resolution_follows_daytime(monkeypatch):
     assert items[0].defer_date == "2026-03-08"
 
 
+def test_0l_completion_time_stamp_follows_daytime_not_ix_clock(monkeypatch):
+    """The -1l completion-time stamp used to compute the HHMM value via
+    `current date` INSIDE the AppleScript, which executes on ix (the
+    always-on home server that never travels) — so it always stamped
+    Ix's Pacific clock time regardless of the traveler's actual local
+    time. The value must now be computed by the caller (via
+    _daytime.local_now()) and embedded as a literal in the generated
+    script, not left for ix to compute live."""
+    frozen = datetime(2026, 3, 7, 21, 47, tzinfo=ZoneInfo("Asia/Tokyo"))
+    mod = _load(monkeypatch, frozen)
+
+    script = mod.build_0l_time_script("3/7")
+    assert "current date" not in script, (
+        "the AppleScript must not compute the time itself via `current "
+        "date` — that reads whichever machine (ix) executes the script"
+    )
+    assert "set timeStr to 2147" in script, (
+        f"expected the frozen local time (21:47 -> 2147) embedded as a "
+        f"literal, got:\n{script}"
+    )
+
+
 def test_no_bare_date_today_or_datetime_now_remains():
     """Guard against a future edit reintroducing a naive call anywhere in
     this file — every date/time computation must route through the
