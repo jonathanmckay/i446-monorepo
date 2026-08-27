@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "stay away from tv tonight": {
-      "todoist_id": "6hMh7GXhfvprmj42",
-      "minutes": 60
-    },
-    "get gc tickets and build a plan for tomorrow": {
-      "todoist_id": "6hMh7GXGfpFH6XxR",
-      "minutes": 30
-    },
-    "get through basic work responsibilities": {
-      "todoist_id": "6hMh7GfHrxc7fJfR",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-08-27T03:55:01.959344-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-27T04:00:10.296872-07:00"
 }
