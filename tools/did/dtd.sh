@@ -868,6 +868,15 @@ if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
   read days < /dev/tty
   prompted=1
+  # Reset any mouse-tracking mode a child enabled, and drain any bytes
+  # already queued in the tty buffer from scroll/click events during the
+  # prompt above — leaked SGR motion sequences type themselves into fzf's
+  # query as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05;
+  # drain half of the fix was 2026-07-27 on done.sh/split.sh but never
+  # ported here). Runs immediately after the read, before the validation
+  # branch below can exit 0 on invalid input and skip cleanup entirely.
+  printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 fi
 days=\${days// /}
 if [[ -n "\$prompted" ]]; then
@@ -939,8 +948,14 @@ for i in {1..\${#ids[@]}}; do
   ) >/dev/null 2>&1 &!
 done
 # Reset any mouse-tracking mode a child enabled — leaked SGR motion
-# sequences type themselves into fzf's query (bug 2026-07-05).
+# sequences type themselves into fzf's query (bug 2026-07-05). Also drain
+# any bytes already queued in the tty buffer from scroll/click events during
+# the "Defer by N days" prompt above — the reset alone only stops FUTURE
+# events, it doesn't clear ones already sitting in the buffer, which fzf
+# then reads as literal ^[[<0;16;15M text on resume (same class of bug as
+# done.sh/split.sh, 2026-07-27, just never ported to this script).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 
 DEFEREOF
 chmod +x "$DTD_DEFER"
@@ -1074,15 +1089,21 @@ if [[ "\$clean" == *"…"* ]]; then
 fi
 printf "\nEdit: %s\n(text=rename · @code=domain · N=points)> " "\$clean" > /dev/tty
 read edits < /dev/tty
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the prompt above
+# — leaked SGR motion sequences type themselves into fzf's query as literal
+# ^[[<0;16;15M text on resume otherwise (bug 2026-07-05; drain half of the
+# fix was 2026-07-27 on done.sh/split.sh but never ported here). Runs
+# unconditionally, BEFORE the cancel check below, so a cancelled edit
+# (blank input) still cleans up instead of exiting past it.
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
   exit 0
 fi
 out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
-# Reset any mouse-tracking mode a child enabled — leaked SGR motion
-# sequences type themselves into fzf's query (bug 2026-07-05).
-printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 
 EDITEOF
 chmod +x "$DTD_EDIT"

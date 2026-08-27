@@ -41,11 +41,15 @@ def test_locked_line_trusts_goal_marker_despite_live():
     assert mod._marker_earned(mod.GOAL_MARKER, line, LIVE_ALL_FALSE)
 
 
-def test_unlocked_line_still_gates_goal_marker_on_live():
-    """The stale-goal protection must survive the lock feature."""
+def test_unlocked_line_still_trusts_goal_marker_on_live():
+    """2026-08-11 per JM: '-1g should always give me the points and audit
+    should not revoke them.' 🎯 is trusted on header presence alone, lock
+    or no lock — this test used to assert the OLD pre-2026-08-11 behavior
+    (live-gated, stripped without a lock) and had been red ever since that
+    change shipped without ever being updated to match."""
     mod = _load()
     line = "- 辰 ☀️ 🎯 ⏱️ ✅ 📧 (67min) 😈"
-    assert not mod._marker_earned(mod.GOAL_MARKER, line, LIVE_ALL_FALSE)
+    assert mod._marker_earned(mod.GOAL_MARKER, line, LIVE_ALL_FALSE)
 
 
 def test_locked_block_scores_full_13(tmp_path):
@@ -62,14 +66,18 @@ def test_strip_skips_locked_block(tmp_path):
     assert "🎯" in bo.read_text(encoding="utf-8"), "locked stamps must never be stripped"
 
 
-def test_strip_still_removes_stale_goal_from_unlocked_block(tmp_path):
+def test_strip_leaves_goal_marker_on_unlocked_block(tmp_path):
+    """2026-08-11 per JM (same change as _marker_earned above):
+    DAEMON_OWNED_MARKERS was emptied so _strip_unearned_markers never claws
+    back 🎯, lock or no lock. This test used to assert the OLD strip
+    behavior and had been red since that change, never updated to match."""
     mod = _load()
     bo = _build_order(tmp_path, "- 辰 ☀️ 🎯 ⏱️ ✅ 📧 (67min) 😈")
     mod.BUILD_ORDER = bo
     mod._strip_unearned_markers("辰", LIVE_ALL_FALSE)
     chen = next(l for l in bo.read_text(encoding="utf-8").split("\n")
                 if l.startswith("- 辰"))
-    assert "🎯" not in chen
+    assert "🎯" in chen
 
 
 if __name__ == "__main__":

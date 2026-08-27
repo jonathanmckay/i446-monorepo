@@ -1501,10 +1501,23 @@ def run_block_ritual_cards(hour: int, dry_run: bool = False,
 
 
 def run_lock_and_mark(dry_run=False, force_hour=None):
-    """Score the just-ended block based on sub-habit emojis, write to -1₦ (P)."""
-    now = daytime.local_now()
-    hour = force_hour if force_hour is not None else now.hour
-    today = now.date()
+    """Score the just-ended block based on sub-habit emojis, write to -1₦ (P).
+
+    'hour'/block-name resolution follows the traveler (daytime.local_now())
+    so the ritual-card cadence and block labeling track wherever the user
+    actually is. 'today' deliberately does NOT: it stays pinned to ix's own
+    real PT calendar day via dt.date.today(), matching every other
+    date-keyed reader/writer this function touches (the 0分 Excel row, the
+    build-order.md frontmatter date, and the archive/reset job that only
+    rolls the day over at real PT 03:00). A travel override with an odd
+    hour offset (e.g. Berlin, PT+9h) makes the active zone's calendar date
+    diverge from PT's for hours at a stretch each real day; if 'today' also
+    followed the traveler, this function would score/lock/write against a
+    date the rest of the -1₦ pipeline doesn't consider 'today' yet (2026-08-27
+    rubber-duck catch, before it ever ran live)."""
+    active_now = daytime.local_now()
+    hour = force_hour if force_hour is not None else active_now.hour
+    today = dt.date.today()
 
     if hour not in BLOCK_FIRE_HOURS:
         log(f"lock-and-mark: hour {hour} is not a fire time — nothing to do")

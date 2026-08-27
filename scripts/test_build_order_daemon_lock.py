@@ -99,6 +99,27 @@ def test_run_lock_and_mark_uses_travel_aware_now():
     assert "dt.datetime.now()" not in src
 
 
+def test_run_lock_and_mark_keeps_today_pt_anchored():
+    """2026-08-27 rubber-duck catch: 'hour' must follow the traveler
+    (daytime.local_now()) but 'today' must NOT — it has to stay pinned to
+    ix's own real PT calendar day (dt.date.today()), matching the 0分 Excel
+    row, the build-order.md frontmatter date, and the archive/reset job
+    (real PT 03:00). A travel override with an odd hour offset (e.g. Berlin,
+    PT+9h) makes the active zone's date diverge from PT's for hours at a
+    stretch each real day; if 'today' also followed the traveler this
+    function would score/lock/write against a date the rest of the -1₦
+    pipeline doesn't consider 'today' yet."""
+    import inspect
+    mod = _load()
+    src = inspect.getsource(mod.run_lock_and_mark)
+    assert "today = dt.date.today()" in src, (
+        "'today' must be ix's own real-clock date, not the travel-aware "
+        "active_now/daytime.local_now() value"
+    )
+    assert "today = active_now.date()" not in src
+    assert "today = now.date()" not in src
+
+
 def test_neon_blocks_build_order_path_matches_daemon():
     """lib/neon/blocks.py must point at the live build-order.md, not the old
     missing '-1₦ , 0₦ - Neon {Build Order}.md' — flip_checkbox/parse_block_goals
