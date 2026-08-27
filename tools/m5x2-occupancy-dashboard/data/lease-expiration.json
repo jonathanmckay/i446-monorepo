@@ -168,18 +168,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 943,
-    "property_name": "kn47 K1",
-    "unit": "J201",
-    "tenant_name": "Delgado , Josiah  V.",
-    "status": "Renewed",
-    "lease_sign_date": "2026-05-08",
-    "move_in": "2026-05-06",
-    "renewal_start_date": "2027-05-01",
-    "last_lease_renewal": "2027-05-01",
-    "rent": "936.00"
-  },
-  {
     "unit_id": 944,
     "property_name": "kn47 K1",
     "unit": "J202",
@@ -490,18 +478,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2023-09-01",
     "rent": "1140.00"
-  },
-  {
-    "unit_id": 1353,
-    "property_name": "c702",
-    "unit": "E201",
-    "tenant_name": "Bocook, Shirley",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-08-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "0.00"
   },
   {
     "unit_id": 1299,
@@ -3836,7 +3812,7 @@
     "lease_sign_date": "2026-02-26",
     "move_in": "2026-02-27",
     "renewal_start_date": null,
-    "last_lease_renewal": null,
+    "last_lease_renewal": "2026-03-01",
     "rent": "1136.00"
   },
   {
