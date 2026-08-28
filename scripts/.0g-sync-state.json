@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "tour the grounds with open mind": {
-      "todoist_id": "6hMxCXFVjHFFRF22",
-      "minutes": 60
-    },
-    "get 2h of doing my own thing on the train": {
-      "todoist_id": "6hMww4Q4hvXf53M2",
-      "minutes": 30
-    },
-    "have a good evening without tv": {
-      "todoist_id": "6hMww4RVvCw887RR",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-08-28T03:55:02.054409-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-28T04:00:12.141062-07:00"
 }
