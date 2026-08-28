@@ -480,6 +480,18 @@
     "rent": "1140.00"
   },
   {
+    "unit_id": 127,
+    "property_name": "a210",
+    "unit": "8",
+    "tenant_name": "Pehrson, Tiffany M.",
+    "status": "Eligible",
+    "lease_sign_date": "2023-05-09",
+    "move_in": "2023-05-09",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2025-09-01",
+    "rent": "1055.00"
+  },
+  {
     "unit_id": 1299,
     "property_name": "c702",
     "unit": "B301",
@@ -514,18 +526,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1545.00"
-  },
-  {
-    "unit_id": 5,
-    "property_name": "a916",
-    "unit": "4",
-    "tenant_name": "Swiger, Cassaundra  M.",
-    "status": "Eligible",
-    "lease_sign_date": "2024-09-16",
-    "move_in": "2024-09-16",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "875.00"
   },
   {
     "unit_id": 8,
@@ -672,18 +672,6 @@
     "rent": "1175.00"
   },
   {
-    "unit_id": 309,
-    "property_name": "k104- LeFevre",
-    "unit": "519-3",
-    "tenant_name": "Enright, Dominic O.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-09-30",
-    "move_in": "2025-10-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1130.00"
-  },
-  {
     "unit_id": 319,
     "property_name": "k104- LeFevre",
     "unit": "406-3",
@@ -756,18 +744,6 @@
     "rent": "2054.00"
   },
   {
-    "unit_id": 847,
-    "property_name": "kn47 K1",
-    "unit": "C105",
-    "tenant_name": "Chavez, Maria G.",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2024-09-25",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 853,
     "property_name": "kn47 K1",
     "unit": "C111",
@@ -786,7 +762,7 @@
     "tenant_name": "Barron, Angel",
     "status": "Eligible",
     "lease_sign_date": "2025-04-01",
-    "move_in": "2025-03-27",
+    "move_in": "2025-03-26",
     "renewal_start_date": null,
     "last_lease_renewal": "2026-04-01",
     "rent": "1089.00"
@@ -828,30 +804,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 1033,
-    "property_name": "kn47 K2",
-    "unit": "C202",
-    "tenant_name": "Chavez Delgado , Mariceny",
-    "status": "Eligible",
-    "lease_sign_date": "2025-09-30",
-    "move_in": "2025-10-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 1043,
-    "property_name": "kn47 K2",
-    "unit": "D104",
-    "tenant_name": "Gomez Castaneda, Jonathan",
-    "status": "Eligible",
-    "lease_sign_date": "2025-06-09",
-    "move_in": "2025-06-09",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-07-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 248,
     "property_name": "m405",
     "unit": "2",
@@ -868,7 +820,7 @@
     "property_name": "m405",
     "unit": "15",
     "tenant_name": "Leiker, Matthew J.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-10-29",
     "move_in": "2025-10-29",
     "renewal_start_date": null,
@@ -900,18 +852,6 @@
     "rent": "1087.00"
   },
   {
-    "unit_id": 211,
-    "property_name": "ms22",
-    "unit": "2258",
-    "tenant_name": "Marshall, Carter A.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-08-19",
-    "move_in": "2025-09-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "945.00"
-  },
-  {
     "unit_id": 1109,
     "property_name": "o155-Oak",
     "unit": "B5",
@@ -936,52 +876,16 @@
     "rent": "1000.00"
   },
   {
-    "unit_id": 1125,
-    "property_name": "o155-Oak",
-    "unit": "D4",
-    "tenant_name": "Hulett, Derek J",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-04-25",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1042.00"
-  },
-  {
     "unit_id": 222,
     "property_name": "p705",
     "unit": "06",
     "tenant_name": "Jones, Raisa R.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2023-10-14",
     "move_in": "2023-10-20",
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1315.00"
-  },
-  {
-    "unit_id": 413,
-    "property_name": "ps17",
-    "unit": "A11",
-    "tenant_name": "Moguel Lopez, Monserrat",
-    "status": "Eligible",
-    "lease_sign_date": "2025-10-11",
-    "move_in": "2025-10-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "910.00"
-  },
-  {
-    "unit_id": 416,
-    "property_name": "ps17",
-    "unit": "B2",
-    "tenant_name": "Prieto, Juan D.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-09-04",
-    "move_in": "2025-10-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "910.00"
   },
   {
     "unit_id": 360,
@@ -1036,24 +940,12 @@
     "property_name": "ps91",
     "unit": "916",
     "tenant_name": "Galvez, Arturo",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2023-08-22",
     "move_in": "2023-09-15",
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "841.00"
-  },
-  {
-    "unit_id": 568,
-    "property_name": "rl16",
-    "unit": "C07",
-    "tenant_name": "Clifton, Crystal A.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-08-24",
-    "move_in": "2025-09-13",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1595.00"
   },
   {
     "unit_id": 520,
@@ -1072,7 +964,7 @@
     "property_name": "rl16",
     "unit": "A13",
     "tenant_name": "Davis, Casey",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2019-11-15",
     "renewal_start_date": null,
@@ -1092,54 +984,6 @@
     "rent": "1589.50"
   },
   {
-    "unit_id": 553,
-    "property_name": "rl16",
-    "unit": "B16",
-    "tenant_name": "Bahadur Poudel Chhetri, Tej",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2023-10-23",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1395.00"
-  },
-  {
-    "unit_id": 560,
-    "property_name": "rl16",
-    "unit": "B23",
-    "tenant_name": "Weed, Breeanna  D.",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2026-03-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1595.00"
-  },
-  {
-    "unit_id": 581,
-    "property_name": "rl16",
-    "unit": "C20",
-    "tenant_name": "Bauman, Reece M.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-10-09",
-    "move_in": "2025-10-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1275.00"
-  },
-  {
-    "unit_id": 585,
-    "property_name": "rl16",
-    "unit": "C24",
-    "tenant_name": "Perry, Rebecca N.",
-    "status": "Eligible",
-    "lease_sign_date": "2024-08-28",
-    "move_in": "2024-09-27",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1395.00"
-  },
-  {
     "unit_id": 594,
     "property_name": "rl16",
     "unit": "D09",
@@ -1150,18 +994,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1542.20"
-  },
-  {
-    "unit_id": 657,
-    "property_name": "s129",
-    "unit": "6",
-    "tenant_name": "Grandison, Maura L.",
-    "status": "Pending",
-    "lease_sign_date": "2025-09-18",
-    "move_in": "2025-09-19",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1345.00"
   },
   {
     "unit_id": 658,
@@ -1186,18 +1018,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1325.00"
-  },
-  {
-    "unit_id": 668,
-    "property_name": "s129",
-    "unit": "17",
-    "tenant_name": "Bonnard, Julien",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2020-11-06",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1248.00"
   },
   {
     "unit_id": 814,
@@ -1632,18 +1452,6 @@
     "rent": "965.00"
   },
   {
-    "unit_id": 565,
-    "property_name": "rl16",
-    "unit": "C04",
-    "tenant_name": "Munns, Sheila L.",
-    "status": "Pending",
-    "lease_sign_date": "2025-11-18",
-    "move_in": "2025-11-19",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-19",
-    "rent": "1275.00"
-  },
-  {
     "unit_id": 605,
     "property_name": "rl16",
     "unit": "D20",
@@ -1762,18 +1570,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1650.00"
-  },
-  {
-    "unit_id": 451,
-    "property_name": "w117",
-    "unit": "4",
-    "tenant_name": "Farnsworth, Robert D.",
-    "status": "Pending",
-    "lease_sign_date": "2025-09-27",
-    "move_in": "2025-10-25",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "925.00"
   },
   {
     "unit_id": 170,
