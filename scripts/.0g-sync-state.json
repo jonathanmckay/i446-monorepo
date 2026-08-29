@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-29T08:00:00.861503-07:00"
+  "tasks": {
+    "see eifel tower": {
+      "todoist_id": "6hPMvx4WhpXgh8PR",
+      "minutes": 60
+    },
+    "get 2h of my own time": {
+      "todoist_id": "6hPMvx5VCfWQ5XVR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-08-29T10:00:01.077773-07:00"
 }
