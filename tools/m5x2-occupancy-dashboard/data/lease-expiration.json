@@ -492,18 +492,6 @@
     "rent": "1055.00"
   },
   {
-    "unit_id": 1299,
-    "property_name": "c702",
-    "unit": "B301",
-    "tenant_name": "Holman, Jessica",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-08-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "0.00"
-  },
-  {
     "unit_id": 521,
     "property_name": "rl16",
     "unit": "A08",
@@ -514,30 +502,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-09-01",
     "rent": "1595.00"
-  },
-  {
-    "unit_id": 1254,
-    "property_name": "tc68",
-    "unit": "D105",
-    "tenant_name": "Estrada, Sean V.",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-08-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1545.00"
-  },
-  {
-    "unit_id": 8,
-    "property_name": "a916",
-    "unit": "7",
-    "tenant_name": "Hammond, Sean C.",
-    "status": "Pending",
-    "lease_sign_date": "2020-09-20",
-    "move_in": "2020-09-21",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "875.00"
   },
   {
     "unit_id": 173,
@@ -592,7 +556,7 @@
     "property_name": "c702",
     "unit": "E306",
     "tenant_name": "DeLoney, Mara",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2025-09-05",
     "renewal_start_date": null,
@@ -607,18 +571,6 @@
     "status": "Eligible",
     "lease_sign_date": null,
     "move_in": "2025-09-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "0.00"
-  },
-  {
-    "unit_id": 1374,
-    "property_name": "c702",
-    "unit": "F206",
-    "tenant_name": "Sawyer, Rachael",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-09-19",
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "0.00"
@@ -876,16 +828,16 @@
     "rent": "1000.00"
   },
   {
-    "unit_id": 222,
-    "property_name": "p705",
-    "unit": "06",
-    "tenant_name": "Jones, Raisa R.",
+    "unit_id": 1125,
+    "property_name": "o155-Oak",
+    "unit": "D4",
+    "tenant_name": "Hulett, Derek J",
     "status": "Pending",
-    "lease_sign_date": "2023-10-14",
-    "move_in": "2023-10-20",
+    "lease_sign_date": null,
+    "move_in": "2025-04-25",
     "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1315.00"
+    "last_lease_renewal": "2026-04-01",
+    "rent": "1042.00"
   },
   {
     "unit_id": 360,
@@ -1188,18 +1140,6 @@
     "rent": "1749.00"
   },
   {
-    "unit_id": 977,
-    "property_name": "kn47 K1",
-    "unit": "M102",
-    "tenant_name": "Dewitt, Rosemary E.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-23",
-    "move_in": "2025-10-25",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-25",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 859,
     "property_name": "kn47 K1",
     "unit": "C207",
@@ -1222,18 +1162,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "931.00"
-  },
-  {
-    "unit_id": 881,
-    "property_name": "kn47 K1",
-    "unit": "E103",
-    "tenant_name": "Moore, Vicki M.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2014-09-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-01",
-    "rent": "1089.00"
   },
   {
     "unit_id": 912,
@@ -1344,18 +1272,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 1073,
-    "property_name": "kn47-k3",
-    "unit": "K102",
-    "tenant_name": "Hunt, Nashon O.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-30",
-    "move_in": "2025-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1410.00"
-  },
-  {
     "unit_id": 424,
     "property_name": "m221",
     "unit": "4",
@@ -1438,18 +1354,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1145.00"
-  },
-  {
-    "unit_id": 499,
-    "property_name": "ps91",
-    "unit": "10",
-    "tenant_name": "Gorden, Izek G.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-27",
-    "move_in": "2025-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "965.00"
   },
   {
     "unit_id": 605,

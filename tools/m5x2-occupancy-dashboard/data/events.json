@@ -5378,5 +5378,85 @@
     "unit": "C07",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-08-29",
+    "kind": "movein",
+    "unit_id": "1225",
+    "prop": "tc68",
+    "unit": "C76",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-08-29",
+    "kind": "movein",
+    "unit_id": "745",
+    "prop": "c313",
+    "unit": "37",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "222",
+    "prop": "p705",
+    "unit": "06",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "1237",
+    "prop": "tc68",
+    "unit": "D088",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-09-16",
+    "kind": "leased",
+    "unit_id": "1216",
+    "prop": "tc68",
+    "unit": "C67",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-12-15",
+    "kind": "ntv",
+    "unit_id": "1182",
+    "prop": "tc68",
+    "unit": "B33",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-08-29",
+    "kind": "movein",
+    "unit_id": "1125",
+    "prop": "o155-Oak",
+    "unit": "D4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-29",
+    "effective": "2026-09-10",
+    "kind": "ntv",
+    "unit_id": "1299",
+    "prop": "c702",
+    "unit": "B301",
+    "tenant": null,
+    "baseline": false
   }
 ]
