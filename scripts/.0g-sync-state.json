@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-08-30T06:00:04.303938-07:00"
+  "tasks": {
+    "good media": {
+      "todoist_id": "6hPcXpw8gqxhJx4R",
+      "minutes": 10
+    },
+    "tasks down to 60": {
+      "todoist_id": "6hPcXpv8c9gV2C9R",
+      "minutes": 60
+    },
+    "4h good with theo": {
+      "todoist_id": "6hPcXpxhv8mwcPX2",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-08-30T08:00:02.239942-07:00"
 }
