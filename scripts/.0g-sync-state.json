@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "good media": {
-      "todoist_id": "6hPcXpw8gqxhJx4R",
-      "minutes": 10
-    },
-    "tasks down to 60": {
-      "todoist_id": "6hPcXpv8c9gV2C9R",
-      "minutes": 60
-    }
-  },
-  "last_sync": "2026-08-31T03:55:00.774586-07:00"
+  "tasks": {},
+  "last_sync": "2026-08-31T04:00:04.517187-07:00"
 }
