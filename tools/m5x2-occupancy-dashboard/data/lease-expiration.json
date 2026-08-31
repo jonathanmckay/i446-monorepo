@@ -504,18 +504,6 @@
     "rent": "1595.00"
   },
   {
-    "unit_id": 173,
-    "property_name": "b101",
-    "unit": "10",
-    "tenant_name": "Williams, William A.",
-    "status": "Pending",
-    "lease_sign_date": "2025-09-12",
-    "move_in": "2025-09-12",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "895.00"
-  },
-  {
     "unit_id": 458,
     "property_name": "c302",
     "unit": "4",
@@ -754,18 +742,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1089.00"
-  },
-  {
-    "unit_id": 248,
-    "property_name": "m405",
-    "unit": "2",
-    "tenant_name": "Murray , Marjorie A.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-29",
-    "move_in": "2025-10-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "925.00"
   },
   {
     "unit_id": 260,
@@ -1219,18 +1195,6 @@
     "status": "Pending",
     "lease_sign_date": "2025-10-07",
     "move_in": "2025-10-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 1037,
-    "property_name": "kn47 K2",
-    "unit": "C206",
-    "tenant_name": "Badillo, Yassary G.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-02",
-    "move_in": "2025-10-02",
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1089.00"

@@ -5468,5 +5468,55 @@
     "unit": "9",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-08-31",
+    "effective": "2026-08-31",
+    "kind": "movein",
+    "unit_id": "1240",
+    "prop": "tc68",
+    "unit": "D091",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-31",
+    "effective": "2026-08-31",
+    "kind": "movein",
+    "unit_id": "1229",
+    "prop": "tc68",
+    "unit": "D080",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-31",
+    "effective": "2026-08-30",
+    "kind": "moveout",
+    "unit_id": "700",
+    "prop": "l912 (Multi-Family)",
+    "unit": "104",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-31",
+    "effective": "2026-09-01",
+    "kind": "leased",
+    "unit_id": "745",
+    "prop": "c313",
+    "unit": "37",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-08-31",
+    "effective": "2026-08-31",
+    "kind": "movein",
+    "unit_id": "339",
+    "prop": "k104- LeFevre",
+    "unit": "505-3",
+    "tenant": null,
+    "baseline": false
   }
 ]
