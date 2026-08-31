@@ -186,6 +186,21 @@ def test_output_never_exceeds_two_lines():
     assert text.count("\n") <= 2
 
 
+def test_prayer_chip_survives_a_crowded_row():
+    """Regression (bug report 2026-08-30, "-1n habits not showing up"): the
+    ص prayer chip is documented as "always-visible" but was appended to
+    pending_chips and packed LAST, so a busy day (enough done values plus a
+    few pending names to fill WIDTH_HINT) silently dropped it -- along with
+    any pending names past the cutoff. The chip must reserve its own budget
+    and always render regardless of how full the rest of the row is."""
+    mod = _load_tui()
+    # Enough done chips alone to consume the whole row.
+    mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(mod.WIDTH_HINT)]
+    mod.STATE.prayer_count = 3.0
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
+    assert "ص 3" in text, f"prayer chip must survive a full row: {text!r}"
+
+
 def test_each_row_drops_overflow_independently():
     mod = _load_tui()
     mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(mod.WIDTH_HINT)]

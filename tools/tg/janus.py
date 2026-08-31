@@ -2057,14 +2057,14 @@ def _habit_block_snoozed(name: str) -> bool:
     return all(cid in snoozes and now_h < snoozes[cid] for cid in todays)
 
 
-def _habit_row(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Fit as many chips as WIDTH_HINT allows onto ONE row; drop the rest
+def _habit_row(chips: list[tuple[str, str]], budget: int = WIDTH_HINT) -> list[tuple[str, str]]:
+    """Fit as many chips as `budget` allows onto ONE row; drop the rest
     (each of the two habit rows is its own single line, not a wrap group)."""
     row: list[tuple[str, str]] = []
     w = 0
     for sty, text in chips:
         cw = dwidth(text)
-        if w + cw > WIDTH_HINT:
+        if w + cw > budget:
             break
         row.append((sty, text))
         w += cw
@@ -2140,9 +2140,14 @@ def render_habits_today() -> list[tuple[str, str]]:
     # pending line, after the 其他人 YTD chip — a count toward 5, so the
     # bare-number done-chip format (or disappearing into the pending names)
     # never fit it (user request 2026-07-27; placement follow-up same day).
+    # Kept OUT of pending_chips and reserved its own width budget below: a
+    # busy day (many done habits, several pending names) was packing the row
+    # full before reaching it, so "always-visible" silently wasn't (bug
+    # report 2026-08-30, "-1n habits not showing up" — the prayer chip and
+    # trailing pending names were the ones actually getting dropped).
+    prayer_chip = None
     if STATE.prayer_count is not None:
-        pending_chips.append((_habit_chip_style("ص"),
-                              f"ص {STATE.prayer_count:g} "))
+        prayer_chip = (_habit_chip_style("ص"), f"ص {STATE.prayer_count:g} ")
     # Only categories currently BEHIND (negative) are worth a glance here —
     # neutral/positive ones are dropped entirely (user request 2026-08-07).
     dozen_chips = _pack_number_chips(
@@ -2152,8 +2157,12 @@ def render_habits_today() -> list[tuple[str, str]]:
                     for name, color in HCBI_BEHIND_DOMAINS.items()
                     if STATE.hcbi_behind.get(name, 0) < 0]
     habit_line = done_chips + pending_chips
+    reserve = dwidth(prayer_chip[1]) if prayer_chip else 0
+    habit_row = _habit_row(habit_line, budget=max(0, WIDTH_HINT - reserve))
+    if prayer_chip:
+        habit_row.append(prayer_chip)
     out: list[tuple[str, str]] = []
-    for chips in (_habit_row(habit_line), _habit_row(dozen_chips)):
+    for chips in (habit_row, _habit_row(dozen_chips)):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))
