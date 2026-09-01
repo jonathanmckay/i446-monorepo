@@ -1161,7 +1161,24 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     # SAME batch may not match it again — the fragment falls through to
     # later routing steps (usually landing as needs_agent) instead of
     # silently re-crediting it.
-    claimed_task_ids: set[str] = set()
+    #
+    # Seeded with today's already-completed task ids (bug 2026-08-31: dtd's
+    # auto-retry loop re-invokes did-fast as a brand-new process for a
+    # completion it believes failed to land — each retry gets a FRESH,
+    # empty claimed_task_ids, so nothing stopped it from re-matching and
+    # re-crediting a task_id an EARLIER, already-successful attempt had
+    # already closed and recorded. "1 groceries 8.20" got its +20 fen credit
+    # 9 times over one real Todoist completion before the retry cap kicked
+    # in. completed-today.json's `ids` map (name → task_id, written at Step 7
+    # of every successful run) is the one piece of state that actually
+    # survives across separate did-fast.py invocations, so it closes the
+    # same gap across processes that claimed_task_ids already closed within
+    # one. See test_did_fast_retry_no_double_credit.py.
+    _today_str = _daytime.today().isoformat()
+    _ct_seed = mc._load(mc.COMPLETED)
+    claimed_task_ids: set[str] = (
+        {str(tid) for tid in _ct_seed.get("ids", {}).values()}
+        if _ct_seed.get("date") == _today_str else set())
 
     # "bigs" = time with both big kids → split the minutes between xk20 (Theo)
     # and xk22 (Ren), then let the normal 0₦ path handle each. Odd minute goes
@@ -1402,7 +1419,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             results.append(RouteResult(
                 item=item, step="skipped",
                 error=f"{item.name}: already matched+credited to "
-                      f"\"{matched['content']}\" earlier in this batch"))
+                      f"\"{matched['content']}\" earlier in this batch "
+                      f"or in a previous attempt today"))
             continue
         if matched:
             claimed_task_ids.add(str(matched.get("id")))
