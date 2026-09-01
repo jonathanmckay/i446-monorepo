@@ -257,9 +257,7 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
                 continue
             if not val:
                 continue
-            if kind in ("num", "num_auto"):
-                if not _is_num(val):
-                    continue
+            if kind in ("num", "num_auto") and _is_num(val):
                 L.append('  set value of range ("%s" & weekRow_%s) of ws to %s' % (col, v, float(val)))
             else:
                 L.append('  set value of range ("%s" & weekRow_%s) of ws to %s' % (col, v, _as_applescript(val)))
@@ -395,11 +393,6 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
         return None
 
     def _submit(app):
-        bad = [lbl for _k, (a, kind, lbl) in areas.items()
-               if kind in ("num", "num_auto") and a.text.strip() and not _is_num(a.text.strip())]
-        if bad:
-            msg["text"] = "Not a number: " + ", ".join(bad)
-            return
         app.exit(result="submit")
 
     kb = KeyBindings()
