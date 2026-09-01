@@ -542,6 +542,13 @@ python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
 # the running line in the project's palette color without waiting for (or
 # hitting) the Toggl poll (feature 2026-07-24).
 printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the two Toggl
+# API calls above — leaked SGR motion sequences type themselves into fzf's
+# query as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05,
+# ported here from done.sh/defer.sh/edit.sh/split.sh).
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
 chmod +x "$DTD_START"
@@ -1685,6 +1692,14 @@ for s in d.values():
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
   code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+  # Reset any mouse-tracking mode a child enabled, and drain any bytes already
+  # queued in the tty buffer from scroll/click events during the two curl
+  # calls above — leaked SGR motion sequences type themselves into fzf's
+  # query as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05,
+  # ported here from done.sh/defer.sh/edit.sh/split.sh). Runs before the
+  # success/failure branch below so both outcomes get the cleanup.
+  printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
   if [[ "\$code" == 2* ]]; then
     # Hide by id (\$REMOVED.ids), NOT by name (\$REMOVED): delete already
     # resolves the exact task via \$tid (collision-proof, 2026-07-12), but
@@ -2095,10 +2110,22 @@ pushed=\$(wc -l < "$DTD_PUSHED" 2>/dev/null || echo 0)
 processed=\$(wc -l < "$DTD_PROCESSED" 2>/dev/null || echo 0)
 if (( pushed > processed )); then
   echo "⏳ \$((pushed - processed)) task(s) still processing — retry ctrl-z in a moment" > "\$HDR"
+  # Reset/drain here too: this is the longest blocking window (up to 5s of
+  # sleep-polling above), so it's the path most likely to trigger the leak —
+  # see the fuller comment below for the bug this guards against.
+  printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
   exit 0
 fi
 result=\$(python3 "$UNDO_FAST" --undo "$DTD_JOURNAL" \\
   --session "$DTD_SESSION" --removed "$DTD_REMOVED" --done-json "$DTD_DONE_FILE" 2>&1)
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the poll loop and
+# undo-fast call above — leaked SGR motion sequences type themselves into
+# fzf's query as literal ^[[<0;16;15M text on resume otherwise (bug
+# 2026-07-05, ported here from done.sh/defer.sh/edit.sh/split.sh).
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 summary=\$(echo "\$result" | jq -r '.summary // .error // "undo failed"' 2>/dev/null)
 if [[ \$(echo "\$result" | jq -r '.ok // empty' 2>/dev/null) == "true" ]]; then
   echo "↩ \$summary" > "\$HDR"
