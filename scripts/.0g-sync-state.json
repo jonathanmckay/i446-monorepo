@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "tasks to 60": {
-      "todoist_id": "6hPvQ99FVCW3Jph2",
-      "minutes": 70
-    },
-    "write at least one doc": {
-      "todoist_id": "6hPvQ97gcjX6X25R",
-      "minutes": 60
-    },
-    "solid bball": {
-      "todoist_id": "6hPvQ9H9vW3JFVp2",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-09-01T03:55:01.407175-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-01T04:00:09.997275-07:00"
 }
