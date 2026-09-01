@@ -1008,6 +1008,14 @@ except Exception:
 print(n)
 PYCOUNT
 )
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the python call
+# above — leaked SGR motion sequences type themselves into fzf's query as
+# literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here
+# from done.sh/defer.sh/edit.sh/split.sh). Runs before the early exit below
+# too, not just the end of the script.
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 if [[ "\$n" == "0" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
   exit 0
@@ -1072,6 +1080,13 @@ with open(tmp, 'w') as f:
 os.replace(tmp, path)
 PYWRITE
 )
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the python call
+# above — leaked SGR motion sequences type themselves into fzf's query as
+# literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here
+# from done.sh/defer.sh/edit.sh/split.sh).
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 echo "\${msg:-✗ block delay failed}" > "\$HDR"
 APPLYEOF
 chmod +x "$DTD_BLOCKAPPLY"
@@ -2082,6 +2097,13 @@ else
   osascript -e "tell application \"Terminal\" to do script \"cc \\\"\$(cat $PROMPT_FILE)\\\"; rm -f $PROMPT_FILE\"" 2>/dev/null
   echo "🤖 agent → $clean (Terminal)" > "$HDR"
 fi
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the cmux/osascript
+# spawn above — leaked SGR motion sequences type themselves into fzf's query
+# as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported
+# here from done.sh/defer.sh/edit.sh/split.sh).
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 AGENTEOF
 sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_AGENT"
 chmod +x "$DTD_AGENT"
@@ -2134,6 +2156,30 @@ else
 fi
 UNDOEOF
 chmod +x "$DTD_UNDO"
+
+# --- Refresh script used by fzf ctrl-r binding ---
+# Was an inline execute-silent(...) command in the --bind string itself until
+# 2026-09-01, but the multi-second did-fast.py --refresh-cache network call
+# it runs is a real blocking window — same leak class as the other scripts
+# below, and a plain inline string has no room for the reset/drain fix (no
+# clean way to embed a `while read` loop inside execute-silent(...)'s parens).
+# Pulled out into its own generated script so it can carry the fix like its
+# siblings.
+DTD_REFRESH="/tmp/dtd-$DTD_ID.refresh.sh"
+cat > "$DTD_REFRESH" << REFRESHEOF
+#!/bin/zsh
+python3 "$DID_FAST" --refresh-cache
+cp "$CACHE" "$DTD_CACHE_FILE"
+echo "🔄 refreshed" > "$DTD_HDR"
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer from scroll/click events during the refresh above
+# — leaked SGR motion sequences type themselves into fzf's query as literal
+# ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here from
+# done.sh/defer.sh/edit.sh/split.sh).
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+REFRESHEOF
+chmod +x "$DTD_REFRESH"
 
 # Clear leftover terminal scrollback so the picker starts on a clean screen
 # (fzf --height renders inline below whatever was already on the terminal).
@@ -2445,7 +2491,7 @@ while true; do
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-r:execute-silent(python3 $DID_FAST --refresh-cache && cp $CACHE $DTD_CACHE_FILE && echo '🔄 refreshed' > $DTD_HDR)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
   task="$fzf_output"
@@ -2583,4 +2629,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"

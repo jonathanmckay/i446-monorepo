@@ -44,9 +44,18 @@ if grep -q 'DTD_SYNC=' "$DTD"; then
 fi
 
 # --- 3. ctrl-r (explicit refresh) MUST still pull the live cache ---
-# This is the sanctioned path for external changes to appear.
-if ! grep -E 'ctrl-r:.*cp .*\$CACHE .*\$DTD_CACHE_FILE' "$DTD" >/dev/null; then
-  echo "FAIL: ctrl-r no longer refreshes the snapshot from the live cache"
+# This is the sanctioned path for external changes to appear. As of
+# 2026-09-01 the refresh command lives in its own generated script
+# ($DTD_REFRESH, given a mouse-leak reset/drain fix alongside its siblings)
+# rather than inline in the --bind string, so this checks the bind wires up
+# to that script AND that the script's own body still does the live-cache
+# copy — same invariant, split across two greps instead of one.
+if ! grep -E 'ctrl-r:execute-silent\(\$DTD_REFRESH\)' "$DTD" >/dev/null; then
+  echo "FAIL: ctrl-r no longer wired to \$DTD_REFRESH"
+  fail=1
+fi
+if ! grep -E 'cp "\$CACHE" "\$DTD_CACHE_FILE"' "$DTD" >/dev/null; then
+  echo "FAIL: ctrl-r refresh script no longer refreshes the snapshot from the live cache"
   fail=1
 fi
 
