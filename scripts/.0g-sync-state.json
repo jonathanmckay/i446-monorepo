@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-02T08:00:04.114160-07:00"
+  "tasks": {
+    "get out hpm+read hpms": {
+      "todoist_id": "6hQHj4CwpGpMfJP2",
+      "minutes": 60
+    },
+    "xcore goes well": {
+      "todoist_id": "6hQHj4JRCqwvX8GR",
+      "minutes": 50
+    },
+    "1500分": {
+      "todoist_id": "6hQHj4PxQpRhQXV2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-09-02T10:00:05.463893-07:00"
 }
