@@ -5700,6 +5700,32 @@ app = Application(layout=Layout(root, focused_element=input_window),
                   mouse_support=True,
                   refresh_interval=0.1)
 
+# prompt_toolkit's own enable_mouse_support() (site-packages
+# prompt_toolkit/output/vt100.py) turns on mode 1003 ("mouse-drag support"
+# per its own comment) alongside 1000/1006 -- xterm's ANY-MOTION tracking,
+# which reports every pixel of cursor movement, not just clicks/scrolls.
+# janus never reads MOUSE_MOVE (only MOUSE_UP/MOUSE_DOWN, for click-select
+# and the swipe gesture -- see _current_row_click), so 1003 is pure
+# overhead: it floods stdin with a continuous stream of SGR motion packets
+# whenever the mouse so much as twitches while navigating the entries list,
+# and a burst can outrun the VT100 parser's escape-sequence disambiguation,
+# leaking raw digit/semicolon/M fragments as literal text into whichever
+# buffer has focus -- the input box, since it's always focused (bug
+# 2026-09-02: "navigate through the list ... in the text input box leads
+# to weird results"). Turn 1002/1003 back off right after prompt_toolkit's
+# own call turns them on; 1000/1006 (click + SGR extended, which
+# wheel-scroll actually uses per prompt_toolkit's default Window handler)
+# are left untouched.
+_orig_enable_mouse_support = app.output.enable_mouse_support
+
+
+def _enable_mouse_support_no_motion() -> None:
+    _orig_enable_mouse_support()
+    app.output.write_raw("\x1b[?1002l\x1b[?1003l")
+
+
+app.output.enable_mouse_support = _enable_mouse_support_no_motion
+
 
 PID_FILE = Path.home() / ".cache" / "janus.pid"
 
