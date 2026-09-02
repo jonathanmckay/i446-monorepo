@@ -189,13 +189,20 @@ Collect into a structure: `{domain: [{goal, fen_target, focus_bonus, pct_done}]}
 
 ### Step 3: Pull Toggl time for the week
 
-Use the toggl_server MCP tool `toggl_date` (the CLI has no `date` command):
+Use the toggl_server MCP tool `toggl_range` — ONE call for the whole week
+(2026-09-02: replaced 7 sequential `toggl_date` calls, which was the single
+heaviest contributor to hitting Toggl's hourly API quota in a tight burst):
 
 ```
-mcp__toggl_server__toggl_date  date=YYYY-MM-DD
+mcp__toggl_server__toggl_range  start_date=<week_start YYYY-MM-DD>  end_date=<week_end YYYY-MM-DD>
 ```
 
-Run for each day Sun–Sat (7 calls; they can be batched in parallel). Parse output to get entries with project code and duration. Aggregate by domain (project code):
+Returns the same per-day sections `toggl_date` would, one per day, concatenated
+in date order — each section starts with `# YYYY-MM-DD`. Parse each day's
+section to get entries with project code and duration, same as before. Only
+fall back to 7 separate `toggl_date` calls if `toggl_range` errors (e.g. a
+range over 31 days, which shouldn't happen for a single week). Aggregate by
+domain (project code):
 
 ```python
 time_by_domain = {
@@ -436,7 +443,7 @@ the user submits it (rerun `1s-survey.py` directly if needed).
 - Batch the multiple writes in this skill into as few helper calls as
   possible to amortize ssh round-trips.
 - The 1g sheet goals reset weekly — read them BEFORE they're overwritten by next week's `/1g`
-- Toggl CLI `date` command returns entries for a single day. Must call 7 times.
+- Use `toggl_range` for the whole week in one call (see Step 3) — not 7 separate `toggl_date` calls.
 - 0分 column mapping must match exactly. If columns shift, the review will have wrong data.
 - AppleScript calls sequential (no parallel Excel access).
 - The `reviews/` folder uses M.W labels, not ISO week numbers: `YYYY-M.W-1s.md` (e.g. `2026-8.2-1s.md`), matching `1分+1s`/`1n+`'s own week labeling.

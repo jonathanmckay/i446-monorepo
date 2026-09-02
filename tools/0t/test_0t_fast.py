@@ -44,6 +44,40 @@ def test_tag_columns_agree_with_daemon():
             f"daemon={daemon.TOGGL_TAG_COLS[tag]}")
 
 
+def test_get_toggl_entries_memoized_across_overlapping_callers():
+    """Regression (2026-09-02): compute_tag_minutes, compute_sleep_dock,
+    compute_sleep, and main() each independently call gather_entries_local
+    for overlapping (yesterday, today) date pairs -- up to 4 raw HTTP fetches
+    of the SAME date within a single /0t run before get_toggl_entries was
+    memoized. This guards the actual fix (fetch count), not just that the
+    code still runs -- a regression that re-wrapped or bypassed the
+    lru_cache would still pass every other test in this file since they all
+    patch get_toggl_entries directly rather than the underlying _toggl_get."""
+    zerot_fast.get_toggl_entries.cache_clear()
+    calls = []
+
+    def fake_toggl_get(path):
+        calls.append(path)
+        return []
+
+    d1 = date(2026, 8, 31)
+    d2 = date(2026, 9, 1)
+    with patch.object(zerot_fast, "_toggl_get", side_effect=fake_toggl_get):
+        # Simulate the 4 overlapping call sites within one /0t run.
+        zerot_fast.gather_entries_local(d1, d2)   # e.g. compute_sleep
+        zerot_fast.gather_entries_local(d1)       # e.g. compute_tag_minutes
+        zerot_fast.gather_entries_local(d2)       # e.g. compute_sleep_dock
+        zerot_fast.gather_entries_local(d1, d2)   # e.g. main()
+
+    assert len(calls) == 2, (
+        f"expected exactly 2 underlying _toggl_get calls (one per distinct "
+        f"date: {d1}, {d2}) across 4 overlapping gather_entries_local calls, "
+        f"got {len(calls)} -- get_toggl_entries is refetching instead of "
+        f"reusing its memoized result"
+    )
+    zerot_fast.get_toggl_entries.cache_clear()
+
+
 def test_compute_tag_minutes_excludes_sleep_from_minus3():
     """睡觉 (sleep) carries the -3 tag but is tracked in column D. It must NOT be
     summed into the -3/AX tag column, or AX reads as a full night of sleep

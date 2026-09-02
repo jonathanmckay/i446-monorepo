@@ -9,6 +9,7 @@ Usage:
 """
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import os
@@ -105,8 +106,18 @@ NEON_XLSX = Path.home() / "OneDrive/vault-excel/Neon分v12.2.xlsx"
 SLEEP_PROJECT = "睡觉"
 
 
+@functools.lru_cache(maxsize=8)
 def get_toggl_entries(d: date) -> list[dict]:
-    """Fetch raw Toggl entries for a date via API."""
+    """Fetch raw Toggl entries for a date via API.
+
+    Memoized per-process (2026-09-02): compute_tag_minutes, compute_sleep_dock,
+    compute_sleep, and main() each independently call gather_entries_local for
+    overlapping (yesterday, today/sleep_date) pairs, so a single /0t run could
+    fetch the SAME date up to 4x without this. Safe: every caller only reads
+    entries (grepped for in-place `e[...] = ` mutation across this file --
+    none), and all reads happen before any Toggl-mutating action within the
+    same process. Small, cheap to be generous with (maxsize=8) since a run
+    only ever touches 2-3 distinct dates."""
     start = d.isoformat()
     end = (d + timedelta(days=1)).isoformat()
     return _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
