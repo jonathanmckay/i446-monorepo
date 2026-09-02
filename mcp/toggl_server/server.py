@@ -404,6 +404,36 @@ def toggl_today() -> str:
         return f"Error: {e}"
 
 
+def _format_day_section(entries: list[dict], date_label: str) -> str:
+    """Shared per-day formatting: sorted entry list + total + project
+    breakdown. Factored out of toggl_date so toggl_range can produce the
+    identical per-day section for each day of a range without a second,
+    drifting copy of this logic (2026-09-02)."""
+    if not entries:
+        return f"# {date_label}\nNo entries on {date_label}."
+
+    entries = sorted(entries, key=lambda e: e.get("start", ""))
+    lines = [f"# {date_label}"]
+    total_sec = 0
+    project_totals = {}  # {project_code: minutes}
+
+    for e in entries:
+        lines.append(f"  {_format_entry(e)}")
+        dur = e.get("duration", 0)
+        if dur > 0:
+            total_sec += dur
+            proj_id = e.get("project_id")
+            proj_code = PROJECT_NAMES.get(proj_id, "no project") if proj_id else "no project"
+            project_totals[proj_code] = project_totals.get(proj_code, 0) + (dur // 60)
+
+    lines.append(f"\nTotal: {_format_duration(total_sec)}")
+    lines.append(f"\nProject breakdown (minutes):")
+    for proj, mins in sorted(project_totals.items(), key=lambda x: x[1], reverse=True):
+        lines.append(f"  {proj}: {mins}m")
+
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def toggl_date(date: str) -> str:
     """Get all time entries for a specific date.
@@ -418,31 +448,49 @@ def toggl_date(date: str) -> str:
             end_date=(target_date + datetime.timedelta(days=2)).isoformat(),
         )
         entries = _filter_entries_by_local_date(raw_entries or [], target_date)
-        if not entries:
-            return f"No entries on {date}."
+        return _format_day_section(entries, date)
 
-        # Sort by start time
-        entries.sort(key=lambda e: e.get("start", ""))
-        lines = [f"# {date}"]
-        total_sec = 0
-        project_totals = {}  # {project_code: minutes}
+    except Exception as e:
+        return f"Error: {e}"
 
-        for e in entries:
-            lines.append(f"  {_format_entry(e)}")
-            dur = e.get("duration", 0)
-            if dur > 0:
-                total_sec += dur
-                # Track by project
-                proj_id = e.get("project_id")
-                proj_code = PROJECT_NAMES.get(proj_id, "no project") if proj_id else "no project"
-                project_totals[proj_code] = project_totals.get(proj_code, 0) + (dur // 60)
 
-        lines.append(f"\nTotal: {_format_duration(total_sec)}")
-        lines.append(f"\nProject breakdown (minutes):")
-        for proj, mins in sorted(project_totals.items(), key=lambda x: x[1], reverse=True):
-            lines.append(f"  {proj}: {mins}m")
+@mcp.tool()
+def toggl_range(start_date: str, end_date: str) -> str:
+    """Get all time entries for a range of dates (inclusive), in ONE Toggl
+    API call instead of one call per day — use this instead of calling
+    toggl_date once per day when you need multiple consecutive days (e.g. a
+    weekly review). Returns the same per-day sections toggl_date would,
+    concatenated in date order.
 
-        return "\n".join(lines)
+    Args:
+        start_date: Range start, "YYYY-MM-DD" (inclusive)
+        end_date: Range end, "YYYY-MM-DD" (inclusive)
+    """
+    try:
+        start = datetime.date.fromisoformat(start_date)
+        end = datetime.date.fromisoformat(end_date)
+        if end < start:
+            return f"Error: end_date {end_date} is before start_date {start_date}"
+        if (end - start).days > 31:
+            return f"Error: range too large ({(end - start).days + 1} days) — call toggl_date per-day for ranges over 31 days"
+
+        # Same padding logic as toggl_date/toggl_today, just spanning the
+        # whole requested range instead of a single day: 1 day of buffer on
+        # each side absorbs Toggl's UTC-based date filter clipping local
+        # evening/late-night entries into the adjacent UTC day.
+        raw_entries = toggl_api.get_entries(
+            start_date=(start - datetime.timedelta(days=1)).isoformat(),
+            end_date=(end + datetime.timedelta(days=2)).isoformat(),
+        ) or []
+
+        sections = []
+        d = start
+        while d <= end:
+            day_entries = _filter_entries_by_local_date(raw_entries, d)
+            sections.append(_format_day_section(day_entries, d.isoformat()))
+            d += datetime.timedelta(days=1)
+
+        return "\n\n".join(sections)
 
     except Exception as e:
         return f"Error: {e}"

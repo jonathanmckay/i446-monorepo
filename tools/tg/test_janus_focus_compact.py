@@ -54,7 +54,7 @@ def test_render_all_uses_focus_compact_not_old_detail_band():
     src = (HERE / "janus.py").read_text()
     i_def = src.index("def render_all()")
     body = src[i_def:src.index("\n\n\n", i_def)]
-    assert "render_focus_compact()" in body
+    assert "render_focus_compact(bo_emojis)" in body
     assert "render_detail()" not in body
 
 

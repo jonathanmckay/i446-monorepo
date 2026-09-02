@@ -106,11 +106,11 @@ def test_render_all_skips_focus_band_on_past_day(monkeypatch):
     _setup_common(mod)
     mod.STATE.day_offset = -1
     calls = []
-    monkeypatch.setattr(mod, "render_focus_compact", lambda: calls.append(1) or [])
-    monkeypatch.setattr(mod, "render_header", lambda: [])
-    monkeypatch.setattr(mod, "render_habits_today", lambda: [])
-    monkeypatch.setattr(mod, "render_morning", lambda: [])
-    monkeypatch.setattr(mod, "render_evening", lambda: [])
+    monkeypatch.setattr(mod, "render_focus_compact", lambda *a: calls.append(1) or [])
+    monkeypatch.setattr(mod, "render_header", lambda *a: [])
+    monkeypatch.setattr(mod, "render_habits_today", lambda *a: [])
+    monkeypatch.setattr(mod, "render_morning", lambda *a: [])
+    monkeypatch.setattr(mod, "render_evening", lambda *a: [])
     text = "".join(t for _, t, *_ in mod.render_all())
     assert not calls, "render_focus_compact must not be called on a past-day view"
     assert "─" * 10 not in text, "the now-marking divider must not appear on a past-day view"
@@ -123,11 +123,11 @@ def test_render_all_still_shows_focus_band_today(monkeypatch):
     _setup_common(mod)
     mod.STATE.day_offset = 0
     calls = []
-    monkeypatch.setattr(mod, "render_focus_compact", lambda: calls.append(1) or [])
-    monkeypatch.setattr(mod, "render_header", lambda: [])
-    monkeypatch.setattr(mod, "render_habits_today", lambda: [])
-    monkeypatch.setattr(mod, "render_morning", lambda: [])
-    monkeypatch.setattr(mod, "render_evening", lambda: [])
+    monkeypatch.setattr(mod, "render_focus_compact", lambda *a: calls.append(1) or [])
+    monkeypatch.setattr(mod, "render_header", lambda *a: [])
+    monkeypatch.setattr(mod, "render_habits_today", lambda *a: [])
+    monkeypatch.setattr(mod, "render_morning", lambda *a: [])
+    monkeypatch.setattr(mod, "render_evening", lambda *a: [])
     text = "".join(t for _, t, *_ in mod.render_all())
     assert calls, "render_focus_compact must still fire on today's view"
     assert "─" * 10 in text, "the now-marking divider must still appear on today's view"

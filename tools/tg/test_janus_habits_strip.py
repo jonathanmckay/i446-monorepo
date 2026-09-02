@@ -279,8 +279,8 @@ def test_render_all_places_habit_strip_right_after_header():
     i_def = src.index("def render_all()")
     body = src[i_def:src.index("\n\n\n", i_def)]
     header_i = body.index("render_header()")
-    habits_i = body.index("render_habits_today()")
-    morning_i = body.index("render_morning()")
+    habits_i = body.index("render_habits_today(bo_emojis)")
+    morning_i = body.index("render_morning(bo_emojis)")
     assert header_i < habits_i < morning_i
 
 

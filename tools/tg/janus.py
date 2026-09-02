@@ -2089,7 +2089,7 @@ def _pack_number_chips(chips: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return out
 
 
-def render_habits_today() -> list[tuple[str, str]]:
+def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, str]]:
     """Two-line strip under the header, today's Neon habits (2026-07-20),
     reworked 2026-08-07:
     - line 1: every habit with a value today, as solid-background chips —
@@ -2116,7 +2116,7 @@ def render_habits_today() -> list[tuple[str, str]]:
     neon_chip: list[tuple[str, str]] = []
     if STATE.day_offset == 0:
         blk = hour_to_block(view_now().hour)
-        label = _read_block_emojis().get(blk[0]) if blk else ""
+        label = (bo_emojis if bo_emojis is not None else _read_block_emojis()).get(blk[0]) if blk else ""
         if label:
             neon_chip = [(NEON_PTS_STYLE, f"{label}")]
     done_chips = _pack_number_chips(
@@ -3380,7 +3380,7 @@ def _mao_line(emojis) -> list[tuple[str, str]]:
     return out
 
 
-def render_morning() -> list[tuple[str, str]]:
+def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, str]]:
     """Past blocks (00:00 → detail-band start), Toggl-filled, one row per
     important allocation. Same compact format as the future (evening) view.
 
@@ -3416,7 +3416,7 @@ def render_morning() -> list[tuple[str, str]]:
                            "tags": list(e.get("tags") or []),
                            "ids": [e["id"]]})
 
-    bo_emojis = _read_block_emojis()
+    bo_emojis = bo_emojis if bo_emojis is not None else _read_block_emojis()
     out: list[tuple[str, str]] = []
     for blk_name, blk_sh, blk_eh in BLOCKS:
         if not whole_day and blk_eh + 1 > cutoff.hour:
@@ -3769,7 +3769,7 @@ def _slot_label_gcal(slot_s, slot_e):
     return f"◇ {len(overlapping)}× {titles}", sty
 
 
-def render_evening() -> list[tuple[str, str]]:
+def render_evening(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, str]]:
     """Future blocks (detail-band end → 22:00), gcal-filled, in the same
     compact format as the past (morning) view."""
     start, end = detail_window()
@@ -3781,7 +3781,7 @@ def render_evening() -> list[tuple[str, str]]:
     if end.date() != start.date():
         return []
     cutoff = end
-    bo_emojis = _read_block_emojis()
+    bo_emojis = bo_emojis if bo_emojis is not None else _read_block_emojis()
     out: list[tuple[str, str]] = []
     for name, sh, eh in BLOCKS:
         if eh + 1 <= cutoff.hour:
@@ -3946,7 +3946,7 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
                                 track_selection=True)
 
 
-def render_focus_compact() -> list[tuple[str, str]]:
+def render_focus_compact(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, str]]:
     """Current + next block, in the SAME compact-card style as the rest of
     the day (render_morning / render_evening) — just FOCUS_ROWS body rows
     instead of the usual 3. Replaces the old dash-ruled "detail band"
@@ -3968,7 +3968,7 @@ def render_focus_compact() -> list[tuple[str, str]]:
     now = view_now()
     cur = hour_to_block(now.hour)
     nxt = next_block(now.hour)
-    bo_emojis = _read_block_emojis()
+    bo_emojis = bo_emojis if bo_emojis is not None else _read_block_emojis()
     out: list[tuple[str, str]] = []
     if cur and not nxt:
         # Last block of the day (子): detail_window anchors the band at
@@ -4004,10 +4004,14 @@ def render_all() -> list[tuple[str, str]]:
     # so render_morning's registrations survive render_focus_compact's (each
     # _compact_block_lines(track_selection=True) call only EXTENDs the list).
     STATE.visible_events = []
+    # Computed once per render_all() pass rather than once per sub-render —
+    # 4 of the day's block-render functions each independently re-read and
+    # re-parsed build-order.md from disk before this (2026-09-02 CPU-burn fix).
+    bo_emojis = _read_block_emojis()
     parts: list[tuple[str, str]] = []
     parts += render_header()
-    parts += render_habits_today()
-    parts += render_morning()
+    parts += render_habits_today(bo_emojis)
+    parts += render_morning(bo_emojis)
     # The focus band (divider + render_focus_compact) only means anything on
     # TODAY's live view — "where now is" and the current/next block cards.
     # On a past day render_morning() above already covers the whole day
@@ -4020,8 +4024,8 @@ def render_all() -> list[tuple[str, str]]:
         # divider marking where "now" actually is, right before the current/next
         # focus band — the boundary a glance actually needs.
         parts.append(("class:rule", "─" * WIDTH_HINT + "\n"))
-        parts += render_focus_compact()
-    parts += render_evening()
+        parts += render_focus_compact(bo_emojis)
+    parts += render_evening(bo_emojis)
     if STATE.current:
         # The pinned bottom-bar mirror of the running timer (render_current_
         # bottom) is a separate Window from main_window, so it can't reset or
