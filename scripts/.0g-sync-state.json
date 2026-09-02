@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "get out 2 newsletters": {
-      "todoist_id": "6hQ62CGVXf89hV6R",
-      "minutes": 100
-    },
-    "carve out time for minecraft": {
-      "todoist_id": "6hQ62CPqQpXQ285R",
-      "minutes": 80
-    },
-    "plan to help lx with stress": {
-      "todoist_id": "6hQ62CVFMcG2vQFR",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-09-02T03:55:00.811360-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-02T04:00:10.413014-07:00"
 }
