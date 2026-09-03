@@ -5908,5 +5908,105 @@
     "unit": "B23",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "552",
+    "prop": "rl16",
+    "unit": "B15",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-03",
+    "kind": "movein",
+    "unit_id": "972",
+    "prop": "kn47 K1",
+    "unit": "L205",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-15",
+    "kind": "leased",
+    "unit_id": "534",
+    "prop": "rl16",
+    "unit": "A21",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "659",
+    "prop": "s129",
+    "unit": "8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-18",
+    "kind": "ntv",
+    "unit_id": "1388",
+    "prop": "c702",
+    "unit": "G202",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-15",
+    "kind": "leased",
+    "unit_id": "517",
+    "prop": "rl16",
+    "unit": "A04",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-25",
+    "kind": "leased",
+    "unit_id": "450",
+    "prop": "w117",
+    "unit": "3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-10-07",
+    "kind": "leased",
+    "unit_id": "211",
+    "prop": "ms22",
+    "unit": "2258",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-15",
+    "kind": "leased",
+    "unit_id": "563",
+    "prop": "rl16",
+    "unit": "C02",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-03",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "399",
+    "prop": "ps25",
+    "unit": "F41",
+    "tenant": null,
+    "baseline": false
   }
 ]
