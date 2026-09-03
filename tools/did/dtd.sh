@@ -872,7 +872,16 @@ label="\${names[1]}"
 days=""
 prompted=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
-  printf "\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
+  # fzf leaves the alternate screen for execute(), but what the terminal
+  # shows then is not guaranteed: cmux keeps the stale fzf frame on screen,
+  # so the prompt is invisible and arrow keys land in a blind `read` that
+  # doesn't navigate anything (bug 2026-07-21, fixed for done.sh's
+  # value-prompt but never ported here — "dtd is locked on the text input
+  # screen, and I can't navigate items in the fzf", 2026-09-03). Clear to
+  # home so the question is the only thing visible, and force sane tty
+  # modes so Enter always terminates the read.
+  stty sane < /dev/tty 2>/dev/null
+  printf "\033[2J\033[H\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
   read days < /dev/tty
   prompted=1
   # Reset any mouse-tracking mode a child enabled, and drain any bytes
@@ -1109,7 +1118,16 @@ if [[ "\$clean" == *"…"* ]]; then
   clean="\${clean%%…*}"
   query="\$clean"
 fi
-printf "\nEdit: %s\n(text=rename · @code=domain · N=points)> " "\$clean" > /dev/tty
+# fzf leaves the alternate screen for execute(), but what the terminal shows
+# then is not guaranteed: cmux keeps the stale fzf frame on screen, so the
+# prompt is invisible and arrow keys land in a blind `read` that doesn't
+# navigate anything (bug 2026-07-21, fixed for done.sh's value-prompt but
+# never ported here — "dtd is locked on the text input screen, and I can't
+# navigate items in the fzf", 2026-09-03). Clear to home so the question is
+# the only thing visible, and force sane tty modes so Enter always
+# terminates the read.
+stty sane < /dev/tty 2>/dev/null
+printf "\033[2J\033[H\nEdit: %s\n(text=rename · @code=domain · N=points)> " "\$clean" > /dev/tty
 read edits < /dev/tty
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the prompt above
