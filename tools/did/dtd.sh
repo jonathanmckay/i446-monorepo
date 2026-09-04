@@ -121,6 +121,20 @@ fi
 # 2026-06-21: 早餐 missing from dtd; cache was stale and no daemon refreshed it).
 # Refresh whenever the cache 'updated' stamp is older than DTD_CACHE_MAX_AGE.
 DTD_CACHE_MAX_AGE=${DTD_CACHE_MAX_AGE:-600}  # seconds
+# Four independent staleness guards follow (time-based, block-aware, today-
+# count, due-count), each capable of triggering its OWN synchronous
+# `--refresh-cache` call. They're not mutually exclusive on a HEALTHY refresh
+# (a successful refresh clears every condition, since each later guard
+# re-reads the file/snapshot the previous one just wrote) but on a DEGRADED
+# network — slow enough to hit refresh_task_queue's own timeouts/retries
+# without failing outright — a refresh can complete without actually fixing
+# staleness, and all four guards then fire in sequence, each paying its own
+# multi-second-to-tens-of-seconds network cost. That serial pile-up is what
+# "dtd is hanging on launch" (2026-09-04) actually was: not one hung call,
+# four stacked ones. One refresh attempt per launch is enough — a second
+# attempt run milliseconds later against the same degraded network isn't
+# going to succeed where the first didn't.
+_dtd_refresh_done=""
 cache_age=$(python3 -c "
 import json, sys, datetime as dt
 try:
@@ -136,9 +150,10 @@ try:
 except Exception:
     print(10**9)
 " "$CACHE" 2>/dev/null || echo 1000000000)
-if [[ "$cache_age" -gt "$DTD_CACHE_MAX_AGE" ]]; then
+if [[ -z "$_dtd_refresh_done" && "$cache_age" -gt "$DTD_CACHE_MAX_AGE" ]]; then
   echo "Task cache is ${cache_age}s old (>${DTD_CACHE_MAX_AGE}s). Refreshing..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  _dtd_refresh_done=1
 fi
 
 # Block-aware freshness. -1neon ritual cards roll over every 2h 地支 block (the
@@ -161,14 +176,16 @@ try:
 except Exception:
     print('1')
 " "$CACHE" 2>/dev/null || echo 1)
-if [[ "$stale_block" == "1" ]]; then
+if [[ -z "$_dtd_refresh_done" && "$stale_block" == "1" ]]; then
   echo "Cache built in a previous block. Refreshing for new-block rituals..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  _dtd_refresh_done=1
 fi
 
-if [[ $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
+if [[ -z "$_dtd_refresh_done" && $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   echo "Refreshing task cache..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  _dtd_refresh_done=1
 fi
 
 setopt NO_MONITOR 2>/dev/null
@@ -190,9 +207,10 @@ due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
   | group_by(.id) | map(.[0])
   | length
 ')
-if [[ $due_today -lt 30 ]]; then
+if [[ -z "$_dtd_refresh_done" && $due_today -lt 30 ]]; then
   echo "⚠ Only $due_today tasks due today (expected ~80+). Refreshing..."
   python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  _dtd_refresh_done=1
   CACHE_SNAPSHOT=$(cat "$CACHE")
   due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
     (
