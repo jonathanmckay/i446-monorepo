@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-04T12:00:06.514637-07:00"
+  "tasks": {
+    "bball+hiit workout": {
+      "todoist_id": "6hQrQ37m7j2r4pX2",
+      "minutes": 40
+    },
+    "list down to 70": {
+      "todoist_id": "6hQrQ3PfpPmq5892",
+      "minutes": 60
+    },
+    "weekend planned": {
+      "todoist_id": "6hQrQ3Vj3vQrmJvR",
+      "minutes": 30
+    },
+    "plan for neon over the weekend": {
+      "todoist_id": "6hQrQ3fx7q7rM372",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-09-04T14:00:11.961518-07:00"
 }
