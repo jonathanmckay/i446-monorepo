@@ -892,7 +892,7 @@ prompted=""
 if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   # fzf leaves the alternate screen for execute(), but what the terminal
   # shows then is not guaranteed: cmux keeps the stale fzf frame on screen,
-  # so the prompt is invisible and arrow keys land in a blind `read` that
+  # so the prompt is invisible and arrow keys land in a blind 'read' that
   # doesn't navigate anything (bug 2026-07-21, fixed for done.sh's
   # value-prompt but never ported here — "dtd is locked on the text input
   # screen, and I can't navigate items in the fzf", 2026-09-03). Clear to
@@ -1138,7 +1138,7 @@ if [[ "\$clean" == *"…"* ]]; then
 fi
 # fzf leaves the alternate screen for execute(), but what the terminal shows
 # then is not guaranteed: cmux keeps the stale fzf frame on screen, so the
-# prompt is invisible and arrow keys land in a blind `read` that doesn't
+# prompt is invisible and arrow keys land in a blind 'read' that doesn't
 # navigate anything (bug 2026-07-21, fixed for done.sh's value-prompt but
 # never ported here — "dtd is locked on the text input screen, and I can't
 # navigate items in the fzf", 2026-09-03). Clear to home so the question is
