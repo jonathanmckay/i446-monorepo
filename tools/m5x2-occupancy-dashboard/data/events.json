@@ -6008,5 +6008,55 @@
     "unit": "F41",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-04",
+    "effective": "2026-09-04",
+    "kind": "movein",
+    "unit_id": "519",
+    "prop": "rl16",
+    "unit": "A06",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-04",
+    "effective": "2026-09-04",
+    "kind": "movein",
+    "unit_id": "1238",
+    "prop": "tc68",
+    "unit": "D089",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-04",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "1150",
+    "prop": "tc68",
+    "unit": "A01",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-04",
+    "effective": "2026-09-04",
+    "kind": "movein",
+    "unit_id": "548",
+    "prop": "rl16",
+    "unit": "B11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-04",
+    "effective": "2026-10-01",
+    "kind": "leased",
+    "unit_id": "367",
+    "prop": "ps25",
+    "unit": "B9",
+    "tenant": null,
+    "baseline": false
   }
 ]
