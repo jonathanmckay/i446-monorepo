@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "bball+hiit workout": {
-      "todoist_id": "6hQrQ37m7j2r4pX2",
-      "minutes": 40
-    },
-    "list down to 70": {
-      "todoist_id": "6hQrQ3PfpPmq5892",
-      "minutes": 60
-    }
-  },
-  "last_sync": "2026-09-05T03:55:01.091213-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-05T04:00:08.633302-07:00"
 }
