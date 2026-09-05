@@ -6058,5 +6058,25 @@
     "unit": "B9",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-05",
+    "effective": "2026-09-11",
+    "kind": "leased",
+    "unit_id": "516",
+    "prop": "rl16",
+    "unit": "A03",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-05",
+    "effective": "2026-09-05",
+    "kind": "movein",
+    "unit_id": "203",
+    "prop": "hl65",
+    "unit": "9",
+    "tenant": null,
+    "baseline": false
   }
 ]

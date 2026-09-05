@@ -552,18 +552,6 @@
     "rent": "1399.00"
   },
   {
-    "unit_id": 1285,
-    "property_name": "c702",
-    "unit": "A304",
-    "tenant_name": "Raber, Laura",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-09-26",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1399.00"
-  },
-  {
     "unit_id": 1287,
     "property_name": "c702",
     "unit": "B101",
@@ -874,30 +862,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1325.00"
-  },
-  {
-    "unit_id": 814,
-    "property_name": "tc34",
-    "unit": "A203",
-    "tenant_name": "Navarro, Angel N.",
-    "status": "Pending",
-    "lease_sign_date": "2025-03-20",
-    "move_in": "2025-03-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1295.00"
-  },
-  {
-    "unit_id": 802,
-    "property_name": "v202",
-    "unit": "16",
-    "tenant_name": "Hogan, Dennis",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2023-07-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1028.50"
   },
   {
     "unit_id": 441,
