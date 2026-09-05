@@ -930,13 +930,29 @@ class PastDatePreferredIdTests(unittest.TestCase):
         self.assertEqual(r.todoist_task["id"], "STRAY1")
         self.assertIsNone(r.fen_col, "past-date completion must not write Neon points")
 
-    def test_past_date_without_preferred_id_still_needs_agent(self):
-        # Unchanged behavior: a plain chat-session /did call with no task_id
-        # must still defer to the agent fallback.
+    def test_past_date_without_preferred_id_creates_posthoc_directly(self):
+        """Regression (2026-09-05): "I wanted to record an event from a
+        previous date but it gave me error past date requires posthoc flow."
+
+        did-fast.py is ALWAYS called headless (dtd's worker, Janus's mobile
+        UI) -- there is no live chat agent watching to catch needs_agent and
+        run the Step 6b posthoc flow by hand, so a fresh past-date habit
+        occurrence with no preferred_id used to surface this raw error and
+        never complete. Fix: route it straight to a Step 6b posthoc creation
+        (step="variable", no Neon write, error="0neon" sentinel labels)
+        instead of needs_agent.
+        """
         item = _df_module.ParsedItem(raw="ibx i9 7/8", name="ibx i9", target_date="7/8")
         results = _df_module.route_items([item], self.headers, self.tq, preferred_id=None)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].step, "needs_agent")
+        r = results[0]
+        self.assertNotEqual(r.step, "needs_agent",
+            "a fresh past-date habit with no preferred_id must not stall on "
+            "needs_agent -- did-fast.py has no agent to catch it")
+        self.assertEqual(r.step, "variable")
+        self.assertIsNone(r.fen_col, "past-date completion must not write Neon points")
+        self.assertIsNone(r.todoist_task, "no existing task to close -- a fresh one must be created")
+        self.assertEqual(r.error, "0neon", "sentinel for Step 6b's [posthoc, 0neon] labels")
 
     def test_past_date_with_unresolvable_preferred_id_falls_back_to_agent(self):
         # preferred_id given but the fetch fails (task gone/network error) —
@@ -1010,6 +1026,32 @@ class VariableStepPosthocSkipsExistingTaskTests(unittest.TestCase):
             "the 6c variable_items filter must exclude items that already "
             "carry a real todoist_task, or a resolved preferred_id closure "
             "gets a spurious duplicate posthoc record on top of it")
+
+
+class TargetDateIsoTests(unittest.TestCase):
+    """Regression (2026-09-05, alongside the needs_agent fix above): Step 6c's
+    posthoc creation used to tag EVERY posthoc task with today's date
+    regardless of the item's actual target_date, which defeats the point of
+    a "record an event from a previous date" flow. target_date_iso() resolves
+    a parsed "M/D" (or None) to the correct ISO date, per-item."""
+
+    def test_none_target_date_is_today(self):
+        today = date(2026, 9, 5)
+        self.assertEqual(_df_module.target_date_iso(None, today), "2026-09-05")
+
+    def test_past_month_day_this_year(self):
+        today = date(2026, 9, 5)
+        self.assertEqual(_df_module.target_date_iso("7/8", today), "2026-07-08")
+
+    def test_month_day_not_yet_happened_this_year_uses_last_year(self):
+        # Parsing "12/31" on 1/2 must mean last New Year's Eve, not a date
+        # 11 months in the future.
+        today = date(2026, 1, 2)
+        self.assertEqual(_df_module.target_date_iso("12/31", today), "2025-12-31")
+
+    def test_today_month_day_is_today(self):
+        today = date(2026, 9, 5)
+        self.assertEqual(_df_module.target_date_iso("9/5", today), "2026-09-05")
 
 
 class BuildOrderCheckboxTests(unittest.TestCase):

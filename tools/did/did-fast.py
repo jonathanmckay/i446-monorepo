@@ -210,6 +210,20 @@ def time_range_minutes(start: str, end: str) -> int:
     sh, sm = int(start[:2]), int(start[2:])
     eh, em = int(end[:2]), int(end[2:])
     return (eh * 60 + em) - (sh * 60 + sm)
+
+
+def target_date_iso(target_date: Optional[str], today: date) -> str:
+    """Resolve a parsed "M/D" target_date (or None, meaning today) to an ISO
+    date string, picking last year when that M/D hasn't happened yet this
+    year (e.g. parsing "12/31" on 1/2 means last New Year's Eve, not a date
+    11 months in the future)."""
+    if not target_date:
+        return today.isoformat()
+    month, day = (int(p) for p in target_date.split("/"))
+    year = today.year
+    if (month, day) > (today.month, today.day):
+        year -= 1
+    return date(year, month, day).isoformat()
 PUNCT_RE = re.compile(r"[^\w\s一-鿿]+", re.UNICODE)
 TIME_RANGE_RE = re.compile(r"(\d{4})-(\d{4})")
 # SQUARE brackets only. {N} is the 0g bonus and flows via item.curly_points →
@@ -1251,9 +1265,37 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                                         fen_col=None, fen_points=0)
                         r.todoist_task = fetched
                         results.append(r)
-                    else:
+                    elif preferred_id:
+                        # preferred_id was given (a specific stray task dtd
+                        # wanted closed) but fetching it failed -- network
+                        # error or the task is gone. Fail safe to needs_agent
+                        # rather than fabricating an unrelated fresh posthoc
+                        # task for content we couldn't actually read.
                         r = RouteResult(item=item, step="needs_agent",
                                         error="past date requires posthoc flow")
+                        results.append(r)
+                    else:
+                        # No preferred_id at all -- this is a fresh habit
+                        # occurrence for a past date (Step 6b: posthoc, no
+                        # Neon write), not a specific existing task to look
+                        # up. Used to bail to step="needs_agent" here, but
+                        # did-fast.py is ALWAYS called headless (dtd's worker,
+                        # Janus's mobile UI) -- no live agent is ever watching
+                        # to catch that and run the posthoc flow by hand, so
+                        # the item just silently never completed (bug
+                        # 2026-09-05: "recording an event from a previous
+                        # date" surfaced the raw "past date requires posthoc
+                        # flow" error instead of doing anything). Fix:
+                        # create+close the posthoc Todoist task directly, same
+                        # fix class as the preferred_id branch above
+                        # (2026-07-19). error="0neon" is a sentinel read by
+                        # _create_posthoc to build Step 6b's
+                        # ["posthoc", "0neon"] labels instead of Step 6's
+                        # ["posthoc", "<domain>"].
+                        r = RouteResult(item=item, step="variable",
+                                        fen_col=None, fen_points=0)
+                        r.todoist_task = None
+                        r.error = "0neon"
                         results.append(r)
                     continue
 
@@ -3276,19 +3318,24 @@ def main():
     variable_items = [] if points_only else [
         r for r in fast if r.step == "variable" and r.todoist_task is None]
     if variable_items:
-        today_iso = _daytime.today().isoformat()
-        target_md = variable_items[0].item.target_date or f"{_daytime.today().month}/{_daytime.today().day}"
+        today = _daytime.today()
 
         def _create_posthoc(r):
-            domain_label = r.error  # stashed domain label
-            content = f"{r.item.name} @posthoc @{today_iso}"
+            domain_label = r.error  # stashed domain label ("0neon" for Step 6b)
+            # Each item keeps its OWN target_date (a batch can mix a today
+            # variable task with a past-date 0n habit) -- tagging every
+            # posthoc task with today's date regardless of the item's actual
+            # date defeated the point of recording something for a past date
+            # (bug 2026-09-05, alongside the needs_agent fix above).
+            item_iso = target_date_iso(r.item.target_date, today)
+            content = f"{r.item.name} @posthoc @{item_iso}"
             labels = ["posthoc"]
             if domain_label:
                 labels.append(domain_label)
             body = json.dumps({
                 "content": content,
                 "labels": labels,
-                "due_date": today_iso,
+                "due_date": item_iso,
             }).encode()
             req = urllib.request.Request(
                 f"{TODOIST_BASE}/tasks",
