@@ -3418,6 +3418,17 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
 
     bo_emojis = bo_emojis if bo_emojis is not None else _read_block_emojis()
     out: list[tuple[str, str]] = []
+    if not STATE.entries_known:
+        # A cold-start rate limit (402) leaves STATE.entries at its initial
+        # empty list, same as a genuinely tracked-nothing morning -- without
+        # this flag the two are indistinguishable, and every block below
+        # would silently render as empty. _block_gaps already guards its own
+        # "empty → HH:MM" flash against exactly this (2026-07-15), but this
+        # function's actual entry listing never got the same guard, so a
+        # cold-started janus (process restart mid-rate-limit) rendered a
+        # confidently blank morning that read as "my entries are gone"
+        # (user report 2026-09-05) instead of "not fetched yet."
+        out.append(("class:dim", "⚠ Toggl unconfirmed — entries below may be incomplete\n"))
     for blk_name, blk_sh, blk_eh in BLOCKS:
         if not whole_day and blk_eh + 1 > cutoff.hour:
             break  # rest handled by the detail band

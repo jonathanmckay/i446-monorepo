@@ -104,6 +104,7 @@ def test_render_morning_shows_kmao_activity_when_awake(monkeypatch):
     monkeypatch.setattr(mod, "detail_window",
                         lambda: (today.replace(hour=6), today.replace(hour=10)))
     monkeypatch.setattr(mod, "_read_block_emojis", lambda *a, **k: {"卯": "☀️"})
+    mod.STATE.entries_known = True  # a confirmed fetch, not a cold-start 402
     mod.STATE.entries = [
         _entry("-1n", today.replace(hour=5, minute=23),
                today.replace(hour=5, minute=32)),  # the prayer, done awake in 卯
@@ -122,6 +123,7 @@ def test_render_morning_collapses_kmao_when_all_sleep(monkeypatch):
     monkeypatch.setattr(mod, "detail_window",
                         lambda: (today.replace(hour=6), today.replace(hour=10)))
     monkeypatch.setattr(mod, "_read_block_emojis", lambda *a, **k: {})
+    mod.STATE.entries_known = True  # a confirmed fetch, not a cold-start 402
     mod.STATE.entries = [_entry("睡觉", today, today.replace(hour=5, minute=45))]
     mod.STATE.entries_yday = []
     mod.STATE.block_points = {}
