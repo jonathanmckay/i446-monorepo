@@ -1243,6 +1243,11 @@ PAGE = r"""<!doctype html>
   #dlg .cancel, #editDlg .cancel { background:#333; color:#aaa; }
   #editDlg .split { background:#2979ff; color:#001a3d; }
   #editDlg input:disabled { opacity:.4; }
+  .fab { position:fixed; right:16px; bottom:calc(env(safe-area-inset-bottom) + 16px);
+    width:52px; height:52px; border-radius:50%; border:none; background:var(--go);
+    color:#003; font:700 26px/1 ui-monospace,Menlo,monospace; box-shadow:0 2px 10px #0008;
+    z-index:8; display:flex; align-items:center; justify-content:center; }
+  .fab:active { transform:scale(.94); }
 </style>
 </head>
 <body>
@@ -1255,7 +1260,7 @@ PAGE = r"""<!doctype html>
 
 <div id="dlg">
   <div class="card">
-    <h3>fill gap</h3>
+    <h3 id="dlgTitle">fill gap</h3>
     <input id="d-desc" placeholder="description (@code for project)" autocomplete="off">
     <div class="times">
       <input id="d-start" inputmode="numeric" placeholder="HH:MM">
@@ -1287,6 +1292,7 @@ PAGE = r"""<!doctype html>
     </div>
   </div>
 </div>
+<button class="fab" id="fab" onclick="openAddDlg()">+</button>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1414,6 +1420,7 @@ let gapCtx = null;
 function act(row, line, r){
   if(r.type === 'gap'){
     gapCtx = r;
+    document.getElementById('dlgTitle').textContent = 'fill gap';
     document.getElementById('d-desc').value = '';
     document.getElementById('d-start').value = r.start;
     document.getElementById('d-end').value = r.end;
@@ -1480,6 +1487,19 @@ async function commitLog(line, r){
     if(d.tag_steps && d.tag_steps.length) msg += ' + '+d.tag_steps.join(', ');
     toast(msg+' ✓');
   } catch(e){ line.classList.remove('logged'); toast('offline', true); }
+}
+
+function openAddDlg(){
+  gapCtx = null;  // not filling a specific gap — /api/fill just needs desc/start/end
+  document.getElementById('dlgTitle').textContent = 'add entry';
+  document.getElementById('d-desc').value = '';
+  const pad = n => String(n).padStart(2,'0');
+  const hhmm = d => pad(d.getHours())+':'+pad(d.getMinutes());
+  const now = new Date();
+  document.getElementById('d-start').value = hhmm(new Date(now - 15*60000));
+  document.getElementById('d-end').value = hhmm(now);
+  dlg.classList.add('show');
+  setTimeout(()=>document.getElementById('d-desc').focus(), 60);
 }
 
 function closeDlg(){ dlg.classList.remove('show'); gapCtx=null; }
