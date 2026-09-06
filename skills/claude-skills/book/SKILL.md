@@ -1,20 +1,35 @@
 ---
 name: "book"
-description: "Add a book to the hcmc reviews database by title — fetches author/year/pages from Open Library (fallback: Google Books) and creates the review stub with status: reading. Usage: /book <title> [--author X]"
+description: "Add, start, or finish a book in the hcmc reviews database. Bare title or '/book started <title>' fetches metadata from Open Library (fallback: Google Books) and creates a status: reading stub. '/book finished [<title>]' marks it done and bumps the weekly books-read count in Neon. Usage: /book <title> | /book started <title> | /book finished [<title>]"
 user-invocable: true
 ---
 
-# Add Book (/book)
+# Add / Start / Finish Book (/book)
 
-Create a book entry in `~/vault/hcmc/reviews/<year>/` from just a title. The
-script fetches metadata (author, first-publish year, pages, ISBN, subjects)
-from Open Library, falling back to Google Books, and writes the same
-frontmatter shape existing book reviews use (`media: book`,
-`status: reading`, `draft: true`). Reviewing/scoring later is `/bookreview`.
+Two scripts back this skill, both operating on `~/vault/hcmc/reviews/<year>/`:
 
-## Execution
+- `book-add.py` — looks up a title (Open Library, fallback Google Books) and
+  creates a stub with `media: book`, `status: reading`, `draft: true`.
+- `book-finish.py` — flips an existing `status: reading` stub to
+  `status: finished` (+ a `finished:` date), leaving every other field
+  (author, isbn, draft: true, ...) untouched so the file still works as a
+  stub for a later `/bookreview`. Also increments the current week's books-read
+  counter (`1分+1s!AM`) in the live Neon workbook via `ix-osa.sh`.
 
-Run the script with the args verbatim and echo its output:
+Reviewing/scoring the actual content later is the separate `/bookreview` skill.
+
+## Routing
+
+Look at the first word of the argument text:
+
+- **First word is `started`** (case-insensitive): strip it, treat the rest as
+  the title, run the **Add** path below exactly as if it were a bare title.
+  (This is just an explicit synonym — `/book <title>` alone already does this.)
+- **First word is `finished`**: strip it, treat the rest (if any) as an
+  optional title, run the **Finish** path below.
+- **Otherwise**: the whole argument text is a title — run the **Add** path.
+
+## Add path (`/book <title>`, `/book started <title>`)
 
 ```bash
 python3 ~/i446-monorepo/tools/hcmc/book-add.py <title words> [--author X] [--pick N]
@@ -28,14 +43,31 @@ python3 ~/i446-monorepo/tools/hcmc/book-add.py <title words> [--author X] [--pic
 - If the title is ambiguous and the user named an author in prose, pass it
   via `--author`.
 
+## Finish path (`/book finished [<title>]`)
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/book-finish.py [title words]
+```
+
+- No title: finishes the single `status: reading` book, if there's exactly
+  one. Zero or multiple in-progress books → the script errors out naming
+  them; ask the user to specify (or note there's nothing in progress).
+- With a title: matches it against `status: reading` entries (case-insensitive
+  substring on the frontmatter title). `NOT_READING:` means it's in the
+  library but already finished or was never started reading.
+- Output `✓ <Title> — finished → hcmc/reviews/... (Neon 1分+1s!AM +1: ...)`.
+  If the Neon write fails (e.g. ix unreachable), the file is still updated;
+  the script prints a `WARN:` line to stderr — surface that to the user
+  rather than silently swallowing it.
+
 ## Response Style
 
-Minimal. One line (plus alts if present). Do NOT explain. Do NOT ask for
-confirmation.
+Minimal. One line (plus alts/warnings if present). Do NOT explain. Do NOT ask
+for confirmation.
 
 ## Notes
 
 - The reviews index (`hcmc/reviews/reviews.md`) is generated elsewhere — do
   not hand-edit its counts.
-- `/bookreview <title>` is the separate skill for writing the actual review
-  when the book is finished.
+- `/bookreview <title>` is the separate skill for writing the actual review;
+  run it any time after `/book finished` on that title.
