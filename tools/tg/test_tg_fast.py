@@ -125,6 +125,57 @@ def test_desc_range_at_project_range_at_start_still_works(monkeypatch):
     assert captured == [("ES 1:1", "i9", [], "14:30", "15:00")]
 
 
+def test_open_ended_dash_backdate_does_not_leak_time_into_description(monkeypatch):
+    """User report (2026-09-06): "I tried to input 0646- lego, and it parsed
+    the 0646 as part of the title, when that should clearly have been the
+    time." '0646-' has no digits after the dash, so it matches neither range
+    regex (both require a numeric end); the old backdate regex required
+    whitespace immediately after the HHMM, not a dash, so it didn't match
+    either -- the whole string fell through to the default start path with
+    "0646- lego" as the literal description.
+
+    Fix: the start-anchored backdate regex also accepts a dash (with or
+    without surrounding spaces) as the HHMM/description separator."""
+    mod = _import_tg_fast()
+    captured = []
+    monkeypatch.setattr(mod, "cmd_backdated",
+                        lambda backtime, desc, project, tags: captured.append((backtime, desc, project, tags)))
+    monkeypatch.setattr(mod, "cmd_start",
+                        lambda desc, project, tags: (_ for _ in ()).throw(
+                            AssertionError(f"must not fall through to cmd_start with desc={desc!r}")))
+
+    mod._process_entry("0646- lego")
+    assert captured, "must route through cmd_backdated, not fall through"
+    backtime, desc, project, tags = captured[0]
+    assert backtime == "0646"
+    assert desc == "lego", f"the time must not leak into the description, got {desc!r}"
+
+
+def test_open_ended_dash_backdate_no_space_after_dash(monkeypatch):
+    """Sanity variant: no space at all between the dash and the description."""
+    mod = _import_tg_fast()
+    captured = []
+    monkeypatch.setattr(mod, "cmd_backdated",
+                        lambda backtime, desc, project, tags: captured.append((backtime, desc, project, tags)))
+    mod._process_entry("0646-lego")
+    assert captured
+    assert captured[0][0] == "0646"
+    assert captured[0][1] == "lego"
+
+
+def test_plain_space_backdate_still_works(monkeypatch):
+    """Regression guard: the original whitespace-only 'HHMM desc' form (no
+    dash at all) must keep working exactly as before this fix."""
+    mod = _import_tg_fast()
+    captured = []
+    monkeypatch.setattr(mod, "cmd_backdated",
+                        lambda backtime, desc, project, tags: captured.append((backtime, desc, project, tags)))
+    mod._process_entry("0646 lego")
+    assert captured
+    assert captured[0][0] == "0646"
+    assert captured[0][1] == "lego"
+
+
 def _import_tg_fast():
     """Import tg-fast.py as a module."""
     import importlib.util

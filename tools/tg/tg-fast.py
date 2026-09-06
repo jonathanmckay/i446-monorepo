@@ -612,8 +612,19 @@ def _process_entry(raw: str) -> str:
         return (f"err: viewing {_DATE_OVERRIDE:%-m/%-d} — use '<desc> HHMM-HHMM' "
                 "to log an entry on that day (start/stop act on today)")
 
-    # Check for backdated start: "HHMM desc" or "desc HHMM"
-    backdate_match = re.match(r'^(\d{4})\s+(.+)$', raw)
+    # Check for backdated start: "HHMM desc" or "desc HHMM". Also accepts a
+    # dash after the HHMM ("0646- lego", "0646-lego") -- an open-ended range
+    # with no end time typed yet reads exactly like a backdated start (it IS
+    # one: "started at 0646, still going"), and the dash is the same
+    # separator the range syntax uses. Any dash WITH digits on both sides
+    # already matched (and returned via) the range regexes above, so this
+    # can't misfire on a real completed range -- by the time execution
+    # reaches here the trailing side is known not to be digits. Without this,
+    # "0646- lego" matched no range regex (no digits after the dash) and no
+    # backdate regex either (the dash, not whitespace, follows the digits),
+    # so the whole string fell through to the default path and "0646-" ended
+    # up literally in the timer's description (user report 2026-09-06).
+    backdate_match = re.match(r'^(\d{4})(?:\s*-\s*|\s+)(.+)$', raw)
     if backdate_match:
         backtime = backdate_match.group(1)
         h, m = int(backtime[:2]), int(backtime[2:])
