@@ -552,18 +552,6 @@
     "rent": "1399.00"
   },
   {
-    "unit_id": 1287,
-    "property_name": "c702",
-    "unit": "B101",
-    "tenant_name": "Gebeke, Kiya",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2026-01-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1499.00"
-  },
-  {
     "unit_id": 507,
     "property_name": "h731",
     "unit": "731 D",

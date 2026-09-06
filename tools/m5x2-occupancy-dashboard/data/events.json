@@ -6078,5 +6078,35 @@
     "unit": "9",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-06",
+    "effective": "2026-09-05",
+    "kind": "moveout",
+    "unit_id": "211",
+    "prop": "ms22",
+    "unit": "2258",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-06",
+    "effective": "2026-09-16",
+    "kind": "ntv",
+    "unit_id": "763",
+    "prop": "rl21",
+    "unit": "9",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-06",
+    "effective": "2026-09-28",
+    "kind": "ntv",
+    "unit_id": "1287",
+    "prop": "c702",
+    "unit": "B101",
+    "tenant": null,
+    "baseline": false
   }
 ]
