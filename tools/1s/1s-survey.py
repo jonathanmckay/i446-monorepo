@@ -79,17 +79,38 @@ def week_range(arg: str | None, today: _dt.date | None = None) -> tuple[_dt.date
     return sunday, sunday + _dt.timedelta(days=6)
 
 
+# Fixed sequential quota of week-rows per label-month (Jan..Dec): every
+# 3rd month of a quarter gets 5, every other month gets 4 (sums to 52).
+# Sundays fill these slots in pure chronological order for the year —
+# NOT by which real calendar month a Sunday happens to fall in. So a
+# calendar month with 5 real Sundays (when it isn't itself a quarter-end
+# month) doesn't get its own '.5' row: its 5th Sunday consumes slot 1 of
+# the next label-month, and that next month's own native Sundays shift
+# down to fill the remaining slots (e.g. 2026-08-30 → '9.1', then
+# 2026-09-06 → '9.2', ... '9.5' — not two Sundays both claiming '9.1').
+_WEEK_QUOTA = [4, 4, 5, 4, 4, 5, 4, 4, 5, 4, 4, 5]
+
+
+def _first_sunday_of_year(year: int) -> _dt.date:
+    d = _dt.date(year, 1, 1)
+    return d + _dt.timedelta(days=(6 - d.weekday()) % 7)
+
+
 def week_row_label(sunday: _dt.date) -> str:
-    """Col A's M.W label for the week starting at `sunday` (which Sunday of
-    the month it is), e.g. 2026-07-12 → '7.2'. Only the 3rd month of each
-    quarter (3/6/9/12) ever gets a 5th week row (X.5); in every other month
-    a calendar 5th Sunday rolls into week 1 of the next month instead."""
-    month = sunday.month
-    week_of_month = (sunday.day - 1) // 7 + 1
-    if week_of_month == 5 and month not in (3, 6, 9, 12):
-        month = month + 1 if month < 12 else 1
-        week_of_month = 1
-    return "%d.%d" % (month, week_of_month)
+    """Col A's M.W label for the week starting at `sunday`, per the fixed
+    sequential quota in _WEEK_QUOTA — e.g. 2026-07-12 → '7.2'."""
+    year = sunday.year
+    first = _first_sunday_of_year(year)
+    if sunday < first:
+        year -= 1
+        first = _first_sunday_of_year(year)
+    ordinal = (sunday - first).days // 7 + 1  # 1-indexed Sunday-of-year
+    cum = 0
+    for month, quota in enumerate(_WEEK_QUOTA, start=1):
+        if ordinal <= cum + quota:
+            return "%d.%d" % (month, ordinal - cum)
+        cum += quota
+    return "1.1"  # 53rd-Sunday overflow year: rolls into next year's week 1
 
 
 def _mdy(d: _dt.date) -> str:
