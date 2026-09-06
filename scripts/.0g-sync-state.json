@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "300分 m5x2": {
-      "todoist_id": "6hRFmWH94Rx5v37R",
-      "minutes": 15
-    },
     "link strategy doc + operating metrics + mbr": {
       "todoist_id": "6hRFmWMcG5pQjxVR",
       "minutes": 30
@@ -12,11 +8,7 @@
     "mt. davidson nice / interesting": {
       "todoist_id": "6hRFmWR49xRHRc52",
       "minutes": 40
-    },
-    "tasks below 60": {
-      "todoist_id": "6hRFmWPgmpj7wW32",
-      "minutes": 40
     }
   },
-  "last_sync": "2026-09-06T12:00:05.137123-07:00"
+  "last_sync": "2026-09-06T14:00:01.491575-07:00"
 }
