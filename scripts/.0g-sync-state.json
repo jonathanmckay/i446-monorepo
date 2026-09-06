@@ -1,22 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "100s": {
-      "todoist_id": "6hR436mrj64mcV8R",
-      "minutes": 20
-    },
-    "hiit + strenuous hike": {
-      "todoist_id": "6hR436pRQMFjww6R",
-      "minutes": 20
-    },
     "read through the strategy doc": {
       "todoist_id": "6hR436q3GmXFHQ7R",
       "minutes": 30
-    },
-    "eat healthy": {
-      "todoist_id": "6hR436vWQ75CF792",
-      "minutes": 30
     }
   },
-  "last_sync": "2026-09-05T16:00:01.090445-07:00"
+  "last_sync": "2026-09-05T18:00:04.396051-07:00"
 }
