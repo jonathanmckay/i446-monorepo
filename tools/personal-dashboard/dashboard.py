@@ -391,12 +391,18 @@ def load_points_data():
 
 
 # Each card pulls a single cell from 0n (or the sheet named by an optional
-# "sheet" key). Headers live on row 369 (and row 1 for xk88). We hardcode
-# (col, row) per card since headers span two rows.
+# "sheet" key), optionally summed with more cells listed in "extra" (each
+# {col, row, sheet?} — sheet defaults to the card's own). Headers live on
+# row 369 (and row 1 for xk88). We hardcode (col, row) per card since
+# headers span two rows.
 CACHE_CARDS = [
-    # Combined hcbp+hcbc Q3 score (hcbi!X378 = SUM of the two per-domain
-    # cells) — replaced the separate hcbp/hcbc cards 2026-08-10 per JM.
-    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q3", "color": "#f81d78"},
+    # Combined hcbp+hcbc score, Q2+Q3 (hcbi!X375 = Q2 sum, hcbi!X378 = Q3
+    # sum, each itself a SUM of the two per-domain cells) — replaced the
+    # separate hcbp/hcbc cards 2026-08-10 per JM; extended from Q3-only to
+    # Q2+Q3 2026-09-06 per JM so the card reflects the running total across
+    # both quarters, not just the current one.
+    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q2+Q3",
+     "color": "#f81d78", "extra": [{"col": "X", "row": 375, "sheet": "hcbi"}]},
     {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
@@ -424,6 +430,11 @@ def load_cache_data():
         for card in CACHE_CARDS:
             ws = wb.sheets[card.get("sheet", "0n")]
             v = ws.range(f"{card['col']}{card['row']}").value
+            for extra in card.get("extra", []):
+                ews = wb.sheets[extra.get("sheet", card.get("sheet", "0n"))]
+                ev = ews.range(f"{extra['col']}{extra['row']}").value
+                if isinstance(ev, (int, float)):
+                    v = ev if not isinstance(v, (int, float)) else v + ev
             if isinstance(v, (int, float)):
                 result[card["label"]] = round(float(v), 1)
     except Exception as e:

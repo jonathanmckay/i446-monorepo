@@ -1756,7 +1756,7 @@ def _ytd_applescript_lines() -> str:
     return "\n".join(lines)
 
 
-def _dozen_applescript_lines(q_label: str) -> str:
+def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
     """AppleScript appended to fetch_habits_today's script (after a third
     '||' marker): finds the hcbi sheet's row labeled q_label in column B —
     the current quarter's Daily Dozen summary row — and reads E:Y of that
@@ -1768,7 +1768,41 @@ def _dozen_applescript_lines(q_label: str) -> str:
     "hcb" (HCBI_BEHIND_DOMAINS) — the label row's own X cell is the
     food-only subtotal and is deliberately not used here. Best-effort:
     a missing/renamed row just leaves this segment empty, same tolerance as
-    the rest of this fetch."""
+    the rest of this fetch.
+
+    If prev_q_label is non-empty, a second independent search finds THAT
+    quarter's own combined X cell and appends it after a ";" so "hcb"
+    becomes a running Q<n-1>+Q<n> total (2026-09-06 per JM, matching the
+    same change in the jm dashboard's CACHE_CARDS) rather than resetting to
+    zero every quarter boundary. Kept as a separate try/search rather than
+    folding into the block above so a missing prior-quarter row (e.g. Q1,
+    with no Q0) degrades to "just this quarter" instead of losing the
+    whole segment."""
+    prev_block = ""
+    if prev_q_label:
+        prev_block = f'''
+    try
+        set wsP to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set pRow to 0
+        set bValsP to value of range "B300:B450" of wsP
+        repeat with i from 1 to (count of bValsP)
+            set bv to ""
+            try
+                set bv to (item 1 of (item i of bValsP)) as text
+            end try
+            if bv is "{prev_q_label}" then
+                set pRow to i + 299
+                exit repeat
+            end if
+        end repeat
+        if pRow > 0 then
+            set pv to ""
+            try
+                set pv to (value of range ("X" & (pRow + 1)) of wsP) as text
+            end try
+            set out to out & ";" & pv
+        end if
+    end try'''
     return f'''    try
         set wsD to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
         set qRow to 0
@@ -1808,7 +1842,7 @@ def _dozen_applescript_lines(q_label: str) -> str:
                 set out to out & dv & ","
             end repeat
         end if
-    end try'''
+    end try{prev_block}'''
 
 
 def fetch_habits_today():
@@ -1818,7 +1852,11 @@ def fetch_habits_today():
     strip empty/stale, same tolerance as fetch_points."""
     try:
         now = view_now()
-        q_label = f"Q{(now.month - 1) // 3 + 1}"
+        q_num = (now.month - 1) // 3 + 1
+        q_label = f"Q{q_num}"
+        # "hcb" is a running Q<n-1>+Q<n> total (2026-09-06 per JM) — no prior
+        # quarter to add for Q1 (no "Q0" row on the sheet).
+        prev_q_label = f"Q{q_num - 1}" if q_num > 1 else ""
         IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
         # BULK range reads only — the old shape (a per-row date loop up to
         # r500 + per-cell header/value reads) was ~580 individual AppleEvents
@@ -1872,7 +1910,7 @@ def fetch_habits_today():
     set out to out & "|"
 {_ytd_applescript_lines()}
     set out to out & "|"
-{_dozen_applescript_lines(q_label)}
+{_dozen_applescript_lines(q_label, prev_q_label)}
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
@@ -1887,6 +1925,12 @@ end tell'''
         raw = segs[0] if len(segs) > 0 else ""
         ytd_raw = segs[1] if len(segs) > 1 else ""
         dozen_raw = segs[2] if len(segs) > 2 else ""
+        # prev-quarter's combined X cell rides at the end of this segment
+        # after a ";" (see _dozen_applescript_lines' prev_block) — peel it
+        # off before the "|"-delimited dRow1/dRow2 parsing below.
+        prev_hcb_raw = ""
+        if ";" in dozen_raw:
+            dozen_raw, prev_hcb_raw = dozen_raw.split(";", 1)
         ytd: dict[str, float] = {}
         for name, val in zip(HABIT_YTD_CELLS, ytd_raw.split("|")):
             try:
@@ -1915,11 +1959,26 @@ end tell'''
         behind: dict[str, float] = {}
         # "hcb" reads column X's row2 specifically (the label row's own X is
         # the food-only subtotal, not the combined total this chip wants —
-        # see _dozen_applescript_lines) — no v1-or-v2 fallback.
+        # see _dozen_applescript_lines) — no v1-or-v2 fallback. Summed with
+        # the previous quarter's own combined cell (prev_hcb_raw) so the chip
+        # tracks a running Q<n-1>+Q<n> total, matching the jm dashboard.
         raw_hcb = dozen_row2[19].strip() if len(dozen_row2) > 19 else ""
+        hcb_total = None
         if raw_hcb:
             try:
-                behind["hcb"] = float(raw_hcb)
+                hcb_total = float(raw_hcb)
+            except ValueError:
+                pass
+        if prev_hcb_raw.strip():
+            try:
+                hcb_total = (hcb_total or 0.0) + float(prev_hcb_raw.strip())
+            except ValueError:
+                pass
+        if hcb_total is not None:
+            behind["hcb"] = hcb_total
+        if raw_hcb:
+            try:
+                pass
             except ValueError:
                 pass
         for key, offset in (("hcbp", 21),):
