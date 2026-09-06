@@ -124,3 +124,47 @@ assert d["snoozes"] == {"id2": 14}, d["snoozes"]
 PY
 
 echo "PASS: fzf-native block picker (arm → picker rows → apply) round-trips"
+
+# ── 4. Minute delays (10m/30m/1h) — always-available quick snooze ───────────
+# 4a. Picker rows: present regardless of hour (unlike block rows, which only
+# show once their hour is still ahead of now).
+echo "plain" > "$TMP/armed"
+out=$(gen "$TMP/armed")
+echo "$out" | grep -q "BLOCK:+10m" || fail "10-minute delay row missing"
+echo "$out" | grep -q "BLOCK:+30m" || fail "30-minute delay row missing"
+echo "$out" | grep -q "BLOCK:+1h"  || fail "1-hour delay row missing"
+
+# 4b. Writer: a minute delay stores an absolute epoch FLOAT, not an int hour
+# (the reader tells the two formats apart by type on read).
+rm -f "$SN"
+python3 "$TMP/writer.py" "$SN" +10m id3 | grep -q "⏰ → +10m" \
+  || fail "writer must confirm a minute delay"
+python3 - "$SN" <<'PY'
+import json, sys, time
+d = json.load(open(sys.argv[1]))
+v = d["snoozes"]["id3"]
+assert isinstance(v, float), f"minute delay must store a float epoch, got {v!r}"
+# Should land ~10 minutes out, not touching the hour-of-day encoding at all.
+delta_min = (v - time.time()) / 60
+assert 9 <= delta_min <= 11, f"expected ~10 minutes out, got {delta_min:.1f}"
+PY
+
+# 4c. Reader: a not-yet-elapsed minute delay hides the task; an already-past
+# one (stored epoch in the past) does not — same file, both id3 formats.
+python3 - "$SN" <<'PY'
+import json, sys, time
+d = json.load(open(sys.argv[1]))
+d["snoozes"]["id4"] = time.time() - 60   # 1 minute ago -- already elapsed
+json.dump(d, open(sys.argv[1], "w"))
+PY
+cat > "$TMP/c.json" <<JSON
+{"0neon":[
+  {"id":"id3","content":"xk22 (20) [15]","due":"$TODAY","labels":["0neon"],"priority":1},
+  {"id":"id4","content":"xk20 (20) [15]","due":"$TODAY","labels":["0neon"],"priority":1}
+ ],"1neon":[],"today":[]}
+JSON
+out=$(gen)
+echo "$out" | grep -q "xk22" && fail "not-yet-elapsed minute delay must hide the task"
+echo "$out" | grep -q "xk20" || fail "already-elapsed minute delay must un-hide the task"
+
+echo "PASS: minute delays (10m/30m/1h) round-trip alongside block delays"

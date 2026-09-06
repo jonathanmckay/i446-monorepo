@@ -1020,11 +1020,13 @@ if [[ "\$1" == BLOCK:* ]]; then
   echo "↩ block picker closed" > "\$HDR"
   exit 0
 fi
-# Nothing to pick after 亥 has begun (20:00) unless un-delay is on offer
+# Nothing to pick after 亥 has begun (20:00) unless un-delay is on offer.
+# The +3 accounts for the always-available minute delays (10m/30m/1h),
+# which never depend on the hour of day.
 n=\$(python3 - "\$SNOOZE" "\$@" <<'PYCOUNT'
 import datetime, json, sys
 now = datetime.datetime.now()
-n = sum(1 for h in (4, 6, 8, 10, 12, 14, 16, 18, 20) if h > now.hour)
+n = sum(1 for h in (4, 6, 8, 10, 12, 14, 16, 18, 20) if h > now.hour) + 3
 try:
     data = json.load(open(sys.argv[1]))
     sn = data.get('snoozes') or {}
@@ -1095,6 +1097,16 @@ if glyph == 'now':
     for i in ids:
         sn.pop(i, None)
     print('↩ shown again')
+elif glyph.startswith('+') and glyph[-1] in ('m', 'h'):
+    # Minute-granularity delay (10m/30m/1h) — stored as an absolute epoch
+    # float, distinct from the plain int hour-of-day used by block delays so
+    # the reader (dtd.sh's list generator) can tell the two apart on read.
+    amount = int(glyph[1:-1])
+    minutes = amount if glyph[-1] == 'm' else amount * 60
+    until = datetime.datetime.now().timestamp() + minutes * 60
+    for i in ids:
+        sn[i] = until
+    print('⏰ → +' + glyph[1:])
 else:
     h = HOURS[glyph]
     for i in ids:
@@ -1395,8 +1407,16 @@ try:
     # stored date.
     if _nw.date().isoformat() <= _sn.get('date', ''):
         _sn_all = {str(k) for k in (_sn.get('snoozes') or {})}
+        # Minute-delays (ctrl-v +10m/+30m/+1h) store an absolute epoch float;
+        # block delays store a plain int hour-of-day. json round-trips a
+        # python float with a decimal point, so isinstance(v, float)
+        # unambiguously distinguishes the two on read.
+        def _still_snoozed(v):
+            if isinstance(v, float):
+                return _nw.timestamp() < v
+            return _nw.hour < int(v)
         _snoozed = {str(k) for k, v in (_sn.get('snoozes') or {}).items()
-                    if _nw.hour < int(v)}
+                    if _still_snoozed(v)}
 except Exception:
     pass
 # Block LABELS (feature 2026-07-27): a task carrying a 地支 glyph label
@@ -1424,8 +1444,13 @@ except Exception:
 if _armed:
     _nw2 = _dt.datetime.now()
     ORANGE = '\x1b[38;2;255;138;61m'
+    CYAN = '\x1b[38;2;97;175;239m'
     GREY = '\x1b[38;2;139;150;163m'
     _R = '\x1b[0m'
+    # Short, always-available delays (not tied to the 地支 block schedule) —
+    # come before the block rows since they're the more common quick-snooze.
+    for _lbl, _g in (('10 minutes','+10m'),('30 minutes','+30m'),('1 hour','+1h')):
+        print(f'{CYAN}⏱ delay {_lbl}{_R}\tBLOCK:{_g}')
     for g, py, h in (('卯','mao',4),('辰','chen',6),('巳','si',8),('午','wu',10),
                      ('未','wei',12),('申','shen',14),('酉','you',16),
                      ('戌','xu',18),('亥','hai',20)):
