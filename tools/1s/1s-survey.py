@@ -81,8 +81,15 @@ def week_range(arg: str | None, today: _dt.date | None = None) -> tuple[_dt.date
 
 def week_row_label(sunday: _dt.date) -> str:
     """Col A's M.W label for the week starting at `sunday` (which Sunday of
-    the month it is), e.g. 2026-07-12 → '7.2'."""
-    return "%d.%d" % (sunday.month, (sunday.day - 1) // 7 + 1)
+    the month it is), e.g. 2026-07-12 → '7.2'. Only the 3rd month of each
+    quarter (3/6/9/12) ever gets a 5th week row (X.5); in every other month
+    a calendar 5th Sunday rolls into week 1 of the next month instead."""
+    month = sunday.month
+    week_of_month = (sunday.day - 1) // 7 + 1
+    if week_of_month == 5 and month not in (3, 6, 9, 12):
+        month = month + 1 if month < 12 else 1
+        week_of_month = 1
+    return "%d.%d" % (month, week_of_month)
 
 
 def _mdy(d: _dt.date) -> str:
