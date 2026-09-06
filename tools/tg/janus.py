@@ -1852,11 +1852,11 @@ def fetch_habits_today():
     strip empty/stale, same tolerance as fetch_points."""
     try:
         now = view_now()
-        q_num = (now.month - 1) // 3 + 1
-        q_label = f"Q{q_num}"
+        q_label = f"Q{(now.month - 1) // 3 + 1}"
         # "hcb" is a running Q<n-1>+Q<n> total (2026-09-06 per JM) — no prior
         # quarter to add for Q1 (no "Q0" row on the sheet).
-        prev_q_label = f"Q{q_num - 1}" if q_num > 1 else ""
+        _q_num = (now.month - 1) // 3 + 1
+        prev_q_label = f"Q{_q_num - 1}" if _q_num > 1 else ""
         IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
         # BULK range reads only — the old shape (a per-row date loop up to
         # r500 + per-cell header/value reads) was ~580 individual AppleEvents
@@ -1976,11 +1976,6 @@ end tell'''
                 pass
         if hcb_total is not None:
             behind["hcb"] = hcb_total
-        if raw_hcb:
-            try:
-                pass
-            except ValueError:
-                pass
         for key, offset in (("hcbp", 21),):
             raw_v = _dozen_cell(offset)
             if raw_v:

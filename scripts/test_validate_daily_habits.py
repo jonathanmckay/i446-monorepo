@@ -106,6 +106,42 @@ def test_live_manifest_is_valid_and_nonempty():
         assert h.get("due_string"), f"{key} missing 'due_string' (recurrence)"
 
 
+def test_detects_stale_point_value_ibx_m5x2():
+    # 2026-09-06: manifest's "ibx m5x2" content was updated to (4) [15], but
+    # the live recurring card — created 2026-07-14, never rewritten by
+    # Todoist on manifest edits — still read (5) [8]. compute_missing alone
+    # can't see this (bare() strips both tokens before matching); this is the
+    # dedicated check for it.
+    manifest = {"habits": {"ibx-m5x2": {"match": "ibx m5x2", "content": "ibx m5x2 (4) [15]"}}}
+    present = ["ibx m5x2 (5) [8]"]
+    drifted = vdh.compute_drifted(manifest, present)
+    points = next(d for d in drifted if d["token"] == "[")
+    assert points["habit"] == "ibx-m5x2"
+    assert points["expected"] == 15
+    assert points["actual"] == 8
+
+
+def test_drift_also_catches_time_estimate_token():
+    manifest = {"habits": {"ibx-m5x2": {"match": "ibx m5x2", "content": "ibx m5x2 (4) [15]"}}}
+    present = ["ibx m5x2 (5) [8]"]
+    drifted = vdh.compute_drifted(manifest, present)
+    tokens = {d["token"] for d in drifted}
+    assert tokens == {"(", "["}, "must flag both the (N) and [N] mismatches, not just one"
+
+
+def test_no_drift_when_live_card_matches_manifest():
+    manifest = {"habits": {"0g": {"match": "0g", "content": "0g (4) [8]"}}}
+    present = ["0g (4) [8]"]
+    assert vdh.compute_drifted(manifest, present) == []
+
+
+def test_missing_habit_not_reported_as_drifted():
+    # A habit absent from Todoist entirely is compute_missing's concern, not
+    # compute_drifted's — no live card means nothing to compare tokens against.
+    manifest = {"habits": {"0g": {"match": "0g", "content": "0g (4) [8]"}}}
+    assert vdh.compute_drifted(manifest, []) == []
+
+
 def test_na_today_reads_dtd_deleted_names(tmp_path, monkeypatch):
     """A habit deleted from dtd (= N/A for today) lands in the day's NA file;
     na_today() returns its bare name so --fix won't resurrect the card the

@@ -9,13 +9,25 @@ notice is cross-checking the Neon sheet. This validates the canonical set
 (config/daily-todoist-manifest.json) against live Todoist and, with --fix,
 recreates the missing ones from their stored spec.
 
+It also detects CONTENT drift: a habit's live recurring card keeps whatever
+(N)/[N] tokens it had when it was first created, even after the manifest's
+`content` is edited (recurring tasks are never retroactively rewritten). This
+is invisible to the missing-habit check above because `bare()` strips those
+tokens before matching. Found 2026-09-06: "ibx m5x2"'s manifest content was
+updated to `(4) [15]` at some point, but the live card — created 2026-07-14 —
+still read `(5) [8]`, and dtd (which reads the live card, correctly) had no
+way to know it was stale. Mirrors the drift WARNING the weekly (1n+) checker
+already does for its `[N]`; same philosophy: report, never auto-correct (the
+manifest and the live card could each be the "right" one, so which to trust is
+a human call — see `compute_drifted`).
+
 Usage:
     validate-daily-habits.py            # report missing as JSON
     validate-daily-habits.py --fix      # recreate missing, then report
     validate-daily-habits.py --pretty   # human-readable summary
 
 Output (JSON): {"checked": N, "present": [...], "missing": [...],
-                "recreated": [...], "errors": [...]}
+                "recreated": [...], "drifted": [...], "errors": [...]}
 The morning wakeup flow reads this to show a "missing habits" card.
 """
 from __future__ import annotations
@@ -61,6 +73,44 @@ def compute_missing(manifest: dict, present_contents: list[str]) -> list[str]:
         if not hit:
             missing.append(key)
     return missing
+
+
+def _tokens(content: str) -> dict:
+    """Extract each (N)/[N]/{N} estimate token's numeric value, keyed by its
+    opening bracket. `None` for a bracket type absent from `content`."""
+    out: dict = {"[": None, "(": None, "{": None}
+    for m in re.finditer(r"[\[\(\{](-?\d+(?:\.\d+)?)[\]\)\}]", content):
+        try:
+            val = float(m.group(1))
+            out[content[m.start()]] = int(val) if val.is_integer() else val
+        except ValueError:
+            pass
+    return out
+
+
+def compute_drifted(manifest: dict, present_contents: list[str]) -> list[dict]:
+    """Pure: for each manifest habit that HAS a live card (missing habits are
+    compute_missing's job, not this), compare the (N)/[N]/{N} token values the
+    manifest declares against what the live card actually holds. A habit
+    whose live card predates a manifest content edit keeps its old tokens
+    forever (Todoist never rewrites existing recurring tasks), so this is the
+    only thing that can catch that drift. Returns one entry per mismatched
+    token: {habit, token, expected, actual, live_content}."""
+    drifted = []
+    for key, h in manifest["habits"].items():
+        name = bare(h["match"])
+        match = next(
+            (p for p in present_contents
+             if bare(p) == name or (len(name) > 3 and (name in bare(p) or bare(p) in name))),
+            None)
+        if match is None:
+            continue
+        want, got = _tokens(h["content"]), _tokens(match)
+        for tok in ("[", "(", "{"):
+            if want[tok] is not None and got[tok] is not None and want[tok] != got[tok]:
+                drifted.append({"habit": key, "token": tok, "expected": want[tok],
+                                 "actual": got[tok], "live_content": match})
+    return drifted
 
 
 def na_today(when=None) -> set[str]:
@@ -148,6 +198,7 @@ def main() -> int:
     skipped_na = [k for k in missing
                   if bare(manifest["habits"][k]["match"]) in na_today()]
     missing = [k for k in missing if k not in skipped_na]
+    drifted = compute_drifted(manifest, present_contents)
 
     recreated, errors = [], []
     if args.fix:
@@ -168,6 +219,7 @@ def main() -> int:
         "recreated": recreated,
         "recreated_names": [manifest["habits"][k]["match"] for k in recreated],
         "skipped_na": skipped_na,
+        "drifted": drifted,
         "errors": errors,
     }
     if args.cache:
@@ -183,6 +235,15 @@ def main() -> int:
                   ", ".join(manifest["habits"][k]["match"] for k in missing))
             for e in errors:
                 print(f"   ✗ {e['habit']}: {e['error']}")
+        if drifted:
+            closing = {"[": "]", "(": ")", "{": "}"}
+            print(f"⚠ {len(drifted)} daily habit card(s) drifted from the manifest (never auto-fixed):")
+            for d in drifted:
+                c = closing[d["token"]]
+                print(f"   {manifest['habits'][d['habit']]['match']}: "
+                      f"{d['token']}{d['actual']}{c} in Todoist vs "
+                      f"{d['token']}{d['expected']}{c} in the manifest "
+                      f"(live: {d['live_content']!r})")
     else:
         print(json.dumps(result, ensure_ascii=False))
     return 0

@@ -121,9 +121,10 @@ def test_fetch_reads_hcbi_sheet_for_the_current_quarter():
     src = (HERE / "janus.py").read_text()
     i_def = src.index("def fetch_habits_today():")
     body = src[i_def:src.index("\n\n\n", i_def)]
-    assert "_dozen_applescript_lines(q_label)" in body, (
+    assert "_dozen_applescript_lines(q_label, prev_q_label)" in body, (
         "must splice in the hcbi Daily Dozen AppleScript, keyed by the "
-        "current quarter, not a hardcoded row")
+        "current quarter (and the previous one, for the running hcb total), "
+        "not a hardcoded row")
     i_helper = src.index("def _dozen_applescript_lines(")
     helper_body = src[i_helper:src.index("\n\n\n", i_helper)]
     assert 'sheet "hcbi"' in helper_body, "must read the hcbi sheet for the Daily Dozen line"
@@ -158,6 +159,48 @@ def test_hcb_behind_reads_column_x_second_row_not_the_label_row(monkeypatch):
     assert mod.STATE.hcbi_behind.get("hcb") == -439.9, \
         "hcb must read the combined-total row, not the label row's food subtotal"
     assert mod.STATE.hcbi_behind.get("hcbp") == 243.0
+
+
+def test_hcb_sums_current_and_previous_quarter(monkeypatch):
+    """hcb (2026-09-06 per JM) is a running Q<n-1>+Q<n> total, matching the
+    same change to the jm dashboard's CACHE_CARDS — not just the current
+    quarter in isolation. The previous quarter's combined-cell value rides
+    at the end of the dozen segment after a ';' (see the prev_block in
+    _dozen_applescript_lines); this test's mocked stdout includes it."""
+    mod = _load_tui()
+    row1 = [""] * 21
+    row2 = [""] * 21
+    row2[19] = "191.9"   # current quarter's combined total (e.g. X378)
+    dozen_raw = ",".join(row1) + "|" + ",".join(row2) + ";-1264.7"  # prev quarter (e.g. X375)
+    stdout = "||" + "||" + dozen_raw
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
+    mod.fetch_habits_today()
+    assert mod.STATE.hcbi_behind.get("hcb") == round(191.9 - 1264.7, 1), \
+        "hcb must sum the current AND previous quarter's combined totals"
+
+
+def test_hcb_falls_back_to_current_quarter_when_no_prior_segment(monkeypatch):
+    """No ';' in the dozen segment (Q1, no prior "Q0" row on the sheet, or
+    any other read failure) must degrade to the current-quarter-only value,
+    not drop the chip or raise."""
+    mod = _load_tui()
+    row1 = [""] * 21
+    row2 = [""] * 21
+    row2[19] = "-439.9"
+    dozen_raw = ",".join(row1) + "|" + ",".join(row2)  # no ';' suffix
+    stdout = "||" + "||" + dozen_raw
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
+    mod.fetch_habits_today()
+    assert mod.STATE.hcbi_behind.get("hcb") == -439.9
+
+
+def test_prev_quarter_label_skipped_for_q1():
+    """No 'Q0' exists on the sheet -- Q1 must pass an empty prev_q_label so
+    _dozen_applescript_lines' prev_block is a no-op, not a doomed search for
+    a row that will never match."""
+    mod = _load_tui()
+    src = (HERE / "janus.py").read_text()
+    assert 'prev_q_label = f"Q{_q_num - 1}" if _q_num > 1 else ""' in src
 
 
 if __name__ == "__main__":
