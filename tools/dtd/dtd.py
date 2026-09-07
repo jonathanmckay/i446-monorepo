@@ -209,8 +209,50 @@ def _refresh_cache_if_stale(force: bool = False):
     # else: a refresh is already in flight — don't stack another, just serve
     # the current cache below.
 
+MIRROR_DIR = Path.home() / "vault" / "z_ibx"
+
+
+def _remote_completed_ids(today: str) -> set[str]:
+    """Ids from OTHER hosts' synced completed-today-<host>.json mirrors, read
+    live on every request (mobile web is stateless/request-driven, unlike
+    dtd.sh's persistent loop — see below — so there is no watcher to keep an
+    overlay warm; a direct read each time is cheap: a handful of small local
+    JSON files, no network).
+
+    Bug (2026-09-07): "-1n [rituals] shown even though already done" — done on
+    another host (e.g. /inbound on Straylight), which writes ITS OWN
+    ~/.local/state/jm/task-queue.json and completed-today.json, neither of
+    which mobile web (served from Ix) reads. did-fast.py's own refresh
+    (`_refresh_task_queue_inner`) DOES call mc.absorb_remote() and re-verifies
+    every -1neon card live against Todoist — but only Ix's OWN cache refresh
+    triggers that, gated behind CACHE_MAX_AGE (180s) and then run
+    fire-and-forget in a background thread (see _refresh_cache_if_stale), so a
+    ritual closed seconds ago on another host can read as still-open here for
+    minutes. dtd.sh sidesteps this with a persistent background loop that
+    polls the mirror files' mtimes and folds them in continuously
+    (tools/did/dtd.sh's cross-machine completions watcher); dtd.py has no
+    persistent process to run that loop in, so it does the equivalent merge
+    inline, per-request, instead."""
+    ids: set[str] = set()
+    try:
+        # Harmless to include this host's own mirror (if it writes one) — it's
+        # a subset of DONE_FILE, unioned in again below, idempotent.
+        for p in MIRROR_DIR.glob("completed-today-*.json"):
+            try:
+                remote = json.loads(p.read_text())
+            except Exception:
+                continue
+            if not isinstance(remote, dict) or today > remote.get("date", ""):
+                continue  # strictly-older remote date: stale, ignore (equal/newer merges)
+            ids |= {str(v) for v in (remote.get("ids") or {}).values()}
+    except Exception:
+        pass
+    return ids
+
+
 def _completed_ids() -> set[str]:
-    """Todoist ids completed today (from completed-today.json `ids` map).
+    """Todoist ids completed today (from completed-today.json `ids` map, plus
+    every other host's synced mirror — see _remote_completed_ids).
 
     Hiding is by id ONLY, never by name. Names are unreliable: -1neon block
     rituals (سمش / -1g / -1ibx) are deleted+recreated with identical names at
@@ -219,30 +261,48 @@ def _completed_ids() -> set[str]:
     Genuinely-closed tasks drop out of the cache on refresh regardless; this id
     set only guards the window between a completion and the next cache refresh.
     """
+    today = _dt.date.today().isoformat()
+    ids = _remote_completed_ids(today)
     try:
         d = json.loads(DONE_FILE.read_text())
+        if d.get("date") == today:
+            ids |= {str(v) for v in (d.get("ids") or {}).values()}
     except Exception:
-        return set()
-    if d.get("date") != _dt.date.today().isoformat():
-        return set()
-    return {str(v) for v in (d.get("ids") or {}).values()}
+        pass
+    return ids
 
 def _snoozed_ids() -> set[str]:
     """Ids block-snoozed (ctrl-v) in the desktop dtd, hidden until their
-    chosen 地支 block's hour arrives. Mirrors tools/did/dtd.sh's read of the
-    same file — without this, a task delayed to later today in the terminal
-    view reappeared immediately here since dtd web never read this file
-    (2026-08-11 bug). File is {date, snoozes: {id: start_hour}}; a stale
-    date (leftover from a previous day) voids it, same as dtd.sh."""
+    chosen 地支 block's hour arrives — or, for a minute-granularity delay
+    (snooze_minutes), until that absolute timestamp passes. Mirrors
+    tools/did/dtd.sh's read of the same file — without this, a task delayed
+    to later today in the terminal view reappeared immediately here since
+    dtd web never read this file (2026-08-11 bug). File is {date, snoozes:
+    {id: start_hour | epoch_float}}; a stale date (leftover from a previous
+    day) voids it, same as dtd.sh.
+
+    A block delay stores a plain int hour-of-day; a minute delay stores an
+    absolute epoch float — json round-trips a python float with a decimal
+    point, so isinstance(v, float) unambiguously tells them apart on read,
+    same distinguishing check as dtd.sh's reader. Comparing a minute delay's
+    huge epoch value against now_hour (0-23) via int(v) — what this used to
+    do — is always true, so a minute-delayed task would never reappear
+    until the next day's reset (would have broken the moment anything wrote
+    a minute delay; nothing did until snooze_minutes(), 2026-09-07)."""
     try:
         sn = json.loads(SNOOZE_FILE.read_text())
     except Exception:
         return set()
     if sn.get("date") != _dt.date.today().isoformat():
         return set()
-    now_hour = _dt.datetime.now().hour
-    return {str(k) for k, v in (sn.get("snoozes") or {}).items()
-            if now_hour < int(v)}
+    now = _dt.datetime.now()
+
+    def _still_snoozed(v) -> bool:
+        if isinstance(v, float):
+            return now.timestamp() < v
+        return now.hour < int(v)
+
+    return {str(k) for k, v in (sn.get("snoozes") or {}).items() if _still_snoozed(v)}
 
 def _deferred_habit_ids() -> set[str]:
     """Recurring 0neon/夜neon habit-parent ids deferred (/defer) today,
@@ -455,35 +515,87 @@ def defer_task(task_id: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def snooze_to_next_block(task_id: str) -> dict:
-    """ctrl-v equivalent, scoped to just the NEXT block (terminal dtd offers
-    a picker across every remaining block today; the web menu is three flat
-    buttons, not a picker-within-a-picker — see the feature plan). Writes
-    the exact same ~/.local/state/jm/dtd-block-snooze.json shape
-    _snoozed_ids() already reads, so this round-trips with terminal dtd
-    either direction. Falls back to defer_task (delay a day) if there's no
-    next block left today (already in 亥, 20:00-21:59)."""
-    hours = sorted(BLOCK_HOURS.values())
-    now_hour = _dt.datetime.now().hour
-    next_hour = next((h for h in hours if h > now_hour), None)
-    if next_hour is None:
-        return defer_task(task_id)
+def _write_snooze(task_id: str, value) -> None:
+    """Read-modify-write dtd-block-snooze.json for one task id. Shared by
+    every delay-to-later-today path (block-by-hour, next-block, minute-
+    granularity) — value is either a plain int hour (block delay) or a
+    float epoch timestamp (minute delay), matching terminal dtd's
+    DTD_BLOCKAPPLY so either surface can read what the other wrote. A stale
+    (not-today) file is discarded first, same forward-only date gate as the
+    terminal's."""
     try:
-        try:
-            sn = json.loads(SNOOZE_FILE.read_text())
-        except Exception:
-            sn = {}
-        today = _dt.date.today().isoformat()
-        if sn.get("date") != today:
-            sn = {"date": today, "snoozes": {}}
-        sn.setdefault("snoozes", {})[str(task_id)] = next_hour
-        SNOOZE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = SNOOZE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(sn))
-        tmp.replace(SNOOZE_FILE)
+        sn = json.loads(SNOOZE_FILE.read_text())
+    except Exception:
+        sn = {}
+    today = _dt.date.today().isoformat()
+    if sn.get("date") != today:
+        sn = {"date": today, "snoozes": {}}
+    sn.setdefault("snoozes", {})[str(task_id)] = value
+    SNOOZE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SNOOZE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sn))
+    tmp.replace(SNOOZE_FILE)
+
+
+def remaining_blocks_today() -> list[dict]:
+    """地支 blocks whose start hour hasn't arrived yet, chronological — the
+    same set terminal dtd's ctrl-v picker offers (DTD_BLOCKARM's `n=... h >
+    now.hour` count). Mirrors BLOCK_HOURS' glyph order via a start-hour
+    sort, not dict insertion order, since BLOCK_HOURS itself is already
+    chronological here but this must stay correct even if that changes."""
+    now_hour = _dt.datetime.now().hour
+    return sorted(
+        ({"glyph": g, "hour": h} for g, h in BLOCK_HOURS.items() if h > now_hour),
+        key=lambda b: b["hour"])
+
+
+# Minute-granularity delay options offered alongside the block picker —
+# always available regardless of hour, exactly mirroring terminal dtd's
+# DTD_BLOCKARM/DTD_BLOCKAPPLY "+10m/+30m/+1h" trio (the "always-available
+# minute delays" its own comment calls them out as, independent of the
+# block list above).
+MINUTE_DELAY_OPTIONS = [10, 30, 60]
+
+
+def snooze_to_block(task_id: str, hour: int) -> dict:
+    """ctrl-v-then-pick-a-block equivalent: delay to an EXPLICIT block's
+    start hour, not just the next one. `hour` must be one of BLOCK_HOURS'
+    values — the caller (api_delay_hour) validates against
+    remaining_blocks_today() so a stale/tampered request can't schedule a
+    block that's already passed today."""
+    try:
+        _write_snooze(task_id, hour)
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "hour": next_hour}
+    return {"ok": True, "hour": hour}
+
+
+def snooze_minutes(task_id: str, minutes: int) -> dict:
+    """+10m/+30m/+1h equivalent: stored as an absolute epoch float (not a
+    bare hour) so the reader (dtd.sh's list generator / build_tasks below)
+    can tell a minute-delay apart from a block-delay on read — exactly
+    terminal dtd's DTD_BLOCKAPPLY encoding."""
+    if minutes not in MINUTE_DELAY_OPTIONS:
+        return {"ok": False, "error": f"unsupported minute delay: {minutes}"}
+    until = _dt.datetime.now().timestamp() + minutes * 60
+    try:
+        _write_snooze(task_id, until)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "minutes": minutes}
+
+
+def snooze_to_next_block(task_id: str) -> dict:
+    """ctrl-v equivalent, scoped to just the NEXT block. Kept as the
+    quick-action fast path (still wired to /api/delay-block); the swipe
+    menu's ⏰ button now opens the full picker (snooze_to_block /
+    snooze_minutes) instead of calling this directly — see
+    remaining_blocks_today(). Falls back to defer_task (delay a day) if
+    there's no next block left today (already in 亥, 20:00-21:59)."""
+    blocks = remaining_blocks_today()
+    if not blocks:
+        return defer_task(task_id)
+    return snooze_to_block(task_id, blocks[0]["hour"])
 
 # ---------------------------------------------------------------------------
 # Day totals for the header: points so far today + tasks completed today.
@@ -636,6 +748,38 @@ def api_delay_block():
         return jsonify({"ok": False, "error": "no id"}), 400
     return jsonify(snooze_to_next_block(task_id))
 
+@app.route("/api/delay-options")
+def api_delay_options():
+    """Populates the ⏰ picker sheet: remaining 地支 blocks today plus the
+    fixed minute-delay trio — fetched fresh each time the sheet opens so
+    the block list is never stale from an earlier page load."""
+    return jsonify({"ok": True, "blocks": remaining_blocks_today(),
+                    "minutes": MINUTE_DELAY_OPTIONS})
+
+@app.route("/api/delay-hour", methods=["POST"])
+def api_delay_hour():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    hour = body.get("hour")
+    if not task_id or not isinstance(hour, int):
+        return jsonify({"ok": False, "error": "no id/hour"}), 400
+    # Reject an hour that's already passed (or isn't a real block start) —
+    # a stale sheet left open across a block boundary, or a tampered
+    # request, must not silently schedule a "delay" into the past.
+    valid_hours = {b["hour"] for b in remaining_blocks_today()}
+    if hour not in valid_hours:
+        return jsonify({"ok": False, "error": "that block has already started"}), 400
+    return jsonify(snooze_to_block(task_id, hour))
+
+@app.route("/api/delay-minutes", methods=["POST"])
+def api_delay_minutes():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    minutes = body.get("minutes")
+    if not task_id or not isinstance(minutes, int):
+        return jsonify({"ok": False, "error": "no id/minutes"}), 400
+    return jsonify(snooze_minutes(task_id, minutes))
+
 @app.route("/api/add", methods=["POST"])
 def api_add():
     body = request.get_json(force=True, silent=True) or {}
@@ -756,6 +900,15 @@ PAGE = r"""<!doctype html>
     </div>
   </div>
 </div>
+<div id="delayWrap" class="sheetWrap">
+  <div class="sheet">
+    <div class="sheetLabel" id="delayLabel">delay until…</div>
+    <div id="delayOptions" class="delayGrid"></div>
+    <div class="sheetRow">
+      <button id="delayCancel">cancel</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 <script>
 const list = document.getElementById('list');
@@ -807,7 +960,7 @@ function makeRow(t){
   actions.className = 'actions';
   actions.innerHTML =
     '<button class="act act-day">🗓<br>+1d</button>' +
-    '<button class="act act-block">⏰<br>next</button>' +
+    '<button class="act act-block">⏰<br>delay</button>' +
     '<button class="act act-start">▶<br>start</button>';
   row.appendChild(actions);
 
@@ -825,7 +978,7 @@ function makeRow(t){
 
   const panel = bindSwipe(row, line, track, actions, t);
   actions.querySelector('.act-day').onclick = ()=> runDelay('day', row, t, panel);
-  actions.querySelector('.act-block').onclick = ()=> runDelay('block', row, t, panel);
+  actions.querySelector('.act-block').onclick = ()=> openDelayMenu(t, row, panel);
   actions.querySelector('.act-start').onclick = ()=> runStart(t, panel);
   return row;
 }
@@ -918,6 +1071,82 @@ async function runDelay(kind, row, t, panel){
     collapseRow(row);
   } catch(e){ toast('offline · not delayed', true); }
 }
+
+// ⏰ picker sheet: delay to any remaining 地支 block today, or +10m/30m/1h —
+// mirrors terminal dtd's ctrl-v block-snooze picker (previously the web
+// menu could only delay to the immediate next block; user request
+// 2026-09-07). Options are fetched fresh from /api/delay-options each time
+// the sheet opens rather than baked into the task list, so the remaining-
+// block set is never stale from an earlier page load.
+const delayWrap = document.getElementById('delayWrap');
+const delayLabel = document.getElementById('delayLabel');
+const delayOptions = document.getElementById('delayOptions');
+let delayCtx = null;
+
+function minuteLabel(m){ return m<60 ? ('+'+m+'m') : ('+'+(m/60)+'h'); }
+
+function openDelayMenu(t, row, panel){
+  panel.close();
+  delayCtx = {t, row};
+  delayLabel.textContent = 'delay "'+t.title+'" until…';
+  delayOptions.innerHTML = '<div class="loading">loading…</div>';
+  delayWrap.classList.add('show');
+  fetch('/api/delay-options').then(r=>r.json()).then(d=>{
+    if(!delayCtx) return;  // sheet closed while the fetch was in flight
+    if(!d.ok){ delayOptions.innerHTML=''; toast(d.error||'could not load options', true); return; }
+    delayOptions.innerHTML = '';
+    for(const b of d.blocks){
+      const btn = document.createElement('button');
+      btn.className = 'delayBtn';
+      btn.textContent = b.glyph+' '+String(b.hour).padStart(2,'0')+':00';
+      btn.onclick = ()=> submitDelayHour(b.hour);
+      delayOptions.appendChild(btn);
+    }
+    for(const m of d.minutes){
+      const btn = document.createElement('button');
+      btn.className = 'delayBtn';
+      btn.textContent = minuteLabel(m);
+      btn.onclick = ()=> submitDelayMinutes(m);
+      delayOptions.appendChild(btn);
+    }
+    if(!d.blocks.length && !d.minutes.length){
+      delayOptions.innerHTML = '<div class="loading">nothing later today</div>';
+    }
+  }).catch(()=>{ if(delayCtx) { delayOptions.innerHTML=''; toast('offline · could not load', true); } });
+}
+
+function closeDelayMenu(){ delayWrap.classList.remove('show'); delayCtx = null; }
+
+async function submitDelayHour(hour){
+  if(!delayCtx) return;
+  const {t, row} = delayCtx;
+  closeDelayMenu();
+  try {
+    const r = await fetch('/api/delay-hour', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:t.id, hour})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'delay failed', true); return; }
+    toast('⏰ → '+String(hour).padStart(2,'0')+':00');
+    collapseRow(row);
+  } catch(e){ toast('offline · not delayed', true); }
+}
+
+async function submitDelayMinutes(minutes){
+  if(!delayCtx) return;
+  const {t, row} = delayCtx;
+  closeDelayMenu();
+  try {
+    const r = await fetch('/api/delay-minutes', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:t.id, minutes})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'delay failed', true); return; }
+    toast('⏰ → '+minuteLabel(minutes));
+    collapseRow(row);
+  } catch(e){ toast('offline · not delayed', true); }
+}
+
+document.getElementById('delayCancel').onclick = closeDelayMenu;
+delayWrap.addEventListener('click', e=>{ if(e.target===delayWrap) closeDelayMenu(); });
 
 async function commit(t){
   total += (t.points||0); count += 1;

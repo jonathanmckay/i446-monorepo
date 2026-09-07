@@ -63,6 +63,47 @@ def test_completed_ids_still_hides_within_ix_window(tmp_path):
     assert "2" not in ids, "id in today's completed-today.json must still hide (local window)"
 
 
+def test_ritual_completed_on_another_host_is_hidden_before_cache_refreshes(tmp_path, monkeypatch):
+    """Bug (2026-09-07): "-1n [rituals] shown even though already done" — the
+    ritual (-1ibx/-1t/-1l) was closed via did-fast on ANOTHER host (e.g.
+    /inbound on Straylight), which writes THAT host's own local
+    completed-today.json and task-queue.json, neither of which mobile web
+    (served from Ix) reads. Ix's own cache refresh eventually re-verifies
+    every -1neon card live and would catch this, but that refresh is gated
+    behind CACHE_MAX_AGE (180s) and runs fire-and-forget in the background —
+    so within that window the still-cached (pre-completion) ritual card kept
+    showing. Fix: _completed_ids() also merges every host's synced
+    completed-today-<host>.json mirror on each request, independent of
+    whether Ix's own task-queue.json has refreshed yet."""
+    cache = {"updated": dt.datetime.now().isoformat(), "today": [
+        {"id": "R1", "content": "😈 -1ibx", "due": TODAY, "recurring": False, "labels": ["-1neon"]},
+        {"id": "R2", "content": "😈 -1t", "due": TODAY, "recurring": False, "labels": ["-1neon"]},
+    ]}
+    _setup(tmp_path, cache)  # no LOCAL completion recorded — closed on Straylight instead
+    mirror_dir = tmp_path / "z_ibx"
+    mirror_dir.mkdir()
+    (mirror_dir / "completed-today-straylight.json").write_text(json.dumps(
+        {"date": TODAY, "ids": {"😈 -1ibx": "R1", "😈 -1t": "R2"}}))
+    monkeypatch.setattr(dtd, "MIRROR_DIR", mirror_dir)
+    ids = {t["id"] for t in dtd.build_tasks()}
+    assert "R1" not in ids, "ritual closed on another host must be hidden immediately, not after a cache refresh"
+    assert "R2" not in ids
+
+
+def test_stale_remote_mirror_from_a_prior_day_is_ignored(tmp_path, monkeypatch):
+    cache = {"updated": dt.datetime.now().isoformat(), "today": [
+        {"id": "R1", "content": "😈 -1ibx", "due": TODAY, "recurring": False, "labels": ["-1neon"]},
+    ]}
+    _setup(tmp_path, cache)
+    mirror_dir = tmp_path / "z_ibx"
+    mirror_dir.mkdir()
+    (mirror_dir / "completed-today-straylight.json").write_text(json.dumps(
+        {"date": YESTERDAY, "ids": {"😈 -1ibx": "R1"}}))
+    monkeypatch.setattr(dtd, "MIRROR_DIR", mirror_dir)
+    ids = {t["id"] for t in dtd.build_tasks()}
+    assert "R1" in ids, "a remote mirror dated before today must not hide today's card"
+
+
 if __name__ == "__main__":
     import sys, pytest
     sys.exit(pytest.main([__file__, "-v"]))

@@ -115,6 +115,36 @@ def test_fill_gap_rejects_bad_times(jm):
     assert jm.fill_gap("x", "junk", "09:00")["ok"] is False
 
 
+def test_fill_gap_no_end_starts_running_timer(jm, monkeypatch):
+    """The add-entry dialog's default (start now, ongoing) must hit
+    start_timer, not create_entry — no fixed duration to compute."""
+    seen = {}
+    def fake_start(description, project_id=None, tags=None, start_time=None):
+        seen["description"] = description
+        seen["project_id"] = project_id
+        seen["start_time"] = start_time
+        return {"id": 1}
+    monkeypatch.setattr(jm.toggl_api, "start_timer", fake_start)
+    r = jm.fill_gap("standup @i9", "now", "")
+    assert r["ok"] is True
+    assert r["running"] is True
+    assert r["project"] == "i9"
+    assert seen["description"] == "standup"
+    assert seen["start_time"] is None  # "now" -> let Toggl stamp server-side
+
+
+def test_fill_gap_no_end_with_explicit_start_backdates_running_timer(jm, monkeypatch):
+    seen = {}
+    def fake_start(description, project_id=None, tags=None, start_time=None):
+        seen["start_time"] = start_time
+        return {"id": 1}
+    monkeypatch.setattr(jm.toggl_api, "start_timer", fake_start)
+    r = jm.fill_gap("x", "09:15", "")
+    assert r["ok"] is True
+    assert seen["start_time"] is not None
+    assert "T09:15:00" in seen["start_time"]
+
+
 def test_habit_tags_filters_to_known_habits(jm):
     """Only tags naming real habits get secondary logs; Toggl meta tags and
     junk resolve to nothing (feature 2026-07-27: run tagged 其他人 credits
