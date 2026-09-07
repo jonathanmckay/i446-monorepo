@@ -612,18 +612,6 @@
     "rent": "1295.00"
   },
   {
-    "unit_id": 750,
-    "property_name": "k308",
-    "unit": "308-B",
-    "tenant_name": "Smylie, Josh",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-02-23",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "2054.00"
-  },
-  {
     "unit_id": 853,
     "property_name": "kn47 K1",
     "unit": "C111",
@@ -694,18 +682,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "920.00"
-  },
-  {
-    "unit_id": 262,
-    "property_name": "m405",
-    "unit": "17",
-    "tenant_name": "Faulk, Robin",
-    "status": "Pending",
-    "lease_sign_date": "2022-08-30",
-    "move_in": "2022-04-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "895.00"
   },
   {
     "unit_id": 101,
@@ -864,18 +840,6 @@
     "rent": "1095.00"
   },
   {
-    "unit_id": 784,
-    "property_name": "a511",
-    "unit": "301",
-    "tenant_name": "Howard, Leila  M.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-20",
-    "move_in": "2025-10-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1025.00"
-  },
-  {
     "unit_id": 12,
     "property_name": "a916",
     "unit": "11",
@@ -936,18 +900,6 @@
     "rent": "1499.00"
   },
   {
-    "unit_id": 197,
-    "property_name": "hl65",
-    "unit": "1",
-    "tenant_name": "QUIAHUA PANZO, Roberto",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-17",
-    "move_in": "2025-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1175.00"
-  },
-  {
     "unit_id": 337,
     "property_name": "k104- LeFevre",
     "unit": "505-1",
@@ -1005,18 +957,6 @@
     "move_in": "2025-10-07",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 1014,
-    "property_name": "kn47 K2",
-    "unit": "B107",
-    "tenant_name": "Leggett, Daniel",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-11-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-01",
     "rent": "1089.00"
   },
   {
@@ -1102,18 +1042,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1595.00"
-  },
-  {
-    "unit_id": 493,
-    "property_name": "ps91",
-    "unit": "4",
-    "tenant_name": "Valencia, Alexis",
-    "status": "Eligible",
-    "lease_sign_date": "2025-10-16",
-    "move_in": "2025-10-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1145.00"
   },
   {
     "unit_id": 605,

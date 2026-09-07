@@ -6108,5 +6108,25 @@
     "unit": "B101",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-07",
+    "effective": "2026-09-07",
+    "kind": "movein",
+    "unit_id": "1052",
+    "prop": "kn47 K2",
+    "unit": "D205",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-07",
+    "effective": "2026-09-06",
+    "kind": "moveout",
+    "unit_id": "272",
+    "prop": "m405",
+    "unit": "DB",
+    "tenant": null,
+    "baseline": false
   }
 ]
