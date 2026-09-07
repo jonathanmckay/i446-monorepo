@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import datetime
 import email.mime.text
+import email.utils
 import json
 import logging
 import os
@@ -249,6 +250,39 @@ def _clear_auth_alert():
     _AUTH_ALERT_PATH.unlink(missing_ok=True)
 
 
+def send_review_alert(service, item: dict, meta: dict, url: str, error: str):
+    """Email JM AND the original forwarder when the autosigner fails on a
+    lease for content reasons (no sign button, no confirmation, etc.) — the
+    2026-09 gap this closes: _flag_for_review used to be completely silent,
+    so failed leases sat unsigned under a label nobody watches until someone
+    happened to notice in AppFolio. The sender needs to know too since
+    they're the one who'll otherwise assume it's handled."""
+    unit = meta.get("unit", "unknown unit")
+    _, sender_addr = email.utils.parseaddr(item.get("from", ""))
+    recipients = [NOTIFY_TO]
+    if sender_addr and sender_addr.lower() != NOTIFY_TO.lower():
+        recipients.append(sender_addr)
+    try:
+        body = (
+            f"The lease auto-signer could NOT sign this lease automatically:\n\n"
+            f"Unit:    {unit}\n"
+            f"Tenants: {meta.get('tenants', '')}\n"
+            f"Type:    {meta.get('lease_type', 'renewal')}\n"
+            f"Error:   {error}\n"
+            f"Link:    {url}\n\n"
+            f"JM needs to sign this one personally in AppFolio.\n"
+        )
+        msg = email.mime.text.MIMEText(body)
+        msg["To"] = ", ".join(recipients)
+        msg["From"] = NOTIFY_TO
+        msg["Subject"] = f"⚠ Auto-sign failed — {unit} needs JM to sign manually"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        log.info(f"Sent manual-sign-needed alert to {', '.join(recipients)} for {unit}")
+    except Exception as e:
+        log.warning(f"Failed to send review-needed alert for {unit}: {e}")
+
+
 def send_notification(service, item: dict, meta: dict, result: dict, count: int):
     """Email mckay@m5c7.com about a successful signing."""
     try:
@@ -370,6 +404,7 @@ def process_email(service, item: dict) -> str:
             log.info(f"Flagged email {email_id} for manual review ({_REVIEW_LABEL})")
     except Exception as e:
         log.warning(f"Failed to flag {email_id} for review: {e}")
+    send_review_alert(service, item, meta, url, error)
     return "failed"
 
 
