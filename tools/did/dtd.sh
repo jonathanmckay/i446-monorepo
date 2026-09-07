@@ -1523,7 +1523,7 @@ for t in unique:
     # Hide by id first: definitive, and immune to same-name collisions.
     if t.get('id') is not None and str(t['id']) in completed_ids:
         continue
-    # Cross-machine "done today" (2026-09-07 fix, mirrors tools/dtd/dtd.py's
+    # Cross-machine done-today (2026-09-07 fix, mirrors tools/dtd/dtd.py's
     # build_tasks): a recurring habit whose due date has advanced past today
     # was completed today -- each close bumps a daily/weekly recurrence by
     # one occurrence. completed-today.json (and its id/name overlays above)
@@ -1534,9 +1534,11 @@ for t in unique:
     # strips before comparing, so it never matches). The due date itself is
     # durable Todoist state, unlike the local completed-today overlay, so it
     # survives regardless of which machine's did-fast call advanced it.
-    # Bug report 2026-09-07: "1st hci" done via dtd mobile (Ix) never hid in
+    # Bug report 2026-09-07: 1st hci done via dtd mobile (Ix) never hid in
     # dtd cli (Straylight) -- mobile's dtd.py already had this exact check;
-    # dtd.sh never did.
+    # dtd.sh never did. (NOTE: this whole block sits inside dtd.sh's
+    # python3 -c zsh double-quoted string -- a literal double-quote char in
+    # a comment here silently truncates the script; avoid it.)
     if t.get('recurring', True) and t.get('due') and t['due'] > today:
         continue
     # Block-snoozed (ctrl-v): hidden until the chosen block's hour arrives.
