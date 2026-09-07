@@ -160,13 +160,22 @@ def test_render_morning_draws_sleep_continuation():
 
 
 def test_render_morning_sleep_and_entry_in_body():
-    """Integration: wake 07:03 + 新闻 after → 辰 header is the bare 辰:00 stamp;
-    both 睡觉 and 新闻 sit in the body."""
+    """Integration: wake 07:03, then a 2-minute UNTRACKED gap before 新闻
+    starts at 07:05 → 辰 header stays at the bare :00 stamp, and both 睡觉
+    and 新闻 sit in the body. (Updated 2026-09-07: the original version of
+    this test had 新闻 start at 07:03 with NO gap after wake — exactly
+    lining up with the wake time, which the 2026-09-07 dedup fix now
+    correctly recognizes as fully redundant and drops; see
+    test_sleep_item_dropped_when_it_lines_up_with_the_next_real_entry and
+    test_render_morning_no_duplicate_sleep_line_at_block_cutover for that
+    case. This test now covers the genuinely-distinct case: a real gap
+    between wake and the next entry, where sleep is NOT redundant and must
+    still show.)"""
     mod = _load_tui()
     today = _midnight()
     mod.STATE.entries = [
         _entry("睡觉", today, today.replace(hour=7, minute=3)),
-        _entry("新闻", today.replace(hour=7, minute=3), today.replace(hour=7, minute=30)),
+        _entry("新闻", today.replace(hour=7, minute=5), today.replace(hour=7, minute=30)),
     ]
     mod.STATE.entries_yday = []
     mod.STATE.block_points = {}
@@ -174,5 +183,26 @@ def test_render_morning_sleep_and_entry_in_body():
     frags = mod.render_morning()
     text = "".join(t for _, t, *_ in frags)
     chen = [ln for ln in text.split("\n") if ln.startswith("辰:00")]
-    assert chen, f"expected a bare 辰:00 header, got lines: {[l for l in text.split(chr(10)) if '辰' in l]}"
-    assert "睡觉" in text and "新闻" in text
+    assert chen, f"expected the bare 辰:00 stamp, got lines: {[l for l in text.split(chr(10)) if '辰' in l]}"
+    chen_idx = text.index("辰:00")
+    next_hdr = min(i for i in (text.find("巳", chen_idx), len(text)) if i >= 0)
+    chen_block = text[chen_idx:next_hdr]
+    assert "睡觉" in chen_block and "新闻" in chen_block, (
+        f"a genuine gap must keep both entries visible: {chen_block!r}")
+
+
+def test_render_morning_keeps_sleep_when_gap_follows_wake():
+    """Sanity companion to the dedup test above: the wake time itself must
+    still line up with the FULL clipped sleep duration even when a gap
+    follows it -- the dedup only drops the row when nothing else changed
+    about it, not the sleep computation itself."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.entries = [
+        _entry("睡觉", today, today.replace(hour=7, minute=3)),
+        _entry("新闻", today.replace(hour=7, minute=5), today.replace(hour=7, minute=30)),
+    ]
+    item = mod._block_sleep_item(6, 7, today.replace(hour=10))
+    assert item is not None
+    assert item["dur_min"] == 63
+    assert item["time_str"] == "07:03"

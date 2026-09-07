@@ -119,6 +119,71 @@ def test_sigusr1_refresh_debounces_burst(monkeypatch):
     assert fetched["n"] == 1, "three rapid nudges must yield exactly one refresh"
 
 
+def test_day_nav_402_falls_back_to_cached_day_not_mismatched_stale_data(monkeypatch, tmp_path):
+    """User report 2026-09-07: "when I check a previous day and time entries
+    are not loaded, it flashes as if there's nothing there."
+
+    STATE.entries is a single global slot holding whatever day was last
+    successfully fetched. Navigating to a different day re-fetches with a
+    window centered on the NEWLY viewed day; if that fetch 402s, the OLD
+    code left STATE.entries holding the PREVIOUS day's data untouched --
+    rendering that mismatched day's entries against the newly-viewed day's
+    cutoff filters nearly everything out, so it read as a confident empty
+    day instead of "couldn't confirm."
+
+    Fix: every successful fetch also writes a small per-day disk cache
+    (today's request also covers the previous day). A failed fetch first
+    tries the disk cache for the SPECIFIC day now being viewed before
+    falling back to entries_known=False."""
+    import datetime as real_dt
+    m = _load()
+    m.DAY_CACHE_PATH = tmp_path / "day-cache.json"
+    tz = m._tz()
+    today = real_dt.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    yday = today - real_dt.timedelta(days=1)
+
+    def _entries(**k):
+        return [
+            {"start": today.replace(hour=9).isoformat(), "stop": today.replace(hour=10).isoformat(),
+             "description": "work today", "project_id": 1, "id": 100, "tags": []},
+            {"start": yday.replace(hour=14).isoformat(), "stop": yday.replace(hour=15).isoformat(),
+             "description": "meeting yesterday", "project_id": 2, "id": 101, "tags": []},
+        ]
+    monkeypatch.setattr(m.toggl_api, "get_entries", _entries)
+    m.view_now = lambda: real_dt.datetime.now(tz)
+    m.fetch_today(force=True)
+    assert [e["desc"] for e in m.STATE.entries] == ["work today"]
+    assert m.STATE.entries_known is True
+
+    # Navigate to yesterday; the live re-fetch now 402s.
+    monkeypatch.setattr(m.toggl_api, "get_entries",
+                        lambda **k: (_ for _ in ()).throw(Exception("HTTP 402 rate limit")))
+    m.STATE.day_offset = -1
+    m.STATE.last_toggl_fetch = 0.0
+    m.STATE.toggl_blocked_until = 0.0  # this test's own cooldown, not the 402 in progress
+    m.view_now = lambda: real_dt.datetime.now(tz) - real_dt.timedelta(days=1)
+    m.fetch_today(force=True)
+
+    assert m.STATE.entries_known is True, (
+        "a day with a real cached read must not be marked unconfirmed")
+    assert [e["desc"] for e in m.STATE.entries] == ["meeting yesterday"], (
+        f"must fall back to YESTERDAY's own cached entries, not leave today's "
+        f"mismatched data in place: {[e['desc'] for e in m.STATE.entries]!r}")
+
+
+def test_day_with_no_cache_at_all_stays_unconfirmed_not_falsely_empty(monkeypatch, tmp_path):
+    """No prior successful fetch exists for the viewed day at all (e.g. a
+    cold-started session whose very first fetch 402s) -- must fall back to
+    entries_known=False (render_morning's own warning), never silently
+    report a confirmed-empty day it never actually saw."""
+    m = _load()
+    m.DAY_CACHE_PATH = tmp_path / "day-cache.json"  # never written to
+    monkeypatch.setattr(m.toggl_api, "get_entries",
+                        lambda **k: (_ for _ in ()).throw(Exception("HTTP 402 rate limit")))
+    m.fetch_today(force=True)
+    assert m.STATE.entries_known is False
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

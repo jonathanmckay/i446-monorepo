@@ -595,6 +595,56 @@ def fetch_current(cached=False):
             flash(f"toggl current err: {e}")
 
 
+# Persisted per-day entries cache -- survives a rate-limited (402) refetch
+# by falling back to the last CONFIRMED read for the specific day being
+# viewed, instead of leaving STATE.entries pointing at whatever OTHER day it
+# last successfully held (which then silently rendered as a confident empty
+# day once the viewed day changed -- user report 2026-09-07: "when I check a
+# previous day and time entries are not loaded, it flashes as if there's
+# nothing there"). Keyed by ISO date; only the most recent DAY_CACHE_KEEP
+# dates are kept, since Toggl's free-tier hourly cap (the thing this exists
+# to ride out) resets within the hour and today/yesterday are what the user
+# actually asked to be able to ride out, not a long-term local mirror.
+DAY_CACHE_PATH = Path.home() / ".cache" / "janus-day-entries.json"
+DAY_CACHE_KEEP = 2
+
+
+def _write_day_cache(date_iso: str, entries: list[dict]) -> None:
+    """Persist one day's CONFIRMED entries (fetch_today's out/yout shape --
+    datetimes serialized to isoformat). Best-effort: a write failure just
+    means no fallback later, not a broken fetch now."""
+    try:
+        data = json.loads(DAY_CACHE_PATH.read_text())
+    except (OSError, ValueError):
+        data = {}
+    data[date_iso] = [
+        {**e, "start_dt": e["start_dt"].isoformat(), "end_dt": e["end_dt"].isoformat()}
+        for e in entries]
+    for stale in sorted(data.keys())[:-DAY_CACHE_KEEP]:
+        del data[stale]
+    try:
+        DAY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DAY_CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(DAY_CACHE_PATH)
+    except OSError:
+        pass
+
+
+def _read_day_cache(date_iso: str) -> list[dict] | None:
+    """A previously-cached day's entries (datetimes restored), or None if
+    that date was never cached (or the cache file doesn't exist yet)."""
+    try:
+        data = json.loads(DAY_CACHE_PATH.read_text())
+    except (OSError, ValueError):
+        return None
+    raw = data.get(date_iso)
+    if raw is None:
+        return None
+    return [{**e, "start_dt": dt.datetime.fromisoformat(e["start_dt"]),
+             "end_dt": dt.datetime.fromisoformat(e["end_dt"])} for e in raw]
+
+
 def fetch_today(force=False):
     """Reload the viewed day's Toggl entries.
 
@@ -645,15 +695,31 @@ def fetch_today(force=False):
         STATE.entries_known = True
         STATE.entries_yday = yout
         STATE.last_toggl_fetch = time.monotonic()
+        _write_day_cache(today.isoformat(), out)
+        _write_day_cache(yday.isoformat(), yout)
         try:
             _resolve_pending_tag_credits()
         except Exception:  # noqa: BLE001 — credits never break the fetch
             pass
     except Exception as e:
-        # Fetch failed → we no longer know today's entries are current. Leave
-        # STATE.entries as-is (last known) but mark it unconfirmed so gap
-        # flashing doesn't treat "haven't fetched yet" as "confirmed empty".
-        STATE.entries_known = False
+        # Fetch failed. STATE.entries may currently hold a DIFFERENT day's
+        # data (e.g. today's, from before a day-nav) -- rendering it against
+        # the newly-viewed day's cutoff filters almost everything out and
+        # reads as a confident empty day (user report 2026-09-07). Fall back
+        # to the specific viewed day's own last-CONFIRMED cache instead, if
+        # one exists, rather than leaving mismatched-day data in place.
+        viewed = view_now().date()
+        cached = _read_day_cache(viewed.isoformat())
+        cached_yday = _read_day_cache((viewed - dt.timedelta(days=1)).isoformat())
+        if cached is not None:
+            STATE.entries = cached
+            STATE.entries_yday = cached_yday or []
+            STATE.entries_known = True
+        else:
+            # Truly nothing to fall back on -- mark unconfirmed so gap
+            # flashing (and render_morning's own warning) don't treat
+            # "haven't fetched yet" as "confirmed empty".
+            STATE.entries_known = False
         if "402" in str(e):
             _note_rate_limit()
         else:
