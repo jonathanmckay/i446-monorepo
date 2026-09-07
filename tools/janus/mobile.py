@@ -661,6 +661,26 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     desc_clean = _AT.sub("", desc).strip()
     pid = PROJECT_MAP.get(code)
     today = _dt.datetime.now(_tz()).date()
+
+    # No end time -> start a live, still-running Toggl timer instead of a
+    # fixed completed block. This is the "start task now" path (the add-entry
+    # dialog defaults here); filling a specific timeline gap always supplies
+    # both times and is unaffected.
+    if not end_hhmm or end_hhmm == "now":
+        if not start_hhmm or start_hhmm == "now":
+            start_iso = None  # let Toggl stamp "now" server-side
+        else:
+            try:
+                st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), _tz())
+            except Exception:
+                return {"ok": False, "error": "bad time format (HH:MM)"}
+            start_iso = st.strftime("%Y-%m-%dT%H:%M:%S%z")
+        try:
+            r = toggl_api.start_timer(desc_clean, project_id=pid, start_time=start_iso)
+            return {"ok": bool(r), "project": code, "running": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+
     try:
         st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), _tz())
         en = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(end_hhmm)), _tz())
@@ -1236,6 +1256,7 @@ PAGE = r"""<!doctype html>
     margin-bottom:10px; }
   #dlg .times, #editDlg .times { display:flex; gap:10px; }
   #dlg .times input, #editDlg .times input { flex:1; text-align:center; }
+  .ongoing-row { display:flex; align-items:center; gap:6px; font-size:.9em; margin:4px 0; }
   #dlg .btns, #editDlg .btns { display:flex; gap:10px; margin-top:4px; }
   #dlg button, #editDlg button { flex:1; font:700 15px ui-monospace,Menlo,monospace; border:none;
     border-radius:8px; padding:12px; }
@@ -1262,6 +1283,9 @@ PAGE = r"""<!doctype html>
   <div class="card">
     <h3 id="dlgTitle">fill gap</h3>
     <input id="d-desc" placeholder="description (@code for project)" autocomplete="off">
+    <label id="d-ongoing-row" class="ongoing-row">
+      <input type="checkbox" id="d-ongoing" onchange="toggleOngoing()"> ongoing (no end yet)
+    </label>
     <div class="times">
       <input id="d-start" inputmode="numeric" placeholder="HH:MM">
       <input id="d-end" inputmode="numeric" placeholder="HH:MM">
@@ -1424,6 +1448,9 @@ function act(row, line, r){
     document.getElementById('d-desc').value = '';
     document.getElementById('d-start').value = r.start;
     document.getElementById('d-end').value = r.end;
+    document.getElementById('d-ongoing-row').style.display = 'none';
+    document.getElementById('d-ongoing').checked = false;
+    document.getElementById('d-end').disabled = false;
     dlg.classList.add('show');
     setTimeout(()=>document.getElementById('d-desc').focus(), 60);
     return;
@@ -1489,15 +1516,36 @@ async function commitLog(line, r){
   } catch(e){ line.classList.remove('logged'); toast('offline', true); }
 }
 
+function toggleOngoing(){
+  const on = document.getElementById('d-ongoing').checked;
+  const endEl = document.getElementById('d-end');
+  const startEl = document.getElementById('d-start');
+  endEl.disabled = on;
+  if(on){
+    endEl.value = '';
+  } else {
+    // Switching to a fixed completed block — replace the "now" sentinel
+    // with real HH:MM values (start 15m ago) so there's something sane to
+    // edit rather than a literal "now" the time parser would reject.
+    const pad = n => String(n).padStart(2,'0');
+    const hhmm = d => pad(d.getHours())+':'+pad(d.getMinutes());
+    const now = new Date();
+    if(startEl.value.trim().toLowerCase() === 'now') startEl.value = hhmm(new Date(now - 15*60000));
+    if(!endEl.value.trim()) endEl.value = hhmm(now);
+  }
+}
+
 function openAddDlg(){
   gapCtx = null;  // not filling a specific gap — /api/fill just needs desc/start/end
   document.getElementById('dlgTitle').textContent = 'add entry';
   document.getElementById('d-desc').value = '';
-  const pad = n => String(n).padStart(2,'0');
-  const hhmm = d => pad(d.getHours())+':'+pad(d.getMinutes());
-  const now = new Date();
-  document.getElementById('d-start').value = hhmm(new Date(now - 15*60000));
-  document.getElementById('d-end').value = hhmm(now);
+  // Default: start now, ongoing (no end) — the common case is "starting
+  // something right now", not backfilling a finished block. Un-checking
+  // "ongoing" still allows logging a specific past completed span.
+  document.getElementById('d-start').value = 'now';
+  document.getElementById('d-ongoing-row').style.display = '';
+  document.getElementById('d-ongoing').checked = true;
+  toggleOngoing();
   dlg.classList.add('show');
   setTimeout(()=>document.getElementById('d-desc').focus(), 60);
 }
@@ -1506,7 +1554,8 @@ function closeDlg(){ dlg.classList.remove('show'); gapCtx=null; }
 async function saveDlg(){
   const desc = document.getElementById('d-desc').value.trim();
   const start = document.getElementById('d-start').value.trim();
-  const end = document.getElementById('d-end').value.trim();
+  const ongoing = document.getElementById('d-ongoing').checked;
+  const end = ongoing ? '' : document.getElementById('d-end').value.trim();
   if(!desc){ toast('need a description', true); return; }
   closeDlg();
   try {
@@ -1515,7 +1564,7 @@ async function saveDlg(){
       body: JSON.stringify({desc, start, end})});
     const d = await r.json();
     if(!d.ok){ toast(d.error||'create failed', true); return; }
-    toast('tracked ✓' + (d.project?' → '+d.project:''));
+    toast(d.running ? 'started ✓'+(d.project?' → '+d.project:'') : 'tracked ✓'+(d.project?' → '+d.project:''));
     load();
   } catch(e){ toast('offline', true); }
 }
