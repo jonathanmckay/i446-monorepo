@@ -61,6 +61,42 @@ def test_generic_11_keyword_still_resolves_to_i9_absent_m5x2_and_calendar():
     assert mod.gcal_project_code(ev) == "i9"
 
 
+def test_sunday_dinner_on_lxu888_resolves_to_xk87_not_xk88():
+    """User report 2026-09-07: "sunday dinner is the wrong color on Janus -
+    it's xk87 so should be orange." The recurring weekly "Sunday dinner"
+    event lives on the "lxu888" calendar (Louisa's personal calendar),
+    which CALENDAR_PROJECT_MAP defaults to xk88 (marriage/social) -- right
+    for a date night, wrong for the whole-family dinner tradition. Same bug
+    class and same fix mechanism as the m5x2/lx@m5c7.com case above: a
+    TITLE_OVERRIDE_KEYWORDS entry wins over the calendar-level default."""
+    mod = _load_tui()
+    ev = {"calendar": "lxu888", "title": "Sunday dinner"}
+    assert mod.gcal_project_code(ev) == "xk87"
+
+
+def test_other_lxu888_events_without_the_keyword_still_resolve_xk88():
+    """Regression guard: this fix must not blanket the whole lxu888 calendar
+    as xk87 -- a genuinely personal event there still resolves via the
+    calendar map, same guarantee test_lx_personal_event_without_m5x2_in_
+    title_still_xk88 gives for the lx@m5c7.com case."""
+    mod = _load_tui()
+    ev = {"calendar": "lxu888", "title": "lx haircut"}
+    assert mod.gcal_project_code(ev) == "xk88"
+
+
+def test_title_override_checked_before_calendar_map():
+    """Structural: TITLE_OVERRIDE_KEYWORDS must be consulted BEFORE
+    CALENDAR_PROJECT_MAP in gcal_project_code's source, or a matching
+    calendar entry short-circuits before the title override is ever
+    reached (exactly how "sunday dinner" broke: the plain per-case `if
+    "m5x2" in title_lower` this fix replaced already ran first, but a new
+    case added the same way as a second scattered `if` risked landing in
+    the wrong place)."""
+    src = (Path(__file__).parent / "janus.py").read_text()
+    body = src.split("def gcal_project_code", 1)[1].split("\ndef ", 1)[0]
+    assert body.index("TITLE_OVERRIDE_KEYWORDS") < body.index("CALENDAR_PROJECT_MAP")
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
