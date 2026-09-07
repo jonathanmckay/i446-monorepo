@@ -87,6 +87,60 @@ def test_sleep_cont_stops_at_wake():
     assert set(cont.keys()) == {(6, 0)}
 
 
+def test_sleep_item_dropped_when_it_lines_up_with_the_next_real_entry():
+    """User report 2026-09-07: "I don't want Janus to have an extra line at
+    the cutover between blocks if there are already time entries that
+    straddle that border... It should be :51, then 巳:09, without a line in
+    between." Wake exactly where the next entry ("generic placeholder")
+    starts (08:09) must not ALSO get its own synthetic 巳:00 睡觉 row --
+    that entry's own start time already proves sleep ran right up until
+    then. _block_spill_items' results already get this treatment via
+    _drop_redundant_spill (2026-08-10); _block_sleep_item's synthetic pick
+    never did, so it must independently pass the same check."""
+    mod = _load_tui()
+    today = _midnight()
+    sleep_end = today.replace(hour=8, minute=9, second=17)
+    mod.STATE.entries = [
+        _entry("睡觉", today, sleep_end),
+        _entry("generic placeholder", sleep_end, today.replace(hour=9, minute=59)),
+    ]
+    picks = mod._past_block_picks("巳", [
+        {"start_dt": e["start_dt"], "end_dt": e["end_dt"], "desc": e["desc"],
+         "project_id": e["project_id"], "running": False, "ids": [e["id"]],
+         "tags": []}
+        for e in mod.STATE.entries if e["desc"] != "睡觉"])
+    sleep = mod._block_sleep_item(8, 9, today.replace(hour=10))
+    assert sleep is not None
+    assert mod._drop_redundant_spill([sleep], picks) == [], (
+        "a wake time landing exactly on the next real entry's start must "
+        "not survive as a duplicate synthetic 睡觉 row")
+
+
+def test_render_morning_no_duplicate_sleep_line_at_block_cutover():
+    """Integration: the exact screenshot scenario -- must go straight from
+    辰's last 睡觉 row to 巳's real header, no separate '巳:00 睡觉' row."""
+    mod = _load_tui()
+    today = _midnight()
+    sleep_end = today.replace(hour=8, minute=9, second=17)
+    mod.STATE.current_known = True
+    mod.STATE.entries_known = True
+    mod.STATE.entries = [
+        _entry("睡觉", today, sleep_end),
+        _entry("generic placeholder", sleep_end, today.replace(hour=9, minute=59)),
+    ]
+    mod.STATE.entries_yday = []
+    mod.STATE.block_points = {}
+    mod.STATE.events = []
+    mod.detail_window = lambda: (today.replace(hour=11), today.replace(hour=13))
+    text = "".join(t for _, t, *_ in mod.render_morning())
+    lines = text.split("\n")
+    si_lines = [l for l in lines if l.startswith("巳")]
+    assert si_lines and si_lines[0].startswith("巳:09"), (
+        f"expected 巳's header to be the real :09 entry with no extra 睡觉 "
+        f"row before it, got: {si_lines!r}")
+    assert not any("睡觉" in l and l.startswith("巳") for l in lines)
+
+
 def test_render_morning_draws_sleep_continuation():
     """Integration: sleeping through 辰 puts a 睡觉 body row plus ◇ │ continuation
     on the covered marks, under the bare 辰:00 header."""

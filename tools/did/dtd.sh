@@ -667,16 +667,18 @@ _dated=""
 [[ "\$clean_base" != "\$clean_lower" ]] && _dated=1
 # Tasks that ask for a value on completion (like cpap). The typed number is
 # appended so did-fast writes it to the task's own 0n column: cpap = 1-3 sleep
-# quality; xk20/xk22/xk26 = minutes with Theo/Ren/Rori; i444 = count, where an
-# explicit 0 records "none needed today" (blank would default to 1 in did-fast).
-# Needs a tty, so the router (below) sends these to execute, not
-# execute-silent. Blank input just completes with no number.
+# quality; xk20/xk22/xk26 = minutes with Theo/Ren/Rori, prompted as "分" since
+# 0分!X sums 0n!AJ:AO 1:1 with no rate conversion (a minute with a kid IS a
+# 分, 2026-09-07 per JM); i444 = count, where an explicit 0 records "none
+# needed today" (blank would default to 1 in did-fast). Needs a tty, so the
+# router (below) sends these to execute, not execute-silent. Blank input
+# just completes with no number.
 _ip=""
 case "\$clean_base" in
   cpap) _ip="CPAP quality (1-3)";;
-  xk20) _ip="xk20 minutes (Theo)";;
-  xk22) _ip="xk22 minutes (Ren)";;
-  xk26) _ip="xk26 minutes (Rori)";;
+  xk20) _ip="xk20 分 (Theo)";;
+  xk22) _ip="xk22 分 (Ren)";;
+  xk26) _ip="xk26 分 (Rori)";;
   i444) _ip="i444 count (0 = none today)";;
   hiit) _ip="hiit minutes";;
   新闻) _ip="新闻 minutes";;

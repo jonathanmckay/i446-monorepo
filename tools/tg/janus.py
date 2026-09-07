@@ -3525,7 +3525,13 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
         # the original anonymous-◇ bug.
         picks = _drop_redundant_spill(_block_spill_items(blk_sh, blk_eh, cutoff), picks) + picks
         sleep = _block_sleep_item(blk_sh, blk_eh, cutoff)
-        if sleep:
+        # Same redundancy check as the spill items just above (user report
+        # 2026-09-07): the sleep spillover is its own synthetic pick, built
+        # by a separate function that never went through _drop_redundant_
+        # spill, so a wake time landing exactly on the next real entry's
+        # start (e.g. sleep clipped to 08:00-08:09, "generic placeholder"
+        # starting 08:09) still duplicated it as an extra "巳:00 睡觉" row.
+        if sleep and _drop_redundant_spill([sleep], picks):
             picks = ([sleep] + picks)[:4]
         # Meetings that actually happened but never got a Toggl entry (or got
         # swallowed by one giant undifferentiated timer) — "turn a calendar
@@ -4005,7 +4011,9 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     # report 2026-08-10; see _drop_redundant_spill / the render_morning gate).
     picks = _drop_redundant_spill(_block_spill_items(blk_sh, blk_eh, now), picks) + picks
     sleep = _block_sleep_item(blk_sh, blk_eh, now)
-    if sleep:
+    # Same redundancy check as the spill items just above (user report
+    # 2026-09-07): see render_morning's identical gate for the full story.
+    if sleep and _drop_redundant_spill([sleep], picks):
         picks = ([sleep] + picks)[:FOCUS_ROWS]
     upcoming = [ev for ev in STATE.events if ev["end_dt"] > now]
     event_picks = _future_block_picks(blk_name, upcoming, limit=FOCUS_ROWS)
