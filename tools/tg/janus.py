@@ -3026,10 +3026,24 @@ def _drop_redundant_spill(spill_items: list[dict], real_picks: list[dict]) -> li
     entry ran right up until then, so the spill row would just restate it
     (user report 2026-08-10). A spill ending mid-gap (nothing else in the
     block starts right there) is kept — that's the original 2026-07-27 case
-    this whole mechanism exists for."""
-    real_starts = {p["start_dt"] for p in real_picks}
+    this whole mechanism exists for.
+
+    Compared at MINUTE precision, not exact datetime equality: dur_min
+    (from _block_spill_items) is itself minute-truncated
+    (int(total_seconds // 60)), so reconstructing the clipped end as
+    start_dt + dur_min undershoots the entry's true end by up to 59s
+    whenever it carries seconds — normal for real Toggl timestamps, which
+    are almost never exactly on the minute. An exact-datetime comparison
+    against a real pick's full-precision start_dt then never matched, so
+    an entry that already got its own titled row in the block it started
+    in showed AGAIN as a spill duplicate in the very next block, right
+    before the real entry it was supposedly deduped against (user report
+    2026-09-06: "shows multiple entries when a time entry goes across a
+    block... should just show 1")."""
+    real_starts = {p["start_dt"].replace(second=0, microsecond=0) for p in real_picks}
     return [s for s in spill_items
-            if s["start_dt"] + dt.timedelta(minutes=s["dur_min"]) not in real_starts]
+            if (s["start_dt"] + dt.timedelta(minutes=s["dur_min"])).replace(second=0, microsecond=0)
+               not in real_starts]
 
 
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:

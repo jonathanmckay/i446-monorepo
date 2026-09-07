@@ -79,6 +79,42 @@ def test_spill_excludes_sleep_and_non_crossing_entries():
     assert mod._block_spill_items(20, 21, today.replace(hour=21)) == []
 
 
+def test_drop_redundant_spill_ignores_seconds_on_the_boundary():
+    """User report 2026-09-06: "janus shows multiple entries when a time
+    entry goes across a block. It should just show 1." A 14:41:03-16:32:07
+    entry spanning 申→酉, immediately followed by a 16:32:07-18:27 entry —
+    the exact same shape as the 2026-08-10 dedup case, just with realistic
+    SECOND-level timestamps (real Toggl entries are almost never exactly on
+    the minute).
+
+    _block_spill_items' dur_min is minute-truncated
+    (int(total_seconds // 60)), so the spill's reconstructed clipped end
+    (start_dt + dur_min minutes) undershoots the entry's true end by up to
+    59s. _drop_redundant_spill's OLD exact-datetime-equality check then
+    never matched the next entry's full-precision start_dt, so the already-
+    shown entry survived as a visible duplicate spill row right before the
+    real one it was supposed to be deduped against."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    mod.STATE.entries = [
+        _entry("to mt davidson", today.replace(hour=14, minute=0),
+               today.replace(hour=14, minute=40), eid=1),
+        _entry("mt. davidson with Salem", today.replace(hour=14, minute=41, second=3),
+               today.replace(hour=16, minute=32, second=7), eid=2),
+        _entry("stern grove", today.replace(hour=16, minute=32, second=7),
+               today.replace(hour=18, minute=27), eid=3),
+    ]
+    cutoff = today.replace(hour=19)
+    real_picks = mod._past_block_picks("酉", [
+        {**e, "start_dt": e["start_dt"], "end_dt": min(e["end_dt"], cutoff)}
+        for e in mod.STATE.entries])
+    spill = mod._drop_redundant_spill(mod._block_spill_items(16, 17, cutoff), real_picks)
+    assert spill == [], (
+        f"the already-shown 'mt. davidson with Salem' must not survive as a "
+        f"duplicate spill row just because its true end carried seconds: {spill!r}")
+
+
 def test_current_block_shows_spilled_run_with_title():
     """End-to-end repro of the report: the 19:59-21:00 run must render a
     titled row in 亥's focus card, not just ◇ │ marks."""
