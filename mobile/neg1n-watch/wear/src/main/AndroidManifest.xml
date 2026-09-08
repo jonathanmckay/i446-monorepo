@@ -136,7 +136,11 @@
                 android:value="900" />
         </service>
 
-        <!-- Reacts to the phone pushing a fresh status over the Data Layer. -->
+        <!-- Reacts to the phone pushing a fresh status over the Data Layer.
+             All 4 paths (bug found 2026-09-08: this only ever matched
+             /neg1n_status, so the OS never routed day-points/hcb/hcmp
+             change events here at all, regardless of what onDataChanged
+             itself handled — see that class's doc comment). -->
         <service
             android:name=".StatusListenerService"
             android:exported="true">
@@ -146,6 +150,18 @@
                     android:scheme="wear"
                     android:host="*"
                     android:path="/neg1n_status" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:path="/neg1n_day_points" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:path="/neg1n_hcb" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:path="/neg1n_hcmp" />
             </intent-filter>
         </service>
 
