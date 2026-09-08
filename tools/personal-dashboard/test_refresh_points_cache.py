@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Regression tests for refresh_points_cache.py.
 
-Covers the 2026-09-08 bug: the embedded-in-bash version of this script had
-an unescaped `"` inside a Python comment that silently truncated the whole
-script (no error, no output, no cache write) whenever bash's outer
-double-quoting parsed it — and separately, cron-spawned runs intermittently
-hit a PermissionError opening the OneDrive-hosted workbook that an
-interactive SSH session's process didn't, also with no visible failure.
-Both bugs manifested identically to the user: watch complications quietly
-showing stale/no data with nothing in any log explaining why."""
+Covers two same-day (2026-09-08) bugs with the identical user-visible
+symptom — watch complications quietly showing stale/no data with nothing in
+any log explaining why:
+
+1. An unescaped `"` inside a Python comment silently truncated the whole
+   embedded-in-bash script wherever bash's outer double-quoting parsed it.
+   No error, no output, no cache write. (Fixed by extracting to this file.)
+2. openpyxl's raw file open hit a confirmed Full Disk Access denial for the
+   `com.apple.python3` bundle (Ix's own TCC log: `authValue=0`, service
+   kTCCServiceSystemPolicyAllFiles) — reproducible under cron AND launchd,
+   i.e. not scheduler-specific. Fixed by switching to xlwings (talks to the
+   already-running Excel.app, which needs no separate FDA grant at all —
+   same fix personal-dashboard/dashboard.py already uses for the identical
+   wall)."""
 import datetime as dt
 import importlib.util
 import sys
@@ -33,23 +39,30 @@ def rpc():
     return _load()
 
 
-class FakeSheet:
-    """Duck-types just enough of openpyxl's worksheet API for iter_rows."""
+class FakeXlSheet:
+    """Duck-types just enough of an xlwings Sheet for _sheet_view: a
+    .range(addr) call returning an object with a .value 2D array. The addr
+    itself is ignored — production always requests one fixed full-height
+    range per sheet, so the fake just always returns its whole array."""
     def __init__(self, rows):
         self._rows = rows
 
-    def iter_rows(self, min_row=1, values_only=True):
-        assert values_only is True
-        return iter(self._rows[min_row - 1:])
+    def range(self, addr):
+        return _FakeRange(self._rows)
 
 
-class FakeWorkbook(dict):
-    """A dict of sheet name -> FakeSheet, closeable like a real workbook."""
-    def close(self):
-        pass
+class _FakeRange:
+    def __init__(self, rows):
+        self.value = rows
 
 
-def _row(n, blank=True):
+class FakeWorkbook:
+    """Duck-types xlwings Book: `.sheets[name]` -> FakeXlSheet."""
+    def __init__(self, sheets: dict):
+        self.sheets = sheets
+
+
+def _row(n):
     """An n-cell row, all-None, 1-indexed access via row[i-1]."""
     return [None] * n
 
@@ -65,14 +78,14 @@ def test_build_cache_extracts_today_fields_correctly(rpc):
     fen_row[1] = today          # col B: date
     fen_row[17] = 20            # col R: i9
     fen_row[3] = 928            # col D: grand total (__total__)
-    fen_rows = [None, None, fen_row]  # rows 1-2 are headers; data starts row 3
+    fen_rows = [_row(30), _row(30), fen_row]  # rows 1-2 headers; data starts row 3
 
     hcbi_row = _row(30)
     hcbi_row[1] = today          # col B: date
     hcbi_row[20] = 1250          # col U: kcal
     hcbi_row[24] = 0             # col Y
     hcbi_row[26] = 69.857        # col AA
-    hcbi_rows = [None, None, hcbi_row]
+    hcbi_rows = [_row(30), _row(30), hcbi_row]
 
     n0_row = _row(50)
     n0_row[2] = today             # col C: date
@@ -80,12 +93,12 @@ def test_build_cache_extracts_today_fields_correctly(rpc):
     n0_row[42] = 83                # col AQ: o314
     n0_row[43] = 78                # col AR: 冥想
     n0_row[44] = 0                  # col AS: 其他人
-    n0_rows = [None, None, None, None, n0_row]  # data starts row 5
+    n0_rows = [_row(50), _row(50), _row(50), _row(50), n0_row]  # data starts row 5
 
     wb = FakeWorkbook({
-        "0分": FakeSheet(fen_rows),
-        "hcbi": FakeSheet(hcbi_rows),
-        "0n": FakeSheet(n0_rows),
+        "0分": FakeXlSheet(fen_rows),
+        "hcbi": FakeXlSheet(hcbi_rows),
+        "0n": FakeXlSheet(n0_rows),
     })
 
     result = rpc.build_cache(wb, today=today)
@@ -108,7 +121,7 @@ def test_build_0n_days_writes_zero_hcmp_minutes_not_missing(rpc):
     row[42] = 0    # o314
     row[43] = 0    # 冥想
     row[44] = 0    # 其他人
-    ws = FakeSheet([None, None, None, None, row])
+    ws = rpc.SheetView([_row(50)] * 4 + [row])
 
     result: dict = {}
     rpc.build_0n_days(ws, today, today - dt.timedelta(days=90), result)
@@ -116,27 +129,28 @@ def test_build_0n_days_writes_zero_hcmp_minutes_not_missing(rpc):
     assert "__hcmp_min__" in result["2026-09-07"]
 
 
-def test_load_workbook_or_die_reports_permission_error_actionably(rpc, capsys):
-    """The actual 2026-09-08 failure mode: cron's process couldn't open the
-    OneDrive-hosted workbook (PermissionError). This must exit loudly with
-    a message pointing at Full Disk Access, not silently produce nothing."""
-    def boom(*a, **kw):
-        raise PermissionError(1, "Operation not permitted")
+def test_load_workbook_or_die_reports_connection_failure_actionably(rpc, monkeypatch):
+    """xlwings connection failures (e.g. Excel not open/running on this Mac)
+    must exit loudly with a message explaining what's needed, not silently
+    produce nothing — the same silent-failure shape as both real 2026-09-08
+    bugs this module exists to prevent a repeat of."""
+    def boom():
+        raise RuntimeError("no running Excel instance")
 
-    rpc.openpyxl.load_workbook = boom
+    monkeypatch.setattr(rpc, "_connect_workbook", boom)
     with pytest.raises(SystemExit) as exc_info:
-        rpc.load_workbook_or_die(rpc.NEON)
+        rpc.load_workbook_or_die()
     message = str(exc_info.value)
-    assert "Full Disk Access" in message
-    assert "Operation not permitted" in message
+    assert "xlwings" in message
+    assert "Excel must be open" in message
+    assert "no running Excel instance" in message
 
 
-def test_load_workbook_or_die_reraises_other_errors_actionably(rpc):
-    def boom(*a, **kw):
-        raise ValueError("corrupt zip")
-
-    rpc.openpyxl.load_workbook = boom
-    with pytest.raises(SystemExit) as exc_info:
-        rpc.load_workbook_or_die(rpc.NEON)
-    assert "ValueError" in str(exc_info.value)
-    assert "corrupt zip" in str(exc_info.value)
+def test_sheet_view_min_row_matches_openpyxl_semantics(rpc):
+    """SheetView.iter_rows(min_row=N) must behave exactly like openpyxl's
+    (1-indexed, inclusive) so build_fen_days/build_0n_days's hardcoded
+    min_row=3 / min_row=5 calls stay correct regardless of data source."""
+    rows = [["r1"], ["r2"], ["r3"], ["r4"], ["r5"]]
+    ws = rpc.SheetView(rows)
+    assert list(ws.iter_rows(min_row=3, values_only=True)) == [["r3"], ["r4"], ["r5"]]
+    assert list(ws.iter_rows(min_row=1, values_only=True)) == rows

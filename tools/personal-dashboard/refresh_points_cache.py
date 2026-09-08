@@ -5,37 +5,40 @@ Extracted from refresh-points-cache.sh's embedded `python3 -c "..."` block
 (2026-09-08): that form is nearly untestable and, worse, an unescaped `"`
 inside a Python comment silently truncated the whole script wherever bash's
 outer double-quoting parsed it — no error, no output, no file write, no
-alerting (found and fixed same day). A real .py file gets real error
-handling and a real regression test instead of a shell-quoting trap.
+alerting (found and fixed same day).
 
-Uses openpyxl (data_only=True) which reads cached formula values from the
-last Excel save — NOT xlwings/live Excel, since this scans up to 90 days of
-history per sheet and a live-Excel per-cell read (dashboard.py's approach)
-would be far too slow for that. The tradeoff: cron-spawned processes on
-macOS have intermittently failed to even open the OneDrive-hosted .xlsx via
-plain file I/O with `PermissionError: Operation not permitted` — a Full
-Disk Access (TCC) restriction that doesn't apply to an interactive SSH
-session's process tree, only to some spawners (confirmed live 2026-09-08:
-identical manual runs succeeded every time; cron's own log
-(/tmp/refresh-points-cache.log) showed repeated PermissionErrors over the
-same period). That's a one-time macOS Full Disk Access grant for cron/bash
-in System Settings, not something this script can fix at the Python level —
-but it CAN fail loudly instead of a silent no-op, which is what actually
-made today's bug take so long to find.
+Reads via **xlwings** (live Excel automation), not openpyxl directly against
+the file — a same-day follow-up fix. openpyxl's raw file open hit a
+confirmed (via Ix's own TCC log: `authValue=0`, service
+kTCCServiceSystemPolicyAllFiles) Full Disk Access denial for the specific
+`com.apple.python3` bundle at
+`/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app`
+— reproducible under both cron and launchd, i.e. any non-interactively-spawned
+process using that binary, regardless of scheduler. Granting FDA is a GUI-only,
+per-machine step this script shouldn't depend on. `tools/personal-dashboard/
+dashboard.py`'s `load_cache_data()` hit the identical wall earlier and solved
+it the same way: xlwings talks to the already-running Excel.app over
+AppleScript, which already has its own access to the file (it has it open) —
+no separate Full Disk Access grant needed at all, for anything.
+
+The one real cost: xlwings/AppleScript per-cell access is slow, so this
+reads each sheet's needed range in ONE bulk `.range(...).value` call
+(returns a full 2D array) rather than iterating cells, keeping this to 3
+AppleScript round trips total regardless of history depth.
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import openpyxl
 from openpyxl.utils import column_index_from_string as ci
 
-NEON = Path.home() / "OneDrive/vault-excel/Neon分v12.2.xlsx"
 CACHE = Path(__file__).parent / ".points-cache.json"
 CUTOFF_DAYS = 90
+NEON_NAME_RE = r"Neon分v[\d.]+\.xlsx$"
 
 # 0分: per-domain points + block breakdown + day grand total (col D).
 # __total__ is read by neg1n's /api/day-points (quarter-circle arc complication).
@@ -43,6 +46,7 @@ FEN_COLS = {16: "-1₦", 17: "0₲", 18: "i9", 19: "m5", 20: "个", 21: "媒",
             22: "思", 23: "hcb", 24: "xk", 25: "社"}
 BLOCK_COLS = {7: "卯", 8: "辰", 9: "巳", 10: "午", 11: "未", 12: "申",
               13: "酉", 14: "戌", 15: "亥"}
+FEN_LAST_COL = "Z"  # covers FEN_COLS/BLOCK_COLS (max col 25) + TOTAL_COL (D)
 
 # hcbi: calories eaten (col U) + today's hcbp+hcbc score (Y+AA), per day,
 # for neg1n's /api/hcb. hcbp+hcbc was originally read as the fixed Q2+Q3
@@ -51,11 +55,17 @@ BLOCK_COLS = {7: "卯", 8: "辰", 9: "巳", 10: "午", 11: "未", 12: "申",
 # "=hcbi!AA{row}+hcbi!Y{row}" is the actual per-day figure to use.
 KCAL_COL = ci("U")
 HCBP_HCBC_COLS = (ci("Y"), ci("AA"))
+HCBI_LAST_COL = "AC"  # covers U (21) and AA (27) with margin
 
 # 0n: prayer count (صلاة) + hcmp minutes (o314+冥想+其他人), per day, for
 # neg1n's /api/hcmp.
 SALAT_COL = ci("AP")
 HCMP_COLS = (ci("AQ"), ci("AR"), ci("AS"))
+N0_LAST_COL = "AU"  # covers AP (42) through AS (45) with margin
+
+# Generous row headroom past CUTOFF_DAYS — cheap (still one round trip) and
+# avoids re-tuning this every time the sheets grow.
+LAST_ROW = 700
 
 
 def as_date(v) -> date | None:
@@ -66,20 +76,48 @@ def as_date(v) -> date | None:
     return None
 
 
-def load_workbook_or_die(path: Path):
+class SheetView:
+    """Wraps one bulk `.range(...).value` 2D array (rows starting at Excel
+    row 1) with openpyxl's `iter_rows(min_row=..., values_only=True)`
+    interface, so the build_* functions below don't need to know or care
+    whether the data came from openpyxl or xlwings."""
+
+    def __init__(self, rows: list[list]):
+        self._rows = rows
+
+    def iter_rows(self, min_row: int = 1, values_only: bool = True):
+        assert values_only is True
+        return iter(self._rows[min_row - 1:])
+
+
+def _connect_workbook():
+    """The live Neon workbook via xlwings — prefer an already-open instance
+    (asking Excel, which has file access, rather than the filesystem, which
+    this process may not) over opening a fresh one."""
+    import xlwings as xw
+
+    wb = next((b for b in xw.books if re.match(NEON_NAME_RE, b.name)), None)
+    if wb is not None:
+        return wb
+    neon_path = Path.home() / "OneDrive/vault-excel/Neon分v12.2.xlsx"
+    return xw.Book(str(neon_path))
+
+
+def load_workbook_or_die():
     try:
-        return openpyxl.load_workbook(str(path), data_only=True, read_only=True)
-    except PermissionError as e:
-        sys.exit(
-            f"ERROR: can't open {path} ({e}). This is almost always macOS Full "
-            "Disk Access: the process running this script needs it granted in "
-            "System Settings -> Privacy & Security -> Full Disk Access (an "
-            "interactive SSH/Terminal session usually already has it; cron's "
-            "own spawned process may not). Not retrying — a permission wall "
-            "doesn't clear itself."
-        )
+        return _connect_workbook()
     except Exception as e:
-        sys.exit(f"ERROR: can't open {path}: {type(e).__name__}: {e}")
+        sys.exit(
+            f"ERROR: can't connect to the live Neon workbook via xlwings: "
+            f"{type(e).__name__}: {e}. Excel must be open on this Mac — "
+            "this reads through the running app, not the file directly."
+        )
+
+
+def _sheet_view(wb, sheet_name: str, last_col: str) -> SheetView:
+    ws = wb.sheets[sheet_name]
+    rows = ws.range(f"A1:{last_col}{LAST_ROW}").value
+    return SheetView(rows)
 
 
 def build_fen_days(ws, today: date, cutoff: date, result: dict) -> None:
@@ -134,18 +172,15 @@ def build_cache(wb, today: date | None = None) -> dict:
     today = today or date.today()
     cutoff = today - timedelta(days=CUTOFF_DAYS)
     result: dict = {}
-    build_fen_days(wb["0分"], today, cutoff, result)
-    build_hcbi_days(wb["hcbi"], today, cutoff, result)
-    build_0n_days(wb["0n"], today, cutoff, result)
+    build_fen_days(_sheet_view(wb, "0分", FEN_LAST_COL), today, cutoff, result)
+    build_hcbi_days(_sheet_view(wb, "hcbi", HCBI_LAST_COL), today, cutoff, result)
+    build_0n_days(_sheet_view(wb, "0n", N0_LAST_COL), today, cutoff, result)
     return result
 
 
 def main() -> int:
-    wb = load_workbook_or_die(NEON)
-    try:
-        result = build_cache(wb)
-    finally:
-        wb.close()
+    wb = load_workbook_or_die()
+    result = build_cache(wb)
     CACHE.write_text(json.dumps(result, indent=2, ensure_ascii=False))
     print(f"wrote {len(result)} days to cache")
     return 0
