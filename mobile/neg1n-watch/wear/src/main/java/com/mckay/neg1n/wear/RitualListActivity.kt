@@ -27,6 +27,13 @@ private const val RECONCILE_DELAY_MS = 3000L
  * no ack, every swipe schedules a delayed reload() to reconcile with
  * ground truth regardless of apparent success.
  *
+ * That reconcile reload() races the phone's actual completion work (see
+ * PendingCompletions' doc comment) and can lose — every reload() therefore
+ * filters through `pendingCompletions`, a local "already swiped this
+ * session" overlay, so a tag we've completed can never revert to
+ * not-done in this activity's list, even if the synced Data Layer item is
+ * still momentarily stale.
+ *
  * Also fires a "/neg1n_sync_now" request to the phone on open, then reloads
  * after a short delay — so opening the list is close to instant-fresh
  * rather than waiting on the phone's own ~15min periodic timer. */
@@ -34,6 +41,7 @@ class RitualListActivity : Activity() {
 
     private lateinit var adapter: RitualAdapter
     private lateinit var emptyText: TextView
+    private val pendingCompletions = PendingCompletions()
     private val labelOf = Neg1nConfig.RITUALS.associate { (tag, label, _) -> tag to label }
     private val colorOf: (String) -> Int = { tag ->
         Neg1nConfig.RITUALS.find { it.first == tag }?.third ?: Neg1nConfig.NOT_DONE_COLOR
@@ -55,6 +63,7 @@ class RitualListActivity : Activity() {
                 val position = viewHolder.bindingAdapterPosition
                 if (position == RecyclerView.NO_POSITION) return
                 val tag = adapter.tagAt(position)
+                pendingCompletions.markCompleted(tag)
                 adapter.removeAt(position)
                 updateEmptyState()
                 completeRitual(tag)
@@ -75,7 +84,8 @@ class RitualListActivity : Activity() {
     private fun reload() {
         CoroutineScope(Dispatchers.Main).launch {
             val status = DataLayerReader.readLatest(applicationContext)
-            val items = status.notDone.mapNotNull { tag -> labelOf[tag]?.let { tag to it } }
+            val items = pendingCompletions.filter(status.notDone)
+                .mapNotNull { tag -> labelOf[tag]?.let { tag to it } }
             Log.i(TAG, "RitualListActivity: loaded block=${status.block} not_done=${status.notDone} " +
                 "endpoint=${status.endpoint} -> ${items.size} row(s)")
             adapter.setItems(items)
