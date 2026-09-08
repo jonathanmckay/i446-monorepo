@@ -37,7 +37,7 @@ class StatusFetcher(private val baseUrl: String) {
     private fun parse(body: String): Neg1nStatus {
         val json = JSONObject(body)
         if (json.has("error")) throw IllegalStateException(json.getString("error"))
-        val block = if (json.isNull("block")) null else json.optString("block", null)
+        val block = if (json.isNull("block") || !json.has("block")) null else json.getString("block")
         val done = json.optJSONArray("done")?.let { arr ->
             (0 until arr.length()).map { arr.getString(it) }
         } ?: emptyList()
