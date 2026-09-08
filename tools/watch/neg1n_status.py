@@ -19,15 +19,17 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 PORT = 5562
 REPO = Path(__file__).resolve().parent.parent.parent
 RITUALS_CFG = REPO / "config" / "block-rituals.json"
 BUILD_ORDER = Path.home() / "vault" / "g245" / "5e-1" / "build-order.md"
+DID_FAST = REPO / "tools" / "did" / "did-fast.py"
 
 # Block start hour (24h local) -> glyph. A block runs from its start hour up
 # to (not including) the next block's start hour. Mirrors g245/CLAUDE.md's
@@ -100,6 +102,41 @@ def compute_status(now: datetime | None = None) -> dict:
 @app.route("/api/neg1n")
 def api_neg1n():
     return jsonify(compute_status())
+
+
+@app.route("/api/neg1n/complete", methods=["POST"])
+def api_neg1n_complete():
+    """Complete one of the current block's rituals from the watch's swipe
+    list. Shells the exact same `did-fast.py --ritual <tag>` the desktop
+    dtd/janus/inbound paths use — same Todoist close, same header stamp,
+    same immediate 0分!P credit. Returns the freshly recomputed status so the
+    caller (the phone, relaying for the watch) can push it straight back
+    without a second round trip."""
+    body = request.get_json(silent=True) or {}
+    tag = body.get("tag", "")
+    valid_tags = {r["tag"] for r in load_rituals()}
+    if tag not in valid_tags:
+        return jsonify({"error": f"unknown ritual tag {tag!r}", "known": sorted(valid_tags)}), 400
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(DID_FAST), "--ritual", tag],
+            capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return jsonify({"error": f"did-fast.py failed to run: {e}"}), 500
+    ritual_result = None
+    brace = proc.stdout.find("{")
+    if brace >= 0:
+        try:
+            ritual_result = json.loads(proc.stdout[brace:])
+        except Exception:
+            pass
+    return jsonify({
+        "ok": proc.returncode == 0,
+        "tag": tag,
+        "ritual_result": ritual_result,
+        "stderr_tail": proc.stderr.strip()[-500:],
+        "status": compute_status(),
+    })
 
 
 if __name__ == "__main__":

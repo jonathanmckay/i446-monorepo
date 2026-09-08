@@ -55,6 +55,8 @@ class Neg1nComplicationService : SuspendingComplicationDataSourceService() {
                 SmallImageComplicationData.Builder(image, contentDescription).build()
             }
             ComplicationType.SHORT_TEXT -> {
+                // Degraded fallback for text-only slots — see manifest comment.
+                // A short-text field can't carry per-bar color, only a count.
                 val doneCount = Neg1nConfig.RITUALS.count { status.done.contains(it.first) }
                 val text = PlainComplicationText.Builder("$doneCount/${Neg1nConfig.RITUALS.size}").build()
                 ShortTextComplicationData.Builder(text, contentDescription).build()

@@ -1,7 +1,9 @@
 package com.mckay.neg1n.phone
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -28,6 +30,30 @@ class StatusFetcher(private val baseUrl: String) {
             } else {
                 val body = resp.body?.string() ?: "{}"
                 Result.success(parse(body))
+            }
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /** Completes one ritual (POST .../api/neg1n/complete) — the real
+     * did-fast.py --ritual close, same as desktop dtd/inbound. Returns the
+     * server's freshly-recomputed status so the caller can push it straight
+     * back to the watch without a second fetch. Blocking — background
+     * thread/Worker only, same as fetch(). */
+    fun complete(tag: String): Result<Neg1nStatus> = try {
+        val completeUrl = baseUrl.trimEnd('/') + "/complete"
+        val payload = JSONObject().put("tag", tag).toString()
+            .toRequestBody("application/json".toMediaType())
+        val request = Request.Builder().url(completeUrl).post(payload).build()
+        client.newCall(request).execute().use { resp ->
+            val text = resp.body?.string() ?: "{}"
+            val json = JSONObject(text)
+            when {
+                !resp.isSuccessful -> Result.failure(IllegalStateException(json.optString("error", "HTTP ${resp.code}")))
+                !json.optBoolean("ok", false) -> Result.failure(IllegalStateException(
+                    json.optString("stderr_tail", "did-fast.py --ritual $tag failed")))
+                else -> Result.success(parse(json.getJSONObject("status").toString()))
             }
         }
     } catch (e: Exception) {

@@ -33,6 +33,14 @@
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
             </intent-filter>
+            <!-- SMALL_IMAGE + SHORT_TEXT: found live (2026-09-08) that the
+                 user's chosen watch-face slot is a text-only complication
+                 family — declaring SMALL_IMAGE alone made this provider
+                 disappear from that slot's picker entirely rather than force
+                 it to use the image. SHORT_TEXT's "N/5" is a degraded
+                 fallback for text-only slots; any slot that DOES accept
+                 images still gets the real 5-bar bitmap (the watch face
+                 picks the type from this list, never both). -->
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
                 android:value="SMALL_IMAGE,SHORT_TEXT" />

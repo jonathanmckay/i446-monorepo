@@ -4,10 +4,6 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.google.android.gms.wearable.DataClient
-import com.google.android.gms.wearable.PutDataMapRequest
-import com.google.android.gms.wearable.Wearable
-import kotlinx.coroutines.tasks.await
 
 private const val TAG = "Neg1n"
 
@@ -33,16 +29,8 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
         }
         Log.i(TAG, "Worker: fetch OK block=${status.block} done=${status.done} not_done=${status.notDone}")
 
-        val dataClient: DataClient = Wearable.getDataClient(applicationContext)
-        val putRequest = PutDataMapRequest.create(Neg1nConfig.DATA_PATH).apply {
-            dataMap.putString(Neg1nConfig.KEY_BLOCK, status.block ?: "")
-            dataMap.putString(Neg1nConfig.KEY_DONE, status.done.joinToString(","))
-            dataMap.putString(Neg1nConfig.KEY_NOT_DONE, status.notDone.joinToString(","))
-            dataMap.putLong(Neg1nConfig.KEY_UPDATED_AT, System.currentTimeMillis())
-        }.asPutDataRequest().setUrgent()
-
         return try {
-            dataClient.putDataItem(putRequest).await()
+            DataLayerPush.push(applicationContext, status)
             Log.i(TAG, "Worker: pushed to Data Layer OK")
             Result.success()
         } catch (e: Exception) {
