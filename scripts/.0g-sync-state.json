@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "1600分": {
-      "todoist_id": "6hRVr846g5g7hgw2",
-      "minutes": 80
-    },
-    "focus on having other people do things": {
-      "todoist_id": "6hRVr82x7GRHXRR2",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-09-08T03:55:01.422166-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-08T04:00:09.391273-07:00"
 }
