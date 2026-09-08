@@ -857,17 +857,29 @@ def _sel_key(item: dict):
     calendar event (the original, unwrapped shape — kept exactly as
     _event_key already returns it, so every existing event-cursor call site
     and test keeps working untouched), a real tracked Toggl entry ("kind":
-    "entry", wrapping one or more merged entry ids), or an untracked gap
-    ("kind": "empty", wrapping the gap's own start/duration). The three
-    shapes can never collide: an event key's first element is always a
-    datetime, never the literal string "entry"/"empty"."""
+    "entry", wrapping one or more merged entry ids), an untracked gap
+    ("kind": "empty", wrapping the gap's own start/duration), or the pinned
+    running-timer row ("kind": "current"). The shapes can never collide: an
+    event key's first element is always a datetime, never the literal
+    string "entry"/"empty"/"current".
+
+    "current" is keyed on the running entry's own start_dt + entry_ids,
+    exactly like "entry" — NOT a content-independent singleton (bug report
+    2026-09-07: selected a time entry to edit, but got a DIFFERENT one,
+    "generic placeholder" started at 19:01, imported instead). A bare
+    ("current",) singleton stays equal to whatever is CURRENTLY running,
+    with no way to tell "the entry I selected" from "whatever happens to be
+    running now" — select the current row while entry A runs, have entry A
+    stop and a new entry B start before acting (e.g. a habit completion
+    auto-starts a "generic placeholder" filler), and the stale selection
+    silently still matches, retargeting the pending edit onto B."""
     kind = item.get("kind")
     if kind == "entry":
         return ("entry", item["start_dt"], tuple(item["entry_ids"]))
     if kind == "empty":
         return ("empty", item["start_dt"])
     if kind == "current":
-        return ("current",)  # singleton — only one live timer can ever exist
+        return ("current", item.get("start_dt"), tuple(item.get("entry_ids") or []))
     return _event_key(item)
 
 
@@ -3992,17 +4004,26 @@ def render_current_bottom() -> list[tuple[str, str]]:
     if not cur:
         return [("class:idle", " (no timer)"),
                 ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
-    key = _sel_key({"kind": "current"})
+    cur_id = cur.get("id")
+    try:
+        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
+    except Exception:
+        st = now
+    # Keyed on the running entry's own identity (start_dt + entry_ids) —
+    # NOT a bare {"kind": "current"} singleton, which stayed "selected"
+    # across a running-entry SWITCH and could retarget a pending edit onto
+    # a different entry than the one actually selected (2026-09-07). Must
+    # match render_all()'s identical construction of this same item's shape
+    # for STATE.visible_events, or Enter's lookup there would never find
+    # this row as selected.
+    key = _sel_key({"kind": "current", "start_dt": st,
+                    "entry_ids": [cur_id] if cur_id is not None else []})
     is_sel = STATE.event_sel == key
     click = _current_row_click(key)  # swipe-aware handler, not _row_click's plain click-to-select
     desc = display_desc(cur.get("description") or "") or "(no description)"
     pid = cur.get("project_id")
     code = toggl_project_code(pid, cur.get("description"))
-    try:
-        st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
-        elapsed = (now - st).total_seconds()
-    except Exception:
-        elapsed = 0.0
+    elapsed = (now - st).total_seconds()
     m, s = divmod(max(0, int(elapsed)), 60)
     frac = int((elapsed % 1) * 10)  # tenths of a second
     dur = f"{m}m{s:02d}.{frac}s"

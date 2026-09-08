@@ -8,22 +8,24 @@ import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.data.SmallImage
 import androidx.wear.watchface.complications.data.SmallImageComplicationData
 import androidx.wear.watchface.complications.data.SmallImageType
-import androidx.wear.watchface.complications.datasource.ComplicationDataSourceService
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
+import androidx.wear.watchface.complications.datasource.SuspendingComplicationDataSourceService
 
 /** Status-only -1n complication: 5 bars, one per block ritual, colored when
  * done / neutral gray when not. No tap action is set anywhere in this file
  * (ComplicationData.Builder's tapAction is simply never called), so the
  * system falls back to "open the containing app" — MainActivity, a static
- * info screen with no further action, matching "status only" for now. */
-class Neg1nComplicationService : ComplicationDataSourceService() {
+ * info screen with no further action, matching "status only" for now.
+ *
+ * Extends the SUSPENDING variant (not the plain listener-callback one) so
+ * DataLayerReader's Data Layer read can safely suspend rather than block —
+ * onComplicationRequest is not guaranteed to run off the main thread
+ * otherwise. */
+class Neg1nComplicationService : SuspendingComplicationDataSourceService() {
 
-    override fun onComplicationRequest(
-        request: ComplicationRequest,
-        listener: ComplicationRequestListener,
-    ) {
-        val status = StatusStore.load(applicationContext)
-        listener.onComplicationData(buildData(request.complicationType, status))
+    override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
+        val status = DataLayerReader.readLatest(applicationContext)
+        return buildData(request.complicationType, status)
     }
 
     override fun getPreviewData(type: ComplicationType): ComplicationData? {

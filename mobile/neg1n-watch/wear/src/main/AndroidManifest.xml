@@ -36,12 +36,18 @@
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
                 android:value="SMALL_IMAGE,SHORT_TEXT" />
-            <!-- 0 = never pulled on a timer; we push updates ourselves via
-                 ComplicationDataSourceUpdateRequester when new phone data
-                 arrives (see StatusListenerService). -->
+            <!-- 900s (15min, matching the phone's own sync cadence) is the
+                 reliable baseline refresh — onComplicationRequest pulls the
+                 latest Data Layer value itself (DataLayerReader) rather than
+                 depending on StatusListenerService's push having been
+                 delivered (see that class's doc comment: GMS never
+                 registered it as a listener for this sideloaded app).
+                 requestUpdateAll() from StatusListenerService still fires
+                 an earlier refresh whenever push delivery does happen to
+                 work, so this is a ceiling on staleness, not the only path. -->
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
-                android:value="0" />
+                android:value="900" />
         </service>
 
         <!-- Reacts to the phone pushing a fresh status over the Data Layer. -->

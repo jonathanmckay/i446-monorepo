@@ -8,7 +8,9 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.mckay.neg1n.wear"
+        // Same applicationId as the phone module — see that build.gradle.kts
+        // comment / DataLayerReader's doc comment for why.
+        applicationId = "com.mckay.neg1n"
         minSdk = 30
         targetSdk = 34
         versionCode = 1
@@ -36,4 +38,5 @@ dependencies {
     implementation("androidx.wear.watchface:watchface-complications-data-source-ktx:1.2.1")
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 }
