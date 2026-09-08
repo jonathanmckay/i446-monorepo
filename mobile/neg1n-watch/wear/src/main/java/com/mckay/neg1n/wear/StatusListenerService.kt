@@ -26,7 +26,8 @@ class StatusListenerService : WearableListenerService() {
             val notDone = (map.getString(Neg1nConfig.KEY_NOT_DONE) ?: "")
                 .split(",").filter { it.isNotBlank() }
             val updatedAt = map.getLong(Neg1nConfig.KEY_UPDATED_AT)
-            StatusStore.save(applicationContext, block, done, notDone, updatedAt)
+            val endpoint = map.getString(Neg1nConfig.KEY_ENDPOINT)?.ifBlank { null }
+            StatusStore.save(applicationContext, block, done, notDone, updatedAt, endpoint)
             changed = true
         }
         dataEvents.release()

@@ -33,6 +33,18 @@ private const val TAG = "Neg1n"
 object DataLayerReader {
 
     suspend fun readLatest(context: Context): Neg1nStatus {
+        val remote = readRemote(context)
+        val local = StatusStore.load(context)
+        // Whichever is more recent wins. This matters right after a
+        // swipe-to-complete on the watch itself (RitualCompleter writes the
+        // fresh result straight to StatusStore with a fresh timestamp): the
+        // synced DataItem still reflects the phone's last push until its
+        // own next periodic sync, which would otherwise silently overwrite
+        // the just-completed ritual back to "not done" for up to 15 minutes.
+        return if (remote != null && remote.updatedAtMillis >= local.updatedAtMillis) remote else local
+    }
+
+    private suspend fun readRemote(context: Context): Neg1nStatus? {
         try {
             val dataClient = Wearable.getDataClient(context)
             // Explicit "*" host = match this path regardless of which node
@@ -53,20 +65,28 @@ object DataLayerReader {
                         val notDone = (map.getString(Neg1nConfig.KEY_NOT_DONE) ?: "")
                             .split(",").filter { it.isNotBlank() }
                         val updatedAt = map.getLong(Neg1nConfig.KEY_UPDATED_AT)
+                        val endpoint = map.getString(Neg1nConfig.KEY_ENDPOINT)?.ifBlank { null }
+                        val status = Neg1nStatus(block, done.toSet(), notDone, updatedAt, endpoint)
                         // Keep StatusStore warm as a fallback for whenever
-                        // the Data Layer client itself is unavailable.
-                        StatusStore.save(context, block, done, notDone, updatedAt)
-                        return Neg1nStatus(block, done.toSet(), notDone, updatedAt)
+                        // the Data Layer client itself is unavailable — but
+                        // only if this remote value is actually newer, so it
+                        // can't clobber a fresher local completion (see
+                        // readLatest's comment).
+                        val local = StatusStore.load(context)
+                        if (updatedAt >= local.updatedAtMillis) {
+                            StatusStore.save(context, block, done, notDone, updatedAt, endpoint)
+                        }
+                        return status
                     }
                 } finally {
                     buffer.release()
                 }
             } else {
-                Log.e(TAG, "DataLayerReader: getDataItems timed out, falling back to cached StatusStore")
+                Log.e(TAG, "DataLayerReader: getDataItems timed out")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "DataLayerReader: live read failed, falling back to cached StatusStore", e)
+            Log.e(TAG, "DataLayerReader: live read failed", e)
         }
-        return StatusStore.load(context)
+        return null
     }
 }

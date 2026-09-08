@@ -31,6 +31,16 @@ RITUALS_CFG = REPO / "config" / "block-rituals.json"
 BUILD_ORDER = Path.home() / "vault" / "g245" / "5e-1" / "build-order.md"
 DID_FAST = REPO / "tools" / "did" / "did-fast.py"
 
+# Shared with day-points/hcb/hcmp below: refreshed every 30min by
+# personal-dashboard/refresh-points-cache.sh straight from the live Neon
+# workbook. A plain file read here (no xlwings/AppleScript in this
+# process) — those complications don't need per-request freshness (nothing
+# else in this whole sync chain promises sub-15min anyway: the phone syncs
+# every 15min, complications refresh every 15min), and it keeps this
+# process from ever blocking on Excel/AppleEvents, which would stall the
+# -1n route too since they'd share this one Flask process/thread.
+POINTS_CACHE = REPO / "tools" / "personal-dashboard" / ".points-cache.json"
+
 # Block start hour (24h local) -> glyph. A block runs from its start hour up
 # to (not including) the next block's start hour. Mirrors g245/CLAUDE.md's
 # "-1₦ Block Rituals" table exactly (even-hour boundaries, not the
@@ -136,6 +146,63 @@ def api_neg1n_complete():
         "ritual_result": ritual_result,
         "stderr_tail": proc.stderr.strip()[-500:],
         "status": compute_status(),
+    })
+
+
+def _today_cache_entry() -> dict:
+    """Today's row from .points-cache.json, or {} if the cache is missing/
+    stale/unreadable — callers treat a missing key as 'no data yet', not an
+    error, since the cache only refreshes every 30min and today's row won't
+    exist until the first refresh after midnight."""
+    try:
+        cache = json.loads(POINTS_CACHE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return cache.get(datetime.now().date().isoformat(), {})
+
+
+@app.route("/api/day-points")
+def api_day_points():
+    """Today's total 分 (0分!D, the grand-total column) for the quarter-circle
+    arc complication. `max` is a fixed reference scale (not a real ceiling —
+    days can and do exceed it), matching what the user asked the arc to be
+    scaled against."""
+    entry = _today_cache_entry()
+    return jsonify({
+        "date": datetime.now().date().isoformat(),
+        "points": entry.get("__total__"),
+        "max": 1440,
+    })
+
+
+@app.route("/api/hcb")
+def api_hcb():
+    """Today's calories eaten (hcbi!U) + the combined hcbp+hcbc score
+    (hcbi!X375+X378, a running Q2+Q3 total — not a daily figure, hence no
+    'date' meaning for that half of the payload) against its 131 goal."""
+    entry = _today_cache_entry()
+    try:
+        cache = json.loads(POINTS_CACHE.read_text())
+    except (OSError, json.JSONDecodeError):
+        cache = {}
+    hcbp_hcbc = cache.get("__hcbp_hcbc__", {})
+    return jsonify({
+        "date": datetime.now().date().isoformat(),
+        "calories": entry.get("__hcb_kcal__"),
+        "hcbp_hcbc": hcbp_hcbc.get("value"),
+        "goal": hcbp_hcbc.get("goal", 131),
+    })
+
+
+@app.route("/api/hcmp")
+def api_hcmp():
+    """Today's prayer count (0n!AP, ص) and combined hcmp minutes (0n!AQ+AR+AS
+    = o314 + 冥想 + 其他人)."""
+    entry = _today_cache_entry()
+    return jsonify({
+        "date": datetime.now().date().isoformat(),
+        "prayers": entry.get("__salat__"),
+        "hcmp_minutes": entry.get("__hcmp_min__"),
     })
 
 

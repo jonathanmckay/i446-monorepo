@@ -2,11 +2,15 @@
 
     <uses-feature android:name="android.hardware.type.watch" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:theme="@android:style/Theme.DeviceDefault">
+        android:theme="@android:style/Theme.DeviceDefault"
+        android:usesCleartextTraffic="true">
 
         <meta-data
             android:name="com.google.android.wearable.standalone"
@@ -22,8 +26,18 @@
             </intent-filter>
         </activity>
 
-        <!-- The complication itself: status only (tap does nothing — no
-             ACTION defined, no config activity). -->
+        <!-- Opened by tapping the complication: swipeable list of this
+             block's not-yet-done rituals, swipe left to complete (calls
+             the backend directly — see RitualCompleter). -->
+        <activity
+            android:name=".RitualListActivity"
+            android:exported="true"
+            android:taskAffinity="" />
+
+        <!-- The complication itself. Tap opens RitualListActivity (set as
+             its tapAction in Neg1nComplicationService) — no config activity
+             is declared here, since the complication's own DATA doesn't
+             need configuring, only what tapping it opens. -->
         <service
             android:name=".Neg1nComplicationService"
             android:exported="true"
@@ -53,6 +67,65 @@
                  requestUpdateAll() from StatusListenerService still fires
                  an earlier refresh whenever push delivery does happen to
                  work, so this is a ceiling on staleness, not the only path. -->
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <!-- day-points, hcb, hcmp: status-only, no tap action (same as -1n
+             before RitualListActivity existed) — the system falls back to
+             "open the containing app" (MainActivity) since none of these
+             set a tapAction. -->
+        <service
+            android:name=".DayPointsComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_foreground"
+            android:label="@string/complication_label_day_points"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SMALL_IMAGE,SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <service
+            android:name=".HcbComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_foreground"
+            android:label="@string/complication_label_hcb"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <!-- RANGED_VALUE first (native ring, hcbp+hcbc vs 131), SHORT_TEXT
+                 as the text-only-slot fallback — same "declare the fallback
+                 too or the provider vanishes from that slot's picker" lesson
+                 as Neg1nComplicationService above. -->
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="RANGED_VALUE,SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <service
+            android:name=".HcmpComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_foreground"
+            android:label="@string/complication_label_hcmp"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT" />
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
                 android:value="900" />

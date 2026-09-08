@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">-1n Status</string>
     <string name="complication_label">-1n block rituals</string>
+    <string name="complication_label_day_points">day 分</string>
+    <string name="complication_label_hcb">hcb (calories + score)</string>
+    <string name="complication_label_hcmp">prayers + hcmp minutes</string>
 </resources>

@@ -9,8 +9,27 @@ object Neg1nConfig {
     const val KEY_DONE = "done"
     const val KEY_NOT_DONE = "not_done"
     const val KEY_UPDATED_AT = "updated_at"
+    const val KEY_ENDPOINT = "endpoint"
 
     const val PREFS_NAME = "neg1n_wear_prefs"
+
+    // --- day-points, hcb, hcmp complications (added alongside -1n) ---
+    const val DATA_PATH_DAY_POINTS = "/neg1n_day_points"
+    const val DATA_PATH_HCB = "/neg1n_hcb"
+    const val DATA_PATH_HCMP = "/neg1n_hcmp"
+
+    const val KEY_POINTS = "points"
+    const val KEY_MAX = "max"
+    const val KEY_CALORIES = "calories"
+    const val KEY_HCBP_HCBC = "hcbp_hcbc"
+    const val KEY_GOAL = "goal"
+    const val KEY_PRAYERS = "prayers"
+    const val KEY_HCMP_MINUTES = "hcmp_minutes"
+
+    /** Sentinel the phone pushes for an Int field it has no value for yet
+     * (DataMap ints can't be null) — see phone/DataLayerPush.kt. Treat as
+     * "no data" everywhere on the wear side too. */
+    const val NO_VALUE = -1
 
     /** The 5 rituals in a fixed, meaningful order (the order they occur
      * through a block: prayer, goal-set, inbox, time-log, task-pointing) —

@@ -12,6 +12,7 @@ data class Neg1nStatus(
     val done: Set<String>,
     val notDone: List<String>,
     val updatedAtMillis: Long,
+    val endpoint: String?,
 )
 
 object StatusStore {
@@ -19,13 +20,16 @@ object StatusStore {
     private const val KEY_DONE = "done"
     private const val KEY_NOT_DONE = "not_done"
     private const val KEY_UPDATED_AT = "updated_at"
+    private const val KEY_ENDPOINT = "endpoint"
 
-    fun save(context: Context, block: String?, done: List<String>, notDone: List<String>, updatedAtMillis: Long) {
+    fun save(context: Context, block: String?, done: List<String>, notDone: List<String>,
+              updatedAtMillis: Long, endpoint: String?) {
         context.getSharedPreferences(Neg1nConfig.PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putString(KEY_BLOCK, block ?: "")
             .putString(KEY_DONE, done.joinToString(","))
             .putString(KEY_NOT_DONE, notDone.joinToString(","))
             .putLong(KEY_UPDATED_AT, updatedAtMillis)
+            .putString(KEY_ENDPOINT, endpoint ?: "")
             .apply()
     }
 
@@ -37,6 +41,7 @@ object StatusStore {
         val notDone = (prefs.getString(KEY_NOT_DONE, "") ?: "")
             .split(",").filter { it.isNotBlank() }
         val updatedAt = prefs.getLong(KEY_UPDATED_AT, 0L)
-        return Neg1nStatus(block, done, notDone, updatedAt)
+        val endpoint = prefs.getString(KEY_ENDPOINT, "")?.ifBlank { null }
+        return Neg1nStatus(block, done, notDone, updatedAt, endpoint)
     }
 }

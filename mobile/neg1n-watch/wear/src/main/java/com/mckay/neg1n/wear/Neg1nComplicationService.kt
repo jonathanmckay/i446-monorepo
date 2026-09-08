@@ -1,5 +1,7 @@
 package com.mckay.neg1n.wear
 
+import android.app.PendingIntent
+import android.content.Intent
 import android.graphics.drawable.Icon
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
@@ -11,11 +13,9 @@ import androidx.wear.watchface.complications.data.SmallImageType
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
 import androidx.wear.watchface.complications.datasource.SuspendingComplicationDataSourceService
 
-/** Status-only -1n complication: 5 bars, one per block ritual, colored when
- * done / neutral gray when not. No tap action is set anywhere in this file
- * (ComplicationData.Builder's tapAction is simply never called), so the
- * system falls back to "open the containing app" — MainActivity, a static
- * info screen with no further action, matching "status only" for now.
+/** -1n complication: 5 bars, one per block ritual, colored when done /
+ * neutral gray when not. Tapping opens RitualListActivity — a swipeable
+ * list of this block's not-yet-done rituals, swipe left to complete.
  *
  * Extends the SUSPENDING variant (not the plain listener-callback one) so
  * DataLayerReader's Data Layer read can safely suspend rather than block —
@@ -37,8 +37,18 @@ class Neg1nComplicationService : SuspendingComplicationDataSourceService() {
             done = setOf("سمش", "-1g", "-1ibx"),
             notDone = listOf("-1t", "-1l"),
             updatedAtMillis = 0L,
+            endpoint = null,
         )
         return buildData(type, preview)
+    }
+
+    private fun tapAction(): PendingIntent {
+        val intent = Intent(applicationContext, RitualListActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        return PendingIntent.getActivity(
+            applicationContext, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 
     private fun buildData(type: ComplicationType, status: Neg1nStatus): ComplicationData? {
@@ -52,14 +62,18 @@ class Neg1nComplicationService : SuspendingComplicationDataSourceService() {
                 val bitmap = BarRenderer.render(status.done)
                 val icon = Icon.createWithBitmap(bitmap)
                 val image = SmallImage.Builder(icon, SmallImageType.ICON).build()
-                SmallImageComplicationData.Builder(image, contentDescription).build()
+                SmallImageComplicationData.Builder(image, contentDescription)
+                    .setTapAction(tapAction())
+                    .build()
             }
             ComplicationType.SHORT_TEXT -> {
                 // Degraded fallback for text-only slots — see manifest comment.
                 // A short-text field can't carry per-bar color, only a count.
                 val doneCount = Neg1nConfig.RITUALS.count { status.done.contains(it.first) }
                 val text = PlainComplicationText.Builder("$doneCount/${Neg1nConfig.RITUALS.size}").build()
-                ShortTextComplicationData.Builder(text, contentDescription).build()
+                ShortTextComplicationData.Builder(text, contentDescription)
+                    .setTapAction(tapAction())
+                    .build()
             }
             else -> null
         }
