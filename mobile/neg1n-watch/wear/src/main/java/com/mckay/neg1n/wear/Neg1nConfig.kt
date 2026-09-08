@@ -35,15 +35,22 @@ object Neg1nConfig {
      * through a block: prayer, goal-set, inbox, time-log, task-pointing) —
      * bars are drawn left to right in this order, never re-sorted by
      * done/not-done state, so a given bar position always means the same
-     * ritual. Tag -> (display label, bar color). Colors follow a fixed
-     * categorical order (never reassigned/cycled) so a color always means
-     * the same ritual across every render. */
+     * ritual.
+     *
+     * Colors are NOT an independent categorical palette — they're pulled
+     * straight from the existing Neon/dtd domain color system
+     * (RITUAL_DOMAIN + COLORS in tools/dtd/dtd.py, mirrored from
+     * tools/did/dtd.sh), so a ritual's bar matches the same color it
+     * already has everywhere else in this system: سمش→hcm, -1g/-1l→g245
+     * (same domain, same color — the two ARE the same color elsewhere too,
+     * not a coloring bug here), -1ibx→i9, -1t→n156. Tag -> (display label,
+     * bar color). */
     val RITUALS: List<Triple<String, String, Int>> = listOf(
-        Triple("سمش", "prayer", 0xFF2A78D6.toInt()),   // blue
-        Triple("-1g", "goal", 0xFFEB6834.toInt()),      // orange
-        Triple("-1ibx", "inbox", 0xFF1BAF7A.toInt()),   // aqua
-        Triple("-1t", "time", 0xFFEDA100.toInt()),      // yellow
-        Triple("-1l", "tasks", 0xFFE87BA4.toInt()),     // magenta
+        Triple("سمش", "prayer", 0xFFAA00FF.toInt()),   // hcm
+        Triple("-1g", "goal", 0xFF00E676.toInt()),      // g245
+        Triple("-1ibx", "inbox", 0xFF2979FF.toInt()),   // i9
+        Triple("-1t", "time", 0xFF1249B4.toInt()),      // n156
+        Triple("-1l", "tasks", 0xFF00E676.toInt()),     // g245
     )
 
     /** Neutral "not done yet" color — same for every bar regardless of

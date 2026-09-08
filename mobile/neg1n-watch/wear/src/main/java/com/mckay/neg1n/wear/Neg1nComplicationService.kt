@@ -6,6 +6,7 @@ import android.graphics.drawable.Icon
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
 import androidx.wear.watchface.complications.data.PlainComplicationText
+import androidx.wear.watchface.complications.data.RangedValueComplicationData
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.data.SmallImage
 import androidx.wear.watchface.complications.data.SmallImageComplicationData
@@ -66,9 +67,27 @@ class Neg1nComplicationService : SuspendingComplicationDataSourceService() {
                     .setTapAction(tapAction())
                     .build()
             }
+            ComplicationType.RANGED_VALUE -> {
+                // The native-looking option for slots that don't render
+                // SMALL_IMAGE at all (confirmed live 2026-09-08: the user's
+                // slot only offered SHORT_TEXT). Rendered as a progress ring
+                // by the watch face itself, in its own accent color — real
+                // per-ritual bar colors aren't representable in a single
+                // continuous value, but it's a visual fill (0-5), not just text.
+                val doneCount = Neg1nConfig.RITUALS.count { status.done.contains(it.first) }
+                val text = PlainComplicationText.Builder("$doneCount/${Neg1nConfig.RITUALS.size}").build()
+                RangedValueComplicationData.Builder(
+                    value = doneCount.toFloat(),
+                    min = 0f,
+                    max = Neg1nConfig.RITUALS.size.toFloat(),
+                    contentDescription = contentDescription,
+                ).setText(text)
+                    .setTapAction(tapAction())
+                    .build()
+            }
             ComplicationType.SHORT_TEXT -> {
-                // Degraded fallback for text-only slots — see manifest comment.
-                // A short-text field can't carry per-bar color, only a count.
+                // Degraded fallback for slots that support neither of the
+                // above — see manifest comment. Plain text, no fill/color.
                 val doneCount = Neg1nConfig.RITUALS.count { status.done.contains(it.first) }
                 val text = PlainComplicationText.Builder("$doneCount/${Neg1nConfig.RITUALS.size}").build()
                 ShortTextComplicationData.Builder(text, contentDescription)

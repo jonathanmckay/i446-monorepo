@@ -47,17 +47,19 @@
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
             </intent-filter>
-            <!-- SMALL_IMAGE + SHORT_TEXT: found live (2026-09-08) that the
-                 user's chosen watch-face slot is a text-only complication
-                 family — declaring SMALL_IMAGE alone made this provider
-                 disappear from that slot's picker entirely rather than force
-                 it to use the image. SHORT_TEXT's "N/5" is a degraded
-                 fallback for text-only slots; any slot that DOES accept
-                 images still gets the real 5-bar bitmap (the watch face
-                 picks the type from this list, never both). -->
+            <!-- SMALL_IMAGE + RANGED_VALUE + SHORT_TEXT, in preference order.
+                 Found live (2026-09-08): the user's chosen watch-face slot
+                 is a SHORT_TEXT/RANGED_VALUE family — SMALL_IMAGE never even
+                 offered there, confirmed after declaring it alone made the
+                 provider disappear from that slot's picker entirely.
+                 RANGED_VALUE gives a native-looking progress ring (0-5, watch
+                 face's own accent color) instead of plain text — any slot
+                 that DOES accept images still gets the real 5-bar bitmap
+                 (the watch face picks one type from this list, never more
+                 than one at a time). -->
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="SMALL_IMAGE,SHORT_TEXT" />
+                android:value="SMALL_IMAGE,RANGED_VALUE,SHORT_TEXT" />
             <!-- 900s (15min, matching the phone's own sync cadence) is the
                  reliable baseline refresh — onComplicationRequest pulls the
                  latest Data Layer value itself (DataLayerReader) rather than

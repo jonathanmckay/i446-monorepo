@@ -13,16 +13,23 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.wear.watchface.complications.datasource.ComplicationDataSourceUpdateRequester
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "Neg1n"
+private const val RECONCILE_DELAY_MS = 3000L
 
 /** Opened by tapping the complication: the current block's not-yet-done
- * rituals as a swipeable list. Swipe left completes one — calls
- * RitualCompleter (direct HTTP from the watch, see its doc comment) and
- * removes the row optimistically; on failure the row is restored by
- * reloading the authoritative list rather than trying to re-insert it at
- * the right spot. */
+ * rituals as a swipeable list. Swipe RIGHT completes one — relays the
+ * action to the phone (see PhoneMessenger/RitualCompleter's doc comments
+ * for why it's phone-relayed rather than a direct watch HTTP call) and
+ * removes the row optimistically; since the relay is fire-and-forget with
+ * no ack, every swipe schedules a delayed reload() to reconcile with
+ * ground truth regardless of apparent success.
+ *
+ * Also fires a "/neg1n_sync_now" request to the phone on open, then reloads
+ * after a short delay — so opening the list is close to instant-fresh
+ * rather than waiting on the phone's own ~15min periodic timer. */
 class RitualListActivity : Activity() {
 
     private lateinit var adapter: RitualAdapter
@@ -42,7 +49,7 @@ class RitualListActivity : Activity() {
         recycler.layoutManager = LinearLayoutManager(this)
         recycler.adapter = adapter
 
-        ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+        ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.RIGHT) {
             override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder) = false
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.bindingAdapterPosition
@@ -54,7 +61,15 @@ class RitualListActivity : Activity() {
             }
         }).attachToRecyclerView(recycler)
 
-        reload()
+        reload() // whatever's cached, immediately
+        CoroutineScope(Dispatchers.Main).launch {
+            val sent = PhoneMessenger.send(applicationContext, "/neg1n_sync_now")
+            Log.i(TAG, "RitualListActivity: sync-now request sent=$sent")
+            if (sent) {
+                delay(RECONCILE_DELAY_MS)
+                reload() // pick up whatever the phone just pushed
+            }
+        }
     }
 
     private fun reload() {
@@ -70,17 +85,18 @@ class RitualListActivity : Activity() {
 
     private fun completeRitual(tag: String) {
         CoroutineScope(Dispatchers.Main).launch {
-            RitualCompleter.complete(applicationContext, tag).fold(
-                onSuccess = {
-                    Log.i(TAG, "RitualListActivity: completed $tag")
-                    requestComplicationUpdate()
-                },
-                onFailure = { e ->
-                    Log.e(TAG, "RitualListActivity: failed to complete $tag", e)
-                    Toast.makeText(this@RitualListActivity, "failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                    reload() // restore the true list rather than guess where the row goes back
-                },
-            )
+            val sent = PhoneMessenger.send(applicationContext, "/neg1n_complete", tag)
+            Log.i(TAG, "RitualListActivity: complete request tag=$tag sent=$sent")
+            if (!sent) {
+                Toast.makeText(this@RitualListActivity, "phone unreachable", Toast.LENGTH_SHORT).show()
+            }
+            requestComplicationUpdate()
+            // No ack from the relay either way — reconcile with ground
+            // truth after giving the phone time to do the real work
+            // (fetch backend /complete, push the result) rather than
+            // trusting the optimistic removal above.
+            delay(RECONCILE_DELAY_MS)
+            reload()
         }
     }
 

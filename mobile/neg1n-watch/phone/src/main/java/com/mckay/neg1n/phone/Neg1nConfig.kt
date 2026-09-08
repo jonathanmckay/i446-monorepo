@@ -16,7 +16,12 @@ object Neg1nConfig {
 
     const val PREFS_NAME = "neg1n_prefs"
     const val PREF_ENDPOINT = "endpoint_url"
-    const val DEFAULT_ENDPOINT = "http://ix:5562/api/neg1n"
+    // Ix's Tailscale IP, not the "ix" MagicDNS hostname or a home-LAN IP —
+    // this needs to resolve/route from wherever the phone actually is
+    // (cellular data, someone else's WiFi, ...), not just at home or with
+    // Tailscale MagicDNS specifically configured on this phone. The phone
+    // needs Tailscale installed and logged in for this to resolve at all.
+    const val DEFAULT_ENDPOINT = "http://100.114.46.109:5562/api/neg1n"
 
     const val SYNC_WORK_NAME = "neg1n_status_sync"
 
