@@ -76,10 +76,12 @@ def test_done_and_pending_share_one_line_done_first():
 
 def test_done_chips_keep_one_space_between_same_color_numbers():
     """Follow-up (2026-07-20), refined 2026-08-07: adjacent done-row chips
-    that SHARE a color (teams/push both map to i9) keep exactly one space
-    between them, else the two numbers would visually merge."""
+    that SHARE a color (teams/notes both map to i9) keep exactly one space
+    between them, else the two numbers would visually merge. Was teams/push
+    until push moved from i9 to g245 (2026-09-08, JM), so the two no longer
+    share a color — swapped to teams/notes, which still do."""
     mod = _load_tui()
-    mod.STATE.habits_today = [("teams", 3.0), ("push", 4.0)]
+    mod.STATE.habits_today = [("teams", 3.0), ("notes", 4.0)]
     row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
     assert "3 4" in row1, f"exactly one space must separate same-color chips: {row1!r}"
 

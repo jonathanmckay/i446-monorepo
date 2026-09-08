@@ -1,5 +1,11 @@
 <resources>
-    <string name="app_name">-1n Status</string>
+    <!-- Shown as the subtitle under EVERY complication this app provides in
+         the watch face's complication picker (Wear OS shows the app's own
+         label there, not just each complication's own label) — must stay
+         neutral across all 4 (-1n, day-points, hcb, hcmp), not name just one
+         of them (bug found 2026-09-08: was "-1n Status", so all 4 showed
+         "-1n" as their subtitle regardless of which one they actually were). -->
+    <string name="app_name">Neon Watch</string>
     <string name="complication_label">-1n block rituals</string>
     <string name="complication_label_day_points">day 分</string>
     <string name="complication_label_hcb">hcb (calories + score)</string>

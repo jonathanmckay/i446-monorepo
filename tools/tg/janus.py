@@ -1804,7 +1804,7 @@ HABIT_COLOR_DOMAIN = {
     "charge": "infra", "tmrw": "g245", "2nd hci": "hci", "1st hci": "hci",
     "ibx s897": "s897", "新闻": "hcmc", "词汇": "hcmc", "night hcmc": "hcmc",
     "0t": "n156", "₦156": "n156", "0l": "g245", "0g": "g245",
-    "stats i9": "i9", "notes": "i9", "ibx i9": "i9", "push": "i9", "teams": "i9",
+    "stats i9": "i9", "notes": "i9", "ibx i9": "i9", "push": "g245", "teams": "i9",
     "slack github": "i9", "slack m5x2": "m5x2", "ibx m5x2": "m5x2", "m5x2 stats": "m5x2",
     "早餐": "hcb", "hiit": "hcb", "问学": "家", "xk20": "xk88", "xk22": "xk88",
     "xk26": "xk88", "qft": "hcm", "xk88": "xk88", "nvc + e": "hcm", "ص": "hcm",
