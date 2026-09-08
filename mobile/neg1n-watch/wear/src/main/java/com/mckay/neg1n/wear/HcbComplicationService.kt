@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
 import androidx.wear.watchface.complications.data.PlainComplicationText
-import androidx.wear.watchface.complications.data.RangedValueComplicationData
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
 import androidx.wear.watchface.complications.datasource.SuspendingComplicationDataSourceService
@@ -12,15 +11,16 @@ import androidx.wear.watchface.complications.datasource.SuspendingComplicationDa
 /** Calories eaten today (hcbi!U) + the combined hcbp+hcbc score against its
  * 131 goal (hcbi!X375+X378, a running Q2+Q3 total, not a daily figure).
  *
- * Uses RANGED_VALUE for the score-vs-goal half — a native ring the watch
- * face styles itself, purpose-built for exactly "value out of a range with
- * a goal" (per the rubber-duck-substitute pass on this feature: cheaper
- * than a 2nd custom bitmap renderer and looks better than one would). This
- * is why this service's rendering doesn't match DayPointsComplicationService's
- * ArcRenderer pattern — -1n's own service already varies its rendering by
- * requested type (custom bitmap for SMALL_IMAGE, plain text for SHORT_TEXT),
- * so offering a 3rd, native type here is consistent with that established
- * norm, not a break from it. */
+ * SHORT_TEXT only — originally tried RANGED_VALUE for the score-vs-goal
+ * half (a native progress ring), but that score is a running annual total
+ * that's frequently deeply negative (confirmed live: -894 against the 131
+ * goal), and RangedValueComplicationData has no way to show "below the
+ * range" — it just clamps to 0%, which rendered as a plain empty/invisible
+ * ring on the watch face ("nothing renders" bug report, 2026-09-08). A
+ * value that can legitimately run far below its own floor isn't a good fit
+ * for a range widget; plain text always shows the real number regardless of
+ * how far off-goal it is, matching DayPointsComplicationService's and
+ * HcmpComplicationService's simpler, always-visible text approach. */
 class HcbComplicationService : SuspendingComplicationDataSourceService() {
 
     private object Cache {
@@ -71,16 +71,6 @@ class HcbComplicationService : SuspendingComplicationDataSourceService() {
         val contentDescription = PlainComplicationText.Builder("hcb: $calText, hcbp+hcbc $scoreText").build()
 
         return when (type) {
-            ComplicationType.RANGED_VALUE -> {
-                RangedValueComplicationData.Builder(
-                    value = (score ?: 0).toFloat().coerceIn(0f, goal.toFloat()),
-                    min = 0f,
-                    max = goal.toFloat().coerceAtLeast(1f),
-                    contentDescription = contentDescription,
-                )
-                    .setText(PlainComplicationText.Builder(calText).build())
-                    .build()
-            }
             ComplicationType.SHORT_TEXT -> {
                 val text = PlainComplicationText.Builder("$calText · $scoreText").build()
                 ShortTextComplicationData.Builder(text, contentDescription).build()

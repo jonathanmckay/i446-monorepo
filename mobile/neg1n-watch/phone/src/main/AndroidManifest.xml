@@ -28,5 +28,20 @@
             </intent-filter>
         </receiver>
 
+        <!-- Watch->phone relay for ritual completion + sync-on-open — see
+             RitualActionListenerService's doc comment. pathPrefix matches
+             both /neg1n_complete and /neg1n_sync_now with one filter. -->
+        <service
+            android:name=".RitualActionListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/neg1n_" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>

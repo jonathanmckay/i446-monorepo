@@ -52,24 +52,25 @@ for row in ws.iter_rows(min_row=3, values_only=True):
     if isinstance(total, (int, float)):
         day_data['__total__'] = int(round(float(total)))
 
-# --- hcbi: calories eaten (col U, per day) for neg1n's /api/hcb ---
-# Own date column (B), independent row numbering from 0分/0n.
+# --- hcbi: calories eaten (col U) + today's hcbp+hcbc score (Y+AA), per
+# day, for neg1n's /api/hcb. Own date column (B), independent row numbering
+# from 0分/0n. hcbp+hcbc was originally read as the fixed Q2+Q3 running
+# total (hcbi!X375+X378) but that's a year-scale figure incompatible with
+# the 131 goal, which is a DAILY target — JM: '=hcbi!AA{row}+hcbi!Y{row}' is
+# the actual per-day figure to use (2026-09-08).
 ws = wb['hcbi']
 KCAL_COL = ci('U')
+Y_COL = ci('Y')
+AA_COL = ci('AA')
 for row in ws.iter_rows(min_row=3, values_only=True):
     d = as_date(row[1])
     if d is None or d <= cutoff or d > today: continue
+    day_data = result.setdefault(d.isoformat(), {})
     kcal = row[KCAL_COL - 1]
     if isinstance(kcal, (int, float)) and kcal > 0:
-        result.setdefault(d.isoformat(), {})['__hcb_kcal__'] = int(round(float(kcal)))
-
-# Combined hcbp+hcbc score (fixed cells, not per-day — mirrors
-# personal-dashboard/dashboard.py's CACHE_CARDS 'hcbp+hcbc' card, Q2+Q3
-# running total) + the 131 goal, stored top-level since it isn't dated.
-q2 = ws.cell(row=375, column=ci('X')).value
-q3 = ws.cell(row=378, column=ci('X')).value
-hcbp_hcbc = sum(v for v in (q2, q3) if isinstance(v, (int, float)))
-result['__hcbp_hcbc__'] = {'value': int(round(float(hcbp_hcbc))), 'goal': 131}
+        day_data['__hcb_kcal__'] = int(round(float(kcal)))
+    hcbp_hcbc = sum(v for v in (row[Y_COL - 1], row[AA_COL - 1]) if isinstance(v, (int, float)))
+    day_data['__hcbp_hcbc__'] = int(round(float(hcbp_hcbc)))
 
 # --- 0n: prayer count (ص) + hcmp minutes (其他人+冥想+o314), per day ---
 # for neg1n's /api/hcmp. Own date column (C).
@@ -84,8 +85,7 @@ for row in ws.iter_rows(min_row=5, values_only=True):
     if isinstance(salat, (int, float)):
         day_data['__salat__'] = int(round(float(salat)))
     hcmp_min = sum(row[c - 1] for c in HCMP_COLS if isinstance(row[c - 1], (int, float)))
-    if hcmp_min:
-        day_data['__hcmp_min__'] = int(round(float(hcmp_min)))
+    day_data['__hcmp_min__'] = int(round(float(hcmp_min)))  # 0 is a real value, not missing data
 
 wb.close()
 with open('$CACHE', 'w') as f:

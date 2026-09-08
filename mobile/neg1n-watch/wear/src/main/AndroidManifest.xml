@@ -27,8 +27,10 @@
         </activity>
 
         <!-- Opened by tapping the complication: swipeable list of this
-             block's not-yet-done rituals, swipe left to complete (calls
-             the backend directly — see RitualCompleter). -->
+             block's not-yet-done rituals, swipe RIGHT to complete — relayed
+             to the phone over Bluetooth (see PhoneMessenger), which does
+             the actual backend call over Tailscale so this works off the
+             home LAN too. -->
         <activity
             android:name=".RitualListActivity"
             android:exported="true"
@@ -104,13 +106,14 @@
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
             </intent-filter>
-            <!-- RANGED_VALUE first (native ring, hcbp+hcbc vs 131), SHORT_TEXT
-                 as the text-only-slot fallback — same "declare the fallback
-                 too or the provider vanishes from that slot's picker" lesson
-                 as Neg1nComplicationService above. -->
+            <!-- SHORT_TEXT only — see HcbComplicationService's doc comment:
+                 RANGED_VALUE looked like the better native fit but the real
+                 score can run deeply negative, which a range widget just
+                 clamps to an invisible 0%. Plain text always shows the real
+                 number. -->
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="RANGED_VALUE,SHORT_TEXT" />
+                android:value="SHORT_TEXT" />
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
                 android:value="900" />

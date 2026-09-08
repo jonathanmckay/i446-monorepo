@@ -177,20 +177,15 @@ def api_day_points():
 
 @app.route("/api/hcb")
 def api_hcb():
-    """Today's calories eaten (hcbi!U) + the combined hcbp+hcbc score
-    (hcbi!X375+X378, a running Q2+Q3 total — not a daily figure, hence no
-    'date' meaning for that half of the payload) against its 131 goal."""
+    """Today's calories eaten (hcbi!U) + today's hcbp+hcbc score
+    (hcbi!Y+AA, today's row — a daily figure, matching the 131 daily goal;
+    NOT the Q2+Q3 running total, which is a different, year-scale number)."""
     entry = _today_cache_entry()
-    try:
-        cache = json.loads(POINTS_CACHE.read_text())
-    except (OSError, json.JSONDecodeError):
-        cache = {}
-    hcbp_hcbc = cache.get("__hcbp_hcbc__", {})
     return jsonify({
         "date": datetime.now().date().isoformat(),
         "calories": entry.get("__hcb_kcal__"),
-        "hcbp_hcbc": hcbp_hcbc.get("value"),
-        "goal": hcbp_hcbc.get("goal", 131),
+        "hcbp_hcbc": entry.get("__hcbp_hcbc__"),
+        "goal": 131,
     })
 
 

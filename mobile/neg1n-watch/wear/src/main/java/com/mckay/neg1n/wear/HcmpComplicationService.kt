@@ -8,10 +8,10 @@ import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
 import androidx.wear.watchface.complications.datasource.SuspendingComplicationDataSourceService
 
-/** Today's prayer count (0n!AP, ص) and combined hcmp minutes (0n!AQ+AR+AS =
- * o314 + 冥想 + 其他人). No stated goal for either number (unlike hcb's 131),
- * so no natural RANGED_VALUE/arc fit here — plain SHORT_TEXT, matching -1n's
- * own degraded-fallback text style ("N/5"). */
+/** Today's prayer count (0n!AP, صلاة) and combined hcmp minutes (0n!AQ+AR+AS
+ * = o314 + 冥想 + 其他人). No stated goal for either number (unlike hcb's
+ * 131), so no natural RANGED_VALUE/arc fit here — plain SHORT_TEXT, matching
+ * -1n's own degraded-fallback text style ("N/5"). */
 class HcmpComplicationService : SuspendingComplicationDataSourceService() {
 
     private object Cache {
@@ -55,9 +55,9 @@ class HcmpComplicationService : SuspendingComplicationDataSourceService() {
     private fun buildData(type: ComplicationType, prayers: Int?, minutes: Int?): ComplicationData? {
         val prayersText = prayers?.toString() ?: "-"
         val minutesText = minutes?.let { "${it}m" } ?: "-"
-        val summary = "${prayersText}ص · $minutesText"
+        val summary = "$prayersText صلاة · $minutesText"
         val contentDescription = PlainComplicationText.Builder(
-            "prayers today: $prayersText, hcmp minutes: $minutesText"
+            "صلاة today: $prayersText, hcmp minutes: $minutesText"
         ).build()
 
         return when (type) {
