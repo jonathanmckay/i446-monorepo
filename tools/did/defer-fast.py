@@ -431,16 +431,26 @@ def handle_recurring(task: dict, target_date: str,
             copy_content = _dated_copy_content(content, current_due)
         copy = create_task(copy_content, labels, project_id, target_date, priority)
 
-    # 2. Advance the parent to its next occurrence, recurrence preserved.
-    body = {"due_date": next_date}
-    if pattern:
-        body["due_string"] = pattern
-    _api("POST", f"/tasks/{task_id}", body)
-    # Daily habit: record the parent id so dtd hides it for the rest of today
-    # (the due-tomorrow drift guard would otherwise keep showing it).
-    mark_habit_deferred(task_id, labels)
-
-    # 3. Posthoc eval record (due today, immediately closed).
+    # 2. Posthoc eval record (due today, immediately closed) — created and
+    #    closed BEFORE the parent advances (moved here 2026-09-08; see bug
+    #    below), so a failure here raises before the parent's due date ever
+    #    moves, instead of after. Mirrors catch_up_recurring's own "audit
+    #    record before the hard-to-reverse action" ordering (its 2026-08-11
+    #    fix note).
+    #
+    #    Bug (2026-09-08): "1 -2g didn't show in this week's repeating
+    #    activities." Reproduced from live data: the parent's due date had
+    #    advanced a full extra week (skipping this week's occurrence
+    #    entirely) with NO trace anywhere — no completed task, no posthoc,
+    #    no deferred copy, nothing in Todoist's activity log. This function
+    #    used to advance the parent (old step 2) BEFORE creating the posthoc
+    #    (old step 3): a failure in the posthoc create/close call (network
+    #    blip, rate limit, ...) left the parent's advance standing with
+    #    nothing to show for the skipped occurrence — and in skip_copy mode
+    #    there is no copy either, so the posthoc was the ONLY record of the
+    #    defer ever happening. Reordering so this step comes first means that
+    #    failure now prevents the parent from advancing at all, instead of
+    #    silently eating the occurrence.
     today_iso = date.today().isoformat()
     if skip_copy:
         posthoc_content = (f"deferred: {content} → next occurrence "
@@ -451,6 +461,15 @@ def handle_recurring(task: dict, target_date: str,
     posthoc_labels = list(set(["posthoc"] + labels))
     posthoc = create_task(posthoc_content, posthoc_labels, project_id, today_iso)
     close_task(posthoc["id"])
+
+    # 3. Advance the parent to its next occurrence, recurrence preserved.
+    body = {"due_date": next_date}
+    if pattern:
+        body["due_string"] = pattern
+    _api("POST", f"/tasks/{task_id}", body)
+    # Daily habit: record the parent id so dtd hides it for the rest of today
+    # (the due-tomorrow drift guard would otherwise keep showing it).
+    mark_habit_deferred(task_id, labels)
 
     return {
         "task": content,

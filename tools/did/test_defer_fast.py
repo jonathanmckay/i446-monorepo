@@ -105,6 +105,41 @@ def test_overdue_recurring_advances_from_today(df, monkeypatch):
     assert advance["due_date"] == "2026-06-12"
 
 
+def test_posthoc_failure_prevents_silent_parent_advance(df, monkeypatch):
+    """Bug (2026-09-08): "1 -2g didn't show in this week's repeating
+    activities." Live data showed a weekly recurring task's due date had
+    jumped forward a full extra occurrence with ZERO trace anywhere — no
+    completed task, no posthoc, no deferred copy. Root cause: the posthoc
+    audit record used to be created AFTER the parent's due-date advance, so a
+    failure creating/closing it (network blip, rate limit, ...) left the
+    advance standing with nothing to show for the skipped occurrence — in
+    skip_copy mode the posthoc is the ONLY record a defer ever happened.
+    Fix: create+close the posthoc BEFORE advancing the parent, so a failure
+    there raises before the parent ever moves. This test makes create_task
+    (which both the posthoc and the one-off copy use) fail every time, and
+    asserts the parent-advance API call (_api) is never reached — the
+    exception must propagate before that call, not after."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return FRI
+    monkeypatch.setattr(df, "date", _D)
+
+    def _boom(*a, **k):
+        raise RuntimeError("Todoist API unreachable")
+    monkeypatch.setattr(df, "create_task", _boom)
+    advance_calls = []
+    monkeypatch.setattr(df, "_api",
+                        lambda method, path, body=None: advance_calls.append(body))
+    task = {"id": "t1", "content": "1 -2g (13) [20]",
+            "due": {"is_recurring": True, "date": "2026-06-05",
+                    "string": "every Friday"}}
+    with pytest.raises(RuntimeError):
+        df.handle_recurring(task, "ignored", 2, skip_copy=True)
+    assert advance_calls == [], (
+        "the parent must not advance when the posthoc audit record failed to be created")
+
+
 # ── skip-to-next-occurrence ("0"/blank on a recurring task) ────────────────
 
 def test_recurring_skip_mode_advances_without_copy(df, monkeypatch):
