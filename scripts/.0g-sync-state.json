@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-09T10:00:02.735907-07:00"
+  "tasks": {
+    "good convo with ben": {
+      "todoist_id": "6hV3G52JwCRCXJ8R",
+      "minutes": 30
+    },
+    "solid flight back": {
+      "todoist_id": "6hV3G58rR398hwC2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-09-09T12:00:09.428997-07:00"
 }
