@@ -6168,5 +6168,35 @@
     "unit": "B44",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-09",
+    "effective": "2026-10-25",
+    "kind": "leased",
+    "unit_id": "947",
+    "prop": "kn47 K1",
+    "unit": "J205",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-09",
+    "effective": "2026-09-08",
+    "kind": "moveout",
+    "unit_id": "549",
+    "prop": "rl16",
+    "unit": "B12",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-09",
+    "effective": "2026-09-09",
+    "kind": "movein",
+    "unit_id": "1255",
+    "prop": "tc68",
+    "unit": "D106",
+    "tenant": null,
+    "baseline": false
   }
 ]
