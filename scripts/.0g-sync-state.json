@@ -1,18 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "good convo with ben": {
-      "todoist_id": "6hV3G52JwCRCXJ8R",
-      "minutes": 30
-    },
     "solid flight back": {
       "todoist_id": "6hV3G58rR398hwC2",
       "minutes": 40
-    },
-    "good conversation and prepped for asha": {
-      "todoist_id": "6hV3w45Q34C3pQFR",
-      "minutes": 100
     }
   },
-  "last_sync": "2026-09-09T20:00:01.180882-07:00"
+  "last_sync": "2026-09-09T22:00:05.861249-07:00"
 }
