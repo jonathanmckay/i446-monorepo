@@ -1013,8 +1013,14 @@ def _entry_edit_prefill(item: dict) -> str:
     """The editable text Enter loads into the input line for a selected real
     entry: "<desc> @<code> HHMM-HHMM" for a single completed entry, or
     "<desc> @<code> HHMM-" (open-ended — blank end means "now" on submit) for
-    the running one — a merged row gets no range at all, since there's no
-    single well-defined time to retime all of it to. Matches what the user
+    the running one — a merged row spanning a real GAP gets no range at all,
+    since there's no single well-defined time to retime all of it to (a
+    genuinely contiguous merge — every sub-entry butting directly against
+    the next, e.g. a recurring filler like "generic placeholder" started
+    right as the previous one stopped — DOES have one: its own overall
+    start/end, same as a single entry; bug report 2026-09-10: "select a
+    generic placeholder... doesn't pull in the time" traced to this blanking
+    on entry_ids length alone, even when gapless). Matches what the user
     would type to recreate it via the ordinary typed-command path. Having the
     CURRENT times in the line makes retiming a matter of editing digits (user
     request 2026-07-28: "change the start / end times of a task"); resubmitting
@@ -1030,7 +1036,9 @@ def _entry_edit_prefill(item: dict) -> str:
     code = proj_code(item.get("project_id"))
     suffix = f" @{code}" if code else ""
     rng = ""
-    if len(item.get("entry_ids") or []) == 1:
+    single_or_contiguous = (len(item.get("entry_ids") or []) == 1
+                            or item.get("contiguous", True))
+    if single_or_contiguous:
         if item.get("running"):
             rng = f" {item['start_dt']:%H%M}-"
         elif item.get("dur_min"):
@@ -2803,7 +2811,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                                              "raw_desc": p["raw_desc"],
                                              "project_id": p["project_id"],
                                              "dur_min": p.get("dur_min"),
-                                             "running": bool(p.get("is_running"))})
+                                             "running": bool(p.get("is_running")),
+                                             "contiguous": p.get("contiguous", True)})
 
     # The header established THIS hour (2026-08-06: not always blk_sh — a
     # promoted head0 in the block's second hour shifts it), so a body row in
@@ -3039,6 +3048,12 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
             # Haiku-shortened/code-suffixed display `label` above.
             "raw_desc": m["desc"],
             "project_id": m["project_id"],
+            # Whether every sub-entry behind a multi-id merge butts
+            # directly against the next with no gap — only then is there
+            # one well-defined span to retime to. Defaults True: a
+            # synthetic pick (e.g. _block_sleep_item) with no real `merged`
+            # dict behind it is trivially "contiguous" (nothing to merge).
+            "contiguous": m.get("contiguous", True),
         })
     items.sort(key=lambda x: x["dur_min"], reverse=True)
     running = [x for x in items if x["is_running"]]
@@ -3568,6 +3583,18 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
         # otherwise vanish, glued onto the earlier block's span).
         if merged and merged[-1]["desc"] == e["desc"] \
                 and _same_block(merged[-1]["start_dt"], e["start_dt"]):
+            # "contiguous" tracks whether every sub-entry butts directly up
+            # against the next with no gap -- true for the common case (a
+            # recurring filler like "generic placeholder" started right as
+            # the previous one stopped), false if the same desc recurs
+            # later with untracked time in between. Only a genuinely
+            # contiguous merge has one well-defined span to retime to (see
+            # _entry_edit_prefill / the edit-apply guard below, bug report
+            # 2026-09-10: "select a generic placeholder... doesn't pull in
+            # the time" -- entry_ids length > 1 blanked the prefill even
+            # when the merge was gapless and retiming it is unambiguous).
+            if e["start_dt"] != merged[-1]["end_dt"]:
+                merged[-1]["contiguous"] = False
             merged[-1]["end_dt"] = end
             merged[-1]["ids"].append(e["id"])
             merged[-1]["tags"] = sorted(set(merged[-1].get("tags") or [])
@@ -3576,7 +3603,7 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
             merged.append({"start_dt": e["start_dt"], "end_dt": end,
                            "desc": e["desc"], "project_id": e["project_id"],
                            "tags": list(e.get("tags") or []),
-                           "ids": [e["id"]]})
+                           "ids": [e["id"]], "contiguous": True})
 
     bo_emojis = bo_emojis if bo_emojis is not None else _read_block_emojis()
     out: list[tuple[str, str]] = []
@@ -4096,6 +4123,11 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
         # otherwise vanish, glued onto the earlier block's span).
         if merged and merged[-1]["desc"] == e["desc"] \
                 and _same_block(merged[-1]["start_dt"], e["start_dt"]):
+            # See render_morning's identical merge loop for why this is
+            # tracked (bug report 2026-09-10: multi-id merges blanked the
+            # edit prefill's time even when genuinely gapless/retimeable).
+            if e["start_dt"] != merged[-1]["end_dt"]:
+                merged[-1]["contiguous"] = False
             merged[-1]["end_dt"] = end
             merged[-1]["running"] = merged[-1].get("running") or e.get("running")
             merged[-1]["ids"].append(e["id"])
@@ -4105,7 +4137,7 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
             merged.append({"start_dt": e["start_dt"], "end_dt": end, "desc": e["desc"],
                            "project_id": e["project_id"], "running": e.get("running", False),
                            "tags": list(e.get("tags") or []),
-                           "ids": [e["id"]]})
+                           "ids": [e["id"]], "contiguous": True})
     picks = _past_block_picks(blk_name, merged, limit=FOCUS_ROWS)
     # A still-relevant entry that STARTED in the previous block (e.g. a run
     # crossing 20:00 into 亥) gets a clipped, titled, selectable row — not
@@ -5030,6 +5062,7 @@ def _(event):
         target = STATE.edit_target
         STATE.edit_target = None
         ids, edit_date = target["ids"], target["date"]
+        contiguous = target.get("contiguous", len(ids) == 1)
         text = input_buffer.text.strip()
         input_buffer.reset()
         if not text:
@@ -5040,12 +5073,15 @@ def _(event):
         if code and pid is None:
             flash(f"unknown project code: {code}", 4.0)
             return
-        if time_range and len(ids) != 1:
-            # A merged row (contiguous same-desc entries collapsed into one
-            # display line) has no single well-defined new time to retime
-            # ALL of them to — description/project edits are safe to apply
-            # to every id behind it, but time is not.
-            flash("can't retime a merged multi-entry row", 4.0)
+        if time_range and len(ids) != 1 and not contiguous:
+            # A merged row spanning a real GAP (some OTHER untracked stretch
+            # between two same-desc occurrences) has no single well-defined
+            # new time to retime ALL of it to — description/project edits
+            # are safe to apply to every id behind it, but time is not. A
+            # gapless merge (every sub-entry butts against the next) DOES
+            # have one well-defined span; see the apply step below, which
+            # collapses it to a single resulting entry.
+            flash("can't retime a merged multi-entry row spanning a gap", 4.0)
             return
         if time_range and time_range[1] is None and not (_find_entry(ids) or {}).get("running"):
             # Open-ended ("HHMM-", blank end = now) only makes sense on the
@@ -5107,8 +5143,22 @@ def _(event):
                     # themselves — their own current position shouldn't
                     # trim itself out from under its own edit.
                     await asyncio.to_thread(toggl_api.trim_range, start_dt, end_dt, set(ids))
-                for eid in ids:
-                    await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
+                if time_range and len(ids) > 1:
+                    # Retiming a gapless multi-id merge collapses it to ONE
+                    # resulting entry (the new span, wherever it lands, is
+                    # already the complete replacement for what all of them
+                    # covered): apply the full new fields — desc/project/
+                    # tags AND the new start/stop — to the first id, then
+                    # delete the rest. Looping update_entry with the SAME
+                    # fields over every id (the single-entry path below)
+                    # would instead leave len(ids) duplicate entries all
+                    # claiming the identical new range.
+                    await asyncio.to_thread(toggl_api.update_entry, ids[0], **fields)
+                    for eid in ids[1:]:
+                        await asyncio.to_thread(toggl_api.delete_entry, eid)
+                else:
+                    for eid in ids:
+                        await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
                 # Value-tag 媒分 credit — completed entry credits at once
                 # (minutes known); a running one queues until it stops
                 # (fetch_today resolves). Journaled so re-edits can't
@@ -5180,7 +5230,8 @@ def _(event):
             # stays distinct from a plain "entry" row's ⌥↵ (which refuses on
             # a running entry).
             STATE.event_sel = None
-            STATE.edit_target = {"ids": item["entry_ids"], "date": item["start_dt"].date()}
+            STATE.edit_target = {"ids": item["entry_ids"], "date": item["start_dt"].date(),
+                                 "contiguous": item.get("contiguous", True)}
             input_buffer.text = _entry_edit_prefill(item)
             input_buffer.cursor_position = len(input_buffer.text)
             return

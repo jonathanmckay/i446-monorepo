@@ -162,6 +162,120 @@ def test_merged_contiguous_same_desc_entries_carry_all_ids():
     assert matches, f"expected one merged row carrying both ids, got {entries!r}"
 
 
+def test_merged_gapless_entries_are_marked_contiguous():
+    """Regression (2026-09-10): "select a generic placeholder from janus,
+    and try and edit it, it doesn't pull in the time for that placeholder."
+    Two back-to-back same-desc entries (the common shape for a recurring
+    filler like "generic placeholder", started right as the previous one
+    stopped) merge into one row -- that merge must be marked "contiguous"
+    since there's exactly one well-defined span to retime."""
+    mod = _load_tui()
+    today = _midnight()
+    _setup_common(mod)
+    mod.STATE.entries = [
+        _entry("generic placeholder", today.replace(hour=7, minute=41),
+               today.replace(hour=7, minute=48), id=201),
+        _entry("generic placeholder", today.replace(hour=7, minute=48),
+               today.replace(hour=7, minute=49), id=202),
+    ]
+    mod.view_now = lambda: today.replace(hour=12, minute=5)
+    mod.render_morning()
+    entries = [it for it in mod.STATE.visible_events if it.get("kind") == "entry"]
+    match = next(it for it in entries if set(it["entry_ids"]) == {201, 202})
+    assert match["contiguous"] is True, (
+        "a gapless merge must be marked contiguous so its time is retimeable")
+
+
+def test_merged_entries_with_a_gap_are_not_contiguous():
+    """Same desc, same block, but a real untracked (or other-content) gap
+    between the two occurrences -- there is NOT one well-defined span to
+    retime to, so this must stay marked non-contiguous."""
+    mod = _load_tui()
+    today = _midnight()
+    _setup_common(mod)
+    mod.STATE.entries = [
+        _entry("generic placeholder", today.replace(hour=7, minute=0),
+               today.replace(hour=7, minute=10), id=301),
+        _entry("generic placeholder", today.replace(hour=7, minute=40),
+               today.replace(hour=7, minute=50), id=302),
+    ]
+    mod.view_now = lambda: today.replace(hour=12, minute=5)
+    mod.render_morning()
+    entries = [it for it in mod.STATE.visible_events if it.get("kind") == "entry"]
+    match = next(it for it in entries if set(it["entry_ids"]) == {301, 302})
+    assert match["contiguous"] is False, (
+        "a merge spanning a real gap must not be marked contiguous")
+
+
+def test_entry_edit_prefill_includes_time_for_contiguous_merge():
+    """The actual bug: entry_ids length > 1 used to blank the prefill's time
+    unconditionally, even for a gapless (contiguous) merge."""
+    mod = _load_tui()
+    today = _midnight()
+    item = {"raw_desc": "generic placeholder", "project_id": None,
+            "entry_ids": [201, 202], "contiguous": True,
+            "start_dt": today.replace(hour=7, minute=41), "dur_min": 8}
+    assert mod._entry_edit_prefill(item) == "generic placeholder 0741-0749"
+
+
+def test_entry_edit_prefill_omits_time_for_gapped_merge():
+    """Regression guard: a merge that spans a real gap must still show no
+    time (unchanged behavior) -- only gaplessness unlocks the prefill."""
+    mod = _load_tui()
+    today = _midnight()
+    item = {"raw_desc": "generic placeholder", "project_id": None,
+            "entry_ids": [301, 302], "contiguous": False,
+            "start_dt": today.replace(hour=7), "dur_min": 10}
+    assert mod._entry_edit_prefill(item) == "generic placeholder"
+
+
+def test_enter_with_armed_edit_time_range_on_contiguous_merged_row_is_allowed():
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [201, 202], "date": today.date(), "contiguous": True}
+    mod.input_buffer.text = "0741-0749"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert "merged" not in mod.STATE.flash
+    assert "0741-0749" in mod.STATE.flash
+
+
+def test_apply_edit_time_range_on_contiguous_merge_collapses_to_first_and_deletes_rest(monkeypatch):
+    """The full end-to-end fix: retiming a contiguous multi-id row must not
+    loop update_entry with the SAME new range over every id (that would
+    leave duplicate overlapping entries) -- it applies the new span to the
+    first id and deletes the rest."""
+    mod = _load_tui()
+    today = _midnight()
+    calls = []
+
+    class _FakeToggl:
+        def trim_range(self, start_dt, end_dt, exclude_ids=None):
+            calls.append(("trim", start_dt, end_dt, exclude_ids))
+            return []
+
+        def update_entry(self, entry_id, **fields):
+            calls.append(("update", entry_id, fields))
+
+        def delete_entry(self, entry_id):
+            calls.append(("delete", entry_id))
+
+    monkeypatch.setattr(mod, "toggl_api", _FakeToggl())
+    monkeypatch.setattr(mod, "fetch_current", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "fetch_today", lambda *a, **k: None)
+
+    mod.STATE.edit_target = {"ids": [201, 202], "date": today.date(), "contiguous": True}
+    mod.input_buffer.text = "0741-0749"
+    _binding(mod, "enter").handler(_CapturingEvent())
+
+    updates = [c for c in calls if c[0] == "update"]
+    deletes = [c for c in calls if c[0] == "delete"]
+    assert len(updates) == 1 and updates[0][1] == 201, (
+        f"exactly one update, on the first id, expected: {calls!r}")
+    assert deletes == [("delete", 202)], (
+        f"every OTHER id must be deleted, not also updated: {calls!r}")
+
+
 def test_render_morning_registers_gap_as_selectable_empty():
     mod = _load_tui()
     today = _midnight()
@@ -268,7 +382,7 @@ def test_enter_on_selected_entry_arms_edit_and_prefills_input():
     mod.input_buffer.text = ""
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.event_sel is None
-    assert mod.STATE.edit_target == {"ids": [7], "date": today.date()}
+    assert mod.STATE.edit_target == {"ids": [7], "date": today.date(), "contiguous": True}
     assert mod.input_buffer.text == "carolina 1|1 @i9"
 
 
@@ -333,7 +447,7 @@ def test_enter_on_selected_running_entry_prefills_open_ended_range():
     mod.STATE.event_sel = mod._sel_key(item)
     mod.input_buffer.text = ""
     _binding(mod, "enter").handler(_FakeEvent())
-    assert mod.STATE.edit_target == {"ids": [9], "date": today.date()}
+    assert mod.STATE.edit_target == {"ids": [9], "date": today.date(), "contiguous": True}
     assert mod.input_buffer.text == "eat 0700-"
 
 
