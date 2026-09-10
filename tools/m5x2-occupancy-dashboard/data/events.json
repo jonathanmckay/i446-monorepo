@@ -6198,5 +6198,75 @@
     "unit": "D106",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-09-10",
+    "kind": "movein",
+    "unit_id": "706",
+    "prop": "l912 (Multi-Family)",
+    "unit": "302",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-09-10",
+    "kind": "movein",
+    "unit_id": "345",
+    "prop": "k104- LeFevre",
+    "unit": "101-1",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-09-10",
+    "kind": "movein",
+    "unit_id": "538",
+    "prop": "rl16",
+    "unit": "B01",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "495",
+    "prop": "ps91",
+    "unit": "6",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-09-10",
+    "kind": "movein",
+    "unit_id": "702",
+    "prop": "l912 (Multi-Family)",
+    "unit": "202",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-11-06",
+    "kind": "leased",
+    "unit_id": "1045",
+    "prop": "kn47 K2",
+    "unit": "D106",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-10",
+    "effective": "2026-09-10",
+    "kind": "movein",
+    "unit_id": "700",
+    "prop": "l912 (Multi-Family)",
+    "unit": "104",
+    "tenant": null,
+    "baseline": false
   }
 ]
