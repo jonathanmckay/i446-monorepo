@@ -543,15 +543,39 @@ def test_enter_with_armed_edit_bare_time_range_updates_time_only():
 
 
 def test_enter_with_armed_edit_time_range_on_merged_row_is_refused():
-    """A merged multi-entry row has no single well-defined new time to
-    retime ALL of them to -- must refuse, not silently corrupt one of them."""
+    """A merged multi-entry row spanning a real gap has no single
+    well-defined new time to retime ALL of them to -- must refuse, not
+    silently corrupt one of them."""
     mod = _load_tui()
     today = _midnight()
     mod.STATE.edit_target = {"ids": [7, 8], "date": today.date()}
     mod.input_buffer.text = "0930-1000"
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.edit_target is None
-    assert "merged" in mod.STATE.flash
+    assert "can't retime it" in mod.STATE.flash
+
+
+def test_rejected_edit_restores_typed_text_and_explains_recovery():
+    """Regression (2026-09-10): "can't retime a merged multi-entry row? I
+    don't even know what that means, I wanted to add a time entry for
+    740-750." The chokepoint clears edit_target AND wipes input_buffer
+    (input_buffer.reset()) before this rejection ever fires, so a user who
+    had a stale edit armed (an earlier, possibly-forgotten row selection)
+    and just typed a plain new time range lost that text entirely, with a
+    jargon error and no hint that retyping it would now work fine (the
+    target is already cleared by the time the message shows). Every reject
+    path here must restore the exact text so nothing is lost, and say so."""
+    mod = _load_tui()
+    today = _midnight()
+    mod.STATE.edit_target = {"ids": [7, 8], "date": today.date()}
+    mod.input_buffer.text = "0740-0750"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert mod.input_buffer.text == "0740-0750", (
+        "the user's typed entry must not silently vanish on rejection")
+    assert "press enter again" in mod.STATE.flash
+    assert "merged multi-entry row" not in mod.STATE.flash, (
+        "the message must not assume the user knows internal jargon")
 
 
 # ─── Cancellation on day-nav / escape ───────────────────────────────────────

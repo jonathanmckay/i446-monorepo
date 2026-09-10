@@ -210,7 +210,7 @@ def test_enter_on_current_row_arms_edit_not_stop():
     mod.input_buffer.text = ""
     _binding(mod, ("c-m",)).handler(_FakeEvent())
     assert mod.STATE.event_sel is None
-    assert mod.STATE.edit_target == {"ids": [42], "date": dtm.date(2026, 8, 8)}
+    assert mod.STATE.edit_target == {"ids": [42], "date": dtm.date(2026, 8, 8), "contiguous": True}
     assert mod.input_buffer.text == mod._entry_edit_prefill(item)
     assert mod.STATE.queued_cmds == set(), "must not run anything yet — edit is armed, not applied"
 

@@ -1036,8 +1036,12 @@ def _entry_edit_prefill(item: dict) -> str:
     code = proj_code(item.get("project_id"))
     suffix = f" @{code}" if code else ""
     rng = ""
-    single_or_contiguous = (len(item.get("entry_ids") or []) == 1
-                            or item.get("contiguous", True))
+    ids_len = len(item.get("entry_ids") or [])
+    # Default matches the apply-side guard below: only trust "contiguous"
+    # when a caller explicitly set it (the real render pipeline always
+    # does); an item that doesn't know either way fails closed to the old
+    # len==1 rule, same as before this fix.
+    single_or_contiguous = item.get("contiguous", ids_len == 1)
     if single_or_contiguous:
         if item.get("running"):
             rng = f" {item['start_dt']:%H%M}-"
@@ -2649,7 +2653,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                        "entry_ids": head0["entry_ids"],
                        "raw_desc": head0["raw_desc"],
                        "project_id": head0["project_id"],
-                       "dur_min": head0.get("dur_min"), "running": running}
+                       "dur_min": head0.get("dur_min"), "running": running,
+                       "contiguous": head0.get("contiguous", True)}
                 my_key = _sel_key(reg)
                 if track_selection:
                     STATE.visible_events.append(reg)
@@ -5070,8 +5075,24 @@ def _(event):
             return
         desc, code, time_range, tags = _parse_edit_text(text)
         pid = PROJECT_MAP.get(code) if code else None
+        # Every rejection below has already cleared STATE.edit_target and
+        # wiped input_buffer (lines above) — a stale edit armed by an
+        # earlier, possibly-forgotten row selection (Tab/click elsewhere)
+        # otherwise silently ate whatever the user typed next, with no sign
+        # anything but a plain fresh command was in flight (bug report
+        # 2026-09-10: "can't retime a merged multi-entry row? I don't even
+        # know what that means, I wanted to add a time entry for 740-750" —
+        # the 740-750 they typed had already vanished into input_buffer.
+        # reset() by the time they saw that message). Restoring the typed
+        # text on every reject here means nothing is lost: the edit target
+        # is already cleared, so hitting Enter again submits the SAME text
+        # fresh, as an ordinary new command, not a retry of the edit.
+        def _reject(msg: str):
+            flash(f"{msg} — target cleared, press enter again to log this as new", 6.0)
+            input_buffer.text = text
+            input_buffer.cursor_position = len(text)
         if code and pid is None:
-            flash(f"unknown project code: {code}", 4.0)
+            _reject(f"unknown project code: {code}")
             return
         if time_range and len(ids) != 1 and not contiguous:
             # A merged row spanning a real GAP (some OTHER untracked stretch
@@ -5081,7 +5102,7 @@ def _(event):
             # gapless merge (every sub-entry butts against the next) DOES
             # have one well-defined span; see the apply step below, which
             # collapses it to a single resulting entry.
-            flash("can't retime a merged multi-entry row spanning a gap", 4.0)
+            _reject("that selection covered more than one entry with a gap between them, can't retime it")
             return
         if time_range and time_range[1] is None and not (_find_entry(ids) or {}).get("running"):
             # Open-ended ("HHMM-", blank end = now) only makes sense on the
@@ -5089,7 +5110,7 @@ def _(event):
             # completed entry would silently strip its stop time and turn it
             # back into a live timer, which is not what a fat-fingered-away
             # end digit means.
-            flash("open-ended time only applies to the running entry", 4.0)
+            _reject("open-ended time only applies to the running entry")
             return
         fields = {}
         if desc:
