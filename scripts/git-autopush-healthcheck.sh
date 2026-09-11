@@ -7,17 +7,32 @@
 # warnings for 9 days while everyone assumed sync was healthy. This watchdog
 # screams when the repo enters any of those silent-failure states.
 #
-# Usage: git-autopush-healthcheck.sh [REPO_DIR]   (default: $HOME/i446-monorepo)
+# Usage: git-autopush-healthcheck.sh [REPO_DIR] [AUTOPUSH_LOG]
+#   REPO_DIR      default: $HOME/i446-monorepo
+#   AUTOPUSH_LOG  default: $REPO_DIR/scripts/.autopush.log (i446-monorepo's own
+#                 convention). vault-autopush.sh logs elsewhere
+#                 (~/Library/Logs/vault-autopush.log, moved out of the repo in
+#                 the 2026-09-07 isolated-worktree rewrite) so a second cron
+#                 line covering ~/vault must pass this explicitly.
 # Cron-friendly: exit 0 = healthy, exit 1 = at least one alert emitted.
 #
 # Alert sink: appends a JSON line to $HOME/vault/z_ibx/alerts.jsonl and fires a
 # macOS notification (same pattern as tools/ai-dashboard/watchdog.sh).
+#
+# 2026-09-11: this watchdog was built after the 2026-06-18 i446-monorepo
+# stuck-rebase incident but only ever ran against i446-monorepo. The exact
+# same failure class then hit ~/vault's own git-autopush layer (added after
+# this script existed) for 18 days, 2026-08-23 -> 2026-09-10, completely
+# undetected -- worse than the incident this script exists to catch. Extended
+# to take an arbitrary REPO_DIR + log path instead of assuming both are
+# i446-monorepo's, and a second cron line now covers ~/vault.
 
 REPO_DIR="${1:-$HOME/i446-monorepo}"
+AUTOPUSH_LOG="${2:-$REPO_DIR/scripts/.autopush.log}"
 DIVERGENCE_THRESHOLD="${DIVERGENCE_THRESHOLD:-20}"   # behind-by commits
 STALE_PUSH_HOURS="${STALE_PUSH_HOURS:-4}"            # hours since last "pushed"
 ALERTS="$HOME/vault/z_ibx/alerts.jsonl"
-HEALTH_LOG="$HOME/i446-monorepo/scripts/.autopush-health.log"
+HEALTH_LOG="$HOME/i446-monorepo/scripts/.autopush-health-$(basename "$REPO_DIR").log"
 HOST="$(hostname -s)"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -66,7 +81,6 @@ if [ "$BRANCH" != "HEAD" ] && git ls-remote --exit-code --heads origin "$BRANCH"
 fi
 
 # 4. Stale push — last "pushed" log line is too old.
-AUTOPUSH_LOG="$REPO_DIR/scripts/.autopush.log"
 if [ -f "$AUTOPUSH_LOG" ]; then
   LAST_PUSH_LINE=$(grep '\] pushed' "$AUTOPUSH_LOG" 2>/dev/null | tail -1)
   if [ -n "$LAST_PUSH_LINE" ]; then
