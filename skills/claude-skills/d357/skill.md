@@ -57,11 +57,11 @@ two days.
    - `project`: `i9` if the event came from the MSFT calendar id; `m5x2` otherwise (default)
    - Prefer the calendar event title as the Toggl description if it differs from user input
 
-   **Fallback — tg-tui caches.** The MSFT import calendar is slow-sync and can lag or miss events. If the MCP query returns no current event, check the tg-tui caches (written by `~/i446-monorepo/tools/tg/{outlook_client,gcal_client}.py`):
-   - `~/.cache/tg-tui/outlook-YYYY-MM-DD.json` — Outlook via Agency MCP; events have `subject`, `start`, `end` (naive local-time strings with `start_tz`/`end_tz` Windows tz names)
-   - `~/.cache/tg-tui/gcal-YYYY-MM-DD.json` — all calendars visible to the m5c7 account; events from `"calendar": "Calendar"` are the MSFT mirror (treat as `i9`); timestamps may be UTC (`Z` suffix)
+   **Fallback — janus caches.** The MSFT import calendar is slow-sync and can lag or miss events. If the MCP query returns no current event, check the janus caches (written by `~/i446-monorepo/tools/tg/{outlook_client,gcal_client}.py`):
+   - `~/.cache/janus/outlook-YYYY-MM-DD.json` — Outlook via Agency MCP; events have `subject`, `start`, `end` (naive local-time strings with `start_tz`/`end_tz` Windows tz names)
+   - `~/.cache/janus/gcal-YYYY-MM-DD.json` — all calendars visible to the m5c7 account; events from `"calendar": "Calendar"` are the MSFT mirror (treat as `i9`); timestamps may be UTC (`Z` suffix)
 
-   An event from either cache that overlaps now counts as a calendar match (same captures as above; Outlook-sourced events → `i9`). The caches only refresh while tg-tui is running (5-min TTL), so check the file mtime — if older than ~30 min, treat its absence of a match as inconclusive rather than authoritative. If no source matches but the meeting name implies Microsoft work (Xbox, GitHub, CoreAI, SLT, names of MSFT coworkers), default the project to `i9` instead of `m5x2`.
+   An event from either cache that overlaps now counts as a calendar match (same captures as above; Outlook-sourced events → `i9`). The caches only refresh while janus is running (5-min TTL), so check the file mtime — if older than ~30 min, treat its absence of a match as inconclusive rather than authoritative. If no source matches but the meeting name implies Microsoft work (Xbox, GitHub, CoreAI, SLT, names of MSFT coworkers), default the project to `i9` instead of `m5x2`.
 4. **Start Toggl timer FIRST** — before the audio pre-flight. Calling the Toggl CLI is the first *write* of the start flow so the time entry is pinned at invocation and the slow, failure-prone audio device juggling (step 5) can't delay or skew it. (Project, description, and `calendar_minutes` are resolved by the calendar check in step 3; the CLI has no `edit` subcommand, so the project must be known before the entry is created.) If `start_time` was provided, use `--at HH:MM` to backdate. Otherwise start at now. Record the returned entry ID.
 5. **Audio pre-flight check** (skip for `--no-teams`; also skip if `prev_mic_only` is true, and auto-set mic-only instead):
    a. Kill stale osascript dialogs: `killall osascript 2>/dev/null`
@@ -169,19 +169,12 @@ two days.
    done
    ```
 5. **Extract transcript path** from the log (`TXT →` line). If no transcript was written, check for the wav file and run Whisper manually.
-6. **Log points to 0分**: Use the computed duration. Write to the appropriate column (i9→R, m5x2→S, etc.) via ix-osa.sh. **CRITICAL: use `formula` not `value`** to preserve existing formula chains. Pattern:
-    ```applescript
-    set theCell to range (targetCol & todayRow) of theSheet
-    set oldFormula to formula of theCell
-    if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "=0+" & N
-    else if character 1 of oldFormula is not "=" then
-        set formula of theCell to "=" & oldFormula & "+" & N
-    else
-        set formula of theCell to oldFormula & "+" & N
-    end if
+6. **Log points to 0分**: Use the computed duration. Append to the appropriate column (i9→R, m5x2→S, etc.) via the excel-http daemon — NEVER raw AppleScript/ix-osa.sh (daemon writes are journaled in the neon audit ledger; raw writes trip the chain check). Always pass `src` naming the meeting:
+    ```bash
+    ssh ix "curl -s -X POST localhost:9876/append -H 'Content-Type: application/json' \
+        -d '{"sheet":"0分","col":"R","date":"M/D","value":"+N","src":"d357 <meeting name>"}'"
     ```
-    Never use `set value of range ... to oldVal & "+N"` as this destroys existing formulas.
+    The daemon handles formula-append semantics (empty cell, bare number, existing formula) itself. If the response contains `"chain": "broken"`, report it — the cell was edited outside the daemon since its last journaled write.
 7. Clear state.json (set `pid: null`).
 7b. **Emit prof stop event** (for professionalism daemon scoring):
     ```bash
