@@ -16,6 +16,7 @@ holes hid them:
    (running first, then by duration), re-sorted chronologically."""
 import datetime as dtm
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -202,6 +203,49 @@ def test_head0_never_promotes_past_an_earlier_spill_item():
     assert huddle_idx < t_idx, \
         f"the earlier spill must render above the later entry:\n{text}"
     assert "▶" in lines[t_idx], "the running marker must survive falling back to a body row"
+
+
+def test_spill_row_shows_no_duration():
+    """User report 2026-09-11: "we're still showing two lines for things
+    that happen on the hour... since there is other info on the block:00
+    line, we can get rid of the time duration for that individual time
+    entry." _block_spill_items always clips a spill's start to exactly the
+    block's own :00 (see its docstring), so its row sits directly under an
+    otherwise-bare ":00" header that already carries the block's own info
+    (emoji/分) -- production case: a real "未:00" header showed only
+    "4 158分" while the very next line, "  :00 XTECH Products Leads Sync
+    120m", repeated the same :00 slot with a second, redundant duration
+    number for a meeting whose REAL duration already rendered in full in
+    the block it actually started in. The row itself must still render (a
+    spill must never itself become the header -- test_spill_item_never_
+    rides_the_header) but now bare of a number."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    spill = {"start_dt": today.replace(hour=12, minute=0), "time_str": "12:00",
+             "label": "XTECH Products Leads Sync", "style": "", "dur_min": 120,
+             "entry_ids": [1], "raw_desc": "XTECH Products Leads Sync",
+             "project_id": None, "is_spill": True}
+    frags = mod._compact_block_lines("未", 12, [spill], 158, "")
+    text = "".join(t for _, t, *_ in frags)
+    spill_line = next(l for l in text.split("\n") if "XTECH" in l)
+    assert not re.search(r"\d+m\b", spill_line), \
+        f"a spill row must not show its own clipped duration: {spill_line!r}"
+
+
+def test_non_spill_entry_keeps_its_duration():
+    """Guard against the spill fix above swallowing ordinary durations too
+    -- only is_spill rows go bare; a genuine tracked entry still shows its
+    real Nm."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    entry = {"start_dt": today.replace(hour=12, minute=5), "time_str": "12:05",
+             "label": "meeting", "style": "", "dur_min": 45,
+             "entry_ids": [1], "raw_desc": "meeting", "project_id": None}
+    frags = mod._compact_block_lines("未", 12, [entry], 0, "")
+    text = "".join(t for _, t, *_ in frags)
+    assert "45m" in text, "an ordinary entry must keep its own duration"
 
 
 def test_row_cap_keeps_biggest_not_earliest():

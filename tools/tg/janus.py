@@ -2962,13 +2962,23 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # is_event flag still reads as "scheduled" (parenthesized duration),
         # not "tracked" (fmt_dur) — the block-level is_future flag alone can't
         # express "elapsed portion is real, remaining portion is a plan".
-        if is_future or p.get("is_event") or p.get("is_spill"):
-            # A gcal/future event keeps its parenthesized "plan" duration; a
-            # spill row's dur_min is only the clipped fragment in THIS block,
-            # not the entry's real total, so it can't be swapped for the
-            # entry's full point value without misrepresenting it — always
-            # minutes there.
-            dur = f"({p['dur_min']})" if (is_future or p.get("is_event")) else fmt_dur(p["dur_min"])
+        if p.get("is_spill"):
+            # No duration at all (user report 2026-09-11: "still showing two
+            # lines for things that happen on the hour"): _block_spill_items
+            # always clips a spill's start to exactly the block's own :00,
+            # so this row sits right under an otherwise-bare ":00" header
+            # that already carries the block's own info (emoji/分). The
+            # spill's clipped minutes are only the fragment inside THIS
+            # block, not the entry's real total — a second, redundant
+            # number for the same entry already shown with its full
+            # duration in the block it actually started in. Dropping it
+            # turns the row into a bare "still going" title instead of a
+            # second measurement, without touching header promotion (a
+            # spill still must never itself ride the header — see
+            # test_spill_item_never_rides_the_header).
+            dur = ""
+        elif is_future or p.get("is_event"):
+            dur = f"({p['dur_min']})"
         else:
             dur = _entry_dur_display(p["dur_min"], p.get("raw_desc"))
         # Value/credit tags (-1/-2/-3, or a domain code like xk87/家) ride the
@@ -3027,7 +3037,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             filler = max(0, space - dwidth(body_txt))
             if filler:
                 out.append(_frag(sty, " " * filler, row_click))
-        out.append(_frag(dur_sty, f" {dur}\n", row_click))
+        out.append(_frag(dur_sty, f" {dur}\n" if dur else "\n", row_click))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
     for _ in range(max_rows - len(rows)):
