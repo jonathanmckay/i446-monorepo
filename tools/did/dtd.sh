@@ -1665,6 +1665,22 @@ for l in normal_lines:
 for l in skipped_lines:
     print(l)
 " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+# Reset any mouse-tracking mode a child enabled, and drain any bytes already
+# queued in the tty buffer while this script ran — leaked SGR motion
+# sequences type themselves into fzf's query as literal ^[[<34;x;yM text on
+# resume otherwise (bug 2026-07-05, ported here from done.sh/defer.sh/edit.sh/
+# split.sh). This is the ONE reload script that was missing the fix: fzf's
+# reload(...) binding blocks its own tty read while this runs, exactly like
+# an execute() script does, but LISTEOF was never added to that family. Since
+# reload($DTD_LIST ...) is what the auto-reload watcher fires on every single
+# FIFO-worker completion (dtd.sh's background did-fast.py loop touches
+# $CACHE per item), this window recurs constantly WHILE dtd is "processing" —
+# matching the reported symptom exactly ("input box interprets scrolling as
+# keystrokes" only during processing, bug 2026-09-11). Written to /dev/tty,
+# never stdout, so it can't corrupt the row data reload() reads from this
+# script's stdout.
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 LISTEOF
 chmod +x "$DTD_LIST"
 

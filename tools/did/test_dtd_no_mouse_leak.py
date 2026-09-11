@@ -28,6 +28,16 @@ REFRESHEOF (ctrl-r's refresh-cache command, pulled out of the inline
 checked for all of them, not just RESET_SEQ — the earlier split undersold
 what DEFEREOF/EDITEOF already had (both), and the leak mechanism doesn't
 distinguish an interactive prompt from any other blocking window.
+
+2026-09-11: LISTEOF (the list-generation script every reload() binding runs,
+including the auto-reload watcher's `reload($DTD_LIST ...)` POST fired on
+every single FIFO-worker completion) was the one blocking script never
+ported. fzf's reload(...) blocks its own tty read while the reload command
+runs, same as execute() does, so this was the same leak class — just never
+classified as one because it isn't launched via execute()/execute-silent.
+Because the auto-reload watcher fires it once per completed task, this
+window recurred constantly while dtd was "processing" a batch, matching a
+user report that scrolling only got typed into the query during processing.
 """
 import re
 from pathlib import Path
@@ -64,7 +74,7 @@ def test_mouse_modes_normalized_before_each_fzf_launch():
 BLOCKING_SCRIPTS = (
     "DEFEREOF", "EDITEOF", "SPLITEOF", "DONEEOF",
     "STARTEOF", "DELETEEOF", "ARMEOF", "APPLYEOF", "UNDOEOF", "AGENTEOF",
-    "REFRESHEOF",
+    "REFRESHEOF", "LISTEOF",
 )
 
 
@@ -85,3 +95,23 @@ def test_prompt_window_scripts_drain_buffered_tty_input():
     for eof in BLOCKING_SCRIPTS:
         assert DRAIN in _heredoc(eof), \
             f"{eof} must drain buffered tty input before fzf resumes"
+
+
+def test_list_reload_script_resets_mouse_modes_after_python_not_in_stdout():
+    # Regression (2026-09-11): scrolling while dtd was "processing" typed
+    # into the query. LISTEOF is what every reload() binding runs, including
+    # the auto-reload watcher's POST fired on every FIFO-worker completion —
+    # so it recurs constantly during processing, unlike the one-shot
+    # execute() scripts. fzf blocks its own tty read for the duration of a
+    # reload(...) command exactly as it does for execute(...), so this needed
+    # the same fix; it had just never been classified as part of that family.
+    body = _heredoc("LISTEOF")
+    py_end = body.rindex('" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"')
+    after_py = body[py_end:]
+    assert RESET_SEQ in after_py and DRAIN in after_py, (
+        "LISTEOF must reset mouse modes and drain tty input after the "
+        "python list-generation call, before fzf resumes")
+    # The reset/drain must target /dev/tty explicitly, not stdout — stdout
+    # here is the row data fzf reads back as the reload payload; writing the
+    # reset sequence there would corrupt the list instead of the query.
+    assert "> /dev/tty" in after_py and "< /dev/tty" in after_py
