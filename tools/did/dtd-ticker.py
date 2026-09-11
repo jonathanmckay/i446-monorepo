@@ -114,6 +114,52 @@ def project_ansi(code: str) -> str:
     r, g, b = int(hexv[1:3], 16), int(hexv[3:5], 16), int(hexv[5:7], 16)
     return f"\033[38;2;{r};{g};{b}m"
 
+# Footer line color by project (feature 2026-07-24). COPY of janus.py's
+# PROJECT_COLORS, which is the color SOURCE (vault/i447/neon-color-pallette.md)
+# — keep in sync (test_dtd_ticker_project_color.py cross-checks the two).
+# fzf renders ANSI in the footer even without --ansi (man fzf, FOOTER).
+PROJECT_COLORS = {
+    "g245": "#00e676",   # Matrix
+    "epcn": "#00bfa5",   # Miami Vice
+    "s897": "#1b5e20",   # Emerald Shadow
+    "hcmc2": "#ffd600",  # Lightning
+    "xk87": "#fd6c1d",   # Tangerine Dream
+    "xk88": "#e65100",   # Molten
+    "hci":  "#63ede0",   # Vaporwave
+    "i9":   "#2979ff",   # Electric Blue
+    "n156": "#1249b4",   # Sapphire
+    "hcmc": "#0d3b66",   # Deep Sea
+    "m5x2": "#d50032",   # Crimson
+    "m828": "#9b0023",   # Velvet (darker than m5x2's Crimson, user request 2026-08-07)
+    "hcb":  "#f81d78",   # Bubblegum Shock
+    "hcbp": "#ff4081",   # Flamingo
+    "infra": "#9e9e9e",  # Concrete
+    "i444": "#616161",   # Graphite
+    "i447": "#a89c8a",   # Shadow (lightened from #303030 for readability on dark)
+    "睡觉": "#666666",    # Abyss (lightened from #0a0a0a)
+    "hcm":  "#aa00ff",   # Purple Haze (no map entry; reasonable fit for hcm parent)
+    "hcmp": "#7c4dff",   # Lavender Lightning
+    "hcmr": "#bda6ff",   # Weak-sauce Purple
+    "家":   "#00b8d4",    # Pool Party (family)
+}
+
+# Toggl project id → code, for coloring externally-started timers found by the
+# API poll (dtd-started ones carry their code in the timer file's 4th field).
+try:
+    from mcp.toggl_server.config import PROJECT_MAP  # type: ignore
+    ID_TO_CODE = {v: k for k, v in PROJECT_MAP.items()}
+except Exception:
+    ID_TO_CODE = {}
+
+
+def project_ansi(code: str) -> str:
+    """Truecolor fg escape for a project code, or '' when unknown."""
+    hexv = PROJECT_COLORS.get((code or "").strip())
+    if not hexv:
+        return ""
+    r, g, b = int(hexv[1:3], 16), int(hexv[3:5], 16), int(hexv[5:7], 16)
+    return f"\033[38;2;{r};{g};{b}m"
+
 
 def _toggl_api():
     try:
