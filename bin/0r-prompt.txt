@@ -1,0 +1,5 @@
+/0r
+IMPORTANT context for this headless run on Ix:
+1. The Agency/Outlook MCP is NOT available here, so skip source #2 (Outlook Agency MCP). Outlook meetings are already captured in the m5c7 "MSFT (Slow Sync)" calendar, which the google-calendar-mcp all-calendars read picks up. Use only Toggl + google-calendar-mcp.
+2. Output 2 (Google Calendar Archive): write the archive events to calendarId "jonathan.b.mckay@gmail.com" (the jbm calendar, which this m5c7 account owns). Do NOT write the archive to the primary calendar — primary is the m5x2 RE calendar.
+3. With no date argument, /0r targets yesterday, which is correct for this nightly run.
