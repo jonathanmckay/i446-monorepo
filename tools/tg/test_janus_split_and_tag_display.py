@@ -87,6 +87,62 @@ def test_value_tags_render_before_minutes():
     assert "billable" not in row, "only recognized (value/project) tags render"
 
 
+def test_value_tags_left_justified_against_the_label():
+    """User request 2026-09-11: "for the tags in Janus, can we left justify
+    rather than right justify them?" Tags used to trail padded-out label
+    text, so they floated near the right edge (just before the minutes)
+    with a big gap after any short label. They now sit immediately after
+    the label, with the filler that keeps the minutes column aligned moved
+    to AFTER the tag instead of before it."""
+    mod = _load_tui()
+    mod.STATE.events = []
+    today = _midnight()
+    picks = [{"start_dt": today.replace(hour=12, minute=5), "time_str": "12:05",
+              "label": "eat", "style": "", "dur_min": 25,
+              "entry_ids": [1], "raw_desc": "eat", "project_id": None,
+              "tags": ["-2"]}]
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, picks, 0, ""))
+    row = next(l for l in text.split("\n") if "eat" in l)
+    assert " eat -2" in row, f"tag must immediately follow the label: {row!r}"
+
+
+def test_value_tags_left_justified_keeps_minutes_column_aligned():
+    """The minutes must still land in the same column whether or not a row
+    has a tag -- only the tag's OWN position moved, not the row's total
+    width or the duration's alignment."""
+    mod = _load_tui()
+    mod.STATE.events = []
+    today = _midnight()
+    tagged = [{"start_dt": today.replace(hour=12, minute=5), "time_str": "12:05",
+               "label": "eat", "style": "", "dur_min": 25,
+               "entry_ids": [1], "raw_desc": "eat", "project_id": None,
+               "tags": ["-2"]}]
+    untagged = [{"start_dt": today.replace(hour=12, minute=5), "time_str": "12:05",
+                 "label": "sleep", "style": "", "dur_min": 25,
+                 "entry_ids": [1], "raw_desc": "sleep", "project_id": None,
+                 "tags": []}]
+    text_tagged = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, tagged, 0, ""))
+    text_untagged = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, untagged, 0, ""))
+    row_tagged = next(l for l in text_tagged.split("\n") if "eat" in l)
+    row_untagged = next(l for l in text_untagged.split("\n") if "sleep" in l)
+    assert row_tagged.index("25m") == row_untagged.index("25m"), (
+        f"minutes column must not shift: {row_tagged!r} vs {row_untagged!r}")
+
+
+def test_running_row_tag_left_justified():
+    """Same left-justify treatment on the live/running-entry row."""
+    mod = _load_tui()
+    mod.STATE.events = []
+    today = _midnight()
+    picks = [{"start_dt": today.replace(hour=12, minute=5), "time_str": "12:05",
+              "label": "eat", "style": "", "dur_min": 25, "is_running": True,
+              "entry_ids": [1], "raw_desc": "eat", "project_id": None,
+              "tags": ["-2"]}]
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("未", 12, picks, 0, ""))
+    row = next(l for l in text.split("\n") if "eat" in l)
+    assert "eat -2" in row, f"tag must immediately follow the label: {row!r}"
+
+
 def test_merged_entries_union_tags():
     """Contiguous same-desc entries merge; their tags must union so a tag on
     either half still shows on the merged row."""

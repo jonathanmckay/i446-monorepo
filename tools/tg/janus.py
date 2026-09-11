@@ -2707,8 +2707,18 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             if head0.get("is_event"):
                 out.append(_frag(sty, " " * max(0, space - dwidth(txt)) + txt, head0_click))
             else:
-                out.append(_frag(sty, prefix + pad(txt, space), head0_click))
+                # Tags hug the label (left-justified) instead of the old
+                # trailing-padding placement, which pushed them toward the
+                # right edge with a gap for any short label (user request
+                # 2026-09-11: "left justify rather than right justify").
+                # Filler moves to AFTER the tags so duration/points still
+                # land in the same column as before.
+                out.append(_frag(sty, prefix + txt, head0_click))
             out.extend(_tag_chip_frags(vtag_list, head0_click))
+            if not head0.get("is_event"):
+                filler = max(0, space - dwidth(txt))
+                if filler:
+                    out.append(_frag(sty, " " * filler, head0_click))
             out.append(_frag(dur_sty, f" {dur}", head0_click))
             if right:
                 out.append(_frag("class:dim", " ", head0_click))
@@ -2939,8 +2949,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             out.append(_frag(time_sty, tcol, running_click))
             out.append(_frag(gsty, gch, running_click))
             _txt = truncate(p["label"], max(1, space - dwidth(rec_sfx))) + rec_sfx
-            out.append(_frag(sty, prefix + pad(_txt, space), running_click))
+            # Tags left-justified against the label — see the head0 branch
+            # above for the full rationale (user request 2026-09-11).
+            out.append(_frag(sty, prefix + _txt, running_click))
             out.extend(_tag_chip_frags(vtag_list, running_click))
+            _filler = max(0, space - dwidth(_txt))
+            if _filler:
+                out.append(_frag(sty, " " * _filler, running_click))
             out.append(_frag(dur_sty, f" {dur}\n", running_click))
             continue
         # A gcal event mixed into a non-future (current-block) card via its own
@@ -3004,8 +3019,14 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # at a glance instead of interleaving mid-line.
             out.append(_frag(sty, " " * max(0, space - dwidth(body_txt)) + body_txt, row_click))
         else:
-            out.append(_frag(sty, pad(body_txt, space), row_click))
+            # Tags left-justified against the label — see the head0 branch
+            # above for the full rationale (user request 2026-09-11).
+            out.append(_frag(sty, body_txt, row_click))
         out.extend(_tag_chip_frags(vtag_list, row_click))
+        if not p.get("is_event"):
+            filler = max(0, space - dwidth(body_txt))
+            if filler:
+                out.append(_frag(sty, " " * filler, row_click))
         out.append(_frag(dur_sty, f" {dur}\n", row_click))
 
     # Pad to exactly max_rows body rows so every block stays a consistent height.
