@@ -6338,5 +6338,45 @@
     "unit": "J101",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-12",
+    "effective": "2026-09-12",
+    "kind": "movein",
+    "unit_id": "244",
+    "prop": "hl73",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-12",
+    "effective": "2026-09-12",
+    "kind": "movein",
+    "unit_id": "659",
+    "prop": "s129",
+    "unit": "8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-12",
+    "effective": "2026-09-30",
+    "kind": "leased",
+    "unit_id": "171",
+    "prop": "b101",
+    "unit": "8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-12",
+    "effective": "2026-09-30",
+    "kind": "ntv",
+    "unit_id": "719",
+    "prop": "c313",
+    "unit": "11",
+    "tenant": null,
+    "baseline": false
   }
 ]
