@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-11T14:00:03.788133-07:00"
+  "tasks": {
+    "honorable physical loop: run down+ groceries up+ hiit + record games w/bball": {
+      "todoist_id": "6hVVPxC689CqcQ62",
+      "minutes": 45
+    },
+    "fun games night": {
+      "todoist_id": "6hVVPx9cq9PqC2m2",
+      "minutes": 30
+    },
+    "write the pc strategy doc": {
+      "todoist_id": "6hVVPx9R8HJ46PGR",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-09-11T18:00:01.696487-07:00"
 }
