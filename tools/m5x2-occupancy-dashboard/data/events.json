@@ -6378,5 +6378,15 @@
     "unit": "11",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-13",
+    "effective": "2026-09-13",
+    "kind": "movein",
+    "unit_id": "1272",
+    "prop": "c702",
+    "unit": "A102",
+    "tenant": null,
+    "baseline": false
   }
 ]
