@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "100s": {
-      "todoist_id": "6hVhRqhxMFgPg7G2",
-      "minutes": 30
-    },
-    "10 bugs for mobile improvement": {
-      "todoist_id": "6hVhRqpHhPwfPC62",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-09-13T03:55:01.099897-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-13T04:00:06.844433-07:00"
 }
