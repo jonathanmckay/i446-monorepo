@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "find something nice to do at suncadia": {
-      "todoist_id": "6hW2VF4JJpc6VjJ2",
-      "minutes": 30
-    },
-    "pc in a reasonable place": {
-      "todoist_id": "6hW2VFJ77q39wXq2",
-      "minutes": 40
-    },
-    "tasks down to 60": {
-      "todoist_id": "6hW2VFMRwgMPph7R",
-      "minutes": 70
-    }
-  },
-  "last_sync": "2026-09-14T03:55:01.552504-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-14T04:00:09.955727-07:00"
 }
