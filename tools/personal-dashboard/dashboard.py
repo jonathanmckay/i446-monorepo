@@ -2316,10 +2316,10 @@ HTML = """<!DOCTYPE html>
   <div style="display:flex;align-items:baseline;gap:12px;">
     <h1>JM DASH</h1>
     <select id="granularitySelect" style="background:var(--card);color:var(--h1);border:1px solid var(--nav);border-radius:4px;padding:3px 8px;font-size:12px;letter-spacing:1px;font-family:inherit;">
-      <option value="daily" selected>DAILY</option>
+      <option value="block" selected>PER BLOCK</option>
+      <option value="daily">DAILY</option>
       <option value="weekly">WEEKLY</option>
       <option value="monthly">MONTHLY</option>
-      <option value="block">BLOCK</option>
     </select>
   </div>
   <div style="display:flex;align-items:baseline;gap:16px;">
@@ -2505,8 +2505,7 @@ function renderFourCharts(data, granularity) {
 }
 
 const _granularCache = {};
-document.getElementById('granularitySelect').addEventListener('change', (e) => {
-  const g = e.target.value;
+function loadGranularity(g) {
   if (g === 'daily') {
     if (dailyPayload) { renderFourCharts(dailyPayload, 'daily'); renderEmailChart(dailyPayload); }
     return;
@@ -2521,7 +2520,8 @@ document.getElementById('granularitySelect').addEventListener('change', (e) => {
     renderFourCharts(d, g);
     renderEmailChart(d);
   });
-});
+}
+document.getElementById('granularitySelect').addEventListener('change', (e) => loadGranularity(e.target.value));
 
 fetch('/api/data').then(r => r.json()).then(data => {
   dailyPayload = data;
@@ -2553,8 +2553,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     cbEl.appendChild(row);
   });
 
-  renderFourCharts(data, 'daily');
-  renderEmailChart(data);
+  loadGranularity(document.getElementById('granularitySelect').value);
   renderNeonEditsChart(data);
 });
 

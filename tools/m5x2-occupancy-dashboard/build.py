@@ -282,14 +282,30 @@ while w <= week_start(TODAY):
     w += dt.timedelta(days=7)
 
 # ── Long-term weekly % series (2024 → today, % of each snapshot's portfolio) ──
+# Concessions ($ from GL 41150) / Gross Potential Rent ($ from GL 40110),
+# fetched monthly by fetch.py into concessions.json. It's a monthly ledger
+# figure, not a point-in-time count like occupancy, so every week within a
+# month shows that month's flat value (a step function) — that's correct,
+# not a bug. Real data on this AppFolio instance only starts ~2026-06
+# (portfolio consolidation); earlier weeks show 0% since there's no key for
+# those months (or the month's GPR is 0), not because concessions were zero.
+try:
+    concessions_by_month = load("concessions.json")
+except FileNotFoundError:
+    concessions_by_month = {}
+
 longterm = []
 d = LT_START
 while d <= TODAY:
     s = nearest(d.isoformat())
     u = s["units"] or UNITS
+    m = concessions_by_month.get(d.isoformat()[:7], {})
+    gpr = m.get("gpr", 0)
+    cx_pct = round(m.get("concessions", 0) / gpr * 100, 2) if gpr else 0.0
     longterm.append({"date": d.isoformat(),
                      "vu": round(s["vu"] / u * 100, 2), "nu": round(s["nu"] / u * 100, 2),
-                     "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2)})
+                     "vr": round(s["vr"] / u * 100, 2), "nr": round(s["nr"] / u * 100, 2),
+                     "cx": cx_pct})
     d += dt.timedelta(days=7)
 
 # ── Occupancy timeline: occupancy % + covered pipeline (vacant-/notice-rented) ─
@@ -457,7 +473,7 @@ inflate retroactively and are not usable. From 6/14 on, everything is a real poi
 
 <script>
 const D = __PAYLOAD__;
-const C={nr:'#1b7a3a',nu:'#ff8a3d',nu2:'#ffc37d',vr:'#8ce99a',vu:'#e23b3b',blue:'#2979ff'};
+const C={nr:'#1b7a3a',nu:'#ff8a3d',nu2:'#ffc37d',vr:'#8ce99a',vu:'#e23b3b',blue:'#2979ff',cx:'#c77dff'};
 // Axis label formatters: drop the year for single-year spans (M/D), keep a compact
 // year for the multi-year long-term chart (M/YY). `this` is the Chart.js scale.
 function fmtMD(value){const s=this.getLabelForValue(value);const d=new Date(s+'T00:00');
@@ -531,7 +547,8 @@ const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
  backgroundColor:color,borderColor:color,fill:true,pointRadius:0,tension:.15,borderWidth:1};}
 new Chart(document.getElementById('pctChart'),{type:'line',
- data:{labels:ltLabels,datasets:[pds('nr','Notice-Rented %',C.nr),pds('nu','Notice-Unrented %',C.nu),
+ data:{labels:ltLabels,datasets:[pds('cx','Concessions % of Rent',C.cx),
+  pds('nr','Notice-Rented %',C.nr),pds('nu','Notice-Unrented %',C.nu),
   pds('vr','Vacant-Rented %',C.vr),pds('vu','Vacant-Unrented %',C.vu)]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}}},

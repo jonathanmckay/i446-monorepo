@@ -4,6 +4,9 @@
 - occupancy_summary (as-of today) → append a real snapshot to occupancy-history.json
   (idempotent per date). Run daily and the 90-day history densifies on its own.
 - unit_vacancy_detail → vacancy.json (current non-occupied units + move dates).
+- twelve_month_income_statement (GL 41150 Concessions / 40110 Gross Potential
+  Rent) → concessions.json, monthly $ figures feeding the dashboard's
+  "concessions % of rent" band.
 
 Usage:
   python3 fetch.py                 # today's snapshot + vacancy
@@ -57,6 +60,51 @@ def report(name, body):
         url = d.get("next_page_url") or d.get("next_page"); data = None
         time.sleep(THROTTLE)
     return rows
+
+def income_statement_12mo(frm, to):
+    """twelve_month_income_statement is also a v2 POST report, but — unlike
+    every other report() caller here — it returns a bare JSON array (one row
+    per GL account, each with a `months` sub-array), not the {results:[...]}
+    envelope report() expects. Confirmed 2026-09-15 by probing both
+    'twelve_month_income_statement' and 'income_statement' directly; only the
+    former returns this month-bucketed shape. Capped at 12 months per call —
+    callers chunk by year."""
+    url = f"{BASE}/api/v2/reports/twelve_month_income_statement.json"
+    body = json.dumps({"unit_visibility": "active", "posted_on_from": frm,
+                       "posted_on_to": to, "level_of_detail": "detail_view"}).encode()
+    hdr = {"Authorization": f"Basic {AUTH}", "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=body, method="POST", headers=hdr)
+    for attempt in range(6):
+        try:
+            d = json.load(urllib.request.urlopen(req, timeout=120)); break
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 5:
+                time.sleep(2 ** attempt * 3); continue
+            raise
+    time.sleep(THROTTLE)
+    return d
+
+def fetch_concessions(start_year=2024):
+    """Monthly Concessions $ (GL 41150) and Gross Potential Rent $ (GL 40110),
+    start_year-01 through the current month, chunked into ≤12-month calls.
+    Concessions posts as a GL credit (negative); stored here as a positive
+    dollar amount for readability. Real ledger data on this AppFolio instance
+    only starts ~2026-06 (portfolio consolidation) — confirmed via spot-check
+    back to 2024, every earlier month is a genuine $0, not a missing value."""
+    today = dt.date.today()
+    months = {}
+    y = start_year
+    while dt.date(y, 1, 1) <= today:
+        frm, to = f"{y}-01", (f"{y}-12" if y < today.year else f"{today.year}-{today.month:02d}")
+        accounts = income_statement_12mo(frm, to)
+        gpr = next((a for a in accounts if a.get("account_code") == "40110"), None)
+        cx = next((a for a in accounts if a.get("account_code") == "41150"), None)
+        for m in (gpr or {}).get("months", []):
+            months.setdefault(m["id"], {})["gpr"] = float(m["value"])
+        for m in (cx or {}).get("months", []):
+            months.setdefault(m["id"], {})["concessions"] = -float(m["value"])
+        y += 1
+    return months
 
 def tickler(frm, to):
     """tenant_tickler is a v1 GET report (not v2 POST). Returns move/notice
@@ -247,8 +295,12 @@ def main():
     (DATA / "tickler.json").write_text(
         json.dumps([{k: r.get(k) for k in tkeep} for r in tk]))
     mv = sum(1 for r in tk if r.get("Event") in ("Move-in", "Move-out"))
+    # monthly concessions $ + Gross Potential Rent $ → concessions.json
+    conc = fetch_concessions()
+    (DATA / "concessions.json").write_text(json.dumps(conc, indent=2, sort_keys=True))
     print(f"history now {total} snapshots; pulled {len(snaps)}; "
-          f"vacancy units {len(vac)}; events {len(events)}; tickler {len(tk)} ({mv} moves)")
+          f"vacancy units {len(vac)}; events {len(events)}; tickler {len(tk)} ({mv} moves); "
+          f"concessions {len(conc)} months")
 
 if __name__ == "__main__":
     main()
