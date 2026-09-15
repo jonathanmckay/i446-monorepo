@@ -31,7 +31,7 @@ Infer the correct domain label from keywords in the task content:
 | career, resume, job search, progression | `h335` |
 | non-profit, charity, volunteer | `m828` |
 
-If the task already has a label that matches a domain (i9, m5x2, g245, hcb, hcmc, xk87, xk88, s897, qz12, i447, f693, h335, m828, hcm, hci, epcn, infra, hcbp, n156, 家), skip it — it already has a domain label.
+If the task already has a label that matches a domain (i9, m5x2, g245, hcb, hcmc, xk87, xk88, s897, qz12, i447, i444, f693, h335, m828, hcm, hci, epcn, infra, hcbp, n156, 家), skip it — it already has a domain label. (`i444` = travel, added 2026-09-15 — it's a legitimate, consistently-used domain that was missing from this list, not a mislabel.)
 
 If the task is in a Todoist project that maps to a domain, use that as a strong signal:
 
@@ -73,7 +73,11 @@ Value should generally be ≥ time estimate. If time > value, it's a signal the 
 
 ### Step 1: Fetch all tasks
 
-Use Todoist MCP `find-tasks` to get all uncompleted tasks. Paginate with `next_cursor` to get ALL tasks. Exclude tasks that have label `#-1g`, `#0g`, or `-1neon`. (`-1neon` block-ritual cards — `سمش`/`-1g`/`-1ibx` — score 0分!P from the block-header emoji, never from `[N]`, so stamping a `(N) [N]` estimate on them is wrong and shows bogus points in `/inbound`.)
+Use Todoist MCP `find-tasks` with `filter: "p1 | p2 | p3 | p4"` (matches every task regardless of due date — `find-tasks` requires at least one filter param, and this is a reliable catch-all since every task has some priority). Paginate with `next_cursor`/`cursor` to get ALL tasks.
+
+**Exclude client-side, not via filter string.** Once fetched, drop any task whose `labels` array contains `#-1g`, `#0g`, or `-1neon` (exact string match against the array — do not re-fetch with a `!@#0g`-style filter clause). Bug found 2026-09-15: Todoist's `@label` filter syntax treats a leading `#` as its project-reference sigil, so a filter like `!@0g & !@-1g & !@-1neon` silently searches for labels literally named `0g`/`-1g` (no hash) and does NOT exclude the real `#0g`/`#-1g`-labeled tasks — confirmed live when 3 `#0g`/`#-1g` tasks leaked through that exact filter. Client-side array matching has no such ambiguity.
+
+(`-1neon` block-ritual cards — `سمش`/`-1g`/`-1ibx` — score 0分!P from the block-header emoji, never from `[N]`, so stamping a `(N) [N]` estimate on them is wrong and shows bogus points in `/inbound`.)
 
 ### Step 2: Audit each task
 
