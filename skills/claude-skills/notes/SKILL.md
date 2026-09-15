@@ -12,7 +12,7 @@ Sort the raw scratch-pad notes in `~/vault/z_ibx/new-notes.md` into their correc
 
 ### Step 1: Read the inbox
 
-Read `~/vault/z_ibx/new-notes.md`. If the file is empty (only the "DO NOT delete" header line), tell the user there's nothing to sort and stop.
+Read `~/vault/z_ibx/new-notes.md`. If the file is empty (only the "DO NOT delete" header line), tell the user there's nothing to sort and skip straight to Step 9 (mark notes habit done) — an empty inbox still completes the habit for today.
 
 ### Step 2: Read the sort instructions
 
