@@ -1,14 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "catch up with o314": {
-      "todoist_id": "6hW9w87mXv97fCVR",
-      "minutes": 20
-    },
     "catch up neon": {
       "todoist_id": "6hW9w88jC5gxrVv2",
       "minutes": 30
     }
   },
-  "last_sync": "2026-09-14T20:00:06.106079-07:00"
+  "last_sync": "2026-09-14T22:00:04.851664-07:00"
 }
