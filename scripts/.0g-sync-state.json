@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "mbr goes well": {
-      "todoist_id": "6hWJjM9pHc278v4R",
-      "minutes": 30
-    },
     "500分 i9": {
       "todoist_id": "6hWJjMGg3VmwQM5R",
       "minutes": 50
@@ -14,5 +10,5 @@
       "minutes": 30
     }
   },
-  "last_sync": "2026-09-15T10:00:01.063497-07:00"
+  "last_sync": "2026-09-15T12:00:02.429326-07:00"
 }
