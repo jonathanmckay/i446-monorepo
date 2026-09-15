@@ -5501,7 +5501,13 @@ def _(event):
         flash("opt+enter: select a tracked entry first", 3.0)
         return
     if item.get("running"):
-        flash("timer still running — stop it (^S) before granting points", 4.0)
+        # The running entry, selected via its ordinary block-card row rather
+        # than the pinned "current" row above -- same underlying live timer
+        # (Toggl only ever has one), so it gets the same one-shot stop+grant
+        # as that row's ⌥↵ instead of refusing and telling the user to stop
+        # it manually first (user report 2026-09-14: "it says I need to stop
+        # rather than stopping it and recording for me").
+        _run_current_timer_done(event.app)
         return
     if not item.get("dur_min"):
         flash("no duration on this row", 3.0)

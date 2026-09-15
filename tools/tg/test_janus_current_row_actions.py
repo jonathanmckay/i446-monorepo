@@ -218,10 +218,12 @@ def test_enter_on_current_row_arms_edit_not_stop():
 def test_enter_on_main_pane_running_entry_still_arms_edit():
     """The main pane's OWN selectable running-entry row (kind == "entry",
     running == True) keeps its pre-existing edit-on-Enter behavior — Enter
-    is now unified across "entry" and "current" (2026-08-09), but ⌥↵ stays
-    distinct: a plain "entry" row still refuses on a running entry, while
-    the pinned "current" row's ⌥↵ runs /done (see test_janus_done_points_
-    prompt.py and the ⌥↵-on-current tests below)."""
+    is now unified across "entry" and "current" (2026-08-09). ⌥↵ is also
+    unified as of 2026-09-14 (see test_alt_enter_on_running_entry_row_also_
+    runs_done below): a plain "entry" row used to refuse on a running entry
+    while only the pinned "current" row's ⌥↵ ran /done, but Toggl only ever
+    has one running timer, so both rows now trigger the same one-shot
+    stop+grant."""
     mod = _load_tui()
     today = dtm.datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     item = {"kind": "entry", "start_dt": today.replace(hour=9), "entry_ids": [1],
@@ -284,6 +286,35 @@ def test_alt_enter_on_current_row_defers_to_recording_finalize_when_it_matches(m
     assert "writing code 0700-1430" not in mod.STATE.queued_cmds, (
         "must not ALSO queue the plain did-fast command for the same entry"
     )
+
+
+def test_alt_enter_on_running_entry_row_also_runs_done(monkeypatch):
+    """User report 2026-09-14: "if I hit ctrl enter on a running entry, it
+    says I need to stop rather than stopping it and recording for me" — the
+    main pane's OWN running-entry row (kind == "entry", selected directly in
+    the block card rather than via the pinned "current" row) used to flash
+    "timer still running — stop it (^S) before granting points" and refuse.
+    Toggl only ever runs one timer at a time, so this IS the same live entry
+    the pinned row's ⌥↵ already handles — it now delegates to that same
+    one-shot stop+grant instead of refusing."""
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None})
+    today = dtm.datetime(2026, 8, 8, tzinfo=TZ)
+    item = {"kind": "entry", "start_dt": today.replace(hour=7), "entry_ids": [1],
+            "raw_desc": "writing code", "project_id": None, "dur_min": 30,
+            "running": True}
+    mod.STATE.visible_events = [item]
+    mod.STATE.event_sel = mod._sel_key(item)
+    _binding(mod, ("escape", "c-m")).handler(_FakeEvent())
+    # start 14:00 UTC -> 07:00 Pacific (PDT); now 14:30 Pacific — same
+    # one-shot did-fast command the pinned "current" row's ⌥↵ builds.
+    expected_cmd = "writing code 0700-1430"
+    assert expected_cmd in mod.STATE.queued_cmds
+    assert "stop it" not in mod.STATE.flash, \
+        f"must not refuse and tell the user to stop it manually: {mod.STATE.flash!r}"
 
 
 # ─── swipe right = /done ─────────────────────────────────────────────────
