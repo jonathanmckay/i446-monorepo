@@ -76,13 +76,25 @@ def _mdy(d: _dt.date) -> str:
     return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
 
 
+def _parse_date(s: str) -> _dt.date:
+    """Accepts YYYY-MM-DD (ISO), YYYY.MM.DD, or MM.DD.YYYY — the two dot-
+    separated forms are disambiguated by which segment is 4 digits (the
+    year), so there's no MM/DD ambiguity between them."""
+    s = s.strip()
+    parts = s.split(".")
+    if len(parts) == 3:
+        y, m, d = parts if len(parts[0]) == 4 else (parts[2], parts[0], parts[1])
+        return _dt.date(int(y), int(m), int(d))
+    return _dt.date.fromisoformat(s)
+
+
 def _review_date(arg: str | None) -> _dt.date:
     """The day the survey is ABOUT. 0s is accrual/retrospective — filled the next
     day about the day before — so with no arg it defaults to YESTERDAY. The main
     fields land in this row; the forward-looking motivation lands in the next
     day's row (this date + 1)."""
     if arg:
-        return _dt.date.fromisoformat(arg)
+        return _parse_date(arg)
     return _dt.date.today() - _dt.timedelta(days=1)
 
 
@@ -257,7 +269,8 @@ def run_form(target: _dt.date) -> dict | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("date", nargs="?", help="YYYY-MM-DD (default today)")
+    ap.add_argument("date", nargs="?",
+                     help="YYYY-MM-DD, YYYY.MM.DD, or MM.DD.YYYY (default: yesterday)")
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     args = ap.parse_args()

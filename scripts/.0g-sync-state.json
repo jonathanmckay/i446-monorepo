@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-15T06:00:02.761153-07:00"
+  "tasks": {
+    "mbr goes well": {
+      "todoist_id": "6hWJjM9pHc278v4R",
+      "minutes": 30
+    },
+    "500分 i9": {
+      "todoist_id": "6hWJjMGg3VmwQM5R",
+      "minutes": 50
+    },
+    "neon caught up": {
+      "todoist_id": "6hWJjMCc7fHQQ8M2",
+      "minutes": 40
+    },
+    "sunset run": {
+      "todoist_id": "6hWJjMCWFhfmx2XR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-09-15T08:00:06.949260-07:00"
 }
