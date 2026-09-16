@@ -5,7 +5,8 @@
       "Bash",
       "Bash(curl -s -u *:api_token*api.track.toggl.com*)",
       "Bash(osascript -e *)",
-      "Bash(python3 -c *)"
+      "Bash(python3 -c *)",
+      "Bash(ssh ix:*)"
     ]
   },
   "model": "claude-fable-5-1[1m]",
