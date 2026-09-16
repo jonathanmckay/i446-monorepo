@@ -1269,6 +1269,7 @@ PAGE = r"""<!doctype html>
     color:#003; font:700 26px/1 ui-monospace,Menlo,monospace; box-shadow:0 2px 10px #0008;
     z-index:8; display:flex; align-items:center; justify-content:center; }
   .fab:active { transform:scale(.94); }
+  .fab.quick { right:78px; background:#2979ff; color:#001a3d; font-size:22px; }
 </style>
 </head>
 <body>
@@ -1316,6 +1317,7 @@ PAGE = r"""<!doctype html>
     </div>
   </div>
 </div>
+<button class="fab quick" id="fabQuick" onclick="quickPlaceholder()" title="quick placeholder — starts now, no details">⚡</button>
 <button class="fab" id="fab" onclick="openAddDlg()">+</button>
 <div class="toast" id="toast"></div>
 
@@ -1565,6 +1567,21 @@ async function saveDlg(){
     const d = await r.json();
     if(!d.ok){ toast(d.error||'create failed', true); return; }
     toast(d.running ? 'started ✓'+(d.project?' → '+d.project:'') : 'tracked ✓'+(d.project?' → '+d.project:''));
+    load();
+  } catch(e){ toast('offline', true); }
+}
+
+async function quickPlaceholder(){
+  // One press, no dialog: start a live "?" timer right now so a transition
+  // gets recorded even when there's no time to describe it. Edit later via
+  // the row's left-swipe edit gesture.
+  try {
+    const r = await fetch('/api/fill', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({desc:'?', start:'now', end:''})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'create failed', true); return; }
+    toast('placeholder started ✓ — edit later');
     load();
   } catch(e){ toast('offline', true); }
 }
