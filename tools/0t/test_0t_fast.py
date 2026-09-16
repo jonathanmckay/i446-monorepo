@@ -241,6 +241,75 @@ def test_refresh_points_cache_includes_block_data(tmp_path):
     assert day.get("-1₦") == 10, "domain-total columns (COLS) must still work"
 
 
+def test_refresh_points_cache_retries_past_a_half_synced_file(tmp_path):
+    """Regression (2026-09-16): refresh_points_cache() saved on ix then read the
+    OneDrive-synced copy with openpyxl after a single fixed time.sleep(3). After a
+    larger-than-usual resync (e.g. Excel just relaunched on ix), 3s wasn't enough —
+    openpyxl hit a half-written file and raised zipfile.BadZipFile, surfacing as a
+    top-level "dashboard: ERROR" that read like the whole /0t run had failed, even
+    though the upstream Neon writes (sleep, 0t habit) had already succeeded. Fix:
+    retry the read with backoff instead of gambling on one fixed delay."""
+    import json as _json
+    import zipfile as _zipfile
+    import openpyxl as _openpyxl
+    import time as _time
+
+    yesterday = date.today() - timedelta(days=1)
+    row = [None] * 25
+    row[1] = yesterday
+    row[15] = 10  # P — -1₦
+
+    class _FakeSheet:
+        def iter_rows(self, min_row, values_only):
+            yield tuple(row)
+
+    class _FakeWorkbook:
+        def __getitem__(self, name):
+            return _FakeSheet()
+
+        def close(self):
+            pass
+
+    calls = {"n": 0}
+
+    def _flaky_load_workbook(*a, **k):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _zipfile.BadZipFile("File is not a zip file")
+        return _FakeWorkbook()
+
+    fake_cache = tmp_path / ".points-cache.json"
+    with patch.object(_openpyxl, "load_workbook", side_effect=_flaky_load_workbook), \
+         patch.object(zerot_fast, "ix_run", return_value=None), \
+         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
+         patch.object(_time, "sleep", return_value=None):
+        zerot_fast.refresh_points_cache()  # must not raise despite two transient failures
+
+    assert calls["n"] == 3, "expected two failed reads before the third succeeded"
+    cache = _json.loads(fake_cache.read_text())
+    assert cache[yesterday.isoformat()]["-1₦"] == 10
+
+
+def test_refresh_points_cache_gives_up_after_exhausting_retries(tmp_path):
+    """A read that never recovers (genuinely stuck sync) must still raise — the
+    retry loop is a bounded backoff, not an infinite/silent swallow."""
+    import zipfile as _zipfile
+    import openpyxl as _openpyxl
+    import time as _time
+    import pytest
+
+    def _always_fails(*a, **k):
+        raise _zipfile.BadZipFile("File is not a zip file")
+
+    fake_cache = tmp_path / ".points-cache.json"
+    with patch.object(_openpyxl, "load_workbook", side_effect=_always_fails), \
+         patch.object(zerot_fast, "ix_run", return_value=None), \
+         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
+         patch.object(_time, "sleep", return_value=None):
+        with pytest.raises(_zipfile.BadZipFile):
+            zerot_fast.refresh_points_cache()
+
+
 def test_marks_done_then_refreshes_dtd_cache():
     """/0t records 0t in completed-today via mark_done(), but dtd only reloads on a
     cache mtime change — so 0t-fast must run did-fast --refresh-cache after marking
