@@ -124,12 +124,71 @@ def test_resolve_part_range_with_points_on_past_day_uses_md_token_not_dashdate()
     assert re.search(r"\s\d{1,2}/\d{1,2}$", cmd), cmd
 
 
+# ─── did-fast routing for a bare +N bonus grant (2026-09-15) ───────────────
+
+def test_resolve_part_routes_bare_bonus_to_did():
+    """"+10 @i9 read COD deck" has no time range at all — did-fast's own
+    no-timer variable/posthoc path handles it fine, so this must NOT fall
+    through to tg-fast (which has no concept of +N and would start a live
+    timer literally named "+10 @i9 read COD deck")."""
+    state, resolve_part, calls = _resolve_part_fn()
+    state.day_offset = 0
+    cmd, use_did = resolve_part("+10 @i9 read COD deck")
+    assert cmd == "+10 @i9 read COD deck", "command text itself is untouched"
+    assert use_did is True
+
+
+def test_resolve_part_bonus_token_order_independent():
+    """did-fast's own +N/@domain extraction is order-independent (re.search,
+    not position-anchored) — the routing decision must match."""
+    state, resolve_part, calls = _resolve_part_fn()
+    state.day_offset = 0
+    cmd, use_did = resolve_part("read COD deck +10 @i9")
+    assert use_did is True
+
+
+def test_resolve_part_bonus_with_range_still_routes_to_did():
+    """A +N bonus alongside an actual completed range is still did-fast's
+    syntax (tg-fast understands neither) — has_range must not suppress it."""
+    state, resolve_part, calls = _resolve_part_fn()
+    state.day_offset = 0
+    cmd, use_did = resolve_part("call with josh 1815-1843 +10 @i9")
+    assert use_did is True
+
+
+def test_resolve_part_bonus_on_past_day_uses_md_token_not_dashdate():
+    """Mirrors the [N]-with-range past-day case: a +N grant needs no range
+    to land on a viewed past day, and must get did-fast's trailing "M/D"
+    token, not tg-fast's "--date" flag or the live-command rejection."""
+    state, resolve_part, calls = _resolve_part_fn()
+    state.day_offset = -1
+    cmd, use_did = resolve_part("+10 @i9 read COD deck")
+    assert use_did is True
+    assert "--date" not in cmd
+    assert cmd.startswith("+10 @i9 read COD deck ")
+    assert re.search(r"\s\d{1,2}/\d{1,2}$", cmd), cmd
+    assert not calls["flash"], "must not hit the past-day rejection warning"
+
+
+def test_resolve_part_plain_plus_word_does_not_misfire():
+    """A literal '+' not followed by digits (e.g. a description that happens
+    to contain one) must not be mistaken for a bonus token."""
+    state, resolve_part, calls = _resolve_part_fn()
+    state.day_offset = 0
+    cmd, use_did = resolve_part("mix+match snacks")
+    assert use_did is False
+
+
 # ─── comma-split wiring in the Enter handler itself ─────────────────────────
 
 def test_comma_splits_into_multiple_tg_calls():
     src = (HERE / "janus.py").read_text()
     i = src.index('parts = [p.strip() for p in text.split(",")')
-    body = src[i:i + 4200]
+    # Window sized generously past _resolve_part's body (grew with the +N
+    # bonus-routing addition, 2026-09-15) rather than pinned to its exact
+    # length, so the next docstring/comment edit in there doesn't retrigger
+    # this same failure.
+    body = src[i:i + 5200]
     assert "if p.strip()" in src[i:src.index("\n", i)], (
         "empty segments (stray/trailing commas) must be dropped")
     assert "_resolve_part" in body, (
@@ -179,7 +238,7 @@ def test_flash_preview_labels_did_vs_tg_per_part():
     did-fast routing, a mixed batch could have parts going to either)."""
     src = (HERE / "janus.py").read_text()
     i = src.index('parts = [p.strip() for p in text.split(",")')
-    body = src[i:i + 4200]
+    body = src[i:i + 5200]  # see window-size comment above
     assert "labels = [f\"{'did' if d else 'tg'} {c}\" for c, d in resolved_pairs]" in body
 
 

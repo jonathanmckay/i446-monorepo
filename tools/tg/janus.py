@@ -5323,6 +5323,14 @@ def _(event):
         return bool(re.search(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)",
                               re.sub(r"\s@\S+\s*$", "", part)))
 
+    def _has_bonus_points(part: str) -> bool:
+        """True if `part` carries a bare `+N` bonus-points token (e.g.
+        "+10 @i9 read COD deck") — did-fast's own immediate-grant/posthoc
+        syntax (user request 2026-09-15): no timer, no completed range,
+        just "credit N points to this domain for this thing, right now".
+        Distinct from a completed-range `[N]` annotation below."""
+        return bool(re.search(r"(?:^|\s)\+\d+\b", part))
+
     def _resolve_part(part: str) -> tuple[str, bool] | None:
         """Returns (resolved_command, use_did) or None to drop the part
         (rejected while viewing a past day). use_did routes a completed
@@ -5337,20 +5345,30 @@ def _(event):
         the plain typed-command path instead. A bare backdated start
         ("1823 desc [30]", no completed end) is deliberately excluded — the
         activity isn't done yet, so crediting points immediately would be
-        premature; that still goes through tg-fast exactly as before."""
+        premature; that still goes through tg-fast exactly as before.
+
+        A bare `+N` bonus token (user request 2026-09-15) ALWAYS routes to
+        did-fast regardless of whether a range is present: unlike [N] on an
+        in-progress backdated start, +N is did-fast's own no-timer immediate-
+        grant syntax (Step 0.4's "variable task" path handles zero time_range
+        fine), so there's no "not done yet" case to exclude — tg-fast has no
+        concept of it at all and would otherwise start a live timer literally
+        named "+10 @i9 read COD deck"."""
         has_range = _has_completed_range(part)
-        use_did = has_range and bool(re.search(r"\[-?\d+\]", part))
+        has_bonus = _has_bonus_points(part)
+        use_did = has_bonus or (has_range and bool(re.search(r"\[-?\d+\]", part)))
         if STATE.day_offset != 0:
             # Viewing another day: typed commands apply to THAT day (user
             # request 2026-07-27 — "tg calls go to yesterday if I'm viewing
-            # yesterday"). Only completed HHMM-HHMM ranges can land on a
-            # past day; live-timer actions (stop/current/del) still act on
-            # now, and anything else would silently start a timer TODAY, so
-            # warn instead of running.
+            # yesterday"). Only completed HHMM-HHMM ranges (or a +N bonus
+            # grant, which needs no range at all) can land on a past day;
+            # live-timer actions (stop/current/del) still act on now, and
+            # anything else would silently start a timer TODAY, so warn
+            # instead of running.
             viewed = view_now().date()
             low = part.lower()
             live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
-            if has_range:
+            if has_range or use_did:
                 # did-fast and tg-fast take the target date in different
                 # shapes — did-fast reads a trailing "M/D" token, tg-fast a
                 # "--date YYYY-MM-DD" flag.

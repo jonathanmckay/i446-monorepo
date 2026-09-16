@@ -220,6 +220,65 @@ end tell
         return None
 
 
+# (sheet, date_str) -> row. Every /append and /write re-ran lookup_row's full
+# ~800-row bulk-range scan (~0.18s) even for the SAME date as the previous
+# call in the same burst (e.g. /ate's four writes, /-1g's build-order +
+# Todoist + cache-refresh flow, janus's new +N posthoc command) — the exact
+# repeat-call pattern this daemon's callers actually produce. Safe without
+# its own lock: do_POST already holds EXCEL_LOCK around the whole handler
+# call, so only one request's body ever executes at a time.
+_ROW_CACHE: dict[tuple[str, str], int] = {}
+
+
+def _row_still_matches(sheet: str, row: int, date_str: str) -> bool:
+    """Single-cell re-check that `row`'s date cell still reads as `date_str`
+    — cheap (one cell, not an 800-row range) insurance against a cached row
+    going stale if a row got inserted/deleted in the sheet between calls.
+    Mirrors lookup_row's own real-date-vs-text comparison."""
+    dc = DATE_COL.get(sheet)
+    if not dc:
+        return False
+    target = safe_str(date_str)
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
+    set cv to value of cell ("{dc}" & {row}) of theSheet
+    if cv is missing value then return "0"
+    if ((class of cv) as text) is "date" then
+        set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
+        if md = "{target}" then
+            return "1"
+        else
+            return "0"
+        end if
+    else
+        if (cv as text) = "{target}" then
+            return "1"
+        else
+            return "0"
+        end if
+    end if
+end tell
+'''
+    rc, out, _ = osascript(script)
+    return rc == 0 and out.strip() == "1"
+
+
+def lookup_row_cached(sheet: str, date_str: str) -> int | None:
+    """lookup_row, but skipping the full range-scan on a cache hit — one
+    cheap single-cell verify instead. Populates/evicts _ROW_CACHE."""
+    key = (sheet, date_str)
+    cached = _ROW_CACHE.get(key)
+    if cached is not None:
+        if _row_still_matches(sheet, cached, date_str):
+            return cached
+        del _ROW_CACHE[key]
+    row = lookup_row(sheet, date_str)
+    if row is not None:
+        _ROW_CACHE[key] = row
+    return row
+
+
 def safe_str(s: str) -> str:
     """Escape backslashes and double quotes for embedding inside an AS string literal."""
     return s.replace("\\", "\\\\").replace('"', '\\"')
@@ -234,7 +293,7 @@ def cell_addr(req: dict) -> tuple[str, int] | None:
     if "row" in req and req["row"]:
         return col, int(req["row"])
     if "date" in req and req["date"]:
-        r = lookup_row(sheet, req["date"])
+        r = lookup_row_cached(sheet, req["date"])
         if r is None:
             return None
         return col, r
@@ -278,7 +337,7 @@ def do_batch(req: dict) -> dict:
     if req.get("row"):
         row = int(req["row"])
     else:
-        row = lookup_row(sheet, req.get("date", ""))
+        row = lookup_row_cached(sheet, req.get("date", ""))
         if row is None:
             return {"ok": False, "error": "date_not_found_or_missing_target"}
     results = []
@@ -432,7 +491,7 @@ def do_lookup(req: dict) -> dict:
     date_str = req.get("date")
     if not sheet or not date_str:
         return {"ok": False, "error": "missing_sheet_or_date"}
-    r = lookup_row(sheet, date_str)
+    r = lookup_row_cached(sheet, date_str)
     return {"ok": True, "row": r} if r else {"ok": False, "error": "date_not_found"}
 
 
