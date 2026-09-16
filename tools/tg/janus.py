@@ -1776,7 +1776,16 @@ def render_header() -> list[tuple[str, str]]:
     # Points chip leads the line (upper-left corner, 2026-08-17 per user
     # request) — the number you care about most gets first billing, ahead of
     # even the "janus" label.
-    pts_str = f"{int(round(pts))}分 · " if pts else ""
+    #
+    # Gate on last_points_fetch, not on pts itself: `today_points` defaults to
+    # 0 and stays there whenever fetch_points() has never completed a
+    # successful Neon read (e.g. Excel unreachable on ix) — "if pts" treated
+    # that identically to a genuine 0分 day and hid the chip either way, so a
+    # standing fetch failure looked exactly like "no points yet," with no
+    # visible sign anything was wrong (bug 2026-09-16: points chip missing
+    # all morning while ix's Excel session was down; a confirmed 0分 read
+    # should still render "0分", not vanish).
+    pts_str = f"{int(round(pts))}分 · " if STATE.last_points_fetch else ""
     # Date sits immediately left of the wall clock at the right edge
     # (2026-08-17 per user request: date moved off the left side entirely,
     # paired with the clock instead of standing alone next to "janus").

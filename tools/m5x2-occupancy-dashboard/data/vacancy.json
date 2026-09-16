@@ -1144,19 +1144,6 @@
     "rent_ready": "Yes"
   },
   {
-    "property_name": "m608",
-    "unit": "4",
-    "unit_status": "Vacant-Rented",
-    "last_move_in": "2023-08-15",
-    "last_move_out": "2026-08-31",
-    "next_move_in": "2026-09-28",
-    "available_on": "2026-09-18",
-    "days_vacant": 16,
-    "schd_rent": "1313.00",
-    "advertised_rent": "1313.00",
-    "rent_ready": "No"
-  },
-  {
     "property_name": "ms22",
     "unit": "2256",
     "unit_status": "Vacant-Rented",

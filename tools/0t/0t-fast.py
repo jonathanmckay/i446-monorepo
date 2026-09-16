@@ -495,12 +495,29 @@ def refresh_points_cache() -> str:
     save_script = 'tell application "Microsoft Excel" to save workbook "Neon分v12.2.xlsx"'
     ix_run(save_script, timeout=15.0)
 
-    # Brief wait for OneDrive sync
+    # Wait for OneDrive sync, then read with openpyxl. A single fixed 3s
+    # sleep raced the upload (bug 2026-09-16: after Excel had just been
+    # relaunched on ix and did a larger-than-usual resync, 3s wasn't enough —
+    # openpyxl hit a half-written file and raised BadZipFile ["File is not a
+    # zip file"], which surfaced as a top-level "dashboard: ERROR" that read
+    # like the whole /0t run had failed, even though the actual Neon writes
+    # upstream (sleep, 0t habit) had already succeeded). Retry with backoff
+    # instead of gambling on one fixed delay.
     import time
-    time.sleep(3)
-
-    # Read with openpyxl
+    import zipfile
     import openpyxl
+
+    def _load_workbook_with_retry(path, attempts=5, delay=2.0):
+        last_err = None
+        for _ in range(attempts):
+            time.sleep(delay)
+            try:
+                return openpyxl.load_workbook(str(path), data_only=True, read_only=True)
+            except zipfile.BadZipFile as e:
+                last_err = e
+                delay *= 1.5
+        raise last_err
+
     COLS = {16: '-1₦', 17: '0₲', 18: 'i9', 19: 'm5', 20: '个',
             21: '媒', 22: '思', 23: 'hcb', 24: 'xk', 25: '社'}
     # G:O — per-block 分 (地支 卯..亥), read into a "__block__" sub-dict so the
@@ -515,7 +532,7 @@ def refresh_points_cache() -> str:
     today = date.today()
     cutoff = today - timedelta(days=90)
 
-    wb = openpyxl.load_workbook(str(NEON_XLSX), data_only=True, read_only=True)
+    wb = _load_workbook_with_retry(NEON_XLSX)
     ws = wb['0分']
     result = {}
     for row in ws.iter_rows(min_row=3, values_only=True):

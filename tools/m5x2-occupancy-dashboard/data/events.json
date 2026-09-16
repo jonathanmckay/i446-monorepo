@@ -6528,5 +6528,15 @@
     "unit": "G208",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-16",
+    "effective": "2026-09-16",
+    "kind": "movein",
+    "unit_id": "96",
+    "prop": "m608",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
   }
 ]

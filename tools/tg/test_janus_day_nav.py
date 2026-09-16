@@ -101,6 +101,7 @@ def test_header_pins_points_to_the_upper_left_corner():
     billing in the upper-left corner."""
     m = _load_tui()
     m.STATE.today_points = 42
+    m.STATE.last_points_fetch = 12345.0  # a fetch succeeded — chip must render
     m.STATE.day_offset = 0
     text = "".join(t for _, t, *_ in m.render_header())
     stripped = text.lstrip()

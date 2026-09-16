@@ -289,10 +289,42 @@ while w <= week_start(TODAY):
 # not a bug. Real data on this AppFolio instance only starts ~2026-06
 # (portfolio consolidation); earlier weeks show 0% since there's no key for
 # those months (or the month's GPR is 0), not because concessions were zero.
+#
+# GPR (40110) is NOT a live charge: it's the bookkeeper's month-end reclass JE
+# (e.g. 42 lines posted 2026-08-31, verified 2026-09-16 in the general ledger;
+# Rent 40001 carries the month until then). So the open month always has real
+# concessions $ but gpr=0, which used to render September as 0% (JM, 2026-09-16).
+# Fix: carry the latest closed month's GPR forward as a flagged estimate; it
+# self-corrects on the next refresh after the JE posts.
 try:
     concessions_by_month = load("concessions.json")
 except FileNotFoundError:
     concessions_by_month = {}
+
+def gpr_for(key):
+    """(gpr, estimated?) — real GPR for the month, else the latest earlier
+    month's real GPR when the month has concessions but no GPR yet."""
+    m = concessions_by_month.get(key, {})
+    if m.get("gpr"):
+        return m["gpr"], False
+    if m.get("concessions"):
+        prior = [k for k, v in concessions_by_month.items() if k < key and v.get("gpr")]
+        if prior:
+            return concessions_by_month[max(prior)]["gpr"], True
+    return 0.0, False
+
+concessions_monthly = []
+for key in sorted(concessions_by_month):
+    m = concessions_by_month[key]
+    if not m.get("concessions") and not m.get("gpr"):
+        continue                              # pre-consolidation $0 months
+    gpr, est = gpr_for(key)
+    concessions_monthly.append({
+        "month": key, "concessions": round(m.get("concessions", 0), 2),
+        "gpr": round(gpr, 2), "gpr_est": est,
+        "pct": round(m.get("concessions", 0) / gpr * 100, 2) if gpr else 0.0,
+        "units": m.get("units"), "lines": m.get("lines"),
+        "open": key == TODAY.isoformat()[:7]})
 
 longterm = []
 d = LT_START
@@ -300,7 +332,7 @@ while d <= TODAY:
     s = nearest(d.isoformat())
     u = s["units"] or UNITS
     m = concessions_by_month.get(d.isoformat()[:7], {})
-    gpr = m.get("gpr", 0)
+    gpr, _ = gpr_for(d.isoformat()[:7])
     cx_pct = round(m.get("concessions", 0) / gpr * 100, 2) if gpr else 0.0
     longterm.append({"date": d.isoformat(),
                      "vu": round(s["vu"] / u * 100, 2), "nu": round(s["nu"] / u * 100, 2),
@@ -398,6 +430,7 @@ payload = {
     # (per JM); the event log still backs the leases-weekly actuals above.
     "back": back, "forward": fwd, "longterm": longterm,
     "leases_weekly": leases_weekly, "occ_timeline": occ_timeline,
+    "concessions_monthly": concessions_monthly,
 }
 
 # ── Render ──────────────────────────────────────────────────────────────────
@@ -406,7 +439,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 :root{--bg:#0d0f12;--card:#161a1f;--text:#e7ecf0;--muted:#8b96a3;--border:#242a31;
- --vu:#e23b3b;--vr:#8ce99a;--nu:#ff8a3d;--nu2:#ffc37d;--nr:#1b7a3a;--occ:#2a3340;--blue:#2979ff;}
+ --vu:#e23b3b;--vr:#8ce99a;--nu:#ff8a3d;--nu2:#ffc37d;--nr:#1b7a3a;--occ:#2a3340;--blue:#2979ff;--cx:#c77dff;}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);
  font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px;max-width:1180px;margin:auto}
 h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weight:600;
@@ -435,6 +468,17 @@ h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;color:var(--muted);font-weigh
 <h1>m5x2 Occupancy</h1>
 <div class="sub">As of __TODAY__ · __UNITS__ units · data: AppFolio occupancy_summary + unit_vacancy</div>
 <div class="kpis" id="kpis"></div>
+
+<h2>Concessions — monthly $ and units receiving one</h2>
+<div class="card"><canvas id="cxChart" height="86"></canvas>
+<div class="legend">
+ <span><i class="sw" style="background:var(--cx)"></i>Concessions $ (GL 41150)</span>
+ <span><i class="sw" style="background:var(--blue)"></i>Units with a concession (distinct, from GL lines)</span></div>
+<div class="note" id="cxNote"></div>
+<div class="note">Concessions $ from the income statement (GL 41150); units = distinct units with a net
+concession debit that month in the general ledger. % of Gross Potential Rent (GL 40110) in the tooltip.
+GPR is a month-end journal entry, so the open month uses the last closed month's GPR (marked <b>est.</b>)
+until the entry posts. 2026-06 was the consolidation month (one bulk entry, no per-unit lines).</div></div>
 
 <h2>Action states — one column per day, trailing 90d (units)</h2>
 <div class="card"><canvas id="unitsChart" height="110"></canvas>
@@ -491,6 +535,28 @@ const P=D.params;
 document.getElementById('paramNote').textContent=
  `Pipeline rates (calibrated): ${P.lambda} new notices/day · notice→vacant ~${P.notice_days}d · `+
  `lease-up velocity ~${P.weekly_signings}/wk · move-in lag ~${P.movein_lag}d.`;
+// ── concessions chart: monthly $ (bars, left) + units with a concession (bars, right) ──
+const cxm=D.concessions_monthly, cxLabels=cxm.map(r=>r.month);
+const fmtUSD=v=>'$'+Math.round(v).toLocaleString();
+new Chart(document.getElementById('cxChart'),{type:'bar',
+ data:{labels:cxLabels,datasets:[
+   {label:'Concessions $',data:cxm.map(r=>r.concessions),yAxisID:'y',backgroundColor:C.cx,borderRadius:3},
+   {label:'Units with a concession',data:cxm.map(r=>r.units),yAxisID:'y2',backgroundColor:C.blue,borderRadius:3}]},
+ options:{responsive:true,interaction:{mode:'index',intersect:false},
+  plugins:{legend:{display:false},tooltip:{callbacks:{
+    title:i=>{const r=cxm[i[0].dataIndex];return r.month+(r.open?'  (month to date)':'');},
+    label:i=>{const r=cxm[i.dataIndex];
+     if(i.datasetIndex===0) return ` ${fmtUSD(r.concessions)} · ${r.pct}% of GPR ${fmtUSD(r.gpr)}${r.gpr_est?' (est.)':''}`;
+     return r.units==null?' units: n/a':` ${r.units} units (${r.lines} ledger lines)`;}}}},
+  scales:{x:{grid:{display:false},ticks:{color:'#8b96a3'}},
+   y:{position:'left',beginAtZero:true,ticks:{color:'#8b96a3',callback:v=>'$'+(v/1000)+'k'},grid:{color:'#1e242b'},
+      title:{display:true,text:'Concessions $',color:'#8b96a3'}},
+   y2:{position:'right',beginAtZero:true,ticks:{color:'#8b96a3',precision:0},grid:{display:false},
+      title:{display:true,text:'Units',color:'#8b96a3'}}}}});
+{const l=cxm[cxm.length-1];
+ if(l) document.getElementById('cxNote').innerHTML=
+  `${l.month}${l.open?' (month to date)':''}: <b>${fmtUSD(l.concessions)}</b> in concessions across `+
+  `<b>${l.units==null?'n/a':l.units}</b> units · ${l.pct}% of GPR ${fmtUSD(l.gpr)}${l.gpr_est?' <b>(est.)</b>':''}.`;}
 // ── units chart: daily back + daily forecast, 4 stacked bands ──
 const rows=[...D.back, ...D.forward.slice(1)];
 const labels=rows.map(r=>r.date);
@@ -547,9 +613,12 @@ const lt=D.longterm, ltLabels=lt.map(r=>r.date);
 function pds(key,label,color){return {label,data:lt.map(r=>r[key]),
  backgroundColor:color,borderColor:color,fill:true,pointRadius:0,tension:.15,borderWidth:1};}
 new Chart(document.getElementById('pctChart'),{type:'line',
- data:{labels:ltLabels,datasets:[pds('cx','Concessions % of Rent',C.cx),
+ // Chart.js stacks datasets bottom→top in array order; concessions go LAST so
+ // the band sits on top of the stack (JM, 2026-09-16).
+ data:{labels:ltLabels,datasets:[
   pds('nr','Notice-Rented %',C.nr),pds('nu','Notice-Unrented %',C.nu),
-  pds('vr','Vacant-Rented %',C.vr),pds('vu','Vacant-Unrented %',C.vu)]},
+  pds('vr','Vacant-Rented %',C.vr),pds('vu','Vacant-Unrented %',C.vu),
+  pds('cx','Concessions % of Rent',C.cx)]},
  options:{responsive:true,interaction:{mode:'index',intersect:false},
   plugins:{legend:{labels:{color:'#8b96a3',boxWidth:12}}},
   scales:{x:{stacked:true,grid:{display:false},

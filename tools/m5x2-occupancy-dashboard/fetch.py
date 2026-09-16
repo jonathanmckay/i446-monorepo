@@ -6,7 +6,8 @@
 - unit_vacancy_detail → vacancy.json (current non-occupied units + move dates).
 - twelve_month_income_statement (GL 41150 Concessions / 40110 Gross Potential
   Rent) → concessions.json, monthly $ figures feeding the dashboard's
-  "concessions % of rent" band.
+  "concessions % of rent" band; plus general_ledger lines on 41150 → per-month
+  count of distinct units that received a concession (the concessions bar chart).
 
 Usage:
   python3 fetch.py                 # today's snapshot + vacancy
@@ -36,13 +37,17 @@ BASE = f"https://{VHOST}.appfolio.com"
 AUTH = base64.b64encode(
     f"{E['APPFOLIO_USERNAME']}:{E['APPFOLIO_PASSWORD']}".encode()).decode()
 
-def report(name, body):
-    """AppFolio reports are v2 POST with a JSON body; follow next_page if present."""
+def report(name, body, single=False):
+    """AppFolio reports are v2 POST with a JSON body; follow next_page if present.
+    single=True returns just the first page (5000 rows) and warns if truncated —
+    general_ledger's next_page link is relative and 404s when followed
+    (probed 2026-09-16), so GL callers keep each request under one page."""
     url = f"{BASE}/api/v2/reports/{name}.json"
     data = json.dumps({"unit_visibility": "active", **body}).encode()
     hdr = {"Authorization": f"Basic {AUTH}", "Content-Type": "application/json"}
     rows = []
     while url:
+        if url.startswith("/"): url = BASE + url
         if data is not None:   # first call = POST with body
             req = urllib.request.Request(url, data=data, method="POST", headers=hdr)
         else:                  # subsequent next_page links are GETs
@@ -59,6 +64,9 @@ def report(name, body):
         rows += d.get("results", [])
         url = d.get("next_page_url") or d.get("next_page"); data = None
         time.sleep(THROTTLE)
+        if single:
+            if url: print(f"  WARN {name}: truncated at {len(rows)} rows (next page ignored)")
+            break
     return rows
 
 def income_statement_12mo(frm, to):
@@ -105,6 +113,40 @@ def fetch_concessions(start_year=2024):
             months.setdefault(m["id"], {})["concessions"] = -float(m["value"])
         y += 1
     return months
+
+def gl_account_id(number):
+    """Resolve a GL account number ('41150') → gl_account_id via chart_of_accounts;
+    general_ledger's gl_account_ids filter wants the id, not the number."""
+    for r in report("chart_of_accounts", {}):
+        if str(r.get("number")) == str(number):
+            return r["gl_account_id"]
+    return None
+
+def concession_units(months):
+    """Per-month count of distinct units that received a concession, from
+    general_ledger lines on GL 41150. A concession posts as a DEBIT to the income
+    account (AppFolio auto-generates a 'Receipt' from the tenant credit); credits
+    are reversals, so a unit only counts when its month net is a debit > 0.
+    ~320 lines/month (2026-09), well under the 5000-row single page.
+    2026-06 is the consolidation month: one bulk JE, 2 units — not comparable."""
+    import calendar
+    aid = gl_account_id("41150")
+    if aid is None:
+        print("  WARN: GL 41150 not found in chart_of_accounts; unit counts skipped"); return
+    for key, m in months.items():
+        if not m.get("concessions"):
+            continue
+        y, mo = int(key[:4]), int(key[5:7])
+        rows = report("general_ledger", {"posted_on_from": f"{key}-01",
+                                          "posted_on_to": f"{key}-{calendar.monthrange(y, mo)[1]:02d}",
+                                          "gl_account_ids": [aid]}, single=True)
+        net = {}
+        for r in rows:
+            uid = r.get("unit_id")
+            if uid is None: continue
+            net[uid] = net.get(uid, 0.0) + float(r.get("debit") or 0) - float(r.get("credit") or 0)
+        m["units"] = sum(1 for v in net.values() if v > 0.005)
+        m["lines"] = len(rows)
 
 def tickler(frm, to):
     """tenant_tickler is a v1 GET report (not v2 POST). Returns move/notice
@@ -297,6 +339,7 @@ def main():
     mv = sum(1 for r in tk if r.get("Event") in ("Move-in", "Move-out"))
     # monthly concessions $ + Gross Potential Rent $ → concessions.json
     conc = fetch_concessions()
+    concession_units(conc)
     (DATA / "concessions.json").write_text(json.dumps(conc, indent=2, sort_keys=True))
     print(f"history now {total} snapshots; pulled {len(snaps)}; "
           f"vacancy units {len(vac)}; events {len(events)}; tickler {len(tk)} ({mv} moves); "

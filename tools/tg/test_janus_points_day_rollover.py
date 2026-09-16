@@ -89,9 +89,37 @@ def test_header_rounds_float_total():
     mod = _load_tui()
     mod.STATE.day_offset = 0
     mod.STATE.today_points = 695.357142857143
+    mod.STATE.last_points_fetch = 12345.0  # a fetch succeeded — chip must render
     text = "".join(t for _, t, *_ in mod.render_header())
     assert "695分" in text
     assert "." not in text
+
+
+def test_header_shows_confirmed_zero_points():
+    """A successful Neon read that genuinely totals 0分 must still render
+    "0分" — not vanish. Bug 2026-09-16: render_header used `if pts` to decide
+    whether to show the chip, which hid it for BOTH a real zero-point day and
+    a fetch that has never succeeded (today_points defaults to 0), so a
+    standing Excel-connectivity failure on ix looked identical to "no points
+    yet" with no visible sign anything was broken."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    mod.STATE.today_points = 0
+    mod.STATE.last_points_fetch = 12345.0  # a fetch DID succeed and confirmed 0
+    text = "".join(t for _, t, *_ in mod.render_header())
+    assert "0分" in text, f"confirmed 0分 must render, not vanish: {text!r}"
+
+
+def test_header_hides_points_chip_before_first_successful_fetch():
+    """Before fetch_points() has ever completed, today_points sits at its
+    default 0 with no data behind it — the chip must stay hidden rather than
+    claiming a confirmed "0分" it hasn't actually read."""
+    mod = _load_tui()
+    mod.STATE.day_offset = 0
+    mod.STATE.today_points = 0
+    mod.STATE.last_points_fetch = 0.0  # never fetched
+    text = "".join(t for _, t, *_ in mod.render_header())
+    assert "分" not in text, f"no confirmed read yet — chip must stay hidden: {text!r}"
 
 
 def test_morning_blocks_use_clamped_accessor():
