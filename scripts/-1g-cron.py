@@ -160,39 +160,65 @@ def _archive_before_reset():
 
 
 def _archive_0g_goals(goal_lines):
-    """Append the just-ended day's 0₲ goals (with their done/undone state) to a
-    durable, reverse-chronological log so they survive the daily reset and can be
-    looked back on. Idempotent per date. `goal_lines` are raw markdown checkbox
-    lines for the day being reset (i.e. yesterday)."""
-    from datetime import datetime, timedelta
-    day = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
-    log = MD_FILE.parent / "0g-log.md"
-    section = f"## {day}\n\n" + "\n".join(l.strip() for l in goal_lines) + "\n"
+    """Reconcile the just-ended day's 0₲ goals — with their final done/undone
+    state — into the SAME durable log 0g_log.py writes at set-time
+    (~/vault/g245/0g-log.md).
 
-    if log.exists():
-        existing = log.read_text(encoding="utf-8")
-        if f"## {day}\n" in existing:  # already logged this date
-            return
-        lines = existing.split("\n")
-        # Insert above the first existing date heading (newest first)
-        insert_at = next((k for k, ln in enumerate(lines) if ln.startswith("## ")), len(lines))
-        lines[insert_at:insert_at] = section.split("\n") + [""]
-        log.write_text("\n".join(lines), encoding="utf-8")
+    Consolidated 2026-09-16: this used to write a second, divergent copy at
+    MD_FILE.parent/0g-log.md (g245/5e-1/) — two daemons silently maintaining
+    two logs of "the same thing", diverging whenever one ran and the other
+    didn't (retired copy archived to g245/z_archive/). 0g_log.py's set-time
+    log usually already has today's goals (always unchecked `- [ ]`, logged
+    the instant /0g ran); this reconciliation updates each matched goal's
+    checkbox to its FINAL state and appends any goal 0g_log.py never saw
+    (e.g. its own run failed that day) — it never creates a second file.
+    Matching/merging reuses 0g_log.py's own normalization so "same goal" is
+    judged identically in both places. `goal_lines` are raw markdown
+    checkbox lines for the day being reset (i.e. yesterday). Idempotent:
+    re-running just re-applies the same final state, never duplicates."""
+    from datetime import datetime, timedelta
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_0g_log_mod", Path(__file__).parent / "0g_log.py")
+    _0g_log = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_0g_log)
+
+    day = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
+    log = _0g_log.LOG_PATH
+    day_heading = f"## {day}"
+
+    final = {_0g_log._goal_text(l): l.strip()
+             for l in goal_lines if _0g_log._CHECKBOX.match(l)}
+    if not final:
+        return
+
+    text = log.read_text(encoding="utf-8") if log.exists() else \
+        _0g_log._HEADER.format(date=day.replace(".", "-"))
+    lines = text.split("\n")
+
+    start = next((i for i, l in enumerate(lines) if l.strip() == day_heading), None)
+    if start is not None:
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].startswith("## ")), len(lines))
+        remaining = dict(final)
+        for i in range(start + 1, end):
+            if _0g_log._CHECKBOX.match(lines[i]):
+                key = _0g_log._goal_text(lines[i])
+                if key in remaining:
+                    lines[i] = remaining.pop(key)
+        if remaining:
+            insert = end
+            while insert - 1 > start and not lines[insert - 1].strip():
+                insert -= 1
+            lines[insert:insert] = list(remaining.values())
     else:
-        header = (
-            "---\n"
-            "title: \"0₲ Goals Log\"\n"
-            f"date: {day.replace('.', '-')}\n"
-            "type: log\n"
-            "tags: [g245, 0g]\n"
-            "source: -1g-cron\n"
-            "---\n\n"
-            "# 0₲ Daily Goals Log\n\n"
-            "Each day's 0₲ goals (with done/undone state), archived before the daily "
-            "reset wipes the live section. Newest first.\n\n"
-        )
-        log.write_text(header + section, encoding="utf-8")
-    print(f"[{LOG_PREFIX}] archived {len(goal_lines)} 0₲ goal(s) to 0g-log.md ({day})")
+        section = [day_heading, ""] + list(final.values()) + [""]
+        insert_at = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
+        lines[insert_at:insert_at] = section
+
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[{LOG_PREFIX}] reconciled {len(goal_lines)} 0₲ goal(s) into 0g-log.md ({day})")
 
 
 def run_daily_reset(dry_run: bool):

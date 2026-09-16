@@ -634,3 +634,90 @@ def test_build_email_by_account_blocked_uses_response_pairs_recv_time(tmp_path, 
     imsg = result["imessage"]
     assert imsg[(day, "巳")]["count"] == 2, "same-block pairs on the same day must merge"
     assert imsg[(day, "申")]["count"] == 1, "different-block pair must bucket separately"
+
+
+# ── Window paging + ledger bucketing (2026-09-16) ──────────────────────────────
+
+def _load_dash():
+    spec = importlib.util.spec_from_file_location(
+        "dash_paging", Path(__file__).parent / "dashboard.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_bucket_neon_edits_lands_events_in_their_block_and_dedups_per_bucket():
+    """Neon Manual Edits used to be day-only. Each ledger event has a full
+    timestamp, so at PER BLOCK it must land in the 2-hour 地支 block it
+    happened in, and a break + its own ack on one cell in one bucket count
+    once."""
+    m = _load_dash()
+    key = ("0分", "P", "9/10")
+    events = [
+        ("2026-09-10T10:00:10", key, "block-turnover"),      # 午 (10-12)
+        ("2026-09-10T10:49:41", key, "ack: same cell"),      # 午 again → dedup
+        ("2026-09-10T14:05:00", ("0n", "AG", "9/10"), "x"),  # 申 (14-16)
+        ("2026-09-10T23:30:00", ("0n", "AH", "9/10"), "x"),  # asleep → dropped
+    ]
+    branches = [b for b, _, _ in m.BRANCH_BLOCKS]
+    out = m.bucket_neon_edits(
+        events, lambda ts: branches.index(m._branch_for_ts(ts)) if m._branch_for_ts(ts) else None,
+        len(branches))
+    assert out["counts"][branches.index("午")] == 1
+    assert out["counts"][branches.index("申")] == 1
+    assert sum(out["counts"]) == 2
+
+
+def test_granular_daily_offset_pages_back_whole_windows(monkeypatch):
+    """offset=1 on the daily view must be the 30 days immediately before the
+    live window, with the window meta the pagers read."""
+    m = _load_dash()
+    import datetime as _d
+    today = _d.date(2026, 9, 16)
+
+    class FakeDate(_d.date):
+        @classmethod
+        def today(cls):
+            return today
+    monkeypatch.setattr(m, "date", FakeDate)
+    monkeypatch.setattr(m, "load_points_all", lambda: {"2026-08-17": {"i9": 7}, "2026-08-18": {"i9": 99}})
+    monkeypatch.setattr(m, "load_toggl_daily_cache", lambda: ({}, {}))
+    monkeypatch.setattr(m, "load_toggl_range", lambda *a, **k: ({}, {}))
+    seen = {}
+    def fake_tasks(n_days=30, end=None):
+        seen["end"] = end
+        return {}
+    monkeypatch.setattr(m, "load_tasks_data", fake_tasks)
+    monkeypatch.setattr(m, "load_email_data", lambda: {})
+    monkeypatch.setattr(m, "_neon_edit_events", lambda a, b: [])
+
+    d = m._build_granular_chart_data("daily", offset=1)
+    assert d["window"] == {"offset": 1, "start": "2026-07-19", "end": "2026-08-17",
+                           "label": "7/19 – 8/17"}
+    assert d["dates"][-1] == "2026-08-17" and len(d["dates"]) == 30
+    assert seen["end"] == _d.date(2026, 8, 17)  # tasks fetched for the paged window
+    i9 = next(ds for ds in d["points"]["datasets"] if ds["label"] == "i9")
+    assert i9["data"][-1] == 7 and sum(i9["data"]) == 7  # 8/18 is outside the window
+
+
+def test_weekly_offset_uses_daily_toggl_cache_not_live_api(monkeypatch):
+    """The v9 live endpoint can't reach back past ~90 days, so paged weekly
+    windows must read the persistent daily cache instead."""
+    m = _load_dash()
+    import datetime as _d
+    today = _d.date(2026, 9, 16)
+
+    class FakeDate(_d.date):
+        @classmethod
+        def today(cls):
+            return today
+    monkeypatch.setattr(m, "date", FakeDate)
+    monkeypatch.setattr(m, "load_points_all", lambda: {})
+    calls = []
+    monkeypatch.setattr(m, "load_toggl_range", lambda *a, **k: calls.append("live") or {})
+    monkeypatch.setattr(m, "load_toggl_daily_cache", lambda: (calls.append("cache") or {"2026-06-01": {"i9": 60}}, {}))
+    w = m._build_weekly_data(offset=1)
+    assert calls == ["cache"]
+    assert w["weeks"] == ['5/31', '6/7', '6/14', '6/21', '6/28', '7/5', '7/12', '7/19']
+    assert w["window"]["label"] == "5/31 – 7/25"
+    assert w["time_week"]["datasets"][0]["data"][0] == 1.0  # 6/1 → first week, 60m = 1.0h
