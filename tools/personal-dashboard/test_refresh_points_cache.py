@@ -16,6 +16,7 @@ any log explaining why:
    same fix personal-dashboard/dashboard.py already uses for the identical
    wall)."""
 import datetime as dt
+import json
 import importlib.util
 import sys
 from pathlib import Path
@@ -154,3 +155,34 @@ def test_sheet_view_min_row_matches_openpyxl_semantics(rpc):
     ws = rpc.SheetView(rows)
     assert list(ws.iter_rows(min_row=3, values_only=True)) == [["r3"], ["r4"], ["r5"]]
     assert list(ws.iter_rows(min_row=1, values_only=True)) == rows
+
+
+def test_default_cutoff_is_jan_1_of_current_year(rpc):
+    """2026-09-16: Points/Week on the dashboard started at 6/14 because the
+    refresher only read 90 days back. A default run must now reach Jan 1."""
+    assert rpc.default_cutoff(dt.date(2026, 9, 16)) == dt.date(2025, 12, 31)
+    assert rpc.default_cutoff(dt.date(2026, 1, 1)) == dt.date(2025, 12, 31)
+
+
+def test_merge_cache_keeps_history_and_replaces_fresh_days(rpc):
+    existing = {"2026-01-05": {"i9": 10}, "2026-09-15": {"i9": 20, "xk": 5}}
+    fresh = {"2026-09-15": {"i9": 25}, "2026-09-16": {"i9": 30}}
+    merged = rpc.merge_cache(existing, fresh)
+    assert merged["2026-01-05"] == {"i9": 10}          # untouched history
+    assert merged["2026-09-15"] == {"i9": 25}          # fresh day wins wholesale
+    assert merged["2026-09-16"] == {"i9": 30}
+    assert existing["2026-09-15"] == {"i9": 20, "xk": 5}  # input not mutated
+
+
+def test_main_merges_into_existing_cache_file(rpc, monkeypatch, tmp_path):
+    """The whole-file overwrite in main() was the truncation vector: a
+    --days run must not drop days outside its window."""
+    cache = tmp_path / ".points-cache.json"
+    cache.write_text(json.dumps({"2026-01-05": {"i9": 10}}))
+    monkeypatch.setattr(rpc, "CACHE", cache)
+    monkeypatch.setattr(rpc, "load_workbook_or_die", lambda: object())
+    monkeypatch.setattr(rpc, "build_cache",
+                        lambda wb, today=None, cutoff=None: {"2026-09-16": {"i9": 30}})
+    assert rpc.main(["--days", "3"]) == 0
+    data = json.loads(cache.read_text())
+    assert data == {"2026-01-05": {"i9": 10}, "2026-09-16": {"i9": 30}}

@@ -318,6 +318,29 @@ Also collect the **below-target habits** (`target - actual` > 0, biggest
 gaps first) and **overperformers** (`actual > target`) — these are more
 informative in the report than the raw percentage alone.
 
+### Step 4c: Week-over-week snapshot from the `1分+1s` sheet (Ix)
+
+Pull the review week's row plus the trailing 8 completed weeks from the
+weekly summary sheet on Ix, so the week is judged against its own recent
+history rather than only against the (often stale) `1g` targets:
+
+```bash
+python3 ~/i446-monorepo/tools/1s/1s-weeks.py [YYYY-MM-DD] [--weeks 8]
+```
+
+Read-only (goes through `ix-osa.sh`; never writes). It prints a ready-made
+markdown block: a per-week table (∑分, 分/d, i9, m7, -2g, hcmc, hcmp, hcb,
+s89, xk87, -1₦/d, 0₲/d, -1n, avg rating, title), the trailing mean and Δ%
+row, the metrics that moved ≥15% either way, best/worst-in-window flags,
+"similar-total" peer weeks (±10% ∑分), and each prior week's own
+win/missed text. `--json` gives the raw structure instead.
+
+The domain numbers here are the sheet's own weekly figures (its formulas),
+not the Step 4 `0分` daily sums — do not mix the two in one table. Paste the
+block verbatim into the review (Step 7) and feed it to the narrative (Step
+6). If the target week's survey row is not yet saved (title blank), the
+table still renders; the digest just lacks that week's title/win text.
+
 ### Step 5: Build comparison table
 
 For each domain, compute:
@@ -348,13 +371,17 @@ Comparison table:
 Total tracked time: {total_hours}h
 Sleep: {sleep_hours}h
 
+Week-over-week (from 1s-weeks.py):
+{wow_block}
+
 Analyze:
 1. **What worked** (2-3 bullets): domains where points met or exceeded targets, especially with efficient time use
 2. **What got crowded out** (2-3 bullets): domains where targets were missed despite having goals. Why? (time went elsewhere, meetings, etc.)
 3. **Time-points mismatch** (1-2 bullets): domains where lots of time was spent but few points earned (meetings without outcomes) or vice versa (high leverage work)
-4. **One priority for next week**: the single highest-leverage adjustment
+4. **Versus recent weeks** (2-3 bullets): using the week-over-week block, name what moved ≥15% against the trailing mean and tie each move to a concrete cause from this week's Toggl/goals. If a similar-total peer week exists, say what that week's own win/missed note suggests about this one.
+5. **One priority for next week**: the single highest-leverage adjustment
 
-Keep it under 200 words total. No hedging.
+Keep it under 260 words total. No hedging.
 ```
 
 ### Step 7: Write to vault
@@ -388,6 +415,9 @@ source: /1s
 
 Below-target habits: {habit} ({actual}/{target}), ...
 Overperformers: {habit} ({actual}/{target}), ...
+
+{wow_block from Step 4c, verbatim — it already carries its own
+"### Week-over-week (M.W vs trailing N)" heading}
 
 ### Goals Detail
 
@@ -427,7 +457,8 @@ Ask the user which action to take for each stale entry.
 ### Step 8: Report
 
 Show the comparison table, the 1n Completion % (with below-target/
-overperformer habits from Step 4b), and narrative to the user. Do NOT run `/did 1s`
+overperformer habits from Step 4b), the week-over-week Δ line (Step 4c:
+what moved ≥15% vs the trailing mean), and narrative to the user. Do NOT run `/did 1s`
 here — the weekly 1s task is marked done by the survey form on `^S` (the
 task is not complete until the survey is; user decision 2026-07-21). If the
 survey is still open, say so; if it was cancelled, the task stays open until
@@ -446,4 +477,5 @@ the user submits it (rerun `1s-survey.py` directly if needed).
 - Use `toggl_range` for the whole week in one call (see Step 3) — not 7 separate `toggl_date` calls.
 - 0分 column mapping must match exactly. If columns shift, the review will have wrong data.
 - AppleScript calls sequential (no parallel Excel access).
+- `1s-weeks.py` (Step 4c) imports `week_range`/`week_row_label` from `1s-survey.py` — keep the label logic there, not duplicated.
 - The `reviews/` folder uses M.W labels, not ISO week numbers: `YYYY-M.W-1s.md` (e.g. `2026-8.2-1s.md`), matching `1分+1s`/`1n+`'s own week labeling.

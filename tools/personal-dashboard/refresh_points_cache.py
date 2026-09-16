@@ -37,7 +37,14 @@ from pathlib import Path
 from openpyxl.utils import column_index_from_string as ci
 
 CACHE = Path(__file__).parent / ".points-cache.json"
-CUTOFF_DAYS = 90
+# History floor for a default run: Jan 1 of the current year. The bulk
+# A1:Z{LAST_ROW} read costs the same regardless of how many rows we keep,
+# and the weekly/monthly dashboard views need the whole year (2026-09-16:
+# a 90-day floor here, combined with a whole-file overwrite in main(), was
+# why Points/Week on the dashboard began at 6/14 — every 30-min cron run
+# truncated everything older). --since overrides; --days N gives a
+# trailing window instead.
+CUTOFF_DAYS = None
 NEON_NAME_RE = r"Neon分v[\d.]+\.xlsx$"
 
 # 0分: per-domain points + block breakdown + day grand total (col D).
@@ -168,9 +175,16 @@ def build_0n_days(ws, today: date, cutoff: date, result: dict) -> None:
         day_data["__hcmp_min__"] = int(round(float(hcmp_min)))  # 0 is real, not missing
 
 
-def build_cache(wb, today: date | None = None) -> dict:
+def default_cutoff(today: date) -> date:
+    """Exclusive lower bound for a default run: the day before Jan 1."""
+    if CUTOFF_DAYS is not None:
+        return today - timedelta(days=CUTOFF_DAYS)
+    return date(today.year, 1, 1) - timedelta(days=1)
+
+
+def build_cache(wb, today: date | None = None, cutoff: date | None = None) -> dict:
     today = today or date.today()
-    cutoff = today - timedelta(days=CUTOFF_DAYS)
+    cutoff = cutoff or default_cutoff(today)
     result: dict = {}
     build_fen_days(_sheet_view(wb, "0分", FEN_LAST_COL), today, cutoff, result)
     build_hcbi_days(_sheet_view(wb, "hcbi", HCBI_LAST_COL), today, cutoff, result)
@@ -178,11 +192,46 @@ def build_cache(wb, today: date | None = None) -> dict:
     return result
 
 
-def main() -> int:
+def merge_cache(existing: dict, fresh: dict) -> dict:
+    """Per-day merge: a freshly read day replaces the stored day wholesale
+    (its values are the sheet's current truth); days the fresh read did not
+    cover are kept. Never truncates history — see the CUTOFF_DAYS note."""
+    merged = dict(existing)
+    merged.update(fresh)
+    return merged
+
+
+def load_existing() -> dict:
+    if not CACHE.exists():
+        return {}
+    try:
+        data = json.loads(CACHE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Refresh the points JSON cache from Neon Excel.")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--since", help="read days after this date (YYYY-MM-DD, exclusive)")
+    g.add_argument("--days", type=int, help="read only the trailing N days")
+    args = ap.parse_args(argv)
+    today = date.today()
+    if args.since:
+        cutoff = date.fromisoformat(args.since)
+    elif args.days is not None:
+        cutoff = today - timedelta(days=args.days)
+    else:
+        cutoff = default_cutoff(today)
     wb = load_workbook_or_die()
-    result = build_cache(wb)
-    CACHE.write_text(json.dumps(result, indent=2, ensure_ascii=False))
-    print(f"wrote {len(result)} days to cache")
+    fresh = build_cache(wb, today=today, cutoff=cutoff)
+    merged = merge_cache(load_existing(), fresh)
+    CACHE.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
+    days = sorted(merged)
+    span = f"{days[0]}..{days[-1]}" if days else "empty"
+    print(f"read {len(fresh)} days since {cutoff}; cache now {len(merged)} days ({span})")
     return 0
 
 

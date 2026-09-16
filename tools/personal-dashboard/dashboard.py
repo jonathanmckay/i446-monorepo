@@ -547,17 +547,20 @@ def load_toggl_daily_cache():
     return minutes, entries
 
 
-def _fetch_toggl_entries(days):
-    """Raw Toggl time entries for the last `days` days (empty list on any
-    failure). Shared by load_toggl_range (day-bucketed) and the per-block
-    chart builder (2-hour-bucketed) so both consume the same API call shape
-    without duplicating the request/auth boilerplate."""
+def _fetch_toggl_entries(days, end=None):
+    """Raw Toggl time entries for the `days` days ending at `end` (default
+    today; empty list on any failure). Shared by load_toggl_range
+    (day-bucketed) and the per-block chart builder (2-hour-bucketed) so both
+    consume the same API call shape without duplicating the request/auth
+    boilerplate. Note the v9 endpoint only reaches back ~90 days; older
+    windows come back empty (the daily Toggl cache covers those for the
+    day/week/month views)."""
     api_key = os.environ.get("TOGGL_API_KEY", "")
     if not api_key:
         return []
-    today = date.today()
-    start = (today - timedelta(days=days)).isoformat()
-    end = (today + timedelta(days=1)).isoformat()
+    last = end or date.today()
+    start = (last - timedelta(days=days)).isoformat()
+    end = (last + timedelta(days=1)).isoformat()
     url = f"https://api.track.toggl.com/api/v9/me/time_entries?start_date={start}&end_date={end}"
     creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
     req = urllib.request.Request(url)
@@ -570,8 +573,9 @@ def _fetch_toggl_entries(days):
         return []
 
 
-def load_toggl_range(days, return_counts=False):
-    """Toggl entries for the last `days` days → {date_str: {project: minutes}}.
+def load_toggl_range(days, return_counts=False, end=None):
+    """Toggl entries for the `days` days ending at `end` (default today) →
+    {date_str: {project: minutes}}.
 
     With return_counts=True, also returns {date_str: {project: entry_count}}
     as a second tuple element (mirrors load_toggl_data's shape for arbitrary
@@ -579,9 +583,9 @@ def load_toggl_range(days, return_counts=False):
     """
     if not os.environ.get("TOGGL_API_KEY", ""):
         return ({}, {}) if return_counts else {}
-    today = date.today()
+    today = end or date.today()
     floor = today - timedelta(days=days)
-    entries = _fetch_toggl_entries(days)
+    entries = _fetch_toggl_entries(days, end=today)
     result = defaultdict(lambda: defaultdict(int))
     entry_counts = defaultdict(lambda: defaultdict(int))
     for e in entries:
@@ -608,15 +612,27 @@ def load_toggl_range(days, return_counts=False):
     return minutes
 
 
-def _build_weekly_data(n_weeks=8):
-    """Weekly time/points by category + cumulative this-week vs last-week shadow."""
+def _build_weekly_data(n_weeks=8, offset=0):
+    """Weekly time/points by category + cumulative this-week vs last-week shadow.
+
+    `offset` pages the two weekly bar charts back by whole windows (offset=1
+    → the n_weeks before the current window). The cumulative this-vs-last
+    panel always describes the current week regardless of offset."""
     today = date.today()
     this_week_start = _week_start(today)
-    first_week_start = this_week_start - timedelta(weeks=n_weeks - 1)
+    offset = max(0, int(offset or 0))
+    window_end_start = this_week_start - timedelta(weeks=n_weeks * offset)
+    first_week_start = window_end_start - timedelta(weeks=n_weeks - 1)
+    window_last_day = min(today, window_end_start + timedelta(days=6))
 
     points_all = load_points_all()
-    days_span = (today - first_week_start).days + 2
-    toggl_all = load_toggl_range(days_span)
+    days_span = (window_last_day - first_week_start).days + 2
+    if offset == 0:
+        toggl_all = load_toggl_range(days_span)
+    else:
+        # Older windows: the v9 live endpoint can't reach back, so use the
+        # persistent daily cache (backfill_toggl_cache.py) instead.
+        toggl_all, _ = load_toggl_daily_cache()
 
     week_starts = [first_week_start + timedelta(weeks=i) for i in range(n_weeks)]
     week_labels = [ws.strftime("%-m/%-d") for ws in week_starts]
@@ -738,6 +754,17 @@ def _build_weekly_data(n_weeks=8):
             "last_full": int(last_full),
         },
         "this_week_start": this_week_start.strftime("%-m/%-d"),
+        "window": _window_meta(first_week_start, window_last_day, offset),
+    }
+
+
+def _window_meta(first_day, last_day, offset):
+    """Shared shape the pagers read: the window's date span + its offset."""
+    return {
+        "offset": int(offset or 0),
+        "start": first_day.isoformat(),
+        "end": last_day.isoformat(),
+        "label": f"{first_day.strftime('%-m/%-d')} – {last_day.strftime('%-m/%-d')}",
     }
 
 
@@ -751,7 +778,7 @@ GRANULAR_WEEKS = 26   # ~6 months of Su-Sa weeks
 GRANULAR_MONTHS = 12  # 1 year of calendar months
 
 
-def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
+def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS, offset=0):
     """Points/Time/Tasks/Entries chart data bucketed into trailing 2-hour 地支
     blocks (last n_days days x 9 blocks/day, skipping the 22:00-04:00 sleep
     window). Each bar's label is a [branch, "M/D"] pair — Chart.js renders a
@@ -762,8 +789,13 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
     Unlike the weekly/monthly buckets in _build_granular_chart_data, Points
     here is a single "分" series (the sheet's G:O columns are per-block
     totals, not broken out by domain like P:Y), not a stacked-by-domain set.
+
+    `offset` pages the window back by whole n_days spans. Time/Entries come
+    from the live v9 endpoint, which only reaches back ~90 days, so very old
+    block windows show Points/Tasks/Edits but empty Time/Entries.
     """
-    today = date.today()
+    offset = max(0, int(offset or 0))
+    today = date.today() - timedelta(days=n_days * offset)
     day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
     bucket_labels = [[branch, d.strftime("%-m/%-d")]
                      for d in day_list for branch, _, _ in BRANCH_BLOCKS]
@@ -806,7 +838,7 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
     # in a 2h block. Each entry's overlap with every block is computed via
     # simple interval intersection and only the overlapping minutes land in
     # that block, so per-block Time now naturally caps at 120.
-    entries = _fetch_toggl_entries(n_days)
+    entries = _fetch_toggl_entries(n_days, end=today)
     time_bucketed = defaultdict(lambda: [0] * n_buckets)
     entries_bucketed = defaultdict(lambda: [0] * n_buckets)
     for e in entries:
@@ -867,7 +899,7 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
     time_entries_values = [sum(entries_bucketed[c][i] for c in entries_bucketed) for i in range(n_buckets)]
 
     # Tasks — bucketed from each completion's completed_at via load_tasks_by_block
-    tasks_all_blocked = load_tasks_by_block(n_days)
+    tasks_all_blocked = load_tasks_by_block(n_days, end=today)
     tasks_neon = [0] * n_buckets
     tasks_posthoc = [0] * n_buckets
     tasks_1n = [0] * n_buckets
@@ -914,6 +946,18 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
         if keyed:
             email_data = {"datasets": _build_email_datasets(keyed, block_keys)}
 
+    # Neon manual edits — each ledger event has a full timestamp, so it lands
+    # in the 2-hour block it happened in (not just the day).
+    def edit_bucket(ts):
+        try:
+            d = date.fromisoformat(ts[:10])
+        except ValueError:
+            return None
+        branch = _branch_for_ts(ts)
+        return bucket_index(d, branch) if branch else None
+    neon_edits = bucket_neon_edits(
+        _neon_edit_events(day_list[0], day_list[-1]), edit_bucket, n_buckets)
+
     result = {
         "dates": bucket_labels,
         "points": {"datasets": points_datasets},
@@ -925,36 +969,42 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS):
         "tasks_other": tasks_other,
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
+        "neon_edits": neon_edits,
+        "window": _window_meta(day_list[0], day_list[-1], offset),
     }
     if email_data:
         result["email"] = email_data
     return result
 
 
-def _build_granular_chart_data(granularity):
-    """Points/Time/Tasks/Entries chart data bucketed weekly or monthly.
+def _build_granular_chart_data(granularity, offset=0):
+    """Points/Time/Tasks/Entries chart data bucketed daily, weekly or monthly.
 
     Returns the same shape as the relevant subset of _build_api_data()'s
     payload (dates/points/time/tasks_*/entries/time_entries), so the
     frontend's chart-building code can treat daily/weekly/monthly uniformly.
+
+    `offset` pages the window back by whole spans (offset=1 → the window
+    immediately before the current one). "daily" at offset 0 is still served
+    from /api/data client-side; it is built here only for offset > 0.
     """
     if granularity == "block":
-        return _build_block_chart_data()
+        return _build_block_chart_data(offset=offset)
 
-    today = date.today()
+    offset = max(0, int(offset or 0))
+    real_today = date.today()
 
     if granularity == "monthly":
-        this_month = _month_start(today)
-        first_month = this_month
-        for _ in range(GRANULAR_MONTHS - 1):
-            first_month = date(first_month.year - (1 if first_month.month == 1 else 0),
-                                12 if first_month.month == 1 else first_month.month - 1, 1)
+        this_month = _add_month(_month_start(real_today), -GRANULAR_MONTHS * offset)
+        first_month = _add_month(this_month, -(GRANULAR_MONTHS - 1))
         bucket_starts = []
         cur = first_month
         for _ in range(GRANULAR_MONTHS):
             bucket_starts.append(cur)
             cur = _add_month(cur)
         bucket_labels = [bs.strftime("%b '%y") for bs in bucket_starts]
+        window_last = min(real_today, _add_month(this_month) - timedelta(days=1))
+        today = window_last
         days_span = (today - first_month).days + 2
 
         def bucket_index(d):
@@ -964,11 +1014,22 @@ def _build_granular_chart_data(granularity):
                 if d >= bucket_starts[i]:
                     return i
             return None
+    elif granularity == "daily":
+        today = real_today - timedelta(days=DAYS * offset)
+        first_day = today - timedelta(days=DAYS - 1)
+        bucket_starts = [first_day + timedelta(days=i) for i in range(DAYS)]
+        bucket_labels = [d.isoformat() for d in bucket_starts]  # matches /api/data
+        days_span = DAYS + 1
+
+        def bucket_index(d):
+            delta = (d - first_day).days
+            return delta if 0 <= delta < DAYS else None
     else:  # "weekly" (default fallback for anything unrecognized)
-        this_week_start = _week_start(today)
+        this_week_start = _week_start(real_today) - timedelta(weeks=GRANULAR_WEEKS * offset)
         first_week_start = this_week_start - timedelta(weeks=GRANULAR_WEEKS - 1)
         bucket_starts = [first_week_start + timedelta(weeks=i) for i in range(GRANULAR_WEEKS)]
         bucket_labels = [ws.strftime("%-m/%-d") for ws in bucket_starts]
+        today = min(real_today, this_week_start + timedelta(days=6))
         days_span = (today - first_week_start).days + 2
 
         def bucket_index(d):
@@ -979,6 +1040,7 @@ def _build_granular_chart_data(granularity):
             return wi if wi < GRANULAR_WEEKS else None
 
     n_buckets = len(bucket_starts)
+    window_first = bucket_starts[0]
 
     points_all = load_points_all()
     # Time/Entries: base data comes from the persistent .toggl-daily-cache.json
@@ -991,10 +1053,11 @@ def _build_granular_chart_data(granularity):
     # refetch-tail pattern as load_tasks_data's _TASKS_REFETCH_TAIL.
     TOGGL_CACHE_TAIL_DAYS = 3
     toggl_all, toggl_counts = load_toggl_daily_cache()
-    live_minutes, live_counts = load_toggl_range(TOGGL_CACHE_TAIL_DAYS, return_counts=True)
-    toggl_all = {**toggl_all, **live_minutes}
-    toggl_counts = {**toggl_counts, **live_counts}
-    tasks_all = load_tasks_data(n_days=days_span)
+    if offset == 0:
+        live_minutes, live_counts = load_toggl_range(TOGGL_CACHE_TAIL_DAYS, return_counts=True)
+        toggl_all = {**toggl_all, **live_minutes}
+        toggl_counts = {**toggl_counts, **live_counts}
+    tasks_all = load_tasks_data(n_days=days_span, end=today)
 
     # Points, bucketed and summed
     pts_cats = [m["label"] for m in POINTS_COLS.values()]
@@ -1099,6 +1162,15 @@ def _build_granular_chart_data(granularity):
         email_by_account_daily, lambda dstr: bucket_index(date.fromisoformat(dstr)), bucket_labels)
     email_datasets = _build_email_datasets(email_by_account_bucketed, bucket_labels)
 
+    # Neon manual edits, bucketed exactly like the other series.
+    def edit_bucket(ts):
+        try:
+            return bucket_index(date.fromisoformat(ts[:10]))
+        except ValueError:
+            return None
+    neon_edits = bucket_neon_edits(
+        _neon_edit_events(window_first, today), edit_bucket, n_buckets)
+
     return {
         "dates": bucket_labels,
         "points": {"datasets": points_datasets},
@@ -1111,6 +1183,8 @@ def _build_granular_chart_data(granularity):
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
         "email": {"datasets": email_datasets},
+        "neon_edits": neon_edits,
+        "window": _window_meta(window_first, today, offset),
     }
 
 
@@ -1190,9 +1264,10 @@ def _fetch_tasks_for_day(day, token):
     return day.isoformat(), counts
 
 
-def load_tasks_data(n_days=DAYS):
+def load_tasks_data(n_days=DAYS, end=None):
     """Fetch completed tasks from Todoist, split by category tag in content.
-    Returns {date_str: {"neon", "posthoc", "one_n", "neg1n", "other", "total"}}.
+    Returns {date_str: {"neon", "posthoc", "one_n", "neg1n", "other", "total"}}
+    for the n_days+1 days ending at `end` (default today).
 
     Performance:
     - Historical days (older than today/yesterday) are read from a disk cache
@@ -1204,7 +1279,8 @@ def load_tasks_data(n_days=DAYS):
     """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
     today = date.today()
-    all_days = [today - timedelta(days=n) for n in range(n_days, -1, -1)]
+    last = end or today
+    all_days = [last - timedelta(days=n) for n in range(n_days, -1, -1)]
     refresh_cutoff = today - timedelta(days=_TASKS_REFETCH_TAIL - 1)
 
     # Load disk cache
@@ -1240,9 +1316,10 @@ def load_tasks_data(n_days=DAYS):
     return {d: counts for d, counts in cache.items() if d in wanted}
 
 
-def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS):
-    """Completed-task counts for the trailing n_days, bucketed into
-    BRANCH_BLOCKS via _fetch_tasks_for_day's "by_block" breakdown.
+def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS, end=None):
+    """Completed-task counts for the n_days ending at `end` (default today),
+    bucketed into BRANCH_BLOCKS via _fetch_tasks_for_day's "by_block"
+    breakdown.
 
     Shares load_tasks_data's disk cache (.tasks-cache.json), but a cached day
     written before "by_block" existed won't have it — so unlike
@@ -1251,7 +1328,7 @@ def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS):
     per-block view only spans GRANULAR_BLOCK_DAYS days.
     """
     token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
-    today = date.today()
+    today = end or date.today()
     day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
 
     cache = {}
@@ -1309,11 +1386,24 @@ def load_neon_manual_edits(n_days=DAYS):
     it as a lower bound on out-of-pipeline edits, not an exact keystroke count.
     """
     dates = last_n_days(n_days)
-    wanted = set(dates)
-    today = dates[-1]
-    cells_by_day: dict[str, set] = {}
-    today_detail = []
-    for month in sorted({d[:7] for d in dates}):
+    events = _neon_edit_events(date.fromisoformat(dates[0]), date.fromisoformat(dates[-1]))
+    pos = {d: i for i, d in enumerate(dates)}
+    return bucket_neon_edits(events, lambda ts: pos.get(ts[:10]), len(dates))
+
+
+def _neon_edit_events(first_day, last_day):
+    """Out-of-pipeline edit events from the write ledger between first_day
+    and last_day inclusive: [(ts_iso, cell_key, via)] in file order. Each
+    event carries its full timestamp so callers can bucket it by day, week,
+    month, or 2-hour 地支 block (bucket_neon_edits)."""
+    events = []
+    months = []
+    cur = date(first_day.year, first_day.month, 1)
+    while cur <= last_day:
+        months.append(cur.strftime("%Y-%m"))
+        cur = _add_month(cur)
+    lo, hi = first_day.isoformat(), last_day.isoformat()
+    for month in months:
         path = os.path.join(NEON_LEDGER_DIR, month + ".jsonl")
         try:
             with open(path, encoding="utf-8") as f:
@@ -1325,8 +1415,8 @@ def load_neon_manual_edits(n_days=DAYS):
                         e = json.loads(line)
                     except json.JSONDecodeError:
                         continue  # torn trailing line from a live append
-                    day = (e.get("ts") or "")[:10]
-                    if day not in wanted:
+                    ts = e.get("ts") or ""
+                    if not (lo <= ts[:10] <= hi):
                         continue
                     is_break = e.get("chain") == "broken"
                     is_ack = e.get("kind") == "ack"
@@ -1334,22 +1424,48 @@ def load_neon_manual_edits(n_days=DAYS):
                         continue
                     key = (e.get("sheet", ""), e.get("col", ""),
                            str(e.get("date") or f"r{e.get('row')}"))
-                    seen = cells_by_day.setdefault(day, set())
-                    if key not in seen and day == today:
-                        label = "ack: " + (e.get("note") or "") if is_ack else (e.get("src") or "?")
-                        today_detail.append({
-                            "cell": f"{key[0]}!{key[1]} @{key[2]}",
-                            "via": label,
-                            "ts": (e.get("ts") or "")[11:16],
-                        })
-                    seen.add(key)
+                    via = "ack: " + (e.get("note") or "") if is_ack else (e.get("src") or "?")
+                    events.append((ts, key, via))
         except FileNotFoundError:
             continue
+    return events
+
+
+def bucket_neon_edits(events, bucket_index_fn, n_buckets):
+    """Count distinct edited cells per bucket. bucket_index_fn maps an event's
+    ISO timestamp to a bucket index (or None to drop it) — the same per-day /
+    per-week / per-month / per-block bucketing the other chart series use,
+    so Neon Manual Edits follows the granularity selector like everything
+    else. "Distinct" is per bucket: a break and its own ack on one cell in
+    the same bucket count once. Today's cells are listed for the summary
+    line whenever today falls inside the window."""
+    today = date.today().isoformat()
+    seen_by_bucket: dict[int, set] = {}
+    today_cells: dict[tuple, dict] = {}
+    for ts, key, via in events:
+        bi = bucket_index_fn(ts)
+        if bi is None or bi < 0 or bi >= n_buckets:
+            continue
+        seen_by_bucket.setdefault(bi, set()).add(key)
+        if ts[:10] == today and key not in today_cells:
+            today_cells[key] = {"cell": f"{key[0]}!{key[1]} @{key[2]}",
+                                "via": via, "ts": ts[11:16]}
+    today_count = len({k for ts, k, _ in events if ts[:10] == today})
     return {
-        "counts": [len(cells_by_day.get(d, ())) for d in dates],
-        "today": len(cells_by_day.get(today, ())),
-        "today_cells": today_detail,
+        "counts": [len(seen_by_bucket.get(i, ())) for i in range(n_buckets)],
+        "today": today_count,
+        "today_cells": list(today_cells.values()),
     }
+
+
+def _branch_for_ts(ts):
+    """地支 branch name for an ISO timestamp's local hour, or None if asleep."""
+    try:
+        hour = int(ts[11:13])
+    except (ValueError, TypeError):
+        return None
+    bi = _block_index_for_hour(hour)
+    return BRANCH_BLOCKS[bi][0] if bi is not None else None
 
 
 def load_imessage_stats():
@@ -1968,9 +2084,10 @@ def api_points_today():
 @app.route("/api/chart-granular")
 def api_chart_granular():
     granularity = request.args.get("granularity", "weekly")
-    if granularity not in ("weekly", "monthly", "block"):
+    if granularity not in ("weekly", "monthly", "block", "daily"):
         granularity = "weekly"
-    return jsonify(_granular_cached(granularity))
+    offset = _parse_offset(request.args.get("offset"))
+    return jsonify(_granular_cached(granularity, offset))
 
 
 @app.route("/api/refresh", methods=["GET", "POST"])
@@ -2011,16 +2128,42 @@ _GRANULAR_LOCK = threading.Lock()
 _GRANULAR_TTL = 300.0
 
 
-def _granular_cached(granularity):
+def _granular_cached(granularity, offset=0):
+    """Keyed by (granularity, offset). Paged-back windows (offset > 0) end on
+    immutable days, so they get a longer TTL than the live window."""
+    now = time.time()
+    key = (granularity, int(offset or 0))
+    ttl = _GRANULAR_TTL if key[1] == 0 else _GRANULAR_TTL * 12
+    with _GRANULAR_LOCK:
+        entry = _GRANULAR_CACHE.get(key)
+        if entry is not None and (now - entry["ts"]) < ttl:
+            return entry["payload"]
+    payload = _build_granular_chart_data(granularity, offset=key[1])
+    with _GRANULAR_LOCK:
+        _GRANULAR_CACHE[key] = {"payload": payload, "ts": time.time()}
+    return payload
+
+
+def _weekly_paged_cached(offset):
+    """Paged-back /api/weekly windows share _GRANULAR_CACHE (so /api/refresh
+    clears them too); offset 0 keeps its own _WEEKLY_CACHE slot."""
+    key = ("weekly8", int(offset))
     now = time.time()
     with _GRANULAR_LOCK:
-        entry = _GRANULAR_CACHE.get(granularity)
-        if entry is not None and (now - entry["ts"]) < _GRANULAR_TTL:
+        entry = _GRANULAR_CACHE.get(key)
+        if entry is not None and (now - entry["ts"]) < _GRANULAR_TTL * 12:
             return entry["payload"]
-    payload = _build_granular_chart_data(granularity)
+    payload = _build_weekly_data(offset=key[1])
     with _GRANULAR_LOCK:
-        _GRANULAR_CACHE[granularity] = {"payload": payload, "ts": time.time()}
+        _GRANULAR_CACHE[key] = {"payload": payload, "ts": time.time()}
     return payload
+
+
+def _parse_offset(raw):
+    try:
+        return max(0, min(int(raw or 0), 400))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _build_api_data():
@@ -2262,6 +2405,13 @@ body { background: var(--bg); color: var(--text); font-family: 'SF Mono', monosp
 .topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
 h1 { font-size: 18px; color: var(--h1); letter-spacing: 2px; }
 h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px; text-transform: uppercase; }
+/* Window pager: ‹ › on each chart card. All pagers drive one shared offset
+   (the cards share an x-axis), › is disabled at the live window. */
+.pager { float: right; display: inline-flex; gap: 2px; margin-top: -2px; }
+.pager button { background: var(--card); color: var(--h2); border: 1px solid var(--nav); border-radius: 4px; width: 22px; height: 18px; line-height: 14px; font-size: 13px; padding: 0; cursor: pointer; font-family: inherit; }
+.pager button:hover { color: var(--h1); }
+.pager button:disabled { opacity: 0.3; cursor: default; }
+#windowLabel { font-size: 12px; color: var(--h2); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
 .nav-link { font-size: 12px; color: var(--nav-text); background: var(--nav); border-radius: 4px; padding: 4px 12px; text-decoration: none; letter-spacing: 1px; }
 .nav-link:hover { opacity: 0.8; }
 .grid { display: grid; grid-template-columns: 1fr; gap: 32px; margin-bottom: 32px; }
@@ -2321,6 +2471,8 @@ HTML = """<!DOCTYPE html>
       <option value="weekly">WEEKLY</option>
       <option value="monthly">MONTHLY</option>
     </select>
+    <span class="pager" style="float:none;margin:0;"><button data-dir="-1" title="earlier window">‹</button><button data-dir="1" title="later window" disabled>›</button></span>
+    <span id="windowLabel"></span>
   </div>
   <div style="display:flex;align-items:baseline;gap:16px;">
     <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
@@ -2334,29 +2486,29 @@ HTML = """<!DOCTYPE html>
     <div id="cacheBars" class="cache-bars"></div>
   </div>
   <div class="card">
-    <h2>Project Bocking — Comms Response Time</h2>
+    <h2>Project Bocking — Comms Response Time<span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
     <div class="summary" id="emailSummary"></div>
   </div>
   <div class="card">
-    <h2 id="tasksEntriesLabel">Tasks &amp; Entries / Day</h2>
+    <h2><span id="tasksEntriesLabel">Tasks &amp; Entries / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap xs"><canvas id="tasksChart"></canvas></div>
     <div class="summary" id="tasksSummary"></div>
     <div class="chart-wrap xs"><canvas id="entriesChart"></canvas></div>
     <div class="summary" id="entriesSummary"></div>
   </div>
   <div class="card">
-    <h2 id="timeLabel">Time / Day</h2>
+    <h2><span id="timeLabel">Time / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
   <div class="card">
-    <h2 id="pointsLabel">Points / Day</h2>
+    <h2><span id="pointsLabel">Points / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
     <div class="summary" id="pointsSummary"></div>
   </div>
   <div class="card">
-    <h2 title="Cells detected changed outside the excel-http pipeline (ledger chain breaks + acked manual edits), distinct cells per day. Detection is lazy: an edit surfaces on that cell's next pipeline write or the hourly audit — a lower bound, and sync clobbers register too.">Neon Manual Edits / Day</h2>
+    <h2 title="Cells detected changed outside the excel-http pipeline (ledger chain breaks + acked manual edits), distinct cells per bucket. Detection is lazy: an edit surfaces on that cell's next pipeline write or the hourly audit — a lower bound, and sync clobbers register too."><span id="neonEditsLabel">Neon Manual Edits / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap xs"><canvas id="neonEditsChart"></canvas></div>
     <div class="summary" id="neonEditsSummary"></div>
   </div>
@@ -2504,24 +2656,45 @@ function renderFourCharts(data, granularity) {
     });
 }
 
+// Window paging: one shared offset (in whole windows of the current
+// granularity) drives every chart card's ‹ › pager — the cards share an
+// x-axis, so they page together. offset 0 = the live window. Daily at
+// offset 0 keeps using the /api/data payload; every other (granularity,
+// offset) pair fetches /api/chart-granular, which serves daily too.
 const _granularCache = {};
+let windowOffset = 0;
+function renderWindow(d, g) {
+  renderFourCharts(d, g);
+  renderEmailChart(d);
+  renderNeonEditsChart(d, g);
+  const w = d.window || {};
+  document.getElementById('windowLabel').textContent = w.label ? w.label + (windowOffset ? `  (−${windowOffset})` : '') : '';
+  document.querySelectorAll('.pager button[data-dir="1"]').forEach(b => { b.disabled = windowOffset === 0; });
+}
 function loadGranularity(g) {
-  if (g === 'daily') {
-    if (dailyPayload) { renderFourCharts(dailyPayload, 'daily'); renderEmailChart(dailyPayload); }
+  const off = windowOffset;
+  if (g === 'daily' && off === 0) {
+    if (dailyPayload) renderWindow(dailyPayload, 'daily');
     return;
   }
-  if (_granularCache[g]) {
-    renderFourCharts(_granularCache[g], g);
-    renderEmailChart(_granularCache[g]);
-    return;
-  }
-  fetch(`/api/chart-granular?granularity=${g}`).then(r => r.json()).then(d => {
-    _granularCache[g] = d;
-    renderFourCharts(d, g);
-    renderEmailChart(d);
+  const key = `${g}:${off}`;
+  if (_granularCache[key]) { renderWindow(_granularCache[key], g); return; }
+  fetch(`/api/chart-granular?granularity=${g}&offset=${off}`).then(r => r.json()).then(d => {
+    _granularCache[key] = d;
+    if (windowOffset === off && document.getElementById('granularitySelect').value === g) renderWindow(d, g);
   });
 }
-document.getElementById('granularitySelect').addEventListener('change', (e) => loadGranularity(e.target.value));
+function shiftWindow(dir) {
+  windowOffset = Math.max(0, windowOffset - dir);  // ‹ (dir −1) goes further back
+  loadGranularity(document.getElementById('granularitySelect').value);
+}
+document.getElementById('granularitySelect').addEventListener('change', (e) => { windowOffset = 0; loadGranularity(e.target.value); });
+document.querySelectorAll('.pager button').forEach(b => b.addEventListener('click', () => shiftWindow(parseInt(b.dataset.dir, 10))));
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') shiftWindow(-1);
+  if (e.key === 'ArrowRight') shiftWindow(1);
+});
 
 fetch('/api/data').then(r => r.json()).then(data => {
   dailyPayload = data;
@@ -2554,21 +2727,25 @@ fetch('/api/data').then(r => r.json()).then(data => {
   });
 
   loadGranularity(document.getElementById('granularitySelect').value);
-  renderNeonEditsChart(data);
 });
 
-// Neon manual edits: bar per day of distinct cells detected changed outside
-// the pipeline (ledger chain breaks + acks). Stays on the daily axis
-// regardless of the granularity selector — it's a hygiene signal, not a
-// performance chart.
-function renderNeonEditsChart(data) {
+// Neon manual edits: bar per bucket of distinct cells detected changed
+// outside the pipeline (ledger chain breaks + acks). Follows the
+// granularity selector and the window pager like the other cards — each
+// ledger event carries a timestamp, so at PER BLOCK it lands in the 2-hour
+// block the edit happened in.
+let _neonEditsChart = null;
+function renderNeonEditsChart(data, granularity) {
   const ne = data.neon_edits || {};
   const el = document.getElementById('neonEditsSummary');
+  const noun = GRANULARITY_NOUN[granularity] || 'Day';
+  document.getElementById('neonEditsLabel').textContent = `Neon Manual Edits / ${noun}`;
+  if (_neonEditsChart) { _neonEditsChart.destroy(); _neonEditsChart = null; }
   if (!ne.counts || !ne.counts.length) {
     el.textContent = 'ledger unavailable';
     return;
   }
-  new Chart(document.getElementById('neonEditsChart'), {
+  _neonEditsChart = new Chart(document.getElementById('neonEditsChart'), {
     type: 'bar',
     data: {
       labels: data.dates,
@@ -2827,12 +3004,12 @@ WEEKLY_HTML = """<!DOCTYPE html>
 </div>
 <div class="grid">
   <div class="card">
-    <h2>Points / Week</h2>
+    <h2>Points / Week <span id="weekWindowLabel" style="text-transform:none;letter-spacing:0;color:var(--text);"></span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap"><canvas id="pointsWeekChart"></canvas></div>
     <div class="summary" id="pointsWeekSummary"></div>
   </div>
   <div class="card">
-    <h2>Time / Week (h)</h2>
+    <h2>Time / Week (h)<span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap"><canvas id="timeWeekChart"></canvas></div>
     <div class="summary" id="timeWeekSummary"></div>
   </div>
@@ -2860,9 +3037,14 @@ function stackedOpts(unit) {
   return o;
 }
 
-fetch('/api/weekly').then(r => r.json()).then(d => {
-  // Points / Week
-  new Chart(document.getElementById('pointsWeekChart'), {
+// The two weekly bar charts page back 8 weeks at a time via the shared ‹ ›
+// pagers (offset in whole windows); the cumulative panel below always shows
+// the current week, so it is drawn once from the offset-0 payload.
+let _pointsWeekChart = null, _timeWeekChart = null, weekOffset = 0;
+const _weeklyCache = {};
+function renderWeekCharts(d) {
+  if (_pointsWeekChart) _pointsWeekChart.destroy();
+  _pointsWeekChart = new Chart(document.getElementById('pointsWeekChart'), {
     type: 'bar',
     data: { labels: d.weeks, datasets: d.points_week.datasets },
     options: stackedOpts('pts')
@@ -2870,14 +3052,39 @@ fetch('/api/weekly').then(r => r.json()).then(d => {
   document.getElementById('pointsWeekSummary').textContent =
     d.points_week.datasets.map(s => s.label).join(' · ');
 
-  // Time / Week
-  new Chart(document.getElementById('timeWeekChart'), {
+  if (_timeWeekChart) _timeWeekChart.destroy();
+  _timeWeekChart = new Chart(document.getElementById('timeWeekChart'), {
     type: 'bar',
     data: { labels: d.weeks, datasets: d.time_week.datasets },
     options: stackedOpts('h')
   });
   document.getElementById('timeWeekSummary').textContent =
     d.time_week.datasets.map(s => s.label).join(' · ');
+
+  const w = d.window || {};
+  document.getElementById('weekWindowLabel').textContent = w.label ? `· ${w.label}` : '';
+  document.querySelectorAll('.pager button[data-dir="1"]').forEach(b => { b.disabled = weekOffset === 0; });
+}
+function loadWeekWindow() {
+  const off = weekOffset;
+  if (_weeklyCache[off]) { renderWeekCharts(_weeklyCache[off]); return; }
+  fetch(`/api/weekly?offset=${off}`).then(r => r.json()).then(d => {
+    _weeklyCache[off] = d;
+    if (weekOffset === off) renderWeekCharts(d);
+  });
+}
+document.querySelectorAll('.pager button').forEach(b => b.addEventListener('click', () => {
+  weekOffset = Math.max(0, weekOffset - parseInt(b.dataset.dir, 10));
+  loadWeekWindow();
+}));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') { weekOffset += 1; loadWeekWindow(); }
+  if (e.key === 'ArrowRight' && weekOffset > 0) { weekOffset -= 1; loadWeekWindow(); }
+});
+
+fetch('/api/weekly').then(r => r.json()).then(d => {
+  _weeklyCache[0] = d;
+  renderWeekCharts(d);
 
   // Cumulative this vs last
   const c = d.cumulative;
@@ -2921,6 +3128,9 @@ def index():
 
 @app.route("/api/weekly")
 def api_weekly():
+    offset = _parse_offset(request.args.get("offset"))
+    if offset:
+        return jsonify(_weekly_paged_cached(offset))
     return jsonify(_weekly_cached())
 
 
