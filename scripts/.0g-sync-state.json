@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "500分 i9": {
-      "todoist_id": "6hWJjMGg3VmwQM5R",
-      "minutes": 50
-    },
-    "sunset run": {
-      "todoist_id": "6hWJjMCWFhfmx2XR",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-09-15T20:00:01.851999-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-15T22:00:02.031488-07:00"
 }
