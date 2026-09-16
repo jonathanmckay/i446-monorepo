@@ -71,6 +71,7 @@ ix_run = _ix_mod.run
 # and other sheets (0n/1n+/hcbi) still use ix_run.
 from neon import excel as neon_excel  # noqa: E402 (path inserted above)
 from neon import cols as neon_cols  # noqa: E402
+from blocks import BLOCK_START, is_future_block  # noqa: E402 (path inserted above)
 
 # Import mark-completed
 _MC_PATH = Path(__file__).parent / "mark-completed.py"
@@ -479,6 +480,7 @@ class ParsedItem:
     defer_date: Optional[str] = None  # ISO date (YYYY-MM-DD) for partial completion
     toggl_tags: list = None  # #tag tokens → Toggl tags
     bonus_points: Optional[int] = None  # +N bonus points added on top of computed value
+    block_override: Optional[str] = None  # explicit 地支 block (e.g. "巳") this completion happened in
 
 
 def parse_input(raw: str) -> list[ParsedItem]:
@@ -575,6 +577,18 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.points_override = int(bracket_match.group(1))
             chunk = chunk[:bracket_match.start()] + chunk[bracket_match.end():]
             chunk = chunk.strip()
+
+        # Extract an explicit block override: a bare, standalone trailing
+        # 地支 glyph (e.g. "1 kids nature 巳") means "this happened in 巳,
+        # not whichever block is current" — points get credited to that
+        # block's 0分!G:O cell instead of defaulting to the current block.
+        # Standalone-token only, matching /todo's identical block-glyph rule
+        # (see tools/did/*.py callers of this field) — never pull the glyph
+        # out of a word that merely contains one of these characters.
+        _chunk_words = chunk.split()
+        if _chunk_words and _chunk_words[-1] in "卯辰巳午未申酉戌亥" and len(_chunk_words[-1]) == 1:
+            item.block_override = _chunk_words[-1]
+            chunk = " ".join(_chunk_words[:-1]).strip()
 
         # Drop display-only "[1/m]" rate markers so they can't ride into the
         # habit name and break header matching (feature 2026-07-25).
@@ -1684,6 +1698,38 @@ def _warn_chain_broken(resp: dict, sheet: str = "0分") -> None:
     for c in cols:
         print(f"⚠ {sheet}!{c} chain broken — cell modified outside daemon",
               file=sys.stderr)
+
+
+def resolve_block_credit(block: str, cur_block: str,
+                         now: datetime) -> tuple[str, Optional[str]]:
+    """Decide what a /did block-override (e.g. "...  巳") should do.
+
+    Returns (action, detail):
+      ("skip", None)   — `block` IS the current block. 0分!G:O's current-
+                          block cell is a live "=D-SUM(locked)" formula (see
+                          scripts/build-order-daemon.py), so an ordinary
+                          domain-column write already lands there for free —
+                          nothing extra to write.
+      ("future", why)  — `block` has not started yet today. Nothing
+                          meaningful to credit; caller should warn and fall
+                          back to the current-block default rather than
+                          write to a cell that doesn't represent elapsed
+                          time.
+      ("credit", col)  — `block` is an earlier, already-locked block today.
+                          `col` is its 0分 column letter (G:O) to append the
+                          points to directly. Safe against double-crediting
+                          the current block: bumping a locked block's literal
+                          increases SUM(locked), which the current block's
+                          live formula subtracts — so its residual nets back
+                          to unchanged (D also rose by the same amount from
+                          the ordinary domain write) even though this credit
+                          runs in the same batch.
+    """
+    if block == cur_block:
+        return ("skip", None)
+    if is_future_block(BLOCK_START[block], now=now):
+        return ("future", f"block {block} hasn't happened yet today")
+    return ("credit", neon_cols.col("0分", block))
 
 
 def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
@@ -3035,6 +3081,7 @@ def main():
     fen_appends = []
     fen_names = []
     for r in fast:
+        is_hcbi_habit = r.item.name.lower() in HCBI_HABITS
         # HCBI_HABITS items (e.g. "bball") already reach their 0分 column
         # through the hcbi write below (step 5b): 0分!W is a FORMULA
         # (=hcbi!AA224+hcbi!Y224+...), not a plain accumulator, and this
@@ -3044,7 +3091,6 @@ def main():
         # hcbi!Y and directly on 0分!W, whose formula already sums hcbi!Y).
         # {N} curly points (0g bonus, column Q) are a separate, unrelated
         # mechanism and still apply regardless of HCBI_HABITS membership.
-        is_hcbi_habit = r.item.name.lower() in HCBI_HABITS
         if (not is_hcbi_habit and r.fen_col and r.fen_points > 0
                 and not (r.step == "1n" and not r.is_variable_1n)):
             fen_appends.append((r.fen_col, r.fen_points))
@@ -3057,6 +3103,59 @@ def main():
     fen_result = None
     if fen_appends:
         fen_result = append_0fen_batch(fen_appends, target_date, fen_names, "0fen")
+
+    # 5a. Block-override credits (2026-09-16 feature) — see
+    # resolve_block_credit()'s docstring for the "why doesn't this
+    # double-count" math. Default (no override) needs no code here.
+    #
+    # A separate pass over `fast` (not folded into step 5's loop above):
+    # G:O tracks the aggregate across ALL domains, so this needs each
+    # item's TOTAL D-contribution (fen_col points + curly Q bonus), not one
+    # column — recomputing that here, from the same already-finalized
+    # RouteResult fields step 5 read, keeps this loop's own hcbi exclusion
+    # logic (an unrelated guard: hcbi-routed items have no appendable
+    # column for step 5a to redirect) textually separate from step 5's.
+    block_override_totals: list[tuple[str, str, int]] = []  # (name, block, pts)
+    for r in fast:
+        if not r.item.block_override:
+            continue
+        habit_routes_via_formula = r.item.name.lower() in HCBI_HABITS
+        if habit_routes_via_formula:
+            print(f"⚠ {r.item.name}: block override ({r.item.block_override}) "
+                  f"ignored — hcbi habits route points through a formula, "
+                  f"not an appendable column", file=sys.stderr)
+            continue
+        item_pts = 0
+        if (r.fen_col and r.fen_points > 0
+                and not (r.step == "1n" and not r.is_variable_1n)):
+            item_pts += r.fen_points
+        if r.item.curly_points and r.item.curly_points > 0:
+            item_pts += r.item.curly_points
+        if item_pts > 0:
+            block_override_totals.append((r.item.name, r.item.block_override, item_pts))
+
+    if block_override_totals:
+        import neon_blocks as _nb_override
+        now = _daytime.local_now()
+        cur_block = _nb_override.current_block(now.hour)
+        block_col_appends = []
+        block_col_names = []
+        for name, block, pts in block_override_totals:
+            action, detail = resolve_block_credit(block, cur_block, now)
+            if action == "skip":
+                continue
+            if action == "future":
+                print(f"⚠ {name}: {detail} — points stayed on the current "
+                      f"block ({cur_block}) instead", file=sys.stderr)
+                continue
+            block_col_appends.append((detail, pts))
+            block_col_names.append(f"{name} →{block}")
+        if block_col_appends:
+            block_result = append_0fen_batch(block_col_appends, target_date,
+                                             block_col_names, "block_override")
+            if block_result.returncode != 0:
+                print(f"⚠ block-override credit failed: {block_result.stderr}",
+                      file=sys.stderr)
 
     # 5b. hcbi writes (habits that log minutes to the hcbi sheet)
     hcbi_appends = []
