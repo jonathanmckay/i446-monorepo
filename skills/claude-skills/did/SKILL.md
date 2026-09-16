@@ -93,6 +93,8 @@ This lets the user finish a task in a single flow: `/did` → stop timer → mar
 
 **Defer (partial completion):** `--tmrw`, `--tomorrow`, `--Mon`, `--Jun 15`, etc. at the end of an item → log points to 0分 but do NOT close the Todoist task. Instead, reschedule it to the defer date and deduct claimed `[N]` points from the task's total. Example: `/did xbox analytics [10] --tmrw` logs 10 pts, reschedules to tomorrow, updates task from `[30]` to `[20]`.
 
+**Block override (2026-09-16):** a bare trailing 地支 glyph (`卯辰巳午未申酉戌亥`, standalone token only — same rule as `/todo`'s block glyph, never pulled out of a word that merely contains one) → credit this completion's points to that block's `0分!G:O` cell instead of the default (whichever block is still live when did-fast.py runs). Example: `did 1 kids nature 巳` logs the points as normal but attributes them to 巳 even if run during 未. No glyph = unchanged default behavior. Naming the **current** block is a no-op (already where it'd land); naming a **future** block is rejected with a warning, not silently misapplied. hcbi-routed habits (e.g. `bball`) can't take a block override — their points reach `0分` through a formula, not an appendable cell. See `resolve_block_credit()` in did-fast.py for the exact locked/current/future mechanics.
+
 ## Routing (Step 0)
 
 **Always run the dispatcher first.** Do not re-implement the matching logic in prose — it lives in code:
