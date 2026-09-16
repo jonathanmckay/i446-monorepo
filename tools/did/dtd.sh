@@ -1159,8 +1159,10 @@ fi
 # the only thing visible, and force sane tty modes so Enter always
 # terminates the read.
 stty sane < /dev/tty 2>/dev/null
-printf "\033[2J\033[H\nEdit: %s\n(text=rename · @code=domain · N=points)> " "\$clean" > /dev/tty
-read edits < /dev/tty
+printf "\033[2J\033[H\nEdit (text=rename · @code=domain · N=points · ctrl-u to clear):\n" > /dev/tty
+REPLY="\$clean"
+vared -p "> " REPLY < /dev/tty > /dev/tty
+edits="\$REPLY"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the prompt above
 # — leaked SGR motion sequences type themselves into fzf's query as literal
