@@ -1184,7 +1184,7 @@ chmod +x "$DTD_EDIT"
 DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
-# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file
+# Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file $8=view $9=blockpick_file $10=domain_filter (optional, exact domain code -> scope the list)
 # Live width: fzf exports FZF_COLUMNS to every bound/reload command — prefer
 # it over the launch-time $5 so rows re-truncate to the CURRENT window width
 # (bug 2026-07-23: the width was baked into the reload command string, so an
@@ -1505,6 +1505,18 @@ def domain_of(t):
 def time_of(t):
     m = re.search(r'\((\d+)\)', t.get('short') or t.get('content') or '')
     return int(m.group(1)) if m else 10**9   # no (N) estimate -> sort to the end
+
+# Domain search (11th arg, 2026-09-16): typing a domain code exactly (e.g.
+# "m5x2") into the query box scopes the list to that domain -- fzf's own
+# fuzzy matcher can't do this on its own, because domain is conveyed PURELY
+# via row color (deliberately, see COLORS/no-project-prefix above), never as
+# text in the searched field. $DTD_DOMAINSEARCH (bound to change:) detects
+# an exact match and reloads through here with the domain as this arg,
+# +clear-query -- so this filter, unlike view/sort, actually REMOVES
+# non-matching rows rather than just reordering them.
+domain_filter = sys.argv[10] if len(sys.argv) > 10 else ''
+if domain_filter:
+    unique = [t for t in unique if domain_of(t) == domain_filter]
 
 if view == 'project':
     unique.sort(key=lambda t: (domain_of(t), prank(t.get('priority'))))
