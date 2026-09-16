@@ -1507,7 +1507,7 @@ def time_of(t):
     return int(m.group(1)) if m else 10**9   # no (N) estimate -> sort to the end
 
 # Domain search (11th arg, 2026-09-16): typing a domain code exactly (e.g.
-# "m5x2") into the query box scopes the list to that domain -- fzf's own
+# 'm5x2') into the query box scopes the list to that domain -- fzf's own
 # fuzzy matcher can't do this on its own, because domain is conveyed PURELY
 # via row color (deliberately, see COLORS/no-project-prefix above), never as
 # text in the searched field. $DTD_DOMAINSEARCH (bound to change:) detects
@@ -1676,7 +1676,7 @@ for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
-" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer while this script ran — leaked SGR motion
 # sequences type themselves into fzf's query as literal ^[[<34;x;yM text on
@@ -1736,6 +1736,59 @@ VTEOF
 sed -i '' "s|PLACEHOLDER_VIEW|$DTD_VIEW|g; s|PLACEHOLDER_HDR|$DTD_HDR|g" "$DTD_VIEWTOGGLE"
 chmod +x "$DTD_VIEWTOGGLE"
 echo default > "$DTD_VIEW"   # start in default view each session
+
+# --- Domain-search script used by fzf's change: binding (2026-09-16) ---
+# Fires on every keystroke. A domain code is conveyed PURELY via row color
+# (see COLORS in the list generator, and its own "no project-name prefix"
+# comment) -- never as searchable text -- so fzf's own fuzzy matcher can
+# never find it, no matter how --with-nth/--nth are combined (verified: once
+# --with-nth restricts the searched+displayed text to field 1, --nth cannot
+# reach a hidden later field to widen search scope back out -- there is no
+# flag combination that displays field 1 while also searching a different,
+# hidden field). So this bypasses fzf's matcher entirely for the one case
+# that needs it: reload the list PRE-FILTERED to the named domain (the list
+# generator already computes each task's true domain via domain_of() for
+# ctrl-t project view; step 5a below just reuses it as a hard filter instead
+# of a sort key), then clear the query so fzf's own matcher — now filtering
+# an already-scoped list against an empty string — shows all of it.
+#
+# Runs via execute-silent on EVERY keystroke, so the domain-code check here
+# must stay a cheap in-process string comparison, not a re-invocation of the
+# (much heavier) list generator, or normal typing would lag. Only an EXACT
+# match pays for the reload; every other keystroke is a no-op (no POST, no
+# subprocess beyond this check) — ordinary fuzzy search is completely
+# unaffected. Keep this domain-code set in sync with COLORS above (see
+# test_dtd_domain_search.py, mirroring test_dtd_colors.py's existing
+# cross-file sync check).
+DTD_DOMAINSEARCH="/tmp/dtd-$DTD_ID.domainsearch.sh"
+cat > "$DTD_DOMAINSEARCH" << EOF
+#!/bin/zsh
+q="\$1"
+case "\$q" in
+  g245|epcn|s897|hcmc2|xk87|xk88|hci|i9|n156|hcmc|m5x2|m828|hcb|hcbp|infra|i444|i447|hcm|hcmp|hcmr|家|睡觉)
+    ;;
+  *)
+    exit 0 ;;
+esac
+port="\$(cat "$DTD_PORT" 2>/dev/null)"
+[[ -z "\$port" ]] && exit 0
+# Resolved directly (not deferred like DTD_RELOAD's \$(date...) trick) --
+# this script is spawned fresh on every keystroke, not baked into a
+# long-lived --bind string at fzf startup, so there's no stale-date risk
+# to defer against; resolving now also sidesteps stacking a third layer of
+# shell-escaping on top of the curl-POST -> fzf-reload hop.
+today="\$(date +%Y-%m-%d)"
+reload_cmd="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '\$q'"
+echo "🔍 domain: \$q (ctrl-r or any action to clear)" > "$DTD_HDR"
+if [[ -n "\$FZF_API_KEY" ]]; then
+  curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$port" \\
+    --data "reload(\$reload_cmd)+clear-query" >/dev/null 2>&1
+else
+  curl -s -XPOST "localhost:\$port" \\
+    --data "reload(\$reload_cmd)+clear-query" >/dev/null 2>&1
+fi
+EOF
+chmod +x "$DTD_DOMAINSEARCH"
 
 # --- Skip script used by fzf ctrl-k binding ---
 DTD_SKIP="/tmp/dtd-$DTD_ID.skip.sh"
@@ -2585,7 +2638,7 @@ while true; do
       --bind "load:transform-header($DTD_HDRGEN)" \
       --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
-      --bind "change:first" \
+      --bind "change:first+execute-silent($DTD_DOMAINSEARCH {q})" \
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
