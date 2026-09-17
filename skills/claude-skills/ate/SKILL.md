@@ -188,42 +188,38 @@ higher value (e.g. a one-off bonus) is never clobbered downward.
    unchanged). An empty/absent `groups_str` (including a genuine zero-group
    estimate) just means `groups = []` — no column writes for that entry.
 
-2. **Run the writer.** Excel must be open with `Neon分v12.2.xlsx` loaded on **ix**. Use the `neon.excel` client (which routes through the excel-http daemon on ix at `localhost:9876`, falling back to `ssh ix osascript` if the daemon is down):
+2. **Run the writer — one batched call.** All cells (name, kcal, protein,
+   every Daily Dozen group) go to Ix in a SINGLE excel-http `/batch`
+   request, applied under the daemon's Excel lock, with SIGINT ignored for
+   the duration of that request. This replaced 3+N separate appends on
+   2026-09-17 after a Ctrl-C two seconds in left the name and kcal written
+   and the protein and groups missing. Never write these cells with
+   individual `excel.append` calls again.
 
-   ```python
-   import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
-   from datetime import datetime
-   from neon import excel, cols
-
-   today = f"{datetime.now().month}/{datetime.now().day}"
-   band  = (cols.hcbi_band_by_branch(forced_branch) if forced_branch
-            else cols.hcbi_band(datetime.now().hour))  # → {branch, cols: [name, kcal, srv]}
-   name_col, kcal_col, protein_col = band["cols"]
-
-   excel.append("hcbi", name_col, date=today, value=", " + name)   # name col uses comma-append
-   excel.append("hcbi", kcal_col, date=today, value=f"+{kcal}")
-   excel.append("hcbi", protein_col,  date=today, value=f"+{protein}")
-   for abbrev, count in groups:                         # e.g. ("br", 3)
-       excel.append("hcbi", cols.daily_dozen_col(abbrev), date=today, value=f"+{count}")
+   ```bash
+   python3 ~/i446-monorepo/tools/ate/ate.py \
+     --name "<name>" --kcal "<kcal expr>" --protein "<protein expr>" \
+     --groups "<groups as typed or estimated, e.g. 'grains 1, flax x 2'>" \
+     [--branch <glyph>] [--date M/D]
    ```
 
-   Note: the **name column** is a string append, not arithmetic — first write should be plain (no leading "+"); the daemon's /append handles that automatically (sets `=name` then concats `, name` thereafter). For correctness, special-case empty-cell vs concat in the caller, or use `/write` for empties.
+   - `--kcal` / `--protein` accept the raw arithmetic the user typed
+     (`60+40+250+200`); the script evaluates it.
+   - `--groups` accepts the loose syntax as typed: full names or abbrevs,
+     `x 2` / `x2` / trailing count, wrapped in `()` or `{}` or bare. Omit
+     it for a genuine zero-group entry.
+   - `--branch` carries `forced_branch` from Step 1; omit to pick by hour.
+   - `--skip-food --groups …` tops up an entry whose food/kcal already
+     landed (e.g. reconciling a partial write) without touching them.
+   - `--dry-run` prints the batch without writing; use it if unsure.
 
-3. **Update tracking points.** Recompute today's food-tracking tier from the
-   post-write calorie total and bump `hcbi!T` if it increased (see
-   [Tracking points](#tracking-points-0s--col-t) above):
+   The script also does Step 3 (tracking tier) itself and prints the
+   one-line confirmation Step 4 echoes, including `row N`, the groups it
+   wrote, today's calorie total and any tier bump.
 
-   ```python
-   cal_col = cols.col("hcbi", "cal")   # U
-   pts_col = cols.col("hcbi", "0s")    # T
-
-   cal_today = float(excel.read("hcbi", cal_col, date=today)["value"] or 0)
-   tier = 0 if cal_today <= 0 else 10 + (5 if cal_today > 800 else 0) + (5 if cal_today > 1200 else 0)
-
-   current_pts = float(excel.read("hcbi", pts_col, date=today)["value"] or 0)
-   if tier > current_pts:
-       excel.write("hcbi", pts_col, date=today, value=str(tier), src="ate-tier")
-   ```
+3. **Tracking points** are handled inside `ate.py` (read `hcbi!U` → tier →
+   compare `hcbi!T` → write only if higher; see [Tracking points](#tracking-points-0s--col-t)).
+   Nothing to do here manually.
 
 4. **Report.** Echo the script's one-line confirmation, e.g.:
    ```
