@@ -62,7 +62,7 @@ To process a `/did` with arguments:
 When `/did` is called with **no arguments**:
 
 1. **Read Toggl cache** at `~/.claude/skills/tg/cache.json`. If no timer running, output `No timer running.` and exit.
-2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes. Apply the d359 bump (Step C) to the stopped entry's tags, same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
+2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes. If the stopped entry carried an explicit value tag (`#-1`/`#-2`/`#-3`), `stop_timer` has already credited its minutes to that tag's 0n column (媒分; see `mcp/toggl_server/tag_credits.py`, 2026-09-16) and the output carries a `Credited: #-2 +29m → 0n` line — echo it in the confirmation, do not credit again. Apply the d359 bump (Step C) to the stopped entry's tags, same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
 3. **Check for /do session.** Read `~/.claude/skills/do/active.json`. If it exists and is valid:
    - The task is a variable-point activity started by `/do`.
    - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks; 5 for xk20s/xk22s, 15 for 一起饭).

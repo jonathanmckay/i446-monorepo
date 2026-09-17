@@ -355,7 +355,8 @@ def toggl_stop() -> str:
             return "No timer is currently running."
 
         entry = toggl_api.stop_timer(current["id"])
-        return f"Stopped: {_format_entry(entry)}"
+        credits = entry.get("_tag_credits") or []
+        return f"Stopped: {_format_entry(entry)}" + "".join(f"\nCredited: {c}" for c in credits)
 
     except Exception as e:
         return f"Error: {e}"

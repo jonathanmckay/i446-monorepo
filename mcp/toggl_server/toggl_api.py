@@ -1,5 +1,6 @@
 import base64
 import json
+import sys
 import os
 import signal
 import time
@@ -145,7 +146,21 @@ def start_timer(description, project_id=None, tags=None, start_time=None):
 
 
 def stop_timer(entry_id):
-    return _request("PATCH", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}/stop")
+    entry = _request("PATCH", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}/stop")
+    # Value-tag 媒分 credit (2026-09-16): every stop path funnels through
+    # here, so an explicitly #-1/#-2/#-3-tagged entry is credited exactly
+    # once regardless of who stopped it. Best-effort; see tag_credits.py.
+    if isinstance(entry, dict):
+        try:
+            from . import tag_credits
+        except ImportError:  # loaded as a plain script, not a package
+            import tag_credits  # type: ignore[no-redef]
+        try:
+            entry["_tag_credits"] = tag_credits.credit_entry(entry)
+        except Exception as e:  # noqa: BLE001
+            print(f"WARN tag credit failed: {e}", file=sys.stderr)
+            entry["_tag_credits"] = []
+    return entry
 
 
 def get_current():

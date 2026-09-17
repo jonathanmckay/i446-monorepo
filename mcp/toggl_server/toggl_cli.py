@@ -134,6 +134,8 @@ def cmd_stop(_args):
         return
     entry = toggl_api.stop_timer(current["id"])
     print(f"Stopped: {_fmt(entry)}")
+    for line in entry.get("_tag_credits") or []:
+        print(f"Credited: {line}")
 
 
 def cmd_current(args):
