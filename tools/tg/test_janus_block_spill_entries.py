@@ -196,7 +196,10 @@ def test_head0_never_promotes_past_an_earlier_spill_item():
     text = "".join(t for _, t, *_ in frags)
     lines = text.split("\n")
     header_line = lines[0]
-    assert "未:00" in header_line, f"header must stay bare, not promote past the spill: {header_line!r}"
+    # 2026-09-17: a header left bare for an earlier spill reads `未:xx`
+    # ("waiting on a spill tail"), never `未:00` next to the spill's own :00 row.
+    assert "未:xx" in header_line, f"header must stay bare (as :xx), not promote past the spill: {header_line!r}"
+    assert "未:00" not in header_line
     assert "XTECH huddle" not in header_line and "-1t" not in header_line
     huddle_idx = next(i for i, l in enumerate(lines) if "XTECH huddle" in l)
     t_idx = next(i for i, l in enumerate(lines) if "-1t" in l)
@@ -344,7 +347,7 @@ def test_surviving_earlier_spill_still_keeps_the_header_bare():
     later = _pick("-1t", today.replace(hour=12, minute=5), 28, 2)
     frags = mod._compact_block_lines("未", 12, [spill, later], 28, "")
     lines = "".join(t for _, t, *_ in frags).split("\n")
-    assert "未:00" in lines[0] and "-1t" not in lines[0]
+    assert "未:xx" in lines[0] and "-1t" not in lines[0]
     assert any("XTECH huddle" in ln for ln in lines[1:])
 
 
@@ -415,3 +418,18 @@ def test_running_spill_survives_a_row_starting_at_its_clipped_end():
     others = [_gap(today.replace(hour=20, minute=30), 20), _gap(today.replace(hour=20, minute=10), 20)]
     out = mod._drop_spills_covered_by([running_spill, done_spill], others)
     assert out == [running_spill]
+
+
+def test_running_spill_first_in_block_reads_x_xx_header():
+    """User request 2026-09-17: when the block is waiting on a still-running
+    entry from the previous block, the header says so — `亥:xx` — with the
+    running spill as the first body row."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    spill = _pick("run", today.replace(hour=20), 30, 1, is_spill=True, is_running=True)
+    later_gap = _gap(today.replace(hour=20, minute=30), 20)
+    frags = mod._compact_block_lines("亥", 20, [spill, later_gap], 0, "", max_rows=8)
+    lines = "".join(t for _, t, *_ in frags).split("\n")
+    assert lines[0].startswith("亥:xx"), lines[0]
+    assert "run" in lines[1] and "▶" in lines[1]

@@ -2699,6 +2699,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                     picks = [p for p in picks if p not in earlier_spills]
                     body_picks = picks
                     earlier_spills = []
+        spill_wait = bool(earlier_spills)
         if earlier_spills:
             head0 = None
         # Tracks the block's own :00 slot when head0 was promoted from a
@@ -2718,6 +2719,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 left = f"{blk_name} {hs0.hour:02d}:{hs0.minute:02d}"
                 vacated_00 = (blk_sh, 0)
             header_hour = hs0.hour
+        elif spill_wait:
+            # Bare because the block is still waiting on a spill tail from
+            # the previous block (its running entry is the first body row):
+            # say so — `未:xx`, not a `未:00` that pairs with the spill's own
+            # `:00` row (user request 2026-09-17: "make it clear that I'm
+            # waiting for a spill-tail, in this case make it like X:xx").
+            left = f"{blk_name}:xx"
         else:
             left = f"{blk_name}:00"
         if head0 is not None and (head0.get("is_gap") or head0.get("is_free")):
