@@ -277,6 +277,18 @@ PROJECT_COLORS = {
     "家":   "#00b8d4",    # Pool Party (family)
 }
 
+# Today's 分 by domain (0分 P:Y), third line of the habit strip (user
+# request 2026-09-17: "a row ... below the row showing hcb points, that
+# shows points by category for today", styled like the sheet's own colored
+# row). Order and fills follow the sheet's column order; 社 covers s897+家.
+DOMAIN_PTS_ROW = [
+    ("-1₦", "#b3261e"), ("0g", "#424242"), ("i9", PROJECT_COLORS["i9"]),
+    ("m5", PROJECT_COLORS["m5x2"]), ("个", PROJECT_COLORS["g245"]),
+    ("媒", PROJECT_COLORS["hcmc"]), ("思", PROJECT_COLORS["hcm"]),
+    ("hcb", PROJECT_COLORS["hcb"]), ("xk", PROJECT_COLORS["xk87"]),
+    ("社", PROJECT_COLORS["s897"]),
+]
+
 # Value-tag (-1/-2/-3 media-minute tiers) chip colors — fixed neon-palette
 # backgrounds, independent of PROJECT_COLORS (user request 2026-08-10).
 # White text throughout, same chip language as NEON_PTS_STYLE.
@@ -443,6 +455,9 @@ class State:
         self.flash_style = ""  # optional override style for flash
         self.today_points = 0  # 分 earned today
         self.block_points: dict[str, int] = {}  # per-block 分, straight from Neon's G:O cells
+        # Today's per-domain 分 straight from 0分 P:Y, keyed by DOMAIN_PTS_ROW
+        # label; empty until the first clean read (third habit-strip line).
+        self.domain_points: dict[str, int] = {}
         # Today's nonzero 0₦ (Neon habits) row: [(habit_name, value), ...] in
         # sheet column order — the two-line habit strip under the header
         # (user request 2026-07-20: "show the neon habits for today... render
@@ -1336,6 +1351,7 @@ def fetch_points():
         if STATE.points_day is not None and STATE.points_day != now.date():
             STATE.today_points = 0
             STATE.block_points = {}
+            STATE.domain_points = {}
         STATE.points_day = now.date()
 
         # Read the Σ total (column D) AND the per-block columns (G:O, headed
@@ -1436,6 +1452,17 @@ end tell'''
                 total_ok = _total_trustworthy(candidate, sum_py)
                 if total_ok:
                     STATE.today_points = candidate
+                    # The same P:Y cells, kept per domain for the habit strip's
+                    # points-by-category line. Only alongside a trusted total
+                    # (a torn read would show one domain's stale value next to
+                    # another's fresh one).
+                    dp: dict[str, int] = {}
+                    for (label, _c), raw_v in zip(DOMAIN_PTS_ROW, py_parts):
+                        try:
+                            dp[label] = int(round(float(raw_v))) if raw_v.strip() else 0
+                        except ValueError:
+                            dp[label] = 0
+                    STATE.domain_points = dp
                 branches = ["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
                 # G:O are read as FORMULAS so a locked literal can be told apart
                 # from the live residual `=D-SUM(locked)`; the cells' computed
@@ -2271,9 +2298,11 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
       for each category that's currently BEHIND (negative; neutral/positive
       categories are omitted), packed the same way, followed by a labeled
       "behind" chip for any HCBI_BEHIND_DOMAINS total that's negative.
+    - line 3 (2026-09-17): today's 分 by domain, one padded cell per 0分
+      column P:Y in sheet order/fills — see _domain_pts_chips.
     Each line independently drops whatever doesn't fit in WIDTH_HINT."""
     if not (STATE.habits_today or STATE.habits_ytd or STATE.daily_dozen
-            or STATE.hcbi_behind):
+            or STATE.hcbi_behind or STATE.domain_points):
         return []
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
@@ -2331,11 +2360,24 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     if prayer_chip:
         habit_row.append(prayer_chip)
     out: list[tuple[str, str]] = []
-    for chips in (habit_row, _habit_row(dozen_chips)):
+    for chips in (habit_row, _habit_row(dozen_chips), _habit_row(_domain_pts_chips())):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))
     return out
+
+
+def _domain_pts_chips() -> list[tuple[str, str]]:
+    """Line 3 of the habit strip: today's 分 per domain as one padded cell
+    each, in the sheet's own P:Y order and fills (DOMAIN_PTS_ROW) — the
+    same look as the 0分 row in Excel. Every domain is drawn, zeros and
+    negatives included, so the row is positionally readable; nothing until
+    the first trusted read of the day."""
+    dp = STATE.domain_points
+    if not dp:
+        return []
+    return [(f"bold bg:{color} #ffffff", f" {dp.get(label, 0):d} ")
+            for label, color in DOMAIN_PTS_ROW]
 
 
 def render_current() -> list[tuple[str, str]]:
