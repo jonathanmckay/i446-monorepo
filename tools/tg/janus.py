@@ -2659,9 +2659,16 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # win here just duplicates that entry — the header should promote to
         # the first genuinely NEW entry of this block instead (e.g. 戌:10
         # 冥想, not 戌:00 bball when bball is really 酉:47's spillover).
-        head0 = next(
-            (p for p in picks if not p.get("is_free") and not p.get("is_gap")
-             and not p.get("is_spill")), None)
+        # 2026-09-17 ("the first time entry in this block should be 未:10"):
+        # the header takes the block's chronologically FIRST row of any
+        # kind — a tracked entry, a meeting, an untracked gap, a free
+        # stretch — except a spill (see below). A gap/free head renders in
+        # its own bar style on the header line (the branch under this one).
+        # (A FUTURE block keeps its earlier rule — free stretches never ride
+        # its header, which belongs to the dominant meeting — but a future
+        # block only reaches this branch when it has no meeting at all.)
+        head0 = next((p for p in picks if not p.get("is_spill")
+                      and not (is_future and p.get("is_free"))), None)
         # A spill item still renders as an ordinary (chronological) body row
         # below the header — if one starts EARLIER than the head0 just
         # picked, promoting head0 would draw a later time above an earlier
@@ -2713,7 +2720,50 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             header_hour = hs0.hour
         else:
             left = f"{blk_name}:00"
-        if head0 is not None:
+        if head0 is not None and (head0.get("is_gap") or head0.get("is_free")):
+            # An untracked gap (red) or free stretch (green) as the block's
+            # first row rides the header in its own bar style — same ink as
+            # the body rows below, just on the `未:10` line, with the block's
+            # -1₦/分 still at the right edge.
+            body_picks = [p for p in picks if p is not head0]
+            end = head0["start_dt"] + dt.timedelta(minutes=head0["dur_min"])
+            tail_w = (dwidth(right) + 1) if right else 0
+            space = max(1, WIDTH_HINT - dwidth(left) - 1 - tail_w)
+            gsty, gch = _gutter(hs0.hour, hs0.minute, slot_min)
+            if head0.get("is_gap"):
+                label = _gap_label(end, head0["dur_min"])
+                gap_key = _sel_key({"kind": "empty", "start_dt": head0["start_dt"]})
+                if track_selection:
+                    STATE.visible_events.append({"kind": "empty", "start_dt": head0["start_dt"],
+                                                 "dur_min": head0["dur_min"]})
+                is_sel, hclick, hmarker = _row_selection(gap_key)
+                if is_sel:
+                    fill_cls, time_sty, gsty = "class:selected_bg", "class:selected_accent", f"{gsty} bg:#3a3a3a"
+                else:
+                    fill_cls = "class:no_entry_bg" if _gap_alarm_on() else "class:no_entry"
+                    time_sty = "class:dim"
+                out.extend(hmarker)
+                out.append(_frag(time_sty, left, hclick))
+                out.append(_frag(gsty, gch, hclick))
+                out.append(_frag(fill_cls, _gap_fill(label, space), hclick))
+            else:
+                label = f"free → {end:%H:%M} ({fmt_dur(head0['dur_min'])})"
+                ft = truncate(label, space)
+                rem = space - dwidth(ft)
+                fill = ("┄" * (rem - 1) + " ") if rem > 1 else " " * max(0, rem)
+                out.append(("class:dim", left))
+                out.append((gsty, gch))
+                out.append(("class:free", fill + ft))
+            if right:
+                out.append(("class:dim", " "))
+                if emojis:
+                    out.append((NEON_PTS_STYLE, emojis))
+                    if pts_str:
+                        out.append(("class:dim", " "))
+                if pts_str:
+                    out.append(("bold #ffffff", pts_str))
+            out.append(("class:dim", "\n"))
+        elif head0 is not None:
             body_picks = [p for p in picks if p is not head0]
             running = bool(head0.get("is_running"))
             if head0.get("is_event"):
@@ -3266,6 +3316,24 @@ def _drop_redundant_spill(spill_items: list[dict], real_picks: list[dict]) -> li
                not in real_starts]
 
 
+def _drop_spills_covered_by(picks: list[dict], others: list[dict]) -> list[dict]:
+    """Second pass of _drop_redundant_spill once the block's gap / event
+    rows exist (they are built after the picks). A FINISHED spill whose
+    clipped end lines up with the start of ANY later row — a real entry, an
+    untracked gap, a calendar event — is redundant: that row's own start
+    time already says when the earlier entry stopped, and the entry itself
+    was shown with its full duration in the block it started in (user
+    report 2026-09-17: "there should not be two time entries with :00 …
+    there should be zero"). A RUNNING spill is never dropped: it is the
+    live task, and the whole spill mechanism exists for it (2026-07-27)."""
+    spills = [p for p in picks if p.get("is_spill") and not p.get("is_running")]
+    if not spills or not others:
+        return picks
+    keep = _drop_redundant_spill(spills, others)
+    return [p for p in picks
+            if not p.get("is_spill") or p.get("is_running") or p in keep]
+
+
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
     """Untracked stretches >= GAP_MIN minutes inside a block's window,
     chronological. Sweeps raw STATE.entries (not the merged display spans,
@@ -3788,6 +3856,9 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
         # just restate the empty grid the body already draws.
         if len(gaps) == 1 and gaps[0]["dur_min"] >= full_block:
             gaps = []
+        # A finished spill that a gap or event row starts right after is
+        # redundant too, not just one followed by a real pick (2026-09-17).
+        picks = _drop_spills_covered_by(picks, gaps + event_picks)
         # The header is now the bare :00 slot, so every entry and gap is a body
         # row. _compact_block_lines merges them with the empty half-hour marks
         # and caps at 3 rows.
@@ -4265,7 +4336,7 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     # Same redundancy check as the spill items just above (user report
     # 2026-09-07): see render_morning's identical gate for the full story.
     if sleep and _drop_redundant_spill([sleep], picks):
-        picks = ([sleep] + picks)[:FOCUS_ROWS]
+        picks = [sleep] + picks  # no [:N] slice — the body cap ranks by importance
     upcoming = [ev for ev in STATE.events if ev["end_dt"] > now]
     event_picks = _future_block_picks(blk_name, upcoming, limit=FOCUS_ROWS)
     ended_event_picks = _past_event_picks(blk_name, STATE.events, STATE.entries, now, limit=FOCUS_ROWS)
@@ -4274,6 +4345,10 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
     # The block's REMAINING minutes get free rows too (window starts at now),
     # so "how much of this block is still mine" reads directly off the card.
     free_rows = _future_free_gaps(blk_sh, blk_eh, now)
+    # Finished spills followed by a gap/event row are redundant (2026-09-17);
+    # free rows are deliberately NOT in this list — a running spill's clipped
+    # end is `now`, exactly where the first free row starts.
+    picks = _drop_spills_covered_by(picks, gaps + event_picks + ended_event_picks)
     body = picks + gaps + event_picks + ended_event_picks + free_rows
     body.sort(key=lambda x: x["start_dt"])
     cont = {**_block_sleep_cont(blk_sh, now, slot_min=15), **_block_gcal_cont(blk_sh, now, slot_min=15),

@@ -346,3 +346,72 @@ def test_surviving_earlier_spill_still_keeps_the_header_bare():
     lines = "".join(t for _, t, *_ in frags).split("\n")
     assert "未:00" in lines[0] and "-1t" not in lines[0]
     assert any("XTECH huddle" in ln for ln in lines[1:])
+
+
+# ── 2026-09-17: zero ":00" rows; the block's first row rides the header ──────
+
+def _gap(start, dur):
+    return {"start_dt": start, "time_str": f"{start:%H:%M}", "label": "", "style": "",
+            "dur_min": dur, "is_gap": True}
+
+
+def test_untracked_gap_as_first_row_rides_the_header():
+    """User report 2026-09-17: 未 showed a bare "未:00" header, then ":00 MBR
+    debrief" (a spill), then ":10 empty → 12:24". "There should be zero
+    [:00 rows] and the first time entry in this block should be 未:10." A
+    gap that is the block's chronologically first row now rides the header
+    like any entry would."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    picks = [_gap(today.replace(hour=12, minute=10), 14),
+             _pick("o314", today.replace(hour=12, minute=24), 18, 2, is_running=True)]
+    frags = mod._compact_block_lines("未", 12, picks, 19, "", max_rows=8, track_selection=True)
+    lines = "".join(t for _, t, *_ in frags).split("\n")
+    assert lines[0].startswith("未:10") and "empty → 12:24" in lines[0], lines[0]
+    assert "19分" in lines[0], "the block's points still ride the right edge of the header"
+    assert not any(ln.lstrip().startswith(":10 ") for ln in lines[1:]), \
+        f"the gap must not ALSO render as a body row:\n{lines}"
+    assert any("o314" in ln for ln in lines[1:])
+    assert any(v.get("kind") == "empty" for v in mod.STATE.visible_events), \
+        "the header gap stays selectable (Enter → fill this stretch)"
+
+
+def test_finished_spill_is_dropped_when_a_gap_starts_where_it_ends():
+    """The spilled MBR-debrief tail (11:35 → 12:10, already shown with its
+    full 25m in 午) is redundant once a gap row starts at 12:10 — the gap's
+    own start time says when the debrief ended. Whole-day render: 未's
+    header becomes the 12:10 gap and "MBR debrief" appears exactly once."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    h = lambda hh, mm: today.replace(hour=hh, minute=mm)  # noqa: E731
+    mod.STATE.entries = [
+        _entry("minecraft weekly standup", h(10, 46), h(11, 35), eid=1),
+        _entry("MBR debrief", h(11, 35), h(12, 10), eid=2),
+        _entry("o314", h(12, 24), h(12, 42), eid=3),
+        _entry("work", h(12, 42), h(13, 59), eid=4),
+    ]
+    mod.STATE.entries_yday = []
+    mod.STATE.day_offset = 1  # whole-day past view
+    mod.view_now = lambda: h(15, 0)
+    from unittest.mock import patch
+    with patch.object(mod, "_COMPLETED_TODAY", Path("/nonexistent/completed-today.json")):
+        frags = mod.render_morning(bo_emojis={})
+    text = "".join(t for _, t, *_ in frags)
+    wei = text.split("未", 1)[1].split("申")[0] if "未" in text else ""
+    wei_lines = ["未" + wei.split("\n")[0]] + wei.split("\n")[1:]
+    assert text.count("MBR debrief") == 1, f"the spill must not repeat in 未:\n{text}"
+    assert wei_lines[0].startswith("未:10") and "empty → 12:24" in wei_lines[0], wei_lines
+    assert not any(ln.startswith("  :00") for ln in wei_lines) and not wei_lines[0].startswith("未:00"), \
+        f"zero block-start :00 rows on 未's card:\n{wei_lines}"
+
+
+def test_running_spill_survives_a_row_starting_at_its_clipped_end():
+    mod = _load_tui()
+    today = _midnight()
+    running_spill = _pick("run", today.replace(hour=20), 30, 1, is_spill=True, is_running=True)
+    done_spill = _pick("call", today.replace(hour=20), 10, 2, is_spill=True)
+    others = [_gap(today.replace(hour=20, minute=30), 20), _gap(today.replace(hour=20, minute=10), 20)]
+    out = mod._drop_spills_covered_by([running_spill, done_spill], others)
+    assert out == [running_spill]

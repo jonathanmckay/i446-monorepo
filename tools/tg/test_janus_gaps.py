@@ -306,15 +306,19 @@ def test_detail_band_gap_end_time_survives_capped_closing_entry(monkeypatch):
     assert "04:20" in text, "gap must end at the true closing entry's start"
 
 
-def test_gap_never_rides_the_header_rule():
-    """All-gap picks (spillover-covered block) render a bare rule + gap rows."""
+def test_gap_as_first_row_rides_the_header():
+    """Reversed 2026-09-17 (user: "the first time entry in this block should
+    be 未:10" — a gap): a block whose first row is an untracked gap puts it
+    ON the header line, labelled with the gap's own start, in the same
+    no_entry bar style a body gap row uses. It does not repeat as a body row."""
     mod = _load_tui()
     today = _midnight()
     gap = {"start_dt": today.replace(hour=9, minute=15), "time_str": "09:15",
            "label": "", "style": "", "dur_min": 30, "is_gap": True}
     frags = mod._compact_block_lines("巳", 8, [gap], 0, "")
-    header = "".join(t for _, t, *_ in frags).split("\n")[0]
-    assert "09:15" not in header, "gap must be a body row, not inline in the rule"
+    lines = "".join(t for _, t, *_ in frags).split("\n")
+    assert lines[0].startswith("巳 09:15") and "empty → 09:45" in lines[0], lines[0]
+    assert not any(ln.startswith("  :15") for ln in lines[1:]), lines
     assert any("no_entry" in s for s, _, *_h in frags)
 
 

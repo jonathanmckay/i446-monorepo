@@ -62,9 +62,12 @@ def test_hai_renders_before_zi_when_zi_is_current():
     text = "".join(t for _, t, *_ in mod.render_focus_compact())
     # 2026-08-06: xk22 (20:10) is 亥's first real entry, so it rides the
     # header itself (`亥:10`) rather than a bare `亥:00` header.
-    assert "亥:10" in text, "亥 must render in the focus band when 子 is current"
+    # 2026-09-17: the block's chronologically first row rides the header,
+    # gaps included — here the 20:00-20:10 untracked stretch, so the card
+    # opens "亥:00 empty → 20:10" with xk22 as the first body row.
+    assert "亥:00 empty → 20:10" in text, "亥 must render in the focus band when 子 is current"
     assert "子:00" in text
-    assert text.index("亥:10") < text.index("子:00"), "亥 must come before 子"
+    assert text.index("亥:00") < text.index("子:00"), "亥 must come before 子"
     assert "xk22" in text.split("子:00")[0], "亥's own entries must render in its card"
 
 
