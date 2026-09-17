@@ -70,3 +70,34 @@ def test_render_morning_keeps_same_desc_entries_in_their_own_blocks():
     assert "29m" in text, f"the 巳 entry (08:00-08:29) must render with its own 29m duration:\n{text}"
     assert "39m" not in text, f"the two entries must not merge into one 39m span:\n{text}"
     assert text.count("xk22") == 2, f"each entry must render as its own row:\n{text}"
+
+
+def test_mao_card_keeps_the_longer_entry_over_an_earlier_shorter_one():
+    """User report 2026-09-17: 卯 showed "-1t 2m" (05:54) and not "0t 8m"
+    (05:56, running on into 辰). After prepending the sleep-spillover row,
+    render_morning sliced [sleep]+picks to four items CHRONOLOGICALLY, so
+    the last-starting entry lost regardless of length. The body cap in
+    _compact_block_lines already keeps rows by importance (duration); the
+    slice must not pre-empt it."""
+    mod = _load_tui()
+    today = _midnight()
+    h = lambda hh, mm: today.replace(hour=hh, minute=mm)  # noqa: E731
+    mod.STATE.entries = [
+        _entry("睡觉", h(0, 0), h(5, 33), 1),
+        _entry("wake up", h(5, 34), h(5, 45), 2),
+        _entry("新闻", h(5, 45), h(5, 53), 3),
+        _entry("-1t", h(5, 54), h(5, 56), 4),
+        _entry("0t", h(5, 56), h(6, 4), 5),
+    ]
+    mod.STATE.entries_yday = []
+    mod.STATE.events = []
+    mod.STATE.block_points = {}
+    mod.STATE.entries_known = True
+    mod.STATE.day_offset = 0
+    mod.detail_window = lambda: (h(8, 0), h(12, 0))
+    with patch.object(mod, "_COMPLETED_TODAY", Path("/nonexistent/completed-today.json")):
+        frags = mod.render_morning()
+    text = "".join(t for _, t, *_ in frags)
+    mao = text.split("辰")[0]
+    assert "0t" in mao and "8m" in mao, f"the 8m 0t entry must make 卯's card:\n{mao}"
+    assert "-1t" not in mao, f"the 2m -1t is the one to drop, not 0t:\n{mao}"

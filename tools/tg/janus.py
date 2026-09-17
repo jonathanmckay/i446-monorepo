@@ -3764,7 +3764,12 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
         # start (e.g. sleep clipped to 08:00-08:09, "generic placeholder"
         # starting 08:09) still duplicated it as an extra "巳:00 睡觉" row.
         if sleep and _drop_redundant_spill([sleep], picks):
-            picks = ([sleep] + picks)[:4]
+            # No chronological [:4] slice here (bug 2026-09-17: 卯 showed the
+            # 2m -1t at :54 and dropped the 8m 0t at :56 because the slice
+            # cut whatever started LAST). _compact_block_lines already caps
+            # the body by importance (running, then duration), so hand it
+            # every pick and let it choose.
+            picks = [sleep] + picks
         # Meetings that actually happened but never got a Toggl entry (or got
         # swallowed by one giant undifferentiated timer) — "turn a calendar
         # event into a time entry" for PAST meetings too, not just the
