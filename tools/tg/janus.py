@@ -2669,9 +2669,30 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # line reads "  :00 XTECH huddle", the huddle's spilled-in tail).
         # Fall back to a bare header instead, so every real item — the spill
         # AND head0's own entry — renders in true chronological body order.
-        if head0 is not None and any(
-                p.get("is_spill") and p["start_dt"] < head0["start_dt"]
-                for p in picks):
+        earlier_spills = [] if head0 is None else [
+            p for p in picks if p.get("is_spill") and p["start_dt"] < head0["start_dt"]]
+        if earlier_spills:
+            # …but only if that spill will actually SURVIVE the body cap
+            # below. Bug 2026-09-17: 辰 had a 6m 0t tail spilling in at :00,
+            # four real entries, and a 3-row body — the header was vacated
+            # for the spill, the cap then trimmed the spill (shortest by
+            # duration), and the 14m "take photos…" entry was squeezed out
+            # too: a bare header over a card that never showed the row it
+            # was kept bare for. If the spill can't make the cut, drop it
+            # here instead and let head0 ride the header as usual, so all
+            # four lines describe the block.
+            others = [p for p in picks if p is not head0]
+            if len(others) > max_rows:
+                survivors = sorted(
+                    others, key=lambda p: (not p.get("is_running"),
+                                           bool(p.get("is_event")),
+                                           bool(p.get("is_spill")),
+                                           -(p.get("dur_min") or 0)))[:max_rows]
+                if not any(sp in survivors for sp in earlier_spills):
+                    picks = [p for p in picks if p not in earlier_spills]
+                    body_picks = picks
+                    earlier_spills = []
+        if earlier_spills:
             head0 = None
         # Tracks the block's own :00 slot when head0 was promoted from a
         # LATER slot, so the mark-fill grid below (FOCUS_ROWS' include_00)
@@ -2818,9 +2839,12 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         # slice dropped a 23m run in favor of two sub-10m entries because it
         # started latest (user report 2026-07-27). Chronological order is
         # restored after the cut.
+        # A spill tail ranks below every real entry of the same block: the
+        # entry it belongs to already rode the previous block's card.
         keep = sorted(entry_rows,
                       key=lambda r: (not r[3].get("is_running"),
                                      bool(r[3].get("is_event")),
+                                     bool(r[3].get("is_spill")),
                                      -(r[3].get("dur_min") or 0)))[:max_rows]
         rows = sorted(keep, key=lambda r: r[0])
     else:

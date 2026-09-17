@@ -296,3 +296,53 @@ def test_row_cap_never_drops_the_running_entry():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def _pick(label, start, dur, eid, **kw):
+    return {"start_dt": start, "time_str": f"{start:%H:%M}", "label": label, "style": "",
+            "dur_min": dur, "entry_ids": [eid], "raw_desc": label, "project_id": None, **kw}
+
+
+def test_trimmed_spill_does_not_leave_the_header_bare():
+    """User report 2026-09-17: 辰's card showed a bare "辰:00" header over
+    lego / streamline bag / 一起饭, and the 14m "take photos…" entry was
+    missing — "this block should have the time entry for taking photos… it's
+    just blank… janus should use all 4 lines". The 0t tail spilling in at
+    :00 (6m) sat before head0, so the header was vacated for chronology's
+    sake, and then the 3-row body cap trimmed that very spill as the
+    shortest row. A spill that cannot survive the cap must not cost the
+    block its header line: drop it and let head0 ride the header."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    h = lambda hh, mm: today.replace(hour=hh, minute=mm)  # noqa: E731
+    picks = [
+        _pick("0t", h(6, 0), 6, 1, is_spill=True),
+        _pick("take photos of and track tech stack", h(6, 25), 14, 2),
+        _pick("lego", h(6, 40), 39, 3),
+        _pick("streamline bag", h(7, 19), 15, 4),
+        _pick("一起饭", h(7, 36), 24, 5),
+    ]
+    frags = mod._compact_block_lines("辰", 6, picks, 251, "")
+    lines = [ln for ln in "".join(t for _, t, *_ in frags).split("\n") if ln]
+    assert "take photos" in lines[0] and "辰:25" in lines[0], \
+        f"head0 must ride the header once the spill can't make the cut:\n{lines}"
+    assert "0t" not in "".join(lines), "the un-showable spill is dropped, not left as a phantom"
+    body = "\n".join(lines[1:])
+    for name in ("lego", "streamline bag", "一起饭"):
+        assert name in body, f"{name} missing from body:\n{lines}"
+    assert len(lines) == 4, f"all four lines describe the block:\n{lines}"
+
+
+def test_surviving_earlier_spill_still_keeps_the_header_bare():
+    """The 2026-08-13 rule is untouched when the spill DOES fit: with room
+    in the body, the earlier spill renders as a row and head0 stays below."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    spill = _pick("XTECH huddle", today.replace(hour=12), 4, 1, is_spill=True)
+    later = _pick("-1t", today.replace(hour=12, minute=5), 28, 2)
+    frags = mod._compact_block_lines("未", 12, [spill, later], 28, "")
+    lines = "".join(t for _, t, *_ in frags).split("\n")
+    assert "未:00" in lines[0] and "-1t" not in lines[0]
+    assert any("XTECH huddle" in ln for ln in lines[1:])
