@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "productive plane ride": {
-      "todoist_id": "6hWcfJwmP88H3Wv2",
-      "minutes": 50
-    },
     "i9+m5x2 inboxes clear through sunday": {
       "todoist_id": "6hWcfJwGXcW3v5XR",
       "minutes": 60
@@ -14,5 +10,5 @@
       "minutes": 30
     }
   },
-  "last_sync": "2026-09-16T18:00:02.694025-07:00"
+  "last_sync": "2026-09-16T20:00:03.506633-07:00"
 }
