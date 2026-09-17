@@ -116,3 +116,28 @@ def test_stop_timer_survives_a_credit_failure(monkeypatch):
     monkeypatch.setattr(real_tc, "credit_entry", boom)
     entry = api.stop_timer(1)
     assert entry["_tag_credits"] == [] and entry["id"] == 1
+
+
+def test_update_entry_stop_on_the_running_entry_credits(monkeypatch):
+    """janus retime / janus-mobile close the running entry with
+    update_entry(stop=...), never stop_timer — same credit (2026-09-17)."""
+    sys.path.insert(0, str(HERE.parent))
+    from toggl_server import tag_credits as real_tc
+    from toggl_server import toggl_api as api
+    monkeypatch.setattr(api, "get_current_cached", lambda *a, **k: {"id": 7})
+    monkeypatch.setattr(api, "_request", lambda *a, **k: {"id": 7, "tags": ["-2"], "description": "x"})
+    monkeypatch.setattr(real_tc, "credit_entry", lambda e: ["#-2 +5m → 0n"])
+    entry = api.update_entry(7, stop="2026-09-17T15:00:00Z")
+    assert entry["_tag_credits"] == ["#-2 +5m → 0n"]
+
+
+def test_update_entry_retime_of_a_closed_entry_does_not_credit(monkeypatch):
+    sys.path.insert(0, str(HERE.parent))
+    from toggl_server import tag_credits as real_tc
+    from toggl_server import toggl_api as api
+    monkeypatch.setattr(api, "get_current_cached", lambda *a, **k: {"id": 99})
+    monkeypatch.setattr(api, "_request", lambda *a, **k: {"id": 7, "tags": ["-2"], "description": "x"})
+    called = []
+    monkeypatch.setattr(real_tc, "credit_entry", lambda e: called.append(e) or [])
+    entry = api.update_entry(7, stop="2026-09-17T15:00:00Z")
+    assert called == [] and "_tag_credits" not in entry

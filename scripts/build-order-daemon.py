@@ -1572,8 +1572,12 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
     else:
         log(f"lock-and-mark: hour={hour:02d} has no block to score (day start)")
 
-    # Toggl tag/project aggregation (same 2h cadence)
-    run_toggl_sync(dry_run=dry_run)
+    # Toggl #xk88 -> 0分 points (same 2h cadence). The 0n value-tag MINUTE
+    # totals (-1/-2/-3 -> AV/AW/AX) are no longer synced here: they are
+    # credited once, at timer stop, by mcp/toggl_server/tag_credits.py
+    # (JM 2026-09-17). The old absolute SET bucketed entries by UTC date
+    # (yesterday 17:00+ PDT landed on today's row) and clobbered AX's
+    # =N+O formula every cycle.
     run_toggl_point_sync(dry_run=dry_run)
 
     # -1neon card lifecycle: retire the just-ended block's leftover cards
@@ -1888,21 +1892,14 @@ def defer_unchecked_neg1(dry_run=False):
     return {"deferred": len(keep), "dropped": len(dropped)}
 
 
-# --- Mode: toggl-sync (tag/project time aggregation to 0n) ---
+# --- Toggl helpers (shared by toggl-point-sync) ---
+# The former "toggl-sync" mode (0n value-tag minute totals -> AV/AW/AX, plus
+# TOGGL_TAG_COLS / TOGGL_PROJ_COLS) was removed 2026-09-17: value-tag minutes
+# are credited at timer stop by mcp/toggl_server/tag_credits.py, one append per
+# entry on the entry's LOCAL day. The 2h absolute SET here bucketed by UTC date
+# and overwrote both those appends and AX's =N+O formula.
 
 TOGGL_API_BASE = "https://api.track.toggl.com/api/v9"
-
-# Tag → 0n column letter
-# AZ ("∑xk87") is deliberately absent: it's a live =SUM(AJ:AO) formula
-# aggregating the kid/family columns, not a raw tag-total target — a "xk87":
-# "AZ" entry here used to clobber that formula with a Toggl-tag-derived total.
-TOGGL_TAG_COLS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX"}
-# Sleep (睡觉) carries the "-3" tag but is tracked separately in column D, so it
-# must be excluded from the -3/AX tag total — otherwise AX reads as ~a whole
-# night of sleep (regression 2026-06-28: AX=439). Mirrors 0t-fast.SLEEP_PROJECT_ID.
-SLEEP_PROJECT_ID = 108358083
-# Project ID → 0n column letter
-TOGGL_PROJ_COLS = {}
 
 
 def _load_toggl_key() -> str:
@@ -1953,40 +1950,8 @@ def _entry_effective_minutes(e: dict, target_date: dt.date, now_ts: dt.datetime)
     return None
 
 
-def compute_toggl_totals(target_date: dt.date) -> dict[str, int]:
-    """Fetch today's Toggl entries, return {column_letter: minutes} for tags and projects."""
-    start = target_date.isoformat()
-    end = (target_date + dt.timedelta(days=1)).isoformat()
-    entries = _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
-
-    col_totals: dict[str, int] = {}
-    now_ts = dt.datetime.now(dt.timezone.utc)
-
-    for e in entries:
-        minutes = _entry_effective_minutes(e, target_date, now_ts)
-        if minutes is None:
-            continue
-
-        # Sleep is column D, not a tag column — exclude it so its -3 tag never
-        # inflates AX (regression 2026-06-28).
-        if e.get("project_id") == SLEEP_PROJECT_ID:
-            continue
-
-        for tag in (e.get("tags") or []):
-            if tag in TOGGL_TAG_COLS:
-                col = TOGGL_TAG_COLS[tag]
-                col_totals[col] = col_totals.get(col, 0) + minutes
-
-        pid = e.get("project_id")
-        if pid in TOGGL_PROJ_COLS:
-            col = TOGGL_PROJ_COLS[pid]
-            col_totals[col] = col_totals.get(col, 0) + minutes
-
-    return col_totals
-
-
 # --- Tag -> 0分 POINTS (not 0n minutes), 1pt/min (JM 2026-08-13: "#xk88") ---
-# Different write model from TOGGL_TAG_COLS above: those SET an absolute 0n
+# Different write model from the retired 0n minute SET (that set an absolute 0n
 # minute total each cycle (idempotent by construction — same total every
 # time until minutes change). 0分!<col> instead ACCUMULATES via a +N append,
 # shared with every other point source for that domain, so blindly
@@ -2013,7 +1978,7 @@ def _save_point_tag_state(state: dict) -> None:
 
 def compute_toggl_point_tag_minutes(target_date: dt.date) -> dict[str, int]:
     """{tag: minutes} for today's entries carrying a TOGGL_POINT_TAG_COLS tag.
-    Unlike compute_toggl_totals, this does NOT exclude the sleep project --
+    This does NOT exclude the sleep project --
     none of the point tags are sleep-adjacent today, and excluding it
     unconditionally would silently misbehave if a future point tag ever were."""
     start = target_date.isoformat()
@@ -2076,71 +2041,12 @@ def run_toggl_point_sync(dry_run=False):
         _save_point_tag_state({today_key: day_state})
 
 
-def write_toggl_totals_to_0n(col_totals: dict[str, int], target_date: dt.date,
-                              dry_run: bool = False) -> str:
-    """Write absolute tag/project minute totals to 0n sheet for target_date."""
-    if not col_totals:
-        return "nothing to write"
-
-    set_lines = []
-    for col, minutes in col_totals.items():
-        set_lines.append(
-            f'    set value of range ("{col}" & targetRow) of theSheet to {minutes}'
-        )
-    set_block = "\n".join(set_lines)
-    month = target_date.month
-    day = target_date.day
-
-    script = f'''tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set targetRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = {month} and d = {day} then
-                    set targetRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if targetRow = 0 then return "ERROR: date {month}/{day} not found"
-{set_block}
-    return "OK: toggl-sync row=" & targetRow
-end tell'''
-
-    if dry_run:
-        log(f"[DRY RUN] Would write to 0n for {month}/{day}: {col_totals}")
-        return "DRY_RUN"
-
-    try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"toggl-sync write: FAILED {out or r.stderr.strip()}")
-            return "FAILED"
-        return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log(f"toggl-sync write: ERROR {e}")
-        return "ERROR"
-
-
 def run_toggl_sync(dry_run=False):
-    """Compute and write Toggl tag/project totals for today to 0n."""
-    today = dt.date.today()
-    try:
-        totals = compute_toggl_totals(today)
-    except Exception as e:
-        log(f"toggl-sync: ERROR fetching Toggl: {e}")
-        return
-    if not totals:
-        log("toggl-sync: no tagged/project entries for today")
-        return
-    result = write_toggl_totals_to_0n(totals, today, dry_run=dry_run)
-    log(f"toggl-sync: {result} — {totals}")
+    """Retired 2026-09-17 (kept so a stale cron/launchd invocation is a
+    harmless no-op). 0n value-tag minutes are credited at timer stop by
+    mcp/toggl_server/tag_credits.py; see run_lock_and_mark."""
+    log("toggl-sync: retired — value-tag minutes are credited at timer stop "
+        "(tag_credits.py); nothing to do")
 
 
 # --- Main ---

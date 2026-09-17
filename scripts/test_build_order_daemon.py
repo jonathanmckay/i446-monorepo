@@ -741,46 +741,37 @@ def test_goal_marker_stays_current_block():
     assert "GOAL_MARKER: _block_has_goals(block_name)" in body
 
 
-# ── compute_toggl_totals: stale open-timer clamp ────────────────────────────
+# ── _entry_effective_minutes: stale open-timer clamp ────────────────────────
 # Bug: Toggl still returns the currently-open (still-running) entry even when
-# it started before the queried day — an open entry has no stop time for the
-# date-range filter to match against. compute_toggl_totals computed a running
-# entry's minutes as `now - start` unconditionally, so a >1-day-old forgotten
-# open timer dumped its ENTIRE elapsed time into the current day's column
-# (regression 2026-08-11: a stale "fall asleep" timer read as AV=1493min in
-# 0n — the whole morning showing as asleep even though the user was up and
-# doing things before 6am).
-#
-# Fix: clamp a running entry's effective start to target_date's local
-# (America/Los_Angeles) midnight before computing elapsed minutes.
+# it started before the queried day. A >1-day-old forgotten open timer used to
+# dump its ENTIRE elapsed time into the current day's column (regression
+# 2026-08-11: a stale "fall asleep" timer read as AV=1493min). The clamp lives
+# in _entry_effective_minutes, shared by every Toggl-tag aggregator that is
+# left (the #xk88 point sync; the 0n minute SET was retired 2026-09-17).
 import datetime as dt
 
 
-def test_compute_toggl_totals_clamps_stale_running_entry(monkeypatch):
+def test_entry_effective_minutes_clamps_stale_running_entry():
     mod = _load_daemon()
     target_date = dt.date(2026, 8, 11)
-
-    # Started >1 day before target_date, still open (Toggl's negative-duration
-    # convention for a running entry — the exact value is irrelevant, only
-    # its sign and the `start` field matter).
     stale_start = dt.datetime(2026, 8, 10, 5, 7, tzinfo=dt.timezone.utc)
+    now_ts = dt.datetime(2026, 8, 11, 13, 0, tzinfo=dt.timezone.utc)  # 06:00 PDT
+    e = {"duration": -1, "start": stale_start.isoformat().replace("+00:00", "Z"),
+         "tags": ["-1"], "project_id": None}
+    # PT midnight for 2026-08-11 is 07:00Z; "now" is 13:00Z, so at most 360
+    # minutes can belong to today — far below the ~1667 an unclamped
+    # (now - stale_start) would produce.
+    assert mod._entry_effective_minutes(e, target_date, now_ts) == 360
 
-    class FrozenDatetime(mod.dt.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return dt.datetime(2026, 8, 11, 13, 0, tzinfo=dt.timezone.utc)  # 06:00 PDT
 
-    monkeypatch.setattr(mod.dt, "datetime", FrozenDatetime)
-    monkeypatch.setattr(mod, "_toggl_get", lambda path: [
-        {"duration": -1, "start": stale_start.isoformat().replace("+00:00", "Z"),
-         "tags": ["-1"], "project_id": None},
-    ])
-
-    totals = mod.compute_toggl_totals(target_date)
-    # PT midnight for 2026-08-11 is 07:00Z; frozen "now" is 13:00Z, so at most
-    # 360 minutes can legitimately belong to today — far below the ~1667
-    # minutes an unclamped (now - stale_start) would have produced.
-    assert totals.get("AV") == 360
+def test_daemon_no_longer_sets_0n_value_tag_minutes():
+    """0n AV/AW/AX (-1/-2/-3 minutes) are credited at timer stop by
+    mcp/toggl_server/tag_credits.py. The daemon's 2h absolute SET bucketed
+    entries by UTC date and clobbered AX's =N+O formula (JM 2026-09-17)."""
+    mod = _load_daemon()
+    assert not hasattr(mod, "compute_toggl_totals")
+    assert not hasattr(mod, "write_toggl_totals_to_0n")
+    assert not hasattr(mod, "TOGGL_TAG_COLS")
 
 
 # ── #xk88 tag -> 0分 points, 1pt/min (JM 2026-08-13) ────────────────────────
@@ -880,11 +871,12 @@ def test_toggl_point_sync_failed_append_does_not_update_baseline(monkeypatch, tm
 
 
 def test_toggl_point_sync_wired_into_lock_and_mark_same_cadence():
-    """run_toggl_point_sync must fire alongside run_toggl_sync inside
-    run_lock_and_mark, not just exist as an unused standalone function."""
+    """run_toggl_point_sync must fire inside run_lock_and_mark, not just exist
+    as an unused standalone function. run_toggl_sync (0n minute SET) must NOT:
+    retired 2026-09-17 in favour of stop-time credits."""
     src = DAEMON.read_text(encoding="utf-8")
     idx = src.index("def run_lock_and_mark")
     next_def = src.index("\ndef ", idx + 1)
     body = src[idx:next_def]
-    assert "run_toggl_sync(dry_run=dry_run)" in body
+    assert "run_toggl_sync(dry_run=dry_run)" not in body
     assert "run_toggl_point_sync(dry_run=dry_run)" in body

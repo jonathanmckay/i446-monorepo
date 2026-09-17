@@ -110,7 +110,7 @@ SLEEP_PROJECT = "睡觉"
 def get_toggl_entries(d: date) -> list[dict]:
     """Fetch raw Toggl entries for a date via API.
 
-    Memoized per-process (2026-09-02): compute_tag_minutes, compute_sleep_dock,
+    Memoized per-process (2026-09-02): compute_sleep_dock,
     compute_sleep, and main() each independently call gather_entries_local for
     overlapping (yesterday, today/sleep_date) pairs, so a single /0t run could
     fetch the SAME date up to 4x without this. Safe: every caller only reads
@@ -163,83 +163,11 @@ def gather_entries_local(*days: date) -> list[dict]:
     return list(seen.values())
 
 
-# 0n columns by Toggl tag. Must match the live headers (AU=1+, AV=-1, AW=-2,
-# AX=-3) and build-order-daemon.py's TOGGL_TAG_COLS. A "1+" column was inserted
-# at AU, shifting -1→AV and -2→AW; keep these in sync to avoid writing -1 into
-# the 1+ column (AU).
-# AZ ("∑xk87") is NOT a tag target: it's a live =SUM(AJ:AO) formula aggregating
-# the individual kid/family columns (xk20/xk22/xk26/qft/xk88/NVC+e). A prior
-# "xk87": "AZ" entry here made this raw-set the cell, clobbering the formula
-# with a Toggl-tag-derived total whenever an entry carried an "xk87" tag.
-TAG_COLUMNS = {"-1": "AV", "-2": "AW", "其他人": "AS", "-3": "AX"}
-PROJECT_COLUMNS = {}  # project_id → (name, 0n column)
-
-
-def compute_tag_minutes(yesterday: date, today: date) -> tuple[dict[str, int], dict[str, int]]:
-    """Sum minutes for tagged and project entries on the target day (yesterday) only."""
-    yesterday_entries = get_toggl_entries(yesterday)
-    tag_totals: dict[str, int] = {}
-    proj_totals: dict[str, int] = {}
-    for e in yesterday_entries:
-        dur = e.get("duration", 0)
-        if dur <= 0:
-            continue
-        # Sleep (睡觉) carries the "-3" tag but is tracked separately in column D.
-        # Without this skip its minutes pollute the -3/AX tag column, which then
-        # reads as ~a full night of sleep (regression 2026-06-28: AX=439).
-        if e.get("project_id") == SLEEP_PROJECT_ID:
-            continue
-        minutes = dur // 60
-        for tag in (e.get("tags") or []):
-            if tag in TAG_COLUMNS:
-                tag_totals[tag] = tag_totals.get(tag, 0) + minutes
-        pid = e.get("project_id")
-        if pid in PROJECT_COLUMNS:
-            name = PROJECT_COLUMNS[pid][0]
-            proj_totals[name] = proj_totals.get(name, 0) + minutes
-    return tag_totals, proj_totals
-
-
-def write_tag_minutes(tag_totals: dict[str, int], target_date: date,
-                      proj_totals: dict[str, int] | None = None) -> str:
-    """Write tag and project minute sums to 0n columns for the target date's row."""
-    if not tag_totals and not proj_totals:
-        return "no tagged entries"
-    set_lines = []
-    for tag, minutes in tag_totals.items():
-        col = TAG_COLUMNS[tag]
-        set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
-    for name, minutes in (proj_totals or {}).items():
-        col = next(c for pid, (n, c) in PROJECT_COLUMNS.items() if n == name)
-        set_lines.append(f'    set value of range ("{col}" & todayRow) of theSheet to {minutes}')
-    set_block = "\n".join(set_lines)
-    month = target_date.month
-    day = target_date.day
-    script = f'''tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = {month} and d = {day} then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {month}/{day} not found"
-{set_block}
-    return "OK: tags written row=" & todayRow
-end tell'''
-    res = ix_run(script, timeout=30.0)
-    out = res.stdout.strip()
-    if res.returncode != 0 or not out or out.startswith("ERROR"):
-        raise RuntimeError(f"tag write failed (rc={res.returncode}): {out or res.stderr.strip()}")
-    return out
+# Value-tag minute totals (-1/-2/-3 -> 0n AV/AW/AX) are NOT written here any
+# more (2026-09-17). They are credited once, at timer stop, by
+# mcp/toggl_server/tag_credits.py onto the entry's local day. The old
+# absolute SET of yesterday's totals here overwrote those appends and AX's
+# =N+O formula, and bucketed entries by UTC date.
 
 
 def detect_night_hcmc(yesterday: date) -> int | None:
@@ -627,17 +555,8 @@ def main():
         output["sleep_write"] = f"FAILED: {e}"
         failed = True
 
-    # 3. Scan tags and write to 0n
-    try:
-        tag_totals, proj_totals = compute_tag_minutes(yesterday, today)
-        if tag_totals or proj_totals:
-            tag_result = write_tag_minutes(tag_totals, yesterday, proj_totals)
-            output["tags"] = {"totals": tag_totals, "projects": proj_totals, "write": tag_result}
-        else:
-            output["tags"] = "none"
-    except RuntimeError as e:
-        output["tags"] = f"FAILED: {e}"
-        failed = True
+    # 3. Value-tag minutes are credited at timer stop (tag_credits.py), not here.
+    output["tags"] = "credited at timer stop (tag_credits.py)"
 
     # 4. Detect hcmc right before sleep → /did night hcmc
     night_hcmc = detect_night_hcmc(yesterday)

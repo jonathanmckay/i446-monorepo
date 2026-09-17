@@ -151,15 +151,7 @@ def stop_timer(entry_id):
     # here, so an explicitly #-1/#-2/#-3-tagged entry is credited exactly
     # once regardless of who stopped it. Best-effort; see tag_credits.py.
     if isinstance(entry, dict):
-        try:
-            from . import tag_credits
-        except ImportError:  # loaded as a plain script, not a package
-            import tag_credits  # type: ignore[no-redef]
-        try:
-            entry["_tag_credits"] = tag_credits.credit_entry(entry)
-        except Exception as e:  # noqa: BLE001
-            print(f"WARN tag credit failed: {e}", file=sys.stderr)
-            entry["_tag_credits"] = []
+        _credit_value_tags(entry)
     return entry
 
 
@@ -203,11 +195,41 @@ def get_projects():
     return _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/projects")
 
 
+def _credit_value_tags(entry):
+    """Value-tag 媒分 credit (2026-09-16): append an explicitly #-1/#-2/#-3
+    tagged entry's minutes to its 0n column, once (journaled). Best-effort;
+    see tag_credits.py. Attaches the human lines as entry["_tag_credits"]."""
+    try:
+        from . import tag_credits
+    except ImportError:  # loaded as a plain script, not a package
+        import tag_credits  # type: ignore[no-redef]
+    try:
+        entry["_tag_credits"] = tag_credits.credit_entry(entry)
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN tag credit failed: {e}", file=sys.stderr)
+        entry["_tag_credits"] = []
+    return entry
+
+
 def update_entry(entry_id, **fields):
-    """Update a time entry. Supported fields: description, start, stop, duration, project_id, tags."""
+    """Update a time entry. Supported fields: description, start, stop, duration, project_id, tags.
+
+    Setting `stop` on the RUNNING entry is a stop in all but name (janus
+    retime, janus-mobile), so it gets the same value-tag credit as
+    stop_timer; a retime of an already-closed entry does not (2026-09-17)."""
+    was_running = False
+    if fields.get("stop"):
+        try:
+            cur = get_current_cached()
+            was_running = bool(cur) and cur.get("id") == entry_id
+        except Exception:  # noqa: BLE001
+            was_running = False
     body = {"workspace_id": TOGGL_WORKSPACE_ID}
     body.update(fields)
-    return _request("PUT", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}", body)
+    entry = _request("PUT", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}", body)
+    if was_running and isinstance(entry, dict):
+        _credit_value_tags(entry)
+    return entry
 
 
 def delete_entry(entry_id):

@@ -9,7 +9,7 @@ excel.append/excel.write call carries a src= ledger label.
 
 Scope notes (deliberate):
   - 0n / 1n+ raw writes are allowed for now (undo-fast's 0n/1n+ pre-image
-    restores, build-order-daemon's toggl-sync) — only 0分-capable paths
+    restores, tag_credits' stop-time value-tag appends) — only 0分-capable paths
     are locked down here.
   - -2n.py has no direct Excel writes (it delegates to did-fast.py); it is
     scanned anyway so a future raw write path fails loudly.
