@@ -95,3 +95,8 @@ skills/claude-skills/d357/state.json
 # Stray artifact from a shell-scripting bug (unexpanded $1/$REMOVED),
 # found 2026-08-09. Harmless to ignore if something regenerates it.
 $REMOVED.ids
+
+# Claude Code skill-sync scratch (~/.claude/skills -> skills/claude-skills). Per-machine,
+# managed by Claude Code, not source. Vendored copies tripped GitGuardian (qpdf --password doc example).
+skills/claude-skills/synced/
+skills/claude-skills/.trash/

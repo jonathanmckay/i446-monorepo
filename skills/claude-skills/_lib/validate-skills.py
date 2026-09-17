@@ -43,7 +43,7 @@ def fix_case(skills_dir: pathlib.Path) -> list[str]:
 def validate(skills_dir: pathlib.Path) -> list[str]:
     errors = []
     for sub in sorted(skills_dir.iterdir()):
-        if not sub.is_dir() or sub.name.startswith(".") or sub.name == "_lib":
+        if not sub.is_dir() or sub.name.startswith(".") or sub.name in ("_lib", "synced"):
             continue
         skill_file = sub / "SKILL.md"
         if not skill_file.exists():
