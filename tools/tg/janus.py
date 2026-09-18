@@ -4489,6 +4489,18 @@ def render_all() -> list[tuple[str, str]]:
 
 # ─── Command execution ─────────────────────────────────────────────────────
 
+_POINTS_LOG_CMD_RE = re.compile(r"^[+-]\d+(?=\s|$)")
+
+
+def _is_points_log_cmd(part: str) -> bool:
+    """A typed 分 log: leading signed points, then (usually) @domain and a
+    note — "+90 @m5x2 monthly sync", "-15 @m5x2 late fee". Routed straight
+    to did-fast, never tg-fast (no timer is involved; 2026-09-18). Only a
+    LEADING "-N" counts: "-1t"/"-1g" habit names and "1815-1843" ranges
+    never match (the digits must be followed by whitespace or end)."""
+    return bool(_POINTS_LOG_CMD_RE.match(part.strip()))
+
+
 def run_tg_fast(text: str) -> str:
     """A single tg-fast.py call can make several Toggl API requests in
     sequence (e.g. a range create: trim_range's get_entries + the create
@@ -5492,7 +5504,10 @@ def _(event):
         syntax (user request 2026-09-15): no timer, no completed range,
         just "credit N points to this domain for this thing, right now".
         Distinct from a completed-range `[N]` annotation below."""
-        return bool(re.search(r"(?:^|\s)\+\d+\b", part))
+        # Inlined rather than calling the module-level _is_points_log_cmd:
+        # the comma-multi tests exec this nested function in isolation.
+        return bool(re.match(r"^[+-]\d+(?=\s|$)", part.strip())
+                    or re.search(r"(?:^|\s)\+\d+\b", part))
 
     def _resolve_part(part: str) -> tuple[str, bool] | None:
         """Returns (resolved_command, use_did) or None to drop the part

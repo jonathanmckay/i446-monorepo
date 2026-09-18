@@ -270,6 +270,22 @@ def calc_week_mw(d: date) -> str:
 # are project/domain codes (i9, m5x2, ...) — call them "project tags" or
 # "projects" in prose, not "labels", to match how every other tool here
 # (dtd, /tg, /todo's @code) already talks about them.
+# Leading signed points token of the 分 log form (see ParsedItem.points_log).
+POINTS_LOG_RE = re.compile(r"^([+-]\d+)(?=\s|$)")
+
+
+def is_points_log_run(items: list) -> bool:
+    """True when EVERY parsed item is a bare 分 log — the whole run then
+    behaves as --points-only (no rituals/Todoist/posthoc) and never stops a
+    running Toggl timer (a points log is not a task completion)."""
+    return bool(items) and all(getattr(it, "points_log", False) for it in items)
+
+
+def _fen_pts_ok(r) -> bool:
+    """A 分 log may be negative ("-15 @m5x2"); everything else must be > 0."""
+    return r.fen_points != 0 if r.item.points_log else r.fen_points > 0
+
+
 LABEL_TO_0FEN = {
     "i9": "R", "i447": "R", "f693": "R", "f694": "R",
     "m5x2": "S",
@@ -481,6 +497,11 @@ class ParsedItem:
     toggl_tags: list = None  # #tag tokens → Toggl tags
     bonus_points: Optional[int] = None  # +N bonus points added on top of computed value
     block_override: Optional[str] = None  # explicit 地支 block (e.g. "巳") this completion happened in
+    # "+90 @m5x2 monthly sync" / "-15 @m5x2 late fee": a bare 分 log — signed
+    # points to a domain column with a free-text note. The note goes ONLY
+    # into the 分 log (neon ledger src + completed-today); no Todoist task,
+    # no posthoc card, no timer stop (user request 2026-09-18).
+    points_log: bool = False
 
 
 def parse_input(raw: str) -> list[ParsedItem]:
@@ -508,6 +529,16 @@ def parse_input(raw: str) -> list[ParsedItem]:
             continue
 
         item = ParsedItem(raw=chunk, name=chunk, target_date=target_date)
+
+        # 分 log form: a LEADING signed points token ("+90 …", "-15 …").
+        # Consumed here, before the bonus (+N) regex below can see it, so
+        # the sign survives and the rest of the chunk is the note.
+        pl = POINTS_LOG_RE.match(chunk)
+        if pl:
+            item.points_log = True
+            item.points_override = int(pl.group(1))
+            chunk = chunk[pl.end():].strip()
+            item.name = chunk
 
         # Extract --defer flag (--tmrw, --tomorrow, --Mon, --Jun 15, etc.)
         defer_match = re.search(r"--(\S+(?:\s+\d{1,2})?)\s*$", chunk)
@@ -1748,7 +1779,8 @@ def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
                                                      AppleScript returned
       rc 1, stderr <error>                          — daemon/transport failure
     """
-    values = [(col, v if isinstance(v, str) else f"+{v}") for col, v in appends]
+    values = [(col, v if isinstance(v, str) else (f"+{v}" if v >= 0 else f"{v}"))
+              for col, v in appends]
     try:
         resp = neon_excel.batch_append("0分", values, date=target_date,
                                        src=_did_src(src_names))
@@ -2886,6 +2918,9 @@ def main():
     if not items:
         print(json.dumps({"error": "no items parsed"}))
         sys.exit(1)
+    points_log_run = is_points_log_run(items)
+    if points_log_run:
+        points_only = True  # 分 log: note → ledger/completed-today only
 
     # 1b. Ritual cards: a daemon-created -1neon card (`😈 <tag>`) completed BY
     # NAME — dtd's enter/alt-enter worker pipes the card content here verbatim —
@@ -2988,7 +3023,8 @@ def main():
     # the timer's elapsed minutes (dtd: no need to type the time when a
     # matching timer is running)
     all_names = [r.item.name for r in fast]
-    toggl_stop = stop_matching_toggl(all_names) if all_names else None
+    toggl_stop = (stop_matching_toggl(all_names)
+                  if all_names and not points_log_run else None)
     apply_timer_minutes(fast, toggl_stop)
 
     # 4. Batch 0₦ writes
@@ -3091,7 +3127,7 @@ def main():
         # hcbi!Y and directly on 0分!W, whose formula already sums hcbi!Y).
         # {N} curly points (0g bonus, column Q) are a separate, unrelated
         # mechanism and still apply regardless of HCBI_HABITS membership.
-        if (not is_hcbi_habit and r.fen_col and r.fen_points > 0
+        if (not is_hcbi_habit and r.fen_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
             fen_appends.append((r.fen_col, r.fen_points))
             fen_names.append(r.item.name)
@@ -3126,7 +3162,7 @@ def main():
                   f"not an appendable column", file=sys.stderr)
             continue
         item_pts = 0
-        if (r.fen_col and r.fen_points > 0
+        if (r.fen_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
             item_pts += r.fen_points
         if r.item.curly_points and r.item.curly_points > 0:

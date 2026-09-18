@@ -75,6 +75,26 @@ This lets the user finish a task in a single flow: `/did` → stop timer → mar
 
 ## Parsing (Steps -2 to 0.5)
 
+### 分 log form (2026-09-18): `+N @domain note` / `-N @domain note`
+
+An item whose FIRST token is a signed number (`+90 @m5x2 monthly sync`,
+`-15 @m5x2 late fee`) is a bare **分 log**, not a task completion. Pass it
+to did-fast verbatim; it detects the form itself:
+
+- points (signed) go to the domain's 0分 column for today (or the trailing
+  `M/D` / `yesterday` date), `@domain` resolved via `LABEL_TO_0FEN`;
+- the note lands ONLY in the 分 log: the neon ledger `src` (`did <note>`)
+  and `completed-today.json` — **no Todoist match, no posthoc card, no
+  Toggl timer stop, no ritual routing**;
+- negatives are allowed and written as `-15`, never `+-15`;
+- no `@domain` → did-fast returns `needs_agent`; resolve the domain from
+  the note (e.g. a property code → `m5x2`) and rerun with `@code`.
+
+Janus accepts the same text directly in its input line (routed to did-fast,
+never tg-fast), so it needs no LLM round-trip. Multiple items separated by
+commas are fine as long as every item is in this form.
+
+
 **Date:** Last token `yesterday` or `M/D` → strip and set `targetDate`. Default: today (M/D format).
 
 **Split:** `,` or `;` → separate items, process each independently.
