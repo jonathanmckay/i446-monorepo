@@ -604,7 +604,7 @@
     "property_name": "kn47 K1",
     "unit": "C111",
     "tenant_name": "Green, Jonetta",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-03",
     "move_in": "2023-07-26",
     "renewal_start_date": null,
@@ -720,18 +720,6 @@
     "rent": "1128.00"
   },
   {
-    "unit_id": 369,
-    "property_name": "ps25",
-    "unit": "B11",
-    "tenant_name": "Chavez, Maria",
-    "status": "Eligible",
-    "lease_sign_date": "2023-05-30",
-    "move_in": "2021-04-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1128.00"
-  },
-  {
     "unit_id": 386,
     "property_name": "ps25",
     "unit": "D28",
@@ -766,18 +754,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1542.20"
-  },
-  {
-    "unit_id": 659,
-    "property_name": "s129",
-    "unit": "8",
-    "tenant_name": "Limtiaco, Janai",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2023-08-15",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1325.00"
   },
   {
     "unit_id": 441,
@@ -880,7 +856,7 @@
     "property_name": "kn47 K1",
     "unit": "G102",
     "tenant_name": "Barajas, Monica",
-    "status": "Pending",
+    "status": "Eligible",
     "lease_sign_date": "2025-10-13",
     "move_in": "2025-10-16",
     "renewal_start_date": null,
@@ -1384,7 +1360,7 @@
     "property_name": "kn47 K2",
     "unit": "C105",
     "tenant_name": "ARQUETTE, Lewis R.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-10-08",
     "move_in": "2025-10-08",
     "renewal_start_date": null,
@@ -1504,7 +1480,7 @@
     "property_name": "tc34",
     "unit": "B114",
     "tenant_name": "Adkins, Donald D.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-11-07",
     "move_in": "2025-11-09",
     "renewal_start_date": null,
@@ -2865,7 +2841,7 @@
     "move_in": "2026-02-21",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "936.00"
+    "rent": "931.00"
   },
   {
     "unit_id": 833,
@@ -3693,19 +3669,7 @@
     "move_in": "2026-04-05",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "936.00"
-  },
-  {
-    "unit_id": 1149,
-    "property_name": "m221",
-    "unit": "G-D",
-    "tenant_name": "Phillips, LeeRoy",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2026-03-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "0.00"
+    "rent": "931.00"
   },
   {
     "unit_id": 421,
