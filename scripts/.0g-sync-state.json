@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "i9 tasks to 0": {
-      "todoist_id": "6hWqQ2wXHR47P4QR",
-      "minutes": 100
-    },
-    "workout with weights": {
-      "todoist_id": "6hWqQ3293chmRhr2",
-      "minutes": 20
-    },
-    "find ways to enjoy the day": {
-      "todoist_id": "6hWqQ2xvFFp9JppR",
-      "minutes": 25
-    }
-  },
-  "last_sync": "2026-09-18T03:55:01.088909-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-18T04:00:12.482656-07:00"
 }
