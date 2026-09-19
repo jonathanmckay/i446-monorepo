@@ -87,123 +87,53 @@ def test_main_passes_yesterday_to_night_hcmc():
     assert "mark_night_hcmc(night_hcmc, today)" not in src
 
 
-def test_refresh_points_cache_includes_block_data(tmp_path):
-    """Regression (2026-07-19): refresh_points_cache() only read the P:Y domain
-    -total columns (COLS), never the G:O per-block (地支 卯..亥) columns, and
-    never wrote a "__block__" key. dashboard.py's load_points_all() reads this
-    SAME .points-cache.json file, and _build_block_chart_data() needs the
-    "__block__" sub-dict to render Points/Block at all — so every /0t run (it
-    calls refresh_points_cache() every morning) silently wiped block data,
-    making Points/Block show empty even though the daemon writes real values
-    to G:O in Neon. Fix: also read G:O into a "__block__" sub-dict, matching
-    the shape dashboard.py's own xlwings fallback path already produces."""
-    import json as _json
-    import openpyxl as _openpyxl
-    import time as _time
+def test_refresh_points_cache_delegates_to_ix_refresher():
+    """Regression (2026-09-19): refresh_points_cache() used to be a second,
+    private openpyxl build of .points-cache.json that scp'd its output over
+    Ix's copy. It only knew the per-domain + __block__ keys, while the
+    canonical refresher (tools/personal-dashboard/refresh_points_cache.py,
+    run by the 30-min relay) also writes __total__/__hcb_kcal__/
+    __hcbp_hcbc__/__salat__/__hcmp_min__ for the Wear OS complications — so
+    every morning /0t nulled the watch's points/hcb/hcmp complications until
+    the next relay run. There must be exactly one writer: /0t saves Excel,
+    then runs that same script on Ix (over SSH when not already on Ix)."""
+    from unittest.mock import MagicMock
 
-    yesterday = date.today() - timedelta(days=1)
+    calls = []
 
-    # Row layout (0-indexed): [0]=A, [1]=B(date), [6]=G(卯) .. [14]=O(亥),
-    # [15]=P(-1₦) .. [24]=Y(社) — matches COLS/BLOCK_COLS' 1-indexed offsets.
-    row = [None] * 25
-    row[1] = yesterday
-    row[6] = 6     # G — 卯
-    row[9] = 13    # J — 午
-    row[15] = 10   # P — -1₦ (a domain total, sanity check COLS still works)
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        r = MagicMock()
+        r.returncode, r.stdout, r.stderr = 0, "read 3 days; cache now 3 days\n", ""
+        return r
 
-    class _FakeSheet:
-        def iter_rows(self, min_row, values_only):
-            yield tuple(row)
+    with patch.object(zerot_fast, "ix_run", return_value=None) as ix_run, \
+         patch.object(zerot_fast.subprocess, "run", side_effect=fake_run):
+        out = zerot_fast.refresh_points_cache()
 
-    class _FakeWorkbook:
-        def __getitem__(self, name):
-            assert name == "0分"
-            return _FakeSheet()
+    assert ix_run.call_count == 1, "Excel must be saved on Ix before the read"
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[0] in ("ssh", "bash")
+    assert any("refresh-points-cache.sh" in part for part in cmd), cmd
+    assert out == "read 3 days; cache now 3 days"
 
-        def close(self):
-            pass
-
-    fake_cache = tmp_path / ".points-cache.json"
-    with patch.object(_openpyxl, "load_workbook", return_value=_FakeWorkbook()), \
-         patch.object(zerot_fast, "ix_run", return_value=None), \
-         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
-         patch.object(_time, "sleep", return_value=None):
-        zerot_fast.refresh_points_cache()
-
-    cache = _json.loads(fake_cache.read_text())
-    day = cache[yesterday.isoformat()]
-    assert day.get("__block__") == {"卯": 6, "午": 13}, (
-        f"expected __block__ with 卯/午 values, got {day.get('__block__')}"
-    )
-    assert day.get("-1₦") == 10, "domain-total columns (COLS) must still work"
+    src = _PATH.read_text()
+    assert "_push_points_cache_to_ix" not in src, "no second writer / scp clobber"
+    assert "import openpyxl" not in src, "no private openpyxl rebuild of the cache"
 
 
-def test_refresh_points_cache_retries_past_a_half_synced_file(tmp_path):
-    """Regression (2026-09-16): refresh_points_cache() saved on ix then read the
-    OneDrive-synced copy with openpyxl after a single fixed time.sleep(3). After a
-    larger-than-usual resync (e.g. Excel just relaunched on ix), 3s wasn't enough —
-    openpyxl hit a half-written file and raised zipfile.BadZipFile, surfacing as a
-    top-level "dashboard: ERROR" that read like the whole /0t run had failed, even
-    though the upstream Neon writes (sleep, 0t habit) had already succeeded. Fix:
-    retry the read with backoff instead of gambling on one fixed delay."""
-    import json as _json
-    import zipfile as _zipfile
-    import openpyxl as _openpyxl
-    import time as _time
-
-    yesterday = date.today() - timedelta(days=1)
-    row = [None] * 25
-    row[1] = yesterday
-    row[15] = 10  # P — -1₦
-
-    class _FakeSheet:
-        def iter_rows(self, min_row, values_only):
-            yield tuple(row)
-
-    class _FakeWorkbook:
-        def __getitem__(self, name):
-            return _FakeSheet()
-
-        def close(self):
-            pass
-
-    calls = {"n": 0}
-
-    def _flaky_load_workbook(*a, **k):
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise _zipfile.BadZipFile("File is not a zip file")
-        return _FakeWorkbook()
-
-    fake_cache = tmp_path / ".points-cache.json"
-    with patch.object(_openpyxl, "load_workbook", side_effect=_flaky_load_workbook), \
-         patch.object(zerot_fast, "ix_run", return_value=None), \
-         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
-         patch.object(_time, "sleep", return_value=None):
-        zerot_fast.refresh_points_cache()  # must not raise despite two transient failures
-
-    assert calls["n"] == 3, "expected two failed reads before the third succeeded"
-    cache = _json.loads(fake_cache.read_text())
-    assert cache[yesterday.isoformat()]["-1₦"] == 10
-
-
-def test_refresh_points_cache_gives_up_after_exhausting_retries(tmp_path):
-    """A read that never recovers (genuinely stuck sync) must still raise — the
-    retry loop is a bounded backoff, not an infinite/silent swallow."""
-    import zipfile as _zipfile
-    import openpyxl as _openpyxl
-    import time as _time
+def test_refresh_points_cache_raises_when_ix_refresher_fails():
+    """A failed remote rebuild must surface (main() reports it as
+    dashboard: ERROR), not silently return success with a stale cache."""
+    from unittest.mock import MagicMock
     import pytest
 
-    def _always_fails(*a, **k):
-        raise _zipfile.BadZipFile("File is not a zip file")
-
-    fake_cache = tmp_path / ".points-cache.json"
-    with patch.object(_openpyxl, "load_workbook", side_effect=_always_fails), \
-         patch.object(zerot_fast, "ix_run", return_value=None), \
-         patch.object(zerot_fast, "POINTS_CACHE", fake_cache), \
-         patch.object(_time, "sleep", return_value=None):
-        with pytest.raises(_zipfile.BadZipFile):
+    r = MagicMock()
+    r.returncode, r.stdout, r.stderr = 1, "", "ERROR: can't connect to the live Neon workbook"
+    with patch.object(zerot_fast, "ix_run", return_value=None), \
+         patch.object(zerot_fast.subprocess, "run", return_value=r):
+        with pytest.raises(RuntimeError, match="live Neon workbook"):
             zerot_fast.refresh_points_cache()
 
 
