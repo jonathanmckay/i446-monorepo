@@ -1,5 +1,10 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-18T16:00:06.678485-07:00"
+  "tasks": {
+    "double reading": {
+      "todoist_id": "6hX84VXQGvcX8qH2",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-09-18T18:00:01.508969-07:00"
 }
