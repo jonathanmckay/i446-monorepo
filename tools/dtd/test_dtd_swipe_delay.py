@@ -231,6 +231,15 @@ def test_snoozed_ids_distinguishes_hour_int_from_epoch_float(monkeypatch, tmp_pa
     monkeypatch.setattr(dtd, "SNOOZE_FILE", snooze_file)
     fixed = _fixed_now(9, 0)
     monkeypatch.setattr(dtd._dt, "datetime", fixed)
+    # _snoozed_ids gates on _dt.date.today() (NOT _dt.datetime), so patch date
+    # too — otherwise the date gate compares the snooze file's hardcoded
+    # 2026-09-07 against the REAL today and voids every snooze, making this
+    # test pass only on 2026-09-07 (time-bomb: it silently rotted from Sep 8 on).
+    class _FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 7)
+    monkeypatch.setattr(dtd._dt, "date", _FixedDate)
     now_ts = fixed.now().timestamp()
     today = dt.date(2026, 9, 7).isoformat()
     snooze_file.write_text(json.dumps({"date": today, "snoozes": {
