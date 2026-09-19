@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-19T06:00:04.342917-07:00"
+  "tasks": {
+    "get a two hour block in": {
+      "todoist_id": "6hXGcRxXC98Vcwm2",
+      "minutes": 30
+    },
+    "have fun in monterey": {
+      "todoist_id": "6hXGcV4h2RgMFqc2",
+      "minutes": 40
+    },
+    "double math for ren": {
+      "todoist_id": "6hXGcV6VFCp896FR",
+      "minutes": 20
+    },
+    "mobile neon": {
+      "todoist_id": "6hXGcV6jV84FGWW2",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-09-19T08:00:04.709311-07:00"
 }
