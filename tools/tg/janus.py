@@ -2489,7 +2489,18 @@ def _gap_fill(label: str, width: int) -> str:
 
 # Placeholder timer labels — tracked time the user hasn't actually categorized.
 # These nag (pulse red↔grey, exactly like empty/gap time) until relabelled.
-_PLACEHOLDER_LABELS = {"generic placeholder"}
+_PLACEHOLDER_LABELS = {"generic placeholder", "?"}
+
+# Descriptions that are NEVER merged with a same-desc neighbour: each "?" is
+# a distinct unknown to be identified on its own (user report 2026-09-19:
+# two "?" entries of 33m and 44m rendered as one 78m row). "generic
+# placeholder" stays mergeable — it is /tg's auto-filler, restarted as the
+# previous one stops, and one span is exactly what it means.
+_NO_MERGE_LABELS = {"?"}
+
+
+def _mergeable_desc(desc: str | None) -> bool:
+    return (desc or "").strip() not in _NO_MERGE_LABELS
 
 
 def _is_placeholder(label: str) -> bool:
@@ -3335,11 +3346,19 @@ def _drop_spills_covered_by(picks: list[dict], others: list[dict]) -> list[dict]
     there should be zero"). A RUNNING spill is never dropped: it is the
     live task, and the whole spill mechanism exists for it (2026-07-27)."""
     spills = [p for p in picks if p.get("is_spill") and not p.get("is_running")]
-    if not spills or not others:
+    rows = list(others) + [p for p in picks if not p.get("is_spill")]
+    if not spills or not rows:
         return picks
-    keep = _drop_redundant_spill(spills, others)
+    # "Starts where it ends" at minute precision, OR within GAP_MIN after —
+    # a sliver too short to earn a gap row (2026-09-19: "?" ending 18:11,
+    # chinese starting 18:12 still left a "戌:xx / :00 ?" pair).
+    starts = [r["start_dt"] for r in rows]
+
+    def covered(sp):
+        end = sp["start_dt"] + dt.timedelta(minutes=sp["dur_min"])
+        return any(0 <= (st - end).total_seconds() < GAP_MIN * 60 + 60 for st in starts)
     return [p for p in picks
-            if not p.get("is_spill") or p.get("is_running") or p in keep]
+            if not p.get("is_spill") or p.get("is_running") or not covered(p)]
 
 
 def _block_gaps(blk_sh, blk_eh, cutoff) -> list[dict]:
@@ -3769,6 +3788,7 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
         # 2026-08-11: a same-desc entry starting in the NEXT block would
         # otherwise vanish, glued onto the earlier block's span).
         if merged and merged[-1]["desc"] == e["desc"] \
+                and _mergeable_desc(e["desc"]) \
                 and _same_block(merged[-1]["start_dt"], e["start_dt"]):
             # "contiguous" tracks whether every sub-entry butts directly up
             # against the next with no gap -- true for the common case (a
@@ -4317,6 +4337,7 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
         # 2026-08-11: a same-desc entry starting in the NEXT block would
         # otherwise vanish, glued onto the earlier block's span).
         if merged and merged[-1]["desc"] == e["desc"] \
+                and _mergeable_desc(e["desc"]) \
                 and _same_block(merged[-1]["start_dt"], e["start_dt"]):
             # See render_morning's identical merge loop for why this is
             # tracked (bug report 2026-09-10: multi-id merges blanked the

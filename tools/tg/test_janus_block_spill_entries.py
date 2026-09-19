@@ -134,11 +134,18 @@ def test_current_block_shows_spilled_run_with_title():
     ]
     text = "".join(t for _, t, *_ in mod.render_focus_compact())
     hai = text.split("子:00")[0]
-    assert "run" in hai, f"spilled run must be titled in 亥:\n{hai}"
+    # Updated 2026-09-19: a FINISHED spill whose end is followed within
+    # GAP_MIN by the next row (snack at 21:01) is redundant — the run is
+    # titled with its full duration in 戌, snack's own start says when it
+    # stopped, and 亥 keeps only the ◇ │ continuation marks (user rule
+    # 2026-08-10 / 2026-09-17: "there should be zero :00 rows"). A RUNNING
+    # spill still gets its titled row (see the 亥:xx test below).
+    assert "run" not in hai, f"finished spill must not repeat in 亥:\n{hai}"
+    assert "◇ │" in hai, "the spilled hour still shows as continuation marks"
     spilled = [it for it in mod.STATE.visible_events
                if isinstance(it, dict) and it.get("kind") == "entry"
                and it.get("entry_ids") == [42]]
-    assert spilled, "the spilled row must be selectable"
+    assert not spilled, "no duplicate selectable row for the finished spill"
 
 
 def test_spill_item_never_rides_the_header():
@@ -433,3 +440,17 @@ def test_running_spill_first_in_block_reads_x_xx_header():
     lines = "".join(t for _, t, *_ in frags).split("\n")
     assert lines[0].startswith("亥:xx"), lines[0]
     assert "run" in lines[1] and "▶" in lines[1]
+
+
+def test_finished_spill_followed_within_gap_min_is_dropped():
+    """2026-09-19: "?" spilled into 戌 until 18:11; chinese started 18:12.
+    The one-minute sliver is below GAP_MIN so no gap row starts exactly at
+    18:11, and the spill survived as a "戌:xx / :00 ?" pair. A later row
+    starting within GAP_MIN of the spill's end now covers it too."""
+    mod = _load_tui()
+    today = _midnight()
+    spill = _pick("?", today.replace(hour=18), 11, 1, is_spill=True)
+    chinese = _pick("chinese", today.replace(hour=18, minute=12), 153, 2)
+    assert mod._drop_spills_covered_by([spill, chinese], []) == [chinese]
+    far = _pick("chinese", today.replace(hour=18, minute=30), 30, 3)
+    assert mod._drop_spills_covered_by([spill, far], []) == [spill, far]

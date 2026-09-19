@@ -101,3 +101,34 @@ def test_mao_card_keeps_the_longer_entry_over_an_earlier_shorter_one():
     mao = text.split("辰")[0]
     assert "0t" in mao and "8m" in mao, f"the 8m 0t entry must make 卯's card:\n{mao}"
     assert "-1t" not in mao, f"the 2m -1t is the one to drop, not 0t:\n{mao}"
+
+
+def test_question_mark_entries_are_never_merged():
+    """User report 2026-09-19: Toggl had two "?" entries (16:53-17:26, 33m
+    and 17:26-18:11, 44m) but janus showed one 78m "?" row. Each "?" is a
+    distinct unknown to identify, so same-desc merging must skip it; the
+    /tg auto-filler "generic placeholder" keeps merging."""
+    mod = _load_tui()
+    today = _midnight()
+    h = lambda hh, mm: today.replace(hour=hh, minute=mm)  # noqa: E731
+    mod.STATE.entries = [
+        _entry("tasks", h(16, 0), h(16, 29), 1),
+        _entry("?", h(16, 53), h(17, 26), 2),
+        _entry("?", h(17, 26), h(18, 11), 3),
+        _entry("generic placeholder", h(18, 20), h(18, 30), 4),
+        _entry("generic placeholder", h(18, 30), h(18, 45), 5),
+    ]
+    mod.STATE.entries_yday = []
+    mod.STATE.events = []
+    mod.STATE.block_points = {}
+    mod.STATE.entries_known = True
+    mod.STATE.day_offset = 1
+    mod.view_now = lambda: h(20, 0)
+    with patch.object(mod, "_COMPLETED_TODAY", Path("/nonexistent/completed-today.json")):
+        text = "".join(t for _, t, *_ in mod.render_morning(bo_emojis={}))
+    you = text.split("酉", 1)[1].split("戌")[0]
+    # (fixture entries are whole minutes: 17:26-18:11 is 45m; Toggl's real
+    # one was 44:48 → 44m)
+    assert "33m" in you and "45m" in you and "78m" not in you, f"two ? rows expected:\n{you}"
+    xu = text.split("戌", 1)[1].split("亥")[0]
+    assert "25m" in xu and xu.count("generic placeholder") == 1, f"auto-filler still merges:\n{xu}"
