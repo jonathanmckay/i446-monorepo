@@ -418,102 +418,32 @@ end tell'''
 
 
 def refresh_points_cache() -> str:
-    """Save Excel on Ix, wait for sync, rebuild points cache from openpyxl."""
-    # Save workbook on Ix
+    """Rebuild the points cache by running the canonical refresher
+    (tools/personal-dashboard/refresh-points-cache.sh) on Ix.
+
+    This used to be a second, independent openpyxl build of the cache that
+    scp'd its output over Ix's copy. That build only knew the per-domain +
+    __block__ keys; refresh_points_cache.py (the one the 30-min relay runs)
+    also writes __total__/__hcb_kcal__/__hcbp_hcbc__/__salat__/__hcmp_min__,
+    which the Wear OS complications read via neg1n_status.py. So every
+    morning /0t overwrote the full cache with the key-poor one and the
+    watch's points/hcb/hcmp complications went null until the next relay
+    run — and permanently whenever the relay was late (bug 2026-09-19).
+    One writer now: the same script, same host, same shape. Excel is saved
+    first so the live-workbook read reflects the 0t writes just made.
+    """
     save_script = 'tell application "Microsoft Excel" to save workbook "Neon分v12.2.xlsx"'
     ix_run(save_script, timeout=15.0)
 
-    # Wait for OneDrive sync, then read with openpyxl. A single fixed 3s
-    # sleep raced the upload (bug 2026-09-16: after Excel had just been
-    # relaunched on ix and did a larger-than-usual resync, 3s wasn't enough —
-    # openpyxl hit a half-written file and raised BadZipFile ["File is not a
-    # zip file"], which surfaced as a top-level "dashboard: ERROR" that read
-    # like the whole /0t run had failed, even though the actual Neon writes
-    # upstream (sleep, 0t habit) had already succeeded). Retry with backoff
-    # instead of gambling on one fixed delay.
-    import time
-    import zipfile
-    import openpyxl
-
-    def _load_workbook_with_retry(path, attempts=5, delay=2.0):
-        last_err = None
-        for _ in range(attempts):
-            time.sleep(delay)
-            try:
-                return openpyxl.load_workbook(str(path), data_only=True, read_only=True)
-            except zipfile.BadZipFile as e:
-                last_err = e
-                delay *= 1.5
-        raise last_err
-
-    COLS = {16: '-1₦', 17: '0₲', 18: 'i9', 19: 'm5', 20: '个',
-            21: '媒', 22: '思', 23: 'hcb', 24: 'xk', 25: '社'}
-    # G:O — per-block 分 (地支 卯..亥), read into a "__block__" sub-dict so the
-    # dashboard's Points/Block chart has data. This cache is shared with
-    # dashboard.py's load_points_data(), whose own xlwings fallback path
-    # already writes this key — refresh_points_cache() must match that shape
-    # or its daily overwrite silently wipes block data (regression 2026-07-19:
-    # Points/Block showed empty because /0t clobbered the cache every morning
-    # with a version that never had __block__ at all).
-    BLOCK_COLS = {7: '卯', 8: '辰', 9: '巳', 10: '午', 11: '未',
-                  12: '申', 13: '酉', 14: '戌', 15: '亥'}
-    today = date.today()
-    cutoff = today - timedelta(days=90)
-
-    wb = _load_workbook_with_retry(NEON_XLSX)
-    ws = wb['0分']
-    result = {}
-    for row in ws.iter_rows(min_row=3, values_only=True):
-        b = row[1]
-        if b is None:
-            continue
-        if isinstance(b, datetime):
-            d = b.date()
-        elif isinstance(b, date):
-            d = b
-        else:
-            continue
-        if d <= cutoff or d > today:
-            continue
-        day_data = {}
-        for idx, label in COLS.items():
-            val = row[idx - 1]
-            if val is not None and isinstance(val, (int, float)) and val > 0:
-                day_data[label] = int(round(float(val)))
-        block_data = {}
-        for idx, branch in BLOCK_COLS.items():
-            val = row[idx - 1]
-            if val is not None and isinstance(val, (int, float)) and val > 0:
-                block_data[branch] = int(round(float(val)))
-        if block_data:
-            day_data['__block__'] = block_data
-        if day_data:
-            result[d.isoformat()] = day_data
-    wb.close()
-
-    POINTS_CACHE.write_text(json.dumps(result, indent=2) + "\n")
-    _push_points_cache_to_ix()
-    return f"{len(result)} days"
-
-
-def _push_points_cache_to_ix() -> None:
-    """The dashboard server (and the .points-cache.json it actually reads)
-    lives on ix, but /0t normally runs on the laptop, and i446-monorepo isn't
-    synced between hosts — so this cache write would otherwise never reach
-    ix, leaving the Points/Block chart stuck on whatever ix last saw (bug
-    2026-07-21). Push a copy straight to ix's matching path unless we're
-    already running there. Best-effort: dashboard.py's own staleness check
-    (_get_points_cache) self-heals from a live Excel read if this fails."""
+    script = str(Path.home() / "i446-monorepo/tools/personal-dashboard/refresh-points-cache.sh")
     host_file = Path.home() / ".claude" / ".host-name"
-    if host_file.exists() and host_file.read_text().strip() == "ix":
-        return
-    try:
-        subprocess.run(
-            ["scp", "-q", str(POINTS_CACHE), f"ix:{POINTS_CACHE}"],
-            capture_output=True, timeout=15,
-        )
-    except Exception:
-        pass
+    on_ix = host_file.exists() and host_file.read_text().strip() == "ix"
+    cmd = ["bash", script] if on_ix else \
+        ["ssh", "-o", "ConnectTimeout=20", "-o", "BatchMode=yes", "ix", f"bash {script}"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip() or f"exit {r.returncode}")
+    return r.stdout.strip()
 
 
 def mark_done() -> dict:
