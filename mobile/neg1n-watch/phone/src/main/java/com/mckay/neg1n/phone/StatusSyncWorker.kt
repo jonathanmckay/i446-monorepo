@@ -35,8 +35,8 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
         Log.i(TAG, "Worker: fetching $endpoint")
 
         val status = StatusFetcher(endpoint).fetch().getOrElse { e ->
-            Log.e(TAG, "Worker: -1n fetch failed, will retry: url=$endpoint", e)
-            return Result.retry()
+            Log.e(TAG, "Worker: -1n fetch failed (attempt $runAttemptCount): url=$endpoint", e)
+            return retryOrWaitForNextPeriod()
         }
         Log.i(TAG, "Worker: -1n fetch OK block=${status.block} done=${status.done} not_done=${status.notDone}")
 
@@ -45,8 +45,8 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
             Log.i(TAG, "Worker: -1n pushed to Data Layer OK")
             Result.success()
         } catch (e: Exception) {
-            Log.e(TAG, "Worker: -1n Data Layer push failed, will retry", e)
-            Result.retry()
+            Log.e(TAG, "Worker: -1n Data Layer push failed (attempt $runAttemptCount)", e)
+            retryOrWaitForNextPeriod()
         }
 
         syncBestEffort("day-points") {
@@ -64,6 +64,20 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
 
         return neg1nResult
     }
+
+    /** Bounded retry. Unbounded Result.retry() with LINEAR 1-min backoff
+     * looks harmless but WorkManager keeps growing the delay across
+     * consecutive failures up to its 5-hour cap (WorkRequest.MAX_BACKOFF_MILLIS),
+     * and a periodic job stuck in backoff does NOT also run on its 15-min
+     * cadence. Bug 2026-09-19: Tailscale had been off on the phone for 9
+     * days, every cycle failed, and once the phone was back on the tailnet
+     * the next attempt was still hours away — every complication sat stale
+     * with the server fully healthy. Two quick retries cover a transient
+     * blip; after that, give up this cycle (Result.failure() on periodic
+     * work just means "run again at the next period") so recovery is never
+     * worse than one 15-min period after the network comes back. */
+    private fun retryOrWaitForNextPeriod(): Result =
+        if (runAttemptCount < 2) Result.retry() else Result.failure()
 
     /** Fetch+push one of the newer, lower-stakes targets — logs and swallows
      * any failure so it never affects -1n's own success/retry result above,
