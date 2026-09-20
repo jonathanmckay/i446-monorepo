@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "have fun in monterey": {
-      "todoist_id": "6hXGcV4h2RgMFqc2",
-      "minutes": 40
-    },
-    "double math for ren": {
-      "todoist_id": "6hXGcV6VFCp896FR",
-      "minutes": 20
-    },
-    "mobile neon": {
-      "todoist_id": "6hXGcV6jV84FGWW2",
-      "minutes": 20
-    }
-  },
-  "last_sync": "2026-09-20T03:55:00.825506-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-20T04:00:06.357730-07:00"
 }
