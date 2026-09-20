@@ -6718,5 +6718,25 @@
     "unit": "B106",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-20",
+    "effective": "2026-09-19",
+    "kind": "moveout",
+    "unit_id": "347",
+    "prop": "k104- LeFevre",
+    "unit": "101-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-20",
+    "effective": "2026-09-20",
+    "kind": "movein",
+    "unit_id": "1193",
+    "prop": "tc68",
+    "unit": "B44",
+    "tenant": null,
+    "baseline": false
   }
 ]

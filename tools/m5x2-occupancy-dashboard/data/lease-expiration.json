@@ -792,18 +792,6 @@
     "rent": "1699.00"
   },
   {
-    "unit_id": 1293,
-    "property_name": "c702",
-    "unit": "B201",
-    "tenant_name": "Bates, Brianna",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1499.00"
-  },
-  {
     "unit_id": 337,
     "property_name": "k104- LeFevre",
     "unit": "505-1",
