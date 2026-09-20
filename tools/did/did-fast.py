@@ -287,6 +287,7 @@ def _fen_pts_ok(r) -> bool:
 
 
 LABEL_TO_0FEN = {
+    "0g": "Q",   # the 0g column itself — reachable from a 分 log ("-10 0g")
     "i9": "R", "i447": "R", "f693": "R", "f694": "R",
     "m5x2": "S",
     "g245": "T", "infra": "T", "cc": "T",
@@ -1263,6 +1264,25 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
     for item in items:
         name_lower = item.name.lower()
+
+        # 分 log ("+90 @m5x2 monthly sync", "-10 0g"): straight to a domain
+        # column. Never a habit/1n+/Todoist match — "-10 0g" must dock the
+        # 0g column, not complete the 0g habit (user request 2026-09-19).
+        # Domain = @code, else the note itself when it IS a domain code.
+        if item.points_log:
+            code = item.project_override or (name_lower if name_lower in LABEL_TO_0FEN else None)
+            if code and code in LABEL_TO_0FEN:
+                r = RouteResult(item=item, step="variable",
+                                fen_col=LABEL_TO_0FEN[code],
+                                fen_points=item.points_override or 0)
+                r.todoist_task = None
+                r.error = code
+                results.append(r)
+            else:
+                results.append(RouteResult(item=item, step="needs_agent",
+                                           error="分 log needs a domain (@code or bare code)"))
+            continue
+
         # 0₦ header lookup only -- ZERO_N_ALIASES resolves e.g. "hcmr" to
         # "o314"'s column; toggl_minutes_for(item.name) below stays on the
         # UNaliased name so it reads this entry's own Toggl minutes, not

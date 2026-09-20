@@ -74,3 +74,28 @@ def test_janus_routes_leading_signed_points_to_did_fast():
     assert not mod._is_points_log_cmd("-1t")
     assert not mod._is_points_log_cmd("1815-1843 work [30]")
     assert not mod._is_points_log_cmd("bball 30 +10")
+
+
+def test_bare_domain_code_after_signed_points_targets_that_column():
+    """User request 2026-09-19: "-10 0g" via janus subtracts from the 0g
+    column. "0g" is also a 0n habit header, so the 分-log path must never
+    reach the habit match (that would mark the habit done, not dock it)."""
+    headers = {"0n": {"0g": 20, "0l": 19}, "1n": {}}
+    (it,) = df.parse_input("-10 0g")
+    assert it.points_log and it.points_override == -10 and it.name == "0g"
+    (r,) = df.route_items([it], headers, {}, skip_todoist=True)
+    assert (r.step, r.fen_col, r.fen_points) == ("variable", "Q", -10)
+    (r2,) = df.route_items(df.parse_input("+5 i9"), headers, {}, skip_todoist=True)
+    assert (r2.step, r2.fen_col, r2.fen_points) == ("variable", "R", 5)
+
+
+def test_points_log_with_at_code_still_wins_over_a_habit_name(monkeypatch):
+    headers = {"0n": {"push": 5}, "1n": {}}
+    (r,) = df.route_items(df.parse_input("+20 @i9 push"), headers, {}, skip_todoist=True)
+    assert (r.step, r.fen_col, r.fen_points, r.item.name) == ("variable", "R", 20, "push")
+
+
+def test_plain_habit_completion_is_untouched_by_the_0g_column_alias():
+    headers = {"0n": {"0g": 20}, "1n": {}}
+    (r,) = df.route_items(df.parse_input("0g"), headers, {}, skip_todoist=True)
+    assert r.step == "0n"

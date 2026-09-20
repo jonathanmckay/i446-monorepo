@@ -87,8 +87,12 @@ to did-fast verbatim; it detects the form itself:
   and `completed-today.json` — **no Todoist match, no posthoc card, no
   Toggl timer stop, no ritual routing**;
 - negatives are allowed and written as `-15`, never `+-15`;
-- no `@domain` → did-fast returns `needs_agent`; resolve the domain from
-  the note (e.g. a property code → `m5x2`) and rerun with `@code`.
+- a bare domain code as the whole note also works: `-10 0g` docks the 0g
+  column (Q), `+5 i9` credits i9 — the code is resolved via `LABEL_TO_0FEN`
+  before any habit/Todoist matching, so `0g` here never completes the 0g
+  habit;
+- otherwise no domain → did-fast returns `needs_agent`; resolve the domain
+  from the note (e.g. a property code → `m5x2`) and rerun with `@code`.
 
 Janus accepts the same text directly in its input line (routed to did-fast,
 never tg-fast), so it needs no LLM round-trip. Multiple items separated by
