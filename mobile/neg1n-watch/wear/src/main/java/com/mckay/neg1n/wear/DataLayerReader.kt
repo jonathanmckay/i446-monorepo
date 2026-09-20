@@ -35,13 +35,15 @@ object DataLayerReader {
     suspend fun readLatest(context: Context): Neg1nStatus {
         val remote = readRemote(context)
         val local = StatusStore.load(context)
-        // Whichever is more recent wins. This matters right after a
-        // swipe-to-complete on the watch itself (RitualCompleter writes the
-        // fresh result straight to StatusStore with a fresh timestamp): the
-        // synced DataItem still reflects the phone's last push until its
-        // own next periodic sync, which would otherwise silently overwrite
-        // the just-completed ritual back to "not done" for up to 15 minutes.
-        return if (remote != null && remote.updatedAtMillis >= local.updatedAtMillis) remote else local
+        // Whichever is more recent wins (the phone stamps updated_at with
+        // its FETCH time, so a stale fetch pushed late loses here). Then the
+        // persisted swipe overlay goes on top — see PendingCompletions: a
+        // ritual just swiped done on the watch must render done in both the
+        // list and the complication bar until the remote confirms it, even
+        // if the synced item momentarily reverts. Applied AFTER readRemote's
+        // StatusStore.save so the overlay never gets written back as fact.
+        val base = if (remote != null && remote.updatedAtMillis >= local.updatedAtMillis) remote else local
+        return PendingCompletions.fromPrefs(context).applyTo(base)
     }
 
     private suspend fun readRemote(context: Context): Neg1nStatus? {

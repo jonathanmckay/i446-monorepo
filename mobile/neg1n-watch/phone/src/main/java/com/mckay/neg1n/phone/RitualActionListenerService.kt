@@ -1,5 +1,6 @@
 package com.mckay.neg1n.phone
 
+import android.content.Context
 import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -29,6 +30,10 @@ class RitualActionListenerService : WearableListenerService() {
             "/neg1n_complete" -> {
                 val tag = String(event.data, Charsets.UTF_8)
                 Log.i(TAG, "RitualActionListenerService: complete request tag=$tag")
+                // Before enqueueing, so a StatusSyncWorker already mid-fetch
+                // sees it when it decides whether to push (see Neg1nConfig).
+                applicationContext.getSharedPreferences(Neg1nConfig.PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putLong(Neg1nConfig.PREF_COMPLETION_STARTED_AT, System.currentTimeMillis()).apply()
                 val request = OneTimeWorkRequestBuilder<CompleteRitualWorker>()
                     .setInputData(completeRitualInputData(tag))
                     .build()

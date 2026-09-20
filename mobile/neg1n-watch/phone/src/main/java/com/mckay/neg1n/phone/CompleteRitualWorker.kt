@@ -27,10 +27,14 @@ class CompleteRitualWorker(appContext: Context, params: WorkerParameters) :
             Log.e(TAG, "CompleteRitualWorker: complete failed for tag=$tag", e)
             return Result.retry()
         }
+        // Stamp with the time the server CONFIRMED the completion: any sync
+        // fetch that started earlier (and may have read pre-stamp state)
+        // carries an older updated_at and loses on the watch.
+        val confirmedAt = System.currentTimeMillis()
         Log.i(TAG, "CompleteRitualWorker: OK tag=$tag done=${status.done} not_done=${status.notDone}")
 
         return try {
-            DataLayerPush.push(applicationContext, status, endpoint)
+            DataLayerPush.push(applicationContext, status, endpoint, confirmedAt)
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "CompleteRitualWorker: Data Layer push failed after completing tag=$tag", e)

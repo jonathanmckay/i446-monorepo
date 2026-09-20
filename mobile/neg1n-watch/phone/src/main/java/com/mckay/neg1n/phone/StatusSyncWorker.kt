@@ -34,6 +34,7 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
         val endpoint = prefs.getString(Neg1nConfig.PREF_ENDPOINT, Neg1nConfig.DEFAULT_ENDPOINT)!!
         Log.i(TAG, "Worker: fetching $endpoint")
 
+        val fetchStartedAt = System.currentTimeMillis()
         val status = StatusFetcher(endpoint).fetch().getOrElse { e ->
             Log.e(TAG, "Worker: -1n fetch failed (attempt $runAttemptCount): url=$endpoint", e)
             return retryOrWaitForNextPeriod()
@@ -41,8 +42,16 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
         Log.i(TAG, "Worker: -1n fetch OK block=${status.block} done=${status.done} not_done=${status.notDone}")
 
         val neg1nResult = try {
-            DataLayerPush.push(applicationContext, status, endpoint)
-            Log.i(TAG, "Worker: -1n pushed to Data Layer OK")
+            if (completionOverlapsFetch(prefs, fetchStartedAt)) {
+                // A ritual completion began within the guard window of this
+                // fetch: the fetched -1n status may predate the server-side
+                // stamp, and pushing it would revert the swipe on the watch.
+                // CompleteRitualWorker pushes the authoritative status.
+                Log.i(TAG, "Worker: -1n push skipped, completion in flight")
+            } else {
+                DataLayerPush.push(applicationContext, status, endpoint, fetchStartedAt)
+                Log.i(TAG, "Worker: -1n pushed to Data Layer OK")
+            }
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "Worker: -1n Data Layer push failed (attempt $runAttemptCount)", e)
@@ -78,6 +87,11 @@ class StatusSyncWorker(appContext: Context, params: WorkerParameters) :
      * worse than one 15-min period after the network comes back. */
     private fun retryOrWaitForNextPeriod(): Result =
         if (runAttemptCount < 2) Result.retry() else Result.failure()
+
+    private fun completionOverlapsFetch(prefs: android.content.SharedPreferences, fetchStartedAt: Long): Boolean {
+        val startedAt = prefs.getLong(Neg1nConfig.PREF_COMPLETION_STARTED_AT, 0L)
+        return startedAt > fetchStartedAt - Neg1nConfig.COMPLETION_GUARD_MILLIS
+    }
 
     /** Fetch+push one of the newer, lower-stakes targets — logs and swallows
      * any failure so it never affects -1n's own success/retry result above,

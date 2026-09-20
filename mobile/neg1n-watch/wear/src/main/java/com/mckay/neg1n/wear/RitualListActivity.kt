@@ -41,7 +41,8 @@ class RitualListActivity : Activity() {
 
     private lateinit var adapter: RitualAdapter
     private lateinit var emptyText: TextView
-    private val pendingCompletions = PendingCompletions()
+    private lateinit var pendingCompletions: PendingCompletions
+    private var currentBlock: String? = null
     private val labelOf = Neg1nConfig.RITUALS.associate { (tag, label, _) -> tag to label }
     private val colorOf: (String) -> Int = { tag ->
         Neg1nConfig.RITUALS.find { it.first == tag }?.third ?: Neg1nConfig.NOT_DONE_COLOR
@@ -52,6 +53,7 @@ class RitualListActivity : Activity() {
         setContentView(R.layout.activity_ritual_list)
 
         emptyText = findViewById(R.id.emptyText)
+        pendingCompletions = PendingCompletions.fromPrefs(applicationContext)
         adapter = RitualAdapter(colorOf)
         val recycler = findViewById<RecyclerView>(R.id.ritualList)
         recycler.layoutManager = LinearLayoutManager(this)
@@ -63,7 +65,6 @@ class RitualListActivity : Activity() {
                 val position = viewHolder.bindingAdapterPosition
                 if (position == RecyclerView.NO_POSITION) return
                 val tag = adapter.tagAt(position)
-                pendingCompletions.markCompleted(tag)
                 adapter.removeAt(position)
                 updateEmptyState()
                 completeRitual(tag)
@@ -83,9 +84,10 @@ class RitualListActivity : Activity() {
 
     private fun reload() {
         CoroutineScope(Dispatchers.Main).launch {
+            // readLatest already applies the persisted swipe overlay.
             val status = DataLayerReader.readLatest(applicationContext)
-            val items = pendingCompletions.filter(status.notDone)
-                .mapNotNull { tag -> labelOf[tag]?.let { tag to it } }
+            currentBlock = status.block
+            val items = status.notDone.mapNotNull { tag -> labelOf[tag]?.let { tag to it } }
             Log.i(TAG, "RitualListActivity: loaded block=${status.block} not_done=${status.notDone} " +
                 "endpoint=${status.endpoint} -> ${items.size} row(s)")
             adapter.setItems(items)
@@ -97,7 +99,14 @@ class RitualListActivity : Activity() {
         CoroutineScope(Dispatchers.Main).launch {
             val sent = PhoneMessenger.send(applicationContext, "/neg1n_complete", tag)
             Log.i(TAG, "RitualListActivity: complete request tag=$tag sent=$sent")
-            if (!sent) {
+            if (sent) {
+                // Persisted, so a reopened list and the complication bar
+                // keep showing it done until the remote confirms — only
+                // when the relay was actually delivered; an undeliverable
+                // swipe must come straight back (reload below), not hide
+                // for the overlay's TTL.
+                pendingCompletions.markCompleted(tag, currentBlock)
+            } else {
                 Toast.makeText(this@RitualListActivity, "phone unreachable", Toast.LENGTH_SHORT).show()
             }
             requestComplicationUpdate()

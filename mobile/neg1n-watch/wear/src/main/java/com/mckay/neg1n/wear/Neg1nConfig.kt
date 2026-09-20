@@ -47,7 +47,7 @@ object Neg1nConfig {
      * bar color). */
     val RITUALS: List<Triple<String, String, Int>> = listOf(
         Triple("سمش", "prayer", 0xFFAA00FF.toInt()),   // hcm
-        Triple("-1g", "goal", 0xFF00E676.toInt()),      // g245
+        Triple("-1g", "-1g", 0xFF00E676.toInt()),       // g245
         Triple("-1ibx", "inbox", 0xFF2979FF.toInt()),   // i9
         Triple("-1t", "time", 0xFF1249B4.toInt()),      // n156
         Triple("-1l", "tasks", 0xFF00E676.toInt()),     // g245

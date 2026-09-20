@@ -25,6 +25,18 @@ object Neg1nConfig {
 
     const val SYNC_WORK_NAME = "neg1n_status_sync"
 
+    /** Wall-clock millis of the most recent "/neg1n_complete" request from
+     * the watch, written by RitualActionListenerService the moment the
+     * message arrives (NOT after the completion finishes — a sync fetch
+     * racing a mid-flight completion must see it). StatusSyncWorker skips
+     * its -1n push when a completion began within COMPLETION_GUARD_MILLIS
+     * of its own fetch start: that fetch may predate the server-side stamp,
+     * and CompleteRitualWorker pushes the authoritative post-completion
+     * status itself. Bug 2026-09-20: the list-open "sync now" fetch was
+     * pushed after the completion's push and reverted the swiped ritual. */
+    const val PREF_COMPLETION_STARTED_AT = "completion_started_at"
+    const val COMPLETION_GUARD_MILLIS = 60_000L
+
     // --- day-points, hcb, hcmp complications (added alongside -1n) ---
     // Sibling endpoints on the same neg1n_status.py Flask process/port —
     // derive from PREF_ENDPOINT's configured host rather than hardcoding it
