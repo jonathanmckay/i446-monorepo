@@ -6758,5 +6758,45 @@
     "unit": "H202",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-22",
+    "effective": "2026-10-02",
+    "kind": "leased",
+    "unit_id": "227",
+    "prop": "p705",
+    "unit": "11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-22",
+    "effective": "2026-10-12",
+    "kind": "leased",
+    "unit_id": "1107",
+    "prop": "o155-Oak",
+    "unit": "B3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-22",
+    "effective": "2026-10-08",
+    "kind": "ntv",
+    "unit_id": "1335",
+    "prop": "c702",
+    "unit": "D203",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-22",
+    "effective": "2026-09-22",
+    "kind": "movein",
+    "unit_id": "1292",
+    "prop": "c702",
+    "unit": "B106",
+    "tenant": null,
+    "baseline": false
   }
 ]
