@@ -552,6 +552,18 @@
     "rent": "1140.00"
   },
   {
+    "unit_id": 719,
+    "property_name": "c313",
+    "unit": "11",
+    "tenant_name": "Van Winkle, Moriah",
+    "status": "Eligible",
+    "lease_sign_date": null,
+    "move_in": "2020-03-31",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2025-10-01",
+    "rent": "1450.00"
+  },
+  {
     "unit_id": 1381,
     "property_name": "c702",
     "unit": "G103",
@@ -790,18 +802,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-11-11",
     "rent": "1230.00"
-  },
-  {
-    "unit_id": 753,
-    "property_name": "k308",
-    "unit": "316-A",
-    "tenant_name": "Wallace, Dustin",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-11-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-01",
-    "rent": "1749.00"
   },
   {
     "unit_id": 863,
@@ -1264,7 +1264,7 @@
     "property_name": "kn47 K2",
     "unit": "E202",
     "tenant_name": "Bennett, Gabriel A.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-11-26",
     "move_in": "2025-11-26",
     "renewal_start_date": null,
@@ -1360,7 +1360,7 @@
     "property_name": "rl21",
     "unit": "17",
     "tenant_name": "Roach, Brandi L.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-06",
     "move_in": "2025-12-06",
     "renewal_start_date": null,
@@ -1690,18 +1690,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1089.00"
-  },
-  {
-    "unit_id": 1078,
-    "property_name": "kn47-k3",
-    "unit": "K203",
-    "tenant_name": "Hutchinson, Shelby",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-02-17",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-07-01",
-    "rent": "1500.00"
   },
   {
     "unit_id": 273,
