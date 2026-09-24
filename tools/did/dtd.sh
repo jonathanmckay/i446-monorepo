@@ -565,7 +565,20 @@ printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
 # API calls above — leaked SGR motion sequences type themselves into fzf's
 # query as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05,
 # ported here from done.sh/defer.sh/edit.sh/split.sh).
+# DRAIN_ECHO note (bug 2026-09-24, "input box goes weird when dtd is busy"):
+# fzf's execute-silent/transform/reload path calls Pause(false) once the
+# command has blocked for 1s (terminal.go blockDuration) -- that RESTORES the
+# tty to its original cooked+ECHO state. Click bytes queued while fzf was
+# still in raw mode become PENDIN input, and every `read -k 1` iteration
+# below flips the tty raw->cooked->raw, which makes the line discipline
+# re-process (and re-ECHO) the still-unread tail each time: 3 clicks (36
+# bytes) painted ~100 suffix fragments (`;18;19M[<0;18;19M<0;18;19M...`)
+# straight over the list and the input box. fzf's Resume(false) only
+# reprints the prompt line, so the mess stayed. Turning ECHO off before the
+# first read makes the re-processing silent; the loop then drains cleanly.
+# Reproduced and verified in test_dtd_drain_no_echo.py (pty harness).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 echo "▶ Started: \$clean → \$project" > "\$HDR"
 STARTEOF
@@ -750,6 +763,7 @@ printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 # prompt was open dumped into fzf's query as literal ^[[<34;x;yM text on
 # resume (bug 2026-07-27: "input pane in dtd is a mess").
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 DONEEOF
 chmod +x "$DTD_DONE"
@@ -912,6 +926,7 @@ if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   # ported here). Runs immediately after the read, before the validation
   # branch below can exit 0 on invalid input and skip cleanup entirely.
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
   while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 fi
 days=\${days// /}
@@ -991,6 +1006,7 @@ done
 # then reads as literal ^[[<0;16;15M text on resume (same class of bug as
 # done.sh/split.sh, 2026-07-27, just never ported to this script).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 
 DEFEREOF
@@ -1046,6 +1062,7 @@ PYCOUNT
 # from done.sh/defer.sh/edit.sh/split.sh). Runs before the early exit below
 # too, not just the end of the script.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 if [[ "\$n" == "0" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
@@ -1127,6 +1144,7 @@ PYWRITE
 # literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here
 # from done.sh/defer.sh/edit.sh/split.sh).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 echo "\${msg:-✗ block delay failed}" > "\$HDR"
 APPLYEOF
@@ -1171,6 +1189,7 @@ edits="\$REPLY"
 # unconditionally, BEFORE the cancel check below, so a cancelled edit
 # (blank input) still cleans up instead of exiting past it.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
@@ -1694,6 +1713,7 @@ for l in skipped_lines:
 # never stdout, so it can't corrupt the row data reload() reads from this
 # script's stdout.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 LISTEOF
 chmod +x "$DTD_LIST"
@@ -1878,6 +1898,7 @@ for s in d.values():
   # ported here from done.sh/defer.sh/edit.sh/split.sh). Runs before the
   # success/failure branch below so both outcomes get the cleanup.
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
   while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
   if [[ "\$code" == 2* ]]; then
     # Hide by id (\$REMOVED.ids), NOT by name (\$REMOVED): delete already
@@ -2122,6 +2143,7 @@ with open(hdr_file, 'w') as f: f.write(msg)
 # Draining here consumes them before fzf reads. Also reset mouse modes, matching
 # the defer/points/edit action scripts.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 SPLITEOF
 # Substitute placeholder paths
@@ -2267,6 +2289,7 @@ fi
 # as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported
 # here from done.sh/defer.sh/edit.sh/split.sh).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 AGENTEOF
 sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_AGENT"
@@ -2300,6 +2323,7 @@ if (( pushed > processed )); then
   # sleep-polling above), so it's the path most likely to trigger the leak —
   # see the fuller comment below for the bug this guards against.
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
   while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
   exit 0
 fi
@@ -2311,6 +2335,7 @@ result=\$(python3 "$UNDO_FAST" --undo "$DTD_JOURNAL" \\
 # fzf's query as literal ^[[<0;16;15M text on resume otherwise (bug
 # 2026-07-05, ported here from done.sh/defer.sh/edit.sh/split.sh).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 summary=\$(echo "\$result" | jq -r '.summary // .error // "undo failed"' 2>/dev/null)
 if [[ \$(echo "\$result" | jq -r '.ok // empty' 2>/dev/null) == "true" ]]; then
@@ -2341,6 +2366,7 @@ echo "🔄 refreshed" > "$DTD_HDR"
 # ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here from
 # done.sh/defer.sh/edit.sh/split.sh).
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 REFRESHEOF
 chmod +x "$DTD_REFRESH"
