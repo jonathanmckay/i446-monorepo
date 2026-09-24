@@ -569,10 +569,10 @@ printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
 # fzf's execute-silent/transform/reload path calls Pause(false) once the
 # command has blocked for 1s (terminal.go blockDuration) -- that RESTORES the
 # tty to its original cooked+ECHO state. Click bytes queued while fzf was
-# still in raw mode become PENDIN input, and every `read -k 1` iteration
+# still in raw mode become PENDIN input, and every 'read -k 1' iteration
 # below flips the tty raw->cooked->raw, which makes the line discipline
 # re-process (and re-ECHO) the still-unread tail each time: 3 clicks (36
-# bytes) painted ~100 suffix fragments (`;18;19M[<0;18;19M<0;18;19M...`)
+# bytes) painted ~100 suffix fragments (;18;19M[<0;18;19M<0;18;19M...)
 # straight over the list and the input box. fzf's Resume(false) only
 # reprints the prompt line, so the mess stayed. Turning ECHO off before the
 # first read makes the re-processing silent; the loop then drains cleanly.
