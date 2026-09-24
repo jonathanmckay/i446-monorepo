@@ -456,6 +456,17 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     if [[ -n "$ok" ]]; then
       echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
+      # 0t completed in dtd → also run the full /0t review (sleep write,
+      # sleep dock, media audit, dashboard cache refresh) in the background,
+      # not just the bare habit close this loop already did. 0t-fast.py
+      # re-invokes did-fast "0t" itself; the recurring-habit done_today gate
+      # (did-fast.py Step 6, "already done today (skipped re-close...)")
+      # makes that second call a safe no-op on the Todoist/0n side, so this
+      # never double-credits or double-advances the due date — it only adds
+      # the sleep/dock/audit/dashboard work dtd's own completion never did.
+      if echo "$result" | jq -e '.results[]? | select(.name | ascii_downcase == "0t")' >/dev/null 2>&1; then
+        ( python3 "$HOME/i446-monorepo/tools/0t/0t-fast.py" >>"$DTD_LOG.err" 2>&1 ) &
+      fi
     else
       # Restore the optimistic id-hide (enter.sh/done.sh hid $task_id from
       # the list the instant Enter was pressed, before this call ran) — an

@@ -342,3 +342,33 @@ def test_media_audit_merges_sources_by_max_not_sum():
     assert r["passive"]["YouTube"] == 60.0   # max, not 105
     assert r["passive"]["Audible"] == 30.0
     assert r["passive_total_min"] == 90
+
+
+def test_mark_done_skips_did_fast_when_0t_already_completed_today():
+    """Regression guard for the 2026-09-24 dtd background-hook feature: dtd
+    now backgrounds `0t-fast.py` right after ITS OWN did-fast completion of
+    the 0t card, so mark_done() runs SECOND, with 0t already recorded in
+    completed-today.json. did-fast's Todoist re-close guard (Step 6,
+    done_today) does NOT protect the 0n write (Step 4) or the 0分 points
+    append (Step 5) -- those run earlier and have no idempotency check, and
+    0分's append is an additive formula, so a second did-fast call would
+    double-credit points. mark_done() must detect the duplicate itself and
+    never invoke did-fast at all in that case."""
+    with patch.object(zerot_fast.mc, "is_duplicate_today", return_value="0t") as dup, \
+         patch.object(zerot_fast.subprocess, "run") as run:
+        result = zerot_fast.mark_done()
+    dup.assert_called_once_with("0t")
+    run.assert_not_called()
+    assert "skipped" in result
+    assert "error" not in result
+
+
+def test_mark_done_calls_did_fast_when_0t_not_yet_completed():
+    """The normal path (0t-fast.py run standalone, e.g. via cron/manual /0t,
+    with 0t not already closed) must still call did-fast."""
+    fake_proc = type("P", (), {"returncode": 0, "stdout": '{"results": []}', "stderr": ""})()
+    with patch.object(zerot_fast.mc, "is_duplicate_today", return_value=None), \
+         patch.object(zerot_fast.subprocess, "run", return_value=fake_proc) as run:
+        result = zerot_fast.mark_done()
+    run.assert_called_once()
+    assert result == {"results": []}

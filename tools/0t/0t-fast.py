@@ -96,6 +96,10 @@ def _toggl_get(path: str) -> list | dict:
 
 # did-fast
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+_MC_PATH = Path.home() / "i446-monorepo/tools/did/mark-completed.py"
+_MC_SPEC = importlib.util.spec_from_file_location("mark_completed", _MC_PATH)
+mc = importlib.util.module_from_spec(_MC_SPEC)
+_MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 
 # Dashboard cache
 DASHBOARD_DIR = Path.home() / "i446-monorepo/tools/personal-dashboard"
@@ -447,7 +451,21 @@ def refresh_points_cache() -> str:
 
 
 def mark_done() -> dict:
-    """Run did-fast.py to mark 0t done in 0₦ + Todoist."""
+    """Run did-fast.py to mark 0t done in 0₦ + Todoist.
+
+    Skips the did-fast call entirely if 0t is already in today's
+    completed-today.json (2026-09-24: dtd now backgrounds this whole script
+    right after ITS OWN completion of the 0t card, so this runs SECOND, after
+    0t is already closed). did-fast's Todoist close has a same-day
+    already-done guard (Step 6, `done_today`), but its 0n write (Step 4) and
+    0分 points append (Step 5) run BEFORE that guard and have no equivalent
+    check — a second call would re-write 0n (harmless, same value) but
+    DOUBLE-APPEND the same points to 0分 (an additive formula append, not a
+    set). Checking here, before calling did-fast at all, is the only safe
+    idempotency point.
+    """
+    if mc.is_duplicate_today("0t"):
+        return {"skipped": "0t already completed today (avoided double 0分 append)"}
     proc = subprocess.run(
         ["python3", str(DID_FAST), "0t"],
         capture_output=True, text=True, timeout=90,
