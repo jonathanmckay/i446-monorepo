@@ -1539,7 +1539,7 @@ def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
     — that catches spikes a fixed cap can't (1523 on a 758分 day). When P:Y is
     unreadable (sum_py is None) fall back to the loose cap so obvious garbage
     (D=-46, D=4351) is still rejected."""
-    if candidate is None or candidate < 0:
+    if candidate is None:
         return False
     # Absolute ceiling FIRST, before the sum_py cross-check: a mid-recalc snapshot
     # can tear D and its own P:Y input range to the SAME spike (both read from the
@@ -1547,11 +1547,21 @@ def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
     # =5064 passed the ±1 check and set Σ=5064, which the cold-start current-block
     # reconstruction (Σ−locked) then showed as 5064分 (2026-07-03). No real day
     # tops _MAX_PLAUSIBLE_TOTAL, so reject above it whether or not sum_py agrees.
-    if candidate > _MAX_PLAUSIBLE_TOTAL:
+    # Symmetric floor: no real day goes further negative than that either.
+    if abs(candidate) > _MAX_PLAUSIBLE_TOTAL:
         return False
     if sum_py is not None:
+        # A NEGATIVE Σ is legitimate when P:Y agrees: the -1₦ penalty in P can
+        # outweigh a light day's earnings (9/23/2026: P=-50 vs 25 earned, D=-25).
+        # The old unconditional `candidate < 0 → torn` rejected that real row on
+        # every read, so navigating back to such a day showed 0分 forever (bug
+        # 2026-09-24: "janus doesn't show neon points for a previous day when I
+        # navigate back"). D=-46-style torn reads still fail the ±1 cross-check
+        # because their P:Y cells don't sum to the torn D.
         return abs(candidate - sum_py) <= 1  # ±1 for float rounding
-    return True
+    # No P:Y cross-check available (loose-cap fallback): a negative D with
+    # nothing to corroborate it is still treated as torn.
+    return candidate >= 0
 
 
 def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
@@ -1562,7 +1572,11 @@ def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
     未 read 975 of a 728分 day and stuck on screen). After the 22:00 lock all
     blocks are literals and Σ may legitimately exceed their sum, so only the
     sum > Σ direction is rejected."""
-    return sum(bp.values()) <= total + 2
+    # No blocks at all is trivially consistent — on a negative-Σ day (penalty
+    # in P outweighs earnings) `0 <= total + 2` is false with an EMPTY bp, which
+    # logged every clean read of that day as torn (2026-09-24, same bug as the
+    # negative-total rejection in _total_trustworthy).
+    return not bp or sum(bp.values()) <= total + 2
 
 
 def _blocks_plausible(bp: dict[str, int]) -> bool:
