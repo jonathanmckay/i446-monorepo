@@ -552,18 +552,6 @@
     "rent": "1140.00"
   },
   {
-    "unit_id": 719,
-    "property_name": "c313",
-    "unit": "11",
-    "tenant_name": "Van Winkle, Moriah",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2020-03-31",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-10-01",
-    "rent": "1450.00"
-  },
-  {
     "unit_id": 1381,
     "property_name": "c702",
     "unit": "G103",
@@ -660,6 +648,18 @@
     "rent": "1089.00"
   },
   {
+    "unit_id": 1033,
+    "property_name": "kn47 K2",
+    "unit": "C202",
+    "tenant_name": "Chavez Delgado , Mariceny",
+    "status": "Pending",
+    "lease_sign_date": "2025-09-30",
+    "move_in": "2025-10-01",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "1089.00"
+  },
+  {
     "unit_id": 260,
     "property_name": "m405",
     "unit": "15",
@@ -712,9 +712,21 @@
     "property_name": "ps25",
     "unit": "A2",
     "tenant_name": "Rodriguez, Julian C.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2022-08-17",
     "move_in": "2022-08-20",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2025-10-01",
+    "rent": "1128.00"
+  },
+  {
+    "unit_id": 369,
+    "property_name": "ps25",
+    "unit": "B11",
+    "tenant_name": "Chavez, Maria",
+    "status": "Pending",
+    "lease_sign_date": "2023-05-30",
+    "move_in": "2021-04-01",
     "renewal_start_date": null,
     "last_lease_renewal": "2025-10-01",
     "rent": "1128.00"
@@ -820,7 +832,7 @@
     "property_name": "kn47 K1",
     "unit": "G102",
     "tenant_name": "Barajas, Monica",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-10-13",
     "move_in": "2025-10-16",
     "renewal_start_date": null,
@@ -1185,7 +1197,7 @@
     "move_in": "2025-11-22",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "931.00"
+    "rent": "0.00"
   },
   {
     "unit_id": 832,
@@ -1672,7 +1684,7 @@
     "property_name": "kn47 K2",
     "unit": "A105",
     "tenant_name": "Swan, Gabriel",
-    "status": "Pending",
+    "status": "Notice Given",
     "lease_sign_date": null,
     "move_in": "2013-08-08",
     "renewal_start_date": null,
