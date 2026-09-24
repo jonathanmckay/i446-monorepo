@@ -136,3 +136,28 @@ def test_fixed_drain_paints_nothing_and_consumes_everything():
     painted = out.replace(b"CLEAN\r\n", b"").replace(b"CLEAN\n", b"")
     assert b";18;19" not in painted and b"\x1b[<" not in painted, f"drain echoed click bytes: {out!r}"
     assert verdict == "CLEAN", f"drain left bytes queued for fzf: {out!r}"
+
+
+# ── guard: no backticks inside UNQUOTED heredocs ─────────────────────────────
+
+def test_no_backticks_inside_unquoted_heredocs():
+    """2026-09-24 follow-up: the DRAIN_ECHO comment first landed with backticks
+    inside STARTEOF, which is an unquoted heredoc (cat > ... << STARTEOF).
+    zsh ran them as command substitution while building the script, the
+    write failed, start.sh came out 0 bytes and dtd would not open. Comments
+    inside unquoted heredocs are NOT inert -- keep backticks out of them."""
+    lines = DTD.split("\n")
+    i = 0
+    bad = []
+    while i < len(lines):
+        m = re.search(r"<<-?\s*([A-Z_]+EOF)\s*$", lines[i])
+        if m:  # unquoted terminator: $, backtick and backslash are live
+            eof = m.group(1)
+            j = i + 1
+            while j < len(lines) and lines[j] != eof:
+                if "`" in lines[j]:
+                    bad.append(j + 1)
+                j += 1
+            i = j
+        i += 1
+    assert not bad, f"backticks inside unquoted heredocs at dtd.sh lines {bad}"
