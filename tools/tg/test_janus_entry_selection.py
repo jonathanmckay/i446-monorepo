@@ -451,13 +451,18 @@ def test_enter_on_selected_running_entry_prefills_open_ended_range():
     assert mod.input_buffer.text == "eat 0700-"
 
 
-def test_open_ended_edit_rejected_for_a_non_running_entry():
-    """A stray dangling dash on a COMPLETED entry (fat-fingered-away end
-    digits) must not silently strip its stop time and turn it back into a
-    live timer — open-ended only applies to the entry that's actually
-    running."""
+def test_open_ended_edit_on_a_non_running_entry_reopens_it():
+    """Was: rejected as a fat-finger guard ("open-ended time only applies to
+    the running entry"). Since 2026-09-24 a dangling dash on a COMPLETED
+    entry deliberately re-opens it as the running timer from that start
+    (user report: "it gave me an error rather than just make that open
+    ended time the current entry")."""
     mod = _load_tui()
+    if dtm.datetime.now(TZ).hour < 8:
+        import pytest
+        pytest.skip("needs 07:00 to be in the past for a stable assert")
     today = _midnight()
+    _setup_common(mod)
     mod.STATE.entries = [_entry("eat", today.replace(hour=7), today.replace(hour=7, minute=30),
                                 id=9, running=False)]
     mod.STATE.entries_yday = []
@@ -465,7 +470,8 @@ def test_open_ended_edit_rejected_for_a_non_running_entry():
     mod.input_buffer.text = "eat 0700-"
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.edit_target is None
-    assert "open-ended time only applies to the running entry" in mod.STATE.flash
+    assert "only applies to the running entry" not in mod.STATE.flash
+    assert mod.STATE.flash.startswith("$ edit eat 0700-now")
 
 
 def test_open_ended_edit_accepted_for_the_running_entry():
@@ -691,3 +697,79 @@ def test_apply_edit_without_time_range_never_calls_trim(monkeypatch):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ─── Open-ended edit on a COMPLETED entry re-opens it (2026-09-24) ──────────
+# Bug report: "when I tried to enter an open ended time (for current entry)
+# in Janus it gave me an error rather than just make that open ended time
+# the current entry". The old guard flashed "open-ended time only applies to
+# the running entry"; a dangling "HHMM-" on a completed entry must instead
+# turn it into the running timer from that start.
+
+def _armed_completed_entry(mod, hour=9):
+    today = _midnight()
+    _setup_common(mod)
+    mod.STATE.entries = [{"id": 7, "desc": "write", "project_id": None, "running": False,
+                          "start_dt": today.replace(hour=hour),
+                          "end_dt": today.replace(hour=hour, minute=30)}]
+    mod.STATE.entries_yday = []
+    mod.STATE.edit_target = {"ids": [7], "date": today.date(), "contiguous": True}
+    return today
+
+
+def test_open_ended_on_completed_entry_reopens_instead_of_rejecting():
+    mod = _load_tui()
+    now = dtm.datetime.now(TZ)
+    if now.hour < 10:
+        import pytest
+        pytest.skip("needs 09:00 to be in the past for a stable assert")
+    _armed_completed_entry(mod)
+    mod.input_buffer.text = "write 0900-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert "only applies to the running entry" not in mod.STATE.flash
+    assert mod.STATE.flash.startswith("$ edit write 0900-now"), mod.STATE.flash
+    assert mod.STATE.edit_target is None
+
+
+def test_open_ended_reopen_rejects_future_start():
+    mod = _load_tui()
+    now = dtm.datetime.now(TZ)
+    if now.hour >= 22:
+        import pytest
+        pytest.skip("no future HHMM left today")
+    _armed_completed_entry(mod)
+    future = (now + dtm.timedelta(hours=1)).strftime("%H%M")
+    mod.input_buffer.text = f"write {future}-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert "must be in the past" in mod.STATE.flash
+    assert mod.input_buffer.text == f"write {future}-", "rejects must restore the typed text"
+
+
+def test_open_ended_reopen_rejects_past_day():
+    mod = _load_tui()
+    today = _armed_completed_entry(mod)
+    mod.STATE.edit_target = {"ids": [7], "date": (today - dtm.timedelta(days=1)).date(),
+                             "contiguous": True}
+    mod.input_buffer.text = "write 0900-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert "today's entries" in mod.STATE.flash
+
+
+def test_open_ended_fields_null_stop_only_when_reopening():
+    mod = _load_tui()
+    start = _midnight().replace(hour=9)
+    running = mod._open_ended_fields(start, reopen=False)
+    assert running["duration"] == -int(start.timestamp()) and "stop" not in running
+    reopened = mod._open_ended_fields(start, reopen=True)
+    assert reopened["stop"] is None and reopened["start"] == start.isoformat()
+
+
+def test_running_entry_open_ended_edit_still_allowed():
+    """The pre-existing path (2026-08-11): retime the RUNNING entry's start."""
+    mod = _load_tui()
+    today = _armed_completed_entry(mod)
+    mod.STATE.entries[0]["running"] = True
+    mod.STATE.current = {"id": 7}
+    mod.input_buffer.text = "write 0845-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.flash.startswith("$ edit write 0845-now"), mod.STATE.flash

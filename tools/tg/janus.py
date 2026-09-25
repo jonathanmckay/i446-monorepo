@@ -1217,6 +1217,19 @@ def _hhmm_to_dt(ref_date: dt.date, hhmm: str) -> dt.datetime:
                        int(hhmm[:2]), int(hhmm[2:]), tzinfo=_tz())
 
 
+def _open_ended_fields(start_dt: dt.datetime, reopen: bool = False) -> dict:
+    """Toggl fields for an open-ended ("HHMM-") edit. duration follows
+    Toggl's own convention for a live entry (negative start-epoch) so the
+    record stays correct in Toggl itself, not just in janus's display.
+    `reopen` (a COMPLETED entry becoming the running one, 2026-09-24) must
+    also null its stop — PUT keeps an omitted field, so without this the
+    entry would carry a negative duration AND a stop time."""
+    fields = {"start": start_dt.isoformat(), "duration": -int(start_dt.timestamp())}
+    if reopen:
+        fields["stop"] = None
+    return fields
+
+
 def _norm_hhmm(text: str) -> str | None:
     """Normalize a lone user-typed time token to canonical 'HHMM', or None if
     it isn't a valid time-of-day. Accepts colon and short-hour forms so a
@@ -5345,14 +5358,23 @@ def _(event):
             # collapses it to a single resulting entry.
             _reject("that selection covered more than one entry with a gap between them, can't retime it")
             return
-        if time_range and time_range[1] is None and not (_find_entry(ids) or {}).get("running"):
-            # Open-ended ("HHMM-", blank end = now) only makes sense on the
-            # entry that's actually still running — applying it to a
-            # completed entry would silently strip its stop time and turn it
-            # back into a live timer, which is not what a fat-fingered-away
-            # end digit means.
-            _reject("open-ended time only applies to the running entry")
-            return
+        # Open-ended ("HHMM-", blank end = now) on a COMPLETED entry re-opens
+        # it as the running timer (user request 2026-09-24: "when I tried to
+        # enter an open ended time for the current entry it gave me an error
+        # rather than just make that open ended time the current entry").
+        # Previously rejected as a fat-finger guard; the explicit dangling
+        # dash is the user's signal, so honor it. Any OTHER running timer is
+        # stopped first (Toggl allows one), then the MECE trim below carves
+        # its overlap the same way a full-range retime would.
+        reopen = bool(time_range and time_range[1] is None
+                      and not (_find_entry(ids) or {}).get("running"))
+        if reopen:
+            if edit_date != dt.datetime.now(_tz()).date():
+                _reject("can only re-open one of today's entries as the running timer")
+                return
+            if _hhmm_to_dt(edit_date, time_range[0]) > dt.datetime.now(_tz()):
+                _reject("open-ended start must be in the past")
+                return
         fields = {}
         if desc:
             fields["description"] = desc
@@ -5369,14 +5391,10 @@ def _(event):
         if time_range:
             start_dt = _hhmm_to_dt(edit_date, time_range[0])
             if time_range[1] is None:
-                # Open-ended: retime the running entry's start, leave it
-                # running. duration follows Toggl's own convention for a live
-                # entry (negative start-epoch) so the record stays correct in
-                # Toggl itself, not just in janus's own display (which reads
-                # "start" directly and never depended on this).
+                # Open-ended: retime the start, leave (or make) it running.
+                # See _open_ended_fields for the Toggl live-entry shape.
                 end_dt = dt.datetime.now(_tz())
-                fields["start"] = start_dt.isoformat()
-                fields["duration"] = -int(start_dt.timestamp())
+                fields.update(_open_ended_fields(start_dt, reopen))
             else:
                 end_dt = _hhmm_to_dt(edit_date, time_range[1])
                 if end_dt <= start_dt:
@@ -5397,6 +5415,12 @@ def _(event):
 
         async def _apply_edit_and_refresh():
             try:
+                if reopen and STATE.current and STATE.current.get("id") not in ids:
+                    # One running timer at a time: close the other one at
+                    # "now" so trim_range treats it as a completed overlap
+                    # (stop-at-start / delete) instead of RESUMING it after
+                    # end_dt, which would leave two live timers.
+                    await asyncio.to_thread(toggl_api.stop_timer, STATE.current.get("id"))
                 if time_range:
                     # MECE: a retimed entry must not leave a stale overlap
                     # behind on some OTHER entry (user request 2026-07-19 —
@@ -5421,6 +5445,11 @@ def _(event):
                 else:
                     for eid in ids:
                         await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
+                if reopen:
+                    # update_entry doesn't know a PUT just changed which
+                    # entry is live — drop the shared current-cache so the
+                    # fetch_current below (and every other poller) sees it.
+                    toggl_api._invalidate_current_cache()
                 # Value-tag 媒分 credit — completed entry credits at once
                 # (minutes known); a running one queues until it stops
                 # (fetch_today resolves). Journaled so re-edits can't
