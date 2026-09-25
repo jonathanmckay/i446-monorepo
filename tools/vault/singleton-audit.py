@@ -141,8 +141,9 @@ def build_description(rows: list[dict], report_rel: str) -> str:
 
 def upsert_task(rows: list[dict], report_rel: str, today: dt.date) -> str:
     td = _todoist()
-    open_tasks = td._api("GET", "/tasks?limit=200") or {}
-    items = open_tasks.get("results", open_tasks) if isinstance(open_tasks, dict) else open_tasks
+    # Filter search paginates; a flat GET /tasks?limit=200 silently misses
+    # the task once there are >200 open tasks (duplicate created 2026-09-24).
+    items = td._fetch_tasks("search: vault singleton-folder review")
     existing = next((t for t in items if isinstance(t, dict)
                      and t.get("content", "").lstrip(AUTO_MARK).strip()
                          .startswith("vault singleton-folder review")), None)
