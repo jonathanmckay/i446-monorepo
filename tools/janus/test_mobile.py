@@ -799,3 +799,38 @@ def test_build_timeline_points_none_when_unresolved(jm, monkeypatch):
     tl = jm.build_timeline()
     row = next(r for r in tl["rows"] if r["type"] == "entry")
     assert row["points"] is None
+
+
+# _fetch_today window (2026-09-24 regression)
+# ---------------------------------------------------------------------------
+
+def test_fetch_today_widens_window_past_utc_midnight(jm):
+    """Toggl's end_date filter is UTC-based and exclusive: a today+1 window
+    ends at 17:00 PDT and drops every later entry plus the running timer
+    (2026-09-24: timeline blank after 15:45 while five entries existed).
+    Structural, like mcp/toggl_server/test_trim_range_window.py."""
+    src = (HERE / "mobile.py").read_text()
+    body = src[src.index("def _fetch_today"):]
+    body = body[:body.index("\ndef ", 10)]
+    assert "today + _dt.timedelta(days=2)" in body, "window must end a day late"
+    assert "today + _dt.timedelta(days=1)" not in body, "the UTC-midnight-clipped window must be gone"
+
+
+def test_fetch_today_keeps_evening_entry_and_running_timer(jm, monkeypatch):
+    """Behavioral: an entry starting after 17:00 local and the running timer
+    both survive _fetch_today's clip as long as get_entries returns them."""
+    seen = {}
+    def fake_get_entries(start_date=None, end_date=None):
+        seen["window"] = (start_date, end_date)
+        return [_raw_entry(jm, 17, 56, 18, 8, desc="late", eid=1),
+                _raw_running(jm, 18, 29, desc="live", eid=2)]
+    monkeypatch.setattr(jm.toggl_api, "get_entries", fake_get_entries)
+    today = dt.datetime.now(jm.TZ).date()
+    rows = jm._fetch_today()
+    assert seen["window"] == ((today - dt.timedelta(days=1)).isoformat(),
+                              (today + dt.timedelta(days=2)).isoformat())
+    now = dt.datetime.now(jm.TZ)
+    kept = {r["desc"] for r in rows}
+    expected = {d for d, h, m in (("late", 17, 56), ("live", 18, 29))
+                if dt.datetime.combine(today, dt.time(h, m), jm.TZ) < now}
+    assert kept == expected

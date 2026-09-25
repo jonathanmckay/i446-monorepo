@@ -264,9 +264,16 @@ def _parse_iso(s: str) -> _dt.datetime:
 
 def _fetch_today() -> list[dict]:
     today = _dt.datetime.now(_tz()).date()
+    # Toggl's start_date/end_date filter is UTC-based and end-exclusive, so
+    # a [today-1, today+1) window ends at 00:00 UTC = 17:00 PDT / 16:00 PST
+    # and silently drops every later entry INCLUDING the running timer (bug
+    # 2026-09-24: the timeline showed nothing after 15:45 while five real
+    # entries and the live timer existed). Same +2 widening _get_entry and
+    # toggl_api.trim_range already use; the date clip below discards the
+    # extra day's entries.
     raw = toggl_api.get_entries(
         start_date=(today - _dt.timedelta(days=1)).isoformat(),
-        end_date=(today + _dt.timedelta(days=1)).isoformat()) or []
+        end_date=(today + _dt.timedelta(days=2)).isoformat()) or []
     now = _dt.datetime.now(_tz())
     out = []
     for e in raw:
@@ -1148,9 +1155,18 @@ def api_edit():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id"):
         return jsonify({"ok": False, "error": "id required"}), 400
-    return jsonify(edit_entry(str(b["id"]), b.get("desc") or "",
-                              (b.get("start") or "").strip(), (b.get("end") or "").strip(),
-                              (b.get("project") or "").strip()))
+    r = edit_entry(str(b["id"]), b.get("desc") or "",
+                   (b.get("start") or "").strip(), (b.get("end") or "").strip(),
+                   (b.get("project") or "").strip())
+    if not r.get("ok"):
+        # A refused edit only ever surfaced as a phone toast, which is gone
+        # by the time anyone asks "what did it say?" (2026-09-24). One line
+        # on stderr (the launchd .err file) keeps it diagnosable.
+        print(f"EDIT REFUSED id={b.get('id')} desc={b.get('desc')!r} "
+              f"start={b.get('start')!r} end={b.get('end')!r} "
+              f"project={b.get('project')!r}: {r.get('error')}",
+              file=sys.stderr, flush=True)
+    return jsonify(r)
 
 
 @app.route("/api/split", methods=["POST"])
