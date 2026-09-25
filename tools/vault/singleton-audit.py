@@ -30,7 +30,8 @@ from pathlib import Path
 VAULT = Path.home() / "vault"
 REPORT_DIR = VAULT / "z_meta"
 THRESHOLD = 3
-TASK_CONTENT = "vault singleton-folder review (20) [15]"
+AUTO_MARK = "😈"  # created-by-a-robot marker (see stale-contacts.py)
+TASK_CONTENT = f"{AUTO_MARK} vault singleton-folder review (20) [15]"
 TASK_LABELS = ["i447"]
 
 # Folders never audited: system dirs, mirrors of external systems, archives,
@@ -143,7 +144,8 @@ def upsert_task(rows: list[dict], report_rel: str, today: dt.date) -> str:
     open_tasks = td._api("GET", "/tasks?limit=200") or {}
     items = open_tasks.get("results", open_tasks) if isinstance(open_tasks, dict) else open_tasks
     existing = next((t for t in items if isinstance(t, dict)
-                     and t.get("content", "").startswith(TASK_CONTENT.split(" (")[0])), None)
+                     and t.get("content", "").lstrip(AUTO_MARK).strip()
+                         .startswith("vault singleton-folder review")), None)
     if not rows:
         if existing:
             td.close_task(existing["id"])
