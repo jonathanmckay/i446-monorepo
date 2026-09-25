@@ -57,6 +57,11 @@ _NOTIFY_REMAINING_PATH = Path.home() / ".config/m5x2/lease_notify_remaining"
 # what let this sit broken and unnoticed for a month (2026-07-07→2026-08-06).
 _AUTH_ALERT_PATH = Path.home() / ".config/m5x2/lease_auth_alert_sent"
 _AUTH_ALERT_INTERVAL = datetime.timedelta(hours=24)
+# The Todoist reminder spawned on a 2FA/session failure. Named the way the
+# task is actually done (2026-09-25 user request): Screen Share into Ix, run
+# `python3 lease_signer.py --login` there, complete AppFolio's 2FA in the
+# Chromium it opens, press Enter. The [10] is the task's 分 value.
+AUTH_ALERT_TASK = "do 2fa with Ix to refresh appfolio cookie [10]"
 
 # Gmail label applied to emails that failed for non-auth reasons (so they're
 # flagged for manual review instead of archived into oblivion or retried forever).
@@ -219,8 +224,7 @@ def maybe_send_auth_alert(service):
     task_id = (state or {}).get("todoist_task_id")
     try:
         task = _todoist.create_task(
-            "\U0001F513 Lease auto-signer needs 2FA re-login — leases piling up unsigned "
-            "(cd ~/i446-monorepo/tools/m5x2-automations && python3 lease_signer.py --login) [10]",
+            AUTH_ALERT_TASK,
             labels=["m5x2"], due_string="today", priority=4,
         )
         task_id = task.get("id", task_id)
