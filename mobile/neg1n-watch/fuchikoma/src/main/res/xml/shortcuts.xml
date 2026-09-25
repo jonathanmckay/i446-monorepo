@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon → jump straight to either surface. One APK,
+     two entry points: satisfies "native dtd" and "native janus" without two
+     installs. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="dtd"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/tab_dtd"
+        android:shortcutLongLabel="@string/tab_dtd">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.mckay.fuchikoma"
+            android:targetClass="com.mckay.fuchikoma.MainActivity">
+            <extra android:name="tab" android:value="dtd" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="janus"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/tab_janus"
+        android:shortcutLongLabel="@string/tab_janus">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.mckay.fuchikoma"
+            android:targetClass="com.mckay.fuchikoma.MainActivity">
+            <extra android:name="tab" android:value="janus" />
+        </intent>
+    </shortcut>
+</shortcuts>

@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "neg1n-watch"
-include(":phone", ":wear")
+include(":phone", ":wear", ":fuchikoma")
