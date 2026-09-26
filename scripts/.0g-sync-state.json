@@ -1,10 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "all three email queues through 1 week": {
-      "todoist_id": "6hcjHMqxgpVx2cQ2",
-      "minutes": 150
-    }
-  },
-  "last_sync": "2026-09-25T20:00:04.017014-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-25T22:00:01.313882-07:00"
 }
