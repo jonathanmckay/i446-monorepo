@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-26T06:00:03.856294-07:00"
+  "tasks": {
+    "2 hours of longform ic work": {
+      "todoist_id": "6hcwxpWrH9CprXw2",
+      "minutes": 50
+    },
+    "enjoy the rest of the day to the max": {
+      "todoist_id": "6hcwxpc4JW6fCJ7R",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-09-26T08:00:03.496738-07:00"
 }
