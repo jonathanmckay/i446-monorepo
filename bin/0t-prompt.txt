@@ -1,0 +1,6 @@
+/0t
+IMPORTANT context for this headless run on Ix (cron safety net, ~/bin/run_0t.sh):
+1. The fast path (tools/0t/0t-fast.py) already ran and failed this invocation. Its output is at the end of today's ~/.cache/0t/<date>.log — read the error first. If the cause looks transient (Toggl 402 rate limit, Excel busy, ssh hiccup) rerun the script once; otherwise use the skill's manual fallback steps.
+2. Excel and the ix-osa helper are local on this machine.
+3. If 0t turns out to be already marked done today, stop — never re-append points.
+4. Nobody is watching: ask no questions, finish with a one-line summary.

@@ -10,6 +10,7 @@ claude -p "$(cat "$HOME/bin/0r-prompt.txt")" \
   --dangerously-skip-permissions --max-budget-usd 3 >> "$LOG" 2>&1
 code=$?
 echo "=== 0r archive exit $code at $(date) ===" >> "$LOG"
+[ $code -ne 0 ] && "$HOME/bin/cron-alert.sh" run_0r_archive "0r_failed" "claude -p /0r exited $code (see $LOG)"
 # prune logs older than 30 days
 find "$HOME/.cache/0r" -name "*.log" -mtime +30 -delete 2>/dev/null
 exit $code
