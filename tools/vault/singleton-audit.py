@@ -86,11 +86,14 @@ def scan(vault: Path = VAULT) -> list[dict]:
         if excluded(rel):
             dirs[:] = []
             continue
+        had_subdirs = bool(dirs)
         dirs[:] = [d for d in dirs if not excluded(f"{rel}/{d}")]
-        if dirs:                       # has subfolders → structural, not a singleton
+        if had_subdirs:                # has subfolders (even excluded ones, e.g. d358's
+            continue                   # year buckets) → structural, not a singleton
+        visible = [f for f in files if not f.startswith(".")]
+        docs = sorted(f for f in visible if Path(f).suffix.lower() in DOC_EXTS)
+        if not docs and visible:       # data-only dir (jsonl ledgers, caches) → not a doc folder
             continue
-        docs = sorted(f for f in files if not f.startswith(".")
-                      and Path(f).suffix.lower() in DOC_EXTS)
         base = os.path.basename(root)
         note = next((f for f in docs if Path(f).stem == base), None)
         content_docs = [f for f in docs if f != note]

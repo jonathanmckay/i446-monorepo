@@ -62,3 +62,13 @@ def test_d359_person_folder_note_plus_one_doc_is_compliant(tmp_path):
     assert "d359/sheridan-hitchens-d359" not in rows   # note + 1 doc is fine under d359
     assert "d359/lonely" in rows                        # note only is still a singleton
     assert "hcbi/two" in rows                           # elsewhere the 3-doc rule holds
+
+
+def test_parent_of_excluded_year_buckets_and_data_dirs_not_flagged(tmp_path):
+    sa = _load()
+    (tmp_path / "h335/d358/2026").mkdir(parents=True)
+    (tmp_path / "h335/d358/d358.md").write_text("x"); (tmp_path / "h335/d358/2026/a d358.md").write_text("x")
+    (tmp_path / "g245/neon-ledger").mkdir(parents=True); (tmp_path / "g245/neon-ledger/2026-09.jsonl").write_text("{}")
+    rows = {r["rel"] for r in sa.scan(tmp_path)}
+    assert "h335/d358" not in rows      # year subfolders make it structural
+    assert "g245/neon-ledger" not in rows  # data-only dir
