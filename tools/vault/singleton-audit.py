@@ -45,6 +45,8 @@ EXCLUDE_PREFIXES = (
     "hcmp/o315/blog",              # Hugo site tree
     "g245/archive", "g245/5e-1",   # build-order daily archives (one folder per day by design)
     "d357",                        # janus meeting recordings, one folder per week by design
+    # Confirmed exceptions (JM, 2026-09-27): two-doc folders accepted as-is.
+    "g245/Zenstoic path", "g245/n156/rob",
 )
 # Folder names that are dates are per-period buckets, never singletons.
 DATE_DIR_RE = re.compile(r"^\d{4}([.\-]\d{2}){0,2}$|^\d{4}\.\d{1,2}$")
