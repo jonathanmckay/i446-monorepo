@@ -43,6 +43,26 @@ Each output line is `STARTED\t<title>\t<author>` or `FINISHED\t<title>\t<author>
 No output at all means nothing started or finished that week — that's a
 normal, reportable result, not an error.
 
+### Step 2b: Media-tag audit (#-1 / #-2 / #-3 → 0n AV / AW / AX)
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/media-tag-audit.py <week_start> <week_end>
+```
+
+Sums the week's Toggl entries carrying an explicit value tag per local day and
+compares them to the 0n minute columns the tags feed (-1 → AV, -2 → AW,
+-3 → AX minus the 新闻/词汇 minutes the AX formula already folds in).
+Shortcode-implied tags are ignored, same as tag_credits.py. Tag credits only
+fire on `toggl_api.stop_timer`, so entries closed by a trim, a mobile retime
+or a backfilled span silently earn nothing (2026-09-27: week 9.16-9.22 had
+324 #-1 minutes uncredited).
+
+- `status: missing` rows → rerun with `--fix`; it appends the shortfall via
+  the tag-credit write path (src `1hcmc media-tag audit`) and never subtracts.
+- `status: sheet>toggl` rows → hand-entered minutes with no tagged entry
+  behind them; report them, do not change them.
+- Include the table (or "media tags: all matched") in the Step 3 report.
+
 ### Step 3: Report
 
 ```
