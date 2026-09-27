@@ -126,7 +126,9 @@ end tell'''
             except ValueError:
                 return 0.0
         av, aw, ax, n, o = (f(x) for x in p[1:6])
-        out[day] = {"-1": av, "-2": aw, "-3": ax - n - o}
+        # AX normally = N + O + tagged extras; a hand-entered AX below N + O
+        # makes the derived tagged part negative — clamp, never "fix" it upward.
+        out[day] = {"-1": av, "-2": aw, "-3": max(0.0, ax - n - o)}
     return out
 
 
@@ -149,7 +151,7 @@ def main() -> int:
                 continue
             status = "ok" if abs(diff) < 0.5 else ("missing" if diff > 0 else "sheet>toggl")
             rows.append({"day": day.isoformat(), "tag": t, "toggl": tm, "sheet": sm, "status": status})
-            if a.fix and diff > 0.5:
+            if a.fix and diff > 0.5 and tm > 0:
                 col = tag_credits._tag_col(t)
                 tag_credits._append("0n", col, date=f"{day.month}/{day.day}", value=f"+{int(round(diff))}",
                                     src="1hcmc media-tag audit")
