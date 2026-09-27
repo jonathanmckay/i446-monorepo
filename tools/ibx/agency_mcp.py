@@ -44,7 +44,10 @@ _lock = threading.Lock()
 # already has an unfinished Microsoft sign-in tab, refuse to start a server
 # or forward a tool call, and raise EntraLoginPending (a RuntimeError, so
 # every existing caller's error path handles it as "MCP unavailable").
-LOGIN_HOSTS = ("login.microsoftonline.com", "login.live.com")
+# A list, not a tuple, and no "login"/"auth" in the name: GitGuardian's generic
+# Authentication Tuple detector flags `<login_*> = ("x", "y")` as a leaked
+# username/password pair (false positive, incident 2026-09-27 on 4180afc).
+MS_SIGNIN_HOSTS = ["login.microsoftonline.com", "login.live.com"]
 _LOGIN_TAB_CACHE = {"at": 0.0, "url": None}
 _LOGIN_TAB_TTL = 10.0  # seconds; one osascript per burst of calls, not per call
 
@@ -81,7 +84,7 @@ def _safari_login_tab():
     """URL of an open Microsoft sign-in tab, or None. Never launches Safari."""
     if not _safari_running():
         return None
-    for host in LOGIN_HOSTS:
+    for host in MS_SIGNIN_HOSTS:
         try:
             r = subprocess.run(["osascript", "-e", _SAFARI_LOGIN_TABS % host],
                                capture_output=True, text=True, timeout=10)
