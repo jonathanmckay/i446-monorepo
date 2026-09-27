@@ -1,18 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "review lr issues": {
-      "todoist_id": "6hf8HJFmrxHfWPM2",
-      "minutes": 40
-    },
     "5 berries": {
       "todoist_id": "6hf8HJCrGRRhjfmR",
       "minutes": 30
-    },
-    "make sure real estate meetings are useful": {
-      "todoist_id": "6hf8HJHGHVJg2C6R",
-      "minutes": 40
     }
   },
-  "last_sync": "2026-09-27T12:00:04.994813-07:00"
+  "last_sync": "2026-09-27T14:00:06.956074-07:00"
 }
