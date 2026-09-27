@@ -120,6 +120,18 @@
     "rent": "1304.00"
   },
   {
+    "unit_id": 858,
+    "property_name": "kn47 K1",
+    "unit": "C206",
+    "tenant_name": "Crookston, Benjamin R.",
+    "status": "Renewed",
+    "lease_sign_date": "2026-09-25",
+    "move_in": "2026-09-27",
+    "renewal_start_date": "2027-09-27",
+    "last_lease_renewal": "2027-09-27",
+    "rent": "931.00"
+  },
+  {
     "unit_id": 886,
     "property_name": "kn47 K1",
     "unit": "E108",

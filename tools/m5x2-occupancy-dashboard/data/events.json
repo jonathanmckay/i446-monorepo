@@ -7008,5 +7008,15 @@
     "unit": "C206",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-27",
+    "effective": "2026-09-27",
+    "kind": "movein",
+    "unit_id": "858",
+    "prop": "kn47 K1",
+    "unit": "C206",
+    "tenant": null,
+    "baseline": false
   }
 ]
