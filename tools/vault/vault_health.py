@@ -15,6 +15,7 @@ Checks (v1, 2026-09-27):
   skills-backup  ~/.claude/skills local git auto-commit freshness
   onedrive-neon  Neon workbook mtime (and Ix↔Straylight parity when run off Ix)
   time-machine   destination configured + latest backup age
+  ix-cron        Ix's live crontab matches the committed config/ix.crontab
   alerts         z_ibx/alerts.jsonl entries from the last 7 days, grouped
 
 Auto-fixes (only ever these): trigger a Syncthing rescan on a folder that is
@@ -301,6 +302,27 @@ def check_time_machine() -> Finding:
     return Finding("time-machine", status, "ok" if status == "ok" else "no or stale backups", detail, review=review)
 
 
+def check_ix_cron() -> Finding:
+    """Ix's live crontab must match config/ix.crontab (the committed copy).
+    2026-09-27: a failed remote rewrite left the crontab EMPTY for minutes;
+    without a parity check that would have gone unnoticed until Monday."""
+    ref = MONO / "config/ix.crontab"
+    if not ref.exists():
+        return Finding("ix-cron", "warn", "config/ix.crontab missing", review=True)
+    live = ix("crontab -l 2>/dev/null")
+    want = [l for l in ref.read_text().splitlines() if l.strip() and not l.startswith("#")]
+    have = [l for l in live.splitlines() if l.strip() and not l.startswith("#")]
+    missing = [l for l in want if l not in have]
+    extra = [l for l in have if l not in want]
+    if not have:
+        return Finding("ix-cron", "fail", "Ix crontab is EMPTY — restore with: crontab config/ix.crontab",
+                       [f"{len(want)} jobs expected"], review=True)
+    if missing or extra:
+        return Finding("ix-cron", "warn", f"{len(missing)} job(s) missing, {len(extra)} extra vs config/ix.crontab",
+                       [f"missing: {m[:90]}" for m in missing] + [f"extra: {e[:90]}" for e in extra], review=True)
+    return Finding("ix-cron", "ok", f"{len(have)} jobs match config/ix.crontab")
+
+
 def check_alerts(now: dt.datetime) -> Finding:
     if not ALERTS.exists():
         return Finding("alerts", "ok", "no alerts sink")
@@ -335,7 +357,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_onedrive_neon(now), check_time_machine,
-               lambda: check_alerts(now)):
+               check_ix_cron, lambda: check_alerts(now)):
         try:
             out.append(fn())
         except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

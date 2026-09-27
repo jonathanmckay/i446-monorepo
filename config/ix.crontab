@@ -1,0 +1,54 @@
+0 4 * * * python3 $HOME/i446-monorepo/scripts/-1g-cron.py daily-reset >> $HOME/i446-monorepo/scripts/.1g-cron.log 2>&1
+0 7,9,11,13,15,17,19,21,23 * * * python3 $HOME/i446-monorepo/scripts/-1g-cron.py block-end >> $HOME/i446-monorepo/scripts/.1g-cron.log 2>&1
+# --- Migrated from Straylight 2026-04-30 ---
+# build-order-enrich: populate build order with meetings, time entries (every 2h)
+0 6,8,10,12,14,16,18,20,22 * * * python3 $HOME/i446-monorepo/scripts/build-order-enrich.py >> /tmp/build-order-enrich.log 2>&1
+# 0g-sync: bidirectional sync between build order and Todoist (every 2h)
+0 */2 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
+# 0g-sync pre-archive: catch completions between 02:00 and the 03:59 archive
+55 3 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
+# 0g-cleanup: move unchecked 0g items to yihou at 5:30am
+30 5 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py cleanup --verbose >> $HOME/i446-monorepo/scripts/.0g-cleanup-stdout.log 2>&1
+# copilot-ingest: ingest copilot transcripts
+*/30 * * * * python3 $HOME/i446-monorepo/scripts/copilot-ingest.py >> $HOME/i446-monorepo/scripts/.copilot-ingest.log 2>&1
+# decision-capture: scan AI logs for decisions daily at 10pm
+0 22 * * * python3 $HOME/i446-monorepo/tools/decision-capture/capture.py >> $HOME/i446-monorepo/tools/decision-capture/.capture.log 2>&1
+# periodic-sync: AI dashboard sync
+*/15 * * * * bash $HOME/i446-monorepo/tools/ai-dashboard/periodic-sync.sh >> $HOME/i446-monorepo/tools/ai-dashboard/.periodic-sync.log 2>&1
+# export-claude-transcripts
+15 * * * * python3 $HOME/i446-monorepo/scripts/export-claude-transcripts.py >> $HOME/vault/i447/i446/ai-transcripts/claude-export.log 2>&1
+*/10 * * * * bash $HOME/i446-monorepo/scripts/git-autopush.sh >> $HOME/i446-monorepo/scripts/.autopush.log 2>&1
+# dream: overnight chief-of-staff agent (runs ~40-60 min, writes to vault/i447/i446/dream-runs/)
+0 3 * * * bash $HOME/i446-monorepo/scripts/dream-launch.sh >> $HOME/i446-monorepo/scripts/.dream-launch.log 2>&1
+*/2 * * * * cd $HOME/m5x2-ai-stats && git pull --rebase origin main -q 2>&1 | tail -50 >> $HOME/m5x2-ai-stats/.pull.log
+
+# refresh-last-contact: auto-derive d359 last_contact from Toggl + d358 before Dream runs
+30 2 * * * python3 $HOME/i446-monorepo/tools/d359/refresh_last_contact.py --days 14 --apply >> $HOME/i446-monorepo/tools/d359/.refresh-last-contact.log 2>&1
+# /0r nightly time-record archive — Toggl + m5c7 calendars -> vault + gcal (jbm past-time view)
+0 2 * * * /Users/mckay/bin/run_0r_archive.sh
+
+# Auto-backup ~/.claude/skills every 10 min (no remote push, local-only)
+*/10 * * * * cd $HOME/.claude/skills && git add -A && git diff --cached --quiet || git commit -q -m "auto: $(date +\%Y-\%m-\%d\ \%H:\%M)" >> /tmp/claude-skills-autocommit.log 2>&1
+# Prune Claude snapshot backups older than 30 days, nightly
+5 3 * * * bash $HOME/i446-monorepo/scripts/claude-backup-cleanup.sh >> /tmp/claude-backup-cleanup.log 2>&1
+# git-autopush-healthcheck: catch stuck rebases / detached HEAD that silently halt sync
+5 * * * * bash $HOME/i446-monorepo/scripts/git-autopush-healthcheck.sh $HOME/vault $HOME/Library/Logs/vault-autopush.log >/dev/null 2>&1
+0 * * * * bash $HOME/i446-monorepo/scripts/git-autopush-healthcheck.sh >/dev/null 2>&1
+# m5x2 occupancy dashboard: refresh AppFolio data + rebuild + publish to site (moved from Straylight 2026-07-26)
+20 6 * * * bash $HOME/i446-monorepo/tools/m5x2-occupancy-dashboard/refresh.sh >> $HOME/i446-monorepo/tools/m5x2-occupancy-dashboard/.refresh.log 2>&1
+# m5x2 weekly-reports grid: rescan update emails + Drive folder daily (Syncthing carries index.html to Straylight)
+40 6 * * * python3 $HOME/i446-monorepo/tools/m5x2-weekly-reports/build.py >> $HOME/i446-monorepo/tools/m5x2-weekly-reports/.build.log 2>&1
+# d357-auto-file: file janus-recorded meetings that never got the LLM filing pass (hourly, <=2/run, $0.50/meeting)
+17 * * * * python3 $HOME/i446-monorepo/scripts/d357-auto-file.py >> $HOME/i446-monorepo/scripts/.d357-auto-file.log 2>&1
+
+# jm-dash Time/Entries charts: keep .toggl-daily-cache.json fresh. Daily
+# sweep covers 45 days (catches most retroactive backfills/edits); a weekly
+# --force sweep covers 90 days to catch anything a date-keyed cache entry
+# would otherwise freeze stale forever (recurring bug: stale Jun29-Aug10
+# "fixed" 2026-08-10 without addressing root cause, recurred for
+# Jul19-Jul25, fixed again 2026-08-17 by widening this window + adding the
+# --force sweep below).
+10 5 * * * python3 $HOME/i446-monorepo/tools/personal-dashboard/backfill_toggl_cache.py --days 45 >> $HOME/i446-monorepo/tools/personal-dashboard/.backfill-toggl.log 2>&1
+15 5 * * 0 python3 $HOME/i446-monorepo/tools/personal-dashboard/backfill_toggl_cache.py --days 90 --force >> $HOME/i446-monorepo/tools/personal-dashboard/.backfill-toggl.log 2>&1
+# 1-i446: weekly vault-health review → z_meta report + 😈 Todoist review task (singletons, syncthing, git autopush, backups, alerts)
+40 4 * * 0 python3 $HOME/i446-monorepo/tools/vault/vault_health.py >> $HOME/i446-monorepo/tools/vault/.1-i446.log 2>&1
