@@ -202,6 +202,7 @@ def test_snooze_to_block_writes_any_explicit_hour(monkeypatch, tmp_path):
 def test_snooze_minutes_writes_epoch_float(monkeypatch, tmp_path):
     snooze_file = tmp_path / "dtd-block-snooze.json"
     monkeypatch.setattr(dtd, "SNOOZE_FILE", snooze_file)
+    monkeypatch.setattr(dtd, "MIRROR_DIR", tmp_path / "mirrors")  # no cross-host files
     fixed = _fixed_now(9, 0)
     monkeypatch.setattr(dtd._dt, "datetime", fixed)
 
@@ -229,6 +230,7 @@ def test_snoozed_ids_distinguishes_hour_int_from_epoch_float(monkeypatch, tmp_pa
     terminal dtd.sh's isinstance(v, float) distinction."""
     snooze_file = tmp_path / "dtd-block-snooze.json"
     monkeypatch.setattr(dtd, "SNOOZE_FILE", snooze_file)
+    monkeypatch.setattr(dtd, "MIRROR_DIR", tmp_path / "mirrors")  # no cross-host files
     fixed = _fixed_now(9, 0)
     monkeypatch.setattr(dtd._dt, "datetime", fixed)
     # _snoozed_ids gates on _dt.date.today() (NOT _dt.datetime), so patch date
@@ -253,6 +255,53 @@ def test_snoozed_ids_distinguishes_hour_int_from_epoch_float(monkeypatch, tmp_pa
 
     assert ids == {"future_minute_delay", "future_block"}, (
         f"got {ids!r}")
+
+
+def test_snoozed_ids_merges_cross_host_mirror(monkeypatch, tmp_path):
+    """Regression (2026-09-27): a delay made in the terminal dtd on ANOTHER
+    host (Straylight) writes a synced vault mirror dtd-block-snooze-<host>.json;
+    dtd web on Ix must union those in — the local ~/.local/state/jm file is
+    host-local, so without this a CLI delay never hid the task in the web UI."""
+    mirrors = tmp_path / "mirrors"
+    mirrors.mkdir()
+    monkeypatch.setattr(dtd, "SNOOZE_FILE", tmp_path / "local-absent.json")  # no local
+    monkeypatch.setattr(dtd, "MIRROR_DIR", mirrors)
+    monkeypatch.setattr(dtd._dt, "datetime", _fixed_now(9, 0))
+    today = dt.date(2026, 9, 7).isoformat()
+    # a remote host's snooze: one future block (14 = 申) still hidden at 09:00
+    (mirrors / "dtd-block-snooze-straylight-refit-local.json").write_text(
+        json.dumps({"date": today, "snoozes": {"from_cli_task": 14}}))
+    # a stale (yesterday) remote file must NOT leak through
+    (mirrors / "dtd-block-snooze-oldhost.json").write_text(
+        json.dumps({"date": "2026-09-06", "snoozes": {"stale_task": 14}}))
+
+    ids = dtd._snoozed_ids()
+    assert "from_cli_task" in ids, "CLI (other-host) delay must hide in web"
+    assert "stale_task" not in ids, "a prior-day mirror must not hide anything"
+
+
+def test_write_snooze_also_writes_host_mirror(monkeypatch, tmp_path):
+    """_write_snooze must drop this host's mirror into the synced vault so a
+    delay made in the web UI is visible to dtd on other machines too."""
+    monkeypatch.setattr(dtd, "SNOOZE_FILE", tmp_path / "dtd-block-snooze.json")
+    monkeypatch.setattr(dtd, "MIRROR_DIR", tmp_path / "mirrors")
+    monkeypatch.setattr(dtd._dt, "datetime", _fixed_now(9, 0))
+    dtd._write_snooze("webtask", 16)
+    mpath = dtd._snooze_mirror_path()
+    assert mpath.exists(), "no host mirror written"
+    data = json.loads(mpath.read_text())
+    assert data["snoozes"].get("webtask") == 16
+
+
+def test_cli_snooze_apply_writes_vault_mirror():
+    """Structural: the terminal dtd.sh block-apply script must also write the
+    per-host vault mirror (dtd-block-snooze-<host>.json), or CLI delays never
+    reach the web server. Checked on the source since it's an embedded heredoc."""
+    from pathlib import Path as _P
+    sh = (_P(__file__).resolve().parents[1] / "did" / "dtd.sh").read_text()
+    assert "dtd-block-snooze-" in sh and "z_ibx" in sh, (
+        "dtd.sh block-apply does not mirror the snooze into the synced vault"
+    )
 
 
 def test_api_delay_options_returns_blocks_and_minutes(monkeypatch):

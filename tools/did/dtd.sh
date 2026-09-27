@@ -1147,6 +1147,24 @@ tmp = path + '.tmp'
 with open(tmp, 'w') as f:
     json.dump(data, f)
 os.replace(tmp, path)
+# Cross-host mirror: $STATE_DIR/dtd-block-snooze.json is host-local (Syncthing
+# does not sync ~/.local/state/jm), so a delay made here in the terminal never
+# reached dtd web on another machine (Ix). Also write this host's snooze into
+# the Syncthing-synced vault, exactly like completed-today's per-host mirror,
+# so dtd web's _snoozed_ids unions it in (2026-09-27 "CLI delay doesn't hit the
+# server" fix). Best-effort — never fail the delay on a mirror miss.
+try:
+    import socket, re as _re
+    slug = _re.sub(r'[^a-z0-9]+', '-', socket.gethostname().lower()).strip('-')[:24]
+    mdir = os.path.expanduser('~/vault/z_ibx')
+    os.makedirs(mdir, exist_ok=True)
+    mpath = os.path.join(mdir, 'dtd-block-snooze-' + slug + '.json')
+    mtmp = mpath + '.tmp'
+    with open(mtmp, 'w') as f:
+        json.dump(data, f)
+    os.replace(mtmp, mpath)
+except Exception:
+    pass
 PYWRITE
 )
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already

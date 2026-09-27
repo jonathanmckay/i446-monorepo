@@ -16,6 +16,7 @@ import datetime as _dt
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -272,38 +273,62 @@ def _completed_ids() -> set[str]:
         pass
     return ids
 
+def _host_slug() -> str:
+    """This host's slug for the snooze mirror filename — same scheme as
+    mark-completed.py's completed-today mirror so the two families of
+    per-host files look consistent in ~/vault/z_ibx."""
+    return re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+
+def _snooze_mirror_path() -> Path:
+    return MIRROR_DIR / f"dtd-block-snooze-{_host_slug()}.json"
+
+def _snoozed_from(data: dict, now: _dt.datetime) -> set[str]:
+    """Still-snoozed ids from one {date, snoozes} dict. Only today's file
+    counts (a stale prior-day date voids everything). A block delay is a plain
+    int hour-of-day; a minute/freeform delay is an absolute epoch float —
+    isinstance(v, float) tells them apart (json round-trips a float with a
+    decimal point), same distinction as dtd.sh's reader. (Comparing an epoch
+    float against now_hour via int(v) is always true — the 2026-09-07 bug.)"""
+    if not isinstance(data, dict) or data.get("date") != now.date().isoformat():
+        return set()
+    out: set[str] = set()
+    for k, v in (data.get("snoozes") or {}).items():
+        try:
+            still = (now.timestamp() < v) if isinstance(v, float) else (now.hour < int(v))
+        except (TypeError, ValueError):
+            still = False
+        if still:
+            out.add(str(k))
+    return out
+
 def _snoozed_ids() -> set[str]:
-    """Ids block-snoozed (ctrl-v) in the desktop dtd, hidden until their
-    chosen 地支 block's hour arrives — or, for a minute-granularity delay
-    (snooze_minutes), until that absolute timestamp passes. Mirrors
-    tools/did/dtd.sh's read of the same file — without this, a task delayed
-    to later today in the terminal view reappeared immediately here since
-    dtd web never read this file (2026-08-11 bug). File is {date, snoozes:
-    {id: start_hour | epoch_float}}; a stale date (leftover from a previous
-    day) voids it, same as dtd.sh.
+    """Ids block-snoozed (ctrl-v / freeform / minute delay), hidden until their
+    block hour or timestamp passes — UNION of this host's local snooze file AND
+    every other host's synced mirror (dtd-block-snooze-<host>.json in the vault).
 
-    A block delay stores a plain int hour-of-day; a minute delay stores an
-    absolute epoch float — json round-trips a python float with a decimal
-    point, so isinstance(v, float) unambiguously tells them apart on read,
-    same distinguishing check as dtd.sh's reader. Comparing a minute delay's
-    huge epoch value against now_hour (0-23) via int(v) — what this used to
-    do — is always true, so a minute-delayed task would never reappear
-    until the next day's reset (would have broken the moment anything wrote
-    a minute delay; nothing did until snooze_minutes(), 2026-09-07)."""
-    try:
-        sn = json.loads(SNOOZE_FILE.read_text())
-    except Exception:
-        return set()
-    if sn.get("date") != _dt.date.today().isoformat():
-        return set()
+    Cross-host is the whole point (2026-09-27): ~/.local/state/jm is host-local
+    and NOT synced, so a delay made in the terminal dtd on Straylight never
+    reached dtd web on Ix — the local read alone only ever saw Ix's own file.
+    This mirrors the completed-today cross-host solution (_remote_completed_ids):
+    each host writes its own mirror into ~/vault/z_ibx (Syncthing-synced), and
+    every reader unions all of them. Union semantics are correct for snoozes —
+    an id is hidden if ANY host says it's still snoozed; each entry self-expires
+    by its own value; clearing a snooze drops it from that host's mirror."""
     now = _dt.datetime.now()
-
-    def _still_snoozed(v) -> bool:
-        if isinstance(v, float):
-            return now.timestamp() < v
-        return now.hour < int(v)
-
-    return {str(k) for k, v in (sn.get("snoozes") or {}).items() if _still_snoozed(v)}
+    ids: set[str] = set()
+    try:
+        ids |= _snoozed_from(json.loads(SNOOZE_FILE.read_text()), now)
+    except Exception:
+        pass
+    try:
+        for p in MIRROR_DIR.glob("dtd-block-snooze-*.json"):
+            try:
+                ids |= _snoozed_from(json.loads(p.read_text()), now)
+            except Exception:
+                continue  # a mid-sync/partial mirror — skip, don't fail the request
+    except Exception:
+        pass
+    return ids
 
 def _deferred_habit_ids() -> set[str]:
     """Recurring 0neon/夜neon habit-parent ids deferred (/defer) today,
@@ -536,6 +561,17 @@ def _write_snooze(task_id: str, value) -> None:
     tmp = SNOOZE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(sn))
     tmp.replace(SNOOZE_FILE)
+    # Cross-host mirror into the synced vault so a delay made HERE is seen by
+    # dtd on other machines too (symmetry with the CLI's mirror write and with
+    # completed-today). Best-effort — a mirror miss must not fail the delay.
+    try:
+        MIRROR_DIR.mkdir(parents=True, exist_ok=True)
+        mpath = _snooze_mirror_path()
+        mtmp = mpath.with_suffix(".tmp")
+        mtmp.write_text(json.dumps(sn))
+        mtmp.replace(mpath)
+    except Exception:
+        pass
 
 
 def remaining_blocks_today() -> list[dict]:
