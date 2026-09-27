@@ -50,6 +50,7 @@ EXCLUDE_PREFIXES = (
     "h335/m5x2/fund-iii/condo-conversion-masterdoc",   # masterdoc + sub-docs, keep
     "hcmp/moral-audit",                                # /moralaudit adds a dated file each quarter
     "h335/i9/xbox/decks",                              # deck build scripts + templates, not docs
+    "h335/i8/社-people/jm-feedback-career/perf-boss-feedback",   # two-doc folder, keep (2026-09-27)
 )
 # Folder names that are dates are per-period buckets, never singletons.
 DATE_DIR_RE = re.compile(r"^\d{4}([.\-]\d{2}){0,2}$|^\d{4}\.\d{1,2}$")
