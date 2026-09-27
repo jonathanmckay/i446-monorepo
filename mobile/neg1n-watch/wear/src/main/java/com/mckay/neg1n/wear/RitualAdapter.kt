@@ -9,7 +9,10 @@ import androidx.recyclerview.widget.RecyclerView
  * Neg1nConfig.RITUALS) + label. Swipe-to-complete is wired by the Activity
  * via ItemTouchHelper, not here — this adapter only owns the list and its
  * rendering. */
-class RitualAdapter(private val colorOf: (String) -> Int) : RecyclerView.Adapter<RitualAdapter.ViewHolder>() {
+class RitualAdapter(
+    private val colorOf: (String) -> Int,
+    private val onClick: (String) -> Unit = {},
+) : RecyclerView.Adapter<RitualAdapter.ViewHolder>() {
 
     private val items = mutableListOf<Pair<String, String>>() // (tag, label)
 
@@ -40,6 +43,7 @@ class RitualAdapter(private val colorOf: (String) -> Int) : RecyclerView.Adapter
         val (tag, label) = items[position]
         holder.label.text = label
         holder.dot.setBackgroundColor(colorOf(tag))
+        holder.itemView.setOnClickListener { onClick(tag) }
     }
 
     override fun getItemCount(): Int = items.size

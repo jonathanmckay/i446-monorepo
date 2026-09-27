@@ -61,6 +61,17 @@ def create_task(content: str, *, labels: Optional[list] = None,
     return _request("POST", "/tasks", body)
 
 
+def get_task(task_id: str) -> Optional[dict]:
+    """One task by id (open or completed -- v1 returns completed tasks with
+    checked=true), or None on 404 (deleted)."""
+    try:
+        return _request("GET", f"/tasks/{task_id}")
+    except RuntimeError as e:
+        if "404" in str(e):
+            return None
+        raise
+
+
 def close_task(task_id: str) -> None:
     _request("POST", f"/tasks/{task_id}/close")
 

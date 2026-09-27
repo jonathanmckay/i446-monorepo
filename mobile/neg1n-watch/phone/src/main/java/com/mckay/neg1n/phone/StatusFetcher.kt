@@ -20,6 +20,10 @@ class StatusFetcher(private val baseUrl: String) {
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
+    private val slowClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .build()
 
     /** Blocking fetch — call from a background thread/WorkManager, never the UI thread. */
     fun fetch(): Result<Neg1nStatus> = try {
@@ -53,6 +57,30 @@ class StatusFetcher(private val baseUrl: String) {
                 !resp.isSuccessful -> Result.failure(IllegalStateException(json.optString("error", "HTTP ${resp.code}")))
                 !json.optBoolean("ok", false) -> Result.failure(IllegalStateException(
                     json.optString("stderr_tail", "did-fast.py --ritual $tag failed")))
+                else -> Result.success(parse(json.getJSONObject("status").toString()))
+            }
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /** Sets the current block's -1g goal (POST .../api/neg1n/goal) — the
+     * server writes build-order.md, creates the #-1g Todoist task, and closes
+     * the -1g ritual, then returns fresh status. Its own client with a long
+     * read timeout: the server does two Todoist calls plus a did-fast run
+     * before answering, routinely >8s, and a timeout here would make
+     * WorkManager retry and double-post the goal. Blocking — Worker only. */
+    fun setGoal(text: String): Result<Neg1nStatus> = try {
+        val goalUrl = baseUrl.trimEnd('/') + "/goal"
+        val payload = JSONObject().put("text", text).toString()
+            .toRequestBody("application/json".toMediaType())
+        val request = Request.Builder().url(goalUrl).post(payload).build()
+        slowClient.newCall(request).execute().use { resp ->
+            val body = resp.body?.string() ?: "{}"
+            val json = JSONObject(body)
+            when {
+                !resp.isSuccessful -> Result.failure(IllegalStateException(json.optString("error", "HTTP ${resp.code}")))
+                !json.optBoolean("ok", false) -> Result.failure(IllegalStateException(json.optString("error", "goal not set")))
                 else -> Result.success(parse(json.getJSONObject("status").toString()))
             }
         }

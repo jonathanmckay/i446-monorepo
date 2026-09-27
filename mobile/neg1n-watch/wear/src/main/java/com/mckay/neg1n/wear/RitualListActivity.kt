@@ -1,6 +1,9 @@
 package com.mckay.neg1n.wear
 
 import android.app.Activity
+import android.app.RemoteInput
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.ComponentName
 import android.os.Bundle
 import android.util.Log
@@ -11,6 +14,7 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.wear.watchface.complications.datasource.ComplicationDataSourceUpdateRequester
+import androidx.wear.input.RemoteInputIntentHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -18,6 +22,9 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "Neg1n"
 private const val RECONCILE_DELAY_MS = 3000L
+private const val GOAL_RITUAL_TAG = "-1g"
+private const val GOAL_INPUT_KEY = "neg1n_goal"
+private const val REQ_GOAL_INPUT = 41
 
 /** Opened by tapping the complication: the current block's not-yet-done
  * rituals as a swipeable list. Swipe RIGHT completes one — relays the
@@ -54,7 +61,10 @@ class RitualListActivity : Activity() {
 
         emptyText = findViewById(R.id.emptyText)
         pendingCompletions = PendingCompletions.fromPrefs(applicationContext)
-        adapter = RitualAdapter(colorOf)
+        // Tap (not swipe) on the -1g row opens Wear's system text entry
+        // (keyboard + voice dictation) for this block's goal -- see
+        // openGoalInput/onActivityResult. Other rows ignore taps.
+        adapter = RitualAdapter(colorOf) { tag -> if (tag == GOAL_RITUAL_TAG) openGoalInput() }
         val recycler = findViewById<RecyclerView>(R.id.ritualList)
         recycler.layoutManager = LinearLayoutManager(this)
         recycler.adapter = adapter
@@ -115,6 +125,59 @@ class RitualListActivity : Activity() {
             // (fetch backend /complete, push the result) rather than
             // trusting the optimistic removal above.
             delay(RECONCILE_DELAY_MS)
+            reload()
+        }
+    }
+
+    /** Wear RemoteInput: the platform's own text-entry sheet (keyboard,
+     * voice, scribble), so dictation comes for free. Result arrives in
+     * onActivityResult (plain Activity, no AndroidX result API here). */
+    private fun openGoalInput() {
+        val remoteInput = RemoteInput.Builder(GOAL_INPUT_KEY)
+            .setLabel("-1g goal")
+            .build()
+        val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
+        RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(remoteInput))
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_GOAL_INPUT)
+        } catch (e: ActivityNotFoundException) {
+            Log.e(TAG, "RitualListActivity: no remote input activity", e)
+            Toast.makeText(this, "no text input available", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_GOAL_INPUT || resultCode != RESULT_OK || data == null) return
+        val text = RemoteInput.getResultsFromIntent(data)?.getCharSequence(GOAL_INPUT_KEY)?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) return
+        setGoal(text)
+    }
+
+    /** Relays the goal text to the phone ("/neg1n_goal" -> SetGoalWorker ->
+     * POST /api/neg1n/goal on Ix), which also closes the -1g ritual
+     * server-side -- so the row is treated like a swipe-complete on the
+     * watch: optimistic removal + persisted overlay, reconciled after a
+     * delay. Only after a delivered relay: an undeliverable goal must come
+     * straight back, not hide for the overlay's TTL. */
+    private fun setGoal(text: String) {
+        CoroutineScope(Dispatchers.Main).launch {
+            val sent = PhoneMessenger.send(applicationContext, "/neg1n_goal", text)
+            Log.i(TAG, "RitualListActivity: goal request sent=$sent text=$text")
+            if (sent) {
+                val pos = (0 until adapter.itemCount).firstOrNull { adapter.tagAt(it) == GOAL_RITUAL_TAG }
+                if (pos != null) { adapter.removeAt(pos); updateEmptyState() }
+                pendingCompletions.markCompleted(GOAL_RITUAL_TAG, currentBlock)
+                Toast.makeText(this@RitualListActivity, "goal: $text", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@RitualListActivity, "phone unreachable", Toast.LENGTH_SHORT).show()
+            }
+            requestComplicationUpdate()
+            // The server's goal call can take 10-20s (Todoist + did-fast);
+            // give it longer than a plain completion before reconciling.
+            delay(RECONCILE_DELAY_MS * 4)
             reload()
         }
     }

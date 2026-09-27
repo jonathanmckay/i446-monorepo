@@ -2476,10 +2476,14 @@ def catch_up_recurring(task_id: str, due_string: str, target_iso: str,
 
 
 def _on_ix() -> bool:
-    """True when this process runs on Ix (the Mac Mini, hostname
-    Jonathans-Mac-mini.local) — the single writer for build-order stamps."""
+    """True when this process runs on Ix (the Mac Mini) — the single writer for
+    build-order stamps. Ix's hostname was renamed from Jonathans-Mac-mini.local
+    to ix.local at some point before 2026-09-27; until this was widened, every
+    on-Ix ritual took the ssh-to-self `_stamp_on_ix` path (worked, but slower,
+    and its failure fallback is an UNLOCKED write)."""
     import socket
-    return "mac-mini" in socket.gethostname().lower()
+    host = socket.gethostname().lower()
+    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
 
 
 def _stamp_on_ix(block: str, emoji: str) -> Optional[tuple[bool, str]]:

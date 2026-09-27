@@ -312,3 +312,143 @@ def score_day(
     # reads term-count off this formula).
     formula = "=" + "+".join(str(s) for _, s in parts) if parts else "=0"
     return parts, total, formula
+
+
+# ---------------------------------------------------------------------------
+# -1g block goals (2026-09-27): shared by tools/watch/neg1n_status.py's
+# /api/neg1n/goal (the watch's tap-to-dictate -1g entry). tools/ibx/-2n.py
+# still carries its own older copies of the same logic (parse_goals_text /
+# write_block_goals / append_block_goals) -- migrate it here when next touched
+# so there is one writer; see build_order_lock's docstring for why copies of
+# this read-modify-write keep racing.
+# ---------------------------------------------------------------------------
+
+GOAL_MARKER = "🎯"
+
+# Block -> default domain label for a goal with no @code and no keyword hit
+# (mirrors tools/ibx/-2n.py's _BLOCK_DOMAIN).
+BLOCK_DOMAIN = {
+    "卯": "hci", "辰": "hcb", "巳": "i9", "午": "i9", "未": "i9",
+    "申": "i9", "酉": "m5x2", "戌": "xk87", "亥": "hcm",
+}
+
+# Keyword -> domain, in the /-1g skill's table order (first hit wins).
+_DOMAIN_KEYWORDS = [
+    ("i9", ("xbox", "platform", "copilot", "github", "teams", "metrics", "standup",
+            "sprint", "retro", "slt", "1:1", " pr ", "deploy", "pipeline",
+            "experimentation", "forza", "halo", "activation")),
+    ("m5x2", ("property", "tenant", "lease", "rent", "appfolio", "occupancy",
+              "maintenance", "p&l", "bookkeeping", "eviction", "unit", "renewal", "vacancy")),
+    ("xk87", ("school", "math", "kids", "theo", "ren ", "aurora", "homework",
+              "reading", "lego", "ptc")),
+    ("hcbp", ("exercise", "gym", "hiit", "bball", "basketball", "run", "walk",
+              "yoga", "stretch", "legs")),
+    ("hcb", ("eat", "food", "meal", "calories", "nutrition", "breakfast", "lunch",
+             "dinner", "snack")),
+    ("hcm", ("meditat", "journal", "prayer", "reflect", "o314", "冥想")),
+    ("hcmc", ("news", "新闻", "youtube", "podcast", "article", "book review")),
+    ("qz12", ("invest", "stocks", "portfolio", "taxes", "budget", "finance")),
+    ("g245", ("goal", "review", "plan", "weekly", "1s", "0g", "dream", "分")),
+    ("s897", ("social", "friends", "dinner out")),
+    ("i447", ("admin", "tooling", "setup", "infra", "fix computer", "claude", "system")),
+]
+
+_GOAL_AT_RE = re.compile(r"(?:^|\s)@([A-Za-z0-9一-鿿]+)")
+_GOAL_BRACE_RE = re.compile(r"\{\d+\}")
+_GOAL_SQUARE_RE = re.compile(r"\[\d+\]")
+
+
+def parse_goals_text(goals_text: str) -> list[str]:
+    """Split typed/dictated goals into items: one per line, or comma /
+    semicolon separated on a plain line; bullet and checkbox prefixes
+    stripped. Full-width 【N】 is normalised to {N} (a phone/watch keyboard
+    habit)."""
+    if not goals_text:
+        return []
+    text = re.sub(r"【(\d+)】", r"{\1}", goals_text)
+    raw: list[str] = []
+    for line in text.splitlines():
+        if line.strip().startswith(("-", "*")) or re.match(r"^\s*\d+[.)]\s", line):
+            raw.append(line)
+        else:
+            raw.extend(re.split(r"[,;，；]", line))
+    out: list[str] = []
+    for item in raw:
+        g = re.sub(r"^([-*]|\d+[.)])\s+", "", item.strip())
+        g = re.sub(r"^\[[ xX]\]\s*", "", g).strip()
+        if g:
+            out.append(g)
+    return out
+
+
+def split_goal_domain(goal: str, block: str) -> tuple[str, str]:
+    """(goal text without its @code, domain label). Explicit @code wins, then
+    the keyword table, then the block's default."""
+    m = _GOAL_AT_RE.search(goal)
+    if m:
+        return _GOAL_AT_RE.sub("", goal).strip(), m.group(1)
+    low = f" {goal.lower()} "
+    for dom, kws in _DOMAIN_KEYWORDS:
+        if any(k in low for k in kws):
+            return goal.strip(), dom
+    return goal.strip(), BLOCK_DOMAIN.get(block, "i9")
+
+
+def is_plain_todo(goal: str) -> bool:
+    """`[N]`-only items are plain todos, not block goals (the /-1g rule)."""
+    return bool(_GOAL_SQUARE_RE.search(goal)) and not _GOAL_BRACE_RE.search(goal)
+
+
+def ensure_goal_points(goal: str, default: int = 10) -> str:
+    """A block goal always carries {N}; without it /did logs 0 pts."""
+    return goal if _GOAL_BRACE_RE.search(goal) else f"{goal.rstrip()} {{{default}}}"
+
+
+def append_block_goals_text(text: str, block: str, goals: list[str]) -> tuple[str, list[str]]:
+    """Pure: add `goals` as `    - [ ] <goal>` under `block`'s header in the
+    `## -1₲` section, after any existing checkbox lines (never replacing
+    them -- a second dictated goal must not wipe the first), replacing a
+    lone blank `    - [ ]` placeholder, skipping goals already present
+    (retry-safe), and stamping 🎯 on the header when at least one goal has
+    text. Returns (new_text, goals_actually_added). Raises ValueError when
+    the section or block header is missing."""
+    lines = text.split("\n")
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith("## -1₲"))
+    except StopIteration:
+        raise ValueError("## -1₲ section not found in build order")
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    hdr = next((i for i in range(start + 1, end)
+                if lines[i].startswith("- ") and _block_line_name(lines[i]) == block), None)
+    if hdr is None:
+        raise ValueError(f"block {block} header not found in ## -1₲")
+    blk_end = next((i for i in range(hdr + 1, end) if lines[i].startswith("- ")), end)
+    children = lines[hdr + 1:blk_end]
+    cb = re.compile(r"^    - \[[ xX]\]\s*(.*)$")
+    existing = [m.group(1).strip() for l in children if (m := cb.match(l))]
+    added = [g for g in goals if g.strip() and g.strip() not in existing]
+    if not added:
+        return text, []
+    new_lines = [f"    - [ ] {g.strip()}" for g in added]
+    # Insert after the last checkbox line; a lone blank placeholder is replaced.
+    last_cb = max((i for i, l in enumerate(children) if cb.match(l)), default=-1)
+    if last_cb >= 0 and cb.match(children[last_cb]).group(1).strip() == "" and len(existing) == 1:
+        children = children[:last_cb] + new_lines + children[last_cb + 1:]
+    else:
+        children = children[:last_cb + 1] + new_lines + children[last_cb + 1:]
+    header = lines[hdr]
+    if GOAL_MARKER not in header:
+        header = header.rstrip() + f" {GOAL_MARKER}"
+    return "\n".join(lines[:hdr] + [header] + children + lines[blk_end:]), added
+
+
+def append_block_goals(block: str, goals: list[str], build_order: Path | None = None) -> list[str]:
+    """Locked read-modify-write of build-order.md (call ON Ix only -- see
+    build_order_lock). Returns the goals actually added."""
+    bo = build_order or BUILD_ORDER
+    with build_order_lock(bo):
+        text = bo.read_text(encoding="utf-8")
+        new_text, added = append_block_goals_text(text, block, goals)
+        if added:
+            bo.write_text(new_text, encoding="utf-8")
+    return added

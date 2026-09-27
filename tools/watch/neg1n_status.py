@@ -149,6 +149,117 @@ def api_neg1n_complete():
     })
 
 
+GOAL_PROJECT_ID = "6XfvCQ3p8Gq6fhGR"  # Todoist project "0g"
+GOAL_LABEL = "#-1g"
+
+
+def _goal_plan(text: str, block: str) -> dict:
+    """Pure part of /api/neg1n/goal: what would be written for `text`."""
+    import sys as _s
+    _s.path.insert(0, str(REPO / "lib"))
+    import neon_blocks as nb
+    goals, todos = [], []
+    for item in nb.parse_goals_text(text):
+        if nb.is_plain_todo(item):
+            content, dom = nb.split_goal_domain(item, block)
+            todos.append({"content": content, "labels": [dom]})
+        else:
+            content, dom = nb.split_goal_domain(item, block)
+            goals.append({"content": nb.ensure_goal_points(content), "labels": [GOAL_LABEL, dom]})
+    return {"goals": goals, "todos": todos}
+
+
+@app.route("/api/neg1n/goal", methods=["POST"])
+def api_neg1n_goal():
+    """Set the current block's -1g goal from the watch (RitualListActivity's
+    tap on the -1g row -> Wear RemoteInput -> phone relay). Body: {"text":
+    "...", "dry_run": bool}. Does what /-1g does, without the LLM: parse
+    items ({N} = block goal, [N]-only = plain todo, @code / keyword / block
+    default -> domain), append the goals under the current 地支 header in
+    build-order.md (locked, retry-safe, stamps 🎯), create the Todoist
+    tasks (dedup by content against open 0g tasks), then in a background
+    thread refresh the dtd cache and close the 😈 -1g ritual card via the
+    same did-fast path as a watch swipe. Responds as soon as the build
+    order + Todoist are written (the phone's client allows 45s; the ritual
+    close takes several more and its result is pushed by the next sync).
+    The build-order write happens ON THIS HOST'S copy: this service runs on
+    Ix, the single writer -- see the /-1g skill's single-writer note."""
+    body = request.get_json(silent=True) or {}
+    text = str(body.get("text") or "").strip()
+    dry_run = bool(body.get("dry_run"))
+    if not text:
+        return jsonify({"ok": False, "error": "empty goal text"}), 400
+    block = current_block()
+    if block is None:
+        return jsonify({"ok": False, "error": "outside the 04:00-22:00 block window"}), 400
+    plan = _goal_plan(text, block)
+    if not plan["goals"] and not plan["todos"]:
+        return jsonify({"ok": False, "error": "no goal parsed from text"}), 400
+    if dry_run:
+        return jsonify({"ok": True, "dry_run": True, "block": block, **plan})
+
+    import sys as _s
+    _s.path.insert(0, str(REPO / "lib"))
+    import neon_blocks as nb
+    import todoist as td
+
+    out: dict = {"ok": True, "block": block, "written": [], "todoist": [], "warnings": []}
+    goal_contents = [g["content"] for g in plan["goals"]]
+    if goal_contents:
+        try:
+            out["written"] = nb.append_block_goals(block, goal_contents)
+        except Exception as e:  # noqa: BLE001 -- keep going: Todoist + ritual still worth doing
+            out["warnings"].append(f"build-order write failed: {e}")
+
+    # Todoist: dedup against open 0g tasks by content (retry-safe).
+    try:
+        existing = {t.get("content", "").strip()
+                    for t in (td._request("GET", f"/tasks?project_id={GOAL_PROJECT_ID}&limit=200") or {}).get("results", [])}
+    except Exception as e:  # noqa: BLE001
+        existing = set()
+        out["warnings"].append(f"todoist dedup fetch failed: {e}")
+    for g in plan["goals"]:
+        if g["content"].strip() in existing:
+            out["todoist"].append({"content": g["content"], "skipped": "exists"})
+            continue
+        try:
+            t = td.create_task(g["content"], labels=g["labels"], due_string="today",
+                               priority=4, project_id=GOAL_PROJECT_ID)  # API 4 == UI p1
+            out["todoist"].append({"content": g["content"], "id": t.get("id")})
+        except Exception as e:  # noqa: BLE001
+            out["warnings"].append(f"todoist create failed for {g['content']!r}: {e}")
+    for t_ in plan["todos"]:
+        try:
+            t = td.create_task(t_["content"], labels=t_["labels"], due_string="today", priority=1)
+            out["todoist"].append({"content": t_["content"], "id": t.get("id"), "plain_todo": True})
+        except Exception as e:  # noqa: BLE001
+            out["warnings"].append(f"todoist todo failed for {t_['content']!r}: {e}")
+
+    def _finish(block_at_request: str) -> None:
+        # Cache refresh so the new #-1g goal reaches dtd, then close the -1g
+        # ritual card + stamp 🎯 through the exact same path a watch swipe
+        # uses. Skipped if the block rolled over meanwhile (--ritual always
+        # acts on the CURRENT block). Runs AFTER the response and outside
+        # any build-order lock: did-fast flocks the same .lock itself.
+        try:
+            subprocess.run(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"],
+                           capture_output=True, text=True, timeout=60)
+        except Exception:
+            pass
+        if goal_contents and current_block() == block_at_request:
+            try:
+                subprocess.run(["/usr/bin/python3", str(DID_FAST), "--ritual", "-1g"],
+                               capture_output=True, text=True, timeout=60)
+            except Exception:
+                pass
+
+    if goal_contents:
+        import threading
+        threading.Thread(target=_finish, args=(block,), daemon=True).start()
+    out["status"] = compute_status()
+    return jsonify(out)
+
+
 def _today_cache_entry() -> dict:
     """Today's row from .points-cache.json, or {} if the cache is missing/
     stale/unreadable — callers treat a missing key as 'no data yet', not an

@@ -185,6 +185,31 @@ def main() -> int:
             if t.get("id") not in _seen:
                 _seen.add(t.get("id"))
                 fresh_dynamic.append(_shape(t))
+    # Final -1neon verification pass (2026-09-27 bug: a سمش ritual swiped done
+    # on the watch at 16:28 -- closed in Todoist, confirmed -- was still listed
+    # open by THIS writer's 16:31 refresh, so dtd kept showing it). The label
+    # index (`/tasks?label=-1neon`) lags a close by minutes, and the
+    # same-block union above deliberately re-adds anything not in THIS host's
+    # completed-today -- a completion recorded on another host (the watch
+    # relay runs did-fast on Ix) isn't there yet. did-fast.py's own
+    # --refresh-cache already re-GETs every -1neon card right before writing
+    # for exactly this reason; this writer runs far more often and never did.
+    # Ritual cards are <=5, so one GET each is cheap. Ambiguous (non-200,
+    # network) keeps the card -- never drop on uncertainty.
+    verified_dynamic = []
+    for t in fresh_dynamic:
+        if "-1neon" not in (t.get("labels") or []):
+            verified_dynamic.append(t)
+            continue
+        try:
+            live = todoist.get_task(str(t.get("id")))
+        except Exception:
+            verified_dynamic.append(t)  # can't verify -- keep
+            continue
+        if live is None or not live.get("checked"):
+            verified_dynamic.append(t)
+        # else: confirmed closed -- drop it
+    fresh_dynamic = verified_dynamic
     today_rest = [t for t in data.get("today", [])
                   if not any(l in t.get("labels", []) for l in DYNAMIC_TODAY_LABELS)]
     data["today"] = fresh_dynamic + today_rest
