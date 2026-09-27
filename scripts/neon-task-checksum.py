@@ -10,7 +10,17 @@ checks BOTH cadences and, with --fix, recreates what's missing:
   daily  (0n)  — the canonical set in config/daily-todoist-manifest.json,
                  checked/recreated via validate-daily-habits.py's logic
                  (imported), plus a manifest→0n-header drift check: every
-                 manifest `match` must still be a live 0n header.
+                 manifest `match` must still be a live 0n header, plus a
+                 points check: 0n row 2 (⊖分, what the sheet credits on
+                 completion — it is what the "N color" total and the BH
+                 partial-credit SUMPRODUCTs sum) must equal the [N] on both
+                 the manifest content and the live card. Warn-only, like the
+                 weekly check (2026-09-25: "1st hci" credited 26 on the sheet
+                 while the card had said [15] since the manifest was seeded
+                 on 2026-06-14, and 8 more daily cards were off the same way;
+                 nothing compared the two). Variable-points habits (did-fast's
+                 VARIABLE_0N, mirrored below) are skipped — their credit is
+                 computed from duration, so the card's [N] is nominal.
   weekly (1n+) — derived STRAIGHT from the sheet, no second manifest: every
                  header column with a day-of-week in row 3 must have an open
                  recurring 1neon task whose bare name matches the header
@@ -73,6 +83,11 @@ ALIASES = {
     "long o314": "长o314",
     "1 groceries": "groceries",
 }
+
+# Mirror of did-fast.py's VARIABLE_0N (same reason as ALIASES; same test
+# cross-checks them). Points for these come from the timer, not 0n row 2.
+VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "hcmr", "其他人", "新闻",
+               "night hcmc", "evening hcmc", "hiit"}
 
 # 1=Sunday … 7=Saturday (1n+ row 3; verified against the live cards 2026-07-25)
 DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday",
@@ -274,6 +289,41 @@ def manifest_drift(manifest: dict, headers_0n: list[str]) -> list[str]:
             if norm_name(h["match"]) not in live]
 
 
+def _card_pts(content: str):
+    m = re.search(r"\[(\d+(?:\.\d+)?)\]", content or "")
+    return float(m.group(1)) if m else None
+
+
+def daily_points_mismatches(pts_0n: dict, manifest: dict, tasks: list[dict]) -> list[str]:
+    """Warn when a daily habit's [N] (manifest content and/or live card)
+    doesn't match 0n row 2, the ⊖分 credit the sheet pays on completion.
+    `pts_0n` maps norm_name(header) → row-2 number (None where blank or
+    non-numeric; those columns are skipped, as are VARIABLE_0N habits).
+    Warn-only, same as the weekly points_mismatches: the sheet is canonical,
+    but rewriting a live recurring card is a human decision."""
+    by_norm: dict[str, list[str]] = {}
+    for t in tasks:
+        by_norm.setdefault(norm_name(t.get("content", "")), []).append(t.get("content", ""))
+    warnings = []
+    for h in manifest["habits"].values():
+        name = norm_name(h["match"])
+        if name in VARIABLE_0N:
+            continue
+        sheet = pts_0n.get(name)
+        if sheet is None:
+            continue
+        mp = _card_pts(h["content"])
+        if mp is not None and mp != sheet:
+            warnings.append(
+                f"{h['match']}: sheet row 2 = [{sheet:g}], manifest has [{mp:g}]")
+        for content in by_norm.get(name, []):
+            cp = _card_pts(content)
+            if cp is not None and cp != sheet:
+                warnings.append(
+                    f"{h['match']}: sheet row 2 = [{sheet:g}], card has [{cp:g}] ({content!r})")
+    return warnings
+
+
 # ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
@@ -306,6 +356,13 @@ READ_SHEETS = f'''tell application "Microsoft Excel"
         set out to out & "\\t"
     end repeat
     set out to out & "\\n"
+    set tmpP to value of range "D2:BL2" of ws0
+    set p0 to item 1 of tmpP
+    repeat with v in p0
+        if v is not missing value then set out to out & (v as text)
+        set out to out & "\\t"
+    end repeat
+    set out to out & "\\n"
     repeat with rn in {{1, 2, 3, 5}}
         set tmpR to value of range ("C" & rn & ":AL" & rn) of ws1
         set rowVals to item 1 of tmpR
@@ -319,13 +376,23 @@ READ_SHEETS = f'''tell application "Microsoft Excel"
 end tell'''
 
 
+def parse_0n_points(header_line: str, points_line: str) -> dict:
+    """0n row 1 / row 2 (tab-separated, positions preserved) → {norm_name(header):
+    row-2 number or None}. Blank header cells are dropped."""
+    hdrs, pts = header_line.split("\t"), points_line.split("\t")
+    return {norm_name(h): _num(p) for h, p in zip(hdrs, pts + [""] * len(hdrs))
+            if h.strip()}
+
+
 def read_sheets():
-    """→ (headers_0n: list[str], rows_1n: [row1, row2, row3, row5])."""
+    """→ (headers_0n: list[str], rows_1n: [row1, row2, row3, row5],
+          pts_0n: {norm header: row-2 credit or None})."""
     raw = run_osascript(READ_SHEETS)
     lines = raw.rstrip("\n").split("\n")
     headers_0n = [c for c in lines[0].split("\t") if c.strip()]
-    rows = [ln.split("\t") for ln in lines[1:5]]
-    return headers_0n, rows
+    pts_0n = parse_0n_points(lines[0], lines[1])
+    rows = [ln.split("\t") for ln in lines[2:6]]
+    return headers_0n, rows, pts_0n
 
 
 def _token() -> str:
@@ -406,7 +473,7 @@ def main() -> int:
 
     token = _token()
     report = {"date": date.today().isoformat(), "host": platform.node()}
-    headers_0n, rows_1n = read_sheets()
+    headers_0n, rows_1n, pts_0n = read_sheets()
 
     if not args.weekly_only:
         vdh = _load_vdh()
@@ -437,15 +504,19 @@ def main() -> int:
                 except Exception as e:
                     report.setdefault("errors", []).append(f"daily {key}: {e}")
         drift = manifest_drift(manifest, headers_0n)
+        daily_pts_warnings = daily_points_mismatches(pts_0n, manifest, daily_tasks)
         report["daily"] = {"checked": len(manifest["habits"]), "missing": missing,
                            "recreated": recreated, "manifest_drift": drift,
-                           "skipped_na": skipped_na}
+                           "skipped_na": skipped_na,
+                           "points_mismatches": daily_pts_warnings}
         if missing:
             emit_alert("daily_habit_missing",
                        f"{', '.join(missing)}" + (" (recreated)" if recreated else ""))
         if drift:
             emit_alert("manifest_drift",
                        f"manifest match not in 0n headers: {', '.join(drift)}")
+        for w in daily_pts_warnings:
+            emit_alert("daily_points_mismatch", w)
 
     if not args.daily_only:
         expected = parse_1n_expectations(*rows_1n)
@@ -496,6 +567,8 @@ def main() -> int:
         d, w = report.get("daily", {}), report.get("weekly", {})
         print(f"daily:  {d.get('checked', '-')} checked, "
               f"missing: {d.get('missing') or 'none'}, drift: {d.get('manifest_drift') or 'none'}")
+        for warn in d.get("points_mismatches", []):
+            print(f"  ⚠ {warn}")
         print(f"weekly: {w.get('checked', '-')} checked, "
               f"missing: {w.get('missing') or 'none'}")
         for warn in w.get("weekday_warnings", []):

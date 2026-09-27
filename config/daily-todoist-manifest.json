@@ -37,7 +37,7 @@
   },
   "1st-hci": {
    "match": "1st hci",
-   "content": "1st hci (15) [15]",
+   "content": "1st hci (15) [26]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -48,7 +48,7 @@
   },
   "2nd-hci": {
    "match": "2nd hci",
-   "content": "2nd hci (15) [15]",
+   "content": "2nd hci (15) [7]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -70,7 +70,7 @@
   },
   "cpap": {
    "match": "CPAP",
-   "content": "CPAP (15) [15]",
+   "content": "CPAP (15) [20]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -147,7 +147,7 @@
   },
   "ibx-s897": {
    "match": "ibx s897",
-   "content": "ibx s897 [6] (15)",
+   "content": "ibx s897 (15) [5]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -158,7 +158,7 @@
   },
   "m5x2-stats": {
    "match": "m5x2 stats",
-   "content": "m5x2 stats (4) [8]",
+   "content": "m5x2 stats (4) [15]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -181,7 +181,7 @@
   },
   "push": {
    "match": "push",
-   "content": "push (10) [30]",
+   "content": "push (10) [20]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -193,7 +193,7 @@
   },
   "slack-m5x2": {
    "match": "slack m5x2",
-   "content": "slack m5x2 (2) [6]",
+   "content": "slack m5x2 (2) [3]",
    "due_string": "every day",
    "labels": [
     "0neon",
@@ -249,7 +249,7 @@
   },
   "stats-i9": {
    "match": "stats i9",
-   "content": "stats i9 (4) [8]",
+   "content": "stats i9 (4) [10]",
    "due_string": "every day",
    "labels": [
     "0neon",
