@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -585,6 +586,65 @@ def snooze_minutes(task_id: str, minutes: int) -> dict:
     return {"ok": True, "minutes": minutes}
 
 
+def _parse_freeform_delay(text: str):
+    """Parse a freeform 'delay until' string into an absolute epoch float for
+    LATER TODAY, or (None, error). Today-only by design (user choice
+    2026-09-27) — no cross-midnight, no future dates. Two forms:
+      - relative duration: '90m', '45 min', '2h', '3 hrs'  -> now + that
+      - clock time today:  '1830', '18:30', '6:05'         -> today at HH:MM
+    Stored as a float epoch so the reader (_snoozed_ids) treats it as a
+    timestamp, same encoding as snooze_minutes. dtd web has no LLM, so this is
+    deliberately a small deterministic parser, not natural-language."""
+    s = (text or "").strip().lower()
+    if not s:
+        return None, "enter a time (e.g. 18:30 or 90m)"
+    now = _dt.datetime.now()
+    m = re.fullmatch(r"(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)", s)
+    if m:
+        n = int(m.group(1))
+        mins = n * 60 if m.group(2).startswith("h") else n
+        if mins <= 0:
+            return None, "must be more than 0"
+        if mins > 18 * 60:
+            return None, "too far out — today only"
+        return now.timestamp() + mins * 60, None
+    m = re.fullmatch(r"(\d{1,2}):?([0-5]\d)", s)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if h > 23:
+            return None, "not a valid time"
+        target = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if target <= now:
+            return None, "that time already passed today"
+        return target.timestamp(), None
+    return None, "use HH:MM (today) or a duration like 90m / 2h"
+
+
+def skip_recurrence(task_id: str) -> dict:
+    """'Skip to next occurrence, without repeat-duplicate' (user request
+    2026-09-27) for a RECURRING task: shell defer-fast.py in skip mode
+    (`--id <id> 0`), which advances the recurring parent to its next natural
+    occurrence with NO one-off dated copy and the recurrence rule intact — and
+    marks the parent deferred-today so dtd hides it for the rest of today. The
+    frontend only offers this for tasks flagged recurring; a non-recurring task
+    has no 'next occurrence' (defer-fast would treat '0' as today), so guard
+    on the returned `recurring` flag and report if it wasn't recurring."""
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(DEFER_FAST), "--id", task_id, "0"],
+            capture_output=True, text=True, timeout=20)
+        if proc.returncode != 0:
+            return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:]}
+        data = json.loads(proc.stdout)
+        if data.get("error"):
+            return {"ok": False, "error": data["error"]}
+        if not data.get("recurring"):
+            return {"ok": False, "error": "not a recurring task — use a normal delay"}
+        return {"ok": True, "next": data.get("next_recurrence") or data.get("target_date", "")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def snooze_to_next_block(task_id: str) -> dict:
     """ctrl-v equivalent, scoped to just the NEXT block. Kept as the
     quick-action fast path (still wired to /api/delay-block); the swipe
@@ -780,6 +840,30 @@ def api_delay_minutes():
         return jsonify({"ok": False, "error": "no id/minutes"}), 400
     return jsonify(snooze_minutes(task_id, minutes))
 
+@app.route("/api/delay-freeform", methods=["POST"])
+def api_delay_freeform():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    text = str(body.get("text") or "")
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    epoch, err = _parse_freeform_delay(text)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    try:
+        _write_snooze(task_id, float(epoch))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "until": f"{_dt.datetime.fromtimestamp(epoch):%H:%M}"})
+
+@app.route("/api/skip-recurrence", methods=["POST"])
+def api_skip_recurrence():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    return jsonify(skip_recurrence(task_id))
+
 @app.route("/api/add", methods=["POST"])
 def api_add():
     body = request.get_json(force=True, silent=True) or {}
@@ -871,6 +955,9 @@ PAGE = r"""<!doctype html>
   .sheetRow button { flex:1; padding:10px; border-radius:8px; border:1px solid #3a3a3a;
     background:#1b1b1b; color:#cfcfcf; font:700 15px inherit; }
   .sheetRow button.go { background:var(--go); color:#003; border-color:var(--go); }
+  .sheetRow input { flex:2; padding:10px; border-radius:8px; border:1px solid #3a3a3a;
+    background:#111; color:#eee; font:600 15px inherit; }
+  .delayBtn.skipBtn { grid-column:1/-1; background:#152a15; border-color:#2e5e2e; color:#9fe09f; }
 </style>
 </head>
 <body>
@@ -904,6 +991,11 @@ PAGE = r"""<!doctype html>
   <div class="sheet">
     <div class="sheetLabel" id="delayLabel">delay until…</div>
     <div id="delayOptions" class="delayGrid"></div>
+    <div class="sheetRow">
+      <input id="delayFreeform" inputmode="text" autocomplete="off"
+             placeholder="or type: 18:30 · 90m · 2h">
+      <button id="delayFreeGo" class="go">go</button>
+    </div>
     <div class="sheetRow">
       <button id="delayCancel">cancel</button>
     </div>
@@ -1090,6 +1182,7 @@ function openDelayMenu(t, row, panel){
   delayCtx = {t, row};
   delayLabel.textContent = 'delay "'+t.title+'" until…';
   delayOptions.innerHTML = '<div class="loading">loading…</div>';
+  document.getElementById('delayFreeform').value = '';
   delayWrap.classList.add('show');
   fetch('/api/delay-options').then(r=>r.json()).then(d=>{
     if(!delayCtx) return;  // sheet closed while the fetch was in flight
@@ -1109,10 +1202,49 @@ function openDelayMenu(t, row, panel){
       btn.onclick = ()=> submitDelayMinutes(m);
       delayOptions.appendChild(btn);
     }
-    if(!d.blocks.length && !d.minutes.length){
+    // Skip-to-next-occurrence: recurring tasks only (no dated duplicate, series
+    // intact). Rendered last so it reads as a distinct action from the delays.
+    if(delayCtx.t.recurring){
+      const btn = document.createElement('button');
+      btn.className = 'delayBtn skipBtn';
+      btn.textContent = '⏭ skip to next';
+      btn.onclick = ()=> submitSkip();
+      delayOptions.appendChild(btn);
+    }
+    if(!d.blocks.length && !d.minutes.length && !delayCtx.t.recurring){
       delayOptions.innerHTML = '<div class="loading">nothing later today</div>';
     }
   }).catch(()=>{ if(delayCtx) { delayOptions.innerHTML=''; toast('offline · could not load', true); } });
+}
+
+async function submitFreeform(){
+  if(!delayCtx) return;
+  const {t, row} = delayCtx;
+  const text = document.getElementById('delayFreeform').value.trim();
+  if(!text) return;
+  closeDelayMenu();
+  try {
+    const r = await fetch('/api/delay-freeform', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:t.id, text})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'delay failed', true); return; }
+    toast('⏰ → '+(d.until||text));
+    collapseRow(row);
+  } catch(e){ toast('offline · not delayed', true); }
+}
+
+async function submitSkip(){
+  if(!delayCtx) return;
+  const {t, row} = delayCtx;
+  closeDelayMenu();
+  try {
+    const r = await fetch('/api/skip-recurrence', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:t.id})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'skip failed', true); return; }
+    toast('⏭ next '+(d.next||'occurrence'));
+    collapseRow(row);
+  } catch(e){ toast('offline · not skipped', true); }
 }
 
 function closeDelayMenu(){ delayWrap.classList.remove('show'); delayCtx = null; }
@@ -1146,6 +1278,11 @@ async function submitDelayMinutes(minutes){
 }
 
 document.getElementById('delayCancel').onclick = closeDelayMenu;
+document.getElementById('delayFreeGo').onclick = submitFreeform;
+document.getElementById('delayFreeform').addEventListener('keydown', e=>{
+  if(e.key==='Enter') submitFreeform();
+  if(e.key==='Escape') closeDelayMenu();
+});
 delayWrap.addEventListener('click', e=>{ if(e.target===delayWrap) closeDelayMenu(); });
 
 async function commit(t){
@@ -1245,7 +1382,31 @@ load(false);
 </body>
 </html>"""
 
+_SRC_MTIME = os.path.getmtime(__file__)
+
+def _watch_own_source():
+    """Exit when dtd.py changes on disk so launchd (KeepAlive=true) relaunches
+    a FRESH process — the durable fix for the recurring "server is stale" bug
+    (2026-09-19 and 2026-09-27: the long-running server kept executing days-old
+    in-memory code after Syncthing updated dtd.py, so delay-hiding/UI fixes on
+    disk silently never ran until a manual kickstart). launchd WatchPaths alone
+    can't do this: it (re)starts a job that's DOWN, but never restarts one
+    that's already running. A source-mtime self-check + os._exit is the
+    reliable way to guarantee the live server always matches the file. Daemon
+    thread, 5s poll; os._exit(0) so KeepAlive treats it as a clean relaunch
+    (ThrottleInterval=10 caps the churn if a sync rewrites repeatedly)."""
+    while True:
+        time.sleep(5)
+        try:
+            if os.path.getmtime(__file__) != _SRC_MTIME:
+                print("dtd.py changed on disk — exiting for launchd relaunch",
+                      file=sys.stderr, flush=True)
+                os._exit(0)
+        except OSError:
+            pass  # transient stat failure mid-sync — try again next tick
+
 if __name__ == "__main__":
+    threading.Thread(target=_watch_own_source, daemon=True).start()
     # threaded=True: Werkzeug's dev server is single-threaded by default, so
     # a single slow request (a force=True refresh, or /api/done's did-fast
     # subprocess) blocked every OTHER client's request behind it too —

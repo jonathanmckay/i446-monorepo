@@ -681,7 +681,7 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
                 st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), _tz())
             except Exception:
                 return {"ok": False, "error": "bad time format (HH:MM)"}
-            start_iso = st.strftime("%Y-%m-%dT%H:%M:%S%z")
+            start_iso = _toggl_iso(st)
         try:
             r = toggl_api.start_timer(desc_clean, project_id=pid, start_time=start_iso)
             return {"ok": bool(r), "project": code, "running": True}
@@ -696,16 +696,21 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     if en <= st:
         return {"ok": False, "error": "end must be after start"}
     dur = int((en - st).total_seconds())
-    fmt = "%Y-%m-%dT%H:%M:%S%z"
     try:
-        r = toggl_api.create_entry(desc_clean, st.strftime(fmt), en.strftime(fmt), dur,
+        r = toggl_api.create_entry(desc_clean, _toggl_iso(st), _toggl_iso(en), dur,
                                    project_id=pid)
         return {"ok": bool(r), "project": code}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
 
-_FMT = "%Y-%m-%dT%H:%M:%S%z"
+def _toggl_iso(d: _dt.datetime) -> str:
+    """RFC3339 with a COLON in the UTC offset (…-07:00) — the format Toggl's
+    v9 API requires. strftime('%z') emits '-0700' (no colon) and Toggl 400s
+    on it: "Invalid time format" (bug 2026-09-27). isoformat() supplies the
+    colon; drop microseconds to keep the old second-granularity serialization.
+    Requires an aware datetime — every caller here builds one via _tz()."""
+    return d.replace(microsecond=0).isoformat()
 
 
 def _get_entry(entry_id: str) -> dict | None:
@@ -827,7 +832,7 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
             # No fixed end to reason about yet — just move the start.
             if new_start >= _dt.datetime.now(_tz()):
                 return {"ok": False, "error": "start must be in the past"}
-            fields["start"] = new_start.strftime(_FMT)
+            fields["start"] = _toggl_iso(new_start)
         else:
             try:
                 new_end = (_dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), _tz())
@@ -845,8 +850,8 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
                 toggl_api.trim_range(new_start, new_end, exclude_ids={e.get("id")})
             except Exception as ex:
                 return {"ok": False, "error": f"trim failed (entry not yet moved): {ex}"[:200]}
-            fields["start"] = new_start.strftime(_FMT)
-            fields["stop"] = new_end.strftime(_FMT)
+            fields["start"] = _toggl_iso(new_start)
+            fields["stop"] = _toggl_iso(new_end)
             fields["duration"] = int((new_end - new_start).total_seconds())
 
     try:
@@ -895,9 +900,9 @@ def split_entry(entry_id: str, mode: str) -> dict:
     tags = e.get("tags") or None
 
     try:
-        toggl_api.create_entry(desc, cut.strftime(_FMT), end.strftime(_FMT),
+        toggl_api.create_entry(desc, _toggl_iso(cut), _toggl_iso(end),
                                int((end - cut).total_seconds()), proj_id, tags)
-        toggl_api.update_entry(e.get("id"), stop=cut.strftime(_FMT),
+        toggl_api.update_entry(e.get("id"), stop=_toggl_iso(cut),
                                duration=int((cut - start).total_seconds()))
     except Exception as ex:
         return {"ok": False, "error": str(ex)[:200]}
