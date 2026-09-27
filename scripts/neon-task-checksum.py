@@ -285,8 +285,11 @@ def manifest_drift(manifest: dict, headers_0n: list[str]) -> list[str]:
     """Manifest habits whose `match` is no longer a live 0n header (renamed or
     removed column). Warn-only; the manifest is hand-curated."""
     live = {norm_name(h) for h in headers_0n}
+    # A split habit (manifest `splits_to`) is not a header itself; it is fine
+    # as long as every column it splits into is live.
     return [k for k, h in manifest["habits"].items()
-            if norm_name(h["match"]) not in live]
+            if (all(norm_name(t) not in live for t in h["splits_to"]) if h.get("splits_to")
+                else norm_name(h["match"]) not in live)]
 
 
 def _card_pts(content: str):

@@ -51,3 +51,20 @@ def test_bigs_produces_two_writes_in_same_row():
 if __name__ == "__main__":
     import subprocess
     sys.exit(subprocess.call([sys.executable, "-m", "pytest", __file__, "-q"]))
+
+
+def test_big_kids_literature_splits_like_bigs():
+    # 2026-09-27: the daily 大孩子文学时间 card replaced xk20/xk22; minutes halve.
+    cols, results = _route("大孩子文学时间 40")
+    assert cols == {36: 20, 37: 20}, cols
+    assert all(r.step == "0n" for r in results)
+
+
+def test_big_kids_literature_closes_its_own_card():
+    items = df.parse_input("大孩子文学时间 31")
+    tq = {"0neon": [{"id": "T1", "content": "大孩子文学时间 (30) [50]", "labels": ["0neon", "xk87"]}],
+          "夜neon": [], "1neon": []}
+    results = df.route_items(items, HEADERS, tq, skip_todoist=False)
+    by_col = {r.col_num: r for r in results}
+    assert by_col[36].write_value == 16 and by_col[37].write_value == 15
+    assert by_col[36].todoist_task and by_col[36].todoist_task["id"] == "T1"

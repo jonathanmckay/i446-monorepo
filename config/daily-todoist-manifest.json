@@ -258,30 +258,6 @@
    "priority": 4,
    "project_id": "6XQ3GMQRVmPgPM4W"
   },
-  "xk20": {
-   "match": "xk20",
-   "content": "xk20 (30) [35]",
-   "due_string": "every day",
-   "labels": [
-    "0neon",
-    "xk20",
-    "xk87"
-   ],
-   "priority": 2,
-   "project_id": "6Crfmq5QFg895Mcw"
-  },
-  "xk22": {
-   "match": "xk22",
-   "content": "xk22 (20) [25]",
-   "due_string": "every day",
-   "labels": [
-    "0neon",
-    "xk22",
-    "xk87"
-   ],
-   "priority": 2,
-   "project_id": "6Crfmq5QFg895Mcw"
-  },
   "xk26": {
    "match": "xk26",
    "content": "xk26 (10) [10]",
@@ -293,6 +269,22 @@
    ],
    "priority": 2,
    "project_id": "6Crfmq5QFg895Mcw"
+  },
+  "大孩子文学时间": {
+   "match": "大孩子文学时间",
+   "content": "大孩子文学时间 (30) [50]",
+   "due_string": "every day",
+   "labels": [
+    "0neon",
+    "xk87"
+   ],
+   "priority": 2,
+   "project_id": "6Crfmq5QFg895Mcw",
+   "splits_to": [
+    "xk20",
+    "xk22"
+   ],
+   "_note": "minutes typed at /did are halved into 0n xk20 + xk22 (did-fast SPLIT_HABITS); not itself a 0n header"
   }
  }
 }
