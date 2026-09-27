@@ -94,7 +94,10 @@ def scan(vault: Path = VAULT) -> list[dict]:
         base = os.path.basename(root)
         note = next((f for f in docs if Path(f).stem == base), None)
         content_docs = [f for f in docs if f != note]
-        if len(content_docs) < THRESHOLD:
+        # d359 exception (d359/CLAUDE.md, 2026-09-27): two or more docs for one
+        # person → a person folder, so a note plus one doc is compliant there.
+        threshold = 2 if rel.startswith("d359/") else THRESHOLD
+        if len(docs) < threshold:
             out.append({"rel": rel, "files": content_docs, "note": note})
     return sorted(out, key=lambda r: r["rel"])
 

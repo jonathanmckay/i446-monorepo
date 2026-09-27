@@ -48,3 +48,17 @@ def test_description_is_numbered_and_bounded():
     d = sa.build_description(rows, "z_meta/r.md")
     assert d.startswith("Weekly vault folder-hygiene audit. Report: z_meta/r.md")
     assert "\n1. x/0/ — a.md" in d and len(d) <= 15000
+
+
+def test_d359_person_folder_note_plus_one_doc_is_compliant(tmp_path):
+    sa = _load()
+    (tmp_path / "d359/sheridan-hitchens-d359").mkdir(parents=True)
+    (tmp_path / "d359/sheridan-hitchens-d359/sheridan-hitchens-d359.md").write_text("x")
+    (tmp_path / "d359/sheridan-hitchens-d359/sheridan-hitchens-2020h1-psc.md").write_text("x")
+    (tmp_path / "d359/lonely").mkdir(); (tmp_path / "d359/lonely/lonely.md").write_text("x")
+    (tmp_path / "hcbi/two").mkdir(parents=True)
+    (tmp_path / "hcbi/two/two.md").write_text("x"); (tmp_path / "hcbi/two/a.md").write_text("x")
+    rows = {r["rel"] for r in sa.scan(tmp_path)}
+    assert "d359/sheridan-hitchens-d359" not in rows   # note + 1 doc is fine under d359
+    assert "d359/lonely" in rows                        # note only is still a singleton
+    assert "hcbi/two" in rows                           # elsewhere the 3-doc rule holds

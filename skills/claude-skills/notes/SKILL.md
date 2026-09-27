@@ -48,12 +48,12 @@ Read the frontmatter templates from `h335/d358-d359-meta.md`.
 
 **For d359 blocks:**
 
-> ⚠️ **Avoid duplicates.** People live in TWO d359 trees with TWO naming styles: `~/vault/d359/` (kebab-case, e.g. `jesse-janasov-d359.md`) and `~/vault/h335/d359/` (Title Case, e.g. `Kelly Martine d359.md`). A narrow `find` in one folder, or a glob on the full name, will miss an existing file and create a dupe (e.g. note says "Jessie Janasov" but the file is `jesse-janasov-d359.md`). Always search BOTH folders, match on the most distinctive token (usually the **last name**), and ignore case/separators/spelling variants before concluding the person is new.
+> ⚠️ **Avoid duplicates.** People live in TWO d359 trees with TWO naming styles: `~/vault/d359/` (kebab-case, e.g. `jesse-janasov-d359.md`) and `~/vault/h335/d359/` (Title Case, e.g. `Kelly Martine d359.md`). A narrow `find` in one folder, or a glob on the full name, will miss an existing file and create a dupe (e.g. note says "Jessie Janasov" but the file is `jesse-janasov-d359.md`). Since 2026-09-27 a person with 2+ docs lives in a `first-last-d359/` folder with the main doc as its folder note, so the search must go two levels deep. Always search BOTH folders, match on the most distinctive token (usually the **last name**), and ignore case/separators/spelling variants before concluding the person is new.
 
 1. **Search both trees for an existing file.** Glob on the last-name token, case-insensitively, across both folders:
    ```bash
    last=janasov   # most distinctive token from the block name; lowercase
-   find ~/vault/d359 ~/vault/h335/d359 -maxdepth 1 -iname "*${last}*d359*"
+   find ~/vault/d359 ~/vault/h335/d359 -maxdepth 2 -iname "*${last}*d359*"
    ```
    If that returns nothing, retry with the first name. Only treat the person as new when **both** queries come up empty in **both** folders. If a name has an obvious spelling variant (Jessie/Jesse, Catherine/Kathy), search the variant too.
 2. **If a file exists (in EITHER folder)**: Read it, then prepend a new dated section **in that file's existing style** — reuse its date-header format (`## YYYY.MM.DD` vs `## YYYY-MM-DD`, whichever the file already uses) and its name spelling. Insert below the About/profile section if present, else below the frontmatter, above existing entries. Update `updated:` (and `last_contact:` if the field is present). **Never create a second file for a person who already has one.**
