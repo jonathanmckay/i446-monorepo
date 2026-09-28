@@ -1197,8 +1197,19 @@ class RouteResult:
 
 def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                 skip_todoist: bool = False,
-                preferred_id: str | None = None) -> list[RouteResult]:
+                preferred_id: str | None = None,
+                past_ok: bool = False) -> list[RouteResult]:
     """Route each item through 0₦ → 1n+ → Todoist → variable.
+
+    past_ok=True (the --past-ok flag; Janus passes it while viewing a past
+    day, 2026-09-28) means a 0₦ habit with a PAST target_date is written
+    straight onto that date's 0n row -- Excel's own formulas then credit
+    that day -- instead of Step 0.1's posthoc detour (a Todoist card and no
+    Neon write). Only the explicitly typed value (or 1) is written, never
+    today's Toggl minutes, and today's recurring 0neon card is left alone:
+    nothing about TODAY may change when the user is deliberately editing
+    another day. /0n's credit-to-today policy is the opposite of this and
+    stays for the agent flow.
 
     skip_todoist=True bypasses the Todoist match/close and build-order steps
     (0.3/0.35/0.37) and routes straight to the variable path. Used by dtd's
@@ -1333,9 +1344,11 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # and close that specific task instead; no Neon write (same as
             # the agent's Step 6b) since it's not today's occurrence.
             target_parts = today_md.split("/")
+            is_past_date = False
             if len(target_parts) == 2 and name_lower not in PAST_DATE_ALLOWED_0N:
                 t_month, t_day = int(target_parts[0]), int(target_parts[1])
-                if (t_month, t_day) != (today_date.month, today_date.day):
+                is_past_date = (t_month, t_day) != (today_date.month, today_date.day)
+                if is_past_date and not past_ok:
                     fetched = _fetch_task_by_id(preferred_id) if preferred_id else None
                     if fetched:
                         r = RouteResult(item=item, step="variable",
@@ -1381,6 +1394,11 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                 val = time_range_minutes(item.time_range[0], item.time_range[1])
             elif item.time_value is not None:
                 val = item.time_value
+            elif past_ok and is_past_date:
+                # A past day's habit (Janus past-day view): today's Toggl
+                # entries say nothing about that day, so mark it done (1)
+                # unless a value was typed.
+                val = 1
             else:
                 # No typed value: record how long the habit actually took,
                 # from today's same-named Toggl entries (2026-07-24).
@@ -1390,8 +1408,9 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
             r = RouteResult(item=item, step="0n", col_num=col, write_value=val)
 
-            # Find matching Todoist task to close
-            neon_tasks = tq.get("0neon", []) + tq.get("夜neon", [])
+            # Find matching Todoist task to close -- never for a past-day
+            # write (past_ok): the open card is TODAY's occurrence.
+            neon_tasks = [] if (past_ok and is_past_date) else tq.get("0neon", []) + tq.get("夜neon", [])
             matched = match_todoist_task(item.name, neon_tasks, preferred_id=preferred_id,
                                         require_labels={"0neon", "夜neon"})
             if matched and str(matched.get("id")) in claimed_task_ids:
@@ -2894,6 +2913,16 @@ def _install_watchdog():
         pass
 
 
+def _past_target(items: list, past_ok: bool) -> bool:
+    """True when --past-ok was given AND the batch's target_date is not
+    today: the signal that today-scoped side effects must be skipped."""
+    if not past_ok or not items:
+        return False
+    t = _daytime.today()
+    td = items[0].target_date or f"{t.month}/{t.day}"
+    return td != f"{t.month}/{t.day}"
+
+
 def main():
     _install_watchdog()
     if len(sys.argv) < 2:
@@ -2946,6 +2975,14 @@ def main():
     points_only = "--points-only" in argv
     if points_only:
         argv = [a for a in argv if a != "--points-only"]
+    # --past-ok: the caller is deliberately writing a PAST day (Janus's
+    # past-day view, 2026-09-28). 0₦ habits then write that day's 0n row
+    # instead of the posthoc detour, and every TODAY-scoped side effect
+    # (timer stop, 0l time stamp, this week's 1n+ row, completed-today) is
+    # skipped -- see route_items' docstring and _past_target().
+    past_ok = "--past-ok" in argv
+    if past_ok:
+        argv = [a for a in argv if a != "--past-ok"]
     # --task-id <id>: dtd passes the fzf row id so completion closes the EXACT
     # selected task, not a name match (duplicate names would close the wrong
     # instance). Only honoured for a single-item completion — a batch has no
@@ -2966,6 +3003,7 @@ def main():
     points_log_run = is_points_log_run(items)
     if points_log_run:
         points_only = True  # 分 log: note → ledger/completed-today only
+    past_target = _past_target(items, past_ok)
 
     # 1b. Ritual cards: a daemon-created -1neon card (`😈 <tag>`) completed BY
     # NAME — dtd's enter/alt-enter worker pipes the card content here verbatim —
@@ -3033,7 +3071,8 @@ def main():
 
     # 3. Route
     routes = route_items(items, headers, tq, skip_todoist=points_only,
-                         preferred_id=(task_id_override if len(items) == 1 else None))
+                         preferred_id=(task_id_override if len(items) == 1 else None),
+                         past_ok=past_ok)
 
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
@@ -3069,7 +3108,7 @@ def main():
     # matching timer is running)
     all_names = [r.item.name for r in fast]
     toggl_stop = (stop_matching_toggl(all_names)
-                  if all_names and not points_log_run else None)
+                  if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
 
     # 4. Batch 0₦ writes
@@ -3113,7 +3152,9 @@ def main():
                 night_hcmc_results[r.item.name] = {"ok": False, "reason": str(e)}
 
     # 4a-ii. 0l special case: write completion time to "N Color" column (AF)
-    if any(r.item.name.lower() == "0l" for r in on_writes):
+    # (never on a past day: that stamps NOW's HHMM into the old row's AF and
+    # drags the all-colors bonus -- the same hazard /0n documents)
+    if not past_target and any(r.item.name.lower() == "0l" for r in on_writes):
         ol_time_result = ix_run(build_0l_time_script(target_date), timeout=15.0)
         if ol_time_result.returncode == 0:
             print(f"0l completion: {ol_time_result.stdout.strip()}", file=sys.stderr)
@@ -3123,7 +3164,11 @@ def main():
     one_n_result = None
     week_row = None
     if one_n_writes:
-        week_mw = calc_week_mw(_daytime.today())
+        # A past-day write (past_ok) belongs to THAT date's week, which may
+        # not be this week.
+        _week_date = (date.fromisoformat(target_date_iso(items[0].target_date, _daytime.today()))
+                      if past_target else _daytime.today())
+        week_mw = calc_week_mw(_week_date)
         script = build_1n_script(one_n_writes, week_mw)
         if script:
             one_n_result = ix_run(script, timeout=30.0)
@@ -3557,7 +3602,9 @@ def main():
     completed_ids = {id_to_name[tid]: tid
                      for tid, (ok, _err) in close_results.items()
                      if ok and tid in id_to_name}
-    if completed_names:
+    # A past-day write is not a TODAY completion: recording it here would
+    # hide today's same-named dtd card and block today's real close.
+    if completed_names and not past_target:
         mc.append_names(completed_names, points=completed_points,
                         ids=completed_ids or None)
 

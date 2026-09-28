@@ -4811,16 +4811,58 @@ def _did_summary(stdout_text: str) -> str:
     return "  ".join(bits) if bits else "(no results)"
 
 
-def run_did_fast(text: str) -> str:
+def _did_flags() -> tuple[str, ...]:
+    """did-fast flags for the CURRENT view: on a past-day view every did-fast
+    run carries --past-ok so the write lands on the viewed day with no
+    today-side effects (user request 2026-09-28: "if I add points on a
+    previous day, those points accrue to the day I'm viewing")."""
+    return ("--past-ok",) if STATE.day_offset != 0 else ()
+
+
+def _did_argv(text: str, flags: tuple[str, ...] = ()) -> list[str]:
+    """Flags are their OWN argv elements, before the command text: did-fast
+    parses flags out of sys.argv, and its trailing-token date parse would
+    otherwise read a flag appended to the text as the last token and drop
+    the M/D date."""
+    return ["python3", DID_FAST, *flags, text]
+
+
+def _is_loggable_on_past_day(part: str) -> bool:
+    """A plain typed part (no range, no +N) that did-fast can credit to a
+    past day: an open Todoist task carrying [N] points, or a known 0₦/1n+
+    habit name. Anything else (an ad-hoc description) would just start a
+    timer TODAY, so the caller keeps rejecting it.
+
+    User request 2026-09-28: "if I add points on a previous day, those
+    points accrue to the day I'm viewing." _resolve_part routes such a part
+    through did-fast with the viewed M/D appended, and run_did_fast adds
+    --past-ok (see _did_flags) so a habit's 0n cell lands on that day's row
+    -- Excel's formulas credit the day -- with none of today's side effects
+    (did-fast skips the timer stop, 0l time stamp, completed-today record
+    and this week's 1n+ row under that flag)."""
+    bare = re.sub(r"\s@\S+\s*$", "", part).strip()
+    if not bare:
+        return False
+    if _resolvable_points(bare) is not None:
+        return True
+    name = re.sub(r"\s+\d+\s*$", "", bare).strip()  # "0l 30" -> "0l"
+    return bool(_habit_tags([name]))
+
+
+def run_did_fast(text: str, flags: tuple[str, ...] | None = None) -> str:
     """Like run_tg_fast, but for did-fast.py — used to convert an ALREADY-
     ENDED calendar event into a completed Toggl entry AND grant its points in
     one shot (the tg-fast path only ever starts a running timer, no points).
     did-fast is a much heavier call: an Excel write over ix-osa plus Todoist
     round-trips, commonly 10-20s and occasionally more — hence the longer
     timeout than run_tg_fast's 15s."""
+    if flags is None:
+        # Every did-fast run from a past-day view carries --past-ok; the flag
+        # is inert when the command targets today (see did-fast _past_target).
+        flags = _did_flags()
     try:
         proc = subprocess.run(
-            ["python3", DID_FAST, text],
+            _did_argv(text, flags),
             capture_output=True, text=True, timeout=45,
         )
         if proc.stdout and "{" in proc.stdout:
@@ -5670,6 +5712,8 @@ def _(event):
             viewed = view_now().date()
             low = part.lower()
             live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
+            if not (has_range or use_did or live_ok) and _is_loggable_on_past_day(part):
+                use_did = True  # credit the viewed day (2026-09-28; see _is_loggable_on_past_day)
             if has_range or use_did:
                 # did-fast and tg-fast take the target date in different
                 # shapes — did-fast reads a trailing "M/D" token, tg-fast a
@@ -5860,8 +5904,10 @@ def _(event):
     # range, so only a literal re-press of THIS row collides here (user
     # report 2026-08-10: desc-only matching refused a second real hiit
     # session and a second xk22 kid-time block as "already recorded").
-    if STATE.day_offset == 0 and _cmd_done_today(cmd):
-        flash(f"already recorded today: {cmd} — not re-running", 6.0)
+    # Past-day views are guarded too (2026-09-28): the command already
+    # carries the viewed M/D, so the key is distinct per day.
+    if _cmd_done_today(cmd):
+        flash(f"already recorded: {cmd} — not re-running", 6.0)
         return
     STATE.event_sel = None
 

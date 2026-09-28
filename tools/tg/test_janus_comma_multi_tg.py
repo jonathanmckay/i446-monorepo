@@ -45,6 +45,10 @@ def _resolve_part_fn():
         "flash": lambda msg, secs=4.0: calls["flash"].append(msg),
         "re": re,
         "view_now": lambda: _dt.datetime(2026, 7, 26, 12, 0, 0),
+        # 2026-09-28: a loggable task/habit on a past day now routes to
+        # did-fast (see test_janus_past_day_points.py); these tests cover
+        # the ad-hoc-description case, which is still rejected.
+        "_is_loggable_on_past_day": lambda part: False,
     }
     exec(compile(body, "<_resolve_part>", "exec"), ns)
     return ns["STATE"], ns["_resolve_part"], calls
