@@ -24,7 +24,7 @@ weekly Todoist habit.
 - `YYYY-MM-DD` — treat that date as "today" for backfilling an older week
   (passed straight through to `week_calc.py`).
 
-## The `i9` sheet (`Neon分v12.2.xlsx`)
+## The `i9+m5x2` sheet (`Neon分v12.2.xlsx`)
 
 Pre-populated for the whole year, one row per fiscal week, **never
 appended to** — row 3 = fiscal week 1 (`1.1`), incrementing one row per
@@ -37,7 +37,8 @@ week. Columns (confirmed against live data 2026-09-15):
 | C | i9 points earned that week | computed from `0分` col R |
 | D | What got done last week | Question 2 |
 | E | What exceeding expectations looks like this week | Question 3 |
-| F | i9 minutes tracked that week (Toggl) | computed — **new column, added by this skill** (previously unused; set a `min` label in row 2 the first time it's written) |
+| F | i9 minutes tracked that week (Toggl) | computed |
+| G–K | m5x2 columns (rating, review, goals, 分, min) — owned by `/1m5x2` (tab merged 2026-09-27) | leave alone |
 
 Rows 1–2 hold sparse/inconsistent header remnants (only B1=`i9`, B2=`OL` are
 non-blank) — don't try to fully reconstruct a header row, just add the `F`
@@ -96,7 +97,7 @@ Find `START_ROW`/`END_ROW` by scanning col B for `week_start`..`week_end`'s
 ```applescript
 tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
-    set s to sheet "i9" of wb
+    set s to sheet "i9+m5x2" of wb
     return string value of cell 1 of row ROW_PLACEHOLDER of s
 end tell
 ```
@@ -124,7 +125,7 @@ risk as every other Neon write):
 ```applescript
 tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
-    set s to sheet "i9" of wb
+    set s to sheet "i9+m5x2" of wb
     set value of cell 2 of row ROW_PLACEHOLDER of s to "RATING_PLACEHOLDER"
     set value of cell 3 of row ROW_PLACEHOLDER of s to POINTS_PLACEHOLDER
     set value of cell 4 of row ROW_PLACEHOLDER of s to "GOT_DONE_PLACEHOLDER"
