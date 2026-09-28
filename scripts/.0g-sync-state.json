@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-28T06:00:02.432771-07:00"
+  "tasks": {
+    "all i9 email done": {
+      "todoist_id": "6hfP4Jrc4FM59rg2",
+      "minutes": 50
+    },
+    "touch every i9 task": {
+      "todoist_id": "6hfP4JvXr4xGwXWR",
+      "minutes": 50
+    },
+    "honorable bball": {
+      "todoist_id": "6hfP4JrWMP9Qx2xR",
+      "minutes": 30
+    },
+    "double math": {
+      "todoist_id": "6hfP4Jr36HcJg8q2",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-09-28T08:00:05.401987-07:00"
 }
