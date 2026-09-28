@@ -32,6 +32,14 @@ Refuses cumulative/variable habits (`问学`, `xk20/22/26`, `冥想`, `o314`, `�
 3. Daemon `batch_append` (ledger `src: "0n backfill <habit> <date>"`): `-N` per changed column on the past date, `+N` on today. Never touches 0分 D/E/F/G:O and never stamps the 0l/0t time in 0n!AF (that would drag the 111 all-colors bonus).
 4. Saves the workbook and refreshes the dashboard points cache (same refresher as `/0t`).
 
+## Already marked
+
+If the 0n cell for that date already holds a value other than blank or 0,
+the script writes nothing and exits 0 with `already_credited: true` and
+`points_awarded: 0`. Report it as "credit already taken for <habit> on <date>,
+no additional points". Only pass `--move-only` when the user says the
+points genuinely still sit on the past day.
+
 ## Report
 
 Relay the JSON: `moves` (column, name, pts), `back_out.date`, `credit.date`, and `note` if the move crosses a Sunday-anchored week (that week's 1s totals change). On exit 2 print the `recovery` line verbatim: it is the exact rerun command.
