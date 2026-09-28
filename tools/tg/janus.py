@@ -1013,6 +1013,64 @@ def _cursor_marker(is_sel: bool) -> list[tuple]:
     return []
 
 
+def _main_scroll() -> int:
+    """main_window's current vertical scroll, or 0 before the layout exists
+    (module-level tests that call render_all() directly)."""
+    win = globals().get("main_window")
+    return int(getattr(win, "vertical_scroll", 0) or 0)
+
+
+def _hold_scroll(parts: list, vertical_scroll: int) -> list:
+    """Pin main_window's scroll where it is when no row carries the cursor.
+
+    prompt_toolkit scrolls a Window to keep its content's cursor visible on
+    EVERY render, and a FormattedTextControl with no "[SetCursorPosition]"
+    fragment reports the cursor at line 0 (Window._scroll_without_
+    linewrapping: `cursor_position or Point(0, 0)`). So once _cursor_marker's
+    0.3s window expired, every 0.1s refresh snapped the view back to the top
+    -- which, on a terminal too short for the whole day, made the bottom
+    rows unselectable: Tab scrolled the last entry into view for a third of
+    a second, then the pane jumped to the top and the selection sat off-
+    screen (user report 2026-09-28: "if the window is too short, it won't
+    let me select the last available entry, it will just rescroll back to
+    the top"). Mouse-wheel scrolling was pinned the same way.
+
+    Fix: when no fragment already positions the cursor, put an empty
+    "[SetCursorPosition]" fragment at the start of the line currently at the
+    top of the viewport. The cursor is then neither above nor below the
+    visible part, so prompt_toolkit leaves vertical_scroll alone; the
+    selection-time marker (still emitted for 0.3s by _cursor_marker) keeps
+    winning while it lasts. Clamped to the last line so a shrunken document
+    can't point past its end."""
+    if any("[SetCursorPosition]" in str(f[0]) for f in parts):
+        return parts
+    line_count = 1 + sum(str(f[1]).count("\n") for f in parts)
+    target = max(0, min(int(vertical_scroll), line_count - 1))
+    if target == 0:
+        return [("[SetCursorPosition]", "")] + list(parts)
+    line = 0
+    for i, f in enumerate(parts):
+        text = str(f[1])
+        n = text.count("\n")
+        if line + n >= target:
+            # The target line starts right after the (target - line)-th
+            # newline inside this fragment: split it there.
+            k = target - line
+            idx = -1
+            for _ in range(k):
+                idx = text.index("\n", idx + 1)
+            head, tail = text[: idx + 1], text[idx + 1:]
+            out = list(parts[:i])
+            if head:
+                out.append((f[0], head) + tuple(f[2:]))
+            out.append(("[SetCursorPosition]", ""))
+            out.append((f[0], tail) + tuple(f[2:]))
+            out.extend(parts[i + 1:])
+            return out
+        line += n
+    return list(parts)
+
+
 def _row_selection(key) -> tuple[bool, object | None, list[tuple]]:
     """(is_selected, click_handler, cursor_marker) for a selectable row —
     every branch in _compact_block_lines needs exactly these three things
@@ -4526,7 +4584,9 @@ def render_all() -> list[tuple[str, str]]:
             "project_id": STATE.current.get("project_id"),
             "running": True,
         })
-    return parts
+    # Hold the viewport where it is once the selection marker expires —
+    # see _hold_scroll (bug 2026-09-28: short terminals snapped to the top).
+    return _hold_scroll(parts, _main_scroll())
 
 
 # NB: the current-timer mirror (render_current_bottom) is pinned ABOVE the input
