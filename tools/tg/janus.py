@@ -1121,6 +1121,17 @@ def _entry_edit_prefill(item: dict) -> str:
         elif item.get("dur_min"):
             end = item["start_dt"] + dt.timedelta(minutes=item["dur_min"])
             rng = f" {item['start_dt']:%H%M}-{end:%H%M}"
+    # A placeholder ("generic placeholder", "?") is by definition text the
+    # user is about to REPLACE, so handing it back only makes them delete
+    # it first (user request 2026-09-28: "just put the time and the cursor
+    # after that so I can fill in the project and task"). Prefill the time
+    # range alone, trailing space, cursor at the end: typing "desc @code"
+    # and Enter goes through _parse_edit_text unchanged (range is found
+    # anywhere in the line; the rest is the new description + code). Only
+    # when a range exists — with none, the bare "" would read like an
+    # empty new command line, so fall back to the full form.
+    if rng and _is_placeholder(item.get("raw_desc") or ""):
+        return rng.strip() + " "
     return f"{item['raw_desc']}{suffix}{rng}"
 
 

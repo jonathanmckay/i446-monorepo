@@ -209,13 +209,18 @@ def test_merged_entries_with_a_gap_are_not_contiguous():
 
 def test_entry_edit_prefill_includes_time_for_contiguous_merge():
     """The actual bug: entry_ids length > 1 used to blank the prefill's time
-    unconditionally, even for a gapless (contiguous) merge."""
+    unconditionally, even for a gapless (contiguous) merge. (Since
+    2026-09-28 a placeholder prefills the time ALONE — the description is
+    what the user is about to replace — so the assertion is on the range
+    being present, not the old "desc range" form.)"""
     mod = _load_tui()
     today = _midnight()
     item = {"raw_desc": "generic placeholder", "project_id": None,
             "entry_ids": [201, 202], "contiguous": True,
             "start_dt": today.replace(hour=7, minute=41), "dur_min": 8}
-    assert mod._entry_edit_prefill(item) == "generic placeholder 0741-0749"
+    assert mod._entry_edit_prefill(item) == "0741-0749 "
+    item["raw_desc"] = "ibx i9"
+    assert mod._entry_edit_prefill(item) == "ibx i9 0741-0749"
 
 
 def test_entry_edit_prefill_omits_time_for_gapped_merge():
@@ -773,3 +778,48 @@ def test_running_entry_open_ended_edit_still_allowed():
     mod.input_buffer.text = "write 0845-"
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.flash.startswith("$ edit write 0845-now"), mod.STATE.flash
+
+
+# ── placeholder rows prefill the time only (user request 2026-09-28) ─────────
+
+def _placeholder_item(mod, desc="generic placeholder", running=False, contiguous=True):
+    today = _midnight()
+    item = {"kind": "entry", "raw_desc": desc, "project_id": mod.PROJECT_MAP["infra"],
+            "start_dt": today.replace(hour=7, minute=40), "entry_ids": [1],
+            "contiguous": contiguous}
+    if running:
+        item["running"] = True
+    else:
+        item["dur_min"] = 56
+    return item
+
+
+def test_placeholder_prefill_is_time_range_only_with_trailing_space():
+    mod = _load_tui()
+    assert mod._entry_edit_prefill(_placeholder_item(mod)) == "0740-0836 "
+    assert mod._entry_edit_prefill(_placeholder_item(mod, desc="?")) == "0740-0836 "
+
+
+def test_placeholder_prefill_running_is_open_ended():
+    mod = _load_tui()
+    assert mod._entry_edit_prefill(_placeholder_item(mod, running=True)) == "0740- "
+
+
+def test_placeholder_prefill_falls_back_to_full_form_without_a_range():
+    mod = _load_tui()
+    item = _placeholder_item(mod, contiguous=False)
+    item["entry_ids"] = [1, 2]
+    assert mod._entry_edit_prefill(item) == "generic placeholder @infra"
+
+
+def test_non_placeholder_prefill_keeps_description_and_code():
+    mod = _load_tui()
+    assert mod._entry_edit_prefill(_placeholder_item(mod, desc="ibx i9")) == "ibx i9 @infra 0740-0836"
+
+
+def test_placeholder_prefill_round_trips_through_parse_edit_text():
+    """Typing the new description after the prefilled time must parse as a
+    retime + rename + reproject in one submit."""
+    mod = _load_tui()
+    body, code, time_range, tags = mod._parse_edit_text("0740-0836 fix bike @家")
+    assert (body, code, time_range, tags) == ("fix bike", "家", ("0740", "0836"), [])
