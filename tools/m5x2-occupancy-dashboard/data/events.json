@@ -7038,5 +7038,55 @@
     "unit": "C207",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-09-29",
+    "effective": "2026-09-29",
+    "kind": "movein",
+    "unit_id": "1231",
+    "prop": "tc68",
+    "unit": "D082",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-29",
+    "effective": "2026-10-07",
+    "kind": "ntv",
+    "unit_id": "1190",
+    "prop": "tc68",
+    "unit": "B41",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-29",
+    "effective": "2026-09-28",
+    "kind": "moveout",
+    "unit_id": "1287",
+    "prop": "c702",
+    "unit": "B101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-29",
+    "effective": "2026-09-29",
+    "kind": "movein",
+    "unit_id": "1099",
+    "prop": "o155-Oak",
+    "unit": "A3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-09-29",
+    "effective": "2026-09-30",
+    "kind": "leased",
+    "unit_id": "1224",
+    "prop": "tc68",
+    "unit": "C75",
+    "tenant": null,
+    "baseline": false
   }
 ]
