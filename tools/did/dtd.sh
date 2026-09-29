@@ -1370,6 +1370,31 @@ def strip_ann(s):
 # shrinks. If there is no room (long/truncated rows), leave inline.
 # [1/m]-style rate markers on variable 1n+ cards count as estimates too, so
 # they right-justify into the same column as numeric [N] (2026-07-25).
+import unicodedata as _ud
+def _dwidth(s):
+    """Terminal display width: East Asian Wide/Fullwidth cells count 2,
+    combining marks 0, everything else 1. len() undercounts CJK by half, so
+    rows like 大孩子文学时间 pushed their (N)/[N] column past the edge
+    (bug 2026-09-28: "naive character counter for chinese").
+    Emoji presentation is left at 1 -- fzf/most terminals disagree on it and
+    the 😈 ritual cards have no trailing estimate to misalign."""
+    w = 0
+    for ch in s:
+        if _ud.combining(ch):
+            continue
+        w += 2 if _ud.east_asian_width(ch) in ('W', 'F') else 1
+    return w
+
+def _dtrunc(s, width):
+    """Leftmost run of s that fits in `width` display cells."""
+    out, w = [], 0
+    for ch in s:
+        cw = 0 if _ud.combining(ch) else (2 if _ud.east_asian_width(ch) in ('W', 'F') else 1)
+        if w + cw > width:
+            break
+        out.append(ch); w += cw
+    return ''.join(out)
+
 _EST_TOK = r'(?:\(\(?\d+\)?\)|\[\d*G?\]|\[[0-9.+]*/m\]|\{\d+\})'
 _EST_TAIL = re.compile(r'(\s*(?:' + _EST_TOK + r'\s*)+)$')
 def rjust_est(s, cols):
@@ -1386,7 +1411,7 @@ def rjust_est(s, cols):
         _toks.sort(key=lambda tk: _rank.get(tk[0], 9))
         est = ' '.join(_toks)
     head = s[:m.start()].rstrip()
-    pad = (cols - 8) - len(head) - len(est)
+    pad = (cols - 8) - _dwidth(head) - _dwidth(est)
     if pad < 2:
         return (head + ' ' + est) if head else est
     return head + ' ' * pad + est
@@ -1671,14 +1696,14 @@ for t in unique:
     # Middle-truncate if needed (fallback; short names usually fit). cols - 7
     # keeps the whole row ~5 cols thinner, matching the estimate margin above.
     line = display
-    if len(line) > cols - 7:
+    if _dwidth(line) > cols - 7:
         # Find trailing annotations
         tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][ ]*[\(\[\{]\d*[\)\]\}].*$', line)
         if not tail_m:
             tail_m = re.search(r'[ ]*[\(\[\{]\d*[\)\]\}][^()\[\]{}]*$', line)
         tail = tail_m.group() if tail_m else line[-15:]
-        head_len = max(10, cols - len(tail) - 7)
-        line = line[:head_len] + '…' + tail
+        head_len = max(10, cols - _dwidth(tail) - 7)
+        line = _dtrunc(line, head_len) + '…' + tail
 
     # Hidden field 2 carries the task id so bindings resolve the real task.
     # fzf shows field 1 only (--with-nth=1); search therefore matches the
