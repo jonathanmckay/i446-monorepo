@@ -99,19 +99,3 @@ def test_script_never_touches_n_color_or_sigma(zb):
     assert "cell 4 of row fRow" not in s           # 0分!D (Σ) not read/written
     assert s.count("\"PRE\" &") == 11 and s.count("\"POST\" &") == 11
     assert "set value of cell" not in zb.build_script(19, 9, 18, 1, do_write=False)
-
-
-# ── already-credited guard (2026-09-28) ─────────────────────────────────────
-
-@pytest.mark.parametrize("cell,expect", [
-    ("", False), ("   ", False), ("0", False), ("0.0", False),
-    ("1", True), ("1.0", True), ("25", True), ("x", True),
-])
-def test_already_credited(zb, cell, expect):
-    assert zb.already_credited(cell) is expect
-
-
-def test_script_writes_over_blank_or_zero_only(zb):
-    s = zb.build_script(7, 9, 25, 1, do_write=True)
-    assert '(pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0"' in s
-    assert "SKIPPED" in s

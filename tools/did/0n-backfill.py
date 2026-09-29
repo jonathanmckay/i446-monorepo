@@ -120,19 +120,6 @@ def signed(x: float) -> str:
     return ("+" if x >= 0 else "-") + fmt_num(abs(x))
 
 
-def already_credited(pre0n: str) -> bool:
-    """True when the 0n cell already holds a mark: any value other than blank
-    or 0 (2026-09-28, per JM: /0n on an already-marked day just reports that
-    credit was taken -- no need to check Neon first)."""
-    txt = (pre0n or "").strip()
-    if txt == "":
-        return False
-    try:
-        return float(txt) != 0
-    except ValueError:
-        return True  # non-numeric text in the cell still counts as marked
-
-
 def parse_num(s: str) -> float:
     s = (s or "").strip()
     if s in ("", "missing value"):
@@ -207,7 +194,7 @@ def build_script(habit_col: int, month: int, day: int, value, do_write: bool) ->
     if do_write:
         # Guard inside the script: a non-empty cell is never overwritten, so
         # "already marked" needs no revert round-trip.
-        write_block = f'''    if (pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0" then
+        write_block = f'''    if (pv as text) = "" then
         set value of cell {habit_col} of row nRow of ws to {value}
         calculate
         set pv2 to value of cell {habit_col} of row nRow of ws
@@ -348,22 +335,15 @@ def main() -> int:
         deltas = {fen_col_for_habit(col): weight * value}
         out["basis"] = "row-2 weight (move-only, no delta measured)"
     elif a.dry_run:
-        if already_credited(pre0n):
-            out["warning"] = (f"0n cell already = {pre0n}; a real run will report "
-                              "'credit already taken' and award nothing (use --move-only to force the move)")
+        if pre0n != "":
+            out["warning"] = f"0n cell already = {pre0n}; a real run will refuse (use --move-only)"
         deltas = {fen_col_for_habit(col): weight * value}
         out["basis"] = "row-2 weight (dry-run estimate)"
     else:
-        if already_credited(pre0n):
-            # The script skipped the write (guarded in AppleScript). Not an
-            # error: the day is already marked, so its points were credited
-            # when it was marked. Report and award nothing (2026-09-28).
-            out.update({"already_credited": True, "moves": [], "points_awarded": 0,
-                        "message": (f"credit already taken: 0n!{col_letter(col)} on {past_md} = {pre0n}; "
-                                    "no additional points awarded (--move-only forces the move if "
-                                    f"the points still sit on {past_md})")})
-            print(json.dumps(out, ensure_ascii=False, indent=2))
-            return 0
+        if pre0n != "":
+            # the script skipped the write (guarded in AppleScript)
+            raise SystemExit(f"ERROR: 0n!{col_letter(col)} on {past_md} already = {pre0n}. "
+                             f"If its points still sit on {past_md}, rerun with --move-only.")
         deltas = compute_deltas(r["PRE"], r["POST"])
         expected = weight * value
         if not deltas_match_expected(deltas, expected, col):
