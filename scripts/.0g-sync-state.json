@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "all i9 email done": {
-      "todoist_id": "6hfP4Jrc4FM59rg2",
-      "minutes": 50
-    },
-    "touch every i9 task": {
-      "todoist_id": "6hfP4JvXr4xGwXWR",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-09-29T03:55:00.759123-07:00"
+  "tasks": {},
+  "last_sync": "2026-09-29T04:00:10.166798-07:00"
 }
