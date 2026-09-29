@@ -4807,6 +4807,8 @@ def _did_summary(stdout_text: str) -> str:
         fen = r.get("0fen") or {}
         pts = fen.get("points", 0) or 0
         pts += fen.get("bonus", 0) or 0
+        # hcbi-routed domain points (hcbp -> hcbi!Y) carry no "0fen" entry.
+        pts += (r.get("hcbi") or {}).get("pts", 0) or 0
         if not pts and r.get("variable_1n"):
             pts = r.get("variable_value") or 0
         td = r.get("todoist") or {}

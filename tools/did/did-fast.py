@@ -298,10 +298,28 @@ LABEL_TO_0FEN = {
     "g245": "T", "infra": "T", "cc": "T",
     "hcmc": "U",
     "hcm": "V", "hci": "V",
-    "hcb": "W", "hcbp": "W",
+    "hcb": "W",
+    # hcbp points are NOT appended to 0分!W directly: they go to hcbi!Y (the
+    # sheet's own hcbp column), which 0分!W's formula already sums
+    # (=hcbi!AA+hcbi!Y+...). Same reason HCBI_HABITS skip the 0分 append
+    # (bug 2026-08-10). The "hcbi:" prefix marks the route; step 5 of main()
+    # diverts it into the hcbi append batch (user request 2026-09-28: "if I
+    # mention hcbp as the category, it should go to hcbi column Y, not the
+    # main hcb column").
+    "hcbp": "hcbi:Y",
     "xk87": "X", "xk88": "X",
     "s897": "Y",
 }
+
+HCBI_ROUTE_PREFIX = "hcbi:"
+
+
+def _hcbi_domain_col(fen_col) -> Optional[str]:
+    """hcbi column letter when `fen_col` is an "hcbi:<col>" route (a domain
+    whose points live on the hcbi sheet, e.g. hcbp -> Y), else None."""
+    if isinstance(fen_col, str) and fen_col.startswith(HCBI_ROUTE_PREFIX):
+        return fen_col[len(HCBI_ROUTE_PREFIX):]
+    return None
 
 
 def _project_fen_col(labels) -> str:
@@ -3208,6 +3226,9 @@ def main():
     fen_names = []
     for r in fast:
         is_hcbi_habit = r.item.name.lower() in HCBI_HABITS
+        # A domain routed to the hcbi sheet (hcbp -> hcbi!Y) is the same
+        # case: its points land in step 5b and reach 0分!W via the formula.
+        is_hcbi_domain = _hcbi_domain_col(r.fen_col) is not None
         # HCBI_HABITS items (e.g. "bball") already reach their 0分 column
         # through the hcbi write below (step 5b): 0分!W is a FORMULA
         # (=hcbi!AA224+hcbi!Y224+...), not a plain accumulator, and this
@@ -3217,7 +3238,7 @@ def main():
         # hcbi!Y and directly on 0分!W, whose formula already sums hcbi!Y).
         # {N} curly points (0g bonus, column Q) are a separate, unrelated
         # mechanism and still apply regardless of HCBI_HABITS membership.
-        if (not is_hcbi_habit and r.fen_col and _fen_pts_ok(r)
+        if (not is_hcbi_habit and not is_hcbi_domain and r.fen_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
             fen_appends.append((r.fen_col, r.fen_points))
             fen_names.append(r.item.name)
@@ -3245,7 +3266,8 @@ def main():
     for r in fast:
         if not r.item.block_override:
             continue
-        habit_routes_via_formula = r.item.name.lower() in HCBI_HABITS
+        habit_routes_via_formula = (r.item.name.lower() in HCBI_HABITS
+                                    or _hcbi_domain_col(r.fen_col) is not None)
         if habit_routes_via_formula:
             print(f"⚠ {r.item.name}: block override ({r.item.block_override}) "
                   f"ignored — hcbi habits route points through a formula, "
@@ -3291,6 +3313,12 @@ def main():
             mins = r.item.time_value or r.write_value or 0
             if mins > 0:
                 hcbi_appends.append((hcbi_col, mins))
+        # hcbi-routed DOMAIN points (hcbp -> hcbi!Y): the points step 5
+        # skipped for this item land here instead, same formula-append.
+        dom_col = _hcbi_domain_col(r.fen_col)
+        if (dom_col and _fen_pts_ok(r)
+                and not (r.step == "1n" and not r.is_variable_1n)):
+            hcbi_appends.append((dom_col, r.fen_points))
     hcbi_result = None
     if hcbi_appends:
         script = build_hcbi_script(hcbi_appends, target_date)
@@ -3639,6 +3667,11 @@ def main():
             mins = r.item.time_value or r.write_value or 0
             if mins > 0:
                 entry["hcbi"] = {"col": hcbi_col, "mins": mins}
+        dom_col = _hcbi_domain_col(r.fen_col)
+        if (dom_col and _fen_pts_ok(r)
+                and not (r.step == "1n" and not r.is_variable_1n)):
+            # Points, not minutes; undo-fast strips "+pts" from hcbi!<col>.
+            entry["hcbi"] = {"col": dom_col, "pts": r.fen_points}
         if r.is_variable_1n:
             entry["variable_1n"] = True
             entry["variable_value"] = r.variable_value
@@ -3672,7 +3705,7 @@ def main():
             entry["todoist"] = td_entry
         if r.step == "variable" and r.item.name in posthoc_results:
             entry["posthoc"] = posthoc_results[r.item.name]
-        if r.fen_col:
+        if r.fen_col and not _hcbi_domain_col(r.fen_col):
             fen_entry = {"col": r.fen_col, "points": r.fen_points}
             if r.item.bonus_points:
                 fen_entry["bonus"] = r.item.bonus_points

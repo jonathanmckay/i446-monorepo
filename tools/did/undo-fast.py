@@ -383,7 +383,10 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
             fen_strips.append(("Q", f"+{e['curly_q']}"))
 
         if hcbi_ok and e.get("hcbi"):
-            hcbi_strips.append((e["hcbi"]["col"], f"+{e['hcbi']['mins']}"))
+            # "mins" for HCBI_HABITS minute writes, "pts" for hcbi-routed
+            # domain points (hcbp -> hcbi!Y, 2026-09-28); same "+N" term.
+            term = e["hcbi"].get("pts", e["hcbi"].get("mins"))
+            hcbi_strips.append((e["hcbi"]["col"], f"+{term}"))
 
         if step == "1n" and e.get("col_letter") and e.get("week_row"):
             row, col = str(e["week_row"]), e["col_letter"]
