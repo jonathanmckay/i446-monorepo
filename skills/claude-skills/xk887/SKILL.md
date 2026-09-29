@@ -117,10 +117,12 @@ If cmux is unavailable, tell the user to run it themselves:
 
 - The writer routes through `~/.claude/skills/_lib/ix-osa.sh` (Excel is
   open on Ix). Never writes a local copy.
-- No Todoist task is marked done on save. The existing weekly `1 xk88 (5)
-  [15]` Todoist habit tracks TIME spent (a variable-duration `/did` habit,
-  distinct from survey completion) and is unaffected — unlike `/1s`, where
-  submitting the survey IS completing that week's task.
+- Finishing the survey (every page submitted) closes the week's `1 xk88`
+  and `1 xk87` cards IF they are on dtd's list (in the 1neon task cache and
+  due today or earlier), via the same `run.py` path dtd's done action uses,
+  queued behind the Neon writes (user request 2026-09-29). `1 xk87 wknd`
+  and cards already advanced to next week are untouched. `--no-mark`
+  skips this for reruns. A cancelled survey closes nothing.
 - Non-interactive paths (scripting/tests): `xk887-survey.py --from-json
   <file>` writes answers from JSON; `--print-script --from-json <file>`
   prints the AppleScript without writing.
