@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-09-29T06:00:02.623977-07:00"
+  "tasks": {
+    "email to zero": {
+      "todoist_id": "6hffcxF9r95pm3PR",
+      "minutes": 70
+    },
+    "review all i9 tasks": {
+      "todoist_id": "6hffcxJVPGvfQMv2",
+      "minutes": 70
+    },
+    "make progress with tc68": {
+      "todoist_id": "6hffcxP2QGP5QGxR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-09-29T08:00:04.784107-07:00"
 }
