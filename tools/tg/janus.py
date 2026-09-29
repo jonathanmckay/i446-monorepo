@@ -220,6 +220,58 @@ def _code_is_stale(now=None) -> bool:
         except OSError:
             _stale_state["stale"] = False
     return _stale_state["stale"]
+
+
+# Idle self-restart (2026-09-29). The red "⚠ RESTART" header above was the
+# whole mechanism, and it kept being missed: the placeholder-prefill fix
+# shipped 2026-09-28 sat on disk for a day while the running janus (started
+# 09-27) showed the old behaviour ("I thought I added code yesterday").
+# So once the file has been newer for STALE_RESTART_SETTLE_S (long enough
+# for a Syncthing delivery or an editor save to settle) AND the UI is idle
+# (nothing typed, no edit/split armed, nothing selected, no recording in
+# flight), the app exits cleanly and re-execs itself. State that matters
+# survives on disk: the PID file is re-asserted, a live d357 recording is
+# re-adopted, the day cache is re-read. Nothing is lost that a manual
+# restart wouldn't also drop.
+_RESTART = {"want": False, "stale_since": 0.0}
+STALE_RESTART_SETTLE_S = 15.0
+STALE_RESTART_POLL_S = 5
+
+
+def _should_self_restart(stale: bool, now: float, *, input_text: str,
+                         edit_target, split_target, event_sel, recording,
+                         state: dict | None = None) -> bool:
+    """Pure decision: restart only after `stale` has held for the settle
+    window and the UI is idle. Resets the settle clock whenever the code
+    stops reading as stale (a restart already happened, or the mtime
+    guard was a false alarm)."""
+    st = _RESTART if state is None else state
+    if not stale:
+        st["stale_since"] = 0.0
+        return False
+    if not st["stale_since"]:
+        st["stale_since"] = now
+        return False
+    if now - st["stale_since"] < STALE_RESTART_SETTLE_S:
+        return False
+    if input_text or edit_target is not None or split_target is not None \
+            or event_sel is not None or recording:
+        return False
+    return True
+
+
+async def ticker_self_restart(app):
+    while True:
+        await asyncio.sleep(STALE_RESTART_POLL_S)
+        if _should_self_restart(_code_is_stale(), time.monotonic(),
+                                input_text=input_buffer.text,
+                                edit_target=STATE.edit_target,
+                                split_target=STATE.split_target,
+                                event_sel=STATE.event_sel,
+                                recording=STATE.recording):
+            _RESTART["want"] = True
+            app.exit()  # run_async() returns → __main__ re-execs (terminal restored first)
+            return
 BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "😈"]
 
@@ -6573,6 +6625,7 @@ async def main():
     app.create_background_task(ticker_today(app))
     app.create_background_task(ticker_gcal(app))
     app.create_background_task(ticker_points(app))
+    app.create_background_task(ticker_self_restart(app))
     try:
         await app.run_async()
     finally:
@@ -6588,3 +6641,7 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+    if _RESTART["want"] and _SRC is not None:
+        # Idle self-restart (see ticker_self_restart): same interpreter, same
+        # file, same args — replaces this process so the pane keeps its tty.
+        os.execv(sys.executable, [sys.executable, str(_SRC), *sys.argv[1:]])
