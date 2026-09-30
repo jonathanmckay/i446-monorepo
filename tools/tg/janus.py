@@ -1710,7 +1710,17 @@ def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
     # in P outweighs earnings) `0 <= total + 2` is false with an EMPTY bp, which
     # logged every clean read of that day as torn (2026-09-24, same bug as the
     # negative-total rejection in _total_trustworthy).
-    return not bp or sum(bp.values()) <= total + 2
+    #
+    # Tolerance scales with the block count: every block value is rounded to
+    # an int individually (the sheet holds fractions like 67.64 / 214.29 from
+    # minutes/7 variable tasks), so a perfectly consistent row can read up to
+    # 0.5 × len(bp) above the rounded Σ. A fixed +2 rejected FIVE consecutive
+    # clean reads on 2026-09-28 23:54-23:59 (Σ 1367 vs eight rounded blocks
+    # summing to 1370), and a janus started inside such a window shows no
+    # block points at all until the sheet happens to change (user report
+    # 2026-09-29: "janus showing nothing from neon"). A real torn read is
+    # hundreds over (975 of 728), never a few.
+    return not bp or sum(bp.values()) <= total + 2 + (len(bp) + 1) // 2
 
 
 def _blocks_plausible(bp: dict[str, int]) -> bool:
