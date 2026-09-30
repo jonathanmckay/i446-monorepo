@@ -233,9 +233,15 @@ def _code_is_stale(now=None) -> bool:
 # survives on disk: the PID file is re-asserted, a live d357 recording is
 # re-adopted, the day cache is re-read. Nothing is lost that a manual
 # restart wouldn't also drop.
-_RESTART = {"want": False, "stale_since": 0.0}
+_RESTART = {"want": False, "stale_since": 0.0, "sel": None}
 STALE_RESTART_SETTLE_S = 15.0
 STALE_RESTART_POLL_S = 5
+# A row selection blocks the restart only while it is FRESH. Tab-selecting a
+# row and walking away is common (2026-09-29: a stale janus sat for 10+
+# minutes with the red header up, empty input, no edit armed — the only
+# thing holding it was a forgotten selection), and losing a selection that
+# nobody has touched for this long costs nothing.
+STALE_RESTART_SEL_IDLE_S = 120.0
 
 
 def _should_self_restart(stale: bool, now: float, *, input_text: str,
@@ -246,6 +252,13 @@ def _should_self_restart(stale: bool, now: float, *, input_text: str,
     stops reading as stale (a restart already happened, or the mtime
     guard was a false alarm)."""
     st = _RESTART if state is None else state
+    # Track how long the CURRENT selection has been sitting unchanged; a
+    # selection that changes restarts its own clock.
+    prev = st.get("sel")
+    if event_sel is None:
+        st["sel"] = None
+    elif prev is None or prev[0] != event_sel:
+        st["sel"] = (event_sel, now)
     if not stale:
         st["stale_since"] = 0.0
         return False
@@ -254,8 +267,9 @@ def _should_self_restart(stale: bool, now: float, *, input_text: str,
         return False
     if now - st["stale_since"] < STALE_RESTART_SETTLE_S:
         return False
-    if input_text or edit_target is not None or split_target is not None \
-            or event_sel is not None or recording:
+    if input_text or edit_target is not None or split_target is not None or recording:
+        return False
+    if st["sel"] is not None and now - st["sel"][1] < STALE_RESTART_SEL_IDLE_S:
         return False
     return True
 

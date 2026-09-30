@@ -49,9 +49,26 @@ def test_busy_ui_blocks_restart():
     m = _load()
     settle = m.STALE_RESTART_SETTLE_S
     for busy in (dict(input_text="ibx i9 @i9"), dict(edit_target={"ids": [1]}),
-                 dict(split_target={"ids": [1]}), dict(event_sel=("k",)), dict(recording={"pid": 1})):
-        st = {"want": False, "stale_since": 100.0}
+                 dict(split_target={"ids": [1]}), dict(recording={"pid": 1})):
+        st = {"want": False, "stale_since": 100.0, "sel": None}
         assert m._should_self_restart(True, 100.0 + settle + 60, state=st, **_idle(**busy)) is False, busy
+
+
+def test_fresh_selection_blocks_but_a_forgotten_one_does_not():
+    m = _load()
+    settle, sel_idle = m.STALE_RESTART_SETTLE_S, m.STALE_RESTART_SEL_IDLE_S
+    st = {"want": False, "stale_since": 100.0, "sel": None}
+    t = 100.0 + settle + 1
+    # first sighting of a selection: fresh → blocks
+    assert m._should_self_restart(True, t, state=st, **_idle(event_sel=("k",))) is False
+    assert st["sel"] == (("k",), t)
+    # still the same selection, but older than the idle window → no longer blocks
+    assert m._should_self_restart(True, t + sel_idle + 1, state=st, **_idle(event_sel=("k",))) is True
+    # a DIFFERENT selection restarts the clock → blocks again
+    assert m._should_self_restart(True, t + sel_idle + 2, state=st, **_idle(event_sel=("j",))) is False
+    # clearing the selection clears the record
+    m._should_self_restart(True, t + sel_idle + 3, state=st, **_idle())
+    assert st["sel"] is None
 
 
 def test_main_schedules_the_self_restart_ticker():
