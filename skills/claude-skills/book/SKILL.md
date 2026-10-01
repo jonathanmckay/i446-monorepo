@@ -66,54 +66,67 @@ python3 ~/i446-monorepo/tools/hcmc/book-finish.py [title words]
 
 Shelve the book as **Read** on the user's Goodreads account using the
 `mcp__claude-in-chrome__*` tools (load them with ONE ToolSearch:
-`select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__find,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__tabs_close_mcp`).
-This step is best-effort: the vault + Neon work above is already done and
-must never be rolled back because Goodreads failed.
+`select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__find,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__tabs_close_mcp`).
+Best-effort: the vault + Neon work above is already done and must never be
+rolled back because Goodreads failed. Live-verified 2026-10-01 against the
+current Goodreads UI; the `find` queries below are natural-language, not CSS.
 
-1. **Get identifiers** from the stub the script just updated (the path is in
-   its `→ hcmc/reviews/...` output): frontmatter `title`, `author`, `isbn`.
+**Which Chrome:** Goodreads is signed in on the **m5c7.com** Chrome profile,
+and the Claude extension is installed only in the m5c7.com and MSFT profiles.
+If `list_connected_browsers` shows two browsers and the in-use one is not
+m5c7.com (check by navigating a tab to `https://myaccount.google.com` and
+reading the email), `select_browser` the other one.
+
+1. **Identifiers** from the stub the script just updated (path is in its
+   `→ hcmc/reviews/...` output): frontmatter `title`, `author`, `isbn`.
    Search URL = `https://www.goodreads.com/search?q=<isbn>` when `isbn` is
-   present (exact match), else `https://www.goodreads.com/search?q=<title> <author>`
+   present, else `https://www.goodreads.com/search?q=<title> <author>`
    URL-encoded.
-2. **Open it**: `tabs_context_mcp` (`createIfEmpty: true`) → `tabs_create_mcp`
-   → `navigate` to the search URL. If the extension is not connected or
-   doesn't respond, retry ONCE; then fall back to
-   `open -a "Google Chrome" "<search url>"` and report
+2. **Connect**: `tabs_context_mcp` (`createIfEmpty: true`). If it reports the
+   extension isn't connected while Chrome is running, run
+   `open -a "Google Chrome" https://claude.ai/chrome`, wait ~6s, retry ONCE.
+   Still down → `open -a "Google Chrome" "<search url>"` and report
    `WARN: Goodreads not updated — Chrome extension not connected; page opened for manual shelving`.
-   Do not keep retrying.
-3. **Land on the book page.** An ISBN search usually redirects straight to
-   `/book/show/...`. If the URL still contains `/search`, `find`
-   `"search result link for the book titled <title>"` and click the first
-   match whose text matches the title (and author, if shown). If nothing
-   matches, report `WARN: Goodreads not updated — no search match for <title>`
+   Then `tabs_create_mcp` and `navigate` the new tab to the search URL.
+3. **Land on the book page.** An ISBN search returns a results list (it does
+   not redirect). `find` `"search result link for the book titled <title>"`,
+   click the first match (href `/book/show/...`), `computer` `wait` 3s. If
+   `find` returns nothing (re-run once; the first call can race the page
+   load), report `WARN: Goodreads not updated — no search match for <title>`
    and stop.
-4. **Confirm it's the right book**: `find` `"book title heading"` and check it
-   matches the stub title (subtitle differences are fine; a different author
-   is not).
-5. **Check for a sign-in wall.** If `find` `"sign in button"` returns a
-   prominent sign-in / "Sign in with" control instead of the shelf button, stop
-   and report `WARN: Goodreads not updated — not signed in`. Never enter
-   credentials.
-6. **Read the current shelf.** `find` `"shelf button showing Want to Read, Currently Reading, or Read"`.
-   - Text already `Read` → nothing to do; go to step 8.
-   - Otherwise `find` `"dropdown arrow next to the shelf button"` and click
-     it, then `find` `"menu option Read"` (the plain `Read` item, not
-     `Want to Read`) and click it.
-7. **Dismiss the review modal.** Goodreads usually opens a "What did you
-   think?" rating/review dialog after shelving as Read. `find`
-   `"close button on the review dialog"` (or a `Done` button) and click it.
-   Do NOT set a star rating or write anything here — that's `/bookreview`.
-8. **Verify**: `find` the shelf button again; its text must now be `Read`.
-   If it isn't, take one `computer` screenshot, report
-   `WARN: Goodreads shelf still shows <text>`, and stop.
-9. **Close the tab** you created (`tabs_close_mcp`).
-10. Append to the one-line response: `· Goodreads: Read ✓` on success, or the
-    `WARN:` line otherwise.
+4. **Confirm the book**: `find` `"book title heading"` → must match the stub
+   title (subtitle/series suffix differences are fine; a different author is
+   not).
+5. **Sign-in wall**: if `find` `"sign in button"` returns a prominent
+   Sign in / Sign in with control and no shelf button exists, stop with
+   `WARN: Goodreads not updated — not signed in`. Never enter credentials.
+6. **Read the current shelf**: `find`
+   `"shelf button showing Want to Read, Currently Reading, or Read on the book page"`.
+   The button's accessible name is one of:
+   - `Shelved as 'Read'. Tap to edit shelf for this book` → already done, skip to step 9.
+   - `Shelved as '<other>'. Tap to edit shelf for this book` → click this button; it opens the chooser.
+   - plain `Want to Read` (unshelved book) → do NOT click it (that shelves as Want to Read). `find`
+     `"Tap to edit shelf dropdown chevron next to the Want to Read button"` and click that instead.
+7. **Choose Read.** The dialog is titled `Step 1 of 2: Choose a shelf for this
+   book` with buttons `Want to Read`, `Currently Reading`, `Read` (plus
+   custom shelves, `Remove from my shelf`, `Continue to tags`, `Close`).
+   `find` `"Read shelf button in the choose-a-shelf dialog"` and click the one
+   whose name is exactly `Read` (or `Read, selected`), never `Want to Read`
+   or `Did Not Finish`. Wait 2s.
+8. **Dismiss follow-ups.** Goodreads may show Step 2 (tags) and/or a
+   "What did you think?" rating/review prompt. `find` `"Close button on the
+   dialog"` and click it. Do NOT set stars, tags, or review text — that's
+   `/bookreview`.
+9. **Verify**: `find` the shelf button again; its name must now begin
+   `Shelved as 'Read'`. If not, one `computer` screenshot, report
+   `WARN: Goodreads shelf still shows <name>`, stop.
+10. **Close the tab** you created (`tabs_close_mcp`).
+11. Append to the one-line response: `· Goodreads: Read ✓` (or
+    `· Goodreads: already Read`), else the `WARN:` line.
 
-Goodreads UI drift: the selectors above are natural-language `find` queries,
-not CSS. If the page layout changes and a query returns nothing, take a
-screenshot, locate the control visually, and update the query text in this
-file before finishing.
+If a `find` query returns nothing because the Goodreads layout changed, take
+one screenshot, locate the control visually, and update the query text here
+before finishing.
 
 ## Response Style
 
