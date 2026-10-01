@@ -71,8 +71,9 @@ Best-effort: the vault + Neon work above is already done and must never be
 rolled back because Goodreads failed. Live-verified 2026-10-01 against the
 current Goodreads UI; the `find` queries below are natural-language, not CSS.
 
-**Which Chrome:** Goodreads is signed in on the **m5c7.com** Chrome profile,
-and the Claude extension is installed only in the m5c7.com and MSFT profiles.
+**Which Chrome:** Goodreads is signed in on the **m5c7.com** Chrome profile.
+The Claude extension is installed in the m5c7.com and 个 profiles (both show
+up in `list_connected_browsers`).
 If `list_connected_browsers` shows two browsers and the in-use one is not
 m5c7.com (check by navigating a tab to `https://myaccount.google.com` and
 reading the email), `select_browser` the other one.
