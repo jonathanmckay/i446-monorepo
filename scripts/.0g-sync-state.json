@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-01T08:00:07.287073-07:00"
+  "tasks": {
+    "5 vegetables": {
+      "todoist_id": "6hg76gxjcv9rXCp2",
+      "minutes": 15
+    },
+    "newsletter out + next written": {
+      "todoist_id": "6hg76h3v8mC5X8hR",
+      "minutes": 30
+    },
+    "strategy for ds in xtech": {
+      "todoist_id": "6hg76h9VH7VJFJ7R",
+      "minutes": 30
+    },
+    "tasks below 60": {
+      "todoist_id": "6hg76hG9vrcgH8M2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-10-01T10:00:01.903737-07:00"
 }
