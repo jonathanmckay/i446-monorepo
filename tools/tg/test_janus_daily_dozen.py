@@ -154,30 +154,29 @@ class _Proc:
         self.stdout = stdout
 
 
-def test_hcb_is_the_combined_total_not_the_label_rows_food_subtotal(monkeypatch):
-    """hcb must be the combined hcbc+hcbp total — label-row X (food) plus
-    label-row Y (hcbp), the same sum the sheet's row-below cell holds for
-    Q2/Q3 2026 (=SUM(X<label>:Y<label>)) — never the label row's food-only
-    X alone. Summed from the inputs rather than read from the row-below
-    cell because Q4 2026's X381 is a literal 0 (bug 2026-10-01: with the
-    row-below read, Q4 contributed nothing and the chip showed Q3 alone).
-    hcbp (column Y) keeps reading the label row, unaffected."""
+def test_hcb_reads_the_sheets_own_combined_cell_x388(monkeypatch):
+    """Per JM 2026-10-01 ("shouldn't you be using X388"): the overall hcb
+    number is hcbi!X388, the sheet's own combined cell (=SUM(X378,X375),
+    "Q2+Q3" today; JM moves the window by editing that formula) — the same
+    cell the jm dashboard's hcbp+hcbc card mirrors. janus must read it
+    verbatim, never re-derive a quarter sum from the row pair (that gave
+    +264 while the sheet said -928). hcbp (column Y) is unaffected."""
     mod = _load_tui()
     row1 = [""] * 21
-    row1[19] = "-840.9"   # label row X (X380-equivalent): food-only subtotal
-    row1[20] = "243.0"    # label row Y (hcbp)
+    row1[19] = "-840.9"   # label-row X (food subtotal): must NOT feed hcb
+    row1[20] = "243.0"    # label-row Y (hcbp)
     row2 = [""] * 21
-    row2[19] = "0"        # row below (X381-equivalent): unwired literal 0
-    dozen_raw = ",".join(row1) + "|" + ",".join(row2)
-    stdout = "||" + "||" + dozen_raw
-    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
+    row2[19] = "-439.9"   # row-below X (combined SUM): must NOT feed hcb either
+    dozen_raw = ",".join(row1) + "|" + ",".join(row2) + "#-928"
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc("||" + "||" + dozen_raw))
     mod.fetch_habits_today()
-    assert mod.STATE.hcbi_behind.get("hcb") == round(-840.9 + 243.0, 1), \
-        "hcb must be label-row X + Y, not the row-below cell nor food alone"
+    assert mod.STATE.hcbi_behind.get("hcb") == -928.0
     assert mod.STATE.hcbi_behind.get("hcbp") == 243.0
 
 
-def test_hcb_falls_back_to_the_row_below_when_the_label_row_is_blank(monkeypatch):
+def test_hcb_absent_when_x388_was_not_read(monkeypatch):
+    """No "#" total (the X388 read failed) must drop the hcb chip, not fall
+    back to a quarter-derived number the sheet doesn't show."""
     mod = _load_tui()
     row1 = [""] * 21
     row2 = [""] * 21
@@ -185,40 +184,30 @@ def test_hcb_falls_back_to_the_row_below_when_the_label_row_is_blank(monkeypatch
     dozen_raw = ",".join(row1) + "|" + ",".join(row2)
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc("||" + "||" + dozen_raw))
     mod.fetch_habits_today()
-    assert mod.STATE.hcbi_behind.get("hcb") == -439.9
+    assert "hcb" not in mod.STATE.hcbi_behind
 
 
-def test_hcb_sums_current_and_previous_quarter(monkeypatch):
-    """hcb (2026-09-06 per JM) is a running Q<n-1>+Q<n> total, matching the
-    same change to the jm dashboard's CACHE_CARDS — not just the current
-    quarter in isolation. The previous quarter's combined-cell value rides
-    at the end of the dozen segment after a ';' (see the prev_block in
-    _dozen_applescript_lines); this test's mocked stdout includes it."""
+def test_hcb_total_survives_a_prev_quarter_block(monkeypatch):
+    """Segment shape <cur>;<prev>#<total>: the ';' prev block (still needed
+    for the Daily Dozen and hcbp running totals) must not swallow the
+    '#' total."""
     mod = _load_tui()
     row1 = [""] * 21
     row2 = [""] * 21
-    row2[19] = "191.9"   # current quarter's combined total (e.g. X378)
-    dozen_raw = ",".join(row1) + "|" + ",".join(row2) + ";-1264.7"  # prev quarter (e.g. X375)
-    stdout = "||" + "||" + dozen_raw
-    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
+    row2[19] = "191.9"
+    dozen_raw = ",".join(row1) + "|" + ",".join(row2) + ";" + ",".join(row1) + "|" + ",".join(row2) + "#-928"
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc("||" + "||" + dozen_raw))
     mod.fetch_habits_today()
-    assert mod.STATE.hcbi_behind.get("hcb") == round(191.9 - 1264.7, 1), \
-        "hcb must sum the current AND previous quarter's combined totals"
+    assert mod.STATE.hcbi_behind.get("hcb") == -928.0
 
 
-def test_hcb_falls_back_to_current_quarter_when_no_prior_segment(monkeypatch):
-    """No ';' in the dozen segment (Q1, no prior "Q0" row on the sheet, or
-    any other read failure) must degrade to the current-quarter-only value,
-    not drop the chip or raise."""
-    mod = _load_tui()
-    row1 = [""] * 21
-    row2 = [""] * 21
-    row2[19] = "-439.9"
-    dozen_raw = ",".join(row1) + "|" + ",".join(row2)  # no ';' suffix
-    stdout = "||" + "||" + dozen_raw
-    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
-    mod.fetch_habits_today()
-    assert mod.STATE.hcbi_behind.get("hcb") == -439.9
+def test_hcb_applescript_reads_x388():
+    src = (HERE / "janus.py").read_text()
+    assert 'HCBI_HCB_TOTAL_CELL = "X388"' in src
+    i = src.index("def _dozen_applescript_lines(")
+    body = src[i:src.index("\ndef ", i + 1)]
+    assert 'range "{HCBI_HCB_TOTAL_CELL}"' in body and '"#"' in body, \
+        "the dozen AppleScript must append '#' + hcbi!X388"
 
 
 def test_prev_quarter_label_skipped_for_q1():
@@ -263,27 +252,29 @@ def test_parse_dozen_segment_sums_previous_quarter_into_current():
     dozen, behind = m._parse_dozen_segment(Q4_ROWS, Q3_ROWS)
     assert dict(dozen)["bn"] == -87 and dict(dozen)["fr"] == -175 and dict(dozen)["vg"] == -15
     assert dict(dozen)["g"] == 136 and dict(dozen)["br"] == 2
-    assert behind["hcb"] == (-494 - 86) + (-585 + 1323)   # Q4 X+Y + Q3 X+Y (label rows)
+    assert "hcb" not in behind           # never derived from the quarter rows
     assert behind["hcbp"] == 1323 - 86   # Q4 Y + Q3 Y, not Q4 alone
+    _, behind = m._parse_dozen_segment(Q4_ROWS, Q3_ROWS, "-928")
+    assert behind["hcb"] == -928         # hcbi!X388 verbatim
 
 
 def test_parse_dozen_segment_q4_alone_would_have_hidden_everything():
     m = _load_tui()
     dozen, behind = m._parse_dozen_segment(Q4_ROWS, "")
     assert all(v == 0 for _, v in dozen)
-    assert behind["hcbp"] == -86 and behind["hcb"] == -494 - 86
+    assert behind["hcbp"] == -86 and "hcb" not in behind
 
 
 def test_parse_dozen_segment_q1_has_no_previous_quarter():
     m = _load_tui()
     dozen, behind = m._parse_dozen_segment(Q3_ROWS, "")
-    assert dict(dozen)["bn"] == -87 and behind["hcbp"] == 1323 and behind["hcb"] == 738
+    assert dict(dozen)["bn"] == -87 and behind["hcbp"] == 1323 and "hcb" not in behind
 
 
-def test_parse_dozen_segment_accepts_legacy_bare_prev_x():
+def test_parse_dozen_segment_tolerates_legacy_bare_prev_x():
     m = _load_tui()
     _, behind = m._parse_dozen_segment(Q3_ROWS, "500")
-    assert behind["hcb"] == 738 + 500 and behind["hcbp"] == 1323
+    assert "hcb" not in behind and behind["hcbp"] == 1323
 
 
 def test_prev_quarter_applescript_reads_the_full_row_pair():
