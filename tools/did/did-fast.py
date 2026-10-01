@@ -71,6 +71,7 @@ ix_run = _ix_mod.run
 # and other sheets (0n/1n+/hcbi) still use ix_run.
 from neon import excel as neon_excel  # noqa: E402 (path inserted above)
 from neon import cols as neon_cols  # noqa: E402
+from neon import weeks as neon_weeks  # noqa: E402
 from blocks import BLOCK_START, is_future_block  # noqa: E402 (path inserted above)
 
 # Import mark-completed
@@ -257,18 +258,16 @@ ONENEON_TO_0FEN: dict[str, str] = {
 
 
 def calc_week_mw(d: date) -> str:
-    """Calculate M.W format using Sunday-anchored weeks.
+    """M.W label of the 1n+ row for the Sun-Sat week containing `d`.
 
-    Find the Sunday that starts this date's week, then count which
-    Sunday-block of the month it falls in. The week label uses the
-    Sunday's month, so Mon-Sat after a month-boundary Sunday still
-    belong to the Sunday's month (e.g. Jun 1 Mon → 5.5 if Sunday
-    was May 31).
+    2026-10-01 fix: the 1n+ sheet's col B is a 4-4-5 fiscal-week ladder
+    (Sundays fill 52 slots chronologically; months 3/6/9/12 hold 5 rows),
+    NOT "which Sunday of the calendar month". The old calendar count
+    diverged after any non-quarter-end month with 5 Sundays: from
+    2026-08-30 every weekly habit landed one row above its real week
+    (Sep 27 week → '9.4' instead of '9.5'). See lib/neon/weeks.py.
     """
-    days_since_sunday = (d.weekday() + 1) % 7  # Sun=0, Mon=1, ..., Sat=6
-    week_start = date.fromordinal(d.toordinal() - days_since_sunday)
-    week_num = ((week_start.day - 1) // 7) + 1
-    return f"{week_start.month}.{week_num}"
+    return neon_weeks.fiscal_week_label(d)
 
 # Project tag → 0分 column mapping (updated 2026.04.28 after 9-column
 # removal). Stored as Todoist "labels" in the API, but functionally these

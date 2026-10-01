@@ -231,12 +231,11 @@ No 0₦ or Todoist match. Number = **points** not minutes.
 
 Matches 1n+ sheet header. Do NOT write to 0₦.
 
-1. Find column + week row. **M.W** is computed from the **Sunday that starts the calendar week containing the target date** (weeks are Sun–Sat):
-   - `sunday = target_date - timedelta(days=(target_date.weekday() + 1) % 7)` (Python; `weekday()` Mon=0..Sun=6)
-   - `M = sunday.month`
-   - `W = (sunday.day - 1) // 7 + 1`  ← which Sunday of `M` this is (1st, 2nd, 3rd, …)
-   - Examples: Fri Apr 24 2026 → Sun Apr 19 → `4.3`. Sun Mar 29 2026 → `3.5`. Mon Apr 13 2026 → Sun Apr 12 → `4.2`.
-   - Do NOT use `ceil(day/7)` — that gives the wrong week when the date's Sunday falls in a different month/week-of-month bucket. The 1n+ column B labels these Sunday-anchored weeks.
+1. Find column + week row. **M.W** is the 1n+ sheet's 4-4-5 fiscal-week label, computed by `lib/neon/weeks.fiscal_week_label(date)` (run.py and did-fast.py both call it; never re-derive it by hand):
+   - `sunday = target_date - timedelta(days=(target_date.weekday() + 1) % 7)` (weeks are Sun–Sat)
+   - Week `1.1` = the first Sunday on/after Jan 1 (2026-01-04). Sundays fill 52 slots in order; label-months 3, 6, 9, 12 hold 5 rows, every other month holds 4.
+   - Examples: Fri Apr 24 2026 → Sun Apr 19 → `4.3`. Sun Mar 29 2026 → `3.5`. Sun Aug 30 2026 → `9.1` (NOT `8.5`). Thu Oct 1 2026 → Sun Sep 27 → `9.5`.
+   - Do NOT use "which Sunday of the calendar month" (`(sunday.day - 1) // 7 + 1`) and do NOT use `ceil(day/7)`. The calendar count silently drifts one row after any non-quarter-end month with 5 Sundays (2026-10-01 bug: every 1n+ write from Aug 30 landed one week early).
 
    Read points from row 3. Write points to cell. Use "1n+ write" template.
    - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template — read old value, add increment, write sum). Fixed increments: `一起饭` = 30.
@@ -279,3 +278,4 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did PTC` — Todoist match "PTC feedback [180]" with label xk87 | Step 5: extract [180] from task, write +180 to 0分 col X (xk87/xk88, via `cols.domain_col`) | Must NOT use 0 pts just because user input had no [N] — always extract from the matched Todoist task. Must NOT hardcode "AG" — that column is dead post-2026-04-28. |
 | `/did Use /inbound to keep response times low.` — Todoist task content has no `{N}`, but build order line has `Use /inbound to keep response times low.{30}` (user added post-sync) | Step 5a: extract `{30}` from BUILD ORDER line, write +30 to 0分 col Q (0g domain alias, via `cols.domain_col`), close Todoist, flip checkbox | Must NOT use 0 pts because Todoist task lacks `{30}` — build order is the points source of truth. Must NOT hardcode "AC" — that column is now headered "1₲" (something else), not 0g. |
 | `/did 1 hcb` on Fri 2026-04-24 — 1n+ Step 1n flow | Compute M.W from the Sunday starting that calendar week (Sun Apr 19 → `4.3`, row 19). Write to U19. | Must NOT use `ceil(day/7)` (gives 4.4, row 20 = NEXT WEEK). 1n+ column B labels are Sunday-anchored Sun–Sat weeks. |
+| `/did 1 hcb` on Thu 2026-10-01 — 1n+ Step 1n flow | `lib/neon/weeks.fiscal_week_label` → `9.5` (row 44). | Must NOT compute calendar week-of-month (`9.4`, row 43 = LAST week). Column B is a 4-4-5 ladder: Aug 30 is `9.1`. |
