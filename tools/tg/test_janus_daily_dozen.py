@@ -107,12 +107,25 @@ def test_behind_chip_uses_its_domain_color():
     assert "-834" in text
 
 
-def test_no_behind_chips_when_all_positive():
+def test_hcbp_chip_hidden_when_positive_but_hcb_overall_stays_up():
+    """Bug 2026-10-01 ("janus still not showing overall hcb points"): hcb is
+    the OVERALL standing (the 2026-08-12 switch to the combined total made
+    it the persistent header chip), so it must render whatever its sign.
+    hcbp keeps the negative-only "behind" rule."""
     mod = _load_tui()
     mod.STATE.daily_dozen = [("bn", -32.0)]
-    mod.STATE.hcbi_behind = {"hcb": 10.0, "hcbp": 243.0}
+    mod.STATE.hcbi_behind = {"hcb": 264.0, "hcbp": 1237.0}
     text = "".join(t for _, t, *_ in mod.render_habits_today())
-    assert "hcb" not in text and "hcbp" not in text
+    assert "hcb +264" in text, text
+    assert "hcbp" not in text and "1237" not in text
+
+
+def test_hcb_chip_absent_only_when_no_value_was_read():
+    mod = _load_tui()
+    mod.STATE.daily_dozen = [("bn", -32.0)]
+    mod.STATE.hcbi_behind = {"hcbp": 243.0}
+    text = "".join(t for _, t, *_ in mod.render_habits_today())
+    assert "hcb" not in text
 
 
 # ── fetch_habits_today: hcbi wiring (structural) ────────────────────────────
@@ -141,24 +154,38 @@ class _Proc:
         self.stdout = stdout
 
 
-def test_hcb_behind_reads_column_x_second_row_not_the_label_row(monkeypatch):
-    """hcb (offset 20, column X) must read the row BELOW the quarter label
-    row — the combined hcbc+hcbp SUM formula (e.g. X378 for Q3 2026) — not
-    the label row's own food-only subtotal (e.g. X377). hcbp (column Y)
-    keeps reading the label row, unaffected."""
+def test_hcb_is_the_combined_total_not_the_label_rows_food_subtotal(monkeypatch):
+    """hcb must be the combined hcbc+hcbp total — label-row X (food) plus
+    label-row Y (hcbp), the same sum the sheet's row-below cell holds for
+    Q2/Q3 2026 (=SUM(X<label>:Y<label>)) — never the label row's food-only
+    X alone. Summed from the inputs rather than read from the row-below
+    cell because Q4 2026's X381 is a literal 0 (bug 2026-10-01: with the
+    row-below read, Q4 contributed nothing and the chip showed Q3 alone).
+    hcbp (column Y) keeps reading the label row, unaffected."""
     mod = _load_tui()
     row1 = [""] * 21
-    row1[19] = "-840.9"   # label row (X377-equivalent): food-only subtotal
+    row1[19] = "-840.9"   # label row X (X380-equivalent): food-only subtotal
     row1[20] = "243.0"    # label row Y (hcbp)
     row2 = [""] * 21
-    row2[19] = "-439.9"   # row below (X378-equivalent): combined SUM total
+    row2[19] = "0"        # row below (X381-equivalent): unwired literal 0
     dozen_raw = ",".join(row1) + "|" + ",".join(row2)
     stdout = "||" + "||" + dozen_raw
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc(stdout))
     mod.fetch_habits_today()
-    assert mod.STATE.hcbi_behind.get("hcb") == -439.9, \
-        "hcb must read the combined-total row, not the label row's food subtotal"
+    assert mod.STATE.hcbi_behind.get("hcb") == round(-840.9 + 243.0, 1), \
+        "hcb must be label-row X + Y, not the row-below cell nor food alone"
     assert mod.STATE.hcbi_behind.get("hcbp") == 243.0
+
+
+def test_hcb_falls_back_to_the_row_below_when_the_label_row_is_blank(monkeypatch):
+    mod = _load_tui()
+    row1 = [""] * 21
+    row2 = [""] * 21
+    row2[19] = "-439.9"
+    dozen_raw = ",".join(row1) + "|" + ",".join(row2)
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc("||" + "||" + dozen_raw))
+    mod.fetch_habits_today()
+    assert mod.STATE.hcbi_behind.get("hcb") == -439.9
 
 
 def test_hcb_sums_current_and_previous_quarter(monkeypatch):
@@ -236,7 +263,7 @@ def test_parse_dozen_segment_sums_previous_quarter_into_current():
     dozen, behind = m._parse_dozen_segment(Q4_ROWS, Q3_ROWS)
     assert dict(dozen)["bn"] == -87 and dict(dozen)["fr"] == -175 and dict(dozen)["vg"] == -15
     assert dict(dozen)["g"] == 136 and dict(dozen)["br"] == 2
-    assert behind["hcb"] == 738          # Q4 row2 X (0) + Q3 row2 X (738)
+    assert behind["hcb"] == (-494 - 86) + (-585 + 1323)   # Q4 X+Y + Q3 X+Y (label rows)
     assert behind["hcbp"] == 1323 - 86   # Q4 Y + Q3 Y, not Q4 alone
 
 
@@ -244,7 +271,7 @@ def test_parse_dozen_segment_q4_alone_would_have_hidden_everything():
     m = _load_tui()
     dozen, behind = m._parse_dozen_segment(Q4_ROWS, "")
     assert all(v == 0 for _, v in dozen)
-    assert behind["hcbp"] == -86 and behind["hcb"] == 0
+    assert behind["hcbp"] == -86 and behind["hcb"] == -494 - 86
 
 
 def test_parse_dozen_segment_q1_has_no_previous_quarter():
