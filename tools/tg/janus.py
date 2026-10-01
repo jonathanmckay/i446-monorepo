@@ -391,17 +391,17 @@ DAILY_DOZEN_ORDER = ["bn", "br", "fr", "cr", "gr", "vg", "fx", "g", "nt", "sp", 
 # total, in that domain's own PROJECT_COLORS hue. "hcbp" is a labeled
 # "behind" chip shown only when negative (same "only show what's owed"
 # convention as HABIT_YTD_COLORS below). "hcb" is the OVERALL hcb standing
-# (combined hcbc+hcbp, switched from food-only 2026-08-12) and is always
-# shown, signed (HCBI_ALWAYS_SHOWN — bug 2026-10-01 "janus still not
-# showing overall hcb points": the running Q3+Q4 total had gone positive,
-# so the negative-only filter hid the one chip meant to be persistent).
-# Per quarter it is label-row X + label-row Y — the same sum the sheet's
-# own row-below cell computes (=SUM(X<label>:Y<label>), e.g. X378 for Q3
-# 2026) — read from the inputs rather than that cell because the Q4 2026
-# block's X381 is a literal 0, not the SUM (the row-below cell is only a
-# fallback when the label row is blank).
+# and is always shown, signed (HCBI_ALWAYS_SHOWN — bug 2026-10-01 "janus
+# still not showing overall hcb points": the total had gone positive, so
+# the negative-only filter hid the one chip meant to be persistent). Its
+# value is the sheet's own combined cell HCBI_HCB_TOTAL_CELL (hcbi!X388,
+# "Q2+Q3" = SUM(X378,X375) as of 2026-10-01 — JM edits that formula when
+# the window moves; the jm dashboard's hcbp+hcbc card is the same number).
+# janus used to derive Q<n-1>+Q<n> from the quarter rows itself, which
+# disagreed with the sheet (+264 vs -928) — per JM 2026-10-01, read X388.
 HCBI_BEHIND_DOMAINS = {"hcb": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
 HCBI_ALWAYS_SHOWN = {"hcb"}
+HCBI_HCB_TOTAL_CELL = "X388"
 
 # Radioactive — the palette's one unassigned signature neon. The ₦ accent:
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
@@ -2100,7 +2100,11 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
     quarter boundary. Kept as a separate try/search rather than
     folding into the block above so a missing prior-quarter row (e.g. Q1,
     with no Q0) degrades to "just this quarter" instead of losing the
-    whole segment."""
+    whole segment.
+
+    A final try appends "#" + the value of HCBI_HCB_TOTAL_CELL (hcbi!X388,
+    the sheet's own combined hcb total) — "hcb" is read from there, never
+    derived from the quarter rows (per JM 2026-10-01)."""
     prev_block = ""
     if prev_q_label:
         prev_block = f'''
@@ -2179,7 +2183,11 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
                 set out to out & dv & ","
             end repeat
         end if
-    end try{prev_block}'''
+    end try{prev_block}
+    try
+        set wsT to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set out to out & "#" & ((value of range "{HCBI_HCB_TOTAL_CELL}" of wsT) as text)
+    end try'''
 
 
 def _dozen_rows(raw: str) -> tuple[list[str], list[str]]:
@@ -2204,32 +2212,19 @@ def _num(s: str) -> float | None:
         return None
 
 
-def _quarter_hcb(r1: list[str], r2: list[str]) -> float | None:
-    """One quarter's combined hcb total: label-row X (food) + label-row Y
-    (hcbp). That is exactly what the sheet's row-below X cell computes for
-    Q2/Q3 2026 (=SUM(X<label>:Y<label>)), but Q4's X381 is a literal 0 —
-    so the inputs are summed here and the row-below cell is only used when
-    the label row has neither value (bug 2026-10-01)."""
-    x1 = _num(r1[19]) if len(r1) > 19 else None
-    y1 = _num(r1[20]) if len(r1) > 20 else None
-    if x1 is not None or y1 is not None:
-        return (x1 or 0.0) + (y1 or 0.0)
-    return _num(r2[19]) if len(r2) > 19 else None
-
-
-def _parse_dozen_segment(cur_raw: str, prev_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
+def _parse_dozen_segment(cur_raw: str, prev_raw: str = "", total_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
     """(daily_dozen, hcbi_behind) from the hcbi segment: the current
     quarter's "row1|row2" E:Y block plus, when present, the previous
     quarter's block in the same shape. Every figure is the RUNNING
     Q<n-1>+Q<n> value — a category/domain counts as present when either
-    quarter has a value. "hcb" is label-row X + Y per quarter (see
-    _quarter_hcb); "hcbp" is column Y on either row. A legacy prev segment
-    that is a bare number (pre-2026-10-01 scripts emitted just the prior
-    row-below X) still feeds "hcb" alone."""
+    quarter has a value. "hcbp" is column Y on either row. "hcb" is NOT
+    derived from the quarter rows at all: it is total_raw, the value of
+    HCBI_HCB_TOTAL_CELL (hcbi!X388) — absent when that read failed, so the
+    chip disappears rather than showing a number the sheet doesn't. A
+    legacy prev segment that is a bare number (pre-2026-10-01 scripts
+    emitted just the prior row-below X) is ignored."""
     c1, c2 = _dozen_rows(cur_raw)
-    legacy_prev_hcb = None
     if prev_raw and "|" not in prev_raw and "," not in prev_raw:
-        legacy_prev_hcb = _num(prev_raw)
         p1, p2 = [], []
     else:
         p1, p2 = _dozen_rows(prev_raw) if prev_raw else ([], [])
@@ -2240,10 +2235,9 @@ def _parse_dozen_segment(cur_raw: str, prev_raw: str = "") -> tuple[list[tuple[s
             continue
         dozen.append((key, (cur or 0.0) + (prev or 0.0)))
     behind: dict[str, float] = {}
-    hcb_cur = _quarter_hcb(c1, c2)
-    hcb_prev = legacy_prev_hcb if legacy_prev_hcb is not None else _quarter_hcb(p1, p2)
-    if hcb_cur is not None or hcb_prev is not None:
-        behind["hcb"] = (hcb_cur or 0.0) + (hcb_prev or 0.0)
+    hcb_total = _num(total_raw)
+    if hcb_total is not None:
+        behind["hcb"] = hcb_total
     hcbp_cur, hcbp_prev = _num(_dozen_cell(c1, c2, 21)), _num(_dozen_cell(p1, p2, 21))
     if hcbp_cur is not None or hcbp_prev is not None:
         behind["hcbp"] = (hcbp_cur or 0.0) + (hcbp_prev or 0.0)
@@ -2330,9 +2324,12 @@ end tell'''
         raw = segs[0] if len(segs) > 0 else ""
         ytd_raw = segs[1] if len(segs) > 1 else ""
         dozen_raw = segs[2] if len(segs) > 2 else ""
-        # prev-quarter's combined X cell rides at the end of this segment
-        # after a ";" (see _dozen_applescript_lines' prev_block) — peel it
-        # off before the "|"-delimited dRow1/dRow2 parsing below.
+        # Segment shape: <cur rows>[;<prev-quarter rows>][#<hcbi!X388>] (see
+        # _dozen_applescript_lines) — peel the "#" total and the ";" prev
+        # block off before the "|"-delimited dRow1/dRow2 parsing below.
+        hcb_total_raw = ""
+        if "#" in dozen_raw:
+            dozen_raw, hcb_total_raw = dozen_raw.split("#", 1)
         prev_hcb_raw = ""
         if ";" in dozen_raw:
             dozen_raw, prev_hcb_raw = dozen_raw.split(";", 1)
@@ -2343,7 +2340,7 @@ end tell'''
             except ValueError:
                 pass
         STATE.habits_ytd = ytd
-        dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw)
+        dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw, hcb_total_raw)
         STATE.daily_dozen = dozen
         STATE.hcbi_behind = behind
         habits = []
