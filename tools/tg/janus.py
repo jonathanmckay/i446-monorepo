@@ -388,14 +388,20 @@ DAILY_DOZEN_COLORS = {
 }
 DAILY_DOZEN_ORDER = ["bn", "br", "fr", "cr", "gr", "vg", "fx", "g", "nt", "sp", "wtr"]
 # hcbi columns X (food 分) / Y (hcbp) hold each domain's running Q<n>
-# total — rendered as a labeled "behind" chip only when negative (same
-# "only show what's owed" convention as HABIT_YTD_COLORS below), in that
-# domain's own PROJECT_COLORS hue. "hcb" reads column X's SECOND row
-# (e.g. X378 in Q3 2026), which is =SUM(X<label row>:Y<label row>) — the
-# combined hcbc+hcbp total — not the label row's food-only subtotal
-# (switched 2026-08-12: the persistent header chip should track overall
-# hcb standing, not just food).
+# total, in that domain's own PROJECT_COLORS hue. "hcbp" is a labeled
+# "behind" chip shown only when negative (same "only show what's owed"
+# convention as HABIT_YTD_COLORS below). "hcb" is the OVERALL hcb standing
+# (combined hcbc+hcbp, switched from food-only 2026-08-12) and is always
+# shown, signed (HCBI_ALWAYS_SHOWN — bug 2026-10-01 "janus still not
+# showing overall hcb points": the running Q3+Q4 total had gone positive,
+# so the negative-only filter hid the one chip meant to be persistent).
+# Per quarter it is label-row X + label-row Y — the same sum the sheet's
+# own row-below cell computes (=SUM(X<label>:Y<label>), e.g. X378 for Q3
+# 2026) — read from the inputs rather than that cell because the Q4 2026
+# block's X381 is a literal 0, not the SUM (the row-below cell is only a
+# fallback when the label row is blank).
 HCBI_BEHIND_DOMAINS = {"hcb": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
+HCBI_ALWAYS_SHOWN = {"hcb"}
 
 # Radioactive — the palette's one unassigned signature neon. The ₦ accent:
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
@@ -2198,15 +2204,28 @@ def _num(s: str) -> float | None:
         return None
 
 
+def _quarter_hcb(r1: list[str], r2: list[str]) -> float | None:
+    """One quarter's combined hcb total: label-row X (food) + label-row Y
+    (hcbp). That is exactly what the sheet's row-below X cell computes for
+    Q2/Q3 2026 (=SUM(X<label>:Y<label>)), but Q4's X381 is a literal 0 —
+    so the inputs are summed here and the row-below cell is only used when
+    the label row has neither value (bug 2026-10-01)."""
+    x1 = _num(r1[19]) if len(r1) > 19 else None
+    y1 = _num(r1[20]) if len(r1) > 20 else None
+    if x1 is not None or y1 is not None:
+        return (x1 or 0.0) + (y1 or 0.0)
+    return _num(r2[19]) if len(r2) > 19 else None
+
+
 def _parse_dozen_segment(cur_raw: str, prev_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
     """(daily_dozen, hcbi_behind) from the hcbi segment: the current
     quarter's "row1|row2" E:Y block plus, when present, the previous
     quarter's block in the same shape. Every figure is the RUNNING
     Q<n-1>+Q<n> value — a category/domain counts as present when either
-    quarter has a value. "hcb" reads column X on row 2 only (the label
-    row's own X is the food-only subtotal); "hcbp" is column Y on either
-    row. A legacy prev segment that is a bare number (pre-2026-10-01
-    scripts emitted just the prior X) still feeds "hcb" alone."""
+    quarter has a value. "hcb" is label-row X + Y per quarter (see
+    _quarter_hcb); "hcbp" is column Y on either row. A legacy prev segment
+    that is a bare number (pre-2026-10-01 scripts emitted just the prior
+    row-below X) still feeds "hcb" alone."""
     c1, c2 = _dozen_rows(cur_raw)
     legacy_prev_hcb = None
     if prev_raw and "|" not in prev_raw and "," not in prev_raw:
@@ -2221,8 +2240,8 @@ def _parse_dozen_segment(cur_raw: str, prev_raw: str = "") -> tuple[list[tuple[s
             continue
         dozen.append((key, (cur or 0.0) + (prev or 0.0)))
     behind: dict[str, float] = {}
-    hcb_cur = _num(c2[19]) if len(c2) > 19 else None
-    hcb_prev = legacy_prev_hcb if legacy_prev_hcb is not None else (_num(p2[19]) if len(p2) > 19 else None)
+    hcb_cur = _quarter_hcb(c1, c2)
+    hcb_prev = legacy_prev_hcb if legacy_prev_hcb is not None else _quarter_hcb(p1, p2)
     if hcb_cur is not None or hcb_prev is not None:
         behind["hcb"] = (hcb_cur or 0.0) + (hcb_prev or 0.0)
     hcbp_cur, hcbp_prev = _num(_dozen_cell(c1, c2, 21)), _num(_dozen_cell(p1, p2, 21))
@@ -2496,8 +2515,9 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
       ("still open").
     - line 2: this quarter's Daily Dozen (hcbi sheet) — a bare-number chip
       for each category that's currently BEHIND (negative; neutral/positive
-      categories are omitted), packed the same way, followed by a labeled
-      "behind" chip for any HCBI_BEHIND_DOMAINS total that's negative.
+      categories are omitted), packed the same way, followed by the labeled
+      overall "hcb" standing (always, signed — HCBI_ALWAYS_SHOWN) and a
+      "behind" chip for any other HCBI_BEHIND_DOMAINS total that's negative.
     - line 3 (2026-09-17): today's 分 by domain, one padded cell per 0分
       column P:Y in sheet order/fills — see _domain_pts_chips.
     Each line independently drops whatever doesn't fit in WIDTH_HINT."""
@@ -2551,9 +2571,12 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     dozen_chips = _pack_number_chips(
         [(f"bold bg:{DAILY_DOZEN_COLORS.get(key, '#444444')} #ffffff", f"{v:g}")
          for key, v in STATE.daily_dozen if v < 0])
+    # "hcb" is the overall standing and stays up whatever its sign
+    # (HCBI_ALWAYS_SHOWN); "hcbp" is a behind chip, negative only.
     dozen_chips += [(f"bold bg:{color} #ffffff", f"{name} {int(round(STATE.hcbi_behind[name])):+d} ")
                     for name, color in HCBI_BEHIND_DOMAINS.items()
-                    if STATE.hcbi_behind.get(name, 0) < 0]
+                    if name in STATE.hcbi_behind
+                    and (name in HCBI_ALWAYS_SHOWN or STATE.hcbi_behind[name] < 0)]
     habit_line = done_chips + pending_chips
     reserve = dwidth(prayer_chip[1]) if prayer_chip else 0
     habit_row = _habit_row(habit_line, budget=max(0, WIDTH_HINT - reserve))
