@@ -505,6 +505,11 @@ DTD_BLOCKAPPLY="/tmp/dtd-$DTD_ID.blockapply.sh"
 # by domain label. Per-session; the list generator reads it as its 8th arg.
 DTD_VIEW="/tmp/dtd-$DTD_ID.view"
 DTD_VIEWTOGGLE="/tmp/dtd-$DTD_ID.view-toggle.sh"
+# Active domain-search scope (2026-10-01): the domain code typed into the
+# query box, or empty. Persisted per-session so EVERY reload path (the
+# watcher's cache-mtime reload, ctrl-* bindings, resize) re-applies it; the
+# list generator reads it as its 11th arg. ctrl-r clears it.
+DTD_DOMAIN="/tmp/dtd-$DTD_ID.domain"
 # Skips persist across dtd sessions for the duration of one day (stable
 # path + date guard), unlike the other per-session temp files. Forward-only:
 # reset (and advance the stamp) only when LOCAL_TODAY is strictly newer than
@@ -1590,7 +1595,15 @@ def time_of(t):
 # an exact match and reloads through here with the domain as this arg,
 # +clear-query -- so this filter, unlike view/sort, actually REMOVES
 # non-matching rows rather than just reordering them.
-domain_filter = sys.argv[10] if len(sys.argv) > 10 else ''
+# The 11th arg is a FILE holding the active domain code (like the view file
+# in arg 8), not the code itself (2026-10-01 fix): a literal code was only
+# ever sent by the domain-search POST, so the next reload from any other
+# path (the cache-mtime watcher, ctrl-* bindings, resize) silently dropped
+# the filter and the full list came back. Empty/missing file = no filter.
+domain_filter = ''
+try:
+    domain_filter = open(sys.argv[10]).read().strip() if len(sys.argv) > 10 else ''
+except: domain_filter = ''
 if domain_filter:
     unique = [t for t in unique if domain_of(t) == domain_filter]
 
@@ -1813,6 +1826,7 @@ VTEOF
 sed -i '' "s|PLACEHOLDER_VIEW|$DTD_VIEW|g; s|PLACEHOLDER_HDR|$DTD_HDR|g" "$DTD_VIEWTOGGLE"
 chmod +x "$DTD_VIEWTOGGLE"
 echo default > "$DTD_VIEW"   # start in default view each session
+: > "$DTD_DOMAIN"            # no domain-search scope at session start
 
 # --- Domain-search script used by fzf's change: binding (2026-09-16) ---
 # Fires on every keystroke. A domain code is conveyed PURELY via row color
@@ -1855,8 +1869,11 @@ port="\$(cat "$DTD_PORT" 2>/dev/null)"
 # to defer against; resolving now also sidesteps stacking a third layer of
 # shell-escaping on top of the curl-POST -> fzf-reload hop.
 today="\$(date +%Y-%m-%d)"
-reload_cmd="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '\$q'"
-echo "🔍 domain: \$q (ctrl-r or any action to clear)" > "$DTD_HDR"
+# Persist the scope so every later reload (watcher, ctrl-*, resize) keeps it;
+# the list generator reads this file as its 11th arg (2026-10-01 fix).
+printf '%s' "\$q" > "$DTD_DOMAIN"
+reload_cmd="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
+echo "🔍 domain: \$q (ctrl-r to clear)" > "$DTD_HDR"
 if [[ -n "\$FZF_API_KEY" ]]; then
   curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$port" \\
     --data "reload(\$reload_cmd)+clear-query" >/dev/null 2>&1
@@ -2414,6 +2431,7 @@ cat > "$DTD_REFRESH" << REFRESHEOF
 #!/bin/zsh
 python3 "$DID_FAST" --refresh-cache
 cp "$CACHE" "$DTD_CACHE_FILE"
+: > "$DTD_DOMAIN"   # ctrl-r also clears the domain-search scope
 echo "🔄 refreshed" > "$DTD_HDR"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the refresh above
@@ -2625,7 +2643,7 @@ TALLY_PID=$!
     [[ -z "$port" ]] && continue
     # Rebuild with the freshly-computed date so a post-midnight reload filters to
     # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
-    watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
+    watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
     if [[ -n "$FZF_API_KEY" ]]; then
       curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
     else
@@ -2679,7 +2697,7 @@ while true; do
   # transient window. A literal \$(...) here is re-evaluated by the shell fzf
   # spawns to run each reload/execute action, so it tracks the real clock for
   # as long as the fzf process stays open, no relaunch required.
-  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' \"\$(date +%Y-%m-%d)\" '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK'"
+  DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' \"\$(date +%Y-%m-%d)\" '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
   DTD_RELOAD="${DTD_LIST_CMD}"
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).

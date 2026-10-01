@@ -77,7 +77,9 @@ def _run_listgen(tmp, cache_obj, domain_filter=None):
     args = [sys.executable, str(payload), cache, done, removed,
             "2026-09-16", "120", skipped, timer, view, blockpick]
     if domain_filter is not None:
-        args.append(domain_filter)
+        # 11th arg is a FILE holding the domain code (2026-10-01: persisted
+        # per-session so every reload path re-applies it), not the literal.
+        args.append(_w("domain", domain_filter))
     r = subprocess.run(args, capture_output=True, text=True)
     assert r.returncode == 0, f"list-gen crashed: {r.stderr}"
     return r.stdout
@@ -157,8 +159,8 @@ def test_invocation_line_forwards_tenth_argument():
 
 def test_domain_filter_parsed_and_applied_before_view_sort():
     body = _listgen_payload()
-    assert "domain_filter = sys.argv[10]" in body
-    filter_idx = body.index("domain_filter = sys.argv[10]")
+    assert "domain_filter = open(sys.argv[10]).read().strip()" in body
+    filter_idx = body.index("domain_filter = open(sys.argv[10]).read().strip()")
     apply_idx = body.index("unique = [t for t in unique if domain_of(t) == domain_filter]")
     view_idx = body.index("if view == 'project':")
     assert filter_idx < apply_idx < view_idx, (
