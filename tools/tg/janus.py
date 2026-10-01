@@ -2085,10 +2085,13 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
     the rest of this fetch.
 
     If prev_q_label is non-empty, a second independent search finds THAT
-    quarter's own combined X cell and appends it after a ";" so "hcb"
-    becomes a running Q<n-1>+Q<n> total (2026-09-06 per JM, matching the
-    same change in the jm dashboard's CACHE_CARDS) rather than resetting to
-    zero every quarter boundary. Kept as a separate try/search rather than
+    quarter's row pair and appends its E:Y two-row block after a ";" (same
+    "row1|row2" shape as the current quarter) so "hcb" (2026-09-06 per JM,
+    matching the jm dashboard's CACHE_CARDS), the Daily Dozen deficits and
+    "hcbp" (2026-10-01: on day one of Q4 the dozen read all-zero so no
+    category showed, and hcbp showed Q4's lone -86 instead of the running
+    1323-86) all carry Q<n-1>+Q<n> instead of resetting to zero at every
+    quarter boundary. Kept as a separate try/search rather than
     folding into the block above so a missing prior-quarter row (e.g. Q1,
     with no Q0) degrades to "just this quarter" instead of losing the
     whole segment."""
@@ -2110,11 +2113,25 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
             end if
         end repeat
         if pRow > 0 then
-            set pv to ""
-            try
-                set pv to (value of range ("X" & (pRow + 1)) of wsP) as text
-            end try
-            set out to out & ";" & pv
+            set tmpP to value of range ("E" & pRow & ":Y" & (pRow + 1)) of wsP
+            set pRow1 to item 1 of tmpP
+            set pRow2 to item 2 of tmpP
+            set out to out & ";"
+            repeat with i from 1 to (count of pRow1)
+                set dv to ""
+                try
+                    set dv to (item i of pRow1) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+            set out to out & "|"
+            repeat with i from 1 to (count of pRow2)
+                set dv to ""
+                try
+                    set dv to (item i of pRow2) as text
+                end try
+                set out to out & dv & ","
+            end repeat
         end if
     end try'''
     return f'''    try
@@ -2157,6 +2174,61 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
             end repeat
         end if
     end try{prev_block}'''
+
+
+def _dozen_rows(raw: str) -> tuple[list[str], list[str]]:
+    rows = raw.split("|")
+    r1 = rows[0].split(",") if len(rows) > 0 else []
+    r2 = rows[1].split(",") if len(rows) > 1 else []
+    return r1, r2
+
+
+def _dozen_cell(r1: list[str], r2: list[str], offset: int) -> str:
+    """offset is 1-based within E:Y (E=1 .. Y=21); the value lives on
+    whichever of the two rows is non-blank for that column."""
+    v1 = r1[offset - 1].strip() if offset - 1 < len(r1) else ""
+    v2 = r2[offset - 1].strip() if offset - 1 < len(r2) else ""
+    return v1 or v2
+
+
+def _num(s: str) -> float | None:
+    try:
+        return float(s.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_dozen_segment(cur_raw: str, prev_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
+    """(daily_dozen, hcbi_behind) from the hcbi segment: the current
+    quarter's "row1|row2" E:Y block plus, when present, the previous
+    quarter's block in the same shape. Every figure is the RUNNING
+    Q<n-1>+Q<n> value — a category/domain counts as present when either
+    quarter has a value. "hcb" reads column X on row 2 only (the label
+    row's own X is the food-only subtotal); "hcbp" is column Y on either
+    row. A legacy prev segment that is a bare number (pre-2026-10-01
+    scripts emitted just the prior X) still feeds "hcb" alone."""
+    c1, c2 = _dozen_rows(cur_raw)
+    legacy_prev_hcb = None
+    if prev_raw and "|" not in prev_raw and "," not in prev_raw:
+        legacy_prev_hcb = _num(prev_raw)
+        p1, p2 = [], []
+    else:
+        p1, p2 = _dozen_rows(prev_raw) if prev_raw else ([], [])
+    dozen: list[tuple[str, float]] = []
+    for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
+        cur, prev = _num(_dozen_cell(c1, c2, offset)), _num(_dozen_cell(p1, p2, offset))
+        if cur is None and prev is None:
+            continue
+        dozen.append((key, (cur or 0.0) + (prev or 0.0)))
+    behind: dict[str, float] = {}
+    hcb_cur = _num(c2[19]) if len(c2) > 19 else None
+    hcb_prev = legacy_prev_hcb if legacy_prev_hcb is not None else (_num(p2[19]) if len(p2) > 19 else None)
+    if hcb_cur is not None or hcb_prev is not None:
+        behind["hcb"] = (hcb_cur or 0.0) + (hcb_prev or 0.0)
+    hcbp_cur, hcbp_prev = _num(_dozen_cell(c1, c2, 21)), _num(_dozen_cell(p1, p2, 21))
+    if hcbp_cur is not None or hcbp_prev is not None:
+        behind["hcbp"] = (hcbp_cur or 0.0) + (hcbp_prev or 0.0)
+    return dozen, behind
 
 
 def fetch_habits_today():
@@ -2252,51 +2324,7 @@ end tell'''
             except ValueError:
                 pass
         STATE.habits_ytd = ytd
-        dozen_rows = dozen_raw.split("|")
-        dozen_row1 = dozen_rows[0].split(",") if len(dozen_rows) > 0 else []
-        dozen_row2 = dozen_rows[1].split(",") if len(dozen_rows) > 1 else []
-
-        def _dozen_cell(offset: int) -> str:
-            # offset is 1-based within E:Y (E=1 .. Y=21); the value lives on
-            # whichever of the two rows is non-blank for that column.
-            v1 = dozen_row1[offset - 1].strip() if offset - 1 < len(dozen_row1) else ""
-            v2 = dozen_row2[offset - 1].strip() if offset - 1 < len(dozen_row2) else ""
-            return v1 or v2
-        dozen: list[tuple[str, float]] = []
-        for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
-            raw_v = _dozen_cell(offset)
-            if raw_v:
-                try:
-                    dozen.append((key, float(raw_v)))
-                except ValueError:
-                    pass
-        behind: dict[str, float] = {}
-        # "hcb" reads column X's row2 specifically (the label row's own X is
-        # the food-only subtotal, not the combined total this chip wants —
-        # see _dozen_applescript_lines) — no v1-or-v2 fallback. Summed with
-        # the previous quarter's own combined cell (prev_hcb_raw) so the chip
-        # tracks a running Q<n-1>+Q<n> total, matching the jm dashboard.
-        raw_hcb = dozen_row2[19].strip() if len(dozen_row2) > 19 else ""
-        hcb_total = None
-        if raw_hcb:
-            try:
-                hcb_total = float(raw_hcb)
-            except ValueError:
-                pass
-        if prev_hcb_raw.strip():
-            try:
-                hcb_total = (hcb_total or 0.0) + float(prev_hcb_raw.strip())
-            except ValueError:
-                pass
-        if hcb_total is not None:
-            behind["hcb"] = hcb_total
-        for key, offset in (("hcbp", 21),):
-            raw_v = _dozen_cell(offset)
-            if raw_v:
-                try:
-                    behind[key] = float(raw_v)
-                except ValueError:
-                    pass
+        dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw)
         STATE.daily_dozen = dozen
         STATE.hcbi_behind = behind
         habits = []

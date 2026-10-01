@@ -206,3 +206,63 @@ def test_prev_quarter_label_skipped_for_q1():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── quarter boundary: running Q<n-1>+Q<n> for the dozen, hcb AND hcbp ───────
+# (bug 2026-10-01: on day one of Q4 the dozen read all-zero so no category
+# rendered, and hcbp showed Q4's lone -86 instead of the running 1323-86)
+
+# E..Y (21 cells) of the hcbi Q3 and Q4 row pairs, exactly as read 2026-10-01,
+# built from column letters so the fixtures can't drift from the sheet layout.
+_COLS = "EFGHIJKLMNOPQRSTUVWXY"
+
+
+def _row(**cells):
+    return ",".join(str(cells.get(c, "")) for c in _COLS) + ","
+
+
+def _pair(row1, row2):
+    return _row(**row1) + "|" + _row(**row2)
+
+
+Q3_ROWS = _pair(dict(E=-87, G=-175, I=-39, K=5, M=2, O=3, Q=-149, X=-585, Y=1323),
+                dict(F=2, H=6, J=-15, L=136, N=13, X=738))
+Q4_ROWS = _pair(dict(E=0, G=0, I=0, K=0, M=0, O=0, Q=0, X=-494, Y=-86),
+                dict(F=0, H=0, J=0, L=0, N=0, X=0))
+
+
+def test_parse_dozen_segment_sums_previous_quarter_into_current():
+    m = _load_tui()
+    dozen, behind = m._parse_dozen_segment(Q4_ROWS, Q3_ROWS)
+    assert dict(dozen)["bn"] == -87 and dict(dozen)["fr"] == -175 and dict(dozen)["vg"] == -15
+    assert dict(dozen)["g"] == 136 and dict(dozen)["br"] == 2
+    assert behind["hcb"] == 738          # Q4 row2 X (0) + Q3 row2 X (738)
+    assert behind["hcbp"] == 1323 - 86   # Q4 Y + Q3 Y, not Q4 alone
+
+
+def test_parse_dozen_segment_q4_alone_would_have_hidden_everything():
+    m = _load_tui()
+    dozen, behind = m._parse_dozen_segment(Q4_ROWS, "")
+    assert all(v == 0 for _, v in dozen)
+    assert behind["hcbp"] == -86 and behind["hcb"] == 0
+
+
+def test_parse_dozen_segment_q1_has_no_previous_quarter():
+    m = _load_tui()
+    dozen, behind = m._parse_dozen_segment(Q3_ROWS, "")
+    assert dict(dozen)["bn"] == -87 and behind["hcbp"] == 1323 and behind["hcb"] == 738
+
+
+def test_parse_dozen_segment_accepts_legacy_bare_prev_x():
+    m = _load_tui()
+    _, behind = m._parse_dozen_segment(Q3_ROWS, "500")
+    assert behind["hcb"] == 738 + 500 and behind["hcbp"] == 1323
+
+
+def test_prev_quarter_applescript_reads_the_full_row_pair():
+    src = (HERE / "janus.py").read_text()
+    i = src.index("def _dozen_applescript_lines(")
+    body = src[i:src.index("\ndef ", i + 1)]
+    prev = body[body.index("prev_block = f'''"):body.index("return f'''")]
+    assert '("E" & pRow & ":Y" & (pRow + 1))' in prev, "prev quarter must return E:Y of both rows"
+    assert '("X" & (pRow + 1))' not in prev, "the old single-cell X read must be gone"
