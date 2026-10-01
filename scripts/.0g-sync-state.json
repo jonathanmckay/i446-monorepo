@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "pc compilation sent before 10": {
-      "todoist_id": "6hfrrXcrgpRf3CxR",
-      "minutes": 30
-    },
-    "taxes work": {
-      "todoist_id": "6hfrrXcfrcHvv2M2",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-10-01T03:55:01.358426-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-01T04:00:05.558858-07:00"
 }
