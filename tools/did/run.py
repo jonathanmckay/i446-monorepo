@@ -45,6 +45,7 @@ from typing import Optional
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 
 from neon import excel  # noqa: E402
+from neon import weeks  # noqa: E402
 import registry  # noqa: E402
 import todoist  # noqa: E402
 
@@ -370,12 +371,11 @@ def _calc_mw(target_date: str) -> tuple[float, int]:
     # If target is in the future relative to current month/day, use prev year
     if target > n + timedelta(days=180):
         target = datetime(year - 1, m, d)
-    # weekday(): Mon=0..Sun=6
-    sunday = target - timedelta(days=(target.weekday() + 1) % 7)
-    M = sunday.month
-    W = (sunday.day - 1) // 7 + 1
-    mw = float(f"{M}.{W}")
-    week_str = f"{M}.{W}"
+    # 2026-10-01 fix: 1n+ col B is a 4-4-5 fiscal-week ladder, not calendar
+    # week-of-month (see lib/neon/weeks.py). The old "(sunday.day-1)//7+1"
+    # put every write from 2026-08-30 on one row above its real week.
+    week_str = weeks.fiscal_week_label(target.date())
+    mw = float(week_str)
     # Single server-side scan (2026-08-09 fix): this used to call
     # excel.read("1n+", "B", row=r) once PER row in a client-side loop over
     # rows 4-59 -- up to 56 sequential network round trips, each individually
