@@ -939,18 +939,28 @@ REMOVED="$DTD_REMOVED"
 # (the single-task path is the 1-element case of the same loop). Resolve
 # every id up front, prompt ONCE for the defer target, then fan out to the
 # same per-task detached worker as before.
-typeset -a ids names
+typeset -a ids names _want
 for _tid in "\$@"; do
   [[ -n "\$_tid" ]] || continue
   [[ "\$_tid" == BLOCK:* ]] && continue   # picker rows are not tasks
-  task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$_tid")  # id (field 2) -> canonical content
-  clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-  # fzf middle-truncates long rows; keep the prefix before the ellipsis
-  # (regression 2026-06-06: "defer failed: call dad" with two call-dad tasks)
-  [[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
-  ids+=("\$_tid")
-  names+=("\$clean")
+  _want+=("\$_tid")
 done
+# ONE jq pass resolves every id -> cleaned name (2026-10-02). The per-id
+# python3 resolve + sed it replaces cost ~0.2s per task (0.6s for three,
+# more under a Defender exec-scan stall), all of it before the prompt could
+# appear. Unknown ids fall back to themselves, as the resolver did; a
+# middle-truncated name keeps only the prefix before the ellipsis.
+if (( \${#_want[@]} )); then
+  while IFS=\$'\t' read -r _tid _clean; do
+    ids+=("\$_tid"); names+=("\$_clean")
+  done < <(jq -r --args '
+  . as \$d | \$ARGS.positional[] as \$id
+  | (([\$d[] | select(type=="array")[] | select(type=="object" and .id == \$id) | .content] | first) // \$id)
+  | gsub(" *[(][0-9]*[)]"; "") | gsub(" *[[][0-9]*[]]"; "")
+  | gsub(" *[[][0-9.+]*/m[]]"; "") | gsub(" *[{][0-9]*[}]"; "")
+  | gsub("  +"; " ") | sub(" *\$"; "") | sub("….*\$"; "")
+  | [\$id, .] | @tsv' "\${_want[@]}" < "$DTD_CACHE_FILE" 2>/dev/null)
+fi
 (( \${#ids[@]} )) || exit 0
 label="\${names[1]}"
 (( \${#ids[@]} > 1 )) && label="\${#ids[@]} tasks (\${(j:, :)names})"
@@ -1097,20 +1107,26 @@ fi
 # Nothing to pick after 亥 has begun (20:00) unless un-delay is on offer.
 # The +3 accounts for the always-available minute delays (10m/30m/1h),
 # which never depend on the hour of day.
-n=\$(python3 - "\$SNOOZE" "\$@" <<'PYCOUNT'
-import datetime, json, sys
-now = datetime.datetime.now()
-n = sum(1 for h in (4, 6, 8, 10, 12, 14, 16, 18, 20) if h > now.hour) + 3
-try:
-    data = json.load(open(sys.argv[1]))
-    sn = data.get('snoozes') or {}
-    if data.get('date') == now.date().isoformat() and any(str(t) in sn for t in sys.argv[2:]):
-        n += 1
-except Exception:
-    pass
-print(n)
-PYCOUNT
-)
+# ONE jq pass (2026-10-02): later-block option count + "already snoozed
+# today" bonus option + first id -> cleaned name for the header label. It
+# replaces a python3 count script plus a python3 resolve + sed, i.e. three
+# exec-scan stalls before the picker could appear.
+[[ -f "\$SNOOZE" ]] || printf '{}' > "\$SNOOZE"
+_out=\$(jq -r --slurpfile sn "\$SNOOZE" --args '
+  (now | localtime) as \$lt
+  | (([4,6,8,10,12,14,16,18,20] | map(select(. > \$lt[3])) | length) + 3
+     + (if ((\$sn[0] // {}) | (.date == (\$lt | strftime("%Y-%m-%d")))
+            and ((.snoozes // {}) | keys | any(. as \$k | \$ARGS.positional | index(\$k) != null)))
+        then 1 else 0 end)) as \$n
+  | \$ARGS.positional[0] as \$id
+  | (([.[] | select(type=="array")[] | select(type=="object" and .id == \$id) | .content] | first) // \$id)
+  | gsub(" *[(][0-9]*[)]"; "") | gsub(" *[[][0-9]*[]]"; "")
+  | gsub(" *[[][0-9.+]*/m[]]"; "") | gsub(" *[{][0-9]*[}]"; "")
+  | gsub("  +"; " ") | sub(" *\$"; "") | sub("….*\$"; "")
+  | [\$n, .] | @tsv' "\$@" < "$DTD_CACHE_FILE" 2>/dev/null)
+n="\${_out%%\$'\t'*}"
+clean="\${_out#*\$'\t'}"
+[[ "\$_out" == *\$'\t'* ]] || { n=3; clean="\$1"; }   # jq failed: keep the picker usable
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the python call
 # above — leaked SGR motion sequences type themselves into fzf's query as
@@ -1124,9 +1140,6 @@ if [[ "\$n" == "0" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
   exit 0
 fi
-task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-[[ "\$clean" == *"…"* ]] && clean="\${clean%%…*}"
 lbl="\$clean"
 [[ \$# -gt 1 ]] && lbl="\$clean +\$((\$# - 1)) more"
 printf '%s\n' "\$@" > "\$BLOCKPICK"
@@ -2787,13 +2800,13 @@ while true; do
       --bind "enter:execute-silent($DTD_ENTER {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:execute($DTD_DEFER {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:execute($DTD_DEFER {+2})+exclude-multi+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")

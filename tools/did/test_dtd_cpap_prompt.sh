@@ -58,7 +58,9 @@ echo "PASS: alt-enter routes through transform(\$DTD_DONE_ROUTER {2})"
 # (execute-silent's shape changed 2026-08-01: it now runs the fast id-hide
 # synchronously then backgrounds the full done.sh, hence 4 %s args not 2 —
 # this assertion was stale from before that redesign and never re-checked.)
-grep -F "printf 'execute(%s %s)' \"\$DTD_DONE\"" "$SCRIPT" >/dev/null \
+# 2026-10-02: the action is prefixed by fzf's instant-hide 'exclude+' via a %s
+# slot and carries the base64 content as a 3rd arg; it must still be execute().
+grep -F "printf '%sexecute(%s %s %s)' \"\$_ex\" \"\$DTD_DONE\"" "$SCRIPT" >/dev/null \
   || fail "router must emit execute() for cpap"
 grep -F "printf 'execute-silent(%s %s; %s %s >/dev/null 2>&1 &)' \"\$DTD_DONE_HIDE\"" "$SCRIPT" >/dev/null \
   || fail "router must emit execute-silent() for non-cpap"
