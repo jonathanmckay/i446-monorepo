@@ -33,7 +33,7 @@ week. Columns (confirmed against live data 2026-09-15):
 | Col | Meaning | Source |
 |-----|---------|--------|
 | A | M.W fiscal week label (e.g. `9.2`) | already populated — verify, don't write |
-| B | Rating vs. expectations: `MM` (missed) / `MA` (met ambition) / `EE` (exceeded) | Question 1 |
+| B | Rating vs. expectations: `MM` (missed) / `MA` (met ambition) / `EE` (exceeded) / `OL` (out: sick or leave, week not rated) | Question 1 |
 | C | i9 points earned that week | computed from `0分` col R |
 | D | What got done last week | Question 2 |
 | E | What exceeding expectations looks like this week | Question 3 |
@@ -113,7 +113,8 @@ Ask directly in the conversation (this is a 3-field survey, not worth a
 dedicated TUI):
 
 1. **Rating vs. expectations** — offer `MM` / `MA` / `EE` (missed / met
-   ambition / exceeded); a single-select question fits well here.
+   ambition / exceeded), plus `OL` for a week that was out (sick, leave;
+   JM used it 2026-10-02 for week 9.4); a single-select question fits well here.
 2. **What did I get done last week?** — free text.
 3. **What does exceeding expectations this week look like?** — free text.
 
