@@ -104,7 +104,7 @@ def test_value_prompt_habit_routes_to_execute(tmp_path):
     router = _generate_router(tmp_path, cache)
     out = subprocess.run(["zsh", str(router), "id-value-prompt"],
                           capture_output=True, text=True, check=True).stdout
-    assert out.startswith("execute("), f"i444 must route to execute (tty), got: {out!r}"
+    assert out.removeprefix("exclude+").startswith("execute("), f"i444 must route to execute (tty), got: {out!r}"
     router.unlink()
 
 
@@ -113,7 +113,7 @@ def test_plain_habit_routes_to_execute_silent(tmp_path):
     router = _generate_router(tmp_path, cache)
     out = subprocess.run(["zsh", str(router), "id-plain"],
                           capture_output=True, text=True, check=True).stdout
-    assert out.startswith("execute-silent("), f"plain habit must route to execute-silent, got: {out!r}"
+    assert out.removeprefix("exclude+").startswith("execute-silent("), f"plain habit must route to execute-silent, got: {out!r}"
     router.unlink()
 
 
@@ -122,7 +122,7 @@ def test_unknown_id_falls_back_to_itself_and_routes_silent(tmp_path):
     router = _generate_router(tmp_path, cache)
     out = subprocess.run(["zsh", str(router), "totally-unknown-id"],
                           capture_output=True, text=True, check=True).stdout
-    assert out.startswith("execute-silent("), (
+    assert out.removeprefix("exclude+").startswith("execute-silent("), (
         "an id with no cache match must fall back to itself as the "
         "content, which won't match any value-prompt name, and route silent")
     router.unlink()

@@ -67,7 +67,7 @@ def test_plain_habit_completion_is_not_backgrounded(tmp_path):
     router = _generate_router(tmp_path, cache)
     out = subprocess.run(["zsh", str(router), "id-plain"],
                           capture_output=True, text=True, check=True).stdout.strip()
-    assert out.startswith("execute-silent("), f"expected execute-silent, got: {out!r}"
+    assert out.removeprefix("exclude+").startswith("execute-silent("), f"expected execute-silent, got: {out!r}"
     assert not re.search(r"&\)\s*$", out), (
         "done.sh must NOT be backgrounded inside execute-silent — a `&` here "
         "detaches it as a grandchild that fzf drops before the FIFO push "
