@@ -307,10 +307,30 @@ LABEL_TO_0FEN = {
     # main hcb column").
     "hcbp": "hcbi:Y",
     "xk87": "X", "xk88": "X",
+    # xk20 / xk22 (time with Theo / Ren) as DOMAINS (user request
+    # 2026-10-02): a Todoist card labelled xk20, or "... @xk20", logs its
+    # MINUTES into the kid's own 0n column (header "xk20" -> AJ, "xk22" ->
+    # AK — resolved by header, never a hardcoded letter), cumulatively,
+    # exactly like "/did xk20 20" does. 0n!AZ sums those columns and 0分!X
+    # is ='0n'!AZ, so the minutes already reach the xk points column at a
+    # point per minute — the card's [N] is therefore NOT appended to 0分
+    # (that would double count; see synth_kid_time_writes for how [N] is
+    # used as a minutes fallback instead). The "0n:" prefix marks the route;
+    # main() gates the 0分 append off for it, same as the "hcbi:" route.
+    "xk20": "0n:xk20", "xk22": "0n:xk22",
     "s897": "Y",
 }
 
 HCBI_ROUTE_PREFIX = "hcbi:"
+ZERO_N_ROUTE_PREFIX = "0n:"
+
+
+def _0n_domain_header(fen_col) -> Optional[str]:
+    """0n header name when `fen_col` is a "0n:<header>" route (a domain
+    whose credit is MINUTES in a 0n column, e.g. xk20 -> AJ), else None."""
+    if isinstance(fen_col, str) and fen_col.startswith(ZERO_N_ROUTE_PREFIX):
+        return fen_col[len(ZERO_N_ROUTE_PREFIX):]
+    return None
 
 
 def _hcbi_domain_col(fen_col) -> Optional[str]:
@@ -1210,6 +1230,9 @@ class RouteResult:
     is_variable_1n: bool = False
     variable_value: Optional[int] = None
     error: Optional[str] = None
+    # Set on a 0n result synthesized by synth_kid_time_writes: the name of
+    # the task (card / ad-hoc item) whose minutes this write carries.
+    kid_time_for: Optional[str] = None
 
 
 def route_items(items: list[ParsedItem], headers: dict, tq: dict,
@@ -2138,6 +2161,56 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
             # Without this they log 0 when completed from dtd with a timer up.
             r.fen_points = mins + (r.item.bonus_points or 0)
             r.item.time_value = mins
+
+
+_TIME_EST_RE = re.compile(r"\((\d+)\)")
+
+
+def synth_kid_time_writes(results: list, toggl_stop: Optional[dict],
+                          headers: dict) -> list:
+    """0n minute writes for results whose domain is a "0n:<header>" route
+    (xk20 / xk22, user request 2026-10-02). For each Todoist-matched or
+    ad-hoc item carrying such a route, return a synthesized step="0n"
+    RouteResult on that header's column, cumulative (xk20/xk22 are in
+    CUMULATIVE_0N) — the same write "/did xk20 <minutes>" makes. Minutes,
+    in order: an explicit HHMM-HHMM range; the Toggl timer just stopped for
+    this task (toggl_stop.description == the item name); the card's "(N)"
+    estimate; the card's [N] (a point per minute, since 0n!AZ -> 0分!X
+    credits minutes at that rate anyway); else 1, with a warning.
+    Never marks the kid habit itself complete (completed-today skips
+    kid_time_for results) and closes no Todoist task of its own."""
+    h0n_norm = {header_normalize(k): v for k, v in headers.get("0n", {}).items()}
+    out = []
+    for r in results:
+        header = _0n_domain_header(r.fen_col)
+        if not header or r.step not in ("todoist", "variable"):
+            continue
+        col = h0n_norm.get(header_normalize(header))
+        if col is None:
+            print(f"⚠ {r.item.name}: no 0n column headed {header!r} — kid minutes not written",
+                  file=sys.stderr)
+            continue
+        minutes = None
+        if r.item.time_range:
+            minutes = time_range_minutes(*r.item.time_range)
+        elif (toggl_stop and toggl_stop.get("minutes")
+                and toggl_stop.get("description", "").lower() == r.item.name.lower()):
+            minutes = toggl_stop["minutes"]
+        elif r.todoist_task and _TIME_EST_RE.search(r.todoist_task.get("content", "")):
+            minutes = int(_TIME_EST_RE.search(r.todoist_task["content"]).group(1))
+        elif r.item.points_override:
+            minutes = r.item.points_override
+        elif r.fen_points > 0:
+            minutes = r.fen_points
+        if not minutes or minutes <= 0:
+            minutes = 1
+            print(f"⚠ {r.item.name}: no minutes (range/timer/(N)/[N]) — {header} +1",
+                  file=sys.stderr)
+        kid_item = ParsedItem(raw=header, name=header, target_date=r.item.target_date,
+                              time_value=minutes)
+        out.append(RouteResult(item=kid_item, step="0n", col_num=col,
+                               write_value=minutes, kid_time_for=r.item.name))
+    return out
 
 
 def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
@@ -3127,6 +3200,9 @@ def main():
     toggl_stop = (stop_matching_toggl(all_names)
                   if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
+    # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
+    # (joins the step-4 0n batch below; see synth_kid_time_writes).
+    fast.extend(synth_kid_time_writes(fast, toggl_stop, headers))
 
     # 4. Batch 0₦ writes
     on_writes = [r for r in fast if r.step == "0n" and r.col_num]
@@ -3228,6 +3304,9 @@ def main():
         # A domain routed to the hcbi sheet (hcbp -> hcbi!Y) is the same
         # case: its points land in step 5b and reach 0分!W via the formula.
         is_hcbi_domain = _hcbi_domain_col(r.fen_col) is not None
+        # A "0n:<header>" domain (xk20 -> AJ) credits MINUTES via the 0n
+        # batch; 0n!AZ -> 0分!X already turns them into points.
+        is_0n_domain = _0n_domain_header(r.fen_col) is not None
         # HCBI_HABITS items (e.g. "bball") already reach their 0分 column
         # through the hcbi write below (step 5b): 0分!W is a FORMULA
         # (=hcbi!AA224+hcbi!Y224+...), not a plain accumulator, and this
@@ -3237,7 +3316,8 @@ def main():
         # hcbi!Y and directly on 0分!W, whose formula already sums hcbi!Y).
         # {N} curly points (0g bonus, column Q) are a separate, unrelated
         # mechanism and still apply regardless of HCBI_HABITS membership.
-        if (not is_hcbi_habit and not is_hcbi_domain and r.fen_col and _fen_pts_ok(r)
+        if (not is_hcbi_habit and not is_hcbi_domain and not is_0n_domain
+                and r.fen_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
             fen_appends.append((r.fen_col, r.fen_points))
             fen_names.append(r.item.name)
@@ -3266,7 +3346,8 @@ def main():
         if not r.item.block_override:
             continue
         habit_routes_via_formula = (r.item.name.lower() in HCBI_HABITS
-                                    or _hcbi_domain_col(r.fen_col) is not None)
+                                    or _hcbi_domain_col(r.fen_col) is not None
+                                    or _0n_domain_header(r.fen_col) is not None)
         if habit_routes_via_formula:
             print(f"⚠ {r.item.name}: block override ({r.item.block_override}) "
                   f"ignored — hcbi habits route points through a formula, "
@@ -3618,7 +3699,9 @@ def main():
                 posthoc_results[name] = result
 
     # 7. Update completed-today (with points for build order enrichment)
-    completed_names = [r.item.name for r in fast]
+    # Synthesized kid-time writes (kid_time_for) carry a CARD's minutes into
+    # xk20/xk22's column; they must not mark the habit "xk20" itself done.
+    completed_names = [r.item.name for r in fast if not r.kid_time_for]
     completed_points = {}
     for r in fast:
         if r.fen_points:
@@ -3704,11 +3787,15 @@ def main():
             entry["todoist"] = td_entry
         if r.step == "variable" and r.item.name in posthoc_results:
             entry["posthoc"] = posthoc_results[r.item.name]
+        if r.kid_time_for:
+            entry["kid_time_for"] = r.kid_time_for
         if r.fen_col and not _hcbi_domain_col(r.fen_col):
-            fen_entry = {"col": r.fen_col, "points": r.fen_points}
-            if r.item.bonus_points:
-                fen_entry["bonus"] = r.item.bonus_points
-            entry["0fen"] = fen_entry
+            # A "0n:<header>" route (xk20/xk22) wrote minutes, not 0分 points.
+            if not _0n_domain_header(r.fen_col):
+                fen_entry = {"col": r.fen_col, "points": r.fen_points}
+                if r.item.bonus_points:
+                    fen_entry["bonus"] = r.item.bonus_points
+                entry["0fen"] = fen_entry
         if r.item.time_range and r.item.name in toggl_created:
             entry["toggl"] = toggl_created[r.item.name]
         if r.item.name in night_hcmc_results:
