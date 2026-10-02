@@ -116,6 +116,17 @@ def _env():
     return {k: v for k, v in os.environ.items() if k != "DTD_DEFER_PROMPT"}
 
 
+def _wait_for(pred, timeout=8.0):
+    """The detached per-task workers each spawn two python3 processes; under
+    an exec-scan stall that can take seconds, so poll rather than sleep."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if pred():
+            return True
+        time.sleep(0.1)
+    return pred()
+
+
 def test_defer_batch_resolves_every_id_fast_and_skips_picker_rows():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -123,12 +134,13 @@ def test_defer_batch_resolves_every_id_fast_and_skips_picker_rows():
         try:
             t0 = time.time()
             subprocess.run(["zsh", str(d), "A1", "C3", "D4", "nope", "BLOCK:戌"], env=_env(), timeout=10, capture_output=True)
-            assert time.time() - t0 < 1.0
-            time.sleep(1.0)
+            assert time.time() - t0 < 1.0, "the wrapper itself must not block on the workers"
             assert set((tmp / "removed.ids").read_text().split()) == {"A1", "C3", "D4", "nope"}
-            assert (tmp / "processed").read_text().count("x") == 4
-            hdr = (tmp / "hdr").read_text()
-            assert "nope" in hdr, "unknown id falls back to itself as the name"
+            assert _wait_for(lambda: (tmp / "processed").read_text().count("x") == 4), "every detached worker completed"
+            # the header is owned by whichever worker finishes last, so check
+            # the unknown-id fallback name on a run of its own
+            subprocess.run(["zsh", str(d), "nope"], env=_env(), timeout=10, capture_output=True)
+            assert _wait_for(lambda: "⏭ nope" in (tmp / "hdr").read_text()), "unknown id falls back to itself as the name"
         finally:
             d.unlink(); a.unlink()
 
@@ -139,12 +151,11 @@ def test_defer_label_strips_annotations_and_ellipsis_tail():
         d, a = _generate(tmp, "tdefjq2")
         try:
             subprocess.run(["zsh", str(d), "C3"], env=_env(), timeout=10, capture_output=True)
-            time.sleep(0.8)
+            assert _wait_for(lambda: "⏭" in (tmp / "hdr").read_text())
             hdr = (tmp / "hdr").read_text()
             assert "a very long name that got" in hdr and "…" not in hdr and "(5)" not in hdr, hdr
             subprocess.run(["zsh", str(d), "D4"], env=_env(), timeout=10, capture_output=True)
-            time.sleep(0.8)
-            assert "it's (weird) $x; y)" in (tmp / "hdr").read_text(), "metachars survive the jq pass"
+            assert _wait_for(lambda: "it's (weird) $x; y)" in (tmp / "hdr").read_text()), "metachars survive the jq pass"
         finally:
             d.unlink(); a.unlink()
 
