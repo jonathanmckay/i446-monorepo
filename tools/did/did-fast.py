@@ -816,6 +816,19 @@ def load_task_queue() -> dict:
     return json.loads(TASK_QUEUE_PATH.read_text())
 
 
+def _defer_refresh() -> bool:
+    """True when the caller will refresh the task cache itself, debounced.
+
+    dtd's FIFO worker sets DIDFAST_DEFER_REFRESH=1: it runs did-fast once per
+    completion, strictly serially, and the ~4s blocking refresh_task_queue()
+    inside every ritual / d359 close was dead time on that queue (measured
+    2026-10-02: a ritual landed 5-9s after the keypress, the next queued one
+    19s). The worker fires ONE backgrounded --refresh-cache once the FIFO
+    goes idle instead. Every other caller (/did, /inbound, janus) keeps the
+    inline refresh, so a goal/ritual still surfaces at once for them."""
+    return os.environ.get("DIDFAST_DEFER_REFRESH", "") == "1"
+
+
 def refresh_task_queue(block: bool = False) -> dict:
     """Fetch 0neon + 1neon + 夜neon + 関键路径 from Todoist, rebuild cache.
     Uses a file lock to prevent concurrent refreshes from clobbering each other.
@@ -3070,7 +3083,7 @@ def main():
                             "content": td.get("content", it.name)},
                 "ritual": res,
             })
-        if ritual_entries:
+        if ritual_entries and not _defer_refresh():
             # The cache mtime bump is dtd's only reload signal (2026-06-29), so
             # refresh even in a mixed batch, not just the all-ritual early return.
             try:
@@ -3114,7 +3127,7 @@ def main():
             else:
                 remaining.append(r)
         fast = remaining
-        if d359_met_entries:
+        if d359_met_entries and not _defer_refresh():
             try:
                 refresh_task_queue(block=True)
             except Exception as e:  # noqa: BLE001

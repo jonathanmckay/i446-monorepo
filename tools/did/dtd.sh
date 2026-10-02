@@ -260,8 +260,19 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
   # session, so a failed read here is always this timeout, never real EOF.
   exec 4<>"$DTD_FIFO"
   typeset -A reinjected stale_alerted
+  # Deferred cache refresh (2026-10-02): did-fast skips its in-completion
+  # refresh_task_queue() (~4s, blocking) when this is set; the worker fires
+  # ONE backgrounded --refresh-cache when the FIFO goes idle (the 2s read
+  # timeout below is the debounce), so a burst of ritual closes pays once,
+  # after the last one, instead of 4s inside each.
+  export DIDFAST_DEFER_REFRESH=1
+  _pending_refresh=""
   while true; do
     if ! IFS= read -r -t 2 line; then
+      if [[ -n "$_pending_refresh" ]]; then
+        _pending_refresh=""
+        ( python3 "$DID_FAST" --refresh-cache >/dev/null 2>>"$DTD_LOG.err" ) &
+      fi
       # Durable-log reconcile + recover: any id done.sh recorded in
       # $DTD_PUSHED.log (field 3) that this loop has not yet marked in
       # $DTD_PROCESSED_IDS was lost before reaching us (killable-child FIFO
@@ -456,6 +467,11 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     if [[ -n "$ok" ]]; then
       echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
+      # A ritual / d359-met close would have refreshed the cache inline;
+      # with DIDFAST_DEFER_REFRESH that is now owed -- pay it on next idle.
+      if echo "$result" | jq -e '.results[]? | select(.step == "ritual" or .d359 != null)' >/dev/null 2>&1; then
+        _pending_refresh=1
+      fi
       # 0t completed in dtd → also run the full /0t review (sleep write,
       # sleep dock, media audit, dashboard cache refresh) in the background,
       # not just the bare habit close this loop already did. 0t-fast.py
