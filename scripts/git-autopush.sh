@@ -11,23 +11,30 @@ cd "$REPO_DIR" || { echo "[$TS] ERROR: cd $REPO_DIR failed"; exit 1; }
 # Stage all changes
 git add -A
 
-# If nothing to commit, log and exit
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# If nothing to commit, log and exit -- UNLESS earlier commits never reached
+# origin. A failed pull/push leaves the branch ahead of origin; this early
+# exit used to skip the sync step entirely on every later "no changes" run,
+# so ix sat 33 commits ahead for a day printing "no changes" (2026-10-02).
 if git diff --cached --quiet; then
-    echo "[$TS] no changes"
-    exit 0
+    UNPUSHED=$(git rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null || echo 0)
+    if [ "${UNPUSHED:-0}" = "0" ]; then
+        echo "[$TS] no changes"
+        exit 0
+    fi
+    echo "[$TS] no changes, but $UNPUSHED unpushed commit(s) -- syncing"
+else
+    CHANGED=$(git diff --cached --stat | tail -1)
+    if ! git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
+        echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
+        exit 1
+    fi
+    echo "[$TS] committed: $CHANGED"
 fi
-
-CHANGED=$(git diff --cached --stat | tail -1)
-if ! git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
-    echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
-    exit 1
-fi
-echo "[$TS] committed: $CHANGED"
 
 # Push the CURRENT branch, not a hardcoded main. This lets a clone sit on a
 # `wip` branch so the every-10-min auto-snapshots accumulate there and keep
 # `main` clean for deliberate, tested commits. Release with release-to-main.sh.
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Only rebase if the remote branch already exists (first push creates it).
 if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
     if ! git pull --rebase --autostash origin "$BRANCH" -q 2>&1; then
@@ -44,8 +51,26 @@ if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
         # failure; this script must too, and skip the push below entirely
         # (pushing a mid-rebase HEAD would fail or push garbage anyway).
         git rebase --abort 2>/dev/null
-        echo "[$TS] WARNING: pull --rebase failed, skipping push. See git status."
-        exit 1
+        # Reconcile fallback (2026-10-02, opt-in via AUTOPUSH_RECONCILE=1 in
+        # the cron line): on the designated autopusher the working tree is
+        # the Syncthing-replicated truth, and a rebase replays every 10-min
+        # snapshot one by one, so it conflicts on INTERMEDIATE states even
+        # when the final trees agree (ix monorepo, 2026-10-01: tip-level
+        # merge clean, rebase stuck on "auto: 09:00"). A single merge of the
+        # tips, with local content winning on any conflicting hunk, lands
+        # exactly the tree Syncthing already shows on every machine.
+        if [ "${AUTOPUSH_RECONCILE:-0}" = "1" ]; then
+            if git merge -X ours --no-edit -q -m "$PREFIX: reconcile with origin/$BRANCH $(date '+%Y-%m-%d %H:%M')" "origin/$BRANCH" 2>&1; then
+                echo "[$TS] reconciled: rebase conflicted; merged origin/$BRANCH with local content winning"
+            else
+                git merge --abort 2>/dev/null
+                echo "[$TS] WARNING: pull --rebase and reconcile merge both failed, skipping push. See git status."
+                exit 1
+            fi
+        else
+            echo "[$TS] WARNING: pull --rebase failed, skipping push. See git status."
+            exit 1
+        fi
     fi
 fi
 git push -u origin "$BRANCH" -q 2>&1 || echo "[$TS] WARNING: push failed"

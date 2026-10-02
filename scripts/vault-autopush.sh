@@ -82,6 +82,24 @@ fi
     2>/tmp/vault-autopush-rebase.err
 REBASE_RC=$?
 
+if [ $REBASE_RC -ne 0 ] && [ "${AUTOPUSH_RECONCILE:-0}" = "1" ]; then
+    # Reconcile fallback (2026-10-02, opt-in via AUTOPUSH_RECONCILE=1 in the
+    # cron line). ~/vault is the Syncthing-replicated truth; when a Straylight
+    # session commits+pushes a file and then keeps editing it, origin holds a
+    # stale version while every working tree (and this repo's snapshot) holds
+    # the newer one, and the rebase conflicts forever (i447/i448, 2026-10-01).
+    # Still inside the isolated worktree: abort the rebase, merge origin/main
+    # with local content winning on conflicting hunks, and carry on exactly
+    # as a clean rebase would (reset ~/vault to the new tip, push).
+    (cd "$WORKTREE_DIR" && git rebase --abort 2>/dev/null; git checkout -q --detach "$LOCAL_HEAD" 2>/dev/null)
+    if (cd "$WORKTREE_DIR" && git -c submodule.recurse=false merge -X ours --no-edit -q \
+            -m "vault backup: reconcile with origin/main $(date '+%Y-%m-%d %H:%M:%S')" origin/main) 2>>/tmp/vault-autopush-rebase.err; then
+        echo "[$TS] reconciled: rebase conflicted; merged origin/main with local content winning"
+        REBASE_RC=0
+    else
+        (cd "$WORKTREE_DIR" && git merge --abort 2>/dev/null)
+    fi
+fi
 if [ $REBASE_RC -ne 0 ]; then
     (cd "$WORKTREE_DIR" && git rebase --abort 2>/dev/null)
     git worktree remove --force "$WORKTREE_DIR" 2>/dev/null
