@@ -53,6 +53,7 @@ def test_defer_resolves_all_ids_in_one_jq_pass():
     assert "sed -E" not in pre_prompt
     assert re.search(r"jq -r --args '", pre_prompt) and "| @tsv'" in pre_prompt
     assert '"\\${_want[@]}" < "$DTD_CACHE_FILE"' in pre_prompt, "ids via --args, cache via stdin"
+    assert "read " not in pre_prompt, "no read before the prompt: test_dtd_prompt_visibility slices at the first one"
 
 
 def test_blockarm_is_a_single_jq_pass():
@@ -64,7 +65,7 @@ def test_blockarm_is_a_single_jq_pass():
     assert "--slurpfile sn" in code and "| @tsv'" in code
     assert "n=3; clean=" in code, "jq failure must leave the picker usable"
     # pinned by test_dtd_id_based_ops: the arm file write is unchanged
-    assert r"""printf '%s\n' "\$@" > "\$BLOCKPICK\"""" in body
+    assert 'printf \'%s\\n\' "\\$@" > "\\$BLOCKPICK"' in body   # the arm-file write is unchanged
 
 
 def test_ctrl_d_excludes_then_reload_syncs():

@@ -951,15 +951,17 @@ done
 # appear. Unknown ids fall back to themselves, as the resolver did; a
 # middle-truncated name keeps only the prefix before the ellipsis.
 if (( \${#_want[@]} )); then
-  while IFS=\$'\t' read -r _tid _clean; do
-    ids+=("\$_tid"); names+=("\$_clean")
-  done < <(jq -r --args '
+  _rows=("\${(f)\$(jq -r --args '
   . as \$d | \$ARGS.positional[] as \$id
   | (([\$d[] | select(type=="array")[] | select(type=="object" and .id == \$id) | .content] | first) // \$id)
   | gsub(" *[(][0-9]*[)]"; "") | gsub(" *[[][0-9]*[]]"; "")
   | gsub(" *[[][0-9.+]*/m[]]"; "") | gsub(" *[{][0-9]*[}]"; "")
   | gsub("  +"; " ") | sub(" *\$"; "") | sub("….*\$"; "")
-  | [\$id, .] | @tsv' "\${_want[@]}" < "$DTD_CACHE_FILE" 2>/dev/null)
+  | [\$id, .] | @tsv' "\${_want[@]}" < "$DTD_CACHE_FILE" 2>/dev/null)}")
+  for _row in "\${_rows[@]}"; do
+    [[ -n "\$_row" ]] || continue
+    ids+=("\${_row%%\$'\t'*}"); names+=("\${_row#*\$'\t'}")
+  done
 fi
 (( \${#ids[@]} )) || exit 0
 label="\${names[1]}"

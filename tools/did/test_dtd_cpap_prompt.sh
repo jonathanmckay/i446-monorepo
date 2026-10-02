@@ -60,9 +60,9 @@ echo "PASS: alt-enter routes through transform(\$DTD_DONE_ROUTER {2})"
 # this assertion was stale from before that redesign and never re-checked.)
 # 2026-10-02: the action is prefixed by fzf's instant-hide 'exclude+' via a %s
 # slot and carries the base64 content as a 3rd arg; it must still be execute().
-grep -F "printf '%sexecute(%s %s %s)' \"\$_ex\" \"\$DTD_DONE\"" "$SCRIPT" >/dev/null \
+grep -F "printf '%sexecute(%s %s %s)' \"\\\$_ex\" \"\$DTD_DONE\"" "$SCRIPT" >/dev/null \
   || fail "router must emit execute() for cpap"
-grep -F "printf 'execute-silent(%s %s; %s %s >/dev/null 2>&1 &)' \"\$DTD_DONE_HIDE\"" "$SCRIPT" >/dev/null \
+grep -F "printf '%sexecute-silent(%s %s; %s %s %s >/dev/null 2>&1)' \"\\\$_ex\" \"\$DTD_DONE_HIDE\"" "$SCRIPT" >/dev/null \
   || fail "router must emit execute-silent() for non-cpap"
 echo "PASS: router emits execute (cpap) / execute-silent (others)"
 
