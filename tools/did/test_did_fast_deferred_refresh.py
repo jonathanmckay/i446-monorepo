@@ -25,6 +25,7 @@ DTD = (HERE / "dtd.sh").read_text()
 def _load_did_fast():
     spec = importlib.util.spec_from_file_location("did_fast_defer_test", DID_FAST)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod  # dataclass field resolution needs this before exec
     spec.loader.exec_module(mod)
     return mod
 

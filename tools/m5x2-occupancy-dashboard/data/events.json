@@ -7378,5 +7378,95 @@
     "unit": "A13",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-11-01",
+    "kind": "leased",
+    "unit_id": "364",
+    "prop": "ps25",
+    "unit": "A6",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-01",
+    "kind": "moveout",
+    "unit_id": "657",
+    "prop": "s129",
+    "unit": "6",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-01",
+    "kind": "moveout",
+    "unit_id": "585",
+    "prop": "rl16",
+    "unit": "C24",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-01",
+    "kind": "moveout",
+    "unit_id": "413",
+    "prop": "ps17",
+    "unit": "A11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-05",
+    "kind": "ntv",
+    "unit_id": "354",
+    "prop": "k104- LeFevre",
+    "unit": "314-10",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-01",
+    "kind": "moveout",
+    "unit_id": "309",
+    "prop": "k104- LeFevre",
+    "unit": "519-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-09-30",
+    "kind": "moveout",
+    "unit_id": "1078",
+    "prop": "kn47-k3",
+    "unit": "K203",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-01",
+    "kind": "moveout",
+    "unit_id": "1043",
+    "prop": "kn47 K2",
+    "unit": "D104",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-02",
+    "effective": "2026-10-02",
+    "kind": "movein",
+    "unit_id": "1168",
+    "prop": "tc68",
+    "unit": "A19",
+    "tenant": null,
+    "baseline": false
   }
 ]
