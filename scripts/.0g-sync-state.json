@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-02T06:00:05.096346-07:00"
+  "tasks": {
+    "enjoy the dinner w/kids": {
+      "todoist_id": "6hgJ29QV5mHrFGMR",
+      "minutes": 35
+    },
+    "60分 hcbp": {
+      "todoist_id": "6hgJ29R5Xpf65gW2",
+      "minutes": 20
+    },
+    "tasks below 60": {
+      "todoist_id": "6hgJ29VQrxjxcj3R",
+      "minutes": 70
+    }
+  },
+  "last_sync": "2026-10-02T08:00:07.617484-07:00"
 }
