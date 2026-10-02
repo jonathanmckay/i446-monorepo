@@ -1361,6 +1361,7 @@ COLORS = {
     'g245': '\033[38;2;0;230;118m',    'epcn': '\033[38;2;0;191;165m',
     's897': '\033[38;2;27;94;32m',     'hcmc2': '\033[38;2;255;214;0m',
     'xk87': '\033[38;2;253;108;29m',   'xk88': '\033[38;2;230;81;0m',
+    'xk20': '\033[38;2;255;145;0m',    'xk22': '\033[38;2;255;171;64m',
     'hci':  '\033[38;2;99;237;224m',   'i9':   '\033[38;2;41;121;255m',
     'n156': '\033[38;2;18;73;180m',    'hcmc': '\033[38;2;13;59;102m',
     'm5x2': '\033[38;2;213;0;50m',     'm828': '\033[38;2;155;0;35m',
@@ -1872,7 +1873,7 @@ cat > "$DTD_DOMAINSEARCH" << EOF
 #!/bin/zsh
 q="\$1"
 case "\$q" in
-  g245|epcn|s897|hcmc2|xk87|xk88|hci|i9|n156|hcmc|m5x2|m828|hcb|hcbp|infra|i444|i447|hcm|hcmp|hcmr|家|睡觉)
+  g245|epcn|s897|hcmc2|xk87|xk88|xk20|xk22|hci|i9|n156|hcmc|m5x2|m828|hcb|hcbp|infra|i444|i447|hcm|hcmp|hcmr|家|睡觉)
     ;;
   *)
     exit 0 ;;
@@ -2185,7 +2186,7 @@ import subprocess
 label_arg = ''
 if open_b == '[':
     for l in labels:
-        if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','s897'):
+        if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','xk20','xk22','s897'):
             label_arg = f'@{l}'
             break
 # did-fast splits its input on commas/semicolons — a task name containing

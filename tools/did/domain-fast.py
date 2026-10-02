@@ -40,7 +40,7 @@ _pf = _load("points_fast", "points-fast.py")  # resolve_from_cache
 # Canonical domain labels — mirrors dtd.sh's COLORS keys (label → row color /
 # Toggl project). Exactly one of these should be on a task at a time.
 DOMAINS = {
-    "g245", "epcn", "s897", "hcmc2", "xk87", "xk88", "hci", "i9", "n156",
+    "g245", "epcn", "s897", "hcmc2", "xk87", "xk88", "xk20", "xk22", "hci", "i9", "n156",
     "hcmc", "m5x2", "hcb", "hcbp", "infra", "i444", "i447", "hcm", "hcmp",
     "hcmr", "家", "睡觉",
 }
