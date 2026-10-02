@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "newsletter out + next written": {
-      "todoist_id": "6hg76h3v8mC5X8hR",
-      "minutes": 30
-    },
-    "strategy for ds in xtech": {
-      "todoist_id": "6hg76h9VH7VJFJ7R",
-      "minutes": 30
-    },
-    "tasks below 60": {
-      "todoist_id": "6hg76hG9vrcgH8M2",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-10-02T03:55:01.436447-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-02T04:00:09.148958-07:00"
 }
