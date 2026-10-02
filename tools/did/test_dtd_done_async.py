@@ -85,7 +85,9 @@ def test_prompt_branch_is_unchanged_still_fully_synchronous():
     they need a live tty for the interactive prompt, which cannot run
     detached from fzf."""
     body = _router_body()
-    m = re.search(r'printf \'execute\(([^\']*)\)\'', body)
+    # 2026-10-02: the action may be prefixed by fzf's instant-hide 'exclude+'
+    # via a %s printf slot; the execute(...) itself must stay unchanged.
+    m = re.search(r'printf \'(?:%s)?execute\(([^\']*)\)\'', body)
     assert m, "prompt branch must still emit a plain execute(...) action"
     action = m.group(1)
     assert "&" not in action, \

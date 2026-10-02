@@ -44,7 +44,7 @@ def test_router_no_longer_shells_out_to_python3_for_the_lookup():
 
 def test_router_uses_jq_for_the_lookup():
     body = _router_body()
-    assert re.search(r"jq -r --arg id .*\.content", body), (
+    assert re.search(r"jq -r --arg id .*\.content", body, re.S), (  # 2026-10-02: single multi-line jq pass
         "expected a jq-based id -> content lookup in the router")
 
 

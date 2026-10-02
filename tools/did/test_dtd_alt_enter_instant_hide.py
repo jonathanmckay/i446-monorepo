@@ -51,9 +51,10 @@ def test_router_emits_exclude_first_on_both_branches():
 
 def test_router_passes_base64_content_and_keeps_jq_lookup():
     body = _heredoc("DTD_DONE_ROUTER", "ROUTEREOF")
-    assert re.search(r"_raw=\\\$\(jq -r --arg id .*\.content", body)
-    assert "base64 | tr -d '\\n'" in body
-    assert "python3" not in body
+    assert re.search(r"jq -r --arg id .*\n.*\.content", body)
+    assert "@base64" in body, "base64 must come from the single jq pass"
+    for tool in ("python3", "sed ", "| base64", "| tr "):
+        assert tool not in body, f"router must stay a single jq exec; found {tool!r}"
 
 
 def test_done_sh_decodes_router_content_and_only_falls_back_to_python():
