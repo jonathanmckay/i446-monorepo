@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "enjoy the dinner w/kids": {
-      "todoist_id": "6hgJ29QV5mHrFGMR",
-      "minutes": 35
-    },
-    "tasks below 60": {
-      "todoist_id": "6hgJ29VQrxjxcj3R",
-      "minutes": 70
-    }
-  },
-  "last_sync": "2026-10-03T03:55:02.511716-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-03T04:00:07.530199-07:00"
 }
