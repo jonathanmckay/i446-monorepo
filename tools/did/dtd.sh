@@ -1691,6 +1691,7 @@ def time_of(t):
 # an exact match and reloads through here with the domain as this arg,
 # +clear-query -- so this filter, unlike view/sort, actually REMOVES
 # non-matching rows rather than just reordering them.
+DTD_HIDE_NAMES = ('一起饭',)   # see the hide check in the row loop
 # The 11th arg is a FILE holding the active domain code (like the view file
 # in arg 8), not the code itself (2026-10-01 fix): a literal code was only
 # ever sent by the domain-search POST, so the next reload from any other
@@ -1736,6 +1737,11 @@ for t in unique:
     # dtd.sh never did. (NOTE: this whole block sits inside dtd.sh's
     # python3 -c zsh double-quoted string -- a literal double-quote char in
     # a comment here silently truncates the script; avoid it.)
+    # Cards done elsewhere (2026-10-03): never shown in dtd. Matches the bare
+    # name and dated catch-up copies (NAME M.D). Still tracked by neon and
+    # completable via /did, janus or inbound -- only hidden from this picker.
+    if any(clean == h or clean.startswith(h + ' ') for h in DTD_HIDE_NAMES):
+        continue
     if t.get('recurring', True) and t.get('due') and t['due'] > today:
         continue
     # Block-snoozed (ctrl-v): hidden until the chosen block's hour arrives.
