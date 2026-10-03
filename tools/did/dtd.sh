@@ -67,6 +67,10 @@ DTD_HDR="/tmp/dtd-$DTD_ID.hdr"
 # at its boundaries so a slow keypress can be attributed. Read with
 # tools/did/dtd-timing-report.py. Builtin print only -- no extra exec.
 DTD_TIMING="/tmp/dtd-$DTD_ID.timing.log"
+# Router -> done.sh handoff of the resolved task content as a FILE (2026-10-03):
+# print/$(<f) are zsh builtins, so done.sh needs no base64/sed/tr exec at all
+# on the common path (each exec costs 0.07-1.5s under a Defender scan stall).
+DTD_RESOLVED_DIR="/tmp/dtd-$DTD_ID.resolved"
 zmodload zsh/datetime 2>/dev/null
 DTD_LOG="/tmp/dtd-$DTD_ID.log"
 # ctrl-z undo state: journal of reversible actions + in-flight counters
@@ -236,6 +240,7 @@ rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.s
       "$DTD_SESSION" "$DTD_TIMER" "$DTD_STOP" "$DTD_FAILED" "$DTD_FAILED.tmp" \
       "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
 mkfifo "$DTD_FIFO"
+mkdir -p "$DTD_RESOLVED_DIR"
 echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED"
 
@@ -684,6 +689,7 @@ SESSION="$DTD_SESSION"
 PUSHED="$DTD_PUSHED"
 REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
+setopt extendedglob
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tdone-start\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 task="\$1"
@@ -701,29 +707,24 @@ fi
 # which already looked it up with jq -- decode instead of re-resolving via
 # python3. Fall back to the resolver for any caller that passes only the id.
 task=""
-[[ -n "\$2" ]] && task=\$(printf '%s' "\$2" | base64 -d 2>/dev/null)
+# Resolved content: file from the router (builtin read), else its base64 arg,
+# else the python resolver. Zero execs on the common path (2026-10-03).
+[[ -n "\$1" && -r "${DTD_RESOLVED_DIR:-/nonexistent}/\$1" ]] && task="\$(<"${DTD_RESOLVED_DIR:-/nonexistent}/\$1")"
+[[ -n "\$task" || -z "\$2" ]] || task=\$(printf '%s' "\$2" | base64 -d 2>/dev/null)
 [[ -n "\$task" ]] || task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 print -- "\$EPOCHREALTIME\tdone-resolved\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
-clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-# Reinstated (2026-07-03): cpap asks for a 1-3 sleep-quality score on completion.
-# The number is appended so did-fast writes it to cpap's 0n column. Needs a tty,
-# so alt-enter is bound with execute (not execute-silent). Blank input just
-# completes with no score.
-clean_lower=\$(echo "\$clean_for_filter" | tr '[:upper:]' '[:lower:]')
-# Deferred/catch-up copies of these habits get their origin date stamped into
-# the name (defer-fast.py's _dated_copy_content, e.g. "xk26 7.21") so they
-# don't silently re-claim the habit's own 0n/1n+ column on completion -- but
-# the stamp also hid them from the case match below entirely, so completing a
-# delayed xk20/xk22/xk26/... card silently used the card's static default
-# points instead of asking (bug 2026-08-20: delayed number-input habits
-# didn't prompt). Match on the name with any trailing "M.D" stamp stripped;
-# \$_dated remembers whether one was present so the typed value routes as an
-# explicit [N] points override below instead of a bare number -- dated copies
-# fall through to the generic Todoist path (Step 5), not the habit's own
-# variable-0n/1n+ handling, so a bare trailing number would silently be
-# discarded as an unused time_value instead of becoming points.
-clean_base=\$(echo "\$clean_lower" | sed -E 's/ [0-9]{1,2}\.[0-9]{1,2}\$//')
+# Annotation stripping in zsh parameter expansion (extendedglob), replacing
+# four echo|sed|tr pipelines (~8 execs). Same rules as the old sed: drop
+# " (N)", " [N]", " [x/m]" (and " {N}" for the filter form), squeeze runs
+# of spaces, trim the tail; lowercase; strip a dated copy's " M.D" stamp.
+clean="\${task//( #\\([0-9]#\\))/}"
+clean="\${clean//( #\\[[0-9]#\\])/}"
+clean="\${clean//( #\\[[0-9.+]#\\/m\\])/}"
+clean="\${clean//  ##/ }"; clean="\${clean%% ##}"
+clean_for_filter="\${clean//( #\\{[0-9]#\\})/}"
+clean_for_filter="\${clean_for_filter//  ##/ }"; clean_for_filter="\${clean_for_filter%% ##}"
+clean_lower="\${(L)clean_for_filter}"
+clean_base="\${clean_lower% [0-9](#c1,2).[0-9](#c1,2)}"
 _dated=""
 [[ "\$clean_base" != "\$clean_lower" ]] && _dated=1
 # Tasks that ask for a value on completion (like cpap). The typed number is
@@ -788,7 +789,8 @@ if [[ -n "\$1" ]]; then
 fi
 echo "x" >> "\$PUSHED"
 # Push audit trail — see enter.sh's twin line (2026-07-30 lost -1t/-1l).
-printf '%s\tdone\t%s\t%s\n' "\$(date +%Y-%m-%dT%H:%M:%S)" "\$1" "\$clean" >> "\$PUSHED.log"
+strftime -s _now '%Y-%m-%dT%H:%M:%S' \$EPOCHSECONDS 2>/dev/null || _now=\$EPOCHSECONDS
+printf '%s\tdone\t%s\t%s\n' "\$_now" "\$1" "\$clean" >> "\$PUSHED.log"
 # Only clear the running-timer cache when the task just completed is the one
 # it's tracking — matched by id like the list generator's own running-highlight
 # (falling back to name when id-less). Clearing it unconditionally blanked the
@@ -796,11 +798,13 @@ printf '%s\tdone\t%s\t%s\n' "\$(date +%Y-%m-%dT%H:%M:%S)" "\$1" "\$clean" >> "\$
 # UNRELATED task was completed while a different timer kept running (bug
 # 2026-08-13: "timer goes blank for 5 seconds ... if I'm not changing the
 # timer, it shouldn't flash").
-_timer_id=\$(cut -f3 "\$TIMER" 2>/dev/null)
+_tline=""; [[ -r "\$TIMER" ]] && _tline="\$(<"\$TIMER")"
+_tf=("\${(@ps:\t:)\${_tline%%\$'\n'*}}")   # first line, tab-split (builtin, was cut)
+_timer_id="\${_tf[3]}"
 if [[ -n "\$1" && -n "\$_timer_id" ]]; then
   [[ "\$_timer_id" == "\$1" ]] && : > "\$TIMER"
 elif [[ -z "\$1" ]]; then
-  _timer_desc=\$(cut -f1 "\$TIMER" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  _timer_desc="\${(L)_tf[1]}"
   [[ -n "\$_timer_desc" && "\$_timer_desc" == "\$clean_lower" ]] && : > "\$TIMER"
 fi
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
@@ -811,9 +815,14 @@ print -- "\$EPOCHREALTIME\tdone-fifo\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/
 # defer/edit/split cleanup, so scroll/motion bursts buffered while the value
 # prompt was open dumped into fzf's query as literal ^[[<34;x;yM text on
 # resume (bug 2026-07-27: "input pane in dtd is a mess").
+# Only the value-prompt path handed the tty to a child (stty sane + read); the
+# execute-silent path never touched it, so the reset+drain (one stty exec)
+# is skipped there (2026-10-03).
+if [[ -n "\$_ip" ]]; then
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+fi
 print -- "\$EPOCHREALTIME\tdone-end\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 DONEEOF
 chmod +x "$DTD_DONE"
@@ -933,6 +942,9 @@ _b64="\${_out#*\$'\\n'}"
 # are regenerated by the reload anyway). The resolved content rides along
 # base64-encoded (action-string safe) so done.sh skips its own python
 # re-resolve of the same id.
+# Hand the raw content to done.sh as a file too (builtin read there; the
+# base64 arg below stays as the fallback and for the action-string tests).
+[[ "\$_id" == BLOCK:* ]] || print -r -- "\$_raw" > "${DTD_RESOLVED_DIR:-/tmp}/\$_id" 2>/dev/null
 _ex="exclude+"
 [[ "\$_id" == BLOCK:* ]] && _ex=""
 print -- "\$EPOCHREALTIME\trouter-resolved\t\$_t_base" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
@@ -2548,15 +2560,19 @@ cat > "$DTD_HDRGEN" <<HDRGENEOF
 # Stale-code check first, same as janus.py's render_header: if it wins, it
 # replaces the WHOLE header line (in red) so a fix that shipped after this
 # session launched can't be missed or mistaken for the normal status line.
-live_mtime=\$(stat -f %m "$DTD_SELF" 2>/dev/null || echo 0)
+zmodload zsh/stat 2>/dev/null
+zstat -A _st +mtime "$DTD_SELF" 2>/dev/null; live_mtime=\${_st[1]:-0}   # builtin stat (was an exec)
 if (( live_mtime > $DTD_SRC_MTIME + 1 )); then
   printf '\033[1;91m⚠ RESTART DTD — code updated on disk\033[0m'
   exit 0
 fi
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\thdr-start\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
-ws=\$(cat "$DTD_HDR" 2>/dev/null | tr '\n' ' ')
-tally=\$(cat "$DTD_TALLY" 2>/dev/null | tr '\n' ' ')
+# Builtin reads + expansion (was cat|tr twice = 4 execs; this script runs on
+# every keystroke's result event, so under a Defender exec stall it cost
+# 0.8-1.6s per keypress -- measured 2026-10-03).
+ws=""; [[ -r "$DTD_HDR" ]] && ws="\$(<"$DTD_HDR")"; ws="\${ws//\$'\n'/ }"
+tally=""; [[ -r "$DTD_TALLY" ]] && tally="\$(<"$DTD_TALLY")"; tally="\${tally//\$'\n'/ }"
 if [ -n "\$tally" ]; then
   printf '%s   %s left   %s   %s' "\$tally" "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
 else

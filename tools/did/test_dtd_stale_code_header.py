@@ -52,7 +52,8 @@ def test_hdrgen_checks_live_mtime_before_anything_else():
     lines = [l for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
     # First non-comment statement must be the live-mtime stat -- the check
     # has to run before any of the normal header composition.
-    assert 'stat -f %m "$DTD_SELF"' in lines[0]
+    # 2026-10-03: builtin zstat (zmodload line first) instead of an exec'd stat
+    assert any('"$DTD_SELF"' in l and ('stat -f %m' in l or 'zstat' in l) for l in lines[:2]), lines[:2]
 
 
 def test_stale_branch_replaces_the_whole_header_and_exits():
@@ -63,7 +64,8 @@ def test_stale_branch_replaces_the_whole_header_and_exits():
     # diverging from janus's "whole header goes red" behavior.
     warn_pos = body.index("RESTART DTD")
     exit_pos = body.index("exit 0", warn_pos)
-    normal_pos = body.index('ws=\\$(cat "$DTD_HDR"')
+    # 2026-10-03: builtin read (ws=""; [[ -r ... ]]) replaced the cat|tr pipeline
+    normal_pos = body.index('ws=""; [[ -r "$DTD_HDR" ]]') if 'ws=""; [[ -r "$DTD_HDR" ]]' in body else body.index('ws=\\$(cat "$DTD_HDR"')
     assert warn_pos < exit_pos < normal_pos
 
 
