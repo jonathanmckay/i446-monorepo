@@ -9,7 +9,7 @@
       "Bash(ssh ix:*)"
     ]
   },
-  "model": "claude-fable-5-1[1m]",
+  "model": "opus",
   "hooks": {
     "PermissionRequest": [
       {
