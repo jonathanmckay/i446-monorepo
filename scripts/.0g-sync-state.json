@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-03T10:00:01.230734-07:00"
+  "tasks": {
+    "finish 2 workouts": {
+      "todoist_id": "6hgf5WpChWvjghH2",
+      "minutes": 40
+    },
+    "parents good time here": {
+      "todoist_id": "6hgf5WjP6RP85cR2",
+      "minutes": 30
+    },
+    "1h ic": {
+      "todoist_id": "6hgf5WjmF8fjv6JR",
+      "minutes": 20
+    }
+  },
+  "last_sync": "2026-10-03T12:00:05.316325-07:00"
 }
