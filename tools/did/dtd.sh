@@ -63,6 +63,11 @@ unset _f _pid
 
 DTD_FIFO="/tmp/dtd-$DTD_ID.fifo"
 DTD_HDR="/tmp/dtd-$DTD_ID.hdr"
+# Stage timing log (2026-10-03): every generated script stamps $EPOCHREALTIME
+# at its boundaries so a slow keypress can be attributed. Read with
+# tools/did/dtd-timing-report.py. Builtin print only -- no extra exec.
+DTD_TIMING="/tmp/dtd-$DTD_ID.timing.log"
+zmodload zsh/datetime 2>/dev/null
 DTD_LOG="/tmp/dtd-$DTD_ID.log"
 # ctrl-z undo state: journal of reversible actions + in-flight counters
 DTD_JOURNAL="/tmp/dtd-$DTD_ID.undo.jsonl"
@@ -440,11 +445,14 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
     echo "⏳ $task_clean" > "$DTD_HDR"
     if [[ -n "$task_id" ]]; then
+      print -- "$EPOCHREALTIME\tdidfast-start\t${task_id:-$task_clean}" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
       result=$(python3 "$DID_FAST" --task-id "$task_id" "$task_clean" 2>>"$DTD_LOG.err")
     else
+      print -- "$EPOCHREALTIME\tdidfast-start\t${task_id:-$task_clean}" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
       result=$(python3 "$DID_FAST" "$task_clean" 2>>"$DTD_LOG.err")
     fi
     rc=$?
+    print -- "$EPOCHREALTIME\tdidfast-end\t${task_id:-$task_clean} rc=$rc" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
     if [[ $rc -ne 0 || -z "$result" ]]; then
       echo "✗ $task_clean (did-fast exit $rc, no output)" > "$DTD_HDR"
       echo "✗ $task_clean (did-fast exit $rc, no output)" >> "$DTD_LOG"
@@ -676,6 +684,8 @@ SESSION="$DTD_SESSION"
 PUSHED="$DTD_PUSHED"
 REMOVED="$DTD_REMOVED"
 TIMER="$DTD_TIMER"
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\tdone-start\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 task="\$1"
 # Picker mode: ⌃⏎ on a block row applies the snooze too (2026-07-27)
 if [[ "\$1" == BLOCK:* ]]; then
@@ -693,6 +703,7 @@ fi
 task=""
 [[ -n "\$2" ]] && task=\$(printf '%s' "\$2" | base64 -d 2>/dev/null)
 [[ -n "\$task" ]] || task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
+print -- "\$EPOCHREALTIME\tdone-resolved\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/  +/ /g; s/ *\$//')
 clean_for_filter=\$(echo "\$clean" | sed -E 's/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
 # Reinstated (2026-07-03): cpap asks for a 1-3 sleep-quality score on completion.
@@ -794,6 +805,7 @@ elif [[ -z "\$1" ]]; then
 fi
 echo "⏳ completing: \$clean_for_filter" > "\$HDR"
 printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
+print -- "\$EPOCHREALTIME\tdone-fifo\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # Reset stray mouse-tracking modes AND drain tty input queued during the
 # prompt window — this was the ONLY interactive execute() script without the
 # defer/edit/split cleanup, so scroll/motion bursts buffered while the value
@@ -802,6 +814,7 @@ printf '%s\t%s\n' "\$1" "\$clean" > "\$FIFO"
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+print -- "\$EPOCHREALTIME\tdone-end\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 DONEEOF
 chmod +x "$DTD_DONE"
 
@@ -830,6 +843,8 @@ DTD_DONE_HIDE="/tmp/dtd-$DTD_ID.done-hide.sh"
 cat > "$DTD_DONE_HIDE" << HIDEEOF
 #!/bin/zsh
 REMOVED="$DTD_REMOVED"
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\thide\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 if [[ -n "\$1" ]]; then
   echo "\$1" >> "\$REMOVED.ids"
 fi
@@ -892,6 +907,8 @@ DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
 _id="\$1"
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\trouter-start\t\$_id" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # ONE jq pass (2026-10-02): id lookup + annotation strip + lowercase +
 # dated-suffix strip ("xk26 7.21" -> "xk26", see \$DTD_DONE) + base64 of the
 # raw content, replacing the old jq/sed/tr/base64 pipeline (7 execs). Every exec
@@ -918,12 +935,14 @@ _b64="\${_out#*\$'\\n'}"
 # re-resolve of the same id.
 _ex="exclude+"
 [[ "\$_id" == BLOCK:* ]] && _ex=""
+print -- "\$EPOCHREALTIME\trouter-resolved\t\$_t_base" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 case "\$_t_base" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf '%sexecute(%s %s %s)' "\$_ex" "$DTD_DONE" "\$_id" "\$_b64" ;;
   *)
     printf '%sexecute-silent(%s %s; %s %s %s >/dev/null 2>&1)' "\$_ex" "$DTD_DONE_HIDE" "\$_id" "$DTD_DONE" "\$_id" "\$_b64" ;;
 esac
+print -- "\$EPOCHREALTIME\trouter-end\t\$_id" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 ROUTEREOF
 chmod +x "$DTD_DONE_ROUTER"
 
@@ -934,6 +953,8 @@ cat > "$DTD_DEFER" << DEFEREOF
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
 HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\tdefer-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # Multi-select (2026-07-23): the ctrl-d binding passes {+2} — every
 # shift-marked row's id, or just the cursor row's id when nothing is marked
 # (the single-task path is the 1-element case of the same loop). Resolve
@@ -984,6 +1005,7 @@ if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   # modes so Enter always terminates the read.
   stty sane < /dev/tty 2>/dev/null
   printf "\033[2J\033[H\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
+  print -- "\$EPOCHREALTIME\tdefer-prompt\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
   read days < /dev/tty
   prompted=1
   # Reset any mouse-tracking mode a child enabled, and drain any bytes
@@ -1077,6 +1099,7 @@ printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || 
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 
+print -- "\$EPOCHREALTIME\tdefer-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 DEFEREOF
 chmod +x "$DTD_DEFER"
 
@@ -1100,6 +1123,8 @@ cat > "$DTD_BLOCKARM" << ARMEOF
 HDR="$DTD_HDR"
 BLOCKPICK="$DTD_BLOCKPICK"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\tarm-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # ctrl-v on a picker row (already armed) = close the picker
 if [[ "\$1" == BLOCK:* ]]; then
   rm -f "\$BLOCKPICK"
@@ -1146,6 +1171,7 @@ lbl="\$clean"
 [[ \$# -gt 1 ]] && lbl="\$clean +\$((\$# - 1)) more"
 printf '%s\n' "\$@" > "\$BLOCKPICK"
 echo "⏰ delay \$lbl until… (enter picks · ctrl-v or ↩-row cancels)" > "\$HDR"
+print -- "\$EPOCHREALTIME\tarm-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 ARMEOF
 chmod +x "$DTD_BLOCKARM"
 
@@ -1294,6 +1320,8 @@ chmod +x "$DTD_EDIT"
 DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
+zmodload zsh/datetime 2>/dev/null; _tl="${1%.cache.json}.timing.log"
+print -- "$EPOCHREALTIME\tlist-start\t" >> "$_tl" 2>/dev/null
 # Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file $8=view $9=blockpick_file $10=domain_filter (optional, exact domain code -> scope the list)
 # Live width: fzf exports FZF_COLUMNS to every bound/reload command — prefer
 # it over the launch-time $5 so rows re-truncate to the CURRENT window width
@@ -1822,6 +1850,7 @@ for l in normal_lines:
 for l in skipped_lines:
     print(l)
 " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
+print -- "$EPOCHREALTIME\tlist-end\t" >> "$_tl" 2>/dev/null
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer while this script ran — leaked SGR motion
 # sequences type themselves into fzf's query as literal ^[[<34;x;yM text on
@@ -2524,6 +2553,8 @@ if (( live_mtime > $DTD_SRC_MTIME + 1 )); then
   printf '\033[1;91m⚠ RESTART DTD — code updated on disk\033[0m'
   exit 0
 fi
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\thdr-start\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 ws=\$(cat "$DTD_HDR" 2>/dev/null | tr '\n' ' ')
 tally=\$(cat "$DTD_TALLY" 2>/dev/null | tr '\n' ' ')
 if [ -n "\$tally" ]; then
@@ -2531,6 +2562,7 @@ if [ -n "\$tally" ]; then
 else
   printf '%s left   %s   %s' "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
 fi
+print -- "\$EPOCHREALTIME\thdr-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 HDRGENEOF
 chmod +x "$DTD_HDRGEN"
 
