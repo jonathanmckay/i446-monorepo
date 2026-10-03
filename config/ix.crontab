@@ -17,7 +17,7 @@
 */15 * * * * bash $HOME/i446-monorepo/tools/ai-dashboard/periodic-sync.sh >> $HOME/i446-monorepo/tools/ai-dashboard/.periodic-sync.log 2>&1
 # export-claude-transcripts
 15 * * * * python3 $HOME/i446-monorepo/scripts/export-claude-transcripts.py >> $HOME/vault/i447/i446/ai-transcripts/claude-export.log 2>&1
-*/10 * * * * bash $HOME/i446-monorepo/scripts/git-autopush.sh >> $HOME/i446-monorepo/scripts/.autopush.log 2>&1
+*/10 * * * * AUTOPUSH_RECONCILE=1 bash $HOME/i446-monorepo/scripts/git-autopush.sh >> $HOME/i446-monorepo/scripts/.autopush.log 2>&1
 # dream: overnight chief-of-staff agent (runs ~40-60 min, writes to vault/i447/i446/dream-runs/)
 0 3 * * * bash $HOME/i446-monorepo/scripts/dream-launch.sh >> $HOME/i446-monorepo/scripts/.dream-launch.log 2>&1
 */2 * * * * cd $HOME/m5x2-ai-stats && git pull --rebase origin main -q 2>&1 | tail -50 >> $HOME/m5x2-ai-stats/.pull.log
