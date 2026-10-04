@@ -41,8 +41,11 @@ def test_split_resets_mouse_modes_like_siblings():
 
 def test_drain_runs_after_the_dialogs():
     body = _split_script()
-    assert body.index("display dialog") < body.index("< /dev/tty"), (
-        "the drain must run after the GUI dialogs, not before")
+    # 2026-10-04: the questions are terminal prompts now (no GUI dialogs);
+    # the drain must still come after the last one.
+    assert "display dialog" not in body, "split must not open GUI dialogs (invisible when dtd runs on Ix)"
+    drain = re.search(r"while read -t [0-9.]+ -k 1 .*; do .* done < /dev/tty", body)
+    assert body.index("What remains?") < drain.start(), "the drain must run after the last prompt"
 
 
 if __name__ == "__main__":

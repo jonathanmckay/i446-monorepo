@@ -2280,15 +2280,33 @@ fi
 duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 [[ -z "$total" ]] && total="?"
 
-# Dialog 1: points
-pts_today=$(/usr/bin/osascript -e 'display dialog "Split: points done today? (total: '"$bracket$total$close"')" default answer "" buttons {"Cancel","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+# Three questions, asked IN THE TERMINAL (2026-10-04; were macOS GUI
+# dialogs, which open on whatever Mac dtd runs on -- invisible when dtd runs
+# on Ix over ssh). Same pattern as ctrl-d's defer prompt: ctrl-p is bound
+# with execute (not execute-silent) so this script owns the tty, the screen
+# is cleared so the question is the only thing visible, and sane tty modes
+# make Enter terminate each read. Gated on DTD_SPLIT_PROMPT, which only
+# dtd's fzf session exports; without it (tests, scripted callers) every
+# answer is blank, i.e. the split is cancelled.
+_ask() {
+  local _r=""
+  if [[ -n "${DTD_SPLIT_PROMPT:-}" && -r /dev/tty ]]; then
+    printf '%s' "$1" > /dev/tty
+    read -r _r < /dev/tty
+  fi
+  print -r -- "$_r"
+}
+if [[ -n "${DTD_SPLIT_PROMPT:-}" && -r /dev/tty ]]; then
+  stty sane < /dev/tty 2>/dev/null
+  printf '\033[2J\033[H\nSplit: %s\n\n' "$task" > /dev/tty
+fi
+# 1: points done today (blank or non-number = cancel)
+pts_today=$(_ask "Points done today? (total: $bracket$total$close, blank = cancel)> ")
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "cancelled" > "$HDR"; exit 0; }
-
-# Dialog 2: what you did
-done_desc=$(/usr/bin/osascript -e 'display dialog "What did you do?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
-
-# Dialog 3: what remains
-remaining_desc=$(/usr/bin/osascript -e 'display dialog "What remains?" default answer "" buttons {"Skip","OK"} default button "OK"' -e 'text returned of result' 2>/dev/null)
+# 2: what you did (blank = skip)
+done_desc=$(_ask "What did you do? (blank = skip)> ")
+# 3: what remains (blank = skip)
+remaining_desc=$(_ask "What remains? (blank = skip)> ")
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 # Strip truncation: if fzf middle-truncated the name with …, search by the
@@ -2666,7 +2684,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ctrl-g: edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -2702,6 +2720,7 @@ chmod +x "$DTD_HDRGEN"
 # ctrl-d prompts for the defer target (N days / date) on the tty. Only set
 # here so the extracted script stays non-interactive for tests and scripts.
 export DTD_DEFER_PROMPT=1
+export DTD_SPLIT_PROMPT=1   # ctrl-p asks its questions in the terminal (see DTD_SPLIT)
 
 # Toggl 429 fast-fail for everything dtd launches (the execute-silent action
 # scripts AND the ticker, which inherit this env). The action scripts call Toggl
@@ -2972,10 +2991,9 @@ while true; do
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-a:execute-silent($DTD_AGENT {2})+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
