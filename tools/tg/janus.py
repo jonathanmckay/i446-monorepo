@@ -5235,6 +5235,18 @@ async def _work_consumer(app):
 
 D357_QUICK = str(Path.home() / "i446-monorepo/tools/meet/d357_quick.py")
 D357_STATE = Path.home() / ".local/state/jm/d357-state.json"
+# Meetings are recorded on the Mac you're sitting at, not wherever Janus runs.
+# `ssh janus` runs Janus on Ix and sets JANUS_RECORD_HOST=straylight, so d357
+# start/stop are sent back over ssh (2026-10-04). Unset = run locally.
+RECORD_HOST = os.environ.get("JANUS_RECORD_HOST", "").strip()
+
+
+def _d357_argv(*args: str) -> list[str]:
+    if not RECORD_HOST:
+        return ["python3", D357_QUICK, *args]
+    import shlex
+    remote = "python3 ~/i446-monorepo/tools/meet/d357_quick.py " + " ".join(shlex.quote(a) for a in args)
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", RECORD_HOST, remote]
 
 
 def _load_recording_state() -> None:
@@ -5406,7 +5418,7 @@ def _spawn_d357_stop() -> None:
     (up to 5 min) Whisper + filing wait in its own detached process — the
     serial work queue must never block on transcription."""
     try:
-        subprocess.Popen(["python3", D357_QUICK, "stop"],
+        subprocess.Popen(_d357_argv("stop"),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     except Exception as e:  # noqa: BLE001
@@ -5563,9 +5575,9 @@ def _convert_selected_event(ev: dict, app) -> None:
             app.invalidate()
         else:
             # Kick off the recording; the wrapper reports its audio verdict.
-            args = ["python3", D357_QUICK, "start", title]
+            args = _d357_argv("start", title)
             if ev_minutes:
-                args += ["--minutes", str(ev_minutes + 5)]
+                args = _d357_argv("start", title, "--minutes", str(ev_minutes + 5))
             r = await asyncio.to_thread(
                 subprocess.run, args, capture_output=True, text=True, timeout=60)
             out = (r.stdout or "").strip().splitlines()
