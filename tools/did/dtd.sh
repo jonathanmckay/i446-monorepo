@@ -512,8 +512,10 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
         grep -v -x -F -- "$task_id" "$removed_ids_path" > "$removed_ids_path.tmp" 2>/dev/null
         mv "$removed_ids_path.tmp" "$removed_ids_path" 2>/dev/null
       fi
-      echo "? $task_clean (restored to list)" > "$DTD_HDR"
-      echo "? $task_clean (restored to list)" >> "$DTD_LOG"
+      # Say WHY when did-fast gave a reason (e.g. "family: how many minutes?").
+      _why=$(echo "$result" | jq -r '.agent_needed[0].reason // empty' 2>/dev/null)
+      echo "? $task_clean (restored to list)${_why:+ — $_why}" > "$DTD_HDR"
+      echo "? $task_clean (restored to list)${_why:+ — $_why}" >> "$DTD_LOG"
     fi
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
@@ -676,6 +678,26 @@ VARPY
 )
 # A failed import must not write a syntactically-broken `) ;;` case branch.
 [[ -z "$DTD_VAR1N_PAT" ]] && DTD_VAR1N_PAT='"__no_variable_1n__"'
+# Variable 1n+ habits with NO base points (family, s897, 业写, …: row 5 is a
+# bare "1/m" rate). For these a blank answer means nothing to credit, and
+# did-fast now refuses to complete them without minutes (bug 2026-10-03:
+# blank fell through to a 0分 reference to the rate text, "+'1n+'!AF5"), so
+# the prompt re-asks instead of accepting blank.
+DTD_VAR1N_NOBASE_PAT=$(python3 - "$DID_FAST" <<'VARPY'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("df_var_nb", sys.argv[1])
+df = importlib.util.module_from_spec(spec)
+sys.modules["df_var_nb"] = df
+spec.loader.exec_module(df)
+based = {df.header_normalize(n) for n in list(df.VARIABLE_1N_BASES) + list(df.VARIABLE_1N_DEFAULTS)}
+nobase = {df.header_normalize(n) for n in df.VARIABLE_1N} - based - {df.header_normalize(n) for n in df.THRESHOLD_1N}
+names = set(nobase)
+names |= {a.lower() for a, t in df.ONENEON_ALIASES.items() if df.header_normalize(t) in nobase}
+names = {re.sub(r"\s*\{\d+\}", "", n).strip() for n in names}
+print("|".join('"%s"' % n for n in sorted(names)))
+VARPY
+)
+[[ -z "$DTD_VAR1N_NOBASE_PAT" ]] && DTD_VAR1N_NOBASE_PAT='"__no_variable_1n__"'
 
 # --- Complete-now script used by fzf alt-enter binding (ctrl+enter via the
 # Ghostty keybind remap ctrl+enter -> ESC CR). Unlike enter, this never starts
@@ -745,6 +767,7 @@ case "\$clean_base" in
   hiit) _ip="hiit minutes";;
   新闻) _ip="新闻 minutes";;
   "evening hcmc"|"night hcmc") _ip="night hcmc minutes";;
+  ${DTD_VAR1N_NOBASE_PAT}) _ip="\$clean_base minutes";;
   ${DTD_VAR1N_PAT}) _ip="\$clean_base minutes (blank = base points)";;
 esac
 if [[ -n "\$_ip" && -r /dev/tty ]]; then
@@ -760,6 +783,15 @@ if [[ -n "\$_ip" && -r /dev/tty ]]; then
   # which would ride into the completion name ("CPAP ␛") and break did-fast's
   # task match. Any garbage → empty → completes with no score, as documented.
   _iv=\${_iv//[^0-9]/}
+  # No-base rate habits (family: "1/m") need a number — re-ask on blank.
+  case "\$clean_base" in
+    ${DTD_VAR1N_NOBASE_PAT})
+      while [[ -z "\$_iv" ]]; do
+        printf '→ %s minutes (needed: points are per minute): ' "\$clean_base" > /dev/tty
+        read _iv < /dev/tty || break
+        _iv=\${_iv//[^0-9]/}
+      done;;
+  esac
   if [[ -n "\$_iv" ]]; then
     if [[ -n "\$_dated" ]]; then
       clean="\$clean [\$_iv]"
