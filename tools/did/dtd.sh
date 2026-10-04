@@ -1344,6 +1344,8 @@ chmod +x "$DTD_BLOCKAPPLY"
 # stdout as fzf actions.
 cat > "$DTD_PICKENTER" << PICKENTEREOF
 #!/bin/zsh
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\tpickenter\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 id="\$1"
 q="\${2// /}"
 if [[ -s "$DTD_BLOCKPICK" ]] && [[ "\$q" == <-> || "\$q" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]]; then
@@ -1729,10 +1731,11 @@ if _armed:
         pass
     # Day-defer rows (2026-10-04, unified schedule screen). Typing a bare
     # number + enter also defers N days (handled by the enter router).
-    _day_rows = [(f'{GREEN}↻ next occurrence (recurring) · tomorrow (one-off){_R}', 'dauto'),
-                 (f'{GREEN}📅 tomorrow{_R}', 'd1'),
-                 (f'{GREEN}📅 in 2 days{_R}', 'd2'),
-                 (f'{GREEN}📅 in 1 week{_R}', 'd7')]
+    # Labels lead with the number you can also type + enter (2026-10-04).
+    _day_rows = [(f'{GREEN}↻ 0 / next occurrence / 1 day{_R}', 'dauto'),
+                 (f'{GREEN}📅 1天{_R}', 'd1'),
+                 (f'{GREEN}📅 2天{_R}', 'd2'),
+                 (f'{GREEN}📅 7天{_R}', 'd7')]
     if _mode == 'days':
         for _t, _g in _day_rows:
             print(f'{_t}\tBLOCK:{_g}')
@@ -1995,8 +1998,18 @@ print -- "$EPOCHREALTIME\tlist-end\t" >> "$_tl" 2>/dev/null
 # never stdout, so it can't corrupt the row data reload() reads from this
 # script's stdout.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
-while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+# Only touch tty MODES when this script owns the terminal (2026-10-04). fzf
+# runs reload commands in a BACKGROUND process group, where stty and
+# `read -k` raise SIGTTOU/SIGTTIN and FREEZE the script (state T). Plain
+# reload() hid that (rows had already streamed); reload-sync() on ctrl-d,
+# ctrl-v and ctrl-k waited for the frozen process, so the picker only
+# appeared when some later reload killed it, 1-2s on. The mouse-mode
+# printf above is a plain write and is safe either way.
+if python3 -c 'import os,sys; fd=os.open("/dev/tty", os.O_RDONLY); sys.exit(0 if os.tcgetpgrp(fd) == os.getpgrp() else 1)' 2>/dev/null; then
+  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
+  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+fi
+print -- "$EPOCHREALTIME\tlist-drained\t" >> "$_tl" 2>/dev/null
 LISTEOF
 chmod +x "$DTD_LIST"
 
