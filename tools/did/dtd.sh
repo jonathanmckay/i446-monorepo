@@ -1762,7 +1762,11 @@ _placed = lambda t: _has(t, '-1neon') or _has(t, '#-1g') or _has(t, '#0g')
 critical = _sec('关键路径', today)
 rest = sorted([t for t in today_tasks if not _placed(t)],
               key=lambda t: prank(t.get('priority')))
-all_tasks = rituals + neg1g + zeroneon + oneneon + zerog + critical + rest
+# Plain tasks (critical path + everything uncategorized): p1 (API priority 4)
+# rises to the top of this area, so dtd's alt-up bump actually moves a task
+# (2026-10-04). Stable sort, so everything else keeps its order.
+plain = sorted(critical + rest, key=lambda t: t.get('priority') != 4)
+all_tasks = rituals + neg1g + zeroneon + oneneon + zerog + plain
 
 # Deduplicate by id
 seen = set()
@@ -2110,6 +2114,28 @@ else
 fi
 EOF
 chmod +x "$DTD_DOMAINSEARCH"
+
+# --- Bump script used by fzf alt-up binding (2026-10-04) ---
+# Sets Todoist priority p1 on the cursor row (or every marked row). The list
+# snapshot is patched first, so the reload shows the task at the top of the
+# plain-task area at once; the API call runs detached (same &! pattern as
+# defer's workers) and the next cache refresh carries the real value.
+DTD_BUMP="/tmp/dtd-$DTD_ID.bump.sh"
+cat > "$DTD_BUMP" << BUMPEOF
+#!/bin/zsh
+zmodload zsh/datetime 2>/dev/null
+print -- "\$EPOCHREALTIME\tbump-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
+typeset -a ids
+for _t in "\$@"; do [[ -n "\$_t" && "\$_t" != BLOCK:* ]] && ids+=("\$_t"); done
+(( \${#ids[@]} )) || exit 0
+jq --args '(.[] | arrays | .[] | objects | select(.id as \$i | \$ARGS.positional | index(\$i) != null)).priority = 4' "\${ids[@]}" \\
+  < "$DTD_CACHE_FILE" > "$DTD_CACHE_FILE.bump" 2>/dev/null && mv "$DTD_CACHE_FILE.bump" "$DTD_CACHE_FILE"
+echo "⬆ p1: \${#ids[@]} task(s)" > "$DTD_HDR"
+( python3 "\$HOME/i446-monorepo/tools/did/bump-fast.py" "\${ids[@]}" >/dev/null 2>&1 \\
+    || echo "✗ p1 failed for \${#ids[@]} task(s) — will revert on next refresh" > "$DTD_HDR" ) >/dev/null 2>&1 &!
+print -- "\$EPOCHREALTIME\tbump-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
+BUMPEOF
+chmod +x "$DTD_BUMP"
 
 # --- Skip script used by fzf ctrl-k binding ---
 DTD_SKIP="/tmp/dtd-$DTD_ID.skip.sh"
@@ -2697,7 +2723,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ctrl-g: edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-g: edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -3006,6 +3032,7 @@ while true; do
       --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-up:execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
@@ -3147,4 +3174,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"

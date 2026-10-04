@@ -38,6 +38,13 @@ plan shorter than 4 days).
    actually logged (map 卯/辰 → Morning, 巳/未 → Snack, 午 → Lunch, 申/戌 →
    Late; put drinks in Drink actual, food in Food actual, verbatim from the
    journal). This is the plan-vs-actual record the weekly sync grades.
+2c. **Household defaults** — `~/vault/hcbi/hcbc/家-meal-system.md`. The
+   standing week fixes JM's weekday breakfast (the yogurt-bowl default), the
+   weekend breakfasts he cooks, his ordered weekday lunch, and which dinners
+   Ashan cooks vs. eating out. Plan JM's Morning/Lunch/Late rows inside that
+   frame (e.g. weekday Morning = the breakfast default unless a note says
+   otherwise; Mon/Wed/Fri Late = family dinner, 一起 X), and name each
+   weekday's lunch order so it can be written into the 家 Meals calendar.
 3. **User notes** — anything after `/mealplan` (travel days, dinners out,
    weight goal changes) overrides the defaults.
 
