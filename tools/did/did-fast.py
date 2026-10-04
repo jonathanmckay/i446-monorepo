@@ -1568,6 +1568,22 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                         claimed_task_ids.add(str(base_matched.get("id")))
                         base_r.todoist_task = base_matched
                     results.append(base_r)
+            # Variable habits with no base points ("1/m": family, s897, 业写,
+            # ...) must not complete without minutes: there is nothing to
+            # credit, and the old fallback referenced the row-5 RATE TEXT
+            # from 0分 (bug 2026-10-03, "+'1n+'!AF5"). Ask instead. An
+            # explicit 0 is an answer; None means no range, no typed value
+            # and no Toggl match (or Toggl offline). The dtd split/timer
+            # path (skip_todoist) gets its minutes later from the timer.
+            if (is_var and not threshold and minutes is None
+                    and not item.points_override and not skip_todoist
+                    and not VARIABLE_1N_BASES.get(resolved_1n)
+                    and not VARIABLE_1N_DEFAULTS.get(resolved_1n)):
+                results.append(RouteResult(
+                    item=item, step="needs_agent",
+                    error=f"{item.name}: how many minutes? (points are a "
+                          f"per-minute rate; no typed minutes, no Toggl match)"))
+                continue
             cell_minutes = minutes if minutes else 1
             var_val = None
             if is_var:
@@ -3297,8 +3313,11 @@ def main():
         for r in one_n_writes:
             if not r.fen_col:
                 continue
-            if r.is_variable_1n and r.variable_value:
-                r.fen_points = r.variable_value
+            if r.is_variable_1n:
+                # Row 5 is a RATE string ("1/m") for these, never a number:
+                # credit the computed points (0 -> nothing) and never
+                # reference the cell (bug 2026-10-03, "+'1n+'!AF5").
+                r.fen_points = r.item.points_override or r.variable_value or 0
             elif r.item.points_override:
                 r.fen_points = r.item.points_override
             elif r.col_letter:

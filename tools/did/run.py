@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 
 from neon import excel  # noqa: E402
 from neon import weeks  # noqa: E402
+from neon import rates  # noqa: E402
 import registry  # noqa: E402
 import todoist  # noqa: E402
 
@@ -250,15 +251,17 @@ def _minutes_from_time_range(tr: tuple[str, str]) -> int:
     return (eh * 60 + em) - (sh * 60 + sm)
 
 
-def _auto_detect_minutes(toggl_desc: str, project_code: str) -> int:
-    """Sum today's Toggl entries matching desc OR project. Default 1."""
+def _auto_detect_minutes(toggl_desc: str, project_code: str, default: int = 1) -> int:
+    """Sum today's Toggl entries matching desc OR project. `default` (1)
+    when nothing matches or Toggl fails; pass default=0 to tell "no match"
+    apart from a real 1-minute entry."""
     try:
         r = subprocess.run(
             ["python3", str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"), "today"],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode != 0:
-            return 1
+            return default
         # Parse "today" output — best-effort grep for matching descriptions
         total = 0
         for line in r.stdout.splitlines():
@@ -270,9 +273,9 @@ def _auto_detect_minutes(toggl_desc: str, project_code: str) -> int:
                         total += int(m.group(1)) * 60 + int(m.group(2))
                     elif m.group(3):
                         total += int(m.group(3))
-        return max(total, 1)
+        return max(total, 1) if total else default
     except Exception:
-        return 1
+        return default
 
 
 def _append_completed(name: str, task_id: str | None = None) -> None:
@@ -610,6 +613,9 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         minutes = _minutes_from_time_range(time_range)
     else:
         minutes = _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", "")) or 1
+    minutes_known = (explicit_minutes is not None or bool(time_range)
+                     or _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", ""),
+                                             default=0) > 0)
 
     inc = d.get("cumulative_increment")
     if inc:
@@ -628,12 +634,24 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         else:
             points = inc
     else:
-        excel.write("1n+", col, row=week_row, value=str(minutes))
         row5 = excel.read("1n+", col, row=5)
-        try:
-            points = int(float(row5.get("value", 0) or 0))
-        except (TypeError, ValueError):
-            points = 0
+        row5_val = row5.get("value", 0)
+        if rates.parse_rate(row5_val) is not None:
+            # Row 5 is a per-minute RATE ("1/m"), not points (bug 2026-10-03):
+            # points = rate applied to the minutes, so the minutes must be
+            # real. With none typed and no Toggl match, defer to the /did
+            # agent (exit 2) so it asks, instead of silently assuming 1.
+            if not minutes_known:
+                print(f"  → {name}: how many minutes? (row 5 is a rate, {row5_val}); "
+                      f"deferring to /did agent", file=sys.stderr)
+                return 2
+            points = rates.rate_points(row5_val, minutes)
+        else:
+            try:
+                points = int(float(row5_val or 0))
+            except (TypeError, ValueError):
+                points = 0
+        excel.write("1n+", col, row=week_row, value=str(minutes))
 
     # Append the points to today's 0分 domain column
     if fen_col and points:
