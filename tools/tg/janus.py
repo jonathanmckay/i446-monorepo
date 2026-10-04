@@ -1971,6 +1971,36 @@ def display_desc(desc: str) -> str:
 
 # ─── Renderers ─────────────────────────────────────────────────────────────
 
+def _live_width() -> int:
+    """Usable line width RIGHT NOW. WIDTH_HINT is fixed at startup, so a pane
+    narrowed afterwards kept getting 64-column lines and the right-edge clock
+    fell off (bug 2026-10-03: "make sure the time shows even if the window is
+    small"). Never wider than WIDTH_HINT; narrower when the pane is."""
+    try:
+        if sys.stdout.isatty():
+            cols = shutil.get_terminal_size().columns
+            if cols > 1:
+                return min(WIDTH_HINT, cols - 1)
+    except Exception:
+        pass
+    return WIDTH_HINT
+
+
+def _fit_clock_line(left: str, rights: list[str], width: int, fill: str = "─") -> str:
+    """left + fill + right on one line of `width` display columns, where the
+    right edge (the clock) is the part that must survive. `rights` runs from
+    the fullest form to the minimal one (e.g. "Sat 10/3 08:58:48 " then
+    "08:58:48 "): the first that fits beside an untruncated left wins;
+    otherwise the minimal right is kept and the LEFT is truncated."""
+    for right in rights:
+        if dwidth(left) + dwidth(right) <= width:
+            return left + fill * max(0, width - dwidth(left) - dwidth(right)) + right
+    right = rights[-1]
+    room = max(0, width - dwidth(right))
+    left = truncate(left, room)
+    return left + fill * max(0, room - dwidth(left)) + right
+
+
 def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(_tz())
     # int(round()) at every 分 render site: the sheet now carries fractional
@@ -1997,22 +2027,23 @@ def render_header() -> list[tuple[str, str]]:
     clock = f"{now:%H:%M:%S} "
     # The running process is behind the file on disk → tell the user to restart;
     # the whole header goes red so it can't be missed.
+    # The clock is the part that must survive a narrow pane: the date drops
+    # first, then the left text truncates (_fit_clock_line). A past-day view
+    # keeps its viewed date, which is the point of that badge.
+    width = _live_width()
     if _code_is_stale():
         left = f" {pts_str}janus · ⚠ RESTART — code updated "
-        right = f"{now:%a %-m/%-d} " + clock
-        line = left + "─" * max(0, WIDTH_HINT - len(left) - len(right)) + right
+        line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
         left = f" {pts_str}janus "
-        right = f"{now:%a %-m/%-d} " + clock
-        line = left + "─" * max(0, WIDTH_HINT - len(left) - len(right)) + right
+        line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:header", line + "\n")]
     # Viewing a past day: badge it (◀ ... ⎋ today) so it's never mistaken for
     # today; the viewed date itself rides the right edge with the clock.
     viewed = view_now()
     left = f" {pts_str}janus · ◀ ⎋ today "
-    right = f"{viewed:%a %-m/%-d} " + clock
-    line = left + "─" * max(0, WIDTH_HINT - len(left) - len(right)) + right
+    line = _fit_clock_line(left, [f"{viewed:%a %-m/%-d} " + clock], width)
     return [("class:no_entry", line + "\n")]
 
 
@@ -4463,9 +4494,10 @@ def render_current_bottom() -> list[tuple[str, str]]:
     now = dt.datetime.now(_tz())
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
+    width = _live_width()
     if not cur:
         return [("class:idle", " (no timer)"),
-                ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
+                ("class:time", f"{clock:>{max(0, width - len(' (no timer)'))}}\n")]
     cur_id = cur.get("id")
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
@@ -4502,7 +4534,9 @@ def render_current_bottom() -> list[tuple[str, str]]:
         time_style = "class:time"
     dot_frags = _rec_level_dot_frags(click) if recording else []
     dots_width = sum(dwidth(t) for _, t, *_ in dot_frags)
-    pad = max(0, WIDTH_HINT - dwidth(left) - dots_width - len(clock))
+    # Narrow pane: truncate the description, never the clock (2026-10-03).
+    left = truncate(left, max(0, width - dots_width - len(clock)))
+    pad = max(0, width - dwidth(left) - dots_width - len(clock))
     return [
         _frag(f"bold {style}".strip(), left, click),
         *dot_frags,
