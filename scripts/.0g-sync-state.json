@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-04T06:00:03.468371-07:00"
+  "tasks": {
+    "2h ic before m5x2": {
+      "todoist_id": "6hgq579432FHxJQ2",
+      "minutes": 20
+    },
+    "tunnel tops and stay agentic": {
+      "todoist_id": "6hgq57Gj4Qpm53V2",
+      "minutes": 30
+    },
+    "good meetings": {
+      "todoist_id": "6hgq57HRvXGPW7G2",
+      "minutes": 30
+    },
+    "900kcal workout": {
+      "todoist_id": "6hgq57FwRV9cMxX2",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-10-04T08:00:02.585476-07:00"
 }
