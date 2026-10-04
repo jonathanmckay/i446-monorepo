@@ -7,6 +7,7 @@ title, calendar. Uses a file cache to avoid hammering the Agency server.
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -58,12 +59,21 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
     Returns list of dicts with keys: start_dt, end_dt, title, calendar, all_day,
     transparency (always "opaque" for Outlook events).
     """
-    if mcp is None:
-        raise RuntimeError("agency_mcp unavailable")
-
     today_str = day_start.strftime("%Y-%m-%d")
     cache_file = CACHE_DIR / f"outlook-{today_str}.json"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Cache-only hosts (2026-10-04): Ix has no Agency CLI / work auth, so
+    # Janus running there reads the cache Straylight pushes every 5 min
+    # (tools/tg/outlook-cache-push.sh) instead of attempting a fetch that can
+    # only time out. JANUS_OUTLOOK_CACHE_ONLY=1 is set by the `janus` ssh
+    # entry on Ix.
+    if mcp is None or os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
+        if cache_file.exists():
+            return _parse_cache(cache_file)
+        if mcp is None:
+            raise RuntimeError("agency_mcp unavailable")
+        return []
 
     # Check cache (5 min TTL)
     if not force and cache_file.exists():

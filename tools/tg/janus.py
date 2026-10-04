@@ -494,6 +494,7 @@ def toggl_project_code(pid, desc: str | None = None) -> str:
 class State:
     def __init__(self):
         self.current = None  # running entry
+        self.optimistic = None  # see _optimistic_set
         # Whether STATE.current reflects a CONFIRMED Toggl read. False until the
         # first successful fetch, and reset whenever a fetch fails (e.g. the
         # free-tier 402 rate limit). The idle nag (whole-screen flash + red NO
@@ -669,6 +670,75 @@ def _note_rate_limit():
     flash(f"toggl: rate limited — backing off {RATE_LIMIT_COOLDOWN}s", RATE_LIMIT_COOLDOWN)
 
 
+# ── Optimistic current-timer view (2026-10-04) ───────────────────────────────
+# Janus used to repaint the timer row only after the whole job finished
+# (did-fast 4-11s, then serial Toggl re-reads), so a stop/done/switch looked
+# frozen. Now the handler sets the row it EXPECTS immediately; fetch_current
+# keeps that view while Toggl still reports the old timer (its /current lags,
+# and the 30s shared cache can be older still), and lets reality win once
+# it differs or the hold expires. dtd's equivalent is fzf's `exclude`.
+OPTIMISTIC_HOLD_S = 20.0
+
+
+def _optimistic_set(expected: dict | None, stale_id) -> None:
+    """Show `expected` (None = no timer) as the current timer right now, and
+    ignore fetched states still showing timer `stale_id` for a while."""
+    STATE.current = expected
+    STATE.current_known = True
+    if expected is None and STATE.no_timer_since is None:
+        STATE.no_timer_since = time.monotonic()
+    STATE.optimistic = {"stale_id": stale_id,
+                        "until": time.monotonic() + OPTIMISTIC_HOLD_S}
+
+
+def _optimistic_holds(fetched) -> bool:
+    opt = getattr(STATE, "optimistic", None)
+    if not opt:
+        return False
+    if time.monotonic() > opt["until"]:
+        STATE.optimistic = None
+        return False
+    fid = (fetched or {}).get("id")
+    if fid == opt["stale_id"]:
+        # Toggl still shows the pre-action state: the timer we just ended or
+        # replaced, or (stale_id None) still no timer after a start.
+        return True
+    STATE.optimistic = None  # Toggl caught up (or changed some other way)
+    return False
+
+
+def _optimistic_stop() -> None:
+    cur = STATE.current or {}
+    _optimistic_set(None, cur.get("id"))
+
+
+def _optimistic_start(desc: str) -> None:
+    cur = STATE.current or {}
+    _optimistic_set({"description": desc, "id": None, "project_id": None,
+                     "start": dt.datetime.now(_tz()).isoformat(),
+                     "tags": [], "_optimistic": True}, cur.get("id"))
+
+
+async def _refresh_parallel(*fns) -> None:
+    """Run the post-command re-reads concurrently instead of back to back
+    (each is an independent network read; serial they added ~1s per action)."""
+    await asyncio.gather(*(asyncio.to_thread(*(f if isinstance(f, tuple) else (f,)))
+                           for f in fns))
+
+
+async def _confirm_after_tg(app) -> None:
+    """After a tg-fast switch/stop: one re-read pair at 1.0s, and a second at
+    2.5s only if Toggl still showed the stale timer. Was 3 live /current reads
+    + 1 entries read per command (0.4/0.8/1.5s), which fed the hourly quota
+    that 402'd on 2026-10-01."""
+    for delay in (1.0, 1.5):
+        await asyncio.sleep(delay)
+        await _refresh_parallel(fetch_current, (fetch_today, True))
+        app.invalidate()
+        if not getattr(STATE, "optimistic", None):
+            return
+
+
 def fetch_current(cached=False):
     """Refresh the running timer. cached=True rides the shared current cache
     (used by the steady 30s ticker, so janus and every open dtd picker share
@@ -680,8 +750,11 @@ def fetch_current(cached=False):
     if _toggl_blocked():
         return
     try:
-        STATE.current = (toggl_api.get_current_cached() if cached
-                         else toggl_api.get_current())
+        fetched = (toggl_api.get_current_cached() if cached
+                   else toggl_api.get_current())
+        if _optimistic_holds(fetched):
+            return  # keep the optimistic view until Toggl reflects the action
+        STATE.current = fetched
         STATE.current_known = True
         STATE.last_current_fetch = time.monotonic()
         if STATE.current:
@@ -5441,11 +5514,13 @@ def _run_done_command(app, cmd: str) -> None:
         res = await asyncio.to_thread(run_did_fast, cmd)
         flash(res, 8.0)
         app.invalidate()
-        await asyncio.to_thread(fetch_current)
-        await asyncio.to_thread(fetch_today, True)
-        await asyncio.to_thread(fetch_points)
+        await _refresh_parallel(fetch_current, (fetch_today, True), fetch_points)
         app.invalidate()
 
+    # Timer row clears NOW; did-fast (Todoist + Excel + Toggl trim) runs in
+    # the background queue and the re-reads reconcile afterwards.
+    _optimistic_stop()
+    app.invalidate()
     _enqueue_work(app, f"did {cmd}", _run, key=cmd)
 
 
@@ -5484,8 +5559,7 @@ def _convert_selected_event(ev: dict, app) -> None:
             # landed by the time the subprocess returns — no need for
             # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
             # propagation lag, just one forced re-read of both.
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
+            await _refresh_parallel((fetch_today, True), fetch_points)
             app.invalidate()
         else:
             # Kick off the recording; the wrapper reports its audio verdict.
@@ -5502,14 +5576,11 @@ def _convert_selected_event(ev: dict, app) -> None:
             else:
                 flash(f"⚠ d357 did NOT start: {line or 'no output'}", 10.0)
             app.invalidate()
-            polls = (0.4, 0.8, 1.5)
-            for i, delay in enumerate(polls):
-                await asyncio.sleep(delay)
-                await asyncio.to_thread(fetch_current)
-                if i == len(polls) - 1:
-                    await asyncio.to_thread(fetch_today, True)
-                app.invalidate()
+            await _confirm_after_tg(app)
 
+    if not is_past:
+        _optimistic_start(title)   # the meeting timer shows at once
+        app.invalidate()
     _enqueue_work(app, label, _run_event_and_refresh, key=cmd)
 
 
@@ -5917,20 +5988,27 @@ def _(event):
             # by the time the subprocess returns (mirrors
             # _convert_selected_event's is_past refresh) — no propagation-lag
             # poll needed for those parts, just a forced re-read of both.
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
+            await _refresh_parallel((fetch_today, True), fetch_points)
             event.app.invalidate()
         if any(not d for _, d in resolved_pairs):
             # At least one part went through tg-fast, which still has
-            # Toggl's own propagation lag to poll through.
-            polls = (0.4, 0.8, 1.5)
-            for i, delay in enumerate(polls):
-                await asyncio.sleep(delay)
-                await asyncio.to_thread(fetch_current)
-                if i == len(polls) - 1:
-                    await asyncio.to_thread(fetch_today, True)
-                event.app.invalidate()
+            # Toggl's own propagation lag to confirm through.
+            await _confirm_after_tg(event.app)
 
+    # Optimistic timer row for a plain switch/stop typed as the LAST part
+    # (the one that leaves the timer running): a bare description becomes the
+    # new running timer at once; ranges/backdates (digits) wait for Toggl.
+    last_cmd, last_did = resolved_pairs[-1]
+    if not last_did:
+        bare = last_cmd.strip()
+        if bare.lower() == "stop":
+            _optimistic_stop()
+        elif not re.search(r"\d{3,4}", bare):
+            desc = " ".join(w for w in bare.split()
+                            if not w.startswith("@") and not re.fullmatch(r"[+\[(]\d+[\])]?", w))
+            if desc:
+                _optimistic_start(desc)
+        event.app.invalidate()
     event.app.create_background_task(_run_and_refresh())
 
 
@@ -6224,14 +6302,10 @@ def _(event):
         res = await asyncio.to_thread(run_tg_fast, "stop")
         flash(res)
         event.app.invalidate()
-        polls = (0.4, 0.8, 1.5)
-        for i, delay in enumerate(polls):
-            await asyncio.sleep(delay)
-            await asyncio.to_thread(fetch_current)
-            if i == len(polls) - 1:
-                await asyncio.to_thread(fetch_today, True)
-            event.app.invalidate()
+        await _confirm_after_tg(event.app)
 
+    _optimistic_stop()
+    event.app.invalidate()
     event.app.create_background_task(_stop())
 
 
