@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "2h ic before m5x2": {
-      "todoist_id": "6hgq579432FHxJQ2",
-      "minutes": 20
-    },
     "tunnel tops and stay agentic": {
       "todoist_id": "6hgq57Gj4Qpm53V2",
       "minutes": 30
@@ -18,5 +14,5 @@
       "minutes": 30
     }
   },
-  "last_sync": "2026-10-04T10:00:03.517488-07:00"
+  "last_sync": "2026-10-04T12:00:01.121074-07:00"
 }
