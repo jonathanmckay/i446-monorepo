@@ -68,9 +68,11 @@ def test_blockarm_is_a_single_jq_pass():
     assert 'printf \'%s\\n\' "\\$@" > "\\$BLOCKPICK"' in body   # the arm-file write is unchanged
 
 
-def test_ctrl_d_excludes_then_reload_syncs():
+def test_ctrl_d_opens_schedule_screen_then_reload_syncs():
+    # ctrl-d is the unified schedule screen since 2026-10-04: the block-picker
+    # arm in "days" mode (day-defer rows first), not the old tty prompt.
     b = _bind("ctrl-d")
-    assert "execute($DTD_DEFER {+2})+exclude-multi+deselect-all+reload-sync($DTD_RELOAD)" in b, b
+    assert "execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)" in b, b
 
 
 def test_block_arm_bindings_reload_sync():
@@ -170,12 +172,12 @@ def test_blockarm_label_count_and_missing_snooze_file():
             assert time.time() - t0 < 5.0   # loose: exec-scan stalls reach 1.5s per spawn here
             assert (tmp / "blockpick").read_text().split() == ["C3", "A1"]
             hdr = (tmp / "hdr").read_text()
-            assert "⏰ delay a very long name that got +1 more until" in hdr, hdr
+            assert "📅 schedule a very long name that got +1 more (" in hdr, hdr
             assert json.loads((tmp / "dtd-block-snooze.json").read_text()) == {}, "missing snooze file is created empty, not fatal"
             subprocess.run(["zsh", str(a), "B2"], timeout=10, capture_output=True)
-            assert "⏰ delay xk26 9.22 until" in (tmp / "hdr").read_text(), "dated copy keeps its stamp in the label"
+            assert "📅 schedule xk26 9.22 (" in (tmp / "hdr").read_text(), "dated copy keeps its stamp in the label"
             subprocess.run(["zsh", str(a), "BLOCK:戌"], timeout=10, capture_output=True)
-            assert "picker closed" in (tmp / "hdr").read_text()
+            assert "back to list" in (tmp / "hdr").read_text()
         finally:
             d.unlink(); a.unlink()
 

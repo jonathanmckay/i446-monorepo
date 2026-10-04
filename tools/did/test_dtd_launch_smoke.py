@@ -34,7 +34,7 @@ DTD = _HERE / "dtd.sh"
 EXPECTED = {
     "agent", "blockapply", "blockarm", "defer", "delete", "domainsearch",
     "done-hide", "done-router", "done", "edit", "enter", "list", "refresh",
-    "skip", "split", "start", "undo", "view-toggle",
+    "skip", "split", "start", "undo", "view-toggle", "pickenter", "back",
 }
 
 
