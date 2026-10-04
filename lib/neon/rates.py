@@ -31,3 +31,16 @@ def rate_points(cell, minutes: float) -> int | None:
         return None
     base, per = r
     return int(round(base + per * minutes))
+
+
+# 0n habits whose minutes Neon credits at a multiple (minutes → 分). The
+# multiplier lives in a sheet formula, not row 5, so it is mirrored here for
+# display only (writes still go through 0n and let the sheet do the math).
+#   hiit: hcbi!Y = '0n'!AE*2 + 40  (the +40 is a flat daily hcbp base)
+ZERO_N_MULTIPLIERS: dict[str, int] = {"hiit": 2}
+
+
+def zero_n_points(habit: str, minutes: float) -> int | None:
+    """分 Neon credits for `minutes` of a multiplied 0n habit, else None."""
+    mult = ZERO_N_MULTIPLIERS.get((habit or "").strip().lower())
+    return None if mult is None else int(round(mult * minutes))

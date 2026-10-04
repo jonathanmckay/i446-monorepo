@@ -26,7 +26,9 @@ def test_fzf_multi_and_shift_binds():
 def test_batch_bindings_use_plus_placeholder_and_clear_marks():
     # ctrl-k re-bound to the block picker 2026-07-27 (skip is keyless now);
     # both picker keys must still batch the {+2} marked set.
-    for key, script in (("ctrl-d", "$DTD_DEFER"), ("ctrl-x", "$DTD_DELETE"),
+    # ctrl-d opens the unified schedule screen (2026-10-04): same arm script as
+    # ctrl-v/k, prefixed with DTD_PICK_MODE=days so day rows list first.
+    for key, script in (("ctrl-d", "DTD_PICK_MODE=days $DTD_BLOCKARM"), ("ctrl-x", "$DTD_DELETE"),
                         ("ctrl-k", "$DTD_BLOCKARM"), ("ctrl-v", "$DTD_BLOCKARM")):
         m = re.search(rf'--bind "{key}:execute(?:-silent)?\(({re.escape(script)}[^)]*)\)([^"]*)"', SRC)
         assert m, f"{key} binding not found"

@@ -100,7 +100,12 @@ ALIASES = {"math": "问学", "skin2skin": "问学", "stats m5x2": "stats m5x2",
            # The daily 夜neon card is named "evening hcmc"; the 0n header is
            # "night hcmc" (registry alias since 2026-07-25 — mirrored here so
            # DIRECT did-fast invocations, e.g. dtd's worker, route it too).
-           "evening hcmc": "night hcmc"}
+           "evening hcmc": "night hcmc",
+           # "hit" is the habitual shorthand for hiit; without this it fell
+           # to needs_agent (or, with @hcb, the variable path at 1x into
+           # 0分!W) instead of 0n!AE, which hcbi!Y credits at 2x
+           # (user report 2026-10-04).
+           "hit": "hiit"}
 # xk20/xk22/xk26 (kid-time with Theo/Ren/Rori) can legitimately fire several
 # times a day (multiple play sessions) — each write must add to the day's
 # running total, not overwrite it (bug 2026-08-16: a second same-day xk22

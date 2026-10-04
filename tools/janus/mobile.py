@@ -139,7 +139,9 @@ COLORS = {
     "n156": "#1249b4", "hcmc": "#0d3b66", "m5x2": "#d50032", "m828": "#9b0023",
     "hcb": "#f81d78",
     "hcbp": "#ff4081", "infra": "#9e9e9e", "i444": "#616161", "i447": "#a89c8a",
-    "hcm": "#aa00ff", "hcmp": "#7c4dff", "hcmr": "#bda6ff", "家": "#ff4136",
+    # 家 = family: Pool Party teal, same as tools/tg/janus.py (was #ff4136,
+    # an orange that clashed with xk87/xk88 — user report 2026-10-04).
+    "hcm": "#aa00ff", "hcmp": "#7c4dff", "hcmr": "#bda6ff", "家": "#00b8d4",
     "睡觉": "#666666",
 }
 DEFAULT_COLOR = "#bdbdbd"
@@ -147,7 +149,55 @@ DEFAULT_COLOR = "#bdbdbd"
 BLOCKS = [(4, "卯"), (6, "辰"), (8, "巳"), (10, "午"), (12, "未"),
           (14, "申"), (16, "酉"), (18, "戌"), (20, "亥"), (22, "子")]
 
+# Per-block 分 lives in 0分 G:O (headed 卯..亥; 子 has no column) — the same
+# cells tools/tg/janus.py's fetch_points mirrors into its block headers.
+BLOCK_PTS_COLS = dict(zip(["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"],
+                          "GHIJKLMNO"))
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
+RITUALS_CFG = Path.home() / "i446-monorepo/config/block-rituals.json"
+_RITUAL_PTS_FALLBACK = {"☀️": 1, "📧": 3, "🎯": 3, "⏱️": 3, "✅": 3}
+
 _AT = re.compile(r"\s*@(\S+)")
+
+
+def _parse_tags(raw) -> list[str]:
+    """Free-typed tags → clean Toggl tag list. Accepts a list or one string
+    split on commas/whitespace (no existing Toggl tag contains a space);
+    a leading '#' is dropped so '#-1' lands as the real value tag '-1'
+    (tag_credits.VALUE_TAGS) rather than minting a look-alike. Order kept,
+    duplicates dropped."""
+    parts = raw if isinstance(raw, list) else re.split(r"[,\s]+", raw or "")
+    out: list[str] = []
+    for t in parts:
+        t = str(t).strip().lstrip("#").strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _resolve_project(code: str) -> tuple[int | None, str]:
+    """Free-text project → (Toggl project id, canonical code). Exact
+    PROJECT_MAP code first, then case-insensitive, then a live Toggl
+    project NAME match (catches projects not in the static map). Unknown
+    text returns (None, "") — callers refuse rather than silently creating
+    a project from a typo."""
+    code = (code or "").strip().lstrip("@").strip()
+    if not code:
+        return None, ""
+    if code in PROJECT_MAP:
+        return PROJECT_MAP[code], code
+    low = code.lower()
+    for k, v in PROJECT_MAP.items():
+        if k.lower() == low:
+            return v, k
+    try:
+        for p in toggl_api.get_projects() or []:
+            name = (p.get("name") or "").strip()
+            if p.get("active", True) and name.lower() == low and p.get("id"):
+                return p["id"], name
+    except Exception as e:  # offline / rate-limited
+        print("WARN get_projects:", e, file=sys.stderr)
+    return None, ""
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import state_paths  # noqa: E402
@@ -536,6 +586,70 @@ def _split_gap_at_boundaries(start_dt: _dt.datetime, end_dt: _dt.datetime,
     return [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
 
 
+def _ritual_pts() -> dict[str, int]:
+    try:
+        rj = json.loads(RITUALS_CFG.read_text())
+        return {r["emoji"]: int(r["points"]) for r in rj["rituals"]}
+    except Exception:
+        return dict(_RITUAL_PTS_FALLBACK)
+
+
+def _block_ritual_scores(now: _dt.datetime) -> dict[str, int]:
+    """{branch: -1₦ score} from the build order's -1₲ section: the sum of the
+    stamped ritual emojis' points (config/block-rituals.json). Mirrors
+    tools/tg/janus.py's _read_block_emojis + _ritual_pts_label, including
+    its guard that a block whose start hour is still ahead never scores
+    (the build order can carry pre-stamped future headers)."""
+    try:
+        text = BUILD_ORDER.read_text()
+    except Exception:
+        return {}
+    pts = _ritual_pts()
+    start = {name: h for h, name in BLOCKS}
+    out: dict[str, int] = {}
+    in_section = False
+    for line in text.splitlines():
+        if line.strip().startswith("## -1₲"):
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if not in_section or not line.startswith("- "):
+            continue
+        tail = line[2:].strip()
+        if not tail or start.get(tail[0]) is None or start[tail[0]] > now.hour:
+            continue
+        score = sum(p for e, p in pts.items() if e in tail)
+        if score:
+            out[tail[0]] = score
+    return out
+
+
+def _block_points(today: _dt.date, total: int | None) -> dict[str, int]:
+    """{branch: 分} straight from 0分 G:O's computed values (a locked
+    literal or the live residual formula — both are what Neon shows).
+    Clamped to the day's Σ like janus.py's _block_display_pts: a block is a
+    residual of D, so a torn read above Σ is impossible and gets capped.
+    Skipped entirely when the Σ read already failed — with the daemon down,
+    each read would fall back to a multi-second ssh+osascript round trip."""
+    if total is None:
+        return {}
+    from neon import excel
+    date = "%d/%d" % (today.month, today.day)
+    out: dict[str, int] = {}
+    for name, col in BLOCK_PTS_COLS.items():
+        try:
+            r = excel.read("0分", col, date=date)
+            v = str(r.get("value") or "").strip() if r.get("ok") else ""
+            if v:
+                n = int(round(float(v)))
+                if n:
+                    out[name] = min(n, total) if total > 0 else n
+        except Exception as e:
+            print(f"WARN block pts {name}:", e, file=sys.stderr)
+    return out
+
+
 def build_timeline() -> dict:
     today = _dt.datetime.now(_tz()).date()
     now = _dt.datetime.now(_tz())
@@ -589,7 +703,8 @@ def build_timeline() -> dict:
             bdt = day0 + _dt.timedelta(hours=h)
             if bdt > t or bdt > now:
                 break
-            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
+            rows.append({"type": "divider", "label": f"{name} {h:02d}:00",
+                         "block": name})
             bidx += 1
 
     for it in stream:
@@ -613,7 +728,8 @@ def build_timeline() -> dict:
                          # _resolvable_points) — lets the swipe label show
                          # what will ACTUALLY be credited (2026-08-15) rather
                          # than always implying "minutes = points".
-                         "points": _resolvable_points(e["desc"], known_habits)})
+                         "points": _resolvable_points(e["desc"], known_habits),
+                         "rate_points": _habit_rate_points(e["desc"], mins)})
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
@@ -634,6 +750,15 @@ def build_timeline() -> dict:
             points = int(float(r["value"]))
     except Exception as e:
         print("WARN points:", e, file=sys.stderr)
+
+    # Per-block Σ分 and -1₦ ritual score on each divider (user request
+    # 2026-10-04: "show both sum of points and -1 sum for every block").
+    block_pts = _block_points(today, points)
+    rituals = _block_ritual_scores(now)
+    for row in rows:
+        if row["type"] == "divider":
+            row["pts"] = block_pts.get(row["block"])
+            row["n1"] = rituals.get(row["block"])
 
     return {"rows": rows, "tracked_min": tracked_min, "points": points,
             "date": today.isoformat()}
@@ -662,11 +787,17 @@ def _hhmm_parts(s: str) -> tuple[int, int]:
     return h, int(m.group(2))
 
 
-def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
+def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
+             tags: list[str] | None = None, project: str = "") -> dict:
     m = _AT.search(desc)
-    code = m.group(1) if m else ""
+    code = project or (m.group(1) if m else "")
     desc_clean = _AT.sub("", desc).strip()
-    pid = PROJECT_MAP.get(code)
+    pid = None
+    if code:
+        pid, code = _resolve_project(code)
+        if pid is None:
+            return {"ok": False, "error": f"unknown project @{project or m.group(1)}"}
+    tags = _parse_tags(tags or [])
     today = _dt.datetime.now(_tz()).date()
 
     # No end time -> start a live, still-running Toggl timer instead of a
@@ -683,7 +814,8 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
                 return {"ok": False, "error": "bad time format (HH:MM)"}
             start_iso = _toggl_iso(st)
         try:
-            r = toggl_api.start_timer(desc_clean, project_id=pid, start_time=start_iso)
+            r = toggl_api.start_timer(desc_clean, project_id=pid, tags=tags or None,
+                                     start_time=start_iso)
             return {"ok": bool(r), "project": code, "running": True}
         except Exception as e:
             return {"ok": False, "error": str(e)[:200]}
@@ -698,7 +830,7 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     dur = int((en - st).total_seconds())
     try:
         r = toggl_api.create_entry(desc_clean, _toggl_iso(st), _toggl_iso(en), dur,
-                                   project_id=pid)
+                                   project_id=pid, tags=tags or None)
         return {"ok": bool(r), "project": code}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
@@ -770,7 +902,7 @@ def _would_touch_logged(entry_id: str, start_dt: _dt.datetime, end_dt: _dt.datet
 
 
 def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
-               project_code: str) -> dict:
+               project_code: str, tags: list[str] | None = None) -> dict:
     """Edit description/project/time. Time changes go through the same
     trim_range() MECE-keeping path the desktop TUI uses. Guards (2026-08-06
     review): refuses to touch a cross-midnight entry's clipped time (can't
@@ -790,10 +922,14 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
         return {"ok": False, "error": "description required"}
     fields: dict = {"description": desc}
     if project_code:
-        pid = PROJECT_MAP.get(project_code)
+        pid, _code = _resolve_project(project_code)
         if pid is None:
             return {"ok": False, "error": f"unknown project @{project_code}"}
         fields["project_id"] = pid
+    # tags=None leaves them untouched; a list (even empty) is the full new
+    # set — the dialog field is prefilled with the current tags.
+    if tags is not None:
+        fields["tags"] = _parse_tags(tags)
 
     # Normalize colon-less numpad input to canonical HH:MM up front (see
     # _hhmm_parts): the inputmode=numeric fields can't retype a deleted colon,
@@ -938,10 +1074,25 @@ def registered_habit_names() -> set[str]:
         known = {df.header_normalize(k)
                  for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
         known |= {df.header_normalize(a) for a in df.ONENEON_ALIASES}
+        # did-fast's plain ALIASES ("hit" → hiit, ...) also route by name.
+        known |= {df.header_normalize(a) for a in df.ALIASES}
         return known
     except Exception as e:
         print("WARN registered_habit_names:", e, file=sys.stderr)
         return set()
+
+
+def _habit_rate_points(desc: str, minutes: int) -> int | None:
+    """分 Neon will credit for a multiplied 0n habit entry (hiit: 2×min via
+    hcbi!Y), resolving did-fast's ALIASES first so "hit" counts too. Display
+    only — the swipe still sends minutes to 0n and the sheet multiplies."""
+    from neon.rates import zero_n_points
+    key = _norm_key(desc)
+    try:
+        key = _load_df_mod().ALIASES.get(key, key)
+    except Exception:
+        pass
+    return zero_n_points(key, minutes)
 
 
 def habit_tags(tags: list[str]) -> list[str]:
@@ -1142,7 +1293,8 @@ def api_fill():
     desc = (b.get("desc") or "").strip()
     if not desc:
         return jsonify({"ok": False, "error": "no description"}), 400
-    return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or ""))
+    return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or "",
+                            tags=b.get("tags") or [], project=(b.get("project") or "").strip()))
 
 
 @app.route("/api/log", methods=["POST"])
@@ -1162,7 +1314,8 @@ def api_edit():
         return jsonify({"ok": False, "error": "id required"}), 400
     r = edit_entry(str(b["id"]), b.get("desc") or "",
                    (b.get("start") or "").strip(), (b.get("end") or "").strip(),
-                   (b.get("project") or "").strip())
+                   (b.get("project") or "").strip(),
+                   tags=b.get("tags") if "tags" in b else None)
     if not r.get("ok"):
         # A refused edit only ever surfaced as a phone toast, which is gone
         # by the time anyone asks "what did it say?" (2026-09-24). One line
@@ -1239,7 +1392,13 @@ PAGE = r"""<!doctype html>
     border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
   main { padding:2px 0 calc(env(safe-area-inset-bottom) + 60px); }
   .div { color:var(--dim); padding:8px 14px 2px; font-size:12px; letter-spacing:1px;
-    border-top:1px solid #242424; }
+    border-top:1px solid #242424; display:flex; justify-content:space-between; align-items:center; }
+  .div .bp { letter-spacing:0; font-variant-numeric:tabular-nums; }
+  .div .bp b { color:var(--go); }
+  .div .n1 { background:#b3261e; color:#fff; font-weight:700; border-radius:4px;
+    padding:0 5px; margin-left:6px; }
+  .tags { font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; max-width:30%; }
   .row { position:relative; overflow:hidden; }
   .row .track { position:absolute; inset:0; background:var(--go); color:#003;
     font-weight:800; display:flex; align-items:center; padding-left:16px; opacity:0; }
@@ -1254,7 +1413,6 @@ PAGE = r"""<!doctype html>
   .meta { white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--dim); }
   .gaprow .ttl { color:var(--gap); font-style:italic; }
   .logged .ttl::after { content:" ✓"; color:var(--go); }
-  .logged { opacity:.45; }
   .running .ttl::before { content:"▶ "; color:var(--go); }
   .eventrow { border-left:2px dashed currentColor; padding-left:12px; }
   .eventrow .ttl::before { content:"◇ "; }
@@ -1272,7 +1430,7 @@ PAGE = r"""<!doctype html>
   #dlg .card, #editDlg .card { background:#232323; width:100%; padding:16px 16px
     calc(env(safe-area-inset-bottom) + 16px); border-radius:14px 14px 0 0; }
   #dlg h3, #editDlg h3 { margin:0 0 12px; font-size:15px; color:#cfcfcf; font-weight:700; }
-  #dlg input, #editDlg input, #editDlg select { width:100%; background:#1b1b1b; border:1px solid #333;
+  #dlg input, #editDlg input { width:100%; background:#1b1b1b; border:1px solid #333;
     color:#cfcfcf; font:15px ui-monospace,Menlo,monospace; border-radius:8px; padding:10px 12px;
     margin-bottom:10px; }
   #dlg .times, #editDlg .times { display:flex; gap:10px; }
@@ -1305,6 +1463,7 @@ PAGE = r"""<!doctype html>
   <div class="card">
     <h3 id="dlgTitle">fill gap</h3>
     <input id="d-desc" placeholder="description (@code for project)" autocomplete="off">
+    <input id="d-tags" placeholder="tags (comma or space separated)" autocomplete="off" autocapitalize="off">
     <label id="d-ongoing-row" class="ongoing-row">
       <input type="checkbox" id="d-ongoing" onchange="toggleOngoing()"> ongoing (no end yet)
     </label>
@@ -1327,7 +1486,9 @@ PAGE = r"""<!doctype html>
       <input id="e-start" inputmode="numeric" placeholder="HH:MM">
       <input id="e-end" inputmode="numeric" placeholder="HH:MM">
     </div>
-    <select id="e-project"></select>
+    <input id="e-project" list="projlist" placeholder="project (free text)" autocomplete="off" autocapitalize="off">
+    <datalist id="projlist"></datalist>
+    <input id="e-tags" placeholder="tags (comma or space separated)" autocomplete="off" autocapitalize="off">
     <div class="btns">
       <button class="cancel" onclick="closeEditDlg()">cancel</button>
       <button class="save" onclick="saveEdit()">save</button>
@@ -1374,7 +1535,18 @@ function render(rows){
   for(const r of rows){
     if(r.type === 'divider'){
       const d = document.createElement('div');
-      d.className = 'div'; d.textContent = r.label;
+      d.className = 'div';
+      const lab = document.createElement('span'); lab.textContent = r.label;
+      d.appendChild(lab);
+      // Block Σ分 (0分 G:O) + -1₦ ritual score chip, like desktop janus.
+      if(r.pts != null || r.n1 != null){
+        const bp = document.createElement('span'); bp.className = 'bp';
+        if(r.pts != null){ const b = document.createElement('b'); b.textContent = r.pts;
+          bp.appendChild(b); bp.appendChild(document.createTextNode('分')); }
+        if(r.n1 != null){ const n = document.createElement('span'); n.className = 'n1';
+          n.textContent = r.n1; bp.appendChild(n); }
+        d.appendChild(bp);
+      }
       list.appendChild(d);
     } else {
       list.appendChild(makeRow(r));
@@ -1392,7 +1564,10 @@ function trackLabel(r){
   // elapsed minutes (2026-08-15: those two numbers are frequently
   // different, and the swipe used to always imply minutes = points).
   if(r.running) return r.points != null ? 'done ✓ ('+r.points+'分)' : 'done ✓ (stop + log)';
-  return r.points != null ? 'log '+r.points+'分' : 'neon log 分 ('+r.minutes+'m)';
+  if(r.points != null) return 'log '+r.points+'分';
+  // Multiplied 0n habit (hiit = 2×min in Neon) — show the real credit.
+  if(r.rate_points != null) return 'log '+r.rate_points+'分 ('+r.minutes+'m)';
+  return 'neon log 分 ('+r.minutes+'m)';
 }
 
 function makeRow(r){
@@ -1423,7 +1598,14 @@ function makeRow(r){
   const meta = document.createElement('span');
   meta.className = 'meta';
   meta.textContent = r.start+'–'+r.end+' · '+r.minutes+'m';
-  line.appendChild(ttl); line.appendChild(meta);
+  line.appendChild(ttl);
+  if(r.tags && r.tags.length){
+    const tg = document.createElement('span');
+    tg.className = 'tags';
+    tg.textContent = r.tags.map(t=>'#'+t).join(' ');
+    line.appendChild(tg);
+  }
+  line.appendChild(meta);
   row.appendChild(line);
   bindSwipe(row, line, track, trackEdit, r);
   return row;
@@ -1469,6 +1651,7 @@ function act(row, line, r){
     gapCtx = r;
     document.getElementById('dlgTitle').textContent = 'fill gap';
     document.getElementById('d-desc').value = '';
+    document.getElementById('d-tags').value = '';
     document.getElementById('d-start').value = r.start;
     document.getElementById('d-end').value = r.end;
     document.getElementById('d-ongoing-row').style.display = 'none';
@@ -1533,7 +1716,7 @@ async function commitLog(line, r){
       toast(d.needs_agent ? 'no route — use /did on desktop' : 'log failed', true);
       return;
     }
-    let msg = '+'+r.minutes+'m → '+(d.step||'neon');
+    let msg = (r.rate_points != null ? '+'+r.rate_points+'分' : '+'+r.minutes+'m')+' → '+(d.step||'neon');
     if(d.tag_steps && d.tag_steps.length) msg += ' + '+d.tag_steps.join(', ');
     toast(msg+' ✓');
   } catch(e){ line.classList.remove('logged'); toast('offline', true); }
@@ -1562,6 +1745,7 @@ function openAddDlg(){
   gapCtx = null;  // not filling a specific gap — /api/fill just needs desc/start/end
   document.getElementById('dlgTitle').textContent = 'add entry';
   document.getElementById('d-desc').value = '';
+  document.getElementById('d-tags').value = '';
   // Default: start now, ongoing (no end) — the common case is "starting
   // something right now", not backfilling a finished block. Un-checking
   // "ongoing" still allows logging a specific past completed span.
@@ -1579,12 +1763,13 @@ async function saveDlg(){
   const start = document.getElementById('d-start').value.trim();
   const ongoing = document.getElementById('d-ongoing').checked;
   const end = ongoing ? '' : document.getElementById('d-end').value.trim();
+  const tags = document.getElementById('d-tags').value.trim();
   if(!desc){ toast('need a description', true); return; }
   closeDlg();
   try {
     const r = await fetch('/api/fill', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({desc, start, end})});
+      body: JSON.stringify({desc, start, end, tags})});
     const d = await r.json();
     if(!d.ok){ toast(d.error||'create failed', true); return; }
     toast(d.running ? 'started ✓'+(d.project?' → '+d.project:'') : 'tracked ✓'+(d.project?' → '+d.project:''));
@@ -1613,7 +1798,9 @@ async function loadProjects(){
     const r = await fetch('/api/projects');
     const d = await r.json();
     if(d.ok) projectCodes = d.codes;
-  } catch(e){ /* dropdown just stays empty — non-fatal */ }
+    document.getElementById('projlist').innerHTML =
+      projectCodes.map(c=>'<option value="'+c+'">').join('');
+  } catch(e){ /* suggestions just stay empty — free text still works */ }
 }
 
 const editDlg = document.getElementById('editDlg');
@@ -1626,9 +1813,8 @@ function openEdit(r){
   const endEl = document.getElementById('e-end');
   endEl.value = r.end;
   endEl.disabled = !!r.running;   // no fixed end yet — stop it first (desktop mirrors this)
-  const sel = document.getElementById('e-project');
-  sel.innerHTML = '<option value="">(none)</option>' +
-    projectCodes.map(c=>'<option value="'+c+'"'+(c===r.project?' selected':'')+'>'+c+'</option>').join('');
+  document.getElementById('e-project').value = r.project || '';
+  document.getElementById('e-tags').value = (r.tags||[]).join(' ');
   editDlg.classList.add('show');
 }
 
@@ -1640,14 +1826,15 @@ async function saveEdit(){
   const start = document.getElementById('e-start').value.trim();
   const endEl = document.getElementById('e-end');
   const end = endEl.disabled ? '' : endEl.value.trim();
-  const project = document.getElementById('e-project').value;
+  const project = document.getElementById('e-project').value.trim();
+  const tags = document.getElementById('e-tags').value.trim();
   if(!desc){ toast('need a description', true); return; }
   const id = editCtx.id;
   closeEditDlg();
   try {
     const r = await fetch('/api/edit', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id, desc, start, end, project})});
+      body: JSON.stringify({id, desc, start, end, project, tags})});
     const d = await r.json();
     if(!d.ok){ toast(d.error||'edit failed', true); return; }
     toast('saved ✓');

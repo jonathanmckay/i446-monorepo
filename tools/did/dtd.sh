@@ -532,6 +532,10 @@ DTD_REMOVED="/tmp/dtd-$DTD_ID.removed"
 # defined here so enter.sh/done.sh heredocs expand real paths).
 DTD_BLOCKPICK="/tmp/dtd-$DTD_ID.blockpick"
 DTD_BLOCKAPPLY="/tmp/dtd-$DTD_ID.blockapply.sh"
+# Schedule-screen routers (2026-10-04): enter (picks a row, or N typed days)
+# and esc/ctrl-c (back to the list from the picker, else exit).
+DTD_PICKENTER="/tmp/dtd-$DTD_ID.pickenter.sh"
+DTD_BACK="/tmp/dtd-$DTD_ID.back.sh"
 # View mode (ctrl-t toggles): empty = default priority order, 'project' = grouped
 # by domain label. Per-session; the list generator reads it as its 8th arg.
 DTD_VIEW="/tmp/dtd-$DTD_ID.view"
@@ -1038,7 +1042,15 @@ label="\${names[1]}"
 # flag unset and get the non-interactive default.
 days=""
 prompted=""
-if [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
+# DTD_DEFER_DAYS (2026-10-04): the unified schedule screen (ctrl-d) already
+# collected the target inside fzf, so take it as an explicit human choice
+# and never open the tty prompt — this script then runs under fzf's
+# execute-silent/transform, where touching /dev/tty would steal fzf's keys.
+_preset="\${DTD_DEFER_DAYS:-}"
+if [[ -n "\$_preset" ]]; then
+  days="\$_preset"
+  prompted=1
+elif [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   # fzf leaves the alternate screen for execute(), but what the terminal
   # shows then is not guaranteed: cmux keeps the stale fzf frame on screen,
   # so the prompt is invisible and arrow keys land in a blind 'read' that
@@ -1139,9 +1151,13 @@ done
 # events, it doesn't clear ones already sitting in the buffer, which fzf
 # then reads as literal ^[[<0;16;15M text on resume (same class of bug as
 # done.sh/split.sh, 2026-07-27, just never ported to this script).
+# Skipped for a preset (schedule-screen) defer: no prompt ran, and fzf still
+# owns the tty, so draining here would eat the user's next keystrokes.
+if [[ -z "\$_preset" ]]; then
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+fi
 
 print -- "\$EPOCHREALTIME\tdefer-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 DEFEREOF
@@ -1171,8 +1187,8 @@ zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tarm-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # ctrl-v on a picker row (already armed) = close the picker
 if [[ "\$1" == BLOCK:* ]]; then
-  rm -f "\$BLOCKPICK"
-  echo "↩ block picker closed" > "\$HDR"
+  rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode"
+  echo "↩ back to list" > "\$HDR"
   exit 0
 fi
 # Nothing to pick after 亥 has begun (20:00) unless un-delay is on offer.
@@ -1213,8 +1229,12 @@ if [[ "\$n" == "0" ]]; then
 fi
 lbl="\$clean"
 [[ \$# -gt 1 ]] && lbl="\$clean +\$((\$# - 1)) more"
+# Mode marker (2026-10-04): ctrl-d opens the unified schedule screen with the
+# day-defer rows FIRST (so a bare enter keeps ctrl-d's old blank-prompt
+# meaning, "next occurrence"); ctrl-v/k keep minutes/blocks first.
+printf '%s' "\${DTD_PICK_MODE:-delay}" > "\$BLOCKPICK.mode"
 printf '%s\n' "\$@" > "\$BLOCKPICK"
-echo "⏰ delay \$lbl until… (enter picks · ctrl-v or ↩-row cancels)" > "\$HDR"
+echo "📅 schedule \$lbl (enter picks · type N + enter = defer N days · esc back)" > "\$HDR"
 print -- "\$EPOCHREALTIME\tarm-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 ARMEOF
 chmod +x "$DTD_BLOCKARM"
@@ -1227,9 +1247,16 @@ BLOCKPICK="$DTD_BLOCKPICK"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
 glyph="\${1#BLOCK:}"
 ids=(\$(cat "\$BLOCKPICK" 2>/dev/null))
-rm -f "\$BLOCKPICK"
+rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode"
 if [[ "\$glyph" == "cancel" || \${#ids[@]} -eq 0 ]]; then
-  echo "block delay cancelled" > "\$HDR"
+  echo "↩ back to list" > "\$HDR"
+  exit 0
+fi
+# Day rows / typed N (2026-10-04, unified schedule screen): BLOCK:d<N|auto|
+# YYYY-MM-DD> defers by days through the same defer script ctrl-d used to
+# prompt for. Must branch BEFORE the python writer (HOURS['d1'] would raise).
+if [[ "\$glyph" == d* ]]; then
+  DTD_DEFER_DAYS="\${glyph#d}" "$DTD_DEFER" "\${ids[@]}" >/dev/null 2>&1
   exit 0
 fi
 msg=\$(python3 - "\$SNOOZE" "\$glyph" "\${ids[@]}" <<'PYWRITE'
@@ -1308,6 +1335,40 @@ while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 echo "\${msg:-✗ block delay failed}" > "\$HDR"
 APPLYEOF
 chmod +x "$DTD_BLOCKAPPLY"
+
+# Enter router (2026-10-04). Bound as transform(...) so it runs even when the
+# query matches no row (fzf skips execute() then, and a typed "12" filters
+# every schedule row away). Does its work itself and prints NOTHING, so no
+# action/quoting layer is emitted; the reload/clear/header tail lives in the
+# static bind. Its children's stdout is discarded because transform reads
+# stdout as fzf actions.
+cat > "$DTD_PICKENTER" << PICKENTEREOF
+#!/bin/zsh
+id="\$1"
+q="\${2// /}"
+if [[ -s "$DTD_BLOCKPICK" ]] && [[ "\$q" == <-> || "\$q" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]]; then
+  "$DTD_BLOCKAPPLY" "BLOCK:d\$q" >/dev/null 2>&1
+elif [[ -n "\$id" ]]; then
+  "$DTD_ENTER" "\$id" >/dev/null 2>&1
+fi
+exit 0
+PICKENTEREOF
+chmod +x "$DTD_PICKENTER"
+
+# Esc / ctrl-c router (2026-10-04): on the schedule screen, go back to the
+# list; on the list with a query, clear it (the bind tail does that); on the
+# bare list, exit. So pressing either twice from the schedule screen exits.
+cat > "$DTD_BACK" << BACKEOF
+#!/bin/zsh
+if [[ -e "$DTD_BLOCKPICK" ]]; then
+  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode"
+  echo "↩ back to list" > "$DTD_HDR"
+elif [[ -z "\$1" ]]; then
+  print -n abort
+fi
+exit 0
+BACKEOF
+chmod +x "$DTD_BACK"
 
 # --- Unified edit script used by fzf ctrl-g binding ---
 # One prompt edits name + domain + points from a single line (needs a tty, so
@@ -1660,6 +1721,21 @@ if _armed:
     _R = '\x1b[0m'
     # Short, always-available delays (not tied to the 地支 block schedule) —
     # come before the block rows since they're the more common quick-snooze.
+    GREEN = '\x1b[38;2;152;195;121m'
+    _mode = ''
+    try:
+        _mode = open(_bp + '.mode').read().strip()
+    except Exception:
+        pass
+    # Day-defer rows (2026-10-04, unified schedule screen). Typing a bare
+    # number + enter also defers N days (handled by the enter router).
+    _day_rows = [(f'{GREEN}↻ next occurrence (recurring) · tomorrow (one-off){_R}', 'dauto'),
+                 (f'{GREEN}📅 tomorrow{_R}', 'd1'),
+                 (f'{GREEN}📅 in 2 days{_R}', 'd2'),
+                 (f'{GREEN}📅 in 1 week{_R}', 'd7')]
+    if _mode == 'days':
+        for _t, _g in _day_rows:
+            print(f'{_t}\tBLOCK:{_g}')
     for _lbl, _g in (('10 minutes','+10m'),('30 minutes','+30m'),('1 hour','+1h')):
         print(f'{CYAN}⏱ delay {_lbl}{_R}\tBLOCK:{_g}')
     for g, py, h in (('卯','mao',4),('辰','chen',6),('巳','si',8),('午','wu',10),
@@ -1667,6 +1743,9 @@ if _armed:
                      ('戌','xu',18),('亥','hai',20)):
         if h > _nw2.hour:
             print(f'{ORANGE}⏰ {g}  {py:<5} {h:02d}:00–{h+2:02d}:00{_R}\tBLOCK:{g}')
+    if _mode != 'days':
+        for _t, _g in _day_rows:
+            print(f'{_t}\tBLOCK:{_g}')
     if any(i in _sn_all for i in _armed):
         print(f'{GREY}↩ un-delay — show again now{_R}\tBLOCK:now')
     print(f'{GREY}✗ cancel{_R}\tBLOCK:cancel')
@@ -2587,7 +2666,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: defer | ctrl-p: split | ctrl-v/k: ⏰block | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ctrl-g: edit | ctrl-a: agent | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -2872,6 +2951,7 @@ while true; do
   # an execute() binding. (Supersedes the --no-mouse + alt-scroll-off workaround,
   # which stopped the ^[[A^[[B flood but also killed scrolling — bugs 07-14/15.)
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode"   # never relaunch into a stale schedule screen
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --info=inline-right \
       --input-border=horizontal \
@@ -2885,10 +2965,12 @@ while true; do
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
-      --bind "enter:execute-silent($DTD_ENTER {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "esc:transform($DTD_BACK {q})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-c:transform($DTD_BACK {q})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:execute($DTD_DEFER {+2})+exclude-multi+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute-silent($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
@@ -3034,4 +3116,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"

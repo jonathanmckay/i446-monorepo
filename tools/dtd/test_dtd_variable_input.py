@@ -78,3 +78,13 @@ def test_build_tasks_exposes_variable_prompt_field(monkeypatch, tmp_path):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_variable_rate_reports_hiit_2x():
+    """2026-10-04: dtd web toasted the card's static [23] for hiit whatever
+    minutes were typed; Neon credits 2×minutes (hcbi!Y). The frontend
+    multiplies the typed value by variableRate."""
+    assert dtd.variable_rate("hiit (10) [23]") == 2
+    assert dtd.variable_rate("hiit 10.5") == 2  # deferred copy
+    assert dtd.variable_rate("xk22 (20) [25]") is None
+    assert dtd.variable_rate("plain task [10]") is None

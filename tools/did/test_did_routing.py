@@ -651,6 +651,17 @@ class ZeroNeonOverrideTests(unittest.TestCase):
         self.assertEqual(r.fen_col, "W")
         self.assertEqual(r.fen_points, 48)
 
+    def test_hit_shorthand_routes_to_hiit_0n(self):
+        # 2026-10-04: "hit 27" fell to needs_agent (and "hit 27 @hcb" to the
+        # variable path, 1x into 0分!W) instead of 0n!AE, which hcbi!Y
+        # credits at 2x. The alias must land it on the hiit 0n column.
+        for raw in ("hit 27", "HIT 27", "hit 27 @hcb", "hiit 27"):
+            r = self._route_one(raw)
+            self.assertEqual(r.step, "0n", raw)
+            self.assertEqual(r.item.name.lower(), "hiit", raw)
+            self.assertEqual(r.item.time_value, 27, raw)
+            self.assertIsNone(r.fen_col, raw)  # sheet does the 2x, no 0分 write
+
     def test_no_override_does_not_write_to_0fen(self):
         # Plain `hiit` → 0₦ write only, Excel rollup handles 0分
         r = self._route_one("hiit")

@@ -122,6 +122,15 @@ def variable_prompt(raw: str) -> str | None:
     key = _DEFER_DATE.sub("", strip_ann(raw).lower().strip()).strip()
     return VARIABLE_INPUT.get(key)
 
+def variable_rate(raw: str) -> int | None:
+    """分 per typed unit for a variable task Neon multiplies (hiit: 2/min via
+    hcbi!Y), so the completion toast and running total show what is actually
+    credited instead of the card's static [N] (user report 2026-10-04: "dtd
+    web shows 1x"). None = keep showing the card's [N]."""
+    from neon.rates import ZERO_N_MULTIPLIERS
+    key = _DEFER_DATE.sub("", strip_ann(raw).lower().strip()).strip()
+    return ZERO_N_MULTIPLIERS.get(key)
+
 def parse_est(content: str) -> tuple[str, int]:
     """Return ('(30) [20]' canonical string, points)."""
     tm, vm, bm = _TIME.search(content), _VAL.search(content), _BONUS.search(content)
@@ -419,6 +428,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "domain": dom,
             "recurring": bool(t.get("recurring")),
             "variablePrompt": variable_prompt(raw),
+            "variableRate": variable_rate(raw),
         })
     return out
 
@@ -1402,7 +1412,8 @@ function submitVal(skip){
   const {t, row, line} = valCtx;
   const v = skip ? '' : valInput.value.replace(/[^0-9]/g, '').trim();
   valWrap.classList.remove('show'); valInput.blur(); valCtx = null;
-  fly(row, line, {...t, raw: v ? (t.title + ' ' + v) : t.title});
+  const pts = (v && t.variableRate) ? Math.round(Number(v) * t.variableRate) : t.points;
+  fly(row, line, {...t, raw: v ? (t.title + ' ' + v) : t.title, points: pts});
 }
 
 document.getElementById('valSkip').onclick = ()=> submitVal(true);
