@@ -1329,7 +1329,11 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     if m_time:
         time_range = (m_time.group(1), m_time.group(2))  # group(2) None → open-ended
         text = (text[:m_time.start()] + " " + text[m_time.end():]).strip()
-    m_code = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
+    # "@i9" alone (no leading space) must still be a project code: it's how
+    # you re-project a row without retyping its name. The old pattern needed
+    # whitespace before "@", so a bare "@i9" became the DESCRIPTION and no
+    # project was set (bug 2026-10-05: "I can't assign the 1 f694 task to i9").
+    m_code = re.match(r"^(.*?)(?:(?:^|\s+)@(\S+))?$", text.strip())
     body = (m_code.group(1) or "").strip() if m_code else text.strip()
     code = m_code.group(2) if m_code else None
     return (body or None), code, time_range, tags

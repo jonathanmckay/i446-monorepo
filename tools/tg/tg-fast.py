@@ -76,6 +76,8 @@ SHORTCODES = {
     "1s": ("g245", []), "get up": ("infra", []), "词汇": ("hcmc", ["-3"]),
     "doze": ("hcmc", ["-1"]), "youtube": ("hcmc2", ["2"]), "stats": ("i9", []),
     "out the door": ("infra", []),
+    # f694 (org strategy) is i9 work; untagged before 2026-10-05.
+    "1 f694": ("i9", []), "f694": ("i9", []),
     # Medium frequency
     "h breakfast": ("hcb", []), "breakfast": ("hcb", []), "早餐": ("hcb", []), "dinner": ("xk87", []),
     "lunch": ("hcb", []), "h dinner": ("hcb", []), "dad call": ("家", []),
