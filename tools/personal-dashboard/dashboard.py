@@ -2872,20 +2872,25 @@ SLICE_HTML = """<!DOCTYPE html>
 <div class="card">
   <div class="controls">
     <span><span class="ctl-label">METRIC</span><span class="seg" data-key="metric"><button data-v="points" class="on">POINTS</button><button data-v="time">TIME</button></span></span>
-    <span><span class="ctl-label">GROUP</span><span class="seg" data-key="group_by"><button data-v="project" class="on">PROJECT</button><button data-v="source">SOURCE</button></span></span>
+    <span><span class="ctl-label">GROUP</span><span class="seg" data-key="group_by"><button data-v="project" class="on">PROJECT</button><button data-v="source">SOURCE</button><button data-v="tool">TOOL</button></span></span>
     <span><span class="ctl-label">GRAIN</span><span class="seg" data-key="grain"><button data-v="block">BLOCK</button><button data-v="day" class="on">DAY</button><button data-v="week">WEEK</button><button data-v="month">MONTH</button></span></span>
     <span><span class="ctl-label">DAYS</span><span class="seg" data-key="days"><button data-v="7">7</button><button data-v="14" class="on">14</button><button data-v="30">30</button><button data-v="90">90</button></span></span>
   </div>
   <div><span class="ctl-label">PROJECT</span><div class="chips" id="projectChips"></div></div>
   <div><span class="ctl-label">SOURCE</span><div class="chips" id="sourceChips"></div></div>
-  <div class="chart-wrap" style="height:360px"><canvas id="sliceChart"></canvas></div>
+  <h2 style="margin-top:12px">Sum <span id="sumUnit"></span></h2>
+  <div class="chart-wrap" style="height:320px"><canvas id="sliceChart"></canvas></div>
   <div class="summary" id="sliceSummary"></div>
+  <h2 style="margin-top:24px">Count · events</h2>
+  <div class="chart-wrap sm"><canvas id="countChart"></canvas></div>
+  <div class="summary" id="countSummary"></div>
+  <div class="note">Count = real events: ledger point writes with a nonzero change, or Toggl entries. The synthetic "unknown" remainder (and older Toggl days from the daily cache) count as 0 events.</div>
   <div class="note" id="sliceNote"></div>
 </div>
 <script>
 """ + _SHARED_JS_HEAD + """
 const state = {metric: 'points', group_by: 'project', grain: 'day', days: '14', project: new Set(), source: new Set()};
-let chart = null;
+let chart = null, countChart = null;
 const LS = 'jmSlice';
 try { const s = JSON.parse(localStorage.getItem(LS) || '{}');
   for (const k of ['metric','group_by','grain','days']) if (s[k]) state[k] = s[k];
@@ -2923,15 +2928,21 @@ async function load() {
   const d = await (await fetch('/api/slice?' + q)).json();
   chips(document.getElementById('projectChips'), 'project', d.dims.project, d.colors);
   chips(document.getElementById('sourceChips'), 'source', d.dims.source, d.colors);
-  const names = Object.keys(d.series);
-  const datasets = names.map(n => ({label: n, data: d.series[n], backgroundColor: d.colors[n] || '#888', borderWidth: 0}));
-  if (chart) chart.destroy();
-  chart = new Chart(document.getElementById('sliceChart'), {type: 'bar', data: {labels: d.labels, datasets},
-    options: {...CHART_DEFAULTS, plugins: {legend: {display: true, labels: {color: TICK, boxWidth: 10, font: {size: 10}}}}}});
-  const total = names.reduce((a, n) => a + d.totals[n], 0);
-  document.getElementById('sliceSummary').innerHTML =
-    `<div class="badge"><span>total</span> ${Math.round(total)} ${d.unit}</div>` +
-    names.map(n => `<div class="badge"><span>${n}</span> ${Math.round(d.totals[n])}</div>`).join('');
+  document.getElementById('sumUnit').textContent = '· ' + d.unit;
+  const draw = (old, canvasId, summaryId, q, unit) => {
+    const names = Object.keys(q.series);
+    const datasets = names.map(n => ({label: n, data: q.series[n], backgroundColor: d.colors[n] || '#888', borderWidth: 0}));
+    if (old) old.destroy();
+    const c = new Chart(document.getElementById(canvasId), {type: 'bar', data: {labels: q.labels, datasets},
+      options: {...CHART_DEFAULTS, plugins: {legend: {display: true, labels: {color: TICK, boxWidth: 10, font: {size: 10}}}}}});
+    const total = names.reduce((a, n) => a + q.totals[n], 0);
+    document.getElementById(summaryId).innerHTML =
+      `<div class="badge"><span>total</span> ${Math.round(total)} ${unit}</div>` +
+      names.map(n => `<div class="badge"><span>${n}</span> ${Math.round(q.totals[n])}</div>`).join('');
+    return c;
+  };
+  chart = draw(chart, 'sliceChart', 'sliceSummary', d, d.unit);
+  countChart = draw(countChart, 'countChart', 'countSummary', d.count, 'events');
   const notes = [];
   if (d.grain === 'block' && d.dropped) notes.push(`${Math.round(d.dropped)} ${d.unit} with no time of day (unattributed remainder, older Toggl days) left out of the block view.`);
   if (d.dims.source.includes('unknown')) notes.push('unknown = recorded before source tracking, or (points) credited by formula with no ledger write.');
@@ -3273,7 +3284,9 @@ def _slice_colors():
     colors = {c["label"]: c["color"] for c in POINTS_COLS.values()}
     colors.update(PROJECT_COLORS)
     colors.update({"cli": "#00e676", "1p-app": "#2979ff", "3p-app": "#ff9100",
-                   "watch": "#aa00ff", "unknown": "#616161"})
+                   "3p-app · excel": "#ff9100", "3p-app · toggl": "#ffc400",
+                   "watch": "#aa00ff", "unknown": "#616161", "excel": "#ff9100",
+                   "toggl": "#ffc400", "unattributed": "#616161"})
     return colors
 
 
@@ -3287,7 +3300,7 @@ def api_slice():
     except ValueError:
         days = 14
     if metric not in ("points", "time") or grain not in ("day", "week", "month", "block") \
-            or group_by not in ("project", "source"):
+            or group_by not in ("project", "source", "tool"):
         return jsonify({"error": "bad metric, grain, or group_by"}), 400
     if grain == "block":
         days = min(days, 7)
@@ -3295,8 +3308,10 @@ def api_slice():
                for k in ("project", "source")}
     rows = _slice_rows(days)
     end = date.today()
-    out = events.query(rows, metric, end - timedelta(days=days - 1), end,
-                       grain, filters, group_by)
+    start = end - timedelta(days=days - 1)
+    out = events.query(rows, metric, start, end, grain, filters, group_by)
+    out["count"] = events.query(rows, metric, start, end, grain, filters, group_by,
+                                measure="count")
     out.update(metric=metric, grain=grain, group_by=group_by, days=days,
                dims=events.dimension_values(rows, metric), colors=_slice_colors(),
                unit="分" if metric == "points" else "min")

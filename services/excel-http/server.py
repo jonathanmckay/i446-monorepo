@@ -185,6 +185,24 @@ def osascript(script: str) -> tuple[int, str, str]:
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
+# Neon audit macro liveness, reported on /health. last_ping comes from the
+# watchdog's `run VB macro "NeonAuditPing"` round trip.
+MACRO_STATE: dict[str, str | None] = {"last_ping": None, "last_observe": None}
+MACRO_INSTALLED = os.path.expanduser("~/.config/neon-audit/installed")
+
+
+def ping_macro() -> None:
+    """Re-arm the audit macro (a VBA reset leaves it dead) and have it ping
+    back through /observe, proving the whole Excel → AppleScriptTask → curl
+    path works. Gated on MACRO_INSTALLED: calling a macro Excel doesn't have
+    can raise a modal error dialog, which would wedge every write."""
+    if not os.path.exists(MACRO_INSTALLED):
+        return
+    subprocess.run(["osascript", "-e",
+                    'tell application "Microsoft Excel" to run VB macro "NeonAuditPing"'],
+                   capture_output=True, timeout=TIMEOUT)
+
+
 def ensure_events_on() -> None:
     """Watchdog: a writer killed mid-write (or a crash) can leave Excel events
     off for the whole app, silently disabling the audit macro. Re-enable under
@@ -218,6 +236,10 @@ def save_loop() -> None:
         with EXCEL_LOCK:
             rc, _, err = save_workbook()
             ensure_events_on()
+            try:
+                ping_macro()
+            except Exception as e:
+                sys.stderr.write(f"ping_macro: {e}\n")
         if rc != 0:
             sys.stderr.write(f"save_loop: save failed: {err}\n")
 
@@ -631,11 +653,15 @@ def do_observe(req: dict) -> dict:
     excel. An observe that arrives after a newer ledger entry for the same
     cell (a pipeline write raced it) is journaled with `observed_after`
     instead of `after`, so it can't roll the chain back."""
+    if req.get("ping"):
+        MACRO_STATE["last_ping"] = datetime.datetime.now().isoformat(timespec="seconds")
+        return {"ok": True, "ping": True}
     sheet = req.get("sheet")
     if not sheet:
         return {"ok": False, "error": "missing_sheet"}
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     client_ts = req.get("ts") or now
+    MACRO_STATE["last_observe"] = now
     if req.get("structural"):
         _ROW_CACHE.clear()  # inserted/deleted rows shift every row lookup
         journal({"ts": now, "client_ts": client_ts, "kind": "structural",
@@ -758,7 +784,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
-            return self._send(200, {"ok": True, "version": VERSION})
+            return self._send(200, {"ok": True, "version": VERSION, "macro": MACRO_STATE})
         return self._send(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self):  # noqa: N802

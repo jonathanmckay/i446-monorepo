@@ -50,9 +50,21 @@ def _f(v) -> float | None:
         return None
 
 
-def _row(metric, ts, day, project, source, via, value):
+def _row(metric, ts, day, project, source, via, value, count=1):
+    """`count` is 1 for a real event, 0 for synthetic remainder rows."""
     return {"metric": metric, "ts": ts, "day": day, "project": project,
-            "source": source, "via": via, "value": value}
+            "source": source, "via": via, "value": value, "count": count}
+
+
+def source_label(r: dict) -> str:
+    """Source as shown and filtered: 3p apps split by tool ("3p-app · excel")."""
+    if r["source"] == "3p-app":
+        return f"3p-app · {r.get('via') or '?'}"
+    return r["source"]
+
+
+_DIM = {"project": lambda r: r["project"], "source": source_label,
+        "tool": lambda r: r.get("via") or "?"}
 
 
 # ── Points: Neon write ledger ─────────────────────────────────────────────────
@@ -109,6 +121,11 @@ def points_events(entries: list[dict], col_project: dict[str, str]) -> list[dict
 
       baseline        no points; just sets the cell's starting value
       ack             no points; re-baselines after a blessed manual edit
+      structural      no points (row/column moves), skipped
+      excel-edit      Excel's own audit of a manual edit (excel-http 1.5):
+                      after_value - before_value → 3p-app / excel. A late
+                      report (after null, observed_after set) still counts,
+                      but doesn't become the cell's latest value.
       reconcile /     Excel edit the pipeline never wrote over:
         excel-edit      after - before → 3p-app / excel
       write / append  pipeline delta after - before → entry source (or cli).
@@ -133,7 +150,11 @@ def points_events(entries: list[dict], col_project: dict[str, str]) -> list[dict
             continue
         cell = (e.get("col"), e.get("row") or e.get("date"))
         kind = e.get("kind")
+        if kind == "structural":
+            continue
         after = _f(e.get("after_value"))
+        if after is None and kind == "excel-edit":
+            after = _f(e.get("observed_after"))
         if after is None:
             continue
         ts = e.get("ts")
@@ -149,7 +170,9 @@ def points_events(entries: list[dict], col_project: dict[str, str]) -> list[dict
                 base = before_known or 0.0
             if after - base:
                 rows.append(_row("points", ts, day, project, "3p-app", "excel", after - base))
-            prev[cell] = after
+            late = kind == "excel-edit" and e.get("after") is None and e.get("observed_after") is not None
+            if not late:
+                prev[cell] = after
             continue
         if kind not in ("write", "append"):
             continue
@@ -190,7 +213,7 @@ def unattributed_points(rows: list[dict], cache: dict, labels: list[str],
                 continue
             gap = round(float(total) - have[(d, lab)], 6)
             if gap:
-                out.append(_row("points", None, d, lab, "unknown", UNATTRIBUTED_VIA, gap))
+                out.append(_row("points", None, d, lab, "unknown", UNATTRIBUTED_VIA, gap, count=0))
     return out
 
 
@@ -231,7 +254,7 @@ def time_events_from_daily_cache(daily: dict, days: list[str]) -> list[dict]:
     for d in days:
         for proj, minutes in (daily.get(d) or {}).items():
             if minutes:
-                rows.append(_row("time", None, d, proj, "unknown", "", float(minutes)))
+                rows.append(_row("time", None, d, proj, "unknown", "", float(minutes), count=0))
     return rows
 
 
@@ -300,13 +323,19 @@ def bucket_of(row: dict, grain: str) -> str | None:
 
 
 def query(rows: list[dict], metric: str, start: date, end: date, grain: str = "day",
-          filters: dict | None = None, group_by: str = "project") -> dict:
+          filters: dict | None = None, group_by: str = "project",
+          measure: str = "sum") -> dict:
     """Filter `rows` to one metric, the [start, end] day range, and any
-    {project: [...], source: [...]} filters; group by project or source;
-    bucket by grain. → {labels, series: {name: [values]}, totals: {name: v},
-    dropped: value excluded at block grain because it has no time of day}."""
-    if group_by not in ("project", "source"):
+    {project|source|tool: [...]} filters (source matches source_label);
+    group by project, source, or tool; bucket by grain; measure "sum" (Σ
+    value) or "count" (events; synthetic remainder rows count 0).
+    → {labels, series: {name: [values]}, totals: {name: v},
+    dropped: measure excluded at block grain because it has no time of day}."""
+    if group_by not in _DIM:
         raise ValueError(f"unknown group_by {group_by!r}")
+    if measure not in ("sum", "count"):
+        raise ValueError(f"unknown measure {measure!r}")
+    field = "value" if measure == "sum" else "count"
     filters = {k: set(v) for k, v in (filters or {}).items() if v}
     labels = buckets(start, end, grain)
     pos = {b: i for i, b in enumerate(labels)}
@@ -316,14 +345,18 @@ def query(rows: list[dict], metric: str, start: date, end: date, grain: str = "d
     for r in rows:
         if r["metric"] != metric or not (lo <= r["day"] <= hi):
             continue
-        if any(r.get(k) not in allowed for k, allowed in filters.items()):
+        if any(_DIM[k](r) not in allowed for k, allowed in filters.items()):
             continue
+        v = r.get(field, 1) if field == "count" else r["value"]
         b = bucket_of(r, grain)
         if b is None or b not in pos:
-            dropped += r["value"]
+            dropped += v
             continue
-        s = series.setdefault(r[group_by], [0.0] * len(labels))
-        s[pos[b]] += r["value"]
+        key = _DIM[group_by](r)
+        if field == "count" and v == 0 and key not in series:
+            continue  # a group made only of synthetic rows has no events
+        s = series.setdefault(key, [0.0] * len(labels))
+        s[pos[b]] += v
     series = {k: [round(x, 2) for x in v] for k, v in series.items()}
     totals = {k: round(sum(v), 2) for k, v in series.items()}
     order = sorted(series, key=lambda k: -abs(totals[k]))
@@ -332,10 +365,10 @@ def query(rows: list[dict], metric: str, start: date, end: date, grain: str = "d
 
 
 def dimension_values(rows: list[dict], metric: str) -> dict[str, list[str]]:
-    """Distinct projects and sources present for a metric (filter menus)."""
-    projects, sources = set(), set()
+    """Distinct values of each dimension for a metric (filter menus)."""
+    out = {k: set() for k in _DIM}
     for r in rows:
         if r["metric"] == metric:
-            projects.add(r["project"])
-            sources.add(r["source"])
-    return {"project": sorted(projects), "source": sorted(sources)}
+            for k, fn in _DIM.items():
+                out[k].add(fn(r))
+    return {k: sorted(v) for k, v in out.items()}

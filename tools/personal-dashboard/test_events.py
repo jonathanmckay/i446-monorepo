@@ -120,7 +120,7 @@ def test_query_groups_filters_and_buckets():
     d0, d1 = date(2026, 10, 4), date(2026, 10, 5)
     q = events.query(rows, "points", d0, d1, "day", group_by="source")
     assert q["labels"] == ["2026-10-04", "2026-10-05"]
-    assert q["series"] == {"cli": [0, 10], "3p-app": [0, 5], "unknown": [2, 0]}
+    assert q["series"] == {"cli": [0, 10], "3p-app · excel": [0, 5], "unknown": [2, 0]}
 
     q = events.query(rows, "points", d0, d1, "day", {"project": ["i9"]}, "source")
     assert q["totals"] == {"cli": 10, "unknown": 2}
@@ -133,7 +133,38 @@ def test_query_groups_filters_and_buckets():
     assert q["labels"] == ["2026-10-04"] and q["series"] == {"i9": [60]}
 
 
-def test_dimension_values():
-    rows = [{"metric": "time", "project": "i9", "source": "cli"},
-            {"metric": "points", "project": "个", "source": "excel"}]
-    assert events.dimension_values(rows, "time") == {"project": ["i9"], "source": ["cli"]}
+def test_dimension_values_split_3p_by_tool():
+    rows = [{"metric": "time", "project": "i9", "source": "cli", "via": "tg-fast"},
+            {"metric": "time", "project": "i9", "source": "3p-app", "via": "toggl"},
+            {"metric": "points", "project": "个", "source": "3p-app", "via": "excel"}]
+    assert events.dimension_values(rows, "time") == {
+        "project": ["i9"], "source": ["3p-app · toggl", "cli"], "tool": ["tg-fast", "toggl"]}
+
+
+def test_count_measure_and_tool_grouping():
+    rows = events.points_events([
+        _e(kind="append", col="R", after_value="5.0", value="+5", source="cli", via="did-fast"),
+        _e(kind="append", col="R", after_value="8.0", value="+3", source="cli", via="did-fast"),
+        _e(kind="reconcile", col="R", before_value="8.0", after_value="10.0"),
+    ], COLS)
+    rows += events.unattributed_points(rows, {"2026-10-05": {"i9": 15}}, ["i9"], ["2026-10-05"])
+    d = date(2026, 10, 5)
+    s = events.query(rows, "points", d, d, "day", group_by="source")
+    c = events.query(rows, "points", d, d, "day", group_by="source", measure="count")
+    assert s["totals"] == {"cli": 8, "unknown": 5, "3p-app · excel": 2}
+    assert c["totals"] == {"cli": 2, "3p-app · excel": 1}  # remainder is not an event
+    t = events.query(rows, "points", d, d, "day", {"source": ["3p-app · excel"]}, "tool")
+    assert t["totals"] == {"excel": 2}
+
+
+def test_excel_edit_and_structural_kinds():
+    rows = events.points_events([
+        _e(kind="append", col="R", after_value="5.0", value="+5"),
+        _e(kind="structural", col="R", after_value="999"),
+        _e(kind="excel-edit", col="R", before_value="5.0", after_value="25.0", after="=5+20"),
+        # late report: counted, but the cell's latest value stays 25
+        _e(kind="excel-edit", col="R", before_value="1.0", after_value="3.0", after=None, observed_after="=3"),
+        _e(kind="append", col="R", after_value="35.0", value="+10"),
+    ], COLS)
+    assert [(r["source"], r["value"]) for r in rows] == [
+        ("cli", 5.0), ("3p-app", 20.0), ("3p-app", 2.0), ("cli", 10.0)]
