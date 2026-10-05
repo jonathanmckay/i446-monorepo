@@ -310,6 +310,37 @@ def _snoozed_from(data: dict, now: _dt.datetime) -> set[str]:
             out.add(str(k))
     return out
 
+def _fired_from(data: dict, now: _dt.datetime) -> set[str]:
+    """Ids whose delay in this {date, snoozes} dict already passed TODAY
+    (the complement of _snoozed_from within today's entries)."""
+    if not isinstance(data, dict) or data.get("date") != now.date().isoformat():
+        return set()
+    return {str(k) for k in (data.get("snoozes") or {})} - _snoozed_from(data, now)
+
+
+def _snooze_files() -> list[Path]:
+    files = [SNOOZE_FILE]
+    try:
+        files += list(MIRROR_DIR.glob("dtd-block-snooze-*.json"))
+    except Exception:
+        pass
+    return files
+
+
+def _woken_ids(still_snoozed: set[str]) -> set[str]:
+    """Ids whose delay fired today on any host and that no host still holds
+    (2026-10-05): build_tasks floats them to the top of their tier, mirroring
+    the terminal dtd's _woke()."""
+    now = _dt.datetime.now()
+    ids: set[str] = set()
+    for p in _snooze_files():
+        try:
+            ids |= _fired_from(json.loads(p.read_text()), now)
+        except Exception:
+            continue
+    return ids - still_snoozed
+
+
 def _snoozed_ids() -> set[str]:
     """Ids block-snoozed (ctrl-v / freeform / minute delay), hidden until their
     block hour or timestamp passes — UNION of this host's local snooze file AND
@@ -380,14 +411,27 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     placed = lambda t: has(t, "-1neon") or has(t, "#-1g") or has(t, "#0g")
     rest = sorted([t for t in today_tasks if not placed(t)],
                   key=lambda t: _prank(t.get("priority")))
-    ordered = rituals + neg1g + zeroneon + oneneon + zerog + critical + rest
-
     completed_ids = _completed_ids()
     snoozed_ids = _snoozed_ids()
     # Block labels (地支 glyph from /todo, 2026-07-27): hidden until that
     # block's hour arrives — mirrors the desktop dtd list generator.
     block_hours = BLOCK_HOURS
     now_hour = _dt.datetime.now().hour
+    # Woken (2026-10-05): a delay or block label that passed today floats the
+    # task to the top of its tier (stable), same as terminal dtd's _float().
+    woken = _woken_ids(snoozed_ids)
+
+    def is_woke(t):
+        if t.get("id") is not None and str(t["id"]) in woken:
+            return True
+        bh = next((block_hours[l] for l in t.get("labels", []) if l in block_hours), None)
+        return bh is not None and now_hour >= bh
+
+    def flt(tier):
+        return sorted(tier, key=lambda t: not is_woke(t))
+
+    ordered = (flt(rituals) + flt(neg1g) + flt(zeroneon) + flt(oneneon)
+               + flt(zerog) + flt(critical + rest))
     seen = set()
     out = []
     for t in ordered:

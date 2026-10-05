@@ -1,10 +1,53 @@
 ---
 name: "1n"
-description: "Generate weekly Toggl donut charts (two versions) and update Neon spreadsheet. Automatically gathers time entries for the most recent week (Sunday-Saturday), creates two visualizations with different exclusions, and handles Excel insertion."
+description: "Two modes. With args, backfill a weekly 1₦+ habit: mark it done in a PAST week's 1n+ row and credit its points to TODAY's 0分 (like /0n, nothing to back out). Usage: /1n <habit> <week> [minutes] [points], e.g. /1n 1 xk88 9.5, /1n family last week 45. With no args, generate the weekly Toggl donut charts and insert them into Neon."
 user-invocable: true
 ---
 
-# Weekly Toggl Donuts (1n)
+# /1n
+
+**Args given → Backfill mode** (below). **No args → Weekly Toggl Donuts** (further down).
+
+# Backfill mode: weekly habit for a past week, credit today
+
+The weekly card for that week is gone, so `/did` can't reach it. `/1n` marks
+the habit in that week's 1n+ row and appends its points to **today's** 0分.
+Unlike `/0n` there is nothing to back out: 1n+ week cells feed no 0分
+formula, and /did credits weekly habits by an explicit append on the day it
+runs.
+
+## Run
+
+```bash
+python3 ~/i446-monorepo/tools/did/1n-backfill.py "<habit>" "<week>" [minutes] [--points N] [--domain D] [--credit-only] [--dry-run]
+```
+
+- `<habit>`: a 1n+ row-1 header (`1 xk88`, `1 -2g`, `family`, `1 hcb`, ...), or a /did alias (`家`, `1 hcbp`). Case/dash-insensitive.
+- `<week>`: fiscal label `9.5` / `10.1` (X.Y with Y 1-5), `last week`, or any date in that Sun-Sat week (`9/24`, `2026-09-24`, `yesterday`). Must be a past week; for this week use `/did`.
+- `[minutes]`: what the week cell records, default 1. **Required for per-minute habits** (family, s897, 业写, relax): their points are rate × minutes. 长冥想 / 长o314 need ≥30.
+- `--points N`: when the user gives points (`[30]`), credit N instead of row-5 expected points.
+- `--domain D`: headers with no mapped 0分 column (`1 cal`, `nails`, `1 sunset`, `1 对身`, `1 f695`, `aos`, `1 kids nature`) exit asking for one. Ask the user which domain (i9, m5x2, g245, hcmc, hcm, hcb, xk87, s897), then rerun with it.
+- `--credit-only`: cell already marked but the points never reached 0分. Only when the user says so.
+
+Map the user's phrasing directly: "/1n 1 xk88 last week" → `"1 xk88" "last week"`; "/1n family 9.4 45" → `family 9.4 45`.
+
+## Already marked
+
+Standard habits whose week cell already holds a mark exit 0 with
+`already_credited: true`. Report: "credit already taken for <habit> in <week>,
+no additional points". Variable habits accumulate minutes, so they never trip this.
+
+## Report
+
+One line from the JSON:
+```
+✓ <habit> <week> (<week_of>) → +<points> to 0分!<col> today
+```
+On exit 2 print the `recovery` line verbatim.
+
+---
+
+# Weekly Toggl Donuts (no args)
 
 Generate two donut chart visualizations of the most recent week's Toggl time tracking data and insert them into the Neon spreadsheet.
 

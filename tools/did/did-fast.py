@@ -259,6 +259,7 @@ ONENEON_TO_0FEN: dict[str, str] = {
     "一起饭": "X", "family": "X", "s897": "Y",
     "relax {60}": "T", "业写": "R",
     "长冥想": "V", "长o314": "V",
+    "groceries": "W",  # hcb (user choice 2026-10-05, first /1n backfill)
 }
 
 
@@ -1512,7 +1513,11 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         resolved_1n = header_normalize(resolved_1n_raw)
         if resolved_1n in h1n_norm:
             col_letter = h1n_norm[resolved_1n]
-            fen_col = ONENEON_TO_0FEN.get(resolved_1n)
+            # Map keys are raw headers ("1 -2g"); resolved_1n is normalized
+            # ("1 2g"), so a hyphenated header never matched and its points
+            # never reached 0分 (found 2026-10-05 building /1n backfill).
+            fen_col = {header_normalize(k): v for k, v in
+                       ONENEON_TO_0FEN.items()}.get(resolved_1n)
             if fen_col is None:
                 # Generic fallback (bug 2026-07-27: "1 m5x2" missing from the
                 # hand-kept map → its points never reached 0分): "1 <domain>"

@@ -1718,6 +1718,19 @@ import sys as _sys
 _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/lib'))
 from blocks import BLOCK_START as _BLOCK_LABEL_HOURS
 _now_hour = _dt.datetime.now().hour
+# Woken (2026-10-05): a task whose delay or block label has passed TODAY
+# floats to the top of its tier, so 'hide until 酉' means 'and then put it
+# first'. Snooze entries expire by value but stay in the file for the day,
+# so _sn_all minus _snoozed is exactly the delays that already fired.
+def _woke(t):
+    tid = t.get('id')
+    if tid is not None and str(tid) in _sn_all and str(tid) not in _snoozed:
+        return True
+    _bh = next((_BLOCK_LABEL_HOURS[l] for l in t.get('labels', [])
+                if l in _BLOCK_LABEL_HOURS), None)
+    return _bh is not None and _now_hour >= _bh
+def _float(tier):
+    return sorted(tier, key=lambda t: not _woke(t))   # stable
 
 # ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending
 # ids, the list IS the picker — block rows instead of tasks. Rendered by the
@@ -1782,8 +1795,9 @@ rest = sorted([t for t in today_tasks if not _placed(t)],
 # Plain tasks (critical path + everything uncategorized): p1 (API priority 4)
 # rises to the top of this area, so dtd's alt-up bump actually moves a task
 # (2026-10-04). Stable sort, so everything else keeps its order.
-plain = sorted(critical + rest, key=lambda t: t.get('priority') != 4)
-all_tasks = rituals + neg1g + zeroneon + oneneon + zerog + plain
+plain = sorted(critical + rest, key=lambda t: (not _woke(t), t.get('priority') != 4))
+all_tasks = (_float(rituals) + _float(neg1g) + _float(zeroneon)
+             + _float(oneneon) + _float(zerog) + plain)
 
 # Deduplicate by id
 seen = set()
@@ -1840,7 +1854,7 @@ if domain_filter:
     unique = [t for t in unique if domain_of(t) == domain_filter]
 
 if view == 'project':
-    unique.sort(key=lambda t: (domain_of(t), prank(t.get('priority'))))
+    unique.sort(key=lambda t: (domain_of(t), not _woke(t), prank(t.get('priority'))))
 elif view == 'time':
     unique.sort(key=lambda t: (time_of(t), prank(t.get('priority'))))
 

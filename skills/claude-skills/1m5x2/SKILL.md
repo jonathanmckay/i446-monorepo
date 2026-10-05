@@ -45,7 +45,7 @@ Columns B–F are `/1i9`'s; leave them alone.
    own weekly figure; report both if they differ.
 4. **Verify the row:** `string value of cell 1 of row ROW of sheet "i9+m5x2"`
    must equal the label. If not, stop and report.
-**Suggest answers from 1g (before asking).** Read, via `ix-osa.sh`:
+**Suggest answers from 1g (before asking).** First read the review week's block in the monthly narrative doc `~/vault/g245/5e2/YYYY.MM 2g+1g-narrative.md` (the month the week's Sunday falls in; the week heading looks like `- **Oct 4 – Oct 10** —`). Its `m5x2` bullets are JM's own weekly goals, and ✅/❌ marks on them are his verdicts; they outrank the 1g tab. Then also read, via `ix-osa.sh`:
 - the `1g` tab's m5x2 (col A `m5c7`) goals (rows 13–19: col D goal, E 分, F focus bonus, G % done). The 1g tab is overwritten weekly by `/1g`, so it only reflects the review week when you run this before the next `/1g`; if `1g!A1` is a placeholder or the goals are clearly stale, say so instead of using them;
 - the previous week's row in `i9+m5x2`, col I (what you said exceeding/next-week would look like);
 - the review week's `/1s` doc (`~/vault/g245/reviews/YYYY-M.W-1s.md`, "Goals Detail"), if it exists.
