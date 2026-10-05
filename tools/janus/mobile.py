@@ -1473,8 +1473,8 @@ PAGE = r"""<!doctype html>
       <input type="checkbox" id="d-ongoing" onchange="toggleOngoing()"> ongoing (no end yet)
     </label>
     <div class="times">
-      <input id="d-start" inputmode="numeric" placeholder="HH:MM">
-      <input id="d-end" inputmode="numeric" placeholder="HH:MM">
+      <input id="d-start" type="time" step="60">
+      <input id="d-end" type="time" step="60">
     </div>
     <div class="btns">
       <button class="cancel" onclick="closeDlg()">cancel</button>
@@ -1488,8 +1488,8 @@ PAGE = r"""<!doctype html>
     <h3>edit entry</h3>
     <input id="e-desc" placeholder="description" autocomplete="off">
     <div class="times">
-      <input id="e-start" inputmode="numeric" placeholder="HH:MM">
-      <input id="e-end" inputmode="numeric" placeholder="HH:MM">
+      <input id="e-start" type="time" step="60">
+      <input id="e-end" type="time" step="60">
     </div>
     <input id="e-project" list="projlist" placeholder="project (free text)" autocomplete="off" autocapitalize="off">
     <datalist id="projlist"></datalist>
@@ -1741,7 +1741,7 @@ function toggleOngoing(){
     const pad = n => String(n).padStart(2,'0');
     const hhmm = d => pad(d.getHours())+':'+pad(d.getMinutes());
     const now = new Date();
-    if(startEl.value.trim().toLowerCase() === 'now') startEl.value = hhmm(new Date(now - 15*60000));
+    if(!startEl.value.trim() || startEl.value.trim().toLowerCase() === 'now') startEl.value = hhmm(new Date(now - 15*60000));
     if(!endEl.value.trim()) endEl.value = hhmm(now);
   }
 }
@@ -1754,7 +1754,9 @@ function openAddDlg(){
   // Default: start now, ongoing (no end) — the common case is "starting
   // something right now", not backfilling a finished block. Un-checking
   // "ongoing" still allows logging a specific past completed span.
-  document.getElementById('d-start').value = 'now';
+  // type=time can't hold a "now" sentinel: prefill the current minute.
+  { const pad = n => String(n).padStart(2,'0'), n = new Date();
+    document.getElementById('d-start').value = pad(n.getHours())+':'+pad(n.getMinutes()); }
   document.getElementById('d-ongoing-row').style.display = '';
   document.getElementById('d-ongoing').checked = true;
   toggleOngoing();
@@ -1796,6 +1798,17 @@ async function quickPlaceholder(){
     load();
   } catch(e){ toast('offline', true); }
 }
+
+// Time fields (2026-10-05): native iOS time wheel (type=time) instead of a
+// number pad, and a tap CLEARS the field so you pick fresh instead of first
+// deleting the old HH:MM. Dismissing the wheel without picking restores the
+// old value, so a stray tap never blanks a time (blank is "unchanged"/"now"
+// to the server anyway).
+function timePicker(el){
+  el.addEventListener('focus', ()=>{ el.dataset.prev = el.value; el.value = ''; });
+  el.addEventListener('blur', ()=>{ if(!el.value && el.dataset.prev) el.value = el.dataset.prev; });
+}
+['d-start','d-end','e-start','e-end'].forEach(id => timePicker(document.getElementById(id)));
 
 let projectCodes = [];
 async function loadProjects(){
