@@ -88,3 +88,15 @@ def test_variable_rate_reports_hiit_2x():
     assert dtd.variable_rate("hiit 10.5") == 2  # deferred copy
     assert dtd.variable_rate("xk22 (20) [25]") is None
     assert dtd.variable_rate("plain task [10]") is None
+
+
+def test_complete_reports_unroutable_item_as_failure(monkeypatch):
+    """2026-10-04: an @m828 task returns agent_needed with exit 0; dtd web
+    used to toast +N 分 for points that were never written."""
+    class P:
+        returncode = 0
+        stdout = '{"results": [], "agent_needed": [{"name": "x", "reason": "no match, needs domain disambiguation"}]}'
+        stderr = ""
+    monkeypatch.setattr(dtd.subprocess, "run", lambda *a, **k: P())
+    r = dtd.complete("x [10] @m828")
+    assert not r["ok"] and "not logged" in r["error"]

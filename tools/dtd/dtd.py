@@ -454,6 +454,14 @@ def complete(content: str) -> dict:
         r0 = data["results"][0]
         step = r0.get("step")
         closed = bool((r0.get("todoist") or {}).get("closed"))
+    # did-fast exits 0 when it can't route an item (agent_needed, e.g. an
+    # @m828 task: no 0分 column), having written nothing. Treating that as
+    # success toasted "+N 分" for points that never landed (2026-10-04).
+    agent = (data or {}).get("agent_needed") or []
+    if agent and not (data or {}).get("results"):
+        return {"ok": False, "closed": False, "step": "needs_agent",
+                "error": "not logged: " + (agent[0].get("reason") or "no route"),
+                "stderr_tail": proc.stderr.strip()[-300:]}
     return {
         "ok": proc.returncode == 0,
         "closed": closed,
@@ -1339,7 +1347,11 @@ async function commit(t){
     const r = await fetch('/api/done', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({id:t.id, content:t.raw})});
     const d = await r.json();
-    if(!d.ok){ toast('saved · Neon write failed', true); return; }
+    if(!d.ok){
+      total -= (t.points||0);
+      document.getElementById('tot').textContent = total;
+      toast(d.error || 'saved · Neon write failed', true); return;
+    }
     if(d.closed) toast('+'+(t.points||0)+' 分 ✓');
     else if(d.future_skipped) toast('+'+(t.points||0)+' 分 · recurring');
     else toast('+'+(t.points||0)+' 分');
