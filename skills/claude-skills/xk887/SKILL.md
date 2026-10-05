@@ -16,6 +16,14 @@ cancel or crash on a later page never loses earlier pages. Rows target the
 as `/1s`). Fields sit on adjacent lines with no blank rows; multiline boxes
 grow with content instead of reserving empty height.
 
+## Step 0: Pull school attendance first
+
+Before opening the form, run `/attendance` (Veracross tardies, absences and
+early dismissals for Theo and Ren → `cais-attendance.md` + the weekly table in
+independence-agency-enterprise's Morning Routine). Use last week's row when
+answering the Theo/Ren pages. If Chrome or Veracross isn't available, note it
+and continue with the form; attendance is best-effort.
+
 ## Field → sheet/column map
 
 Rows are keyed by col A's **M.W label** (Sunday-anchored: `M` = the
