@@ -184,6 +184,42 @@ def new_task(content: str) -> dict:
     return task
 
 
+VALUE_RE = __import__("re").compile(r"^\s*\[(\d+)\]\s*$")
+_POINTS_RE = __import__("re").compile(r"\s*\[\d+\]")
+
+
+def set_value(session: str, n: int, root: Path | None = None) -> str:
+    """A bare `[N]` while this session holds a claim is the claimed task's
+    VALUE (opportunity), not a completion: write it onto the Todoist task so
+    dtd's ⌥↵ credits it when JM finishes. Never logs points (2026-10-05: a
+    bare [200] got logged as +200 immediately)."""
+    root = root or CLAIMS_DIR
+    try:
+        tid = (root / "by-session" / session).read_text().strip()
+    except OSError:
+        return ""   # no claim: leave the prompt to the model
+    import subprocess
+    lib = str(Path.home() / "i446-monorepo" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import todoist
+    try:
+        content = (todoist.get_task(tid) or {}).get("content", "")
+        new = _POINTS_RE.sub("", content).rstrip() + f" [{n}]"
+        todoist._request("POST", f"/tasks/{tid}", {"content": new})
+    except Exception as e:
+        return f"[claim hook] couldn't set [{n}] on the claimed task ({e}). Do NOT log points."
+    try:
+        subprocess.Popen(["python3", str(Path(__file__).resolve().parent / "did-fast.py"),
+                          "--refresh-cache"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+    return (f"[claim hook] set value [{n}] on the claimed task: {new}. This is the task's "
+            "value (opportunity), NOT a completion: do NOT log points or run /did. "
+            "JM credits it by completing the task in dtd (⌥↵).")
+
+
 def hook(payload: str) -> str:
     """UserPromptSubmit fast path for `/d <task>[: request]` (and /claim):
     claim before the model even starts, so dtd shows it in ~1s instead of
@@ -194,8 +230,12 @@ def hook(payload: str) -> str:
         d = json.loads(payload)
     except ValueError:
         return ""
-    m = HOOK_RE.match(d.get("prompt") or "")
+    prompt = d.get("prompt") or ""
     session = d.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    v = VALUE_RE.match(prompt)
+    if v and session:
+        return set_value(session, int(v.group(1)))
+    m = HOOK_RE.match(prompt)
     if not m or not session:
         return ""
     arg = (m.group(1) or "").strip()

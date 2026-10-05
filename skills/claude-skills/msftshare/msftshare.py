@@ -167,10 +167,31 @@ def _list_and_die(arg, matches):
 
 # --- fidelity scan --------------------------------------------------------
 
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+EMBED_RE = re.compile(r"!\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
+
+
+def _embed_path(name: str):
+    """Absolute path for an Obsidian image embed, or None. Images live in the
+    root z_asts/ (vault convention), so that's the only place we look."""
+    p = VAULT / "z_asts" / name.strip()
+    return p if p.suffix.lower() in IMAGE_EXTS and p.is_file() else None
+
+
+def inline_image_embeds(md_text: str) -> str:
+    """Rewrite `![[img.png]]` image embeds as standard markdown images with an
+    absolute path, which pandoc embeds in the .docx (2026-10-05: a shared org
+    plan lost its sketch). Non-image or missing embeds are left as-is."""
+    def sub(m):
+        p = _embed_path(m.group(1))
+        return f"![]({p})" if p else m.group(0)
+    return EMBED_RE.sub(sub, md_text)
+
+
 def fidelity_warnings(md_text: str):
     w = []
-    if "![[" in md_text:
-        w.append("Obsidian embeds (![[...]]) are DROPPED by pandoc")
+    if any(_embed_path(m.group(1)) is None for m in EMBED_RE.finditer(md_text)):
+        w.append("non-image (or missing) Obsidian embeds (![[...]]) are DROPPED by pandoc")
     if re.search(r"(?<!!)\[\[", md_text):
         w.append("wikilinks ([[...]]) render as dead literal text in the .docx")
     for m in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", md_text):
@@ -203,7 +224,7 @@ def to_docx_text(text: str, out_docx: Path):
     out_docx.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False,
                                       encoding="utf-8") as tf:
-        tf.write(text)
+        tf.write(inline_image_embeds(text))
         tmp_path = tf.name
     try:
         r = subprocess.run(["pandoc", tmp_path, "-o", str(out_docx)],

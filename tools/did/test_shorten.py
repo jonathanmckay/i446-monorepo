@@ -173,3 +173,51 @@ def test_edited_estimate_invalidates_cached_short(tmp_path, monkeypatch):
     t = cache["today"][0]
     assert "short" not in t, "stale short must be popped, never served for edited content"
     assert "[10]" in t["content"]
+
+
+def test_haiku_key_loaded_from_zshrc_when_env_lacks_it(tmp_path, monkeypatch):
+    """Regression (2026-10-05): a task created by `/d new` never got a short
+    name. Its cache refresh ran from the Claude hook's environment, which has
+    no ANTHROPIC_API_KEY (only interactive zsh sources ~/.zshrc), so the Haiku
+    call failed silently. shorten must find the key itself."""
+    import sys
+    import types
+    import shorten
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    rc = tmp_path / ".zshrc"
+    rc.write_text('alias x=y\nexport ANTHROPIC_API_KEY="sk-ant-test123"\n')
+    monkeypatch.setattr(shorten, "KEY_FILES", (tmp_path / "missing.env", rc))
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            seen["key"] = api_key
+            self.messages = self
+
+        def create(self, **kw):
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text="Short title")])
+
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeClient))
+    assert shorten._haiku_shorten("a long task title that needs shortening for the dtd pane") == "Short title"
+    assert seen["key"] == "sk-ant-test123"
+
+
+def test_cap_never_strands_a_connector_word(monkeypatch):
+    """'make data org transition plan of record, review with Scott, ...' came
+    back over the cap and was cut to 'Data org transition plan review with'."""
+    import sys
+    import types
+    import shorten
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = self
+
+        def create(self, **kw):
+            return types.SimpleNamespace(content=[types.SimpleNamespace(
+                text="Data org transition plan review with Scott Josh Will Ben")])
+
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeClient))
+    out = shorten._haiku_shorten("x" * 80)
+    assert len(out) <= shorten.PROSE_CAP
+    assert not out.lower().endswith(" with")

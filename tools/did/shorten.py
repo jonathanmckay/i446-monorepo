@@ -91,6 +91,29 @@ def _save_sidecar(data: dict) -> None:
         pass
 
 
+KEY_FILES = (Path.home() / "vault" / ".env", Path.home() / ".zshrc")
+
+
+def _api_key() -> str | None:
+    """ANTHROPIC_API_KEY from the env, else from ~/vault/.env or the export in
+    ~/.zshrc. Non-interactive callers (the /d hook's detached cache refresh,
+    launchd jobs) never source .zshrc, so without this fallback their Haiku call
+    failed silently and new tasks stayed unshortened (2026-10-05)."""
+    import os
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    for f in KEY_FILES:
+        try:
+            for line in f.read_text().splitlines():
+                m = re.match(r"\s*(?:export\s+)?ANTHROPIC_API_KEY=['\"]?([^'\"\s#]+)", line)
+                if m:
+                    return m.group(1)
+        except OSError:
+            continue
+    return None
+
+
 def _haiku_shorten(prose: str) -> str | None:
     """Ask Haiku for a <=PROSE_CAP-char version of the prose. Returns None on
     any failure."""
@@ -99,7 +122,8 @@ def _haiku_shorten(prose: str) -> str | None:
     except ImportError:
         return None
     try:
-        client = anthropic.Anthropic()
+        key = _api_key()
+        client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
         resp = client.messages.create(
             model=MODEL,
             max_tokens=40,
@@ -124,6 +148,9 @@ def _haiku_shorten(prose: str) -> str | None:
             cut = short[:PROSE_CAP]
             sp = cut.rfind(" ")
             short = (cut[:sp] if sp >= PROSE_CAP - 12 else cut).rstrip(" -–—:,")
+            # A word-boundary cut can strand a connector ("...review with").
+            short = re.sub(r"(?:\s+(?:with|and|of|for|to|the|a|an|in|on|&))+$", "",
+                           short, flags=re.I)
         return short
     except Exception:
         return None

@@ -29,6 +29,12 @@ context starting with `[claim hook]`:
   `python3 ~/i446-monorepo/tools/did/agent_claims.py claim "<query>"`,
   `... new "<task>"`, or `... release`.
 
+**A bare `[N]` while a task is claimed is that task's VALUE, not a completion.**
+The hook writes `[N]` onto the claimed task (`set value [N] ...`). Never log
+points or run /did for it: points are opportunity until JM completes the task in
+dtd (⌥↵). If no hook line appears, do the same by hand (edit the task content),
+still without logging.
+
 Then: with a `<request>` after the colon, confirm in one line
 (`😈 claimed: <task>`) and do the request as if the user had typed it alone.
 Without one, just the confirmation line.

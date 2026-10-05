@@ -189,3 +189,32 @@ def test_hook_new_creates_then_claims(hooked, monkeypatch):
     assert made == ["draft xbox memo"]
     assert "created and 😈 claimed: draft xbox memo" in out
     assert (hooked / "by-session" / "S9").read_text().strip() == "N1"
+
+
+# ── bare [N] = the claimed task's value, never a completion (2026-10-05:
+#    a bare [200] got logged as +200 immediately; points are opportunity
+#    until JM completes the task in dtd with ⌥↵) ──
+
+def test_bare_value_sets_claimed_task_content_not_points(hooked, monkeypatch):
+    import types
+    _fast("/d source logging")
+    calls = []
+    fake = types.SimpleNamespace(
+        get_task=lambda tid: {"id": tid, "content": "source logging [20]"},
+        _request=lambda m, path, body=None: calls.append((m, path, body)))
+    monkeypatch.setitem(sys.modules, "todoist", fake)
+    monkeypatch.setattr(ac.subprocess if hasattr(ac, "subprocess") else __import__("subprocess"),
+                        "Popen", lambda *a, **k: None)
+    out = _fast("[200]")
+    assert calls == [("POST", "/tasks/T1", {"content": "source logging [200]"})]
+    assert "NOT a completion" in out and "do NOT log points" in out
+
+
+def test_bare_value_without_claim_is_left_to_the_model(hooked):
+    assert _fast("[200]", session="nobody") == ""
+
+
+def test_zsh_hook_prefilter_routes_bare_value_to_python():
+    """The hook only spawns python for /d, /claim, or a bare [N] prompt."""
+    src = HOOK.read_text()
+    assert r'\[[0-9]+\][[:space:]]*"' in src
