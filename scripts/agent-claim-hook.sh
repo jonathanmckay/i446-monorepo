@@ -13,6 +13,12 @@ sid=""
 IFS= read -r -d '' -t 1 j 2>/dev/null
 [[ "$j" =~ '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"' ]] && sid="${match[1]}"
 [[ -z "$sid" ]] && sid="${CLAUDE_CODE_SESSION_ID:-}"
+# `/c <task>[: request]` (or /claim): claim right here, before the model starts,
+# so dtd shows it in ~1s. Python only runs for these prompts; its stdout lands
+# in the model's context so the /c skill knows the claim is already done.
+if [[ "$1" == working && "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(c|claim)([[:space:]]|")' ]]; then
+  print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
+fi
 [[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0
 tid="$(<"$D/by-session/$sid")"
 tid="${tid//[[:space:]]/}"

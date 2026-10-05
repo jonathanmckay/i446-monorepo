@@ -1,6 +1,6 @@
 ---
 name: "claim"
-description: "Tie this Claude session to a dtd task so dtd shows it greyed with 😈 and a top-line spinner while you work, then normal when the turn ends. Works as a decorator: /claim <task>: <request> claims the task, then does the request. Usage: /claim <task>[: request] | /claim off"
+description: "Tie this Claude session to a dtd task: dtd moves it to the top with a live spinner while you work. Short form: /c. Works as a decorator: /claim <task>: <request> claims the task, then does the request. Usage: /claim <task>[: request] | /claim off"
 user-invocable: true
 ---
 
@@ -13,6 +13,11 @@ user-invocable: true
   No colon: the whole argument is the task query and there is no request.
 
 ## Run
+
+The UserPromptSubmit hook claims `/claim` and `/c` prompts before you start; if
+your context has a `[claim hook]` line, follow it (see `/c`'s SKILL.md) instead
+of re-running the claim.
+
 
 ```bash
 python3 ~/i446-monorepo/tools/did/agent_claims.py claim "<task query>"

@@ -150,7 +150,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh working >/dev/null 2>&1"
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh working 2>/dev/null"
           }
         ]
       }

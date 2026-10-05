@@ -1736,13 +1736,20 @@ def _float(tier):
 # render grey with a 😈 prefix, in place. Store + staleness rules live in
 # tools/did/agent_claims.py; the watcher reloads when the claims dir changes.
 _agent_ids = set()
+_claim_ids = set()
 try:
     _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
     import agent_claims as _ac
     _agent_ids = _ac.working_ids()
+    _claim_ids = set(_ac.load().keys())
 except Exception:
     pass
 AGENT_GREY = '\x1b[38;2;110;110;110m'
+# Claimed tasks sort to the top; a working one carries Claude's own spinner
+# glyph, advanced on every reload (the watcher reloads twice a second while
+# any claim is working), so the row itself moves.
+_AGENT_SPIN = '·✢✳✶✻✽✻✶✳✢'
+_agent_frame = _AGENT_SPIN[int(time.time() * 2) % len(_AGENT_SPIN)]
 
 # ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending
 # ids, the list IS the picker — block rows instead of tasks. Rendered by the
@@ -1885,6 +1892,7 @@ elif view == 'time':
     unique.sort(key=lambda t: (time_of(t), prank(t.get('priority'))))
 
 DIM = '\033[2m'
+claimed_lines = []
 running_lines = []
 normal_lines = []
 skipped_lines = []
@@ -2014,9 +2022,12 @@ for t in unique:
         prefix = f'▶ {elapsed}m · {dom_tag}'
     else:
         prefix = repeat + dom_tag
+    is_claimed = str(t.get('id', '')) in _claim_ids
     if str(t.get('id', '')) in _agent_ids:
-        prefix = '😈 ' + prefix
+        prefix = _agent_frame + ' 😈 ' + prefix
         color = AGENT_GREY
+    elif is_claimed:
+        prefix = '😈 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)
@@ -2028,7 +2039,9 @@ for t in unique:
         body = body.replace(
             link_text,
             '\x1b]8;;' + link_url + _st + link_text + '\x1b]8;;' + _st, 1)
-    if is_running:
+    if is_claimed:
+        claimed_lines.append(f'{color}{body}{RESET}{sfx}')
+    elif is_running:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
         running_lines.append(f'{color}{body}{RESET}{sfx}')
@@ -2039,6 +2052,8 @@ for t in unique:
     else:
         normal_lines.append(f'{body}{sfx}')
 
+for l in claimed_lines:
+    print(l)
 for l in running_lines:
     print(l)
 for l in normal_lines:
@@ -2942,7 +2957,15 @@ TALLY_PID=$!
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
   last_day="$(date +%Y-%m-%d)"
   while [[ -f "$DTD_PORT" ]]; do
-    sleep 2
+    # Wake within 0.5s of a claim change (fractional mtime: two writes in one
+    # second still differ), and keep cycling every 0.5s while any claim is
+    # working so its spinner glyph animates; otherwise the usual 2s cadence.
+    for _acw in 1 2 3 4; do
+      sleep 0.5
+      [[ "$(stat -f %Fm "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)" != "${last_ac:-}" ]] && break
+      _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
+      (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && break
+    done
     watch_today="$(date +%Y-%m-%d)"
     # Day rollover while dtd sits open: reset the per-day overlays (mirrors the
     # UI-loop rollover, which can't run behind the blocking fzf) and pull today's
@@ -2993,11 +3016,13 @@ TALLY_PID=$!
     # re-greys / un-greys. (Not `touch $CACHE`: that would make a stale task
     # cache look fresh to did-fast.)
     ac_reload=""
-    cur_ac=$(stat -f %m "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)
+    cur_ac=$(stat -f %Fm "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)
     if [[ -n "$cur_ac" && "$cur_ac" != "${last_ac:-}" ]]; then
       [[ -n "${last_ac:-}" ]] && ac_reload=1
       last_ac="$cur_ac"
     fi
+    _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
+    (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && ac_reload=1
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" ]] && continue
     [[ "$cur_m" == "$last_m" && -z "$ac_reload" ]] && continue

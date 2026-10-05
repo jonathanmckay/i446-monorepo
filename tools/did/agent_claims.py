@@ -16,6 +16,7 @@ directory mtime advances; dtd's watcher reloads on that.
 
 Usage:
   agent_claims.py claim <query>   fuzzy-match a task in the dtd cache, claim it
+  agent_claims.py hook            UserPromptSubmit fast path for `/c <task>: ...`
   agent_claims.py release         drop this session's claim
   agent_claims.py list            JSON of claims (+ derived working flag)
 """
@@ -156,11 +157,53 @@ def push() -> None:
         pass
 
 
+HOOK_RE = __import__("re").compile(r"^\s*/(?:c|claim)(?:\s+(.*))?$", __import__("re").S)
+
+
+def hook(payload: str) -> str:
+    """UserPromptSubmit fast path for `/c <task>[: request]` (and /claim):
+    claim before the model even starts, so dtd shows it in ~1s instead of
+    after the model has read the skill. Returns the line injected into the
+    model's context ('' = not a claim prompt). The skill sees it and skips
+    its own claim call."""
+    try:
+        d = json.loads(payload)
+    except ValueError:
+        return ""
+    m = HOOK_RE.match(d.get("prompt") or "")
+    session = d.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not m or not session:
+        return ""
+    arg = (m.group(1) or "").strip()
+    query = arg.split(":", 1)[0].strip()
+    if query.lower() in ("off", "release", "done"):
+        release(session)
+        push()
+        return "[claim hook] released this session's claim."
+    if not query:
+        return ""
+    df = _did()
+    cands = candidates(query, all_tasks(df.load_task_queue()), df)
+    if not cands:
+        return f"[claim hook] no dtd task matches {query!r}; nothing claimed."
+    if len(cands) > 1:
+        opts = "; ".join(f"{t['id']}: {t.get('content', '')}" for t in cands[:5])
+        return f"[claim hook] ambiguous, nothing claimed. Candidates: {opts}"
+    rec = claim(cands[0], session)
+    push()
+    return f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}). Already done; don't run agent_claims.py claim again."
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
         return 1
     cmd, rest = argv[0], " ".join(argv[1:]).strip()
+    if cmd == "hook":
+        out = hook(sys.stdin.read())
+        if out:
+            print(out)
+        return 0
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if cmd == "list":
         print(json.dumps(load(), ensure_ascii=False, indent=2))

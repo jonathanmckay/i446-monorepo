@@ -128,3 +128,54 @@ def test_terminal_dtd_greys_claimed_task(tmp_path):
     assert "😈" not in bravo
     # order unchanged: the claimed task stays in place
     assert r.stdout.index("alpha") < r.stdout.index("bravo")
+
+
+# ── /c fast path (2026-10-05): the UserPromptSubmit hook claims before the
+#    model starts, so dtd shows it in ~1s instead of after skill loading. ──
+
+class _FakeDid:
+    ANNOT_RE = __import__("re").compile(r"\s*[\(\[]\d+[\)\]]")
+
+    def __init__(self, tasks):
+        self._tasks = tasks
+
+    def load_task_queue(self):
+        return {"today": self._tasks}
+
+    def match_todoist_task(self, q, tasks):
+        return None
+
+
+@pytest.fixture
+def hooked(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac, "CLAIMS_DIR", tmp_path)
+    monkeypatch.setattr(ac, "push", lambda: None)
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "T2", "content": "source review"}]))
+    # claim()/release() take root defaults bound at def time; route them to tmp
+    real_claim, real_release = ac.claim, ac.release
+    monkeypatch.setattr(ac, "claim", lambda t, s, root=None, now=None: real_claim(t, s, root=tmp_path, now=now))
+    monkeypatch.setattr(ac, "release", lambda s, root=None: real_release(s, root=tmp_path))
+    return tmp_path
+
+
+def _fast(prompt, session="S9"):
+    return ac.hook(json.dumps({"session_id": session, "prompt": prompt}))
+
+
+def test_hook_claims_c_prompt(hooked):
+    out = _fast("/c source logging: build the adapter")
+    assert "😈 claimed: source logging" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "T1"
+
+
+def test_hook_ignores_ordinary_prompts(hooked):
+    assert _fast("can you check the source logging") == ""
+    assert _fast("/commit everything") == ""     # /c must be a whole command
+    assert not (hooked / "by-session").exists()
+
+
+def test_hook_ambiguous_and_release(hooked):
+    assert "ambiguous" in _fast("/claim source")
+    _fast("/c source logging")
+    assert "released" in _fast("/c off")
+    assert not (hooked / "by-session" / "S9").exists()

@@ -228,7 +228,7 @@ def _post(port: int, action: str) -> bool:
 # Agent spinner (/claim, 2026-10-05): while any claimed task is mid-turn, the
 # top line carries a spinner + 😈 + the task, so the motion lives here and the
 # list rows stay static (grey). Claims are re-read once a second, not per tick.
-SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPIN = "·✢✳✶✻✽✻✶✳✢"   # Claude Code's own spinner glyphs, same as the claimed row
 CLAIMS_EVERY = 1.0
 
 try:
