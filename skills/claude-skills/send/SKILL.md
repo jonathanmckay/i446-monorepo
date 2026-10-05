@@ -138,6 +138,50 @@ tokens = json.load(open(Path.home() / '.config/slack/tokens.json'))
 _slack.send_reply(token, channel_id, '<message>')
 ```
 
+## Named Group Threads
+
+Some recipients are iMessage/RCS **group threads**, addressed by their thread
+name instead of a person. `imessage_send` only takes one phone/email, so send to
+these through the chat-level helper (works for 1:1 and group chats):
+
+```python
+import sqlite3, sys
+from pathlib import Path
+sys.path.insert(0, str(Path.home() / 'i446-monorepo/tools/ibx'))
+import imsg
+
+def group_guid(name):
+    """Most recently active chat whose display_name is exactly `name`."""
+    db = sqlite3.connect(f"file:{Path.home()}/Library/Messages/chat.db?mode=ro", uri=True)
+    row = db.execute(
+        "SELECT c.guid FROM chat c LEFT JOIN chat_message_join j ON j.chat_id = c.ROWID "
+        "LEFT JOIN message m ON m.ROWID = j.message_id WHERE c.display_name = ? "
+        "GROUP BY c.ROWID ORDER BY MAX(m.date) DESC LIMIT 1", (name,)).fetchone()
+    return row[0] if row else None
+
+imsg.reply_imessage({"chat_guid": group_guid("3494")}, final_text)
+```
+
+Then confirm delivery with `imessage_read` / chat.db before reporting `Sent via iMessage to 3494`.
+Match the name **exactly**: "3494" is not "3494 House" (a separate, older thread).
+
+| Thread | Bilingual |
+| --- | --- |
+| `3494` | Yes (English ↔ 中文) |
+
+### Bilingual threads (English ↔ 中文)
+
+For any thread marked bilingual above, every message carries both languages:
+
+- Message mostly **English** → append a Simplified Chinese translation.
+- Message mostly **Chinese** → append an English translation.
+- Format: the original as written, a blank line, then the translation. No labels like "Translation:".
+- Translate naturally (how a native speaker would text it), keep names, times, and numbers exactly as written, and keep the original untouched.
+
+**Always confirm before sending**, even without angle brackets: the translation is
+text JM didn't write, so show the full final message (original + translation) and ask
+**Send? (y/n)**. Send only on yes.
+
 ## Recipient Resolution
 
 Resolve recipients via **d359 lookup first**, then fall back to live lookups.

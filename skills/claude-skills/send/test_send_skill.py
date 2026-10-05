@@ -144,3 +144,29 @@ def test_resolve_registry_parses_table(tmp_path, monkeypatch):
     assert ch['email'] == 'jane@gmail.com' and ch['phone'] == '+14155551234'
     assert 'work_email' not in ch, "blank cells must not become channel fields"
     assert ns['resolve_registry']('Nobody Here') is None
+
+
+def test_3494_thread_is_bilingual_and_confirmed():
+    """
+    Feature (2026-10-05): messages to the "3494" group text must carry both
+    English and Chinese (translate whichever is missing), and because the
+    translation is text JM didn't write, the final message is always shown
+    for approval before sending.
+    """
+    text = SKILL_MD.read_text()
+    assert "`3494`" in text and "Bilingual" in text
+    assert "append a Simplified Chinese translation" in text
+    assert "append an English translation" in text
+    assert "Always confirm before sending" in text
+
+
+def test_group_threads_use_chat_guid_not_imessage_send():
+    """
+    imessage_send only targets a single phone/email, so a named group thread
+    like "3494" must go through imsg.reply_imessage with the chat guid, matched
+    by exact display_name ("3494" != "3494 House").
+    """
+    text = SKILL_MD.read_text()
+    assert "reply_imessage" in text
+    assert "c.display_name = ?" in text
+    assert '"3494 House"' in text
