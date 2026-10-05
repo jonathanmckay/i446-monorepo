@@ -16,7 +16,8 @@ directory mtime advances; dtd's watcher reloads on that.
 
 Usage:
   agent_claims.py claim <query>   fuzzy-match a task in the dtd cache, claim it
-  agent_claims.py hook            UserPromptSubmit fast path for `/c <task>: ...`
+  agent_claims.py hook            UserPromptSubmit fast path for `/d <task>: ...`
+  agent_claims.py new <task>      create a today task and claim it
   agent_claims.py release         drop this session's claim
   agent_claims.py list            JSON of claims (+ derived working flag)
 """
@@ -157,11 +158,34 @@ def push() -> None:
         pass
 
 
-HOOK_RE = __import__("re").compile(r"^\s*/(?:c|claim)(?:\s+(.*))?$", __import__("re").S)
+HOOK_RE = __import__("re").compile(r"^\s*/(?:d|claim)(?:\s+(.*))?$", __import__("re").S)
+
+
+def new_task(content: str) -> dict:
+    """`/d new <task>`: create it in Todoist, due today, and return it. An
+    `@code` token becomes its label (like /todo). dtd's cache refresh runs
+    detached, so the row appears on the next watcher reload without making
+    the prompt wait for it."""
+    import re
+    import subprocess
+    lib = str(Path.home() / "i446-monorepo" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import todoist
+    labels = re.findall(r"(?:^|\s)@(\S+)", content)
+    content = re.sub(r"(?:^|\s)@\S+", "", content).strip()
+    task = todoist.create_task(content, labels=labels or None, due_string="today")
+    try:
+        subprocess.Popen(["python3", str(Path(__file__).resolve().parent / "did-fast.py"),
+                          "--refresh-cache"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+    return task
 
 
 def hook(payload: str) -> str:
-    """UserPromptSubmit fast path for `/c <task>[: request]` (and /claim):
+    """UserPromptSubmit fast path for `/d <task>[: request]` (and /claim):
     claim before the model even starts, so dtd shows it in ~1s instead of
     after the model has read the skill. Returns the line injected into the
     model's context ('' = not a claim prompt). The skill sees it and skips
@@ -182,6 +206,18 @@ def hook(payload: str) -> str:
         return "[claim hook] released this session's claim."
     if not query:
         return ""
+    if query.lower().startswith("new "):
+        name = query[4:].strip()
+        if not name:
+            return ""
+        try:
+            task = new_task(name)
+        except Exception as e:
+            return f"[claim hook] couldn't create {name!r} in Todoist ({e}); nothing claimed."
+        rec = claim(task, session)
+        push()
+        return (f"[claim hook] created and 😈 claimed: {rec['task']} (id {rec['task_id']}). "
+                "Already done; don't create or claim it again.")
     df = _did()
     cands = candidates(query, all_tasks(df.load_task_queue()), df)
     if not cands:
@@ -214,6 +250,11 @@ def main(argv: list[str]) -> int:
     if cmd == "release":
         print(json.dumps({"ok": True, "released": release(session)}))
         push()
+        return 0
+    if cmd == "new" and rest:
+        rec = claim(new_task(rest), session)
+        push()
+        print(json.dumps({"ok": True, **rec}, ensure_ascii=False))
         return 0
     if cmd != "claim" or not rest:
         print(json.dumps({"ok": False, "error": "usage: claim <query> | release | list"}))

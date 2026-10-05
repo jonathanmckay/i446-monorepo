@@ -1,6 +1,6 @@
 ---
 name: "claim"
-description: "Tie this Claude session to a dtd task: dtd moves it to the top with a live spinner while you work. Short form: /c. Works as a decorator: /claim <task>: <request> claims the task, then does the request. Usage: /claim <task>[: request] | /claim off"
+description: "Tie this Claude session to a dtd task: dtd moves it to the top with a live spinner while you work. Short form: /d (and /d new <task> creates one first). Works as a decorator: /claim <task>: <request> claims the task, then does the request. Usage: /claim <task>[: request] | /claim off"
 user-invocable: true
 ---
 
@@ -14,8 +14,8 @@ user-invocable: true
 
 ## Run
 
-The UserPromptSubmit hook claims `/claim` and `/c` prompts before you start; if
-your context has a `[claim hook]` line, follow it (see `/c`'s SKILL.md) instead
+The UserPromptSubmit hook claims `/claim` and `/d` prompts before you start; if
+your context has a `[claim hook]` line, follow it (see `/d`'s SKILL.md) instead
 of re-running the claim.
 
 

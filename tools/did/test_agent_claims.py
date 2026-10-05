@@ -130,7 +130,7 @@ def test_terminal_dtd_greys_claimed_task(tmp_path):
     assert r.stdout.index("alpha") < r.stdout.index("bravo")
 
 
-# ── /c fast path (2026-10-05): the UserPromptSubmit hook claims before the
+# ── /d fast path (2026-10-05): the UserPromptSubmit hook claims before the
 #    model starts, so dtd shows it in ~1s instead of after skill loading. ──
 
 class _FakeDid:
@@ -162,20 +162,30 @@ def _fast(prompt, session="S9"):
     return ac.hook(json.dumps({"session_id": session, "prompt": prompt}))
 
 
-def test_hook_claims_c_prompt(hooked):
-    out = _fast("/c source logging: build the adapter")
+def test_hook_claims_d_prompt(hooked):
+    out = _fast("/d source logging: build the adapter")
     assert "😈 claimed: source logging" in out
     assert (hooked / "by-session" / "S9").read_text().strip() == "T1"
 
 
 def test_hook_ignores_ordinary_prompts(hooked):
     assert _fast("can you check the source logging") == ""
-    assert _fast("/commit everything") == ""     # /c must be a whole command
+    assert _fast("/do something") == ""     # /d must be a whole command
     assert not (hooked / "by-session").exists()
 
 
 def test_hook_ambiguous_and_release(hooked):
     assert "ambiguous" in _fast("/claim source")
-    _fast("/c source logging")
-    assert "released" in _fast("/c off")
+    _fast("/d source logging")
+    assert "released" in _fast("/d off")
     assert not (hooked / "by-session" / "S9").exists()
+
+
+def test_hook_new_creates_then_claims(hooked, monkeypatch):
+    """`/d new <task>` (2026-10-05): attach work that isn't in dtd yet."""
+    made = []
+    monkeypatch.setattr(ac, "new_task", lambda c: made.append(c) or {"id": "N1", "content": c})
+    out = _fast("/d new draft xbox memo: write the outline")
+    assert made == ["draft xbox memo"]
+    assert "created and 😈 claimed: draft xbox memo" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "N1"
