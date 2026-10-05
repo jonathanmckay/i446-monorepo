@@ -651,6 +651,12 @@ class ZeroNeonOverrideTests(unittest.TestCase):
         self.assertEqual(r.fen_col, "W")
         self.assertEqual(r.fen_points, 48)
 
+    def test_m828_points_route_to_ge_column(self):
+        # 2026-10-05: @m828 had no 0分 column and routed to needs_agent.
+        r = self._route_one("board prep [40] @m828")
+        self.assertEqual(r.fen_col, "T")
+        self.assertEqual(r.fen_points, 40)
+
     def test_hit_shorthand_routes_to_hiit_0n(self):
         # 2026-10-04: "hit 27" fell to needs_agent (and "hit 27 @hcb" to the
         # variable path, 1x into 0分!W) instead of 0n!AE, which hcbi!Y

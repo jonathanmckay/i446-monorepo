@@ -22,7 +22,6 @@ from pathlib import Path
 REVIEWS_DIR = Path.home() / "vault" / "hcmc" / "reviews"
 BLOG_REVIEWS_DIR = Path.home() / "vault" / "hcmp" / "o315" / "blog" / "content" / "reviews"
 BLOG_URL = "https://jonathanmckay.com/reviews/{slug}/"
-COVER_CACHE = Path.home() / ".cache" / "jmreads-covers.json"
 
 # Annual book goal for the reading challenge. Placeholder until JM sets it.
 READING_GOALS = {2026: 52}
@@ -30,8 +29,7 @@ DEFAULT_GOAL = 52
 
 FEED_LIMIT = 60
 API_TTL = 600            # seconds; the vault changes a few times a day at most
-COVER_LOOKUPS_PER_CALL = 12
-COVER_MISS_RETRY_DAYS = 30
+COVER_MISS_RETRY_DAYS = 7
 
 _cache: dict = {"t": 0.0, "data": None}
 _cache_lock = threading.Lock()
@@ -114,70 +112,176 @@ def headline(body: str) -> str:
 
 
 # --- covers ------------------------------------------------------------------
+#
+# Covers are resolved server-side and cached on disk, then served from
+# /jmreads/cover/<key>, so the page never waits on Open Library's slow
+# redirects. Lookup order per book: Open Library by ISBN, Google Books by
+# ISBN, Open Library title+author search, Google Books title+author search.
+# A background thread fills misses so /api/reads never blocks on the network.
 
-def _load_cover_cache() -> dict:
+COVER_DIR = Path.home() / ".cache" / "jmreads-covers"
+_UA = {"User-Agent": "jmreads/1.0 (personal dashboard)"}
+_filling = threading.Event()
+
+
+def cover_key(b: dict) -> str:
+    import hashlib
+    raw = (b.get("isbn") or f"{b['title']}|{b.get('author', '')}").lower()
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def cover_path(key: str) -> Path | None:
+    if not re.fullmatch(r"[0-9a-f]{16}", key or ""):
+        return None
+    p = COVER_DIR / f"{key}.jpg"
+    return p if p.exists() else None
+
+
+def _get(url: str, timeout: float = 6.0) -> bytes | None:
     try:
-        return json.loads(COVER_CACHE.read_text())
+        req = urllib.request.Request(url, headers=_UA)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except Exception:
+        return None
+
+
+def _json(url: str):
+    raw = _get(url)
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _image(url: str | None) -> bytes | None:
+    """Download and sanity-check an image (real covers are several KB)."""
+    if not url:
+        return None
+    data = _get(url, timeout=10)
+    if data and len(data) > 2500 and data[:3] in (b"\xff\xd8\xff", b"\x89PN", b"GIF", b"RIF"):
+        return data
+    return None
+
+
+def _gbooks_thumb(query: str) -> str | None:
+    d = _json("https://www.googleapis.com/books/v1/volumes?maxResults=5&q=" + urllib.parse.quote(query))
+    for item in (d or {}).get("items", []):
+        links = item.get("volumeInfo", {}).get("imageLinks", {})
+        url = links.get("thumbnail") or links.get("smallThumbnail")
+        if url:
+            url = url.replace("http://", "https://").replace("&edge=curl", "")
+            return re.sub(r"zoom=\d", "zoom=1", url)
+    return None
+
+
+def _ol_search(title: str, author: str) -> str | None:
+    q = {"title": re.sub(r":.*$", "", title).strip(), "limit": "5", "fields": "cover_i"}
+    if author:
+        q["author"] = author.split(",")[0].strip()
+    d = _json("https://openlibrary.org/search.json?" + urllib.parse.urlencode(q))
+    for doc in (d or {}).get("docs", []):
+        if doc.get("cover_i"):
+            return f"https://covers.openlibrary.org/b/id/{doc['cover_i']}-M.jpg"
+    return None
+
+
+def fetch_cover(b: dict) -> tuple[bytes | None, str]:
+    title = re.sub(r":.*$", "", b["title"]).strip()
+    author = (b.get("author") or "").split(",")[0].strip()
+    isbn = b.get("isbn")
+    steps = []
+    if isbn:
+        steps.append(("openlibrary-isbn", lambda: f"https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg?default=false"))
+        steps.append(("google-isbn", lambda: _gbooks_thumb(f"isbn:{isbn}")))
+    steps.append(("openlibrary-search", lambda: _ol_search(b["title"], b.get("author", ""))))
+    steps.append(("google-search", lambda: _gbooks_thumb(
+        f'intitle:"{title}"' + (f' inauthor:"{author}"' if author else ""))))
+    for name, url_fn in steps:
+        try:
+            data = _image(url_fn())
+        except Exception:
+            data = None
+        if data:
+            return data, name
+    return None, "none"
+
+
+def _index() -> dict:
+    try:
+        return json.loads((COVER_DIR / "index.json").read_text())
     except (OSError, ValueError):
         return {}
 
 
-def _save_cover_cache(c: dict) -> None:
-    try:
-        COVER_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = COVER_CACHE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(c))
-        tmp.replace(COVER_CACHE)
-    except OSError:
-        pass
+def _save_index(idx: dict) -> None:
+    COVER_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = COVER_DIR / "index.json.tmp"
+    tmp.write_text(json.dumps(idx, indent=0))
+    tmp.replace(COVER_DIR / "index.json")
 
 
-def _search_cover(title: str, author: str) -> str | None:
-    q = {"title": re.sub(r":.*$", "", title).strip(), "limit": "3", "fields": "cover_i"}
-    if author:
-        q["author"] = author.split(",")[0].strip()
-    url = "https://openlibrary.org/search.json?" + urllib.parse.urlencode(q)
-    req = urllib.request.Request(url, headers={"User-Agent": "jmreads/1.0 (personal dashboard)"})
-    with urllib.request.urlopen(req, timeout=4) as r:
-        docs = json.load(r).get("docs", [])
-    for d in docs:
-        if d.get("cover_i"):
-            return f"https://covers.openlibrary.org/b/id/{d['cover_i']}-M.jpg"
-    return None
-
-
-def resolve_covers(books: list[dict]) -> None:
-    """Fill book['cover']. ISBN → Open Library cover URL directly (the page
-    falls back to a placeholder if OL has no image). No ISBN → a cached
-    title/author search, a bounded number of new lookups per call."""
+def fill_covers(books: list[dict], limit: int | None = None) -> dict:
+    """Download covers for books that don't have one yet. Misses are retried
+    after COVER_MISS_RETRY_DAYS. Returns counts by source."""
     with _cover_lock:
-        cache = _load_cover_cache()
-        todo = []
+        COVER_DIR.mkdir(parents=True, exist_ok=True)
+        idx = _index()
         now = time.time()
+        todo = []
         for b in books:
-            if b.get("isbn"):
-                b["cover"] = f"https://covers.openlibrary.org/b/isbn/{b['isbn']}-M.jpg?default=false"
+            k = cover_key(b)
+            if cover_path(k):
                 continue
-            key = f"{b['title']}|{b.get('author', '')}".lower()
-            hit = cache.get(key)
-            if hit and (hit.get("url") or now - hit.get("t", 0) < COVER_MISS_RETRY_DAYS * 86400):
-                b["cover"] = hit.get("url")
-            else:
-                b["cover"] = None
-                todo.append((key, b))
-        todo = todo[:COVER_LOOKUPS_PER_CALL]
-        if todo:
-            def look(item):
-                key, b = item
-                try:
-                    return key, b, _search_cover(b["title"], b.get("author", ""))
-                except Exception:
-                    return key, b, None
-            with ThreadPoolExecutor(max_workers=6) as ex:
-                for key, b, url in ex.map(look, todo):
-                    cache[key] = {"url": url, "t": now}
-                    b["cover"] = url
-            _save_cover_cache(cache)
+            hit = idx.get(k)
+            if hit and now - hit.get("t", 0) < COVER_MISS_RETRY_DAYS * 86400:
+                continue
+            todo.append((k, b))
+        if limit:
+            todo = todo[:limit]
+        counts: dict = {}
+
+        def work(item):
+            k, b = item
+            data, src = fetch_cover(b)
+            return k, b, data, src
+
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            for k, b, data, src in ex.map(work, todo):
+                if data:
+                    (COVER_DIR / f"{k}.jpg").write_bytes(data)
+                idx[k] = {"src": src, "t": now, "title": b["title"]}
+                counts[src] = counts.get(src, 0) + 1
+        _save_index(idx)
+        return counts
+
+
+def attach_covers(books: list[dict]) -> list[dict]:
+    """Point each book at its cached cover (or None) and return the ones still
+    missing so a background fill can fetch them."""
+    missing = []
+    for b in books:
+        k = cover_key(b)
+        if cover_path(k):
+            b["cover"] = f"/jmreads/cover/{k}"
+        else:
+            b["cover"] = None
+            missing.append(b)
+    return missing
+
+
+def _background_fill(books: list[dict]) -> None:
+    if _filling.is_set():
+        return
+    _filling.set()
+
+    def run():
+        try:
+            if fill_covers(books):
+                invalidate()   # next page load picks up the new covers
+        finally:
+            _filling.clear()
+    threading.Thread(target=run, daemon=True).start()
 
 
 # --- model -------------------------------------------------------------------
@@ -265,7 +369,9 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
 
     shown = {id(b) for b in reading} | {id(b) for b in read} | {id(e["book"]) for e in events}
     if covers:
-        resolve_covers([b for b in books if id(b) in shown])
+        missing = attach_covers([b for b in books if id(b) in shown])
+        if missing:
+            _background_fill(missing)
 
     goal = READING_GOALS.get(year, DEFAULT_GOAL)
     day_of_year = (today - date(year, 1, 1)).days + 1

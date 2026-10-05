@@ -3167,6 +3167,21 @@ def jmreads_page():
     return jmreads.page(_SHARED_STYLE)
 
 
+@app.route("/jmreads/cover/<key>")
+def jmreads_cover(key):
+    """Serve a book cover cached on disk by jmreads.fill_covers."""
+    from flask import send_file, abort
+    path = jmreads.cover_path(key)
+    if not path:
+        abort(404)
+    head = path.read_bytes()[:4]
+    mime = "image/png" if head.startswith(b"\x89PN") else "image/gif" if head.startswith(b"GIF") \
+        else "image/webp" if head.startswith(b"RIF") else "image/jpeg"
+    resp = send_file(path, mimetype=mime)
+    resp.headers["Cache-Control"] = "public, max-age=604800"
+    return resp
+
+
 @app.route("/api/reads")
 def api_reads():
     return jsonify(jmreads.data(force=request.args.get("fresh") == "1"))
