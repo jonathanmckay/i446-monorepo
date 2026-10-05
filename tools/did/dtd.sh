@@ -1246,6 +1246,10 @@ HDR="$DTD_HDR"
 BLOCKPICK="$DTD_BLOCKPICK"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
 glyph="\${1#BLOCK:}"
+if [[ "\$glyph" == custom ]]; then
+  echo "✎ press Enter on the custom row, then type the number of days" > "\$HDR"
+  exit 0
+fi
 ids=(\$(cat "\$BLOCKPICK" 2>/dev/null))
 rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode"
 if [[ "\$glyph" == "cancel" || \${#ids[@]} -eq 0 ]]; then
@@ -1348,10 +1352,21 @@ zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tpickenter\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 id="\$1"
 q="\${2// /}"
+# stdout is read by fzf's transform as ACTIONS: print only change-prompt(...)
+# for the custom-days entry (2026-10-04), nothing on every other path.
 if [[ -s "$DTD_BLOCKPICK" ]] && [[ "\$q" == <-> || "\$q" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]]; then
   "$DTD_BLOCKAPPLY" "BLOCK:d\$q" >/dev/null 2>&1
+  [[ -e "$DTD_BLOCKPICK.custom" ]] && { rm -f "$DTD_BLOCKPICK.custom"; print -n 'change-prompt(> )'; }
+elif [[ "\$id" == BLOCK:custom ]]; then
+  # Custom row: same screen, prompt becomes a days field; the next Enter with
+  # a number lands in the branch above (works even if the number filters every
+  # row out, since it reads the query, not the row).
+  : > "$DTD_BLOCKPICK.custom"
+  echo "✎ type a whole number of days, then Enter (esc = back)" > "$DTD_HDR"
+  print -n 'change-prompt(📅 delay days > )'
 elif [[ -n "\$id" ]]; then
   "$DTD_ENTER" "\$id" >/dev/null 2>&1
+  [[ -e "$DTD_BLOCKPICK.custom" ]] && { rm -f "$DTD_BLOCKPICK.custom"; print -n 'change-prompt(> )'; }
 fi
 exit 0
 PICKENTEREOF
@@ -1363,7 +1378,8 @@ chmod +x "$DTD_PICKENTER"
 cat > "$DTD_BACK" << BACKEOF
 #!/bin/zsh
 if [[ -e "$DTD_BLOCKPICK" ]]; then
-  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode"
+  [[ -e "$DTD_BLOCKPICK.custom" ]] && print -n 'change-prompt(> )'
+  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom"
   echo "↩ back to list" > "$DTD_HDR"
 elif [[ -z "\$1" ]]; then
   print -n abort
@@ -1735,7 +1751,8 @@ if _armed:
     _day_rows = [(f'{GREEN}↻ 0 / next occurrence / one day{_R}', 'dauto'),
                  (f'{GREEN}📅 1天{_R}', 'd1'),
                  (f'{GREEN}📅 2天{_R}', 'd2'),
-                 (f'{GREEN}📅 7天{_R}', 'd7')]
+                 (f'{GREEN}📅 7天{_R}', 'd7'),
+                 (f'{GREEN}✎ delay N days: type a number…{_R}', 'custom')]
     if _mode == 'days':
         for _t, _g in _day_rows:
             print(f'{_t}\tBLOCK:{_g}')
@@ -2086,6 +2103,21 @@ DTD_DOMAINSEARCH="/tmp/dtd-$DTD_ID.domainsearch.sh"
 cat > "$DTD_DOMAINSEARCH" << EOF
 #!/bin/zsh
 q="\$1"
+# On the delay screen a typed number means "delay N days" (Enter applies it,
+# see the enter router): say so in the header as you type (2026-10-04).
+if [[ -s "$DTD_BLOCKPICK" ]]; then
+  _n="\${q// /}"
+  if [[ "\$_n" == <-> ]]; then
+    zmodload zsh/datetime 2>/dev/null
+    if (( _n == 0 )); then
+      echo "↵ delay 0 days → next occurrence (recurring) / one day (one-off)" > "$DTD_HDR"
+    else
+      strftime -s _d '%a %b %-d' \$(( EPOCHSECONDS + _n * 86400 ))
+      echo "↵ delay \$_n day\$( (( _n == 1 )) || print -n s) → \$_d" > "$DTD_HDR"
+    fi
+  fi
+  exit 0
+fi
 case "\$q" in
   g245|epcn|s897|hcmc2|xk87|xk88|xk20|xk22|hci|i9|n156|hcmc|m5x2|m828|hcb|hcbp|infra|i444|i447|hcm|hcmp|hcmr|家|睡觉)
     ;;
@@ -3168,4 +3200,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"

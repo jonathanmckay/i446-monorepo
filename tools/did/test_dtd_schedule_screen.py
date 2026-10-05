@@ -250,3 +250,70 @@ def test_defer_honors_preset_days_without_prompting():
             assert "+12" in (tmp / "hdr").read_text() or "⏭" in (tmp / "hdr").read_text()
         finally:
             d.unlink(); a.unlink()
+
+
+# --- custom days entry + "delay N days" header (2026-10-04) --------------------
+
+def test_custom_row_switches_prompt_then_number_applies_and_resets():
+    """User request: a 'custom option' on the delay screen that takes you to a
+    text input on the same screen for an integer number of days."""
+    assert "✎ delay N days: type a number" in SRC
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        s, log = _gen(tmp, "DTD_PICKENTER", "PICKENTEREOF")
+        (tmp / "blockpick").write_text("A1\n")
+        assert _run(s, "BLOCK:custom", "") == "change-prompt(📅 delay days > )"
+        assert _calls(log) == [], "choosing the custom row applies nothing yet"
+        assert (tmp / "blockpick.custom").exists() and "number of days" in (tmp / "hdr").read_text()
+        assert _run(s, "", "5") == "change-prompt(> )", "applying the number restores the prompt"
+        assert _calls(log) == [[str(tmp / "apply-stub"), "", "BLOCK:d5"]]
+        assert not (tmp / "blockpick.custom").exists()
+
+
+def test_picking_another_row_after_custom_still_restores_prompt():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        s, log = _gen(tmp, "DTD_PICKENTER", "PICKENTEREOF")
+        (tmp / "blockpick").write_text("A1\n")
+        (tmp / "blockpick.custom").write_text("")
+        assert _run(s, "BLOCK:d2", "") == "change-prompt(> )"
+        assert _calls(log)[0][2] == "BLOCK:d2"
+
+
+def test_esc_from_custom_entry_restores_prompt():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        s, _ = _gen(tmp, "DTD_BACK", "BACKEOF")
+        (tmp / "blockpick").write_text("A1\n")
+        (tmp / "blockpick.custom").write_text("")
+        assert _run(s, "") == "change-prompt(> )"
+        assert not (tmp / "blockpick.custom").exists()
+
+
+def test_apply_never_sends_custom_to_the_block_writer():
+    assert '[[ "\\$glyph" == custom ]]' in SRC
+
+
+def test_typing_a_number_on_delay_screen_says_delay_n_days():
+    """User follow-up: 'add the text delay XX days so I know that's what's
+    happening'. The per-keystroke hook writes it to the header."""
+    s = next(i for i, l in enumerate(LINES) if l.startswith("DTD_DOMAINSEARCH="))
+    e = next(i for i in range(s, len(LINES)) if LINES[i] == "EOF")
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        (tmp / "g.zsh").write_text(f'#!/bin/zsh\nDTD_ID="tdsh"; DTD_BLOCKPICK="{tmp}/bp"; DTD_HDR="{tmp}/hdr"; '
+                                   f'DTD_PORT="{tmp}/port"\n' + "\n".join(LINES[s:e + 1]) + "\n")
+        subprocess.run(["zsh", str(tmp / "g.zsh")], check=True)
+        ds = "/tmp/dtd-tdsh.domainsearch.sh"
+        try:
+            (tmp / "bp").write_text("A1\n")
+            for q, want in (("3", "↵ delay 3 days → "), ("1", "↵ delay 1 day → "), ("0", "↵ delay 0 days → next occurrence")):
+                (tmp / "hdr").write_text("-")
+                subprocess.run(["zsh", ds, q], check=True)
+                assert (tmp / "hdr").read_text().startswith(want), (q, (tmp / "hdr").read_text())
+            (tmp / "bp").unlink()
+            (tmp / "hdr").write_text("-")
+            subprocess.run(["zsh", ds, "5"], check=True)
+            assert (tmp / "hdr").read_text() == "-", "main list: a number is just a search"
+        finally:
+            Path(ds).unlink(missing_ok=True)
