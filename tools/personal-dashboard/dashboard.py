@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+sys.path.insert(0, str(Path(__file__).parent))
+import jmreads  # noqa: E402  /jmreads Goodreads-style page (hcmc reviews / o315)
 
 
 def _tz() -> ZoneInfo:
@@ -2101,6 +2103,7 @@ def api_refresh():
         _WEEKLY_CACHE["ts"] = 0.0
     with _GRANULAR_LOCK:
         _GRANULAR_CACHE.clear()
+    jmreads.invalidate()
     return jsonify({"status": "ok"})
 
 
@@ -2477,6 +2480,7 @@ HTML = """<!DOCTYPE html>
   <div style="display:flex;align-items:baseline;gap:16px;">
     <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
     <div style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">Oct 2 '27: <span id="daysLeftVal" style="color:var(--text);font-weight:600;"></span><script>document.getElementById('daysLeftVal').textContent=Math.ceil((new Date('2027-10-02')-new Date())/864e5)+'d';</script></div>
+    <a class="nav-link" href="/jmreads">READS</a>
     <a class="nav-link" href="/more">MORE →</a>
   </div>
 </div>
@@ -2874,6 +2878,8 @@ MORE_HTML = """<!DOCTYPE html>
 <div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--muted);">
   <a href="/1s" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ 1s weekly</a>
   &nbsp;·&nbsp;
+  <a href="/jmreads" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ jmreads</a>
+  &nbsp;·&nbsp;
   <a href="http://ix:5555" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ jm-ai-dash</a>
   &nbsp;·&nbsp;
   <a href="http://ix:5556" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ AI Dashboard (m5x2)</a>
@@ -3152,6 +3158,18 @@ def f695():
     if not p.exists():
         return "f695 weekly-reports grid not found (cron builds it daily on ix)", 404
     return p.read_text()
+
+
+@app.route("/jmreads")
+def jmreads_page():
+    """Goodreads-style reading page: currently reading, the year's reading
+    challenge, and a feed of JM's book updates (see jmreads.py)."""
+    return jmreads.page(_SHARED_STYLE)
+
+
+@app.route("/api/reads")
+def api_reads():
+    return jsonify(jmreads.data(force=request.args.get("fresh") == "1"))
 
 
 if __name__ == "__main__":
