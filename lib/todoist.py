@@ -74,6 +74,18 @@ def get_task(task_id: str) -> Optional[dict]:
 
 def close_task(task_id: str) -> None:
     _request("POST", f"/tasks/{task_id}/close")
+    _record_close(task_id)
+
+
+def _record_close(task_id: str) -> None:
+    """Log a first-party close for JM Dash's source dimension (lib/jmsource)."""
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        import jmsource
+        jmsource.record("task", task_id)
+    except Exception:
+        pass
 
 
 def get_comments(task_id: str) -> list:

@@ -109,6 +109,23 @@ def _request(method, path, body=None):
             raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")
 
 
+def _record_create(entry):
+    """Log a first-party create for JM Dash's source dimension (lib/jmsource).
+    Toggl doesn't return which client made an entry, so the creator logs it.
+    Creator wins: a later stop or edit through another surface doesn't
+    change an entry's source."""
+    try:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            return
+        lib = str(Path.home() / "i446-monorepo" / "lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        jmsource.record("time", entry["id"])
+    except Exception:
+        pass
+
+
 def create_entry(description, start_iso, stop_iso, duration_sec, project_id=None, tags=None):
     body = {
         "description": description,
@@ -122,7 +139,9 @@ def create_entry(description, start_iso, stop_iso, duration_sec, project_id=None
         body["project_id"] = project_id
     if tags:
         body["tags"] = tags
-    return _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
+    entry = _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
+    _record_create(entry)
+    return entry
 
 
 def start_timer(description, project_id=None, tags=None, start_time=None):
@@ -142,7 +161,9 @@ def start_timer(description, project_id=None, tags=None, start_time=None):
         body["project_id"] = project_id
     if tags:
         body["tags"] = tags
-    return _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
+    entry = _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
+    _record_create(entry)
+    return entry
 
 
 def stop_timer(entry_id):

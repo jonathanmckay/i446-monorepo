@@ -27,18 +27,12 @@ plan shorter than 4 days).
    - Comments and outcome marks: `🟢🟡🔴`, `(x)`, `(missed)`, bold `**…**`
      day notes. Repeat what went 🟢, retry what was missed (say so in the
      note), drop or rework what went 🔴.
-   - The "Food actual" / "Drink actual" columns vs. the plan — where actuals
-     diverged repeatedly, plan the actual (it's the revealed preference) or
-     name the deviation deliberately.
+   - The hcbi food journal (/ate 时辰 triads: 卯 AK-AM, 辰 AN-AP, 巳 AQ-AS,
+     午 AT-AV, 未 AW-AY, 申 AZ-BB, 戌 BC-BE; date in col B) vs. the plan —
+     where actuals diverged repeatedly, plan the actual (it's the revealed
+     preference) or name the deviation deliberately.
    - The current table format and goal-line phrasing.
-2b. **Backfill the previous plan's actuals** before drafting: read the food
-   journal (`hcbi` sheet — the /ate 时辰 triads: 卯 AK-AM, 辰 AN-AP, 巳 AQ-AS,
-   午 AT-AV, 未 AW-AY, 申 AZ-BB, 戌 BC-BE; date in col B) for each planned
-   day and fill any empty "Food actual" / "Drink actual" cells with what was
-   actually logged (map 卯/辰 → Morning, 巳/未 → Snack, 午 → Lunch, 申/戌 →
-   Late; put drinks in Drink actual, food in Food actual, verbatim from the
-   journal). This is the plan-vs-actual record the weekly sync grades.
-2c. **Household defaults** — `~/vault/hcbi/hcbc/家-meal-system.md`. The
+2b. **Household defaults** — `~/vault/hcbi/hcbc/家-meal-system.md`. The
    standing week fixes JM's weekday breakfast (the yogurt-bowl default), the
    weekend breakfasts he cooks, his ordered weekday lunch, and which dinners
    Ashan cooks vs. eating out. Plan JM's Morning/Lunch/Late rows inside that
@@ -62,19 +56,21 @@ shape to the previous plan file. Body:
 4. One `### <Day M/D>` section per day using the established table:
 
    ```
-   |         | Food | Drink | 一起  | Food actual | Drink actual |
-   | ------- | ---- | ----- | --- | ----------- | ------------ |
+   |         | Food | Drink | 一起  | Who's cooking | Who's eating |
+   | ------- | ---- | ----- | --- | ------------- | ------------ |
    | Morning |      |       | X   |             |              |
    | Snack   |      |       |     |             |              |
    | Lunch   |      |       |     |             |              |
    | Late    |      |       | X   |             |              |
    ```
 
-   `一起` = eaten with the kids (Morning and Late usually X). The two
-   "actual" columns start EMPTY — they're filled from the hcbi food journal
-   (step 2b) when the next plan is drafted, so the weekly sync can grade
-   plan vs. actual. Bold one-line errand/prep notes under the day header
-   where needed (hummus run, orders).
+   `一起` = eaten with the kids (Morning and Late usually X). `Who's cooking`
+   and `Who's eating` come from the 家 standing week unless a note overrides
+   it: weekday Morning = "JM (yogurt bowl); Gi → kids" / "JM + kids", Snack =
+   JM / JM, weekday Lunch = "ordered" / JM, Mon/Wed/Fri Late = Ashan / all 7,
+   Tue/Thu Late = Ashan / family, weekend breakfast = JM / family, weekend
+   lunch and dinner = "eating out" / family. Bold one-line errand/prep notes
+   under the day header where needed (hummus run, orders).
 5. Mark the previous plan's frontmatter `status: completed` (add
    `updated: <today>`) so only one plan is ever `active`.
 

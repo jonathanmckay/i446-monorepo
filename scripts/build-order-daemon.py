@@ -1456,12 +1456,25 @@ def delete_block_rituals(dry_run: bool = False, live: dict | None = None) -> Non
         try:
             if earned:
                 _todoist_write(f"/tasks/{tid}/close", {}, token)
+                _record_close(tid)
                 log(f"rituals: ✓ {content} (earned at block close)")
             else:
                 _todoist_write(f"/tasks/{tid}", None, token, method="DELETE")
                 log(f"rituals: − {content}")
         except Exception as e:
             log(f"rituals: {verb} {content!r} ERROR {e}")
+
+
+def _record_close(task_id) -> None:
+    """Log a first-party close for JM Dash's source dimension (lib/jmsource)."""
+    try:
+        lib = str(Path.home() / "i446-monorepo" / "lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        jmsource.record("task", task_id)
+    except Exception:
+        pass
 
 
 def _refresh_dtd_cache(dry_run: bool = False) -> None:
