@@ -219,6 +219,31 @@ def _ol_isbns(title: str, author: str) -> list[str]:
     return out[:6]
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _itunes(title: str, author: str) -> str | None:
+    """Apple Books (ebook, then audiobook) cover, matched on title AND author.
+    Finds covers Open Library and Amazon lack: new fiction, Great Courses
+    lectures, photo books (2026-10-05: Teo's Durumi, Understanding Japan,
+    Dune: Exposures, Dad Brain, The Virtues all hit)."""
+    if not author:
+        return None
+    last = _norm(author).split()[-1]
+    want = _norm(title)
+    for media in ("ebook", "audiobook"):
+        q = urllib.parse.urlencode({"media": media, "limit": "5", "term": f"{title} {author}"})
+        d = _json("https://itunes.apple.com/search?" + q)
+        for x in (d or {}).get("results", []):
+            name = _norm(x.get("trackName") or x.get("collectionName"))
+            if last in _norm(x.get("artistName")) and (name.startswith(want) or want.startswith(name)):
+                art = x.get("artworkUrl100") or ""
+                if art:
+                    return re.sub(r"/\d+x\d+bb\.", "/600x600bb.", art)
+    return None
+
+
 def fetch_cover(b: dict) -> tuple[bytes | None, str]:
     title = re.sub(r":.*$", "", b["title"]).strip()
     author = (b.get("author") or "").split(",")[0].strip()
@@ -242,6 +267,12 @@ def fetch_cover(b: dict) -> tuple[bytes | None, str]:
     for t in variants:
         steps.append(("amazon-ol-edition", lambda t=t: next(
             (u for u in (_amazon(i) for i in _ol_isbns(t, author)) if u and _image(u)), None)))
+    for t in variants:
+        steps.append(("apple-books", lambda t=t: _itunes(t, author)))
+    # Last resort, by hand: Goodreads blocks scripted downloads, so a cover
+    # only Goodreads has is captured from the book page in Chrome and saved
+    # into COVER_DIR with src "goodreads-capture" (done for Understanding
+    # Japan, 2026-10-05).
     # No title-only search: without the author it matched the wrong book 4 of 4
     # times (2026-10-05). A text card beats a wrong cover.
     steps.append(("google-search", lambda: _gbooks_thumb(
@@ -374,6 +405,7 @@ def load_books(reviews_dir: Path = REVIEWS_DIR, blog_dir: Path = BLOG_REVIEWS_DI
             "excerpt": excerpt if len(excerpt) > 40 else "",
             "url": BLOG_URL.format(slug=slug) if published else None,
             "goodreads": fm.get("goodreads_review"),
+            "reviewed": bool((excerpt if len(excerpt) > 40 else "") or isinstance(fm.get("score"), int)),
         })
     return books
 
@@ -457,6 +489,37 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
     }
 
 
+LAUNCHER = Path(__file__).with_name("open-claude-tab.sh")
+
+
+def request_review(book_id: str) -> tuple[bool, str]:
+    """Open a Claude tab on Straylight running /bookreview for one book.
+    Takes a book id (the review file's stem), never free text, so the
+    endpoint can only ever start a review of a book already in the vault."""
+    import socket
+    import subprocess
+    book = next((b for b in load_books() if b["id"] == book_id), None)
+    if not book:
+        return False, f"unknown book {book_id}"
+    if read_date(book) is None:
+        return False, "still reading"
+    prompt = f"/bookreview {book['title']}"
+    if book["author"]:
+        prompt += f" by {book['author']}"
+    if "straylight" in socket.gethostname().lower():
+        cmd = [str(LAUNCHER)]
+    else:
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "straylight-refit",
+               "~/i446-monorepo/tools/personal-dashboard/open-claude-tab.sh"]
+    try:
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=25)
+    except subprocess.TimeoutExpired:
+        return False, "Straylight did not answer"
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout).strip()[-200:] or f"exit {r.returncode}"
+    return True, r.stdout.strip()
+
+
 def data(force: bool = False) -> dict:
     with _cache_lock:
         if not force and _cache["data"] and time.time() - _cache["t"] < API_TTL:
@@ -516,6 +579,9 @@ __SHARED_STYLE__
 .shelf > div { min-width: 0; }
 .shelf .cover { width: 100%; height: auto; aspect-ratio: 2 / 3; display: block; font-size: 7px; }
 .muted { color: var(--h2); font-size: 12px; }
+.review-btn { font: 12px Georgia, serif; padding: 5px 12px; margin-right: 10px; border-radius: 3px; cursor: pointer;
+              background: #409d69; color: #fff; border: 1px solid #357f55; }
+.review-btn:disabled { background: var(--badge-bg); color: var(--h2); border-color: var(--grid); cursor: default; }
 </style>
 </head>
 <body>
@@ -601,7 +667,9 @@ fetch('/api/reads').then(r => r.json()).then(d => {
     const rating = e.type === 'reviewed' && b.score ? `<div>Rating ${stars(b.score)}</div>` : '';
     const hl = e.type === 'reviewed' && b.headline ? `<div class="hl">${esc(b.headline)}</div>` : '';
     const ex = e.type === 'reviewed' && b.excerpt ? `<div class="excerpt">${esc(b.excerpt)}</div>` : '';
-    const links = [b.url ? `<a href="${esc(b.url)}" target="_blank">Read review</a>` : '',
+    const writeBtn = (b.status !== 'reading' && !b.reviewed)
+      ? `<button class="review-btn" data-id="${esc(b.id)}">Write review</button>` : '';
+    const links = [writeBtn, b.url ? `<a href="${esc(b.url)}" target="_blank">Read review</a>` : '',
                    b.goodreads ? `<a href="${esc(b.goodreads)}" target="_blank">Goodreads</a>` : ''].join('');
     return `<div class="ev">
       <div class="avatar">JM</div>
@@ -617,6 +685,17 @@ fetch('/api/reads').then(r => r.json()).then(d => {
       </div>
     </div>`;
   }).join('') || '<div class="muted">No updates yet.</div>';
+
+  document.getElementById('feed').addEventListener('click', ev => {
+    const btn = ev.target.closest('.review-btn');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true; btn.textContent = 'Opening…';
+    fetch('/jmreads/review/' + encodeURIComponent(btn.dataset.id), {method: 'POST'})
+      .then(r => r.json()).then(j => {
+        btn.textContent = j.ok ? (j.where === 'cmux' ? 'Opened in cmux' : 'Opened in Terminal') : 'Failed';
+        if (!j.ok) { btn.title = j.error || ''; btn.disabled = false; }
+      }).catch(() => { btn.textContent = 'Failed'; btn.disabled = false; });
+  });
 
   // Shelf
   document.getElementById('shelfTitle').textContent = 'Read in ' + d.year + ' (' + d.read.length + ')';

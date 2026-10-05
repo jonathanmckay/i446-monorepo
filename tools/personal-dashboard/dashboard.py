@@ -3403,6 +3403,14 @@ def jmreads_cover(key):
     return resp
 
 
+@app.route("/jmreads/review/<book_id>", methods=["POST"])
+def jmreads_review(book_id):
+    """'Write review' button: open /bookreview for this book in a new Claude
+    tab on Straylight (cmux, else Terminal)."""
+    ok, msg = jmreads.request_review(book_id)
+    return jsonify({"ok": ok, "where": msg if ok else None, "error": None if ok else msg}), (200 if ok else 400)
+
+
 @app.route("/api/reads")
 def api_reads():
     return jsonify(jmreads.data(force=request.args.get("fresh") == "1"))
