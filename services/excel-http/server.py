@@ -45,7 +45,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -314,6 +314,9 @@ def _journal_and_respond(kind: str, req: dict, row: int,
         "value": str(req.get("value", "")), "before": before, "after": formula,
         "after_value": value, "src": req.get("src"), "chain": state,
     }
+    for k in ("source", "via"):  # JM Dash source dimension (lib/jmsource)
+        if req.get(k):
+            entry[k] = req[k]
     if state == "broken":
         entry["chain_expected"] = expected
     journal(entry)
@@ -344,7 +347,8 @@ def do_batch(req: dict) -> dict:
     for item in appends:
         sub = {"sheet": sheet, "col": item.get("col"), "row": row,
                "date": req.get("date"), "value": item.get("value"),
-               "src": item.get("src") or req.get("src")}
+               "src": item.get("src") or req.get("src"),
+               "source": req.get("source"), "via": req.get("via")}
         if not sub["col"]:
             results.append({"ok": False, "error": "missing_col"})
             continue

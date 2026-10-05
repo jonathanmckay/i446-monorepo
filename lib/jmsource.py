@@ -2,15 +2,16 @@
 
 SOURCE is the surface JM interacted through, not the data's origin system:
 
-  excel   direct edits in the Neon workbook
-  3p      third-party apps (toggl.com, Todoist apps, native mail apps)
-  cli     any first-party tool (did-fast, dtd, janus, /inbound, Claude skills)
-  mobile  a future first-party phone app
-  watch   future watch complications
+  cli     first-party terminal tools (did-fast, dtd, janus TUI, /inbound, Claude skills)
+  1p-app  first-party apps with a UI (janus phone view, /卯 wakeup web app, future own app)
+  3p-app  third-party apps (Excel, toggl.com, Todoist apps, native mail apps)
+  watch   watch complications
+
+`via` names the specific tool or app (did-fast, excel, quick-close, ...).
 
 Neither Toggl nor Todoist reports which client wrote an entry, so first-party
 tools log their own writes here and the dashboard treats anything absent from
-the log as 3p (or `unknown` before the per-metric cutover, see CUTOVER).
+the log as 3p-app (or `unknown` before the per-metric cutover, see CUTOVER).
 
 One append-only JSONL file per host per month under the vault, so Syncthing
 never has two machines appending to the same file. Recording is best-effort:
@@ -26,14 +27,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOURCES = ("excel", "3p", "cli", "mobile", "watch")
+SOURCES = ("cli", "1p-app", "3p-app", "watch")
 
 _DEFAULT_LOG_DIR = Path.home() / "vault" / "i447" / "i446" / "source-log"
 LOG_DIR = _DEFAULT_LOG_DIR
 _HOST_FILE = Path.home() / ".claude" / ".host-name"
 
 # First moment every first-party writer of a metric is instrumented. Earlier
-# events are `unknown`, never 3p: absence from the log says nothing about
+# events are `unknown`, never 3p-app: absence from the log says nothing about
 # where they came from. None = not cut over yet. Still missing (2026-10-05):
 # task closes in tools/did/did-fast.py (two raw /close calls) and Claude's
 # hosted Todoist MCP; time needs janus and the toggl MCP server restarted on

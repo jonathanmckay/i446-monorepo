@@ -33,6 +33,12 @@ import time
 import secrets
 from datetime import datetime
 from pathlib import Path
+import os
+
+# JM Dash source dimension (lib/jmsource): writes made through this phone UI,
+# including did-fast/tg-fast subprocesses it spawns, are 1p-app, not cli.
+os.environ["JMSOURCE"] = "1p-app"
+os.environ["JMSOURCE_VIA"] = "wakeup"
 
 from flask import Flask, jsonify, request, render_template_string
 

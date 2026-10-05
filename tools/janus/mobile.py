@@ -41,6 +41,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# JM Dash source dimension (lib/jmsource): writes made through this phone UI,
+# including did-fast/tg-fast subprocesses it spawns, are 1p-app, not cli.
+os.environ["JMSOURCE"] = "1p-app"
+os.environ["JMSOURCE_VIA"] = "janus-mobile"
 from zoneinfo import ZoneInfo
 
 # Toggl API key: env first, else the MCP config (same fallback toggl_cli uses —

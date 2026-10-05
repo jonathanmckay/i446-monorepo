@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import shlex
 import socket
 import subprocess
+import sys
 from typing import Any
 
 DAEMON_HOST = "ix"
@@ -79,6 +81,19 @@ def health() -> bool:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _surface() -> dict[str, str]:
+    """source/via for the ledger (JM Dash's source dimension, lib/jmsource).
+    Best-effort: a missing jmsource just leaves the fields off."""
+    try:
+        lib = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        return {"source": jmsource.default_source(), "via": jmsource.default_via()}
+    except Exception:
+        return {}
+
+
 def append(sheet: str, col: str, *, date: str | None = None,
            row: int | None = None, value: str, src: str | None = None) -> dict[str, Any]:
     """Append `value` (e.g. '+10', "+'1n+'!S20") to a cell formula.
@@ -93,6 +108,7 @@ def append(sheet: str, col: str, *, date: str | None = None,
         body["row"] = row
     if src:
         body["src"] = src
+    body.update(_surface())
     out = _curl("/append", body)
     if out:
         return out
@@ -108,6 +124,7 @@ def write(sheet: str, col: str, *, date: str | None = None,
         body["row"] = row
     if src:
         body["src"] = src
+    body.update(_surface())
     out = _curl("/write", body)
     if out:
         return out
@@ -127,6 +144,7 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
         body["row"] = row
     if src:
         body["src"] = src
+    body.update(_surface())
     out = _curl("/batch", body)
     if out:
         return out
@@ -175,6 +193,7 @@ def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
         "kind": op, "sheet": sheet, "col": col, "row": row, "date": date,
         "value": value, "before": None, "after": after_formula,
         "src": src, "fallback": True, "host": socket.gethostname(),
+        **_surface(),
     }
     line = json.dumps(entry, ensure_ascii=False)
     path = f"{LEDGER_DIR}/{now.strftime('%Y-%m')}.jsonl"
