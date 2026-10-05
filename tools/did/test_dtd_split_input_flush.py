@@ -45,7 +45,8 @@ def test_drain_runs_after_the_dialogs():
     # the drain must still come after the last one.
     assert "display dialog" not in body, "split must not open GUI dialogs (invisible when dtd runs on Ix)"
     drain = re.search(r"while read -t [0-9.]+ -k 1 .*; do .* done < /dev/tty", body)
-    assert body.index("What remains?") < drain.start(), "the drain must run after the last prompt"
+    # 2026-10-04: one form (split-form.py) asks everything; the drain still follows it.
+    assert body.index("split-form.py") < drain.start(), "the drain must run after the form"
 
 
 if __name__ == "__main__":

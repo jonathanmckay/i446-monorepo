@@ -2319,33 +2319,24 @@ fi
 duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 [[ -z "$total" ]] && total="?"
 
-# Three questions, asked IN THE TERMINAL (2026-10-04; were macOS GUI
-# dialogs, which open on whatever Mac dtd runs on -- invisible when dtd runs
-# on Ix over ssh). Same pattern as ctrl-d's defer prompt: ctrl-p is bound
-# with execute (not execute-silent) so this script owns the tty, the screen
-# is cleared so the question is the only thing visible, and sane tty modes
-# make Enter terminate each read. Gated on DTD_SPLIT_PROMPT, which only
-# dtd's fzf session exports; without it (tests, scripted callers) every
-# answer is blank, i.e. the split is cancelled.
-_ask() {
-  local _r=""
-  if [[ -n "${DTD_SPLIT_PROMPT:-}" && -r /dev/tty ]]; then
-    printf '%s' "$1" > /dev/tty
-    read -r _r < /dev/tty
-  fi
-  print -r -- "$_r"
-}
+# One terminal FORM with all four questions (2026-10-04): points done today,
+# what you did, what remains, points remaining (prefilled total - done, and it
+# follows "done" until you type in it). Tab / arrows move, Enter splits, Esc
+# cancels. Was three GUI dialogs, then three sequential prompts. ctrl-p is
+# bound with execute (not execute-silent) so this owns the tty. Gated on
+# DTD_SPLIT_PROMPT, which only dtd's fzf session exports; without it (tests,
+# scripted callers) nothing is asked and the split is cancelled.
+pts_today=""; done_desc=""; remaining_desc=""; remaining_override=""
 if [[ -n "${DTD_SPLIT_PROMPT:-}" && -r /dev/tty ]]; then
+  _form_out=$(mktemp -t dtdsplit.XXXXXX)
   stty sane < /dev/tty 2>/dev/null
-  printf '\033[2J\033[H\nSplit: %s\n\n' "$task" > /dev/tty
+  if python3 "$HOME/i446-monorepo/tools/did/split-form.py" --title "$task" --total "$total" \
+       --open "$bracket" --close "$close" --out "$_form_out" < /dev/tty > /dev/tty 2>/dev/null; then
+    { IFS= read -r pts_today; IFS= read -r done_desc; IFS= read -r remaining_desc; IFS= read -r remaining_override; } < "$_form_out"
+  fi
+  rm -f "$_form_out"
 fi
-# 1: points done today (blank or non-number = cancel)
-pts_today=$(_ask "Points done today? (total: $bracket$total$close, blank = cancel)> ")
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "cancelled" > "$HDR"; exit 0; }
-# 2: what you did (blank = skip)
-done_desc=$(_ask "What did you do? (blank = skip)> ")
-# 3: what remains (blank = skip)
-remaining_desc=$(_ask "What remains? (blank = skip)> ")
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 # Strip truncation: if fzf middle-truncated the name with …, search by the
@@ -2378,6 +2369,9 @@ task_id = sys.argv[9]
 open_b, close_b = sys.argv[10], sys.argv[11]  # '[' ']' or '{' '}' -- preserve the original's point style
 
 remaining_pts = max(0, total - pts_today) if total > 0 else 0
+# Points remaining typed in the form (12th arg) wins over total - done.
+if len(sys.argv) > 12 and sys.argv[12].strip().isdigit():
+    remaining_pts = int(sys.argv[12].strip())
 
 def api(method, path, body=None):
     data = json.dumps(body).encode() if body else None
@@ -2477,7 +2471,7 @@ subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
 with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
 msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}"
 
 # Flush tty input buffered while the osascript GUI dialogs held focus. With the
 # terminal idle behind the dialogs, two-finger touchpad scroll emits ESC[A/ESC[B
