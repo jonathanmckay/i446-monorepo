@@ -488,9 +488,17 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Complete via did-fast (real /did: closes Todoist + writes Neon)
 # ---------------------------------------------------------------------------
-def complete(content: str) -> dict:
+def complete(content: str, task_id: str | None = None) -> dict:
+    # Same call terminal dtd's worker makes: the annotation-stripped name plus
+    # --task-id. Sending the raw card ("i447 (15) [5]") made did-fast read [5]
+    # as a deliberate override and keep "(15)" in the name, so the 0n header
+    # never matched: the card closed and +5 went to a domain column while the
+    # habit stayed unmarked (bug 2026-10-05: 早餐, wake up, i444, i447, charge).
+    args = ["/usr/bin/python3", str(DID_FAST)]
+    if task_id:
+        args += ["--task-id", str(task_id)]
     try:
-        proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), content],
+        proc = subprocess.run(args + [strip_ann(content)],
                               capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timeout"}
@@ -887,7 +895,7 @@ def api_done():
     content = (body.get("content") or "").strip()
     if not content:
         return jsonify({"ok": False, "error": "no content"}), 400
-    res = complete(content)
+    res = complete(content, body.get("id"))
     res["points"] = parse_est(content)[1]
     return jsonify(res)
 

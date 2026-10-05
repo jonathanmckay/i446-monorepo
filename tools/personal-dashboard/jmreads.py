@@ -24,7 +24,7 @@ BLOG_REVIEWS_DIR = Path.home() / "vault" / "hcmp" / "o315" / "blog" / "content" 
 BLOG_URL = "https://jonathanmckay.com/reviews/{slug}/"
 
 # Annual book goal for the reading challenge. Placeholder until JM sets it.
-READING_GOALS = {2026: 52}
+READING_GOALS = {2026: 60}   # matches the Goodreads 2026 challenge (2026-10-05)
 DEFAULT_GOAL = 52
 
 FEED_LIMIT = 60
