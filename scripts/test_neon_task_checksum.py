@@ -344,3 +344,13 @@ def test_driver_gates_fix_on_guard(cs):
     assert "args.fix and not skip_weekly" in src
     assert 'emit_alert("checksum_recreate_skipped"' in src
     assert 'emit_alert("weekly_habit_duplicate"' in src
+
+
+def test_no_card_habits_are_never_expected_or_recreated(cs):
+    """一起饭 lives on the calendar; deleting its card must stick (2026-10-05)."""
+    import ast
+    assert "一起饭" in cs.NO_CARD
+    src = (_HERE / "neon-task-checksum.py").read_text()
+    main = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    assert "NO_CARD" in ast.unparse(main), "main() must drop NO_CARD from weekly expectations"

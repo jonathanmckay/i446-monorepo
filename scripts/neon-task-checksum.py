@@ -89,6 +89,13 @@ ALIASES = {
 VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "hcmr", "其他人", "新闻",
                "night hcmc", "evening hcmc", "hiit"}
 
+# 1n+ columns that deliberately have NO Todoist card: the habit lives on the
+# calendar, and /did still credits it without a card. Without this, --fix
+# resurrected 一起饭 at 04:15 the morning after every delete (2026-10-03
+# delete, 10-04 recreate; JM 2026-10-05: "delete 一起饭 since that happens
+# more on the calendar").
+NO_CARD = {"一起饭"}
+
 # 1=Sunday … 7=Saturday (1n+ row 3; verified against the live cards 2026-07-25)
 DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday",
              "thursday", "friday", "saturday"]
@@ -522,7 +529,8 @@ def main() -> int:
             emit_alert("daily_points_mismatch", w)
 
     if not args.daily_only:
-        expected = parse_1n_expectations(*rows_1n)
+        expected = [e for e in parse_1n_expectations(*rows_1n)
+                    if norm_name(e["header"]) not in {norm_name(h) for h in NO_CARD}]
         weekly_tasks = fetch_label_tasks(token, "1neon")
         contents = [t["content"] for t in weekly_tasks]
         present, missing_w = match_weekly(expected, contents)
