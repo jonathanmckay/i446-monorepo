@@ -45,6 +45,16 @@ Columns B–F are `/1i9`'s; leave them alone.
    own weekly figure; report both if they differ.
 4. **Verify the row:** `string value of cell 1 of row ROW of sheet "i9+m5x2"`
    must equal the label. If not, stop and report.
+**Suggest answers from 1g (before asking).** Read, via `ix-osa.sh`:
+- the `1g` tab's m5x2 (col A `m5c7`) goals (rows 13–19: col D goal, E 分, F focus bonus, G % done). The 1g tab is overwritten weekly by `/1g`, so it only reflects the review week when you run this before the next `/1g`; if `1g!A1` is a placeholder or the goals are clearly stale, say so instead of using them;
+- the previous week's row in `i9+m5x2`, col I (what you said exceeding/next-week would look like);
+- the review week's `/1s` doc (`~/vault/g245/reviews/YYYY-M.W-1s.md`, "Goals Detail"), if it exists.
+
+Then, with each question, offer a drafted answer the user can accept with "ok" or edit:
+1. **Rating**: compare the week's actual minutes/points and the goals' % done against last week's stated goal; suggest MM/MA/EE with a one-line reason.
+2. **Review (col H)**: one sentence naming which 1g goals got done or moved, plus the biggest Toggl blocks.
+3. **Next week (col I)**: carry forward unfinished 1g goals, phrased as concrete outcomes.
+
 5. **Ask the 3 questions** in chat: rating (`MM`/`MA`/`EE`), review of last
    week, goals for next week. Offer the week's biggest Toggl m5x2 blocks as the
    suggested review text.
