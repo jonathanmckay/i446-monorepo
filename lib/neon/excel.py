@@ -301,6 +301,11 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'end tell'
         )
     osa = f"osascript -e {shlex.quote(script)}"
+    if op in ("append", "write"):
+        # Excel events off for the write, so the Neon audit macro only logs
+        # edits made in Excel itself (scripts/neon-osa-quiet.sh).
+        osa = ('Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; '
+               f'if [ -x "$Q" ]; then "$Q" -e {shlex.quote(script)}; else {osa}; fi')
     r = subprocess.run(
         ["sh", "-c", osa] if IS_IX else ["ssh", DAEMON_HOST, osa],
         capture_output=True, text=True, timeout=45,

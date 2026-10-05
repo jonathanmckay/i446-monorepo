@@ -37,6 +37,13 @@ QUEUE_PATH = Path(os.environ.get("IX_WRITE_QUEUE",
                                  str(Path.home() / ".claude/ix-write-queue.jsonl")))
 
 
+# Pipeline writes run with Excel events off (scripts/neon-osa-quiet.sh) so the
+# Neon audit macro only logs edits made in Excel itself. Falls back to plain
+# osascript if the wrapper hasn't synced to ix yet.
+QUIET_REMOTE = ('Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; '
+                'if [ -x "$Q" ]; then "$Q"; else osascript -; fi')
+
+
 def _is_write(script: str) -> bool:
     """Same write-detection as _notify_janus: only mutation verbs count."""
     return "set value" in script or "set formula" in script
@@ -81,7 +88,7 @@ def run(script: str, *, timeout: float = 30.0) -> IxResult:
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
         IX_HOST,
-        "osascript", "-",
+        *([QUIET_REMOTE] if _is_write(script) else ["osascript", "-"]),
     ]
     try:
         proc = subprocess.run(

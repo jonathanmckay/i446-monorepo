@@ -47,8 +47,14 @@ fi
 
 # Execute. ssh exit codes 255 == transport error; otherwise we get
 # osascript's own exit code on the remote.
+# Writes run with Excel events off (scripts/neon-osa-quiet.sh) so the Neon
+# audit macro only logs edits made in Excel itself.
+remote="osascript -"
+if grep -q -e "set value" -e "set formula" <<<"$script"; then
+    remote='Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; if [ -x "$Q" ]; then "$Q"; else osascript -; fi'
+fi
 out="$(ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-       "${IX_HOST}" osascript - <<<"$script" 2>/tmp/ix-osa.stderr.$$)"
+       "${IX_HOST}" "$remote" <<<"$script" 2>/tmp/ix-osa.stderr.$$)"
 rc=$?
 err="$(cat /tmp/ix-osa.stderr.$$ 2>/dev/null)"
 rm -f /tmp/ix-osa.stderr.$$

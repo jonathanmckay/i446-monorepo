@@ -86,3 +86,22 @@ def test_sh_helper_has_write_notify():
     assert '*"set value"*' in gate and '*"set formula"*' in gate, (
         "sh notify must be gated on set value/set formula write verbs"
     )
+
+
+def test_writes_run_through_quiet_wrapper_reads_do_not(ix_osa, monkeypatch):
+    """Neon audit macro (2026-10-05): pipeline writes must run with Excel
+    events off via scripts/neon-osa-quiet.sh, or the macro logs them as
+    manual Excel edits. Reads keep plain `osascript -`."""
+    calls = []
+
+    class P:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    monkeypatch.setattr(ix_osa.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or P())
+    monkeypatch.setattr(ix_osa, "_notify_janus", lambda s: None)
+    ix_osa.run('tell application "Microsoft Excel" to set value of cell "A1" to 1')
+    ix_osa.run('tell application "Microsoft Excel" to get value of cell "A1"')
+    assert "neon-osa-quiet.sh" in calls[0][-1]
+    assert calls[1][-2:] == ["osascript", "-"]

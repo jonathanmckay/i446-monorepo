@@ -15,6 +15,7 @@ Endpoints (POST JSON bodies):
   POST /batch    {sheet, date|row, appends:[{col,value,src?}], src?}  # N appends, one row lookup
   POST /ack      {sheet, col, date|row, note}     # bless the cell's CURRENT formula as the new ledger baseline
   POST /reconcile {sheet, date|row, cols:[...]}   # journal outside (Excel) edits as source 3p-app
+  POST /observe  {sheet, ts, cells:[...]}          # manual edits from the Neon audit macro (no Excel call)
   GET  /health                                    # → {ok: true, version}
 
 Sheet date-column resolution is hardcoded to match neon-cols.json:
@@ -36,7 +37,9 @@ poison history. /ack (with a mandatory note) blesses a deliberate manual edit.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -46,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -146,12 +149,56 @@ def journal(entry: dict) -> None:
         sys.stderr.write(f"ledger journal failed: {e}\n")
 
 
+QUIET_LOCK = "/tmp/neon-osa-quiet.lock"  # shared with scripts/neon-osa-quiet.sh
+_EVENTS = 'tell application "Microsoft Excel" to set enable events to {}'
+
+
+def _is_write(script: str) -> bool:
+    return "set value" in script or "set formula" in script
+
+
+@contextlib.contextmanager
+def quiet_excel():
+    """Excel events off for a pipeline write, so the Neon audit macro (VBA
+    SheetChange) only logs edits made in Excel itself. Holds the same lock as
+    scripts/neon-osa-quiet.sh so no other writer can re-enable events
+    mid-write, and re-enables from Python even if osascript is killed."""
+    with open(QUIET_LOCK, "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["osascript", "-e", _EVENTS.format("false")],
+                           capture_output=True, timeout=TIMEOUT)
+            yield
+        finally:
+            subprocess.run(["osascript", "-e", _EVENTS.format("true")],
+                           capture_output=True, timeout=TIMEOUT)
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
 def osascript(script: str) -> tuple[int, str, str]:
-    r = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True, text=True, timeout=TIMEOUT,
-    )
+    ctx = quiet_excel() if _is_write(script) else contextlib.nullcontext()
+    with ctx:
+        r = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=TIMEOUT,
+        )
     return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+def ensure_events_on() -> None:
+    """Watchdog: a writer killed mid-write (or a crash) can leave Excel events
+    off for the whole app, silently disabling the audit macro. Re-enable under
+    the writer lock so it can't fire in the middle of someone's quiet write."""
+    try:
+        with open(QUIET_LOCK, "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                subprocess.run(["osascript", "-e", _EVENTS.format("true")],
+                               capture_output=True, timeout=TIMEOUT)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+    except Exception as e:
+        sys.stderr.write(f"ensure_events_on: {e}\n")
 
 
 def save_workbook() -> tuple[int, str, str]:
@@ -170,6 +217,7 @@ def save_loop() -> None:
         time.sleep(SAVE_INTERVAL)
         with EXCEL_LOCK:
             rc, _, err = save_workbook()
+            ensure_events_on()
         if rc != 0:
             sys.stderr.write(f"save_loop: save failed: {err}\n")
 
@@ -310,6 +358,16 @@ def _journal_and_respond(kind: str, req: dict, row: int,
     date = req.get("date")
     key = chain_key(sheet, col, date, row)
     state, expected = check_chain(key, before)
+    if state != "ok":
+        # The cell may have last been written under its other key (ritual
+        # -1n writes are row-addressed, did-fast date-addressed): judge it
+        # against the newest entry across both keys.
+        last = latest_entry(sheet, col, date, row)
+        if last is not None:
+            if last.get("after") == before:
+                state, expected = "ok", None
+            else:
+                state, expected = "broken", last.get("after")
     entry = {
         "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "kind": kind, "sheet": sheet, "col": col, "row": row, "date": date,
@@ -562,6 +620,79 @@ end tell
     return {"ok": True, "row": row, "changes": changes}
 
 
+def do_observe(req: dict) -> dict:
+    """Manual Excel edits reported by the Neon audit macro (VBA SheetChange →
+    AppleScriptTask → curl): {sheet, ts, structural?, cells: [{row, col,
+    date, formula, value, before_formula?, before_value?}]}.
+
+    Never touches Excel (the macro's Excel is waiting on nothing, but keep it
+    that way) and runs outside EXCEL_LOCK. Pipeline writes run with events
+    off, so everything arriving here was done in Excel: source 3p-app, via
+    excel. An observe that arrives after a newer ledger entry for the same
+    cell (a pipeline write raced it) is journaled with `observed_after`
+    instead of `after`, so it can't roll the chain back."""
+    sheet = req.get("sheet")
+    if not sheet:
+        return {"ok": False, "error": "missing_sheet"}
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    client_ts = req.get("ts") or now
+    if req.get("structural"):
+        _ROW_CACHE.clear()  # inserted/deleted rows shift every row lookup
+        journal({"ts": now, "client_ts": client_ts, "kind": "structural",
+                 "sheet": sheet, "rows": req.get("rows"), "after": None,
+                 "source": "3p-app", "via": "excel"})
+        return {"ok": True, "structural": True}
+    cells = req.get("cells") or []
+    latest = latest_entries(sheet, cells)
+    n = 0
+    for c in cells:
+        col, row = c.get("col"), c.get("row")
+        if not col or not row:
+            continue
+        formula = c.get("formula", "")
+        last = latest.get((col, int(row)))
+        before = c.get("before_formula", last.get("after") if last else None)
+        if before == formula:
+            continue  # re-entered the same thing; nothing changed
+        entry = {
+            "ts": now, "client_ts": client_ts, "kind": "excel-edit",
+            "sheet": sheet, "col": col, "row": int(row),
+            "date": (last.get("date") if last else None) or c.get("date"),
+            "value": None, "before": before,
+            "before_value": c.get("before_value", last.get("after_value") if last else None),
+            "after_value": c.get("value"),
+            "src": "excel", "source": "3p-app", "via": "excel",
+        }
+        if last is not None and (last.get("ts") or "") > client_ts:
+            entry["after"], entry["observed_after"] = None, formula
+        else:
+            entry["after"] = formula
+        journal(entry)
+        n += 1
+    return {"ok": True, "journaled": n, "truncated": bool(req.get("truncated"))}
+
+
+def latest_entries(sheet: str, cells: list) -> dict:
+    """{(col, row): newest ledger entry} for many cells in one ledger pass,
+    matching each cell under its row key or (if the macro sent one) date key."""
+    want = {}
+    for c in cells:
+        if c.get("col") and c.get("row"):
+            r = int(c["row"])
+            want[chain_key(sheet, c["col"], None, r)] = (c["col"], r)
+            if c.get("date"):
+                want[chain_key(sheet, c["col"], c["date"], r)] = (c["col"], r)
+    now = datetime.datetime.now()
+    prev = now.replace(day=1) - datetime.timedelta(days=1)
+    found = {}
+    for p in (ledger_path(prev), ledger_path(now)):
+        for e in iter_ledger(p):
+            cell = want.get(entry_key(e))
+            if cell and e.get("after") is not None:
+                found[cell] = e
+    return found
+
+
 def do_read(req: dict) -> dict:
     addr = cell_addr(req)
     if not addr:
@@ -598,7 +729,9 @@ ROUTES = {
     "/batch":  do_batch,
     "/ack":    do_ack,
     "/reconcile": do_reconcile,
+    "/observe": do_observe,
 }
+NO_EXCEL = {"/observe"}  # handlers that never touch Excel: skip EXCEL_LOCK
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -641,8 +774,11 @@ class Handler(BaseHTTPRequestHandler):
             # Threads must not send concurrent AppleEvents to Excel — serialize
             # the actual Excel-touching call; the HTTP layer above stays
             # threaded so a stalled connection can't block other requests.
-            with EXCEL_LOCK:
+            if self.path in NO_EXCEL:
                 result = handler(body)
+            else:
+                with EXCEL_LOCK:
+                    result = handler(body)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})
         except Exception as e:

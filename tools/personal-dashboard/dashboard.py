@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 sys.path.insert(0, str(Path(__file__).parent))
 import jmreads  # noqa: E402  /jmreads Goodreads-style page (hcmc reviews / o315)
+import events  # noqa: E402  /slice: points + time as one table, sliced by project or source
 
 
 def _tz() -> ZoneInfo:
@@ -2481,6 +2482,7 @@ HTML = """<!DOCTYPE html>
     <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
     <div style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">Oct 2 '27: <span id="daysLeftVal" style="color:var(--text);font-weight:600;"></span><script>document.getElementById('daysLeftVal').textContent=Math.ceil((new Date('2027-10-02')-new Date())/864e5)+'d';</script></div>
     <a class="nav-link" href="/jmreads">READS</a>
+    <a class="nav-link" href="/slice">SLICE</a>
     <a class="nav-link" href="/more">MORE →</a>
   </div>
 </div>
@@ -2844,6 +2846,104 @@ function renderEmailChart(data) {
 </html>"""
 
 
+SLICE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<title>jm slice</title>
+""" + _SHARED_STYLE + """
+<style>
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 16px; font-size: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--nav); border-radius: 4px; overflow: hidden; }
+.seg button { background: var(--card); color: var(--h2); border: 0; padding: 4px 10px; font: inherit; letter-spacing: 1px; cursor: pointer; }
+.seg button.on { background: var(--nav); color: var(--text); }
+.ctl-label { color: var(--h2); letter-spacing: 1px; margin-right: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; font-size: 12px; }
+.chip { border: 1px solid var(--nav); border-radius: 12px; padding: 2px 10px; cursor: pointer; color: var(--h2); user-select: none; }
+.chip.on { color: var(--text); border-color: var(--h1); }
+.chip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.note { font-size: 11px; color: var(--h2); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>JM DASH · SLICE</h1>
+  <a class="nav-link" href="/">← DASH</a>
+</div>
+<div class="card">
+  <div class="controls">
+    <span><span class="ctl-label">METRIC</span><span class="seg" data-key="metric"><button data-v="points" class="on">POINTS</button><button data-v="time">TIME</button></span></span>
+    <span><span class="ctl-label">GROUP</span><span class="seg" data-key="group_by"><button data-v="project" class="on">PROJECT</button><button data-v="source">SOURCE</button></span></span>
+    <span><span class="ctl-label">GRAIN</span><span class="seg" data-key="grain"><button data-v="block">BLOCK</button><button data-v="day" class="on">DAY</button><button data-v="week">WEEK</button><button data-v="month">MONTH</button></span></span>
+    <span><span class="ctl-label">DAYS</span><span class="seg" data-key="days"><button data-v="7">7</button><button data-v="14" class="on">14</button><button data-v="30">30</button><button data-v="90">90</button></span></span>
+  </div>
+  <div><span class="ctl-label">PROJECT</span><div class="chips" id="projectChips"></div></div>
+  <div><span class="ctl-label">SOURCE</span><div class="chips" id="sourceChips"></div></div>
+  <div class="chart-wrap" style="height:360px"><canvas id="sliceChart"></canvas></div>
+  <div class="summary" id="sliceSummary"></div>
+  <div class="note" id="sliceNote"></div>
+</div>
+<script>
+""" + _SHARED_JS_HEAD + """
+const state = {metric: 'points', group_by: 'project', grain: 'day', days: '14', project: new Set(), source: new Set()};
+let chart = null;
+const LS = 'jmSlice';
+try { const s = JSON.parse(localStorage.getItem(LS) || '{}');
+  for (const k of ['metric','group_by','grain','days']) if (s[k]) state[k] = s[k];
+  for (const k of ['project','source']) if (s[k]) state[k] = new Set(s[k]);
+} catch (e) {}
+function save() { try { localStorage.setItem(LS, JSON.stringify({...state, project: [...state.project], source: [...state.source]})); } catch (e) {} }
+
+document.querySelectorAll('.seg').forEach(seg => {
+  const key = seg.dataset.key;
+  seg.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', b.dataset.v === state[key]);
+    b.onclick = () => {
+      state[key] = b.dataset.v;
+      if (key === 'metric') { state.project.clear(); state.source.clear(); }
+      seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      save(); load();
+    };
+  });
+});
+
+function chips(el, key, values, colors) {
+  el.innerHTML = '';
+  values.forEach(v => {
+    const c = document.createElement('span');
+    c.className = 'chip' + (state[key].has(v) ? ' on' : '');
+    c.innerHTML = `<i style="background:${colors[v] || '#888'}"></i>${v}`;
+    c.onclick = () => { state[key].has(v) ? state[key].delete(v) : state[key].add(v); save(); load(); };
+    el.appendChild(c);
+  });
+}
+
+async function load() {
+  const q = new URLSearchParams({metric: state.metric, group_by: state.group_by, grain: state.grain, days: state.days,
+    project: [...state.project].join(','), source: [...state.source].join(',')});
+  const d = await (await fetch('/api/slice?' + q)).json();
+  chips(document.getElementById('projectChips'), 'project', d.dims.project, d.colors);
+  chips(document.getElementById('sourceChips'), 'source', d.dims.source, d.colors);
+  const names = Object.keys(d.series);
+  const datasets = names.map(n => ({label: n, data: d.series[n], backgroundColor: d.colors[n] || '#888', borderWidth: 0}));
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('sliceChart'), {type: 'bar', data: {labels: d.labels, datasets},
+    options: {...CHART_DEFAULTS, plugins: {legend: {display: true, labels: {color: TICK, boxWidth: 10, font: {size: 10}}}}}});
+  const total = names.reduce((a, n) => a + d.totals[n], 0);
+  document.getElementById('sliceSummary').innerHTML =
+    `<div class="badge"><span>total</span> ${Math.round(total)} ${d.unit}</div>` +
+    names.map(n => `<div class="badge"><span>${n}</span> ${Math.round(d.totals[n])}</div>`).join('');
+  const notes = [];
+  if (d.grain === 'block' && d.dropped) notes.push(`${Math.round(d.dropped)} ${d.unit} with no time of day (unattributed remainder, older Toggl days) left out of the block view.`);
+  if (d.dims.source.includes('unknown')) notes.push('unknown = recorded before source tracking, or (points) credited by formula with no ledger write.');
+  document.getElementById('sliceNote').textContent = notes.join(' ');
+}
+load();
+</script>
+</body>
+</html>
+"""
+
+
 MORE_HTML = """<!DOCTYPE html>
 <html>
 <head>
@@ -3125,6 +3225,87 @@ def auth_ga4():
     creds = flow.run_local_server(port=0)
     GA4_TOKENS.write_text(creds.to_json())
     return "GA4 OAuth complete. Tokens saved. Pageviews should now load on the dashboard."
+
+
+# ── /slice: one points/time chart, filter + group by project or source ────────
+
+_SLICE_CACHE = {}
+_SLICE_TTL = 120  # seconds
+_TOGGL_LIVE_DAYS = 85  # v9 /me/time_entries reaches back ~90 days
+
+
+def _slice_rows(days):
+    """events.py rows for the trailing `days` days (both metrics), cached."""
+    hit = _SLICE_CACHE.get(days)
+    if hit and time.time() - hit[0] < _SLICE_TTL:
+        return hit[1]
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    day_list = [(start + timedelta(days=i)).isoformat() for i in range(days)]
+    col_project = {_points_col_letter(i): c["label"] for i, c in POINTS_COLS.items()}
+    col_project.setdefault("Z", "n156")
+
+    ledger = events.load_ledger(start, end, NEON_LEDGER_DIR)
+    pts = [r for r in events.points_events(ledger, col_project)
+           if day_list[0] <= r["day"] <= day_list[-1]]
+    labels = [c["label"] for c in POINTS_COLS.values()]
+    pts += events.unattributed_points(pts, load_points_all(), labels, day_list)
+
+    live_days = min(days, _TOGGL_LIVE_DAYS)
+    entries = _fetch_toggl_entries(live_days, end=end)
+    tm = events.time_events(
+        entries, events.jmsource_index("time"), events.time_cutover(),
+        lambda pid: PROJECT_ID_TO_CODE.get(pid, "no project") if pid else "no project",
+        _tz())
+    live_floor = (end - timedelta(days=live_days - 1)).isoformat()
+    tm = [r for r in tm if live_floor <= r["day"] <= day_list[-1]]
+    older = [d for d in day_list if d < live_floor]
+    if older:
+        daily, _ = load_toggl_daily_cache()
+        tm += events.time_events_from_daily_cache(daily, older)
+
+    rows = pts + tm
+    _SLICE_CACHE[days] = (time.time(), rows)
+    return rows
+
+
+def _slice_colors():
+    colors = {c["label"]: c["color"] for c in POINTS_COLS.values()}
+    colors.update(PROJECT_COLORS)
+    colors.update({"cli": "#00e676", "1p-app": "#2979ff", "3p-app": "#ff9100",
+                   "watch": "#aa00ff", "unknown": "#616161"})
+    return colors
+
+
+@app.route("/api/slice")
+def api_slice():
+    metric = request.args.get("metric", "points")
+    grain = request.args.get("grain", "day")
+    group_by = request.args.get("group_by", "project")
+    try:
+        days = max(1, min(int(request.args.get("days", 14)), 366))
+    except ValueError:
+        days = 14
+    if metric not in ("points", "time") or grain not in ("day", "week", "month", "block") \
+            or group_by not in ("project", "source"):
+        return jsonify({"error": "bad metric, grain, or group_by"}), 400
+    if grain == "block":
+        days = min(days, 7)
+    filters = {k: [v for v in request.args.get(k, "").split(",") if v]
+               for k in ("project", "source")}
+    rows = _slice_rows(days)
+    end = date.today()
+    out = events.query(rows, metric, end - timedelta(days=days - 1), end,
+                       grain, filters, group_by)
+    out.update(metric=metric, grain=grain, group_by=group_by, days=days,
+               dims=events.dimension_values(rows, metric), colors=_slice_colors(),
+               unit="分" if metric == "points" else "min")
+    return jsonify(out)
+
+
+@app.route("/slice")
+def slice_page():
+    return render_template_string(SLICE_HTML)
 
 
 @app.route("/")
