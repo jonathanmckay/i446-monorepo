@@ -55,7 +55,11 @@ def _host() -> str:
 
 def default_via() -> str:
     """Tool name for the `via` field: $JMSOURCE_VIA, else the entry script."""
-    return os.environ.get("JMSOURCE_VIA") or Path(sys.argv[0] or "python").stem or "python"
+    if os.environ.get("JMSOURCE_VIA"):
+        return os.environ["JMSOURCE_VIA"]
+    stem = Path(sys.argv[0] or "").stem
+    # `python3 -`, `python3 -c`, and the REPL have no script name.
+    return "inline" if stem in ("", "-", "-c", "__main__") else stem
 
 
 def default_source() -> str:

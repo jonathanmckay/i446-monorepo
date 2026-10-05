@@ -14,6 +14,7 @@ Endpoints (POST JSON bodies):
   POST /lookup   {sheet, date}                    # → {row}
   POST /batch    {sheet, date|row, appends:[{col,value,src?}], src?}  # N appends, one row lookup
   POST /ack      {sheet, col, date|row, note}     # bless the cell's CURRENT formula as the new ledger baseline
+  POST /reconcile {sheet, date|row, cols:[...]}   # journal outside (Excel) edits as source 3p-app
   GET  /health                                    # → {ok: true, version}
 
 Sheet date-column resolution is hardcoded to match neon-cols.json:
@@ -45,7 +46,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -301,7 +302,8 @@ def cell_addr(req: dict) -> tuple[str, int] | None:
 
 
 def _journal_and_respond(kind: str, req: dict, row: int,
-                         before: str, value: str, formula: str) -> dict:
+                         before: str, value: str, formula: str,
+                         before_value: str | None = None) -> dict:
     """Common post-write path: chain-check the observed before-formula,
     journal the entry, and build the response."""
     sheet, col = req["sheet"], req["col"]
@@ -314,6 +316,10 @@ def _journal_and_respond(kind: str, req: dict, row: int,
         "value": str(req.get("value", "")), "before": before, "after": formula,
         "after_value": value, "src": req.get("src"), "chain": state,
     }
+    if before_value is not None:
+        # With the previous entry's after_value, a broken chain's
+        # before_value - expected value is the outside (Excel) edit in points.
+        entry["before_value"] = before_value
     for k in ("source", "via"):  # JM Dash source dimension (lib/jmsource)
         if req.get(k):
             entry[k] = req[k]
@@ -431,19 +437,20 @@ tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     set theCell to cell ("{col}{row}") of theSheet
     set oldFormula to formula of theCell
+    set oldValue to (value of theCell) as string
     if oldFormula = "" or oldFormula = "0" then
         {empty_set}
     else
         {nonempty_set}
     end if
-    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
+    return oldFormula & (character id 9) & oldValue & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    before, value, formula = (out.split("\t", 2) + ["", ""])[:3]
-    return _journal_and_respond("append", req, row, before, value, formula)
+    before, before_value, value, formula = (out.split("\t", 3) + ["", "", ""])[:4]
+    return _journal_and_respond("append", req, row, before, value, formula, before_value)
 
 
 def do_write(req: dict) -> dict:
@@ -460,15 +467,99 @@ def do_write(req: dict) -> dict:
 tell application "Microsoft Excel"
     set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
     set oldFormula to formula of theCell
+    set oldValue to (value of theCell) as string
     set {setter} of theCell to "{val_esc}"
-    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
+    return oldFormula & (character id 9) & oldValue & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    before, value, formula = (out.split("\t", 2) + ["", ""])[:3]
-    return _journal_and_respond("write", req, row, before, value, formula)
+    before, before_value, value, formula = (out.split("\t", 3) + ["", "", ""])[:4]
+    return _journal_and_respond("write", req, row, before, value, formula, before_value)
+
+
+def latest_entry(sheet: str, col: str, date: str | None, row: int) -> dict | None:
+    """Newest ledger entry (prev + current month) for this cell under either
+    its date key or its row key, or None if the ledger has never seen it."""
+    keys = {chain_key(sheet, col, None, row)}
+    if date:
+        keys.add(chain_key(sheet, col, date, row))
+    now = datetime.datetime.now()
+    prev = now.replace(day=1) - datetime.timedelta(days=1)
+    found = None
+    for p in (ledger_path(prev), ledger_path(now)):
+        for e in iter_ledger(p):
+            if entry_key(e) in keys and e.get("after") is not None:
+                found = e  # file order is time order
+    return found
+
+
+def do_reconcile(req: dict) -> dict:
+    """Journal outside edits the pipeline never wrote over: {sheet, date, cols}.
+
+    Reads each cell once. A cell whose formula differs from the ledger's last
+    after-formula gets a `reconcile` entry attributed to source 3p-app / via
+    excel. A cell the ledger has never seen gets a sourceless `baseline` entry
+    instead (its origin is unknown: row-template formulas look the same as
+    edits), so run it early each morning too, before the day's edits. That records the
+    Excel edit with before_value/after_value so JM Dash can count its points,
+    and advances the chain so the next pipeline write isn't flagged broken for
+    an edit that's already accounted for. Run nightly (scripts/neon-reconcile.sh)."""
+    cols = req.get("cols") or []
+    sheet = req.get("sheet")
+    if not sheet or not cols:
+        return {"ok": False, "error": "missing_sheet_or_cols"}
+    addr = cell_addr({"sheet": sheet, "col": cols[0], "date": req.get("date"), "row": req.get("row")})
+    if not addr:
+        return {"ok": False, "error": "date_not_found_or_missing_target"}
+    row = addr[1]
+    reads = "\n".join(
+        f'    set c to cell ("{safe_str(c)}{row}") of theSheet\n'
+        f'    set out to out & ((value of c) as string) & (character id 9) & (formula of c) & (character id 30)'
+        for c in cols)
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
+    set out to ""
+{reads}
+    return out
+end tell
+'''
+    rc, out, err = osascript(script)
+    if rc != 0:
+        return {"ok": False, "error": err}
+    cells = out.split("\x1e")
+    changes = []
+    for col, cell in zip(cols, cells):
+        value, formula = (cell.split("\t", 1) + [""])[:2]
+        # A cell is chained under its date key (date-addressed writes) or its
+        # row key (row-addressed writes, e.g. ritual -1n); compare against the
+        # newest of the two and journal under that same addressing so the
+        # next write on either path chains cleanly.
+        last = latest_entry(sheet, col, req.get("date"), row)
+        if last is not None and last.get("after") == formula:
+            continue
+        entry = {
+            "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "sheet": sheet, "col": col, "row": row,
+            "date": last.get("date") if last is not None else req.get("date"),
+            "value": None,
+            "before": last.get("after") if last is not None else None,
+            "before_value": last.get("after_value") if last is not None else None,
+            "after": formula, "after_value": value,
+        }
+        if last is None:
+            # Unknown history (row template formulas, pre-ledger values):
+            # record a sourceless starting point, never an Excel edit.
+            entry.update(kind="baseline", src=req.get("src") or "baseline")
+        else:
+            entry.update(kind="reconcile", src=req.get("src") or "reconcile",
+                         source="3p-app", via="excel")
+        journal(entry)
+        changes.append({"col": col, "kind": entry["kind"],
+                        "before_value": entry["before_value"], "after_value": value})
+    return {"ok": True, "row": row, "changes": changes}
 
 
 def do_read(req: dict) -> dict:
@@ -506,6 +597,7 @@ ROUTES = {
     "/lookup": do_lookup,
     "/batch":  do_batch,
     "/ack":    do_ack,
+    "/reconcile": do_reconcile,
 }
 
 
