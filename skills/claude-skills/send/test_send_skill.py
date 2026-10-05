@@ -170,3 +170,8 @@ def test_group_threads_use_chat_guid_not_imessage_send():
     assert "reply_imessage" in text
     assert "c.display_name = ?" in text
     assert '"3494 House"' in text
+
+
+def test_bilingual_name_glossary():
+    """阿珊 is Kelly in English (2026-10-05): a literal "Ah Shan" was wrong."""
+    assert "| 阿珊 | Kelly |" in SKILL_MD.read_text()

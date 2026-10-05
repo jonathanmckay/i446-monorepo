@@ -176,7 +176,12 @@ For any thread marked bilingual above, every message carries both languages:
 - Message mostly **English** → append a Simplified Chinese translation.
 - Message mostly **Chinese** → append an English translation.
 - Format: the original as written, a blank line, then the translation. No labels like "Translation:".
-- Translate naturally (how a native speaker would text it), keep names, times, and numbers exactly as written, and keep the original untouched.
+- Translate naturally (how a native speaker would text it), keep times and numbers exactly as written, and keep the original untouched.
+- Names use the glossary below in both directions; names not listed stay as written.
+
+| 中文 | English |
+| --- | --- |
+| 阿珊 | Kelly |
 
 **Always confirm before sending**, even without angle brackets: the translation is
 text JM didn't write, so show the full final message (original + translation) and ask
