@@ -1,7 +1,8 @@
 #!/bin/bash
 # outlook-cache-push.sh — refresh the Outlook calendar cache on Straylight
 # (the only Mac with Agency/work auth) and push it to Ix, where Janus runs
-# with JANUS_OUTLOOK_CACHE_ONLY=1. Straylight cron, every 5 min. 2026-10-04.
+# with JANUS_OUTLOOK_CACHE_ONLY=1. Manual one-shot only; the unattended
+# feed is outlook-cache-daemon.py (launchd com.mckay.outlook-cache-daemon).
 set -u
 # INTERACTIVE ONLY (2026-10-04). Unattended runs (this was a */5 cron job)
 # start a fresh Agency calendar server every time -- Agency servers die with

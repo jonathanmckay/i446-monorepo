@@ -65,7 +65,7 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
 
     # Cache-only hosts (2026-10-04): Ix has no Agency CLI / work auth, so
     # Janus running there reads the cache Straylight pushes every 5 min
-    # (tools/tg/outlook-cache-push.sh) instead of attempting a fetch that can
+    # (tools/tg/outlook-cache-daemon.py) instead of attempting a fetch that can
     # only time out. JANUS_OUTLOOK_CACHE_ONLY=1 is set by the `janus` ssh
     # entry on Ix.
     if mcp is None or os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
