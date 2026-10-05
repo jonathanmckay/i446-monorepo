@@ -1732,7 +1732,7 @@ if _armed:
     # Day-defer rows (2026-10-04, unified schedule screen). Typing a bare
     # number + enter also defers N days (handled by the enter router).
     # Labels lead with the number you can also type + enter (2026-10-04).
-    _day_rows = [(f'{GREEN}↻ 0 / next occurrence / 1 day{_R}', 'dauto'),
+    _day_rows = [(f'{GREEN}↻ 0 / next occurrence / one day{_R}', 'dauto'),
                  (f'{GREEN}📅 1天{_R}', 'd1'),
                  (f'{GREEN}📅 2天{_R}', 'd2'),
                  (f'{GREEN}📅 7天{_R}', 'd7')]

@@ -91,7 +91,7 @@ def test_background_list_tail_exits_instead_of_freezing():
 
 
 def test_day_rows_lead_with_the_typeable_number():
-    assert "↻ 0 / next occurrence / 1 day" in DTD
+    assert "↻ 0 / next occurrence / one day" in DTD
     for n in ("1天", "2天", "7天"):
         assert f"📅 {n}" in DTD
     for old in ("next occurrence (recurring) · tomorrow (one-off)", "📅 tomorrow{", "📅 in 2 days", "📅 in 1 week"):
