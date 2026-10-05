@@ -1292,6 +1292,31 @@ def api_timeline():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def run_command(text: str) -> dict:
+    """The CLI's typed-command path, for the web command bar (2026-10-05):
+    desktop janus hands whatever you type to tg-fast.py (run_tg_fast), so
+    "coffee", "coffee @epcn", "coffee 1400-1415 #-1" and backdated "1400
+    coffee" mean exactly what they mean in the CLI."""
+    try:
+        proc = subprocess.run(["/usr/bin/python3", str(TG_FAST), text],
+                              capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "tg-fast timed out"}
+    lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+    msg = lines[-1] if lines else ""
+    if proc.returncode != 0:
+        return {"ok": False, "error": msg or f"tg-fast exit {proc.returncode}"}
+    return {"ok": True, "msg": msg}
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    text = ((request.get_json(force=True, silent=True) or {}).get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "nothing to run"}), 400
+    return jsonify(run_command(text))
+
+
 @app.route("/api/fill", methods=["POST"])
 def api_fill():
     b = request.get_json(force=True, silent=True) or {}
@@ -1389,6 +1414,10 @@ PAGE = r"""<!doctype html>
     background:#1b1b1bee; backdrop-filter:blur(6px);
     display:flex; align-items:center; justify-content:space-between;
     border-bottom:1px solid #2a2a2a; }
+  header { flex-wrap:wrap; row-gap:7px; }
+  #cmdbar { flex-basis:100%; display:flex; }
+  #cmd { flex:1; background:#111; color:inherit; border:1px solid #333; border-radius:8px;
+    padding:8px 10px; font:inherit; font-size:16px; }
   header .brand { font-weight:700; letter-spacing:1px; }
   header .brand b { color:var(--go); }
   .tally { color:var(--dim); font-variant-numeric:tabular-nums; }
@@ -1461,6 +1490,10 @@ PAGE = r"""<!doctype html>
   <div class="brand">jan<b>u</b>s</div>
   <div class="tally"><b id="pts">–</b> 分 · <span id="trk">0:00</span></div>
   <button id="reload">↻</button>
+  <form id="cmdbar" onsubmit="runCmd(event)">
+    <input id="cmd" placeholder="coffee 1400-1415 @epcn · same as the CLI" autocomplete="off"
+      autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+  </form>
 </header>
 <main id="list"><div class="loading">loading…</div></main>
 
@@ -1809,6 +1842,24 @@ function timePicker(el){
   el.addEventListener('blur', ()=>{ if(!el.value && el.dataset.prev) el.value = el.dataset.prev; });
 }
 ['d-start','d-end','e-start','e-end'].forEach(id => timePicker(document.getElementById(id)));
+
+// Command bar (2026-10-05): the CLI's "type to run" line. Sent to tg-fast.py
+// verbatim server-side (/api/run), so the syntax is the CLI's exactly.
+async function runCmd(ev){
+  ev.preventDefault();
+  const el = document.getElementById('cmd');
+  const text = el.value.trim();
+  if(!text) return;
+  el.value = ''; el.blur();
+  try {
+    const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'failed', true); el.value = text; return; }
+    toast((d.msg||'done')+' ✓');
+    load();
+  } catch(e){ toast('offline', true); el.value = text; }
+}
 
 let projectCodes = [];
 async function loadProjects(){
