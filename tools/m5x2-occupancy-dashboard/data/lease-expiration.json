@@ -696,18 +696,6 @@
     "rent": "1365.00"
   },
   {
-    "unit_id": 1164,
-    "property_name": "tc68",
-    "unit": "A15",
-    "tenant_name": "Hearn, Donna S.",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-10-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1575.00"
-  },
-  {
     "unit_id": 1180,
     "property_name": "tc68",
     "unit": "B31",
@@ -2530,18 +2518,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "850.00"
-  },
-  {
-    "unit_id": 821,
-    "property_name": "tc34",
-    "unit": "B110",
-    "tenant_name": "Del Pino, Nelson",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-03-05",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-03-01",
-    "rent": "1043.00"
   },
   {
     "unit_id": 1166,

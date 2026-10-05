@@ -7488,5 +7488,35 @@
     "unit": "F43",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-05",
+    "effective": "2026-10-04",
+    "kind": "moveout",
+    "unit_id": "659",
+    "prop": "s129",
+    "unit": "8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-05",
+    "effective": "2026-10-05",
+    "kind": "movein",
+    "unit_id": "174",
+    "prop": "b101",
+    "unit": "11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-05",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "821",
+    "prop": "tc34",
+    "unit": "B110",
+    "tenant": null,
+    "baseline": false
   }
 ]
