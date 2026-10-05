@@ -1,6 +1,6 @@
 ---
 name: "3s"
-description: "Quarterly scorecard: fill a 4-4-5 week quarter's row of scorecard.xlsx › 16-26 3s from Neon: 0₲✓ (days with any 0g), sd 0₦ (days 0₦ done before 1000), com0 (days 0₦ logged), 1₦ (avg 1n+ AN), 2₦ (1n+ row 89), and the m5c7 / I9 ratings averaged from /1m5x2 and /1i9. Usage: /3s [YYYY-Qn] [--partial] [--dry-run]"
+description: "Quarterly scorecard: fill a 4-4-5 week quarter's row of scorecard.xlsx › 16-26 3s from Neon: 0₲✓ (days with any 0g), sd 0₦ (days 0₦ done before 1000), com0 (days 0₦ logged), 1₦ (avg 1n+ AN), 2₦ (1n+ row 89), the m5c7 / I9 ratings averaged from /1m5x2 and /1i9, and hcb / hcbp / hcbc 分 per day. Usage: /3s [YYYY-Qn] [--partial] [--dry-run]"
 user-invocable: true
 ---
 
@@ -31,6 +31,9 @@ Echo the script's output verbatim. Nothing else to compute.
 | I | 3₦ | **manual**, never written |
 | K | m5c7 Rating | mean of i9+m5x2!G over the quarter's weeks |
 | L | I9 Rating | mean of i9+m5x2!B over the quarter's weeks |
+| AB | hcb sum | mean per day of 0分!W (all hcb points: hcbi AA + Y + direct appends) |
+| AC | hcbp | mean per day of hcbi!Y |
+| AD | hcbc 分 | mean per day of hcbi!AA (∑c) |
 
 Ratings: MM=1, MA=2, EE=3; OL and blank weeks are skipped. The mean goes to
 the nearest letter, with `+`/`-` when it is ≥ 0.25 away from it.

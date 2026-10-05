@@ -19,6 +19,9 @@ Columns written in scorecard.xlsx › '16-26 3s' (row: col A == 'YYYY.Qn'):
   L  I9 Rating   mean of i9+m5x2!B (i9) over the quarter's weeks
                  ratings: MM=1 MA=2 EE=3, OL/blank skipped; mean → nearest
                  letter, '+'/'-' when >= .25 off it
+  AB hcb sum    mean per day of 0分!W (hcb: hcbi AA + Y + direct appends)
+  AC hcbp       mean per day of hcbi!Y
+  AD hcbc 分    mean per day of hcbi!AA (∑c)
   I (3₦) and every other column are left alone.
 
 Also renames the tab '16-23 3s' → '16-26 3s' if the old name is still there.
@@ -132,7 +135,7 @@ def compute(wb, year: int, q: int, today: date, partial: bool) -> dict:
             continue
         d = d.date() if isinstance(d, datetime) else d
         if start <= d <= last:
-            days.append({"E": num(r[4]), "Q": num(r[16])})
+            days.append({"date": d, "E": num(r[4]), "Q": num(r[16]), "W": num(r[22])})
     n = len(days)
     expected = (last - start).days + 1
     if n != expected:
@@ -140,6 +143,20 @@ def compute(wb, year: int, q: int, today: date, partial: bool) -> dict:
     g0 = sum(1 for d in days if (d["Q"] or 0) > 0)   # any 0g that day
     sd = sum(1 for d in days if d["E"] and 0 < d["E"] < 1000)
     com = sum(1 for d in days if d["E"])
+    hcb = sum(d["W"] or 0 for d in days) / n
+
+    # hcbi is keyed by its own date column (rows are offset from 0分's).
+    hy, ha = {}, {}
+    for r in wb["hcbi"].iter_rows(min_row=2, max_row=600, values_only=True):
+        d = r[1]
+        if isinstance(d, (date, datetime)):
+            d = d.date() if isinstance(d, datetime) else d
+            if start <= d <= last:
+                hy[d], ha[d] = num(r[ci("Y") - 1]), num(r[ci("AA") - 1])
+    if len(hy) != n:
+        raise SystemExit(f"hcbi has {len(hy)} rows for {start}..{last}, expected {n}")
+    hcbp = sum(v or 0 for v in hy.values()) / n
+    hcbc = sum(v or 0 for v in ha.values()) / n
 
     ws1 = wb["1n+"]
     an_col = ci("AN") - 1
@@ -175,6 +192,7 @@ def compute(wb, year: int, q: int, today: date, partial: bool) -> dict:
 
     return {"year": year, "q": q, "start": start, "end": end, "last": last,
             "days": n, "g0": g0, "sd": sd, "com": com,
+            "hcb": hcb, "hcbp": hcbp, "hcbc": hcbc,
             "one_n": one_n, "an": an, "two_n": two_n, "two_n_col": col,
             "two_n_note": two_n_note, "i9": i9_r, "i9_n": i9_n,
             "m5": m5_r, "m5_n": m5_n, "weeks": len(labels)}
@@ -193,7 +211,9 @@ def write(res: dict) -> str:
     label = f"{res['year']}.Q{res['q']}"
     n = res["days"]
     cells = {"D": f"={res['g0']}/{n}", "E": f"={res['sd']}/{n}",
-             "F": f"={res['com']}/{n}", "H": f"{res['two_n']:.4f}"}
+             "F": f"={res['com']}/{n}", "H": f"{res['two_n']:.4f}",
+             "AB": f"{res['hcb']:.1f}", "AC": f"{res['hcbp']:.1f}",
+             "AD": f"{res['hcbc']:.1f}"}
     if res["one_n"] is not None:
         cells["G"] = f"{res['one_n']:.4f}"
     if res["m5"]:
@@ -262,6 +282,8 @@ def main() -> int:
     one_n = "—" if res["one_n"] is None else f"{res['one_n']:.0%}"
     print(f"  1₦    {one_n}   (1n+!AN: {an})")
     print(f"  2₦    {res['two_n']:.0%}   (1n+ row 89, month {3 * q - 2}){res['two_n_note']}")
+    print(f"  hcb   {res['hcb']:.1f}/day   (0分!W)   hcbp {res['hcbp']:.1f}/day (hcbi!Y)   "
+          f"hcbc 分 {res['hcbc']:.1f}/day (hcbi!AA)")
     print(f"  m5c7  {res['m5'] or '—'}   ({res['m5_n']}/{res['weeks']} weeks rated)")
     print(f"  I9    {res['i9'] or '—'}   ({res['i9_n']}/{res['weeks']} weeks rated)")
     if a.dry_run:
