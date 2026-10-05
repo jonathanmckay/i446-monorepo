@@ -78,7 +78,9 @@ def test_domainsearch_persists_code_then_passes_file():
     reload_line = next(l for l in blk.splitlines() if l.startswith("reload_cmd="))
     assert reload_line.rstrip().endswith(LISTGEN_ARGS_TAIL), reload_line
     assert "'\\$q'\"" not in blk, "must not send the code as a one-shot literal any more"
-    assert write < blk.index("reload_cmd="), "write the file BEFORE the reload reads it"
+    # "\nreload_cmd=" = the domain path's own (unindented) line; the delay
+    # screen's days-flag reload above it is indented (2026-10-05).
+    assert write < blk.index("\nreload_cmd="), "write the file BEFORE the reload reads it"
 
 
 def test_ctrl_r_refresh_clears_domain_scope():

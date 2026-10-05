@@ -100,6 +100,14 @@
             "command": "/Users/mckay/.claude/sync-stats.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh idle >/dev/null 2>&1"
+          }
+        ]
       }
     ],
     "StopFailure": [
@@ -135,6 +143,24 @@
           {
             "type": "command",
             "command": "~/i446-monorepo/scripts/backup-health-alert.sh 2>/dev/null"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh working >/dev/null 2>&1"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh release >/dev/null 2>&1"
           }
         ]
       }

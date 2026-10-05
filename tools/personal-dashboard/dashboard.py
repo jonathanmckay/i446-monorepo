@@ -2508,17 +2508,31 @@ HTML = """<!DOCTYPE html>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
-  <div class="card">
+  <div class="card" style="display:none">
     <h2><span id="pointsLabel">Points / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
     <div class="summary" id="pointsSummary"></div>
   </div>
-  <div class="card">
+  <div class="card" style="display:none">
     <h2 title="Cells detected changed outside the excel-http pipeline (ledger chain breaks + acked manual edits), distinct cells per bucket. Detection is lazy: an edit surfaces on that cell's next pipeline write or the hourly audit — a lower bound, and sync clobbers register too."><span id="neonEditsLabel">Neon Manual Edits / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap xs"><canvas id="neonEditsChart"></canvas></div>
     <div class="summary" id="neonEditsSummary"></div>
   </div>
+  <!-- Points/time by project or source (replaced Points and Manual Edits
+       charts 2026-10-05). Same page as /slice, embedded; it reports its
+       height so the frame never scrolls. -->
+  <div class="card" style="grid-column: 1 / -1; padding: 0;">
+    <iframe id="sliceFrame" src="/slice?embed=1" title="slice" scrolling="no"
+            style="width:100%; height:900px; border:0; display:block; background:transparent;"></iframe>
+  </div>
 </div>
+<script>
+window.addEventListener('message', e => {
+  if (e.data && e.data.sliceHeight) {
+    document.getElementById('sliceFrame').style.height = e.data.sliceHeight + 'px';
+  }
+});
+</script>
 
 <script>
 """ + _SHARED_JS_HEAD + """
@@ -2839,6 +2853,8 @@ function renderEmailChart(data) {
   &nbsp;·&nbsp;
   <a href="/f695" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ f695 weekly reports</a>
   &nbsp;·&nbsp;
+  <a href="/jmreads" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ jmreads</a>
+  &nbsp;·&nbsp;
   <a href="https://m5x2.github.io/appfolio-dashboards-site/" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ m5x2 AppFolio dash</a>
 </div>
 
@@ -2865,10 +2881,19 @@ SLICE_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+{% if not embed %}
 <div class="topbar">
   <h1>JM DASH · SLICE</h1>
   <a class="nav-link" href="/">← DASH</a>
 </div>
+{% else %}
+<style>body { margin: 0; padding: 0; background: transparent; } body > .card { margin: 0; }</style>
+<script>
+// Embedded in the main dash: report height so the parent sizes the iframe.
+new ResizeObserver(() => parent.postMessage({sliceHeight: document.documentElement.scrollHeight}, '*'))
+  .observe(document.body);
+</script>
+{% endif %}
 <div class="card">
   <div class="controls">
     <span><span class="ctl-label">METRIC</span><span class="seg" data-key="metric"><button data-v="points" class="on">POINTS</button><button data-v="time">TIME</button></span></span>
@@ -3320,7 +3345,7 @@ def api_slice():
 
 @app.route("/slice")
 def slice_page():
-    return render_template_string(SLICE_HTML)
+    return render_template_string(SLICE_HTML, embed=request.args.get("embed") == "1")
 
 
 @app.route("/")

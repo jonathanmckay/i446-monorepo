@@ -420,6 +420,14 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     # Woken (2026-10-05): a delay or block label that passed today floats the
     # task to the top of its tier (stable), same as terminal dtd's _float().
     woken = _woken_ids(snoozed_ids)
+    # Agent claims (/claim, 2026-10-05): ids a Claude session is mid-turn on,
+    # drawn grey with 😈 (same store as terminal dtd; see did/agent_claims.py).
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "did"))
+        import agent_claims
+        agent_ids = agent_claims.working_ids()
+    except Exception:
+        agent_ids = set()
 
     def is_woke(t):
         if t.get("id") is not None and str(t["id"]) in woken:
@@ -473,6 +481,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "recurring": bool(t.get("recurring")),
             "variablePrompt": variable_prompt(raw),
             "variableRate": variable_rate(raw),
+            "agent": tid is not None and str(tid) in agent_ids,
         })
     return out
 
@@ -1007,6 +1016,11 @@ PAGE = r"""<!doctype html>
     border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
   main { padding:2px 0 calc(env(safe-area-inset-bottom) + 60px); }
   .row { position:relative; overflow:hidden; }
+  .row.agent .line { color:#6e6e6e !important; }
+  #agentSpin { color:var(--dim); display:none; }
+  #agentSpin.on { display:inline; }
+  #agentSpin i { display:inline-block; font-style:normal; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .row .track { position:absolute; inset:0; background:var(--go); color:#003; font-weight:800;
     display:flex; align-items:center; padding-left:16px; opacity:0; }
   .row .track::before { content:"✓ done  +" ; white-space:pre; }
@@ -1061,7 +1075,7 @@ PAGE = r"""<!doctype html>
 <body>
 <header>
   <div class="brand">d<b>t</b>d</div>
-  <div class="tally"><b id="tot">0</b> 分 · <span id="cnt">0</span> done</div>
+  <div class="tally"><b id="tot">0</b> 分 · <span id="cnt">0</span> done <span id="agentSpin"><i>◐</i> 😈<span id="agentN"></span></span></div>
   <button id="reload">↻</button>
 </header>
 <main id="list"><div class="loading">loading…</div></main>
@@ -1131,6 +1145,10 @@ async function load(refresh){
 }
 
 function render(tasks){
+  const nAgent = tasks.filter(t=>t.agent).length;
+  const spin = document.getElementById('agentSpin');
+  if(spin){ spin.classList.toggle('on', nAgent>0);
+    document.getElementById('agentN').textContent = nAgent>1 ? ' ×'+nAgent : ''; }
   if(!tasks.length){ list.innerHTML = '<div class="empty">🎉 nothing left for today</div>'; return; }
   list.innerHTML = '';
   for(const t of tasks) list.appendChild(makeRow(t));
@@ -1138,7 +1156,7 @@ function render(tasks){
 
 function makeRow(t){
   const row = document.createElement('div');
-  row.className = 'row';
+  row.className = 'row' + (t.agent ? ' agent' : '');
   const track = document.createElement('div');
   track.className = 'track';
   track.innerHTML = '<span class="p">'+(t.points||0)+' 分</span>';
@@ -1159,7 +1177,7 @@ function makeRow(t){
   line.style.color = t.color;
   const ttl = document.createElement('span');
   ttl.className = 'ttl';
-  ttl.textContent = (t.recurring?'↻ ':'') + t.title;
+  ttl.textContent = (t.agent?'😈 ':'') + (t.recurring?'↻ ':'') + t.title;
   const est = document.createElement('span');
   est.className = 'est';
   est.textContent = t.est || '';

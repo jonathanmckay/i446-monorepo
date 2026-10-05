@@ -1187,7 +1187,7 @@ zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tarm-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # ctrl-v on a picker row (already armed) = close the picker
 if [[ "\$1" == BLOCK:* ]]; then
-  rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode"
+  rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode" "\$BLOCKPICK.days"
   echo "↩ back to list" > "\$HDR"
   exit 0
 fi
@@ -1232,6 +1232,7 @@ lbl="\$clean"
 # Mode marker (2026-10-04): ctrl-d opens the unified schedule screen with the
 # day-defer rows FIRST (so a bare enter keeps ctrl-d's old blank-prompt
 # meaning, "next occurrence"); ctrl-v/k keep minutes/blocks first.
+rm -f "\$BLOCKPICK.days"
 printf '%s' "\${DTD_PICK_MODE:-delay}" > "\$BLOCKPICK.mode"
 printf '%s\n' "\$@" > "\$BLOCKPICK"
 echo "📅 schedule \$lbl (enter picks · type N + enter = defer N days · esc back)" > "\$HDR"
@@ -1251,7 +1252,7 @@ if [[ "\$glyph" == custom ]]; then
   exit 0
 fi
 ids=(\$(cat "\$BLOCKPICK" 2>/dev/null))
-rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode"
+rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode" "\$BLOCKPICK.days"
 if [[ "\$glyph" == "cancel" || \${#ids[@]} -eq 0 ]]; then
   echo "↩ back to list" > "\$HDR"
   exit 0
@@ -1379,7 +1380,7 @@ cat > "$DTD_BACK" << BACKEOF
 #!/bin/zsh
 if [[ -e "$DTD_BLOCKPICK" ]]; then
   [[ -e "$DTD_BLOCKPICK.custom" ]] && print -n 'change-prompt(> )'
-  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom"
+  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days"
   echo "↩ back to list" > "$DTD_HDR"
 elif [[ -z "\$1" ]]; then
   print -n abort
@@ -1731,6 +1732,17 @@ def _woke(t):
     return _bh is not None and _now_hour >= _bh
 def _float(tier):
     return sorted(tier, key=lambda t: not _woke(t))   # stable
+# Agent claims (/claim, 2026-10-05): tasks a Claude session is mid-turn on
+# render grey with a 😈 prefix, in place. Store + staleness rules live in
+# tools/did/agent_claims.py; the watcher reloads when the claims dir changes.
+_agent_ids = set()
+try:
+    _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
+    import agent_claims as _ac
+    _agent_ids = _ac.working_ids()
+except Exception:
+    pass
+AGENT_GREY = '\x1b[38;2;110;110;110m'
 
 # ── BLOCK-PICKER MODE (ctrl-v, 2026-07-27): when the arm file holds pending
 # ids, the list IS the picker — block rows instead of tasks. Rendered by the
@@ -1766,6 +1778,20 @@ if _armed:
                  (f'{GREEN}📅 2天{_R}', 'd2'),
                  (f'{GREEN}📅 7天{_R}', 'd7'),
                  (f'{GREEN}✎ delay N days: type a number…{_R}', 'custom')]
+    _days_q = ''
+    try:
+        _days_q = open(_bp + '.days').read().strip()
+    except Exception:
+        pass
+    if _days_q.isdigit():
+        # Typed bare number = N days, the only row shown (see domainsearch).
+        _n = int(_days_q)
+        if _n == 0:
+            print(f'{GREEN}↻ 0 / next occurrence / one day{_R}\tBLOCK:d0')
+        else:
+            _when = (_dt.date.today() + _dt.timedelta(days=_n)).strftime('%a %b %-d')
+            print(f'{GREEN}📅 {_n}天 → {_when}{_R}\tBLOCK:d{_n}')
+        sys.exit(0)
     if _mode == 'days':
         for _t, _g in _day_rows:
             print(f'{_t}\tBLOCK:{_g}')
@@ -1988,6 +2014,9 @@ for t in unique:
         prefix = f'▶ {elapsed}m · {dom_tag}'
     else:
         prefix = repeat + dom_tag
+    if str(t.get('id', '')) in _agent_ids:
+        prefix = '😈 ' + prefix
+        color = AGENT_GREY
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)
@@ -2129,6 +2158,27 @@ if [[ -s "$DTD_BLOCKPICK" ]]; then
       strftime -s _d '%a %b %-d' \$(( EPOCHSECONDS + _n * 86400 ))
       echo "↵ delay \$_n day\$( (( _n == 1 )) || print -n s) → \$_d" > "$DTD_HDR"
     fi
+  fi
+  # A bare number means DAYS, never a time (2026-10-05: "4" fuzzy-matched the
+  # 14:00 申 row and Enter on it looked like the default). While the query is
+  # all digits the list generator shows ONLY the day row (.days flag); times
+  # take a colon ("16:") or the block name ("申"/"shen"). Reload only when the
+  # flag actually changes, so ordinary typing costs nothing.
+  _want=""
+  [[ "\$_n" == <-> ]] && _want="\$_n"
+  _have="\$(cat "$DTD_BLOCKPICK.days" 2>/dev/null)"
+  [[ "\$_want" == "\$_have" ]] && exit 0
+  if [[ -n "\$_want" ]]; then printf '%s' "\$_want" > "$DTD_BLOCKPICK.days"
+  else rm -f "$DTD_BLOCKPICK.days"; fi
+  port="\$(cat "$DTD_PORT" 2>/dev/null)"
+  [[ -z "\$port" ]] && exit 0
+  today="\$(date +%Y-%m-%d)"
+  reload_cmd="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
+  if [[ -n "\$FZF_API_KEY" ]]; then
+    curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$port" \\
+      --data "reload(\$reload_cmd)" >/dev/null 2>&1
+  else
+    curl -s -XPOST "localhost:\$port" --data "reload(\$reload_cmd)" >/dev/null 2>&1
   fi
   exit 0
 fi
@@ -2937,8 +2987,20 @@ TALLY_PID=$!
       python3 "$HOME/i446-monorepo/tools/did/mark-completed.py" --absorb-remote >/dev/null 2>&1
       touch "$CACHE" 2>/dev/null
     fi
+    # Agent claims (/claim, 2026-10-05): a session going working/idle rewrites
+    # its state file via rename, which advances the claims dir mtime (here or
+    # via Syncthing from another host). Force the reload below so the task
+    # re-greys / un-greys. (Not `touch $CACHE`: that would make a stale task
+    # cache look fresh to did-fast.)
+    ac_reload=""
+    cur_ac=$(stat -f %m "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)
+    if [[ -n "$cur_ac" && "$cur_ac" != "${last_ac:-}" ]]; then
+      [[ -n "${last_ac:-}" ]] && ac_reload=1
+      last_ac="$cur_ac"
+    fi
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
-    [[ -z "$cur_m" || "$cur_m" == "$last_m" ]] && continue
+    [[ -z "$cur_m" ]] && continue
+    [[ "$cur_m" == "$last_m" && -z "$ac_reload" ]] && continue
     last_m="$cur_m"
     cp "$CACHE" "$DTD_CACHE_FILE" 2>/dev/null
     # Rebuild the completed-today overlay from the LIVE $DONE before reloading.
@@ -3049,7 +3111,7 @@ while true; do
   # an execute() binding. (Supersedes the --no-mouse + alt-scroll-off workaround,
   # which stopped the ^[[A^[[B flood but also killed scrolling — bugs 07-14/15.)
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode"   # never relaunch into a stale schedule screen
+  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.days"   # never relaunch into a stale schedule screen
   fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --info=inline-right \
       --input-border=horizontal \
@@ -3214,4 +3276,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"

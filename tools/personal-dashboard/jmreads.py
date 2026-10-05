@@ -30,6 +30,7 @@ DEFAULT_GOAL = 52
 FEED_LIMIT = 60
 API_TTL = 600            # seconds; the vault changes a few times a day at most
 COVER_MISS_RETRY_DAYS = 7
+SYNC_COVER_LIMIT = 5        # new covers fetched inline before responding
 
 _cache: dict = {"t": 0.0, "data": None}
 _cache_lock = threading.Lock()
@@ -417,9 +418,17 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
 
     shown = {id(b) for b in reading} | {id(b) for b in read} | {id(e["book"]) for e in events}
     if covers:
-        missing = attach_covers([b for b in books if id(b) in shown])
+        shown_books = [b for b in books if id(b) in shown]
+        missing = attach_covers(shown_books)
         if missing:
-            _background_fill(missing)
+            # A few new books (the usual case: one just added via /book) are
+            # fetched inline so the very next page load has their covers;
+            # a large backlog goes to the background thread instead.
+            if len(missing) <= SYNC_COVER_LIMIT and not _filling.is_set():
+                fill_covers(missing)
+                missing = attach_covers(shown_books)
+            if missing:
+                _background_fill(missing)
 
     goal = READING_GOALS.get(year, DEFAULT_GOAL)
     day_of_year = (today - date(year, 1, 1)).days + 1

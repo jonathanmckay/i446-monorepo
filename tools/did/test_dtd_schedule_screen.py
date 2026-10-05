@@ -317,3 +317,76 @@ def test_typing_a_number_on_delay_screen_says_delay_n_days():
             assert (tmp / "hdr").read_text() == "-", "main list: a number is just a search"
         finally:
             Path(ds).unlink(missing_ok=True)
+
+
+# --- bare number = days only (2026-10-05) -------------------------------------
+# "when I type 4, it defaults to 14:00": the query "4" fuzzy-matched the 申
+# 14:00-16:00 row, so the screen showed a time as the pick. While the query is
+# all digits the screen must show ONLY the N-days row.
+
+def _listgen_payload():
+    i0 = next(i for i, l in enumerate(LINES) if l.strip() == "cat > \"$DTD_LIST\" << 'LISTEOF'")
+    ps = next(i for i in range(i0, len(LINES)) if LINES[i].strip().startswith('python3 -c "'))
+    pe = next(i for i in range(ps + 1, len(LINES)) if LINES[i].startswith('" "$1"'))
+    return "\n".join(LINES[ps + 1:pe])
+
+
+def _picker_rows(tmp, days_flag):
+    import json
+    def w(n, t):
+        (tmp / n).write_text(t)
+        return str(tmp / n)
+    cache = w("cache.json", json.dumps({"updated": "t", "today": [], "关键路径": [
+        {"id": "T1", "content": "a task (10) [5]", "labels": ["i9"], "priority": 3,
+         "due": "2026-10-05", "recurring": False}]}))
+    (tmp / "removed.ids").write_text("")
+    bp = w("blockpick", "T1\n")
+    (tmp / "blockpick.days").unlink(missing_ok=True)
+    if days_flag is not None:
+        w("blockpick.days", days_flag)
+    (tmp / "lg.py").write_text(_listgen_payload())
+    r = subprocess.run([sys.executable, str(tmp / "lg.py"), cache,
+                        w("done.json", '{"date": "2026-10-05", "names": [], "ids": {}}'),
+                        w("removed", ""), "2026-10-05", "120", w("skipped", ""), w("timer", ""),
+                        w("view", ""), bp, w("domain", "")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return [l.rsplit("\t", 1)[-1] for l in r.stdout.splitlines() if l.strip()]
+
+
+def test_digit_query_shows_only_the_days_row():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        assert _picker_rows(tmp, "4") == ["BLOCK:d4"]
+        assert _picker_rows(tmp, "0") == ["BLOCK:d0"]
+        full = _picker_rows(tmp, None)
+        assert "BLOCK:+10m" in full and "BLOCK:cancel" in full, "no flag = full picker"
+
+
+def test_domainsearch_sets_and_clears_days_flag():
+    s = next(i for i, l in enumerate(LINES) if l.startswith("DTD_DOMAINSEARCH="))
+    e = next(i for i in range(s, len(LINES)) if LINES[i] == "EOF")
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        (tmp / "g.zsh").write_text(f'#!/bin/zsh\nDTD_ID="tdsd"; DTD_BLOCKPICK="{tmp}/bp"; DTD_HDR="{tmp}/hdr"; '
+                                   f'DTD_PORT="{tmp}/noport"\n' + "\n".join(LINES[s:e + 1]) + "\n")
+        subprocess.run(["zsh", str(tmp / "g.zsh")], check=True)
+        ds = "/tmp/dtd-tdsd.domainsearch.sh"
+        flag = tmp / "bp.days"
+        try:
+            (tmp / "bp").write_text("A1\n")
+            subprocess.run(["zsh", ds, "4"], check=True)
+            assert flag.read_text() == "4"
+            subprocess.run(["zsh", ds, "14"], check=True)
+            assert flag.read_text() == "14"
+            subprocess.run(["zsh", ds, "16:"], check=True)
+            assert not flag.exists(), "a colon means a time: full picker back"
+            subprocess.run(["zsh", ds, "4"], check=True)
+            subprocess.run(["zsh", ds, ""], check=True)
+            assert not flag.exists()
+        finally:
+            Path(ds).unlink(missing_ok=True)
+
+
+def test_days_flag_cleared_wherever_picker_state_is():
+    assert SRC.count('"\\$BLOCKPICK.days"') >= 3  # arm (fresh), close, apply
+    assert '"$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days"' in SRC  # esc back

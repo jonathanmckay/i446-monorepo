@@ -225,6 +225,43 @@ def _post(port: int, action: str) -> bool:
         return False
 
 
+# Agent spinner (/claim, 2026-10-05): while any claimed task is mid-turn, the
+# top line carries a spinner + 😈 + the task, so the motion lives here and the
+# list rows stay static (grey). Claims are re-read once a second, not per tick.
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+CLAIMS_EVERY = 1.0
+
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import agent_claims  # type: ignore
+except Exception:
+    agent_claims = None
+
+
+def agent_suffix(claims: list[str], tick: int) -> str:
+    """'  ⠹ 😈 task' (one claim) / '  ⠹ 😈 ×2' (several) / '' (none)."""
+    if not claims:
+        return ""
+    frame = SPIN[tick % len(SPIN)]
+    if len(claims) == 1:
+        name = claims[0]
+        for ch in "()[]{}":
+            name = name.replace(ch, "")
+        name = " ".join(name.split())[:40]
+        return f"   {frame} 😈 {name}"
+    return f"   {frame} 😈 ×{len(claims)}"
+
+
+def _working_names() -> list[str]:
+    if agent_claims is None:
+        return []
+    try:
+        return sorted(r.get("task", "") for r in agent_claims.load().values()
+                      if r.get("working"))
+    except Exception:
+        return []
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         return
@@ -252,6 +289,9 @@ def main() -> None:
     # with no PID-reuse race, unlike polling an external PID by number.
     parent_pid = os.getppid()
     proc_start = time.time()
+    tick = 0
+    agents: list[str] = []
+    last_claims = 0.0
 
     while True:
         if not port_file.exists():   # picker exited and cleaned up
@@ -306,6 +346,12 @@ def main() -> None:
                 body = f"{ansi}{body}\033[0m"
         else:
             body = "▶ (idle)"
+
+        if now - last_claims >= CLAIMS_EVERY:
+            last_claims = now
+            agents = _working_names()
+        tick += 1
+        body += agent_suffix(agents, tick)
 
         if port is not None:
             ok = _post(port, f"change-footer({body})")
