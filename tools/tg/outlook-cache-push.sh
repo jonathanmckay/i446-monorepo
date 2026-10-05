@@ -3,6 +3,16 @@
 # (the only Mac with Agency/work auth) and push it to Ix, where Janus runs
 # with JANUS_OUTLOOK_CACHE_ONLY=1. Straylight cron, every 5 min. 2026-10-04.
 set -u
+# INTERACTIVE ONLY (2026-10-04). Unattended runs (this was a */5 cron job)
+# start a fresh Agency calendar server every time -- Agency servers die with
+# the process that started them -- and each fresh server re-runs Microsoft
+# interactive sign-in, so a lapsed token meant a new sign-in prompt every 5
+# minutes. Run it by hand from a Straylight terminal; it refuses without a
+# terminal unless OUTLOOK_PUSH_UNATTENDED=1 is set deliberately.
+if [[ ! -t 0 && "${OUTLOOK_PUSH_UNATTENDED:-0}" != "1" ]]; then
+  echo "outlook-cache-push: refusing to run without a terminal (would trigger Microsoft sign-in prompts)" >&2
+  exit 0
+fi
 cd "$HOME/i446-monorepo/tools/tg" || exit 1
 python3 - <<'PY'
 import datetime as dt, sys
