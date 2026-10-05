@@ -186,6 +186,38 @@ def _ol_search(title: str, author: str) -> str | None:
     return None
 
 
+def _isbn10(isbn: str) -> str | None:
+    isbn = re.sub(r"[^0-9Xx]", "", isbn or "")
+    if len(isbn) == 10:
+        return isbn.upper()
+    if len(isbn) == 13 and isbn.startswith("978"):
+        core = isbn[3:12]
+        ck = (11 - sum((10 - i) * int(c) for i, c in enumerate(core)) % 11) % 11
+        return core + ("X" if ck == 10 else str(ck))
+    return None
+
+
+def _amazon(isbn: str) -> str | None:
+    """Amazon's public cover image by ISBN-10. A missing cover comes back as a
+    tiny placeholder, which _image()'s size check rejects."""
+    i10 = _isbn10(isbn)
+    return f"https://images-na.ssl-images-amazon.com/images/P/{i10}.01.LZZZZZZZ.jpg" if i10 else None
+
+
+def _ol_isbns(title: str, author: str) -> list[str]:
+    """ISBNs of editions matching title AND author (never title alone)."""
+    if not author:
+        return []
+    q = {"title": title, "author": author, "limit": "3", "fields": "isbn"}
+    d = _json("https://openlibrary.org/search.json?" + urllib.parse.urlencode(q))
+    out: list[str] = []
+    for doc in (d or {}).get("docs", []):
+        for i in doc.get("isbn", []):
+            if _isbn10(i) and i not in out:
+                out.append(i)
+    return out[:6]
+
+
 def fetch_cover(b: dict) -> tuple[bytes | None, str]:
     title = re.sub(r":.*$", "", b["title"]).strip()
     author = (b.get("author") or "").split(",")[0].strip()
@@ -193,8 +225,24 @@ def fetch_cover(b: dict) -> tuple[bytes | None, str]:
     steps = []
     if isbn:
         steps.append(("openlibrary-isbn", lambda: f"https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg?default=false"))
+        steps.append(("amazon-isbn", lambda: _amazon(isbn)))
         steps.append(("google-isbn", lambda: _gbooks_thumb(f"isbn:{isbn}")))
-    steps.append(("openlibrary-search", lambda: _ol_search(b["title"], b.get("author", ""))))
+    # Title variants: the part before a colon (subtitle dropped), the part
+    # after it (review titles are "<headline>: <book>"), and with any
+    # "(Series, #n)" suffix removed.
+    variants = []
+    for t in (b["title"], b["title"].split(":", 1)[-1], re.sub(r"\s*\([^)]*#\d+\)\s*$", "", b["title"])):
+        t = re.sub(r":.*$", "", t).strip()
+        if t and t not in variants:
+            variants.append(t)
+    for t in variants:
+        steps.append(("openlibrary-search", lambda t=t: _ol_search(t, b.get("author", ""))))
+    # Editions found by title+author, tried on Amazon (covers OL lacks).
+    for t in variants:
+        steps.append(("amazon-ol-edition", lambda t=t: next(
+            (u for u in (_amazon(i) for i in _ol_isbns(t, author)) if u and _image(u)), None)))
+    # No title-only search: without the author it matched the wrong book 4 of 4
+    # times (2026-10-05). A text card beats a wrong cover.
     steps.append(("google-search", lambda: _gbooks_thumb(
         f'intitle:"{title}"' + (f' inauthor:"{author}"' if author else ""))))
     for name, url_fn in steps:
@@ -465,8 +513,10 @@ __SHARED_STYLE__
 <div class="topbar">
   <h1>JM · READS</h1>
   <span>
+    <a class="nav-link" href="http://ix:5555">JM-AI-DASH</a>
+    <a class="nav-link" href="http://ix:5556">M5X2 AI</a>
     <a class="nav-link" href="/more">MORE</a>
-    <a class="nav-link" href="/">← MAIN</a>
+    <a class="nav-link" href="/">← JM DASHBOARD</a>
   </span>
 </div>
 
