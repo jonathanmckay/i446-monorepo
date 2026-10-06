@@ -7518,5 +7518,35 @@
     "unit": "B110",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-06",
+    "effective": "2026-10-05",
+    "kind": "moveout",
+    "unit_id": "354",
+    "prop": "k104- LeFevre",
+    "unit": "314-10",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-06",
+    "effective": "2026-10-06",
+    "kind": "movein",
+    "unit_id": "1304",
+    "prop": "c702",
+    "unit": "C102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-06",
+    "effective": "2026-10-24",
+    "kind": "leased",
+    "unit_id": "1133",
+    "prop": "o155-Elm",
+    "unit": "F",
+    "tenant": null,
+    "baseline": false
   }
 ]
