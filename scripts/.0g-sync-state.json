@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-06T08:00:03.696085-07:00"
+  "tasks": {
+    "500分 i9": {
+      "todoist_id": "6hhGWggGWMqrCwgR",
+      "minutes": 50
+    },
+    "1.5 future fit + comment": {
+      "todoist_id": "6hhGWgfhvHjjGJVR",
+      "minutes": 40
+    },
+    "enjoy dinner w/dwight": {
+      "todoist_id": "6hhGWghJm6QM5GG2",
+      "minutes": 35
+    }
+  },
+  "last_sync": "2026-10-06T10:00:03.720384-07:00"
 }
