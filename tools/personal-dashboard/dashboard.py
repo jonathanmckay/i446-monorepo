@@ -403,9 +403,11 @@ CACHE_CARDS = [
     # sum, each itself a SUM of the two per-domain cells) — replaced the
     # separate hcbp/hcbc cards 2026-08-10 per JM; extended from Q3-only to
     # Q2+Q3 2026-09-06 per JM so the card reflects the running total across
-    # both quarters, not just the current one.
-    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q2+Q3",
-     "color": "#f81d78", "extra": [{"col": "X", "row": 375, "sheet": "hcbi"}]},
+    # both quarters, not just the current one. Q4 (hcbi!X381) added
+    # 2026-10-06 per JM, label now Q2-Q4.
+    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q2-Q4",
+     "color": "#f81d78", "extra": [{"col": "X", "row": 375, "sheet": "hcbi"},
+                                   {"col": "X", "row": 381, "sheet": "hcbi"}]},
     {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
