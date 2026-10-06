@@ -335,6 +335,11 @@ def _word_overlap(query: str, content: str) -> float:
     return len(qt & ct) / len(qt)
 
 
+# Mirrors did-fast.py's ADVANCE_ALLOWED: daily habits that may be completed
+# one day early (their card may be due tomorrow when closed).
+ADVANCE_ALLOWED_0N = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
+
+
 class AlreadyDoneThisPeriod(Exception):
     """The matched recurring card's due date is past the period being credited:
     it was already closed for that period and rolled forward."""
@@ -562,8 +567,22 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
         except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
             print(f"  · night hcmc toggl: error ({e})", file=sys.stderr)
 
-    # Close Todoist
-    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "0neon", name, d.get("aliases", []))
+    # Close Todoist -- but never a card that already rolled past the credited
+    # day: it was closed for that day already, and closing again advances an
+    # "every day" recurrence one more day, so the habit drops off dtd the next
+    # morning (bug 2026-10-06: 0g reached due 10/07 on 10/06, unmarked). Same
+    # guard as run_1n's not_due_after and did-fast's future-due skip, including
+    # did-fast's one-day ADVANCE_ALLOWED exception.
+    credit_day = _target_date_obj(target_date)
+    if name.lower() in ADVANCE_ALLOWED_0N:
+        credit_day += timedelta(days=1)
+    try:
+        closed, closed_id = _find_and_close_todoist(
+            d.get("todoist_label") or "0neon", name, d.get("aliases", []),
+            not_due_after=credit_day)
+    except AlreadyDoneThisPeriod as e:
+        print(f"  = {name} card already closed for today: {e}; left alone")
+        closed, closed_id = None, None
 
     # Toggl entry if time range
     if time_range:
