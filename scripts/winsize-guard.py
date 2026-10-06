@@ -120,4 +120,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        rc = main()
+    except Exception:  # noqa: BLE001 -- a guard crash must leave evidence
+        import traceback
+        log("guard crashed:\n" + traceback.format_exc())
+        raise
+    sys.exit(rc)

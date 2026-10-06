@@ -1386,6 +1386,8 @@ if [[ -e "$DTD_BLOCKPICK" ]]; then
   rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days"
   echo "↩ back to list" > "$DTD_HDR"
 elif [[ -z "\$1" ]]; then
+  zmodload zsh/datetime 2>/dev/null
+  print -- "\$EPOCHREALTIME\tback-abort\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
   print -n abort
 fi
 exit 0
@@ -3180,9 +3182,13 @@ while true; do
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
+  _fzf_rc=$?
   task="$fzf_output"
 
   if [[ -z "$task" ]]; then
+    # Exit forensics (2026-10-06, "dtd is randomly exiting"): 130 = esc/ctrl-c
+    # abort (back-abort line just before it), 2 = fzf error, other = unexpected.
+    print -- "$EPOCHREALTIME\tfzf-exit\trc=$_fzf_rc" >> "$DTD_TIMING" 2>/dev/null
     break
   fi
 
