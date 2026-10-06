@@ -520,6 +520,7 @@ class State:
         # Toggl actually had filled (2026-07-15).
         self.entries_known = False
         self.entries_yday: list[dict] = []  # yesterday's (for 卯 sleep total)
+        self.entries_day = None  # date STATE.entries belongs to (None = unloaded)
         self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
         self.day_offset = 0  # 0=today, -1=yesterday, … (≤0; for filling gaps)
@@ -821,6 +822,30 @@ def _read_day_cache(date_iso: str) -> list[dict] | None:
              "end_dt": dt.datetime.fromisoformat(e["end_dt"])} for e in raw]
 
 
+def _load_viewed_day_cache(force=False) -> None:
+    """Point STATE.entries at the VIEWED day's last-confirmed cache when no
+    live fetch can run. force=False is the skipped-fetch path: a no-op while
+    the loaded entries already belong to the viewed day. With no cache, clear
+    and mark unconfirmed, so gap flashing (and render_morning's warning)
+    don't read "haven't fetched yet" as "confirmed empty" -- and so another
+    day's entries are never drawn at their clock times on this one."""
+    viewed = view_now().date()
+    if not force and STATE.entries_day == viewed:
+        return
+    cached = _read_day_cache(viewed.isoformat())
+    cached_yday = _read_day_cache((viewed - dt.timedelta(days=1)).isoformat())
+    if cached is not None:
+        STATE.entries = cached
+        STATE.entries_yday = cached_yday or []
+        STATE.entries_known = True
+    else:
+        if STATE.entries_day != viewed:
+            STATE.entries = []
+            STATE.entries_yday = cached_yday or []
+        STATE.entries_known = False
+    STATE.entries_day = viewed
+
+
 def fetch_today(force=False):
     """Reload the viewed day's Toggl entries.
 
@@ -830,6 +855,11 @@ def fetch_today(force=False):
     rapid Ctrl+←/→ scrubbing or back-to-back commands don't each hit the API. All
     fetches are skipped during a post-402 cooldown."""
     if _toggl_blocked():
+        # Skipped, not failed: still never leave ANOTHER day's entries on
+        # screen (2026-10-06: a 402 cooldown spanning midnight kept showing
+        # 10/5's entries at their clock times on 10/6, and a restart during
+        # the cooldown showed none at all, despite a confirmed 10/6 cache).
+        _load_viewed_day_cache()
         return
     # Coalesce bursts — but a 0 sentinel means "never fetched", so the first
     # (startup) read always runs even when monotonic() is still small.
@@ -868,6 +898,7 @@ def fetch_today(force=False):
             })
         out.sort(key=lambda x: x["start_dt"])
         STATE.entries = out
+        STATE.entries_day = today
         STATE.entries_known = True
         STATE.entries_yday = yout
         STATE.last_toggl_fetch = time.monotonic()
@@ -884,18 +915,7 @@ def fetch_today(force=False):
         # reads as a confident empty day (user report 2026-09-07). Fall back
         # to the specific viewed day's own last-CONFIRMED cache instead, if
         # one exists, rather than leaving mismatched-day data in place.
-        viewed = view_now().date()
-        cached = _read_day_cache(viewed.isoformat())
-        cached_yday = _read_day_cache((viewed - dt.timedelta(days=1)).isoformat())
-        if cached is not None:
-            STATE.entries = cached
-            STATE.entries_yday = cached_yday or []
-            STATE.entries_known = True
-        else:
-            # Truly nothing to fall back on -- mark unconfirmed so gap
-            # flashing (and render_morning's own warning) don't treat
-            # "haven't fetched yet" as "confirmed empty".
-            STATE.entries_known = False
+        _load_viewed_day_cache(force=True)
         if "402" in str(e):
             _note_rate_limit()
         else:
