@@ -15,6 +15,9 @@
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
+# ctrl-o detail pane (2026-10-06): full title, description, comments, links,
+# fetched live per task (the snapshot cache carries none of these).
+DTD_DETAIL="$HOME/i446-monorepo/tools/did/task-detail.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 # Staleness self-check (mirrors janus.py's _code_is_stale): dtd.sh only reads
@@ -2828,7 +2831,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-g: edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o: details | ctrl-g: edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -3150,6 +3153,8 @@ while true; do
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
+      --preview "python3 $DTD_DETAIL {2}" --preview-window "up,55%,hidden,wrap,border-bottom" \
+      --bind "ctrl-o:toggle-preview" \
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "esc:transform($DTD_BACK {q})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-c:transform($DTD_BACK {q})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
