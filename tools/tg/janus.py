@@ -4875,6 +4875,41 @@ def _is_points_log_cmd(part: str) -> bool:
     return bool(_POINTS_LOG_CMD_RE.match(part.strip()))
 
 
+_D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
+_ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
+
+
+def parse_d_command(text: str) -> tuple[str, str] | None:
+    """`/d <task>` (2026-10-06): add <task> to the todo list AND start working
+    on it now. Returns (todoist_content, timer_command): the content keeps
+    (N)/[N] and @code (agent_claims.new_task turns @code into the label); the
+    timer drops the bracketed annotations so tg-fast doesn't name a timer
+    "... [20]". None when the text isn't a /d command."""
+    m = _D_CMD_RE.match(text.strip())
+    if not m:
+        return None
+    content = m.group(1).strip()
+    timer = " ".join(_ANNOT_RE.sub("", content).split())
+    if not timer or not [w for w in timer.split() if not w.startswith("@")]:
+        return None
+    return content, timer
+
+
+def create_todo_task(content: str) -> str:
+    """Create a due-today Todoist task through agent_claims.new_task (the
+    same path as Claude's `/d new`). Returns a short status for the flash."""
+    try:
+        import importlib.util as _ilu
+        _p = Path("~/i446-monorepo/tools/did/agent_claims.py").expanduser()
+        _spec = _ilu.spec_from_file_location("janus_agent_claims", _p)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        task = _mod.new_task(content)
+        return f"+todo {task.get('content', content)}"
+    except Exception as e:  # noqa: BLE001 — the timer still starts
+        return f"todo err: {e}"
+
+
 def run_tg_fast(text: str) -> str:
     """A single tg-fast.py call can make several Toggl API requests in
     sequence (e.g. a range create: trim_range's get_entries + the create
@@ -5919,6 +5954,26 @@ def _(event):
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
+        return
+
+    d_cmd = parse_d_command(text)
+    if d_cmd:
+        if STATE.day_offset:  # any past-day view
+            flash("/d starts work now — go back to today first", 5.0)
+            return
+        content, timer = d_cmd
+        _optimistic_start(" ".join(w for w in timer.split() if not w.startswith("@")))
+        flash(f"$ /d {content}")
+        event.app.invalidate()
+
+        async def _d_run():
+            todo, tg = await asyncio.gather(asyncio.to_thread(create_todo_task, content),
+                                            asyncio.to_thread(run_tg_fast, timer))
+            flash(f"{todo} | {tg}", 6.0)
+            event.app.invalidate()
+            await _confirm_after_tg(event.app)
+
+        event.app.create_background_task(_d_run())
         return
 
     # Comma splits multiple /tg calls (2026-08-05 user request) — mirrors

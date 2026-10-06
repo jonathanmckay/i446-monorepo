@@ -1,13 +1,15 @@
 ---
 name: "d"
-description: "Tie this session to a dtd task (→dtd): moves it to the top of dtd with a live spinner while you work, then does the request. `/d new <task>` creates the task first, for work that isn't in dtd yet. Usage: /d <task>[: request] | /d new <task>[: request] | /d off"
+description: "Tie this session to a dtd task (→dtd): moves it to the top of dtd with a live spinner while you work, then does the request. No match in dtd = it creates the task first, then claims it. Usage: /d <task>[: request] | /d new <task>[: request] | /d off"
 user-invocable: true
 ---
 
 # /d — attach this session to a dtd task (short form of /claim)
 
-- `/d <task>[: request]` claims an existing dtd task.
-- `/d new <task>[: request]` creates `<task>` in Todoist (due today; an `@code`
+- `/d <task>[: request]` claims the matching dtd task; if NOTHING matches it
+  creates `<task>` in Todoist (due today) and claims that (default since
+  2026-10-06).
+- `/d new <task>[: request]` always creates `<task>` in Todoist (due today; an `@code`
   token becomes its label), then claims it, so work that isn't in dtd yet
   still shows up there as underway.
 - `/d off` releases.
@@ -21,8 +23,8 @@ context starting with `[claim hook]`:
 - `released ...` → done; just confirm.
 - `ambiguous ... Candidates: <id>: <task>; ...` → show them numbered, ask which,
   then run `python3 ~/i446-monorepo/tools/did/agent_claims.py claim <id>`.
-- `no dtd task matches ...` → say so and stop. Don't guess a task (suggest
-  `/d new <task>` if it sounds like it isn't in dtd).
+- `no dtd task matches ...` → only from an old hook; run
+  `python3 ~/i446-monorepo/tools/did/agent_claims.py new "<task>"` yourself.
 - `couldn't create ...` → say so and stop.
 - No `[claim hook]` line at all (hook didn't run) → do it yourself: split the
   argument on the FIRST `:`, then

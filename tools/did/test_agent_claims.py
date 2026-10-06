@@ -191,6 +191,22 @@ def test_hook_new_creates_then_claims(hooked, monkeypatch):
     assert (hooked / "by-session" / "S9").read_text().strip() == "N1"
 
 
+def test_hook_unmatched_d_creates_then_claims(hooked, monkeypatch):
+    """2026-10-06: `/d wire up /d to janus [5]` matched nothing and claimed
+    nothing; "that should be the default behavior" -- no match = create it."""
+    made = []
+    monkeypatch.setattr(ac, "new_task", lambda c: made.append(c) or {"id": "N2", "content": c})
+    out = _fast("/d wire up /d to janus [5]")
+    assert made == ["wire up /d to janus [5]"]
+    assert "created and 😈 claimed: wire up /d to janus [5]" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "N2"
+
+
+def test_hook_matched_d_does_not_create(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError("created")))
+    assert "😈 claimed: source logging" in _fast("/d source logging")
+
+
 # ── bare [N] = the claimed task's value, never a completion (2026-10-05:
 #    a bare [200] got logged as +200 immediately; points are opportunity
 #    until JM completes the task in dtd with ⌥↵) ──

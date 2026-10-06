@@ -246,8 +246,14 @@ def hook(payload: str) -> str:
         return "[claim hook] released this session's claim."
     if not query:
         return ""
-    if query.lower().startswith("new "):
-        name = query[4:].strip()
+    df = _did()
+    explicit_new = query.lower().startswith("new ")
+    cands = [] if explicit_new else candidates(query, all_tasks(df.load_task_queue()), df)
+    if explicit_new or not cands:
+        # No dtd match = new work: create it and claim (default since
+        # 2026-10-06, "that should be the default behavior"). `/d new` stays
+        # as the explicit form for a name that WOULD match something old.
+        name = query[4:].strip() if explicit_new else query
         if not name:
             return ""
         try:
@@ -258,10 +264,6 @@ def hook(payload: str) -> str:
         push()
         return (f"[claim hook] created and 😈 claimed: {rec['task']} (id {rec['task_id']}). "
                 "Already done; don't create or claim it again.")
-    df = _did()
-    cands = candidates(query, all_tasks(df.load_task_queue()), df)
-    if not cands:
-        return f"[claim hook] no dtd task matches {query!r}; nothing claimed."
     if len(cands) > 1:
         opts = "; ".join(f"{t['id']}: {t.get('content', '')}" for t in cands[:5])
         return f"[claim hook] ambiguous, nothing claimed. Candidates: {opts}"
