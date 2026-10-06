@@ -21,8 +21,9 @@ grow with content instead of reserving empty height.
 Before opening the form, run `/attendance` (Veracross tardies, absences and
 early dismissals for Theo and Ren → `cais-attendance.md` + the weekly table in
 independence-agency-enterprise's Morning Routine). Use last week's row when
-answering the Theo/Ren pages. If Chrome or Veracross isn't available, note it
-and continue with the form; attendance is best-effort.
+answering the Theo/Ren pages. If Chrome or Veracross isn't available, /attendance
+prints one `attendance: skipped (...)` line; pass it through and open the form.
+No setup instructions for JM; attendance is best-effort.
 
 ## Field → sheet/column map
 
