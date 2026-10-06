@@ -40,3 +40,15 @@ def test_handler_routes_d_before_comma_split_and_refuses_past_days():
     assert "if STATE.day_offset:" in block
     assert "create_todo_task" in block and "run_tg_fast" in block
     ast.parse(src)
+
+
+def test_d_task_writes_dtd_running_hint_and_stop_clears_it(tmp_path):
+    mod = _load()
+    mod.DTD_RUNNING_HINT = tmp_path / "dtd-running-hint"
+    mod.write_dtd_running_hint({"id": "6hX", "content": "Write JD (60) [20]"})
+    name, started, tid = mod.DTD_RUNNING_HINT.read_text().split("\t")
+    assert (name, tid) == ("write jd", "6hX") and started.isdigit()
+    mod._optimistic_stop()
+    assert not mod.DTD_RUNNING_HINT.exists()
+    src = (HERE / "janus.py").read_text()
+    assert "write_dtd_running_hint(task)" in src[src.index("def create_todo_task"):]

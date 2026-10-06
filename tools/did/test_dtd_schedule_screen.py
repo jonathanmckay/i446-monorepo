@@ -390,3 +390,45 @@ def test_domainsearch_sets_and_clears_days_flag():
 def test_days_flag_cleared_wherever_picker_state_is():
     assert SRC.count('"\\$BLOCKPICK.days"') >= 3  # arm (fresh), close, apply
     assert '"$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days"' in SRC  # esc back
+
+
+# --- shared running hint (2026-10-06) ------------------------------------------
+# janus /d creates a task + starts its timer; dtd must float that task to the
+# TOP ("otherwise I won't see it"). dtd's own timer file never hears of it.
+
+def _list_order(tmp, hint_text, timer_text=""):
+    import json, os
+    def w(n, t):
+        (tmp / n).write_text(t)
+        return str(tmp / n)
+    tasks = [{"id": f"T{i}", "content": f"task {i} (10) [5]", "labels": ["i9"], "priority": 1,
+              "due": "2026-10-06", "recurring": False} for i in range(1, 6)]
+    cache = w("cache.json", json.dumps({"updated": "t", "today": [], "关键路径": tasks}))
+    (tmp / "removed.ids").write_text("")
+    home = tmp / "home"
+    (home / ".local/state/jm").mkdir(parents=True, exist_ok=True)
+    if not (home / "i446-monorepo").exists():  # the generator imports ~/i446-monorepo/lib
+        (home / "i446-monorepo").symlink_to(Path.home() / "i446-monorepo")
+    hint = home / ".local/state/jm/dtd-running-hint"
+    hint.unlink(missing_ok=True)
+    if hint_text is not None:
+        hint.write_text(hint_text)
+    (tmp / "lg.py").write_text(_listgen_payload())
+    r = subprocess.run([sys.executable, str(tmp / "lg.py"), cache,
+                        w("done.json", '{"date": "2026-10-06", "names": [], "ids": {}}'),
+                        w("removed", ""), "2026-10-06", "120", w("skipped", ""), w("timer", timer_text),
+                        w("view", ""), w("blockpick", ""), w("domain", "")],
+                       capture_output=True, text=True, env={**os.environ, "HOME": str(home)})
+    assert r.returncode == 0, r.stderr
+    return [l.rsplit("\t", 1)[-1] for l in r.stdout.splitlines() if l.strip()]
+
+
+def test_shared_running_hint_floats_task_to_top():
+    now = int(time.time())
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        assert _list_order(tmp, None)[0] == "T1"
+        assert _list_order(tmp, f"task 4\t{now}\tT4")[0] == "T4"
+        assert _list_order(tmp, f"task 4\t{now - 5 * 3600}\tT4")[0] == "T1", "stale hint ignored"
+        # dtd's own newer start beats an older shared hint
+        assert _list_order(tmp, f"task 4\t{now - 60}\tT4", f"task 2\t{now}\tT2")[0] == "T2"

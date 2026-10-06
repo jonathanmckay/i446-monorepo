@@ -1549,6 +1549,15 @@ try:
         running_started = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
         running_id = parts[2].strip() if len(parts) > 2 else ''
 except: pass
+# Shared running hint (2026-10-06): janus /d creates a task and starts its
+# timer, but this dtd's own timer file never hears of it, so the new task sat
+# mid-list. Same 3-field format; the newer start wins; ignored after 4h.
+try:
+    _hint = open(__import__('os').path.expanduser('~/.local/state/jm/dtd-running-hint')).read().strip().split('\t')
+    _hs = int(_hint[1]) if len(_hint) > 2 and _hint[1].isdigit() else 0
+    if _hs > running_started and time.time() - _hs < 4 * 3600:
+        running_clean, running_started, running_id = _hint[0].strip().lower(), _hs, _hint[2].strip()
+except Exception: pass
 
 # Neon color palette (label → ANSI 256-color)
 COLORS = {

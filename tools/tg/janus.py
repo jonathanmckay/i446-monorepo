@@ -709,6 +709,7 @@ def _optimistic_holds(fetched) -> bool:
 
 
 def _optimistic_stop() -> None:
+    clear_dtd_running_hint()
     cur = STATE.current or {}
     _optimistic_set(None, cur.get("id"))
 
@@ -4895,6 +4896,33 @@ def parse_d_command(text: str) -> tuple[str, str] | None:
     return content, timer
 
 
+DTD_RUNNING_HINT = Path(os.environ.get("XDG_STATE_HOME")
+                        or (Path.home() / ".local" / "state")) / "jm" / "dtd-running-hint"
+
+
+def write_dtd_running_hint(task: dict) -> None:
+    """Tell every dtd this task's timer is running, so it floats to the top
+    of dtd (2026-10-06: "make sure it goes to the top, otherwise I won't see
+    it"). dtd's own timer file is per-instance and only written by its own
+    start path; this shared hint uses the same name<TAB>epoch<TAB>id format."""
+    name = _ANNOT_RE.sub("", task.get("content", "")).strip().lower()
+    try:
+        DTD_RUNNING_HINT.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DTD_RUNNING_HINT.with_suffix(".tmp")
+        tmp.write_text(f"{name}\t{int(time.time())}\t{task.get('id', '')}")
+        tmp.replace(DTD_RUNNING_HINT)
+    except OSError:
+        pass
+
+
+def clear_dtd_running_hint() -> None:
+    """The timer moved on (switch/stop): the /d task no longer runs."""
+    try:
+        DTD_RUNNING_HINT.unlink()
+    except OSError:
+        pass
+
+
 def create_todo_task(content: str) -> str:
     """Create a due-today Todoist task through agent_claims.new_task (the
     same path as Claude's `/d new`). Returns a short status for the flash."""
@@ -4905,6 +4933,7 @@ def create_todo_task(content: str) -> str:
         _mod = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
         task = _mod.new_task(content)
+        write_dtd_running_hint(task)
         return f"+todo {task.get('content', content)}"
     except Exception as e:  # noqa: BLE001 — the timer still starts
         return f"todo err: {e}"
@@ -6098,6 +6127,7 @@ def _(event):
             desc = " ".join(w for w in bare.split()
                             if not w.startswith("@") and not re.fullmatch(r"[+\[(]\d+[\])]?", w))
             if desc:
+                clear_dtd_running_hint()  # the timer moves off any /d task
                 _optimistic_start(desc)
         event.app.invalidate()
     event.app.create_background_task(_run_and_refresh())
