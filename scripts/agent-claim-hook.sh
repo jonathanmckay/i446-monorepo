@@ -19,7 +19,8 @@ IFS= read -r -d '' -t 1 j 2>/dev/null
 # /d skill knows it's already done.
 # `/0t`, `/1s897` and `/notes` claim their own card the same way (agent_claims.SKILL_CLAIMS).
 # A bare `[N]` while holding a claim sets the claimed task's value (not points).
-if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|1s897|notes)([[:space:]]|")' \
+if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|1s897|notes)([[:space:]]|")'\
+      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|1s897|notes)[[:space:]]*<' \
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi

@@ -274,3 +274,16 @@ def test_notes_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
     out = _fast("/notes")
     assert "😈 claimed: notes (3) [8]" in out and "releases the claim" in out
     assert _fast("/notesy", session="S8") == ""
+
+
+def test_hook_unwraps_expanded_slash_command(hooked, monkeypatch):
+    """2026-10-07: /notes reached the hook as <command-name> tags, not '/notes',
+    and claimed nothing. Both the python matcher and the zsh prefilter must
+    accept the wrapped form."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "N7", "content": "notes (3) [8]"}]))
+    wrapped = ("<command-message>notes</command-message>\n<command-name>/notes</command-name>")
+    assert "😈 claimed: notes (3) [8]" in _fast(wrapped)
+    assert "😈 claimed: source logging" in _fast(
+        "<command-message>d</command-message>\n<command-name>/d</command-name>\n"
+        "<command-args>source logging: go</command-args>", session="S7")
+    assert "command-name>[[:space:]]*/(d|claim|0t|1s897|notes)" in HOOK.read_text()

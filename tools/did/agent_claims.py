@@ -228,6 +228,24 @@ def set_value(session: str, n: int, root: Path | None = None) -> str:
             "JM credits it by completing the task in dtd (⌥↵).")
 
 
+_CMD_NAME_RE = __import__("re").compile(r"<command-name>\s*(/[^<\s]+)\s*</command-name>")
+_CMD_ARGS_RE = __import__("re").compile(r"<command-args>(.*?)</command-args>", __import__("re").S)
+
+
+def _unwrap_command(prompt: str) -> str:
+    """A slash command can reach UserPromptSubmit wrapped as
+    `<command-message>..</command-message><command-name>/notes</command-name>
+    <command-args>..</command-args>` rather than the typed `/notes ...`
+    (2026-10-07: `/notes` ran without claiming its card). Rebuild the typed
+    form so HOOK_RE / SKILL_RE see `/name args`."""
+    m = _CMD_NAME_RE.search(prompt)
+    if not m:
+        return prompt
+    a = _CMD_ARGS_RE.search(prompt)
+    args = (a.group(1).strip() if a else "")
+    return f"{m.group(1)} {args}".rstrip()
+
+
 def hook(payload: str) -> str:
     """UserPromptSubmit fast path for `/d <task>[: request]` (and /claim):
     claim before the model even starts, so dtd shows it in ~1s instead of
@@ -238,7 +256,7 @@ def hook(payload: str) -> str:
         d = json.loads(payload)
     except ValueError:
         return ""
-    prompt = d.get("prompt") or ""
+    prompt = _unwrap_command(d.get("prompt") or "")
     session = d.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     v = VALUE_RE.match(prompt)
     if v and session:
