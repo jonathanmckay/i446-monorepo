@@ -186,9 +186,12 @@ def new_task(content: str) -> dict:
 
 VALUE_RE = __import__("re").compile(r"^\s*\[(\d+)\]\s*$")
 # Skills that claim their own dtd card while they run, as if the prompt were
-# `/d <task>`. The skill's script releases the claim once it closes the card.
-# Never creates: if the card is already gone (done today), nothing is claimed.
-SKILL_CLAIMS = {"0t": "0t"}
+# `/d <task>`. Never creates: if the card is already gone (done), nothing is
+# claimed. 0t-fast and /notes release the claim once they close the card;
+# /1s897 has a manual part, so it keeps the claim and JM completes it in dtd.
+SKILL_CLAIMS = {"0t": "0t", "1s897": "1 s897", "notes": "notes"}
+# Skills whose flow closes the card and then releases the claim itself.
+SKILL_RELEASES = {"0t", "notes"}
 SKILL_RE = __import__("re").compile(r"^\s*/(" + "|".join(SKILL_CLAIMS) + r")(?:\s.*)?$", __import__("re").S)
 _POINTS_RE = __import__("re").compile(r"\s*\[\d+\]")
 
@@ -247,8 +250,9 @@ def hook(payload: str) -> str:
             return ""
         rec = claim(cands[0], session)
         push()
-        return (f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}) for /{sk.group(1)}; "
-                "its script releases the claim when it closes the card.")
+        tail = ("the skill releases the claim when it closes the card." if sk.group(1) in SKILL_RELEASES
+                else "it has a manual part: leave the card open and the claim held; JM completes it in dtd.")
+        return f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}) for /{sk.group(1)}; {tail}"
     m = HOOK_RE.match(prompt)
     if not m or not session:
         return ""

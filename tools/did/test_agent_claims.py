@@ -255,4 +255,22 @@ def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
 
 
 def test_zsh_hook_prefilter_routes_0t_to_python():
-    assert "(d|claim|0t)" in HOOK.read_text()
+    assert "(d|claim|0t|1s897|notes)" in HOOK.read_text()
+
+
+def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
+    """2026-10-07: /1s897 claims '1 s897' like /0t, but has a manual part, so
+    nothing releases or completes it; JM closes the card in dtd."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "W1", "content": "1 s897 (25) [30]"},
+                                                      {"id": "W2", "content": "ibx s897 (15) [5]"},
+                                                      {"id": "W3", "content": "s897 (120) [30]"}]))
+    out = _fast("/1s897 7.4")
+    assert "😈 claimed: 1 s897 (25) [30]" in out and "leave the card open" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "W1"
+
+
+def test_notes_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "N7", "content": "notes (3) [8]"}]))
+    out = _fast("/notes")
+    assert "😈 claimed: notes (3) [8]" in out and "releases the claim" in out
+    assert _fast("/notesy", session="S8") == ""

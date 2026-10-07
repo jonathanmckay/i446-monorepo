@@ -206,6 +206,14 @@ Report archived files if any: `Archived N stale files from z_ibx.`
 
 After action item handling (or skipping), execute the `/did` skill for habit `notes` — follow the full `/did` flow exactly as if the user had typed `/did notes`. This writes 1 to the `notes` column in today's 0₦ row and closes any matching 0neon Todoist task.
 
+Then release the dtd claim the `/notes` prompt took (the claim hook ties this
+session to the `notes` card while the skill runs; the card is closed now, so
+stop its 😈 spinner). Harmless no-op if nothing is claimed:
+
+```bash
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
+```
+
 ## Rules
 
 - **Raw notes only** — never summarize, rewrite, or edit the note content. Copy as-is.
