@@ -696,18 +696,6 @@
     "rent": "1365.00"
   },
   {
-    "unit_id": 1180,
-    "property_name": "tc68",
-    "unit": "B31",
-    "tenant_name": "Morales, Joseph J.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2022-01-05",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1650.00"
-  },
-  {
     "unit_id": 170,
     "property_name": "b101",
     "unit": "7",
@@ -864,18 +852,6 @@
     "rent": "931.00"
   },
   {
-    "unit_id": 1018,
-    "property_name": "kn47 K2",
-    "unit": "B203",
-    "tenant_name": "Olivera, Elicia R.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-11-19",
-    "move_in": "2025-11-19",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 1028,
     "property_name": "kn47 K2",
     "unit": "C105",
@@ -955,18 +931,6 @@
     "status": "Eligible",
     "lease_sign_date": "2025-12-11",
     "move_in": "2025-12-12",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "850.00"
-  },
-  {
-    "unit_id": 771,
-    "property_name": "rl21",
-    "unit": "17",
-    "tenant_name": "Roach, Brandi L.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-06",
-    "move_in": "2025-12-06",
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "850.00"
@@ -1540,7 +1504,7 @@
     "property_name": "c313",
     "unit": "28",
     "tenant_name": "Lamay, Ely  G.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-02-20",
     "move_in": "2026-02-21",
     "renewal_start_date": null,
@@ -1672,7 +1636,7 @@
     "property_name": "j312",
     "unit": "3116",
     "tenant_name": "Irakoze, Augustin",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-02-18",
     "move_in": "2026-02-18",
     "renewal_start_date": null,
@@ -1780,7 +1744,7 @@
     "property_name": "m405",
     "unit": "18",
     "tenant_name": "Lillegard, Janet F.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-02-10",
     "move_in": "2026-02-11",
     "renewal_start_date": null,

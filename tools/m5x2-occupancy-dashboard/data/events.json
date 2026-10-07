@@ -7548,5 +7548,115 @@
     "unit": "F",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "211",
+    "prop": "ms22",
+    "unit": "2258",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1401",
+    "prop": "c702",
+    "unit": "H101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1340",
+    "prop": "c702",
+    "unit": "D208",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1332",
+    "prop": "c702",
+    "unit": "D108",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1346",
+    "prop": "c702",
+    "unit": "D308",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1331",
+    "prop": "c702",
+    "unit": "D107",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "398",
+    "prop": "ps25",
+    "unit": "F40",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-11-01",
+    "kind": "ntv",
+    "unit_id": "1160",
+    "prop": "tc68",
+    "unit": "A11",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1341",
+    "prop": "c702",
+    "unit": "D301",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-11-20",
+    "kind": "ntv",
+    "unit_id": "1018",
+    "prop": "kn47 K2",
+    "unit": "B203",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-07",
+    "effective": "2026-10-07",
+    "kind": "movein",
+    "unit_id": "1339",
+    "prop": "c702",
+    "unit": "D207",
+    "tenant": null,
+    "baseline": false
   }
 ]
