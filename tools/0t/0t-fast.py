@@ -561,6 +561,18 @@ def main():
     except Exception as e:
         output["dtd_cache"] = f"ERROR: {e}"
 
+    # 5c. Release the dtd claim /0t took via the claim hook (agent_claims
+    # SKILL_CLAIMS): the card is closed, so the 😈 spinner should stop now,
+    # not at session end. Only when 0t actually got marked done; no session
+    # (Ix cron) = no claim to release.
+    if "error" not in did_result and os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        try:
+            r = subprocess.run(["python3", str(DID_FAST.parent / "agent_claims.py"), "release"],
+                               capture_output=True, text=True, timeout=15)
+            output["claim"] = (r.stdout or r.stderr).strip() or "released"
+        except Exception as e:
+            output["claim"] = f"ERROR: {e}"
+
     # 6. Refresh dashboard points cache
     try:
         days = refresh_points_cache()

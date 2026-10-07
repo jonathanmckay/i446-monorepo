@@ -185,6 +185,11 @@ def new_task(content: str) -> dict:
 
 
 VALUE_RE = __import__("re").compile(r"^\s*\[(\d+)\]\s*$")
+# Skills that claim their own dtd card while they run, as if the prompt were
+# `/d <task>`. The skill's script releases the claim once it closes the card.
+# Never creates: if the card is already gone (done today), nothing is claimed.
+SKILL_CLAIMS = {"0t": "0t"}
+SKILL_RE = __import__("re").compile(r"^\s*/(" + "|".join(SKILL_CLAIMS) + r")(?:\s.*)?$", __import__("re").S)
 _POINTS_RE = __import__("re").compile(r"\s*\[\d+\]")
 
 
@@ -235,6 +240,15 @@ def hook(payload: str) -> str:
     v = VALUE_RE.match(prompt)
     if v and session:
         return set_value(session, int(v.group(1)))
+    sk = SKILL_RE.match(prompt)
+    if sk and session:
+        cands = candidates(SKILL_CLAIMS[sk.group(1)], all_tasks(_did().load_task_queue()), _did())
+        if len(cands) != 1:
+            return ""
+        rec = claim(cands[0], session)
+        push()
+        return (f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}) for /{sk.group(1)}; "
+                "its script releases the claim when it closes the card.")
     m = HOOK_RE.match(prompt)
     if not m or not session:
         return ""

@@ -234,3 +234,25 @@ def test_zsh_hook_prefilter_routes_bare_value_to_python():
     """The hook only spawns python for /d, /claim, or a bare [N] prompt."""
     src = HOOK.read_text()
     assert r'\[[0-9]+\][[:space:]]*"' in src
+
+
+# ── /0t claims its own dtd card while it runs (2026-10-07: "calling /0t
+#    invokes /d for the task 0t until it automatically marks it complete") ──
+
+def test_skill_prompt_claims_its_card(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "Z0", "content": "0t (3) [10]"},
+                                                      {"id": "Z1", "content": "-1t"}]))
+    out = _fast("/0t")
+    assert "😈 claimed: 0t (3) [10]" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "Z0"
+
+
+def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError("created")))
+    assert _fast("/0t") == ""          # 0t already done today: nothing to claim
+    assert _fast("/0tx") == ""          # must be the whole command
+    assert not (hooked / "by-session").exists()
+
+
+def test_zsh_hook_prefilter_routes_0t_to_python():
+    assert "(d|claim|0t)" in HOOK.read_text()
