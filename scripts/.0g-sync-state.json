@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "500分 i9": {
-      "todoist_id": "6hhVWV5xM4W3HPvR",
-      "minutes": 50
-    },
-    "1.5 workouts": {
-      "todoist_id": "6hhVWVCv5mM7fCJ2",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-10-07T18:00:06.514866-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-07T20:00:06.401562-07:00"
 }
