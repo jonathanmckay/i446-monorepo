@@ -38,6 +38,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 PRIORITY = ["imago", "fuchikoma", "straylight", "ix"]
+PHONES = {"imago", "fuchikoma"}  # reported by the Ix servers they browse
 WHERE_DIR = Path.home() / "vault" / "z_ibx" / "where"
 ACTIVE_FILE = Path.home() / ".local" / "state" / "jm" / "active_tz.json"
 SEEN_EVERY = 1800  # rewrite an unchanged report at most this often (git/Syncthing churn)
@@ -133,6 +134,8 @@ def peer_device(ip: str) -> str | None:
         for line in out.splitlines():
             if line.strip().startswith("Name:"):
                 name = line.split(":", 1)[1].strip().split(".")[0].lower()
+                # "straylight-refit" → "straylight", same as this_device()
+                name = next((d for d in PRIORITY if name.startswith(d)), name)
                 break
         break
     _peer_cache[ip] = (time.time(), name)
@@ -140,11 +143,14 @@ def peer_device(ip: str) -> str | None:
 
 
 def record_peer(ip: str, tz: str) -> str | None:
-    """Server side of a phone beacon. Returns the device recorded, or None."""
+    """Server side of a phone beacon. Returns the device recorded, or None.
+    Phones only: a Mac reports itself (report_self), and a second writer on
+    its file would make Syncthing conflicts."""
     dev = peer_device(ip)
-    if dev in PRIORITY and record(dev, tz):
-        return dev
-    return dev if dev in PRIORITY else None
+    if dev not in PHONES:
+        return None
+    record(dev, tz)
+    return dev
 
 
 # ── Resolution ────────────────────────────────────────────────────────────────

@@ -75,3 +75,11 @@ def test_record_throttles_and_tracks_since(tmp_path, monkeypatch):
 def test_peer_device_rejects_non_tailscale():
     assert where.peer_device("127.0.0.1") is None
     assert where.peer_device("192.168.1.5") is None
+
+
+def test_record_peer_accepts_phones_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(where, "WHERE_DIR", tmp_path)
+    monkeypatch.setattr(where, "peer_device", lambda ip: {"1": "imago", "2": "straylight"}.get(ip))
+    assert where.record_peer("1", "Asia/Tokyo") == "imago"
+    assert where.record_peer("2", "Asia/Tokyo") is None, "Macs self-report; one writer per file"
+    assert not (tmp_path / "straylight.json").exists()

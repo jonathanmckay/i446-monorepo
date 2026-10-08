@@ -44,9 +44,27 @@ DONE="$STATE_DIR/completed-today.json"
 # inherit exported vars) — plus every Python helper's naive datetime.now()/
 # date.today() — honor the override with no per-call plumbing. Absent or
 # malformed travel.json is silently a no-op (TZ stays whatever the OS has).
-_travel_tz=$(jq -r '.active_tz // empty' "$STATE_DIR/travel.json" 2>/dev/null)
+# 2026-10-08: the zone is now daytime's full resolution — /travel override,
+# else the nearest device's zone (lib/where.py: imago → fuchikoma →
+# straylight → ix, never backwards). One python call here; the loops below
+# re-read the resolved file with zsh builtins (_dtd_tz_refresh).
+_travel_tz=$(python3 "$HOME/i446-monorepo/lib/daytime.py" --tz-env 2>/dev/null)
 [[ -n "$_travel_tz" ]] && export TZ="$_travel_tz"
 unset _travel_tz
+# Re-export TZ from the shared /travel override, else this host's resolved
+# zone (~/.local/state/jm/active_tz.json, kept fresh by where.py's cron).
+# Pure zsh: called every loop pass, must not spawn processes.
+_dtd_tz_refresh() {
+  local f j
+  for f in "$HOME/vault/z_ibx/where/override.json" "$STATE_DIR/active_tz.json"; do
+    [[ -r $f ]] || continue
+    j=$(<$f)
+    if [[ $j =~ '"(active_tz|tz)": *"([A-Za-z_+-]+/[A-Za-z0-9_+/-]+)"' ]]; then
+      [[ "$TZ" != "$match[2]" ]] && export TZ="$match[2]"
+      return
+    fi
+  done
+}
 
 # Per-launch id for all temp paths. dtd.sh is *sourced*, so $$ is the
 # (long-lived) shell PID and is identical on every re-run. A bare $$ made
@@ -1711,11 +1729,20 @@ zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
 # dtd un-hides the task on the first reload after the block hour arrives
 # (the watcher refreshes at every block boundary).
 _snoozed = set()
-_sn_all = {}
-try:
-    with open(_os.path.expanduser('~/.local/state/jm/dtd-block-snooze.json')) as _sf:
-        _sn = json.load(_sf)
-    _nw = _dt.datetime.now()
+_sn_all = set()
+# Cross-host (2026-10-08): union this host's file with every host's synced
+# mirror (~/vault/z_ibx/dtd-block-snooze-<host>.json), same as dtd web's
+# _snoozed_ids: a delay made on Ix (phone or Ix dtd) now hides the task here
+# too, so a network switch never resurfaces snoozed cards.
+import glob as _glob
+_nw = _dt.datetime.now()
+for _sp in [_os.path.expanduser('~/.local/state/jm/dtd-block-snooze.json')] + \
+           _glob.glob(_os.path.expanduser('~/vault/z_ibx/dtd-block-snooze-*.json')):
+    try:
+        with open(_sp) as _sf:
+            _sn = json.load(_sf)
+    except Exception:
+        continue
     # Forward-only: a stored date equal-or-newer than today is still valid,
     # matching the writer's fix (DTD_BLOCKAPPLY, above) — a plain equality
     # check here would silently un-hide every snoozed task the moment the
@@ -1723,20 +1750,23 @@ try:
     # wiping them, since a backward move means this reader's freshly-
     # computed 'today' no longer equals the (correctly preserved) newer
     # stored date.
-    if _nw.date().isoformat() <= _sn.get('date', ''):
-        _sn_all = {str(k) for k in (_sn.get('snoozes') or {})}
-        # Minute-delays (ctrl-v +10m/+30m/+1h) store an absolute epoch float;
-        # block delays store a plain int hour-of-day. json round-trips a
-        # python float with a decimal point, so isinstance(v, float)
-        # unambiguously distinguishes the two on read.
-        def _still_snoozed(v):
-            if isinstance(v, float):
-                return _nw.timestamp() < v
-            return _nw.hour < int(v)
-        _snoozed = {str(k) for k, v in (_sn.get('snoozes') or {}).items()
-                    if _still_snoozed(v)}
-except Exception:
-    pass
+    if not isinstance(_sn, dict) or _nw.date().isoformat() > _sn.get('date', ''):
+        continue
+    # Minute-delays (ctrl-v +10m/+30m/+1h) store an absolute epoch float;
+    # block delays store a plain int hour-of-day. json round-trips a
+    # python float with a decimal point, so isinstance(v, float)
+    # unambiguously distinguishes the two on read.
+    def _still_snoozed(v):
+        if isinstance(v, float):
+            return _nw.timestamp() < v
+        return _nw.hour < int(v)
+    for _k, _v in (_sn.get('snoozes') or {}).items():
+        _sn_all.add(str(_k))
+        try:
+            if _still_snoozed(_v):
+                _snoozed.add(str(_k))
+        except (TypeError, ValueError):
+            pass
 # Block LABELS (feature 2026-07-27): a task carrying a 地支 glyph label
 # (/todo ... 戌) hides until that block starts — the durable, task-level
 # analog of the ctrl-v snooze. Uses the current clock, same as above.
@@ -2975,6 +3005,7 @@ TALLY_PID=$!
       _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
       (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && break
     done
+    _dtd_tz_refresh
     watch_today="$(date +%Y-%m-%d)"
     # Day rollover while dtd sits open: reset the per-day overlays (mirrors the
     # UI-loop rollover, which can't run behind the blocking fzf) and pull today's
@@ -3071,6 +3102,7 @@ WATCHER_PID=$!
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
+  _dtd_tz_refresh
   NEW_TODAY=$(date +%Y-%m-%d)
   if [[ "$NEW_TODAY" != "$LOCAL_TODAY" ]]; then
     LOCAL_TODAY="$NEW_TODAY"

@@ -131,5 +131,10 @@ if __name__ == "__main__":
     elif args and args[0] == "--zone":
         zone = active_zone()
         print(getattr(zone, "key", str(zone)))
+    elif args and args[0] == "--tz-env":
+        # IANA name for `export TZ=...`, or nothing when only the OS zone is
+        # known (an abbreviation like "PDT" is not a valid TZ value).
+        key = getattr(active_zone(), "key", "")
+        print(key if "/" in key else "", end="")
     else:
         print(today_iso())
