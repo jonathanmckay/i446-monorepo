@@ -85,6 +85,10 @@ def main() -> int:
             log(f"dropped {size[0]}x{size[1]} resize (kept {good[0]}x{good[1]}) for {' '.join(sys.argv[1:4])}")
 
     signal.signal(signal.SIGWINCH, on_winch)
+    # SIGTERM (ix-tui's network switch, 2026-10-08): forward to the child so
+    # mosh tears down its screen, then the normal EIO path below restores
+    # the tty. The default action would kill only us, leaving the pane raw.
+    signal.signal(signal.SIGTERM, lambda _s, _f: os.kill(pid, signal.SIGTERM))
     saved = None
     if os.isatty(stdin):
         saved = termios.tcgetattr(stdin)

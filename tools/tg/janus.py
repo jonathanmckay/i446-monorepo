@@ -6911,6 +6911,9 @@ async def main():
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGUSR1, lambda: loop.create_task(_sigusr1_refresh()))
+    # SIGTERM → clean exit (ix-tui's network switch, 2026-10-08): restores the
+    # terminal and releases the pid file instead of dying mid-screen.
+    loop.add_signal_handler(signal.SIGTERM, lambda: app.exit() if app.is_running else None)
 
     # Write PID so other tools can signal us
     _assert_pid_file()
