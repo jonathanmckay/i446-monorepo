@@ -98,6 +98,14 @@ cat > "$TMP/.local/state/jm/dtd-block-snooze.json" <<JSON
 JSON
 gen | grep -q "xk22" || fail "stale-dated snooze file must not hide tasks"
 
+# 2e. Cross-host (2026-10-08): another host's synced mirror hides the task
+#     here too (a delay made on Ix must survive a switch to local dtd).
+mkdir -p "$TMP/vault/z_ibx"
+echo '{"date":"'$TODAY'","snoozes":{"snoozed":'$(( $(date +%s) + 3600 )).0'}}' \
+  > "$TMP/vault/z_ibx/dtd-block-snooze-ix-local.json"
+gen | grep -q "xk22" && fail "a remote host's live snooze must hide the task"
+rm -f "$TMP/vault/z_ibx/dtd-block-snooze-ix-local.json"
+
 # ── 3. Functional: PYWRITE writer sets and clears snoozes ────────────────────
 python3 - "$DTD" "$TMP/writer.py" <<'PY'
 import re, sys
