@@ -940,7 +940,7 @@
     "property_name": "s129",
     "unit": "11",
     "tenant_name": "Dalton, Minna L.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-10-14",
     "move_in": "2025-11-05",
     "renewal_start_date": null,
@@ -1000,7 +1000,7 @@
     "property_name": "v202",
     "unit": "12",
     "tenant_name": "Slater, Terri",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2024-12-01",
     "renewal_start_date": null,
@@ -2758,18 +2758,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1290.00"
-  },
-  {
-    "unit_id": 301,
-    "property_name": "k104- LeFevre",
-    "unit": "512-3",
-    "tenant_name": "Sadowsky , Olivia L.",
-    "status": "Notice Given",
-    "lease_sign_date": "2026-03-16",
-    "move_in": "2026-04-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1334.00"
   },
   {
     "unit_id": 308,

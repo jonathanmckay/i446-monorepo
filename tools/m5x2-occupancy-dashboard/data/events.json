@@ -7658,5 +7658,35 @@
     "unit": "D207",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-08",
+    "effective": "2026-10-07",
+    "kind": "moveout",
+    "unit_id": "1190",
+    "prop": "tc68",
+    "unit": "B41",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-08",
+    "effective": "2026-10-16",
+    "kind": "ntv",
+    "unit_id": "1383",
+    "prop": "c702",
+    "unit": "G105",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-08",
+    "effective": "2026-11-01",
+    "kind": "leased",
+    "unit_id": "1312",
+    "prop": "c702",
+    "unit": "C202",
+    "tenant": null,
+    "baseline": false
   }
 ]
