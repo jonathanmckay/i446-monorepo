@@ -20,8 +20,16 @@ Resolution order for the active timezone:
      {"active_tz": "<IANA zone>", ...} — an explicit override set by the
      /travel command. Deliberately NOT auto-detected (IP geolocation, phone
      push, etc.) — see /travel's own docs for why.
-  2. The OS's own local timezone, via datetime.now().astimezone(). This is
-     the common case: the laptop follows wherever it physically is.
+  2. where.active_tz() (2026-10-08): the zone of the device nearest JM,
+     imago → fuchikoma → straylight → ix, never moving "today" backwards.
+     Auto-detection, overriding the 2026-08-23 no-auto decision at JM's
+     request; the never-backwards hold in where.py is what makes it safe for
+     the equality-polling rollover logic. See lib/where.py.
+  3. The OS's own local timezone, via datetime.now().astimezone() (no device
+     has reported yet).
+
+The /travel override lives in the synced vault (z_ibx/where/override.json)
+so it applies on every machine, not just the one /travel ran on.
 
 HOME_TZ is fixed at America/Los_Angeles — used only as a display reference
 (e.g. showing "home" time alongside local time) and as TRAVEL_FILE's
@@ -38,15 +46,22 @@ from zoneinfo import ZoneInfo
 
 HOME_TZ = ZoneInfo("America/Los_Angeles")
 
-TRAVEL_FILE = Path.home() / ".local" / "state" / "jm" / "travel.json"
+TRAVEL_FILE = Path.home() / "vault" / "z_ibx" / "where" / "override.json"
+_LEGACY_TRAVEL_FILE = Path.home() / ".local" / "state" / "jm" / "travel.json"
+
+sys.path.insert(0, str(Path(__file__).parent))
+import where  # noqa: E402
 
 
 def _travel_state() -> dict | None:
-    try:
-        d = json.loads(TRAVEL_FILE.read_text())
-    except Exception:
-        return None
-    return d if isinstance(d, dict) else None
+    for f in (TRAVEL_FILE, _LEGACY_TRAVEL_FILE):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            return d
+    return None
 
 
 def is_traveling() -> bool:
@@ -71,7 +86,13 @@ def active_zone() -> ZoneInfo | dt.tzinfo:
         try:
             return ZoneInfo(st["active_tz"])
         except Exception:
-            pass  # malformed override — fall through to system local
+            pass  # malformed override — fall through
+    try:
+        tz = where.active_tz()
+        if tz:
+            return ZoneInfo(tz)
+    except Exception:
+        pass  # never let location resolution break "today"
     return dt.datetime.now().astimezone().tzinfo
 
 

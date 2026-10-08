@@ -1382,6 +1382,16 @@ def api_done_current():
     return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip()))
 
 
+@app.route("/api/where", methods=["POST"])
+def api_where():
+    """Phone beacon (lib/where.py), same as dtd web's: browser zone,
+    attributed to the Tailscale device behind the request IP."""
+    import where
+    tz = (request.get_json(silent=True) or {}).get("tz", "")
+    dev = where.record_peer(request.remote_addr or "", str(tz))
+    return jsonify({"ok": bool(dev), "device": dev})
+
+
 @app.route("/api/projects")
 def api_projects():
     return jsonify({"ok": True, "codes": sorted(PROJECT_MAP.keys())})
@@ -1542,6 +1552,11 @@ PAGE = r"""<!doctype html>
 <div class="toast" id="toast"></div>
 
 <script>
+// where beacon (lib/where.py): this phone's zone decides "today" everywhere.
+function whereBeacon(){ try { fetch('/api/where', {method:'POST', headers:{'Content-Type':'application/json'},
+  body: JSON.stringify({tz: Intl.DateTimeFormat().resolvedOptions().timeZone})}).catch(()=>{}); } catch(e){} }
+whereBeacon();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') whereBeacon(); });
 const list = document.getElementById('list');
 const toastEl = document.getElementById('toast');
 const dlg = document.getElementById('dlg');

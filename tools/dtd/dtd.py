@@ -43,6 +43,17 @@ CACHE_MAX_AGE = 180  # seconds; refresh from Todoist if staler
 SUMMARY_MAX_AGE = 45  # seconds; day-total (points + done) cache
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+import daytime  # noqa: E402  — device-priority 'today' (lib/where.py), not Ix's own clock
+
+
+def _now() -> "_dt.datetime":
+    """Now in JM's zone (daytime: device priority, never backwards), via
+    _dt.datetime so tests that freeze dtd._dt.datetime still control it."""
+    return _dt.datetime.now(daytime.active_zone())
+
+
+def _today() -> "_dt.date":
+    return _now().date()
 TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
 
 # Neon domain palette — mirrors tools/did/dtd.sh COLORS (RGB → hex).
@@ -272,7 +283,7 @@ def _completed_ids() -> set[str]:
     Genuinely-closed tasks drop out of the cache on refresh regardless; this id
     set only guards the window between a completion and the next cache refresh.
     """
-    today = _dt.date.today().isoformat()
+    today = _today().isoformat()
     ids = _remote_completed_ids(today)
     try:
         d = json.loads(DONE_FILE.read_text())
@@ -331,7 +342,7 @@ def _woken_ids(still_snoozed: set[str]) -> set[str]:
     """Ids whose delay fired today on any host and that no host still holds
     (2026-10-05): build_tasks floats them to the top of their tier, mirroring
     the terminal dtd's _woke()."""
-    now = _dt.datetime.now()
+    now = _now()
     ids: set[str] = set()
     for p in _snooze_files():
         try:
@@ -354,7 +365,7 @@ def _snoozed_ids() -> set[str]:
     every reader unions all of them. Union semantics are correct for snoozes —
     an id is hidden if ANY host says it's still snoozed; each entry self-expires
     by its own value; clearing a snooze drops it from that host's mirror."""
-    now = _dt.datetime.now()
+    now = _now()
     ids: set[str] = set()
     try:
         ids |= _snoozed_from(json.loads(SNOOZE_FILE.read_text()), now)
@@ -374,7 +385,7 @@ def _deferred_habit_ids() -> set[str]:
     """Recurring 0neon/夜neon habit-parent ids deferred (/defer) today,
     hidden for the rest of today. Mirrors tools/did/dtd.sh's read of the same
     per-day marker file (same gap as _snoozed_ids above)."""
-    p = DEFERRED_DIR / f"habits-deferred-{_dt.date.today().isoformat()}.ids"
+    p = DEFERRED_DIR / f"habits-deferred-{_today().isoformat()}.ids"
     try:
         return {l.strip() for l in p.read_text().splitlines() if l.strip()}
     except OSError:
@@ -388,8 +399,8 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         print("WARN read cache:", e, file=sys.stderr)
         return []
 
-    today = _dt.date.today().isoformat()
-    tomorrow = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
+    today = _today().isoformat()
+    tomorrow = (_today() + _dt.timedelta(days=1)).isoformat()
 
     def sec(key, bound):
         return [t for t in d.get(key, []) if isinstance(t, dict)
@@ -416,7 +427,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     # Block labels (地支 glyph from /todo, 2026-07-27): hidden until that
     # block's hour arrives — mirrors the desktop dtd list generator.
     block_hours = BLOCK_HOURS
-    now_hour = _dt.datetime.now().hour
+    now_hour = _now().hour
     # Woken (2026-10-05): a delay or block label that passed today floats the
     # task to the top of its tier (stable), same as terminal dtd's _float().
     woken = _woken_ids(snoozed_ids)
@@ -632,7 +643,7 @@ def _write_snooze(task_id: str, value) -> None:
         sn = json.loads(SNOOZE_FILE.read_text())
     except Exception:
         sn = {}
-    today = _dt.date.today().isoformat()
+    today = _today().isoformat()
     if sn.get("date") != today:
         sn = {"date": today, "snoozes": {}}
     sn.setdefault("snoozes", {})[str(task_id)] = value
@@ -659,7 +670,7 @@ def remaining_blocks_today() -> list[dict]:
     now.hour` count). Mirrors BLOCK_HOURS' glyph order via a start-hour
     sort, not dict insertion order, since BLOCK_HOURS itself is already
     chronological here but this must stay correct even if that changes."""
-    now_hour = _dt.datetime.now().hour
+    now_hour = _now().hour
     return sorted(
         ({"glyph": g, "hour": h} for g, h in BLOCK_HOURS.items() if h > now_hour),
         key=lambda b: b["hour"])
@@ -693,7 +704,7 @@ def snooze_minutes(task_id: str, minutes: int) -> dict:
     terminal dtd's DTD_BLOCKAPPLY encoding."""
     if minutes not in MINUTE_DELAY_OPTIONS:
         return {"ok": False, "error": f"unsupported minute delay: {minutes}"}
-    until = _dt.datetime.now().timestamp() + minutes * 60
+    until = _now().timestamp() + minutes * 60
     try:
         _write_snooze(task_id, until)
     except Exception as e:
@@ -713,7 +724,7 @@ def _parse_freeform_delay(text: str):
     s = (text or "").strip().lower()
     if not s:
         return None, "enter a time (e.g. 18:30 or 90m)"
-    now = _dt.datetime.now()
+    now = _now()
     m = re.fullmatch(r"(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)", s)
     if m:
         n = int(m.group(1))
@@ -791,7 +802,7 @@ def _todoist_completed_today() -> int:
         return 0
     if not tok:
         return 0
-    today = _dt.date.today().isoformat()
+    today = _today().isoformat()
     url = ("https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
            "?since=%sT00:00:00&until=%sT23:59:59&limit=200" % (today, today))
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})
@@ -805,7 +816,7 @@ def _compute_summary() -> dict:
     completion and updates _SUMMARY. Split out of day_summary() so force=True
     can call it directly (blocking, as before) while the stale/background
     case below can run it off-thread."""
-    today = _dt.date.today()
+    today = _today()
     iso = today.isoformat()
 
     # points so far today = 0分 Σ (col D), the grand total for today's row.
@@ -889,6 +900,15 @@ def api_summary():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+@app.route("/api/where", methods=["POST"])
+def api_where():
+    """Phone beacon (lib/where.py): the browser's zone, attributed to the
+    Tailscale device behind the request IP. Non-Tailscale IPs are ignored."""
+    import where
+    tz = (request.get_json(silent=True) or {}).get("tz", "")
+    dev = where.record_peer(request.remote_addr or "", str(tz))
+    return jsonify({"ok": bool(dev), "device": dev})
+
 @app.route("/api/done", methods=["POST"])
 def api_done():
     body = request.get_json(force=True, silent=True) or {}
@@ -969,7 +989,7 @@ def api_delay_freeform():
         _write_snooze(task_id, float(epoch))
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "until": f"{_dt.datetime.fromtimestamp(epoch):%H:%M}"})
+    return jsonify({"ok": True, "until": f"{_dt.datetime.fromtimestamp(epoch, daytime.active_zone()):%H:%M}"})
 
 @app.route("/api/skip-recurrence", methods=["POST"])
 def api_skip_recurrence():
@@ -1123,6 +1143,11 @@ PAGE = r"""<!doctype html>
 </div>
 <div class="toast" id="toast"></div>
 <script>
+// where beacon (lib/where.py): this phone's zone decides "today" everywhere.
+function whereBeacon(){ try { fetch('/api/where', {method:'POST', headers:{'Content-Type':'application/json'},
+  body: JSON.stringify({tz: Intl.DateTimeFormat().resolvedOptions().timeZone})}).catch(()=>{}); } catch(e){} }
+whereBeacon();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') whereBeacon(); });
 const list = document.getElementById('list');
 const toastEl = document.getElementById('toast');
 let total = 0, count = 0;

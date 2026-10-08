@@ -57,3 +57,6 @@
 55 23 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1
 # OneDrive (personal) cloud→disk copy onto the Ix Backup SSD; Time Machine only sees what is downloaded
 30 1 * * * bash $HOME/i446-monorepo/bin/onedrive-backup.sh >/dev/null 2>&1
+
+# where: report this Mac's zone for device-priority "today" (lib/where.py, 2026-10-08)
+*/10 * * * * /usr/bin/python3 $HOME/i446-monorepo/lib/where.py report >/dev/null 2>&1  # where: report this Mac zone (lib/where.py)

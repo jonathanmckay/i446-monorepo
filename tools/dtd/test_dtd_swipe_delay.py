@@ -67,12 +67,14 @@ def test_snooze_to_next_block_writes_expected_hour(monkeypatch, tmp_path):
     assert result == {"ok": True, "hour": 10}  # 午 starts at 10
     written = json.loads(snooze_file.read_text())
     assert written["snoozes"]["t1"] == 10
-    assert written["date"] == dt.date.today().isoformat()
+    # One clock (2026-10-08): the date comes from the same frozen now as the
+    # hour, not the real date.today() the old split-clock code used.
+    assert written["date"] == "2026-08-11"
 
 
 def test_snooze_to_next_block_preserves_other_ids(monkeypatch, tmp_path):
     snooze_file = tmp_path / "dtd-block-snooze.json"
-    today = dt.date.today().isoformat()
+    today = "2026-08-11"  # the frozen now's date (one clock, 2026-10-08)
     snooze_file.write_text(json.dumps({"date": today, "snoozes": {"existing": 16}}))
     monkeypatch.setattr(dtd, "SNOOZE_FILE", snooze_file)
 

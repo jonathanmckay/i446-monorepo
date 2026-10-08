@@ -141,12 +141,19 @@ def _maybe_agent_triage(desc):
     source = _AGENT_TRIAGE.get(key)
     if not source:
         return
+    import socket
     script = Path.home() / "i446-monorepo/tools/ibx/agent_triage.py"
     log = Path.home() / ".config/ibx/agent_triage.log"
+    cmd = ["/usr/bin/python3", str(script), source]
+    # Agency (Outlook) and the logged-in claude CLI live on Straylight only;
+    # a start from dtd/janus on Ix hands the run over ssh.
+    if not socket.gethostname().lower().startswith("straylight"):
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "straylight",
+               f"mkdir -p ~/.config/ibx; /usr/bin/python3 ~/i446-monorepo/tools/ibx/agent_triage.py {source}"
+               " >> ~/.config/ibx/agent_triage.log 2>&1"]
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(["/usr/bin/python3", str(script), source],
-                         stdout=open(log, "a"), stderr=subprocess.STDOUT,
+        subprocess.Popen(cmd, stdout=open(log, "a"), stderr=subprocess.STDOUT,
                          stdin=subprocess.DEVNULL, cwd="/tmp", start_new_session=True)
     except Exception:
         pass
