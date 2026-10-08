@@ -33,7 +33,7 @@ THREADS = {
     "3494": {"glossary": {"阿珊": "Kelly"}},
 }
 BOT = "🤖"
-POLL_SECS = 5
+POLL_SECS = 1
 MAX_PER_HOUR = 30
 CLAUDE = "/opt/homebrew/bin/claude"
 STATE = Path.home() / ".local" / "state" / "jm" / "thread-translator.json"
@@ -110,6 +110,38 @@ def translate(text: str, target: str, glossary: dict[str, str]) -> str | None:
         + "Output ONLY the translation: no quotes, no tags, no notes.\n\n"
         + f"<message>{text}</message>"
     )
+    out = _api_translate(prompt)
+    if out is None:
+        out = _cli_translate(prompt)
+    if not out:
+        return None
+    if len(out) > 4 * len(text) + 40:
+        log(f"translate rejected: output implausibly long: {out[:160]!r}")
+        return None
+    return out
+
+
+KEY_FILE = Path.home() / ".config" / "anthropic" / "key"
+API_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _api_translate(prompt: str) -> str | None:
+    """Direct API call (~1s). None when there's no key or the call fails, so
+    the slower `claude -p` path takes over."""
+    try:
+        key = KEY_FILE.read_text().strip()
+        import anthropic
+        resp = anthropic.Anthropic(api_key=key).messages.create(
+            model=API_MODEL, max_tokens=500,
+            messages=[{"role": "user", "content": prompt}])
+        return resp.content[0].text.strip().strip('"').strip() or None
+    except Exception as e:
+        if KEY_FILE.exists():
+            log(f"api translate failed, falling back to claude -p: {type(e).__name__}: {str(e)[:120]}")
+        return None
+
+
+def _cli_translate(prompt: str) -> str | None:
     try:
         # Neutral cwd: no project CLAUDE.md steering a one-line translation.
         r = subprocess.run([CLAUDE, "-p", "--model", "haiku", prompt],
@@ -120,9 +152,6 @@ def translate(text: str, target: str, glossary: dict[str, str]) -> str | None:
     out = r.stdout.strip().strip('"').strip()
     if r.returncode != 0 or not out or "Not logged in" in out:
         log(f"translate failed rc={r.returncode}: {(r.stderr or out)[:200]}")
-        return None
-    if len(out) > 4 * len(text) + 40:
-        log(f"translate rejected: output implausibly long: {out[:160]!r}")
         return None
     return out
 
@@ -147,7 +176,11 @@ def send(chat_guid: str, text: str) -> bool:
 # local (launchd python has Messages automation) and so does `claude -p`
 # (needs the GUI session's keychain). Columns come back hex-encoded so text
 # with tabs/newlines/emoji survives the round trip.
-SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "ix"]
+# One kept-open connection (ControlMaster) so a 1s poll costs ~20ms, not a
+# fresh ssh handshake each time.
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+       "-o", "ControlMaster=auto", "-o", "ControlPath=/tmp/thread-translator-ssh",
+       "-o", "ControlPersist=600", "ix"]
 
 
 def query(sql: str) -> list[list[str]]:
