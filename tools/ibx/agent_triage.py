@@ -51,7 +51,7 @@ EMAILS:
 
 EXTRA = {
     "i9": "Context: this is my Microsoft (Xbox) work inbox. Mail from my manager, skip-level, direct reports or a named teammate is keep unless clearly automated.",
-    "m5x2": "Context: this is my real-estate company inbox (McKay Capital / m5x2). Property-management email (tenants, maintenance, inspections, leasing, owners, lenders, introductions) is keep.",
+    "m5x2": "Context: this is my real-estate company inbox (McKay Capital / m5x2). Property-management email (tenants, maintenance, inspections, leasing, owners, lenders, investors, introductions) is keep, including threads where my team is replying, unless the thread is plainly closed.",
 }
 
 
@@ -91,7 +91,11 @@ def parse_verdicts(text, n):
 
 
 def ask_agency(prompt):
-    r = subprocess.run([AGENCY, "copilot", "-p", prompt],
+    # --no-custom-instructions: the global instructions' terminal-color ritual
+    # otherwise eats the turn and the answer never prints. --available-tools
+    # with no names = no tools at all: classification only, no mail access.
+    r = subprocess.run([AGENCY, "copilot", "-p", prompt, "--",
+                        "-s", "--no-custom-instructions", "--available-tools"],
                        capture_output=True, text=True, timeout=300, cwd="/tmp")
     return r.stdout
 
