@@ -13,9 +13,6 @@ sid=""
 IFS= read -r -d '' -t 1 j 2>/dev/null
 [[ "$j" =~ '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"' ]] && sid="${match[1]}"
 [[ -z "$sid" ]] && sid="${CLAUDE_CODE_SESSION_ID:-}"
-# TEMP 2026-10-08: /notes still claimed nothing after the <command-name> fix.
-# Record the head of each prompt payload to see what a slash command looks like.
-[[ "$1" == working ]] && print -r -- "$(date +%T) ${j[1,400]}" >> "$HOME/.local/state/claim-hook-debug.log" 2>/dev/null
 # `/d <task>[: request]` / `/d new <task>` (or /claim): claim (or create +
 # claim) right here, before the model starts, so dtd shows it in ~1s. Python
 # only runs for these prompts; its stdout lands in the model's context so the
