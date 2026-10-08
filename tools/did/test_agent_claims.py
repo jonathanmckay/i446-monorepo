@@ -255,7 +255,7 @@ def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
 
 
 def test_zsh_hook_prefilter_routes_0t_to_python():
-    assert "(d|claim|0t|1s897|notes)" in HOOK.read_text()
+    assert "(d|claim|0t|1s897|notes|0g)" in HOOK.read_text()
 
 
 def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
@@ -286,4 +286,16 @@ def test_hook_unwraps_expanded_slash_command(hooked, monkeypatch):
     assert "😈 claimed: source logging" in _fast(
         "<command-message>d</command-message>\n<command-name>/d</command-name>\n"
         "<command-args>source logging: go</command-args>", session="S7")
-    assert "command-name>[[:space:]]*/(d|claim|0t|1s897|notes)" in HOOK.read_text()
+    assert "command-name>[[:space:]]*/(d|claim|0t|1s897|notes|0g)" in HOOK.read_text()
+
+
+def test_0g_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
+    """2026-10-08: /0g claims the '0g' card while it runs, then releases it once
+    did-fast closes the card. Goal args after /0g must not stop the match, and
+    a #0g goal that merely mentions 0g must not make it ambiguous."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "G0", "content": "0g (4) [8]"},
+                                                      {"id": "G1", "content": "fix 0g dedup {8}"}]))
+    out = _fast("/0g fix 0g dedup {8}, call mom (15)")
+    assert "😈 claimed: 0g (4) [8]" in out and "releases the claim" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "G0"
+    assert _fast("/0gx", session="S8") == ""

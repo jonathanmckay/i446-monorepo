@@ -8,6 +8,14 @@ user-invocable: true
 
 Manage daily goals in the `## 0₲` section of the build order file and sync to Todoist.
 
+## dtd claim
+
+The claim hook ties this session to the `0g` dtd card the moment `/0g` is
+submitted (a `[claim hook] 😈 claimed: 0g ...` line in context), so dtd shows it
+in progress while the skill runs. Don't claim it again. The skill closes the
+card (`did-fast.py "0g"`) and then releases the claim in its last step. If the
+card is already done today, nothing is claimed and the release is a no-op.
+
 ## Files
 
 - **Build order**: `~/vault/g245/5e-1/build-order.md`
@@ -136,6 +144,9 @@ python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
 # did-refresh-cache daemon also picks up #0g within ~3min as a fallback, but the
 # foreground run makes /0g trigger the refresh immediately.
 python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+# The card is closed now: release the dtd claim the /0g prompt took, so its 😈
+# spinner stops. Harmless no-op if nothing is claimed.
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
 ```
 This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The foreground `--refresh-cache` rebuilds `task-queue.json` (with the new #0g goals) so dtd's watcher reloads and surfaces them immediately.
 
@@ -179,6 +190,9 @@ python3 ~/i446-monorepo/tools/did/did-fast.py "0g"
 # did-refresh-cache daemon also picks up #0g within ~3min as a fallback, but the
 # foreground run makes /0g trigger the refresh immediately.
 python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+# The card is closed now: release the dtd claim the /0g prompt took, so its 😈
+# spinner stops. Harmless no-op if nothing is claimed.
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
 ```
 This writes 1 to 0₦, closes the 0neon Todoist task, appends points to 0分, and stops any running 0g Toggl timer. The foreground `--refresh-cache` rebuilds `task-queue.json` (with the new #0g goals) so dtd's watcher reloads and surfaces them immediately.
 
