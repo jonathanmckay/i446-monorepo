@@ -255,7 +255,7 @@ def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
 
 
 def test_zsh_hook_prefilter_routes_0t_to_python():
-    assert "(d|claim|0t|1s897|notes|0g)" in HOOK.read_text()
+    assert "(d|claim|0t|1s897|1hcmc|notes|0g)" in HOOK.read_text()
 
 
 def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
@@ -267,6 +267,16 @@ def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
     out = _fast("/1s897 7.4")
     assert "😈 claimed: 1 s897 (25) [30]" in out and "leave the card open" in out
     assert (hooked / "by-session" / "S9").read_text().strip() == "W1"
+
+
+def test_1hcmc_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
+    """2026-10-08: /1hcmc claims '1 hcmc' and keeps it, like /1s897; the
+    plain 'hcmc' card must not make the match ambiguous."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "H1", "content": "1 hcmc (20) [20]"},
+                                                      {"id": "H2", "content": "hcmc (60) [10]"}]))
+    out = _fast("/1hcmc 10.1")
+    assert "😈 claimed: 1 hcmc (20) [20]" in out and "leave the card open" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "H1"
 
 
 def test_notes_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
@@ -286,7 +296,7 @@ def test_hook_unwraps_expanded_slash_command(hooked, monkeypatch):
     assert "😈 claimed: source logging" in _fast(
         "<command-message>d</command-message>\n<command-name>/d</command-name>\n"
         "<command-args>source logging: go</command-args>", session="S7")
-    assert "command-name>[[:space:]]*/(d|claim|0t|1s897|notes|0g)" in HOOK.read_text()
+    assert "command-name>[[:space:]]*/(d|claim|0t|1s897|1hcmc|notes|0g)" in HOOK.read_text()
 
 
 def test_0g_claims_its_card_and_says_skill_releases(hooked, monkeypatch):

@@ -188,8 +188,9 @@ VALUE_RE = __import__("re").compile(r"^\s*\[(\d+)\]\s*$")
 # Skills that claim their own dtd card while they run, as if the prompt were
 # `/d <task>`. Never creates: if the card is already gone (done), nothing is
 # claimed. 0t-fast, /notes and /0g release the claim once they close the card;
-# /1s897 has a manual part, so it keeps the claim and JM completes it in dtd.
-SKILL_CLAIMS = {"0t": "0t", "1s897": "1 s897", "notes": "notes", "0g": "0g"}
+# /1s897 and /1hcmc have a manual part, so they keep the claim and JM completes
+# them in dtd.
+SKILL_CLAIMS = {"0t": "0t", "1s897": "1 s897", "1hcmc": "1 hcmc", "notes": "notes", "0g": "0g"}
 # Skills whose flow closes the card and then releases the claim itself.
 SKILL_RELEASES = {"0t", "notes", "0g"}
 SKILL_RE = __import__("re").compile(r"^\s*/(" + "|".join(SKILL_CLAIMS) + r")(?:\s.*)?$", __import__("re").S)
