@@ -2301,24 +2301,8 @@ task="\$1"
 # Strip ANSI codes and recurring indicator
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
 clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-echo "⏳ deleting: \$clean" > "\$HDR"
-tid=\$(python3 -c "
-import json, re, sys
-q = sys.argv[1].lower()
-with open(sys.argv[2]) as f:
-    d = json.load(f)
-# Handle truncated names (contain …): match by prefix before …
-prefix = q.split('\u2026')[0].strip() if '\u2026' in q else None
-for s in d.values():
-    if not isinstance(s, list): continue
-    for t in s:
-        if not isinstance(t, dict): continue
-        c = re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', t.get('content','')).strip().lower()
-        if c == q or (prefix and c.startswith(prefix)):
-            print(t['id']); sys.exit(0)
-" "\$clean" "\$CACHE_FILE" 2>/dev/null)
-# fzf field 2 (\$1) IS the Todoist id — override any name-based match so a
-# duplicate name can never delete the wrong row (id-based, 2026-07-12).
+# fzf field 2 (\$1) IS the Todoist id (id-based since 2026-07-12; the old
+# name-match lookup that ran here was dead code, overwritten on the next line).
 tid="\$1"
 if [[ -n "\$tid" ]]; then
   # Get full name from cache for the removed list (clean may be truncated)
@@ -2334,30 +2318,23 @@ for s in d.values():
             print(re.sub(r' *\(\d*\)| *\[\d*\]| *\{\d*\}', '', t.get('content','')).strip().lower())
             sys.exit(0)
 " "\$tid" "\$CACHE_FILE" 2>/dev/null)
+  # Optimistic (2026-10-07, "ctrl-x is a bit slow"): hide the row by id NOW
+  # and let fzf reload at once; the two Todoist round trips (pre-image GET +
+  # DELETE, 0.3-1s each from Ix) ran inline under execute-silent and froze
+  # dtd 1-2s per task. A failed DELETE rolls the hide back, same as defer.
+  # Hide by id, not by name: two identically-named tasks must not both
+  # vanish (2026-08-17).
+  echo "\$tid" >> "\$REMOVED.ids"
+  echo "🗑 deleting: \$clean" > "\$HDR"
+  (
   # Pre-image for ctrl-z undo — fetched before the DELETE, journaled only
   # after a successful DELETE (a failed delete must not be undoable, or
   # ctrl-z would recreate a task that still exists)
-  pre=\$(curl -s "https://api.todoist.com/api/v1/tasks/\$tid" \
+  pre=\$(curl -s "https://api.todoist.com/api/v1/tasks/\$tid" \\
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
-  code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \
+  code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \\
     -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
-  # Reset any mouse-tracking mode a child enabled, and drain any bytes already
-  # queued in the tty buffer from scroll/click events during the two curl
-  # calls above — leaked SGR motion sequences type themselves into fzf's
-  # query as literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05,
-  # ported here from done.sh/defer.sh/edit.sh/split.sh). Runs before the
-  # success/failure branch below so both outcomes get the cleanup.
-  printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
-  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
   if [[ "\$code" == 2* ]]; then
-    # Hide by id (\$REMOVED.ids), NOT by name (\$REMOVED): delete already
-    # resolves the exact task via \$tid (collision-proof, 2026-07-12), but
-    # hiding by its annotation-stripped name suppressed EVERY task sharing
-    # that name — two identically-named open tasks, delete one, both vanish
-    # from the list until the next full cache refresh (2026-08-17). Same
-    # mechanism enter.sh/done.sh/defer already use for this exact reason.
-    echo "\$tid" >> "\$REMOVED.ids"
     printf '%s' "\$pre" | python3 -c "
 import json, sys
 name, fallback, tid = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2370,14 +2347,10 @@ if not isinstance(task, dict) or not task.get('content'):
 print(json.dumps({'type': 'delete', 'names': [name], 'task': task, 'task_id': tid},
                  ensure_ascii=False))
 " "\${fullname:-\$clean}" "\$clean" "\$tid" | python3 "$UNDO_FAST" --append "$DTD_JOURNAL"
-    # Daily habit (0neon/夜neon) deleted = N/A for today: write an explicit 0
-    # to its 0n Neon column (blank = not done yet; 0 = didn't apply/happen —
-    # Janus hides explicit-0 habits from its strip) and record the name in the
-    # day's NA file so validate-daily-habits --fix doesn't resurrect the card
-    # the same day. The recurring card returns on the next day's validation.
-    # (ctrl-z undo recreates the card but leaves the 0; re-completing the
-    # habit overwrites it.)
-    python3 - "\${fullname:-\$clean}" "\$pre" << 'NAEOF' &
+    # Daily habit (0neon/夜neon) deleted = N/A for today: explicit 0 in its
+    # 0n column + the day's NA file, so validate-daily-habits --fix doesn't
+    # resurrect the card the same day (ctrl-z recreates the card, keeps the 0).
+    python3 - "\${fullname:-\$clean}" "\$pre" << 'NAEOF'
 import datetime, json, pathlib, subprocess, sys
 name = sys.argv[1].strip()
 try:
@@ -2403,8 +2376,11 @@ subprocess.run(
 NAEOF
     echo "🗑 Deleted: \$clean" > "\$HDR"
   else
-    echo "? delete failed (HTTP \$code): \$clean" > "\$HDR"
+    grep -v -x -F -- "\$tid" "\$REMOVED.ids" > "\$REMOVED.ids.tmp" 2>/dev/null
+    mv "\$REMOVED.ids.tmp" "\$REMOVED.ids"
+    echo "? delete failed (HTTP \$code): \$clean (restored to list)" > "\$HDR"
   fi
+  ) >/dev/null 2>&1 &!
 else
   echo "? delete: task not found" > "\$HDR"
 fi
