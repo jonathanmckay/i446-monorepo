@@ -539,6 +539,7 @@ DTD_BLOCKAPPLY="/tmp/dtd-$DTD_ID.blockapply.sh"
 # and esc/ctrl-c (back to the list from the picker, else exit).
 DTD_PICKENTER="/tmp/dtd-$DTD_ID.pickenter.sh"
 DTD_BACK="/tmp/dtd-$DTD_ID.back.sh"
+DTD_PREVIEW_OPEN="/tmp/dtd-$DTD_ID.preview-open"  # ctrl-o details pane shown
 # View mode (ctrl-t toggles): empty = default priority order, 'project' = grouped
 # by domain label. Per-session; the list generator reads it as its 8th arg.
 DTD_VIEW="/tmp/dtd-$DTD_ID.view"
@@ -1381,15 +1382,27 @@ chmod +x "$DTD_PICKENTER"
 # bare list, exit. So pressing either twice from the schedule screen exits.
 cat > "$DTD_BACK" << BACKEOF
 #!/bin/zsh
+# Prints the WHOLE action list (esc/ctrl-c bind is just transform(this)), so
+# closing the ctrl-o details pane can leave the query and list alone
+# (2026-10-07: "if I do ctrl+o - escape should close the dialog").
+if [[ -e "$DTD_PREVIEW_OPEN" ]]; then
+  rm -f "$DTD_PREVIEW_OPEN"
+  print -n 'hide-preview'
+  exit 0
+fi
+acts=""
 if [[ -e "$DTD_BLOCKPICK" ]]; then
-  [[ -e "$DTD_BLOCKPICK.custom" ]] && print -n 'change-prompt(> )'
+  [[ -e "$DTD_BLOCKPICK.custom" ]] && acts="change-prompt(> )+"
   rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days"
   echo "↩ back to list" > "$DTD_HDR"
 elif [[ -z "\$1" ]]; then
   zmodload zsh/datetime 2>/dev/null
   print -- "\$EPOCHREALTIME\tback-abort\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
   print -n abort
+  exit 0
 fi
+# DTD_RELOAD / DTD_HDRGEN are exported by dtd before fzf starts.
+print -rn -- "\${acts}reload(\$DTD_RELOAD)+clear-query+transform-header(\$DTD_HDRGEN)"
 exit 0
 BACKEOF
 chmod +x "$DTD_BACK"
@@ -3101,6 +3114,7 @@ while true; do
   # as long as the fzf process stays open, no relaunch required.
   DTD_LIST_CMD="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' \"\$(date +%Y-%m-%d)\" '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
   DTD_RELOAD="${DTD_LIST_CMD}"
+  export DTD_RELOAD DTD_HDRGEN  # back.sh prints its own reload (esc/ctrl-c)
   # --no-sort: keep dtd's priority order while filtering, so matches stay in
   # dtd's priority order instead of fuzzy-rank order (regression 2026-06-06).
   # --bind change:first: with --no-sort, fzf does not snap the cursor back to
@@ -3147,10 +3161,10 @@ while true; do
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
       --preview "python3 $DTD_DETAIL {2}" --preview-window "up,55%,hidden,wrap,border-bottom" \
-      --bind "ctrl-o:toggle-preview" \
+      --bind "ctrl-o:toggle-preview+execute-silent([[ -e '$DTD_PREVIEW_OPEN' ]] && rm -f '$DTD_PREVIEW_OPEN' || : > '$DTD_PREVIEW_OPEN')" \
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "esc:transform($DTD_BACK {q})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-c:transform($DTD_BACK {q})+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "esc:transform($DTD_BACK {q})" \
+      --bind "ctrl-c:transform($DTD_BACK {q})" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
@@ -3303,4 +3317,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_PREVIEW_OPEN" "$DTD_EDIT"

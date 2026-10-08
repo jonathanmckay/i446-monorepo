@@ -73,7 +73,10 @@ def _bind(key):
 def test_enter_esc_ctrlc_ctrld_bindings():
     assert "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query" in _bind("enter")
     for k in ("esc", "ctrl-c"):
-        assert f"{k}:transform($DTD_BACK {{q}})+reload($DTD_RELOAD)+clear-query" in _bind(k)
+        # back.sh prints the whole action list itself (2026-10-07), so
+        # closing the ctrl-o pane can skip the reload/clear-query tail
+        assert f'--bind "{k}:transform($DTD_BACK {{q}})"' == _bind(k)
+    assert "export DTD_RELOAD DTD_HDRGEN" in SRC
     assert "ctrl-d:execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})" in _bind("ctrl-d")
     assert "ctrl-d: 📅schedule" in SRC and "esc: back" in SRC
 
@@ -112,13 +115,32 @@ def test_pickenter_rows_and_main_list_use_enter():
 
 # --- esc / ctrl-c router -----------------------------------------------------
 
+# DTD_RELOAD / DTD_HDRGEN are unset in these unit runs.
+TAIL = "reload()+clear-query+transform-header()"
+
+
+def test_esc_closes_ctrl_o_details_pane_first():
+    """2026-10-07: "if I do ctrl+o - escape should close the dialog" -- and
+    only that: no reload, no clear-query, no abort, schedule screen kept."""
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        s, _ = _gen(tmp, "DTD_BACK", "BACKEOF", extra=f'DTD_PREVIEW_OPEN="{tmp}/pv"')
+        (tmp / "pv").write_text("")
+        (tmp / "blockpick").write_text("A1\n")
+        assert _run(s, "") == "hide-preview"
+        assert not (tmp / "pv").exists() and (tmp / "blockpick").exists()
+        assert _run(s, "") == TAIL, "next esc backs out of the schedule screen as before"
+    assert "ctrl-o:toggle-preview+execute-silent(" in _bind("ctrl-o")
+    assert "$DTD_PREVIEW_OPEN" in _bind("ctrl-o")
+
+
 def test_back_from_schedule_screen_returns_to_list():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         s, _ = _gen(tmp, "DTD_BACK", "BACKEOF")
         (tmp / "blockpick").write_text("A1\n")
         (tmp / "blockpick.mode").write_text("days")
-        assert _run(s, "") == "", "must not abort while on the schedule screen"
+        assert _run(s, "") == TAIL, "must not abort while on the schedule screen"
         assert not (tmp / "blockpick").exists() and not (tmp / "blockpick.mode").exists()
         assert "back to list" in (tmp / "hdr").read_text()
 
@@ -128,7 +150,7 @@ def test_back_on_main_list_exits_or_clears_query():
         tmp = Path(td)
         s, _ = _gen(tmp, "DTD_BACK", "BACKEOF")
         assert _run(s, "") == "abort", "bare list: second press exits dtd"
-        assert _run(s, "foo") == "", "list with a query: just clear it (bind tail)"
+        assert _run(s, "foo") == TAIL, "list with a query: just clear it"
 
 
 # --- apply: day rows go to defer with a preset, never the block writer -------
@@ -286,7 +308,7 @@ def test_esc_from_custom_entry_restores_prompt():
         s, _ = _gen(tmp, "DTD_BACK", "BACKEOF")
         (tmp / "blockpick").write_text("A1\n")
         (tmp / "blockpick.custom").write_text("")
-        assert _run(s, "") == "change-prompt(> )"
+        assert _run(s, "") == "change-prompt(> )+" + TAIL
         assert not (tmp / "blockpick.custom").exists()
 
 
