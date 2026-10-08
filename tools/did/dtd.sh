@@ -2381,6 +2381,12 @@ NAEOF
     echo "? delete failed (HTTP \$code): \$clean (restored to list)" > "\$HDR"
   fi
   ) >/dev/null 2>&1 &!
+  # Reset any mouse-tracking mode a child enabled, and drain bytes already
+  # queued in the tty buffer (bug 2026-07-05; echo off first, 2026-09-24) —
+  # cheap now that the Todoist calls no longer run inline.
+  printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
+  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 else
   echo "? delete: task not found" > "\$HDR"
 fi
