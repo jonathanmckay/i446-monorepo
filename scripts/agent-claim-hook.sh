@@ -13,17 +13,14 @@ sid=""
 IFS= read -r -d '' -t 1 j 2>/dev/null
 [[ "$j" =~ '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"' ]] && sid="${match[1]}"
 [[ -z "$sid" ]] && sid="${CLAUDE_CODE_SESSION_ID:-}"
-# TEMP 2026-10-08: /notes still claimed nothing after the <command-name> fix.
-# Record the head of each prompt payload to see what a slash command looks like.
-[[ "$1" == working ]] && print -r -- "$(date +%T) ${j[1,400]}" >> "$HOME/.local/state/claim-hook-debug.log" 2>/dev/null
 # `/d <task>[: request]` / `/d new <task>` (or /claim): claim (or create +
 # claim) right here, before the model starts, so dtd shows it in ~1s. Python
 # only runs for these prompts; its stdout lands in the model's context so the
 # /d skill knows it's already done.
-# `/0t`, `/1s897` and `/notes` claim their own card the same way (agent_claims.SKILL_CLAIMS).
+# `/0t`, `/1s897`, `/notes` and `/0g` claim their own card the same way (agent_claims.SKILL_CLAIMS).
 # A bare `[N]` while holding a claim sets the claimed task's value (not points).
-if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|1s897|notes)([[:space:]]|")'\
-      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|1s897|notes)[[:space:]]*<' \
+if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|1s897|notes|0g)([[:space:]]|")'\
+      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|1s897|notes|0g)[[:space:]]*<' \
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi
