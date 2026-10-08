@@ -5,10 +5,12 @@
 # cloud so Ix's internal disk never has to hold it, and gives a copy that
 # survives losing the Microsoft account. Files deleted or overwritten in
 # OneDrive are moved to a dated folder, never dropped.
+# Personal Vault is excluded: the Graph API can't list it (locked vault), and
+# it would fail every run.
 # One-time setup: `rclone config` remote named onedrive-personal (OneDrive, personal).
 set -u
 export PATH="/opt/homebrew/bin:$PATH"
-DRIVE="/Volumes/Ix Backup"
+DRIVE="/Volumes/OneDrive Backup"   # own APFS volume: TM owns "Ix Backup"
 DEST="$DRIVE/OneDrive-Personal"
 LOG="$HOME/.cache/onedrive-backup/$(date +%F).log"
 mkdir -p "$(dirname "$LOG")"
@@ -17,6 +19,7 @@ alert() { "$HOME/i446-monorepo/bin/cron-alert.sh" onedrive-backup "$1" "$2"; }
 rclone listremotes | grep -q '^onedrive-personal:$' || { alert "rclone remote missing" "run rclone config on Ix (remote onedrive-personal)"; exit 1; }
 rclone sync onedrive-personal: "$DEST" \
   --backup-dir "$DRIVE/OneDrive-Personal-changed/$(date +%F)" \
+  --exclude "/Personal Vault/**" \
   --transfers 4 --checkers 8 --fast-list --log-level INFO --log-file "$LOG"
 rc=$?
 [ $rc -eq 0 ] || alert "rclone sync failed (rc=$rc)" "see $LOG on Ix"
