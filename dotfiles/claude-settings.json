@@ -9,7 +9,6 @@
       "Bash(ssh ix:*)"
     ]
   },
-  "model": "opus",
   "hooks": {
     "PermissionRequest": [
       {
@@ -173,7 +172,6 @@
   "companyAnnouncements": [
     "Claude Code on Windows can now run PowerShell natively. No more wrapping commands through git bash — Claude writes and executes PowerShell directly, with proper syntax and fewer escaping headaches. See https://code.claude.com/docs/en/tools-reference#powershell-tool to enable this."
   ],
-  "tui": "fullscreen",
   "autoMode": {
     "allow": [
       "$defaults",
@@ -190,18 +188,12 @@
       "Direct/raw AppleScript or Excel writes to Neon分v12.2.xlsx that bypass the journaled excel-http daemon (ix-osa.sh) or the did-fast/neon-write.py tooling — those writes aren't captured in the neon-ledger audit.",
       "Editing or disabling launchd/cron jobs, hooks in ~/.claude/settings.json, or automation like term-color.sh / tailscale-watchdog."
     ],
-    "hard_deny": [
-      "$defaults",
-      "Sending a message, email, or DM to another person as Jonathan McKay (iMessage, Gmail, Slack, Teams) without him first reading and approving the exact text.",
-      "Placing orders, submitting AppFolio actions that affect tenants or leases (notices, rent changes, evictions), or any other outward-facing action on his behalf without asking first.",
-      "Any action that spends money or moves funds.",
-      "Reading or exfiltrating credentials/secrets from .env files, gcp-oauth.keys.json, or other credential stores under ~/i446-monorepo or ~/.config."
-    ],
     "environment": [
       "$defaults",
       "This is Jonathan McKay's personal automation monorepo (~/i446-monorepo, symlinked from ~/vault/i447/i446/i446-monorepo) and its companion Obsidian vault (~/vault). It runs his personal productivity system: Toggl time tracking, Todoist tasks, a Neon points/habit-tracking Excel workbook, and AppFolio property-management integrations for McKay Capital rental properties.",
       "Money and outward-facing actions are pre-negotiated boundaries the user has set for himself: never send a message to another person under his name without him first reading and approving the exact text (drafting is fine, sending is not); never place an order or take another outward-facing action without asking first; never spend money or move funds — propose instead.",
       "Writes to the Neon workbook (~/OneDrive/vault-excel/Neon分v12.2.xlsx) should go through the journaled excel-http daemon on host 'ix' or the documented did-fast/neon-write.py tooling. Raw/direct AppleScript writes to that file bypass the audit ledger and are not trusted the same way."
     ]
-  }
+  },
+  "tui": "fullscreen"
 }
