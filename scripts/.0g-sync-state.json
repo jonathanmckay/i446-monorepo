@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-09T06:00:01.106650-07:00"
+  "tasks": {
+    "2 outdoor activities with theo": {
+      "todoist_id": "6hj2Hvv3w9h46q82",
+      "minutes": 80
+    },
+    "maximize the 禅修天": {
+      "todoist_id": "6hj2Hvx9cVjvw2xR",
+      "minutes": 100
+    }
+  },
+  "last_sync": "2026-10-09T08:00:04.414972-07:00"
 }
