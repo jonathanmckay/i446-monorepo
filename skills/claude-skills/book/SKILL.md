@@ -88,6 +88,13 @@ reading the email), `select_browser` the other one.
    `open -a "Google Chrome" https://claude.ai/chrome`, wait ~6s, retry ONCE.
    Still down → `open -a "Google Chrome" "<search url>"` and report
    `WARN: Goodreads not updated — Chrome extension not connected; page opened for manual shelving`.
+   If only the 个 profile is connected (Goodreads shows a header "Sign in"
+   there), wake the m5c7.com profile directly — it is Chrome folder
+   `Profile 11` — with
+   `/usr/bin/open -na "Google Chrome" --args --profile-directory="Profile 11" https://claude.ai/chrome`,
+   wait ~12s, `list_connected_browsers`, and `select_browser` the new entry
+   (verified 2026-10-09). Plain `open` goes through the cmux shim and picks
+   the wrong profile.
    Then `tabs_create_mcp` and `navigate` the new tab to the search URL.
 3. **Land on the book page.** An ISBN search returns a results list (it does
    not redirect). `find` `"search result link for the book titled <title>"`,
@@ -111,6 +118,11 @@ reading the email), `select_browser` the other one.
 7. **Choose Read.** The dialog is titled `Step 1 of 2: Choose a shelf for this
    book` with buttons `Want to Read`, `Currently Reading`, `Read` (plus
    custom shelves, `Remove from my shelf`, `Continue to tags`, `Close`).
+   The chevron's name is `Tap to choose a shelf for this book`; refs from an
+   earlier `find` go stale after page load, so re-`find` before clicking, and
+   if the dialog doesn't appear, click the chevron once more. The dialog can
+   render outside the viewport: `scroll_to` the Read button's ref before
+   clicking it, or the click silently does nothing (2026-10-09).
    `find` `"Read shelf button in the choose-a-shelf dialog"` and click the one
    whose name is exactly `Read` (or `Read, selected`), never `Want to Read`
    or `Did Not Finish`. Wait 2s.
