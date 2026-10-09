@@ -83,7 +83,7 @@ naming the offending cells.
 
 - Path: `~/vault/hcmp/moral-audit/YYYY-MM-DD-moral-audit.md` (hcmp — this
   ritual's actual journal home; JM has been writing "moral audit" entries
-  under `hcmp/o314/` since 2011, and a standalone `hcmp/Morals + Audit.md`
+  under `hcmp/o314/` since 2011, and a standalone `hcmp/morals.md` (audit history in `hcmp/moral-audit.md`)
   predates this skill. Moved 2026-08-13 from an initial `g245/5e4/` guess.)
 - Frontmatter: `title: "Moral Audit YYYY-Qn"`, `date`, `type: moral-audit`,
   `tags: [hcmp]`
