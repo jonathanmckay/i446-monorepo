@@ -552,18 +552,6 @@
     "rent": "1705.00"
   },
   {
-    "unit_id": 1232,
-    "property_name": "tc68",
-    "unit": "D083",
-    "tenant_name": "Maher, Nathan",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2023-04-10",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-01-01",
-    "rent": "1520.00"
-  },
-  {
     "unit_id": 800,
     "property_name": "v202",
     "unit": "14",
@@ -1018,18 +1006,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1025.00"
-  },
-  {
-    "unit_id": 207,
-    "property_name": "c616",
-    "unit": null,
-    "tenant_name": "Bryan, Carol",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2026-01-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1995.00"
   },
   {
     "unit_id": 1447,
@@ -3322,6 +3298,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1525.00"
+  },
+  {
+    "unit_id": 1232,
+    "property_name": "tc68",
+    "unit": "D083",
+    "tenant_name": "Maher, Nathan",
+    "status": "Renewed",
+    "lease_sign_date": null,
+    "move_in": "2023-04-10",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2026-10-01",
+    "rent": "1595.70"
   },
   {
     "unit_id": 1234,

@@ -7688,5 +7688,35 @@
     "unit": "C202",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-09",
+    "effective": "2026-10-08",
+    "kind": "moveout",
+    "unit_id": "1335",
+    "prop": "c702",
+    "unit": "D203",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-09",
+    "effective": "2026-10-09",
+    "kind": "movein",
+    "unit_id": "453",
+    "prop": "w117",
+    "unit": "10",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-09",
+    "effective": "2026-10-09",
+    "kind": "movein",
+    "unit_id": "228",
+    "prop": "p705",
+    "unit": "12",
+    "tenant": null,
+    "baseline": false
   }
 ]
