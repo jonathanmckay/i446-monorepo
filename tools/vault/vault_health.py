@@ -9,6 +9,9 @@ prompt, so starting the task opens the review with the list in hand).
 
 Checks (v1, 2026-09-27):
   singletons     folders under the ~3-doc rule (tools/vault/singleton-audit.py scan)
+  duplicate-notes one note name held by 2+ live notes outside dated folders,
+                 with the notes that bare-link it (added 2026-10-09 after
+                 hcmc/epcn.md and hcmp/epcn.md diverged unnoticed)
   syncthing      device connectivity, folder state, remote completion, errors
   git-autopush   ~/vault and ~/i446-monorepo: stuck rebase, stale commit,
                  unpushed commits, autopush log warnings
@@ -99,6 +102,77 @@ def check_singletons() -> Finding:
         return Finding("singletons", "ok", "no folders under the ~3-doc rule")
     detail = [f"{r['rel']}/ — {', '.join(r['files']) or 'note only'}" for r in rows]
     return Finding("singletons", "warn", f"{len(rows)} folder(s) under the ~3-doc rule", detail, review=True)
+
+
+WIKILINK_RE = re.compile(r"(?<!!)\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]")
+# Note names that legitimately repeat. Grow this from /1-i446 answers, the way
+# singleton-audit.py's EXCLUDE_PREFIXES records confirmed exceptions.
+DUP_NAMES_OK = {
+    "claude",       # per-folder CLAUDE.md instruction files, one per tree by design
+    "portfolio",    # h335/m5x2/fund-*/portfolio/portfolio.md, one folder note per fund
+}
+
+
+def _skip_dir(rel: str) -> bool:
+    """Same exclusions as the singleton audit (archives, mirrors, transcripts)."""
+    parts = rel.split("/")
+    if any(p in singleton_audit.EXCLUDE_NAMES or p.startswith(".") for p in parts):
+        return True
+    return any(rel == e or rel.startswith(e.rstrip("/") + "/") for e in singleton_audit.EXCLUDE_PREFIXES)
+
+
+def _dated(rel: str) -> bool:
+    return any(singleton_audit.DATE_DIR_RE.match(p) for p in rel.split("/")[:-1])
+
+
+def scan_duplicate_notes(vault: Path = VAULT) -> dict[str, dict]:
+    """{name: {"paths": [rel...], "linked_from": [rel...]}} for every note
+    name held by 2+ live notes outside dated folders (o314/2019/life.md vs
+    o314/2020/life.md is a journal, not a conflict). linked_from lists notes
+    with a bare [[name]] link, i.e. the ones Obsidian resolves by guessing."""
+    notes: dict[str, list[str]] = {}
+    for root, dirs, files in os.walk(vault):
+        rel = os.path.relpath(root, vault)
+        rel = "" if rel == "." else rel
+        if rel and _skip_dir(rel):
+            dirs[:] = []
+            continue
+        for f in files:
+            if f.endswith(".md"):
+                notes.setdefault(f[:-3].lower(), []).append(f"{rel}/{f}" if rel else f)
+    out = {}
+    for k, paths in notes.items():
+        live = sorted(p for p in paths if not _dated(p))
+        if len(live) > 1 and k not in DUP_NAMES_OK:
+            out[k] = {"paths": live, "linked_from": []}
+    if not out:
+        return out
+    for paths in notes.values():
+        for src in paths:
+            try:
+                text = (vault / src).read_text(errors="ignore")
+            except OSError:
+                continue
+            for m in WIKILINK_RE.finditer(text):
+                name = m.group(1).strip()
+                key = (name[:-3] if name.lower().endswith(".md") else name).lower()
+                if "/" not in name and key in out and src not in out[key]["linked_from"]:
+                    out[key]["linked_from"].append(src)
+    return out
+
+
+def check_duplicate_notes() -> Finding:
+    dups = scan_duplicate_notes()
+    if not dups:
+        return Finding("duplicate-notes", "ok", "no note name is shared by two live notes")
+    detail = []
+    for k, v in sorted(dups.items(), key=lambda kv: (-len(kv[1]["linked_from"]), kv[0])):
+        lf = sorted(v["linked_from"])
+        tail = (f" — [[{k}]] from {', '.join(lf[:3])}" + (f" +{len(lf) - 3}" if len(lf) > 3 else "")) if lf else ""
+        detail.append(f"{k}: {' | '.join(v['paths'])}{tail}")
+    return Finding("duplicate-notes", "warn",
+                   f"{len(dups)} note name(s) held by 2+ live notes (merge, rename, or confirm as OK)",
+                   detail, review=True)
 
 
 def _st_get(path: str, key: str):
@@ -355,7 +429,7 @@ def check_alerts(now: dt.datetime) -> Finding:
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, lambda: check_syncthing(now), lambda: check_git_autopush(now),
+    for fn in (check_singletons, check_duplicate_notes, lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, lambda: check_alerts(now)):
         try:
@@ -372,7 +446,7 @@ ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
 def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
-             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, Syncthing, git autopush, "
+             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, Syncthing, git autopush, "
              "skills backup, OneDrive Neon, Time Machine, alerts. Review items are in the 😈 Todoist task.", "",
              "| Check | Status | Summary | Auto-fixed |", "|---|---|---|---|"]
     for f in findings:

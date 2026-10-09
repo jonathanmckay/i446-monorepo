@@ -1,6 +1,6 @@
 ---
 name: "1-i446"
-description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
+description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
 user-invocable: true
 ---
 
@@ -26,6 +26,9 @@ hand does the same thing interactively, from whichever machine you are on
 3. Apply the answers. For singleton folders: flatten (prefix + move up), merge
    into the canonical doc, delete, or record the folder in
    `singleton-audit.py`'s `EXCLUDE_PREFIXES` as a confirmed exception. For
+   duplicate note names: merge into one canonical note (carry over any
+   unique lines, then repoint the bare `[[name]]` links listed), rename one,
+   or add the name to `vault_health.py`'s `DUP_NAMES_OK`. For
    sync/backup findings: fix what he approves; if a fix is not something a
    script should own, file a Todoist task instead.
 4. Re-run the script. Zero review items closes its own Todoist task.

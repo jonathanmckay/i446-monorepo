@@ -49,3 +49,21 @@ def test_git_state_flags_stuck_rebase_and_unpushed(tmp_path):
     (repo / ".git/rebase-merge").mkdir()
     s, d, r = vh._git_state(repo, None, now, is_pusher=True)
     assert s == "fail" and r and "REBASE" in d[0]
+
+
+def test_duplicate_notes_flags_live_dupes_not_journals_or_archives(tmp_path, monkeypatch):
+    vh = _load()
+    monkeypatch.setattr(vh.singleton_audit, "EXCLUDE_PREFIXES", ("z_arcv",))
+    for rel, body in {
+        "hcmc/epcn.md": "", "hcmp/epcn.md": "",             # live dupes: the 2026-10-09 case
+        "hcmc/hcmc.md": "[[epcn]] and [[hcmp/epcn|ok]]",     # same-folder bare link still listed
+        "hcmp/hcmp.md": "[[epcn|EPCN]] ![[epcn]]",
+        "o314/2019/life.md": "", "o314/2020/life.md": "",    # dated journal folders: not a conflict
+        "z_arcv/old/epcn.md": "[[epcn]]",                    # archive: ignored entirely
+        "a/CLAUDE.md": "", "b/CLAUDE.md": "",                # DUP_NAMES_OK
+    }.items():
+        p = tmp_path / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(body)
+    d = vh.scan_duplicate_notes(tmp_path)
+    assert set(d) == {"epcn"}
+    assert d["epcn"]["paths"] == ["hcmc/epcn.md", "hcmp/epcn.md"]
+    assert sorted(d["epcn"]["linked_from"]) == ["hcmc/hcmc.md", "hcmp/hcmp.md"]
