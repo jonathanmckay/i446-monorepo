@@ -22,6 +22,7 @@ from pathlib import Path
 REVIEWS_DIR = Path.home() / "vault" / "hcmc" / "reviews"
 BLOG_REVIEWS_DIR = Path.home() / "vault" / "hcmp" / "o315" / "blog" / "content" / "reviews"
 BLOG_URL = "https://jonathanmckay.com/reviews/{slug}/"
+TO_READ_FILE = Path.home() / "vault" / "hcmc" / "to-read.md"
 
 # Annual book goal for the reading challenge. Placeholder until JM sets it.
 READING_GOALS = {2026: 60}   # matches the Goodreads 2026 challenge (2026-10-05)
@@ -410,6 +411,32 @@ def load_books(reviews_dir: Path = REVIEWS_DIR, blog_dir: Path = BLOG_REVIEWS_DI
     return books
 
 
+def load_to_read(path: Path = TO_READ_FILE) -> list[dict]:
+    """The want-to-read shelf, from the hcmc/to-read.md table
+    (| Title | Link | 分 | Time | Area |). Only rows whose title cell reads
+    `Title — Author` count as reading material; emails and chores in the same
+    table are skipped, as are rows whose Link is "Done". Kept out of the
+    reviews database so unread books never count toward the challenge."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    out = []
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or " — " not in cells[0] or cells[1].lower() == "done":
+            continue
+        title, author = (x.strip() for x in cells[0].rsplit(" — ", 1))
+        note = ""
+        m = re.match(r"^(.*?)\s*\((.+)\)\s*$", author)
+        if m:   # "Al-Ghazali (tr. T.J. Winter)": keep the name clean for cover search
+            author, note = m[1], m[2]
+        link = re.search(r"\((https?://[^)]+)\)", cells[1])
+        out.append({"id": "", "title": title, "author": author, "note": note,
+                    "isbn": "", "link": link[1] if link else None})
+    return out
+
+
 def read_date(b: dict) -> date | None:
     """When the book counts as read, or None if it hasn't been."""
     if b["status"] == "reading":
@@ -447,10 +474,11 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
     reading = sorted([b for b in books if b["status"] == "reading"],
                      key=lambda b: b["date"] or date.min, reverse=True)
     events = build_events(books)[:FEED_LIMIT]
+    to_read = load_to_read()
 
     shown = {id(b) for b in reading} | {id(b) for b in read} | {id(e["book"]) for e in events}
     if covers:
-        shown_books = [b for b in books if id(b) in shown]
+        shown_books = [b for b in books if id(b) in shown] + to_read
         missing = attach_covers(shown_books)
         if missing:
             # A few new books (the usual case: one just added via /book) are
@@ -483,6 +511,7 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
             "reviews": sum(1 for b in read if b["excerpt"]),
         },
         "reading": [card(b) for b in reading],
+        "to_read": [card(b) for b in to_read],
         "read": [card(b) for b in read],
         "feed": [{"type": e["type"], "date": e["date"].isoformat(), "book": card(e["book"])}
                  for e in events],
@@ -601,9 +630,13 @@ __SHARED_STYLE__
       <h2>Currently Reading</h2>
       <div id="reading"><div class="muted">loading…</div></div>
     </div>
-    <div class="card challenge">
+    <div class="card challenge" style="margin-bottom:24px">
       <h2 id="chTitle">Reading Challenge</h2>
       <div id="challenge"><div class="muted">loading…</div></div>
+    </div>
+    <div class="card">
+      <h2>Want to Read</h2>
+      <div id="toread"><div class="muted">loading…</div></div>
     </div>
   </div>
 
@@ -649,6 +682,13 @@ fetch('/api/reads').then(r => r.json()).then(d => {
       <div><div class="t">${esc(b.title)}</div><div class="a">by ${esc(b.author)}</div>
       <div class="a">since ${esc(ago(b.date))}${b.pages ? ' · ' + b.pages + ' pages' : ''}</div></div>
     </div>`).join('') : '<div class="muted">Nothing in progress. /book started &lt;title&gt;</div>';
+
+  // Want to read
+  document.getElementById('toread').innerHTML = (d.to_read || []).length ? d.to_read.map(b => `
+    <div class="book-row">${cover(b, 'sm')}
+      <div><div class="t">${b.link ? `<a href="${esc(b.link)}" target="_blank">${esc(b.title)}</a>` : esc(b.title)}</div><div class="a">by ${esc(b.author)}</div>
+      ${b.note ? `<div class="a">${esc(b.note)}</div>` : ''}</div>
+    </div>`).join('') : '<div class="muted">Empty. Add `Title — Author` rows to hcmc/to-read.md</div>';
 
   // Challenge
   const c = d.challenge;
