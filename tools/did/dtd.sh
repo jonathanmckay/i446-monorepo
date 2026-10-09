@@ -2580,11 +2580,20 @@ api('POST', f'/tasks/{tid}', {
 #    column mapping, so only look one up for the square-bracket case.
 #    --points-only skips Todoist matching: without it did-fast re-finds the
 #    just-renamed remainder task and closes it.
-import subprocess
+#    Domains come from did-fast's own LABEL_TO_0FEN: a hardcoded copy here
+#    went stale and lacked m828, so an @m828 split logged nothing while the
+#    header still claimed +N today (bug 2026-10-09).
+import subprocess, importlib.util, sys as _sys
+try:
+    _spec = importlib.util.spec_from_file_location('did_fast_split', '$HOME/i446-monorepo/tools/did/did-fast.py')
+    _df = importlib.util.module_from_spec(_spec); _sys.modules['did_fast_split'] = _df; _spec.loader.exec_module(_df)
+    domains = set(_df.LABEL_TO_0FEN) - {'0g'}
+except Exception:
+    domains = {'i9','i447','f693','f694','m5x2','m828','g245','infra','cc','hcmc','hcm','hci','hcb','hcbp','xk87','xk88','xk20','xk22','s897'}
 label_arg = ''
 if open_b == '[':
     for l in labels:
-        if l in ('i9','i447','f693','f694','m5x2','g245','infra','cc','hcmc','hcb','hcbp','xk87','xk88','xk20','xk22','s897'):
+        if l in domains:
             label_arg = f'@{l}'
             break
 # did-fast splits its input on commas/semicolons — a task name containing
@@ -2620,6 +2629,8 @@ subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
 # Write results
 with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
 msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
+if not (didfast_out or {}).get('results'):
+    msg = f'⚠ split: {open_b}{pts_today}{close_b} NOT logged (did-fast: no domain) / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
 " "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}"
 
