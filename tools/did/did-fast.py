@@ -3055,6 +3055,29 @@ def _past_target(items: list, past_ok: bool) -> bool:
     return td != f"{t.month}/{t.day}"
 
 
+_JSON_OUT = None  # file object on the real stdout, set by _redirect_stdout_to_stderr
+
+
+def _redirect_stdout_to_stderr() -> None:
+    """Save the real stdout for _emit() and point fd 1 (Python and any child
+    process) at stderr. Idempotent."""
+    global _JSON_OUT
+    if _JSON_OUT is not None:
+        return
+    sys.stdout.flush()
+    _JSON_OUT = os.fdopen(os.dup(1), "w", encoding="utf-8")
+    os.dup2(2, 1)
+
+
+def _emit(obj) -> None:
+    """Write the run's JSON result to the real stdout (see main())."""
+    if _JSON_OUT is None:
+        print(json.dumps(obj, ensure_ascii=False, indent=2))
+        return
+    _JSON_OUT.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+    _JSON_OUT.flush()
+
+
 def main():
     _install_watchdog()
     if len(sys.argv) < 2:
@@ -3102,6 +3125,15 @@ def main():
         return
 
     argv = sys.argv[1:]
+    # Stdout is a JSON protocol here (dtd's worker, undo-fast's journal and
+    # Janus all parse it). Anything else that reaches fd 1 during the run, a
+    # stray print in an imported module or a child process inheriting fd 1,
+    # turns the output into invalid JSON, and dtd then reports a completion
+    # that DID land as "? restored to list" (2026-10-10: 15 of 54 in one
+    # session, habits all present in completed-today.json, none journaled).
+    # Point fd 1 at stderr for the whole run; _emit() writes the result to the
+    # saved real stdout, so stray text shows up in dtd's .err log instead.
+    # Script runs only (see __main__): in-process callers keep sys.stdout.
     # --points-only: log points to 0分/completed-today but skip all Todoist
     # side effects (match/close/posthoc/build-order). Used by dtd's split.
     points_only = "--points-only" in argv
@@ -3130,7 +3162,7 @@ def main():
     # 1. Parse
     items = parse_input(raw)
     if not items:
-        print(json.dumps({"error": "no items parsed"}))
+        _emit({"error": "no items parsed"})
         sys.exit(1)
     points_log_run = is_points_log_run(items)
     if points_log_run:
@@ -3193,8 +3225,7 @@ def main():
             except Exception as e:  # noqa: BLE001
                 print(f"cache refresh failed: {e}", file=sys.stderr)
         if not items:
-            print(json.dumps({"results": ritual_entries, "agent_needed": []},
-                             ensure_ascii=False, indent=2))
+            _emit({"results": ritual_entries, "agent_needed": []})
             return
 
     # 2. Load caches
@@ -3933,8 +3964,10 @@ def main():
         except Exception:
             pass
 
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+    _emit(output)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("--refresh") and sys.argv[1] != "--ritual":
+        _redirect_stdout_to_stderr()
     main()

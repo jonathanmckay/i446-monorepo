@@ -27,26 +27,26 @@
   },
   "2026-07": {
     "concessions": 51071.9,
-    "gpr": 1280832.62,
+    "gpr": 1276752.62,
     "lines": 310,
     "units": 264
   },
   "2026-08": {
     "concessions": 58868.56,
-    "gpr": 1587819.15,
+    "gpr": 1549999.15,
     "lines": 328,
     "units": 276
   },
   "2026-09": {
     "concessions": 63786.6,
-    "gpr": 0.0,
+    "gpr": 1540053.7,
     "lines": 337,
     "units": 283
   },
   "2026-10": {
-    "concessions": 51749.86,
+    "concessions": 52020.83,
     "gpr": 0.0,
-    "lines": 288,
-    "units": 253
+    "lines": 290,
+    "units": 255
   }
 }

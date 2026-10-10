@@ -7718,5 +7718,35 @@
     "unit": "12",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-10",
+    "effective": "2026-10-10",
+    "kind": "movein",
+    "unit_id": "387",
+    "prop": "ps25",
+    "unit": "D29",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-10",
+    "effective": "2026-10-16",
+    "kind": "leased",
+    "unit_id": "1434",
+    "prop": "c702",
+    "unit": "K102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-10",
+    "effective": "2026-10-10",
+    "kind": "movein",
+    "unit_id": "1245",
+    "prop": "tc68",
+    "unit": "D096",
+    "tenant": null,
+    "baseline": false
   }
 ]
