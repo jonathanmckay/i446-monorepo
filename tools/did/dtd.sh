@@ -269,29 +269,17 @@ echo "ready" > "$DTD_HDR"
 touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED"
 
 (
-  # RECOVERY, not just detection (2026-08-03): "completed all -1n in a block,
-  # points still short" is a genuine FIFO race. The done keybinding's FIFO
-  # push (done.sh: `printf ... > "$FIFO"`) runs inside a short-lived, KILLABLE
-  # fzf `execute` child; a rapid-fire alt-enter burst (sub-1s apart) tears that
-  # child down mid-write, so the line NEVER reaches this loop -- always the
-  # LAST item in the cluster. Meanwhile quick-close.py (forked detached, not
-  # gated on this worker) still closes the Todoist card, so it vanishes looking
-  # "done" while its stamp and -1₦ credit silently never happen. Every prior
-  # fix (2026-07-30..08-02) only DETECTED the loss via a set-difference alert;
-  # the work still had to be redone by hand. This loop now RECOVERS it.
-  #
-  # done.sh appends every requested completion to $DTD_PUSHED.log (atomic
-  # O_APPEND, "ts<TAB>done<TAB>id<TAB>content") BEFORE the racy FIFO push, so
-  # that log -- not the ephemeral FIFO -- is the durable source of truth for
-  # "this work was requested." fd 4 below is a persistent read-write handle on
-  # the FIFO that THIS subshell owns (in-process, never a killable child); we
-  # open it <> so the open can't block waiting for a reader (we are the reader,
-  # via `done < "$DTD_FIFO"`) and so shutdown stays driven by $DTD_STOP, never
-  # by EOF. `read -t 2` polls every idle 2s; each tick reconciles the durable
-  # log against $DTD_PROCESSED_IDS and re-injects any lost id back onto the
-  # FIFO through fd 4, healing the loss through the exact same processing path
-  # within ~2s. fd 3 (opened by the parent below) keeps ≥1 writer for the whole
-  # session, so a failed read here is always this timeout, never real EOF.
+  # The FIFO race (2026-08-03): done.sh's FIFO push runs inside a short-lived,
+  # KILLABLE fzf `execute` child, and a rapid alt-enter burst tears it down
+  # mid-write, so the line never arrives (always the LAST of a cluster) while
+  # quick-close.py still closes the card. 2026-08-03..10-09 the worker healed
+  # this by diffing $DTD_PUSHED.log against processed ids on idle ticks and
+  # re-injecting the lost line; since 2026-10-10 the log simply IS the queue
+  # (see QUEUE below), so there is nothing to lose. fd 4 is a persistent
+  # read-write handle on the FIFO owned by this subshell: opened <> so the
+  # open can't block and so a read never sees EOF while the session lives;
+  # shutdown is driven by $DTD_STOP. fd 3 (opened by the parent below) keeps
+  # >=1 writer for the whole session.
   exec 4<>"$DTD_FIFO"
   typeset -A stale_alerted
   # Deferred cache refresh (2026-10-02): did-fast skips its in-completion
