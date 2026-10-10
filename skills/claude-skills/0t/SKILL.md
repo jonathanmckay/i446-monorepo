@@ -37,10 +37,14 @@ The script handles everything:
    Sources merge per-label by max (not sum) to avoid double counting.
    If `media_audit.flagged` is true (passive exceeds Toggl by >20 min),
    surface the gap and the per-app passive breakdown prominently to the user.
+   **Junk-site highlight:** every tracked site (Verge, Techmeme, Reddit,
+   YouTube, ...) is junk and belongs in an `hcmc #1` entry, never a credited
+   `#-1`. Whenever `media_audit.junk_sites.highlight` is true, put its
+   `message` at the TOP of the report, bolded, ahead of sleep.
 6. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
 7. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit`, `did`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `did`, `dashboard`.
 
 Note: the dashboard points cache only keeps positive day-values, so on the rare
 night where the dock pushes hcb net-negative the dashboard shows a blank for

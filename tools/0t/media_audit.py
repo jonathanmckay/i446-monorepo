@@ -85,6 +85,10 @@ MEDIA_BUNDLES = {
 
 # Toggl media projects (hcmc, hcmc2)
 MEDIA_PROJECT_IDS = {109932707, 108359992}
+# Media value tags. Negative tags (-1/-2/-3) earn 媒分; positive tags (1/2/3)
+# mark junk consumption (youtube/starcraft → hcmc2 #2). Every site the
+# passive trackers watch is junk: it should be logged as hcmc #1, never #-1.
+JUNK_TAGS = {"1", "2", "3"}
 
 
 
@@ -306,6 +310,43 @@ def toggl_media_minutes(entries: list, day: date,
     return total
 
 
+def toggl_junk_minutes(entries: list, day: date, entry_local_dt) -> int:
+    """Minutes of Toggl hcmc/hcmc2 entries tagged with a positive (junk) value
+    tag that STARTED on the local day."""
+    total = 0
+    for e in entries:
+        if e.get("project_id") not in MEDIA_PROJECT_IDS:
+            continue
+        if not JUNK_TAGS & set(e.get("tags") or []):
+            continue
+        ldt = entry_local_dt(e)
+        if ldt is None or ldt.date() != day:
+            continue
+        dur = e.get("duration", 0)
+        if dur > 0:
+            total += dur // 60
+    return total
+
+
+def junk_sites_report(passive: dict, junk_logged: int) -> dict:
+    """Highlight for the /0t report: any passive minutes on the tracked sites
+    are junk time that belongs in an hcmc #1 entry, not a credited #-1 one."""
+    passive_total = round(sum(passive.values()))
+    unlogged = max(0, passive_total - junk_logged)
+    sites = ", ".join(f"{k} {round(v)}m" for k, v in
+                      sorted(passive.items(), key=lambda kv: -kv[1]) if round(v) > 0)
+    out = {
+        "passive_min": passive_total,
+        "logged_as_junk_min": junk_logged,
+        "unlogged_min": unlogged,
+        "highlight": passive_total >= 1,
+    }
+    if out["highlight"]:
+        out["message"] = (f"{passive_total} min on {sites}: log as hcmc #1, not #-1 "
+                          f"({junk_logged} min logged with a junk tag; {unlogged} min unaccounted)")
+    return out
+
+
 def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
     """The /0t step: passive vs Toggl media minutes for one local day."""
     notes = []
@@ -336,6 +377,8 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
         "toggl_media_min": toggl_total,
         "gap_min": gap,
         "flagged": gap > MEDIA_GAP_THRESHOLD_MIN,
+        "junk_sites": junk_sites_report(
+            passive, toggl_junk_minutes(toggl_entries, day, entry_local_dt)),
     }
     if notes:
         result["notes"] = notes

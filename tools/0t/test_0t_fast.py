@@ -344,6 +344,39 @@ def test_media_audit_merges_sources_by_max_not_sum():
     assert r["passive_total_min"] == 90
 
 
+def test_junk_sites_highlights_time_logged_under_credit_tag():
+    """2026-10-10: Verge/Techmeme/Reddit time belongs in hcmc #1 (junk); an
+    hcmc #-1 entry covering it earns 媒分 it shouldn't, so /0t highlights it."""
+    entries = [{"project_id": 109932707, "duration": 30 * 60, "tags": ["-1"]}]
+    ldt = lambda e: datetime(2026, 10, 9, 21, 13, tzinfo=ma.LOCAL_TZ)
+    with patch.object(ma, "media_minutes_from_aw", return_value={"The Verge": 9.0, "Techmeme": 3.0}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={"Reddit": 0.7}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 9), entries, ldt)
+    j = r["junk_sites"]
+    assert j["highlight"] is True
+    assert j["logged_as_junk_min"] == 0          # the #-1 entry doesn't count
+    assert j["unlogged_min"] == 13
+    assert "hcmc #1" in j["message"] and "The Verge 9m" in j["message"]
+    assert r["flagged"] is False                 # the old gap check missed it
+
+
+def test_junk_sites_counts_positive_tags_and_stays_quiet_when_empty():
+    entries = [{"project_id": 108359992, "duration": 20 * 60, "tags": ["2"]}]
+    ldt = lambda e: datetime(2026, 10, 9, 12, 0, tzinfo=ma.LOCAL_TZ)
+    with patch.object(ma, "media_minutes_from_aw", return_value={"YouTube": 15.0}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 9), entries, ldt)
+    assert r["junk_sites"]["logged_as_junk_min"] == 20
+    assert r["junk_sites"]["unlogged_min"] == 0
+    with patch.object(ma, "media_minutes_from_aw", return_value={}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 9), [], ldt)
+    assert r["junk_sites"]["highlight"] is False and "message" not in r["junk_sites"]
+
+
 def test_mark_done_skips_did_fast_when_0t_already_completed_today():
     """Regression guard for the 2026-09-24 dtd background-hook feature: dtd
     now backgrounds `0t-fast.py` right after ITS OWN did-fast completion of
