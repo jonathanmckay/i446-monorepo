@@ -1931,8 +1931,21 @@ zerog = [t for t in today_tasks if _has(t, '#0g') and not _has(t, '-1neon') and 
 # critical-path + any other uncategorized today task, by priority, at the end.
 _placed = lambda t: _has(t, '-1neon') or _has(t, '#-1g') or _has(t, '#0g')
 critical = _sec('关键路径', today)
+# Within a priority tier, highest 分 per minute first (2026-10-10): every
+# task already carries its value [N] and estimate (N), and a 79-task today
+# list ordered only by priority and id buried a [60]-for-60-minutes task
+# under quick low-value ones. No (N) counts as 30 minutes; no [N] sorts last.
+# Stable, so equal ratios keep the by-id order (test_dtd_stable_render_order).
+def _fen_per_min(t):
+    c = t.get('content', '')
+    pv = re.search(r'\[(\d+)\]', c)
+    if not pv:
+        return 0.0
+    mv = re.search(r'\((\d+)\)', c)
+    mins = int(mv.group(1)) if mv and int(mv.group(1)) > 0 else 30
+    return int(pv.group(1)) / mins
 rest = sorted([t for t in today_tasks if not _placed(t)],
-              key=lambda t: prank(t.get('priority')))
+              key=lambda t: (prank(t.get('priority')), -_fen_per_min(t)))
 # Plain tasks (critical path + everything uncategorized): p1 (API priority 4)
 # rises to the top of this area, so dtd's alt-up bump actually moves a task
 # (2026-10-04). Stable sort, so everything else keeps its order.

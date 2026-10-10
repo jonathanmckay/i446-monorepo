@@ -176,3 +176,17 @@ def test_no_reinject_machinery_left():
     body = _worker_body()
     assert ">&4" not in body, "the worker must not write work back onto its own FIFO"
     assert "reinjected" not in body
+
+
+def test_push_lines_carry_a_full_date():
+    """done.sh's log line must timestamp with %Y-%m-%d (carried over from
+    test_dtd_recovery_stale_date.py): the same-day gate above cannot tell
+    yesterday's push from today's without it. 2026-10-03: built with the zsh
+    strftime builtin (_now) instead of exec'ing date."""
+    import re
+    legacy = re.search(
+        r"printf '%s\\tdone\\t%s\\t%s\\n' \"\\\$\(date \+%Y-%m-%dT%H:%M:%S\)\"", SRC)
+    builtin = ("strftime -s _now '%Y-%m-%dT%H:%M:%S'" in SRC
+               and re.search(r"printf '%s\\tdone\\t%s\\t%s\\n' \"\\\$_now\"", SRC))
+    assert legacy or builtin, "pushed.log timestamps must include the date"
+    assert 'date +%H:%M:%S' not in SRC.split("PUSHED.log")[0].rsplit("printf", 1)[-1]
