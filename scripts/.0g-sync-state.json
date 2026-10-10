@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-10T06:00:02.849078-07:00"
+  "tasks": {
+    "2 nature style activities with theo": {
+      "todoist_id": "6hj9rg7JpjpxhMrR",
+      "minutes": 80
+    },
+    "2h ic time (120)": {
+      "todoist_id": "6hj9rg7qXj7Fh9h2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-10-10T08:00:02.459301-07:00"
 }
