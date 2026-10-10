@@ -61,7 +61,7 @@ def test_processed_ids_write_comes_before_the_did_fast_call_itself():
     wasn't early enough — the interruption struck in/around the result=$(...)
     capture itself."""
     body = _worker_body()
-    line_parse = body.index('task_id="${line%%$\'\\t\'*}"')
+    line_parse = body.index('task_id="${_qf[3]}"; task_clean="${_qf[4]}"')
     processed_ids_write = body.index('echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"')
     did_fast_call = body.index('result=$(python3 "$DID_FAST" --task-id')
     undo_pipe = body.index('python3 "$UNDO_FAST" --journal-done')
@@ -127,6 +127,8 @@ DTD_JOURNAL={journal}
 DTD_STOP={stop}
 DID_FAST={did_fast}
 UNDO_FAST={undo_fast}
+DTD_OUTCOME={HERE / "dtd_outcome.py"}
+zmodload zsh/datetime
 HOME={tmp_path}
 mkfifo "$DTD_FIFO"
 : > "$DTD_PUSHED"; : > "$DTD_PROCESSED"; : > "$DTD_PROCESSED_IDS"; : > "$DTD_LOG"; : > "$DTD_LOG.err"
@@ -135,6 +137,8 @@ mkfifo "$DTD_FIFO"
 WORKER_PID=$!
 
 exec 3>"$DTD_FIFO"
+strftime -s _now '%Y-%m-%dT%H:%M:%S' $EPOCHSECONDS
+printf '%s\\tdone\\trealTaskId123\\ti447\\n' "$_now" >> "$DTD_PUSHED.log"
 printf 'realTaskId123\\ti447\\n' >&3
 sleep 0.5
 
@@ -172,7 +176,10 @@ def test_processed_id_recorded_even_when_undo_fast_crashes_after_did_fast_succee
     assert "realTaskId123" in out["processed_ids"], (
         "the id must be recorded as processed even though the undo-fast "
         "step that runs AFTER it failed -- this is the exact 2026-08-02 gap")
-    assert "? i447" in out["log"]
+    # Since 2026-10-10 an "already done today" skip is reported as done, not
+    # as "? restored to list" (dtd_outcome.py: that false failure hit 15 of 54
+    # completions in one session).
+    assert "✓ i447 (already done today)" in out["log"]
 
 
 def test_processed_id_recorded_and_failure_visible_when_did_fast_itself_fails(tmp_path):
@@ -220,12 +227,16 @@ DTD_JOURNAL={journal}
 DTD_STOP={stop}
 DID_FAST={did_fast}
 UNDO_FAST={undo_fast}
+DTD_OUTCOME={HERE / "dtd_outcome.py"}
+zmodload zsh/datetime
 HOME={tmp_path}
 mkfifo "$DTD_FIFO"
 : > "$DTD_PUSHED"; : > "$DTD_PROCESSED"; : > "$DTD_PROCESSED_IDS"; : > "$DTD_LOG"
 
 {body}
 exec 3>"$DTD_FIFO"
+strftime -s _now '%Y-%m-%dT%H:%M:%S' $EPOCHSECONDS
+printf '%s\\tdone\\trealTaskId123\\ti447\\n' "$_now" >> "$DTD_PUSHED.log"
 printf 'realTaskId123\\ti447\\n' >&3
 """
     script_path = tmp_path / "harness.sh"

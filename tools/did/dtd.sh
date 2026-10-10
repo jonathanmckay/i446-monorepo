@@ -18,6 +18,9 @@ DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
 # ctrl-o detail pane (2026-10-06): full title, description, comments, links,
 # fetched live per task (the snapshot cache carries none of these).
 DTD_DETAIL="$HOME/i446-monorepo/tools/did/task-detail.py"
+# Per-item verdict on a did-fast run (ok/already/recorded/agent/unknown) and
+# per-item ctrl-z journaling for batched habit runs (2026-10-10).
+DTD_OUTCOME="$HOME/i446-monorepo/tools/did/dtd_outcome.py"
 TG_FAST="$HOME/i446-monorepo/tools/tg/tg-fast.py"
 TOGGL_CLI="$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 # Staleness self-check (mirrors janus.py's _code_is_stale): dtd.sh only reads
@@ -335,6 +338,51 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     [[ "${(L)2}" != 0t && "${(L)2}" != "0t "* ]] || return 1   # 0t has its own follow-up run
     return 0
   }
+  # Restore the optimistic id-hide (enter.sh/done.sh hid the row the instant
+  # the key was pressed) for an item that did not complete.
+  _dtd_unhide() {
+    [[ -n "$1" ]] || return
+    local f="/tmp/dtd-$DTD_ID.removed.ids"
+    grep -v -x -F -- "$1" "$f" > "$f.tmp" 2>/dev/null
+    mv "$f.tmp" "$f" 2>/dev/null
+  }
+  _dtd_run_batch() {
+    local i n=${#_bids} _pairs=() _rows _r _st _disp _ok=0
+    for i in {1..$n}; do
+      echo "x" >> "$DTD_PROCESSED"
+      echo "${_bids[i]:-${_bcont[i]}}" >> "$DTD_PROCESSED_IDS"
+      _pairs+=("${_bids[i]}"$'\t'"${_bcont[i]}")
+    done
+    echo "⏳ $n habits: ${(j:, :)_bcont}" > "$DTD_HDR"
+    print -- "$EPOCHREALTIME\tdidfast-start\tbatch:$n ${(j:,:)_bids}" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
+    result=$(python3 "$DID_FAST" "${(j:, :)_bcont}" 2>>"$DTD_LOG.err")
+    rc=$?
+    print -- "$EPOCHREALTIME\tdidfast-end\tbatch:$n rc=$rc" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
+    _rows=$(print -r -- "$result" | python3 "$DTD_OUTCOME" "$DTD_JOURNAL" "$rc" "${_pairs[@]}" 2>>"$DTD_LOG.err")
+    for _r in ${(f)_rows}; do
+      _f=("${(@ps:\t:)_r}")
+      _st="${_f[2]}"; _disp="${_f[3]}"
+      case "$_st" in
+        ok|already|recorded)
+          _ok=1
+          echo "✓ $_disp" >> "$DTD_LOG";;
+        *)
+          # Index of this row's item (rows come back in request order).
+          for i in {1..$n}; do [[ "${_bids[i]}" == "${_f[1]}" ]] && break; done
+          if (( rc != 0 )); then
+            # Transient failure: queue each item for the idle-tick retry,
+            # which re-drives it as a single did-fast run.
+            printf '%d\t%d\t%s\t%s\n' "$(( $(date +%s) + 10 ))" 1 "${_bids[i]}" "${_bcont[i]}" >> "$DTD_FAILED"
+            echo "✗ ${_bcont[i]} (did-fast exit $rc; will retry)" >> "$DTD_LOG"
+          else
+            _dtd_unhide "${_bids[i]}"
+            echo "? ${_disp} (restored to list)" >> "$DTD_LOG"
+          fi;;
+      esac
+    done
+    (( _ok )) && _pending_refresh=1
+    echo "✓ $n habits: ${(j:, :)_bcont}" > "$DTD_HDR"
+  }
   while true; do
     IFS= read -r -t 2 _wake
     _rr=$?
@@ -422,7 +470,10 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     _qcur=$(( _qcur + 1 ))
     _qf=("${(@ps:\t:)_qlines[$_qcur]}")
     task_id="${_qf[3]}"; task_clean="${_qf[4]}"
-    [[ -z "$task_clean" ]] && continue
+    if [[ -z "$task_clean" ]]; then
+      echo "x" >> "$DTD_PROCESSED"   # keep the undo guard's pushed/processed counts even
+      continue
+    fi
     # SAME-DAY ONLY (2026-08-10): a session left open across midnight must not
     # run the previous evening's leftovers against the NEW day (did-fast is
     # only idempotent within a day: it would close the new day's recurring
@@ -501,16 +552,26 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
         ( python3 "$HOME/i446-monorepo/tools/0t/0t-fast.py" >>"$DTD_LOG.err" 2>&1 ) &
       fi
     else
-      # Restore the optimistic id-hide (enter.sh/done.sh hid $task_id from
-      # the list the instant Enter was pressed, before this call ran) — an
-      # empty $ok means did-fast produced NO results entry with
-      # todoist.closed:true (e.g. it fell through to needs_agent, which dtd's
-      # synchronous worker can't service), so nothing was actually completed
-      # and the task must not vanish from view. Regression 2026-08-18: "ibx
-      # i9" hit exactly this path, its id stayed in $REMOVED.ids all day even
-      # though Todoist still showed it open — the same class of bug already
-      # fixed for delete/defer failures (which DO restore on failure), just
-      # never applied to this ambiguous-completion branch.
+      # No results entry by the quick jq check. Before calling it a failure,
+      # ask dtd_outcome.py (2026-10-10): did-fast may have skipped it as
+      # already done today, or the completion landed (completed-today.json
+      # has it) and only the report was lost. That false "?" hit 15 of 54
+      # completions on 2026-10-09/10, so the failure signal had become noise.
+      _vr=$(print -r -- "$result" | python3 "$DTD_OUTCOME" - "$rc" "$task_id"$'\t'"$task_clean" 2>>"$DTD_LOG.err")
+      _vf=("${(@ps:\t:)_vr}")
+      case "${_vf[2]}" in
+        ok|already|recorded)
+          echo "✓ ${_vf[3]}" > "$DTD_HDR"
+          echo "✓ ${_vf[3]}" >> "$DTD_LOG"
+          _pending_refresh=1
+          continue;;
+      esac
+      # Really not completed: restore the optimistic id-hide (enter.sh/done.sh
+      # hid $task_id the instant the key was pressed). An empty $ok here means
+      # did-fast produced NO results entry (e.g. it fell through to
+      # needs_agent, which this synchronous worker can't service), so the task
+      # must not vanish from view. Regression 2026-08-18: "ibx i9" stayed in
+      # $REMOVED.ids all day though Todoist still showed it open.
       if [[ -n "$task_id" ]]; then
         removed_ids_path="/tmp/dtd-$DTD_ID.removed.ids"
         grep -v -x -F -- "$task_id" "$removed_ids_path" > "$removed_ids_path.tmp" 2>/dev/null

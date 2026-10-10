@@ -83,7 +83,7 @@ def test_worker_marks_refresh_owed_on_ritual_or_d359_result():
 
 def test_worker_fires_one_backgrounded_refresh_on_idle():
     w = _worker_block()
-    i = w.index("if ! IFS= read -r -t 2 line")
+    i = w.index("if (( ${#_qlines} <= _qcur )); then")
     idle = w[i:i + 400]
     assert '[[ -n "$_pending_refresh" ]]' in idle, "refresh must be gated on the owed flag"
     assert '_pending_refresh=""' in idle, "flag must be cleared so it fires once per burst"
@@ -97,7 +97,7 @@ def test_idle_refresh_runs_before_shutdown_break():
     refresh must fire before that break or a session that ends right after a
     ritual close never refreshes the cache."""
     w = _worker_block()
-    i = w.index("if ! IFS= read -r -t 2 line")
+    i = w.index("if (( ${#_qlines} <= _qcur )); then")
     assert w.index('[[ -n "$_pending_refresh" ]]', i) < w.index('[[ -f "$DTD_STOP" ]] && break', i)
 
 

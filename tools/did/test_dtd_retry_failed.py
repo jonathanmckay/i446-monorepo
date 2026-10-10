@@ -88,7 +88,7 @@ def test_retry_does_not_break_sibling_structural_anchors():
     the ordering assertions would fail. Retry uses `rout=` (not `result=`) and
     journals via a variable flag (not the literal `--journal-done`)."""
     body = _worker_body()
-    idle = body[:body.index('[[ -z "$line" ]] && continue')]
+    idle = body[:body.index('# Dequeue "ts<TAB>done<TAB>id<TAB>content"')]
     assert 'result=$(python3 "$DID_FAST" --task-id' not in idle, \
         "retry must not use the locked did-fast-call substring"
     assert 'python3 "$UNDO_FAST" --journal-done' not in idle, \
