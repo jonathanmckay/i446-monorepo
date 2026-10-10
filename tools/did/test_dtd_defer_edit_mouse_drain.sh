@@ -52,7 +52,7 @@ defer_exit_line=$(echo "$defer_body" | grep -n 'invalid defer target.*exit 0' | 
 (( defer_drain_line < defer_exit_line )) || fail "defer.sh drain must come before the invalid-input exit 0"
 echo "PASS: defer.sh drains before its invalid-input exit path"
 
-edit_read_line=$(echo "$edit_body" | grep -n '^read edits < /dev/tty$' | head -1 | cut -d: -f1)
+edit_read_line=$(echo "$edit_body" | grep -n '^vared -p .* REPLY < /dev/tty' | head -1 | cut -d: -f1)
 edit_drain_line=$(echo "$edit_body" | grep -nF "$DRAIN" | head -1 | cut -d: -f1)
 edit_exit_line=$(echo "$edit_body" | grep -n 'exit 0' | head -1 | cut -d: -f1)
 [[ -n "$edit_read_line" ]] || fail "edit.sh prompt read not found"

@@ -290,7 +290,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
   # within ~2s. fd 3 (opened by the parent below) keeps ≥1 writer for the whole
   # session, so a failed read here is always this timeout, never real EOF.
   exec 4<>"$DTD_FIFO"
-  typeset -A reinjected stale_alerted
+  typeset -A stale_alerted
   # Deferred cache refresh (2026-10-02): did-fast skips its in-completion
   # refresh_task_queue() (~4s, blocking) when this is set; the worker fires
   # ONE backgrounded --refresh-cache when the FIFO goes idle (the 2s read
@@ -298,75 +298,55 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
   # after the last one, instead of 4s inside each.
   export DIDFAST_DEFER_REFRESH=1
   _pending_refresh=""
+  # QUEUE = $DTD_PUSHED.log (2026-10-10). done.sh appends every completion to
+  # that log (atomic O_APPEND) BEFORE its killable FIFO push, so the log, not
+  # the FIFO, is the queue: the worker consumes it in order through a line
+  # cursor, and a FIFO line is only a wake-up whose content is ignored. A
+  # dropped push (the rapid alt-enter race that hit 19 of 54 completions on
+  # 2026-10-09/10) now costs at most one 2s idle tick, with no re-inject
+  # step and no "auto-recovered" alarm. Cursor by LINE, not by id: a
+  # recurring card keeps its id, so the same id can legitimately be queued
+  # twice in a day (family 30, later family 20).
+  _qcur=0
+  # BATCHING (2026-10-10): each 0₦ habit completion is a full did-fast run
+  # (~7s, mostly the Neon write over ssh), so a 10-habit morning burst took
+  # ~75s serially. Consecutive queued 0neon/夜neon habits now go to ONE
+  # did-fast call, which already batches its Neon writes. Habits only: they
+  # route by name anyway (did-fast honours --task-id for single items only),
+  # and their runs carry none of the timer/0t side work. dtd_outcome.py maps
+  # the batch result back to items and journals each one separately, so
+  # ctrl-z still undoes one habit at a time.
+  _qcache="/tmp/dtd-$DTD_ID.cache.json"
+  typeset -A _habit_ids
+  _habit_mtime=""
+  zmodload -F zsh/stat b:zstat 2>/dev/null
+  _dtd_habit_ids_refresh() {
+    local m; m=$(zstat +mtime "$_qcache" 2>/dev/null) || return
+    [[ "$m" == "$_habit_mtime" ]] && return
+    _habit_mtime="$m"; _habit_ids=()
+    local i
+    for i in ${(f)"$(jq -r '((.["0neon"] // []) + (.["夜neon"] // []))[] | .id // empty' "$_qcache" 2>/dev/null)"}; do
+      _habit_ids[$i]=1
+    done
+  }
+  _dtd_batchable() {   # $1 id, $2 content
+    [[ -n "$1" && -n "${_habit_ids[$1]}" ]] || return 1
+    [[ "$2" != *[,\;]* ]] || return 1        # did-fast splits batches on , and ;
+    [[ "${(L)2}" != 0t && "${(L)2}" != "0t "* ]] || return 1   # 0t has its own follow-up run
+    return 0
+  }
   while true; do
-    if ! IFS= read -r -t 2 line; then
+    IFS= read -r -t 2 _wake
+    _rr=$?
+    _qlines=()
+    [[ -s "$DTD_PUSHED.log" ]] && _qlines=("${(@f)$(<"$DTD_PUSHED.log")}")
+    if (( ${#_qlines} <= _qcur )); then
+      # Queue drained. A wake line just means another push is landing; only
+      # a real idle tick (read timed out) runs the idle work below.
+      (( _rr == 0 )) && continue
       if [[ -n "$_pending_refresh" ]]; then
         _pending_refresh=""
         ( python3 "$DID_FAST" --refresh-cache >/dev/null 2>>"$DTD_LOG.err" ) &
-      fi
-      # Durable-log reconcile + recover: any id done.sh recorded in
-      # $DTD_PUSHED.log (field 3) that this loop has not yet marked in
-      # $DTD_PROCESSED_IDS was lost before reaching us (killable-child FIFO
-      # race). Re-inject the FIRST such item onto the FIFO through fd 4 and let
-      # it flow through the exact same processing path below -- do NOT merely
-      # alert. ONE item per tick keeps the self-write far under the pipe buffer
-      # (no capacity deadlock draining our own FIFO); the next idle tick picks
-      # up the next one. Safe to replay: did-fast's Todoist close + Neon write
-      # are idempotent, and the id is marked processed the instant it is
-      # dequeued (below), so a recovered item is attempted exactly once.
-      #
-      # SAME-DAY ONLY (2026-08-10): replay is gated on the push carrying
-      # TODAY's date. A session left open across midnight replayed the whole
-      # previous evening's batch against the NEW day when processed-ids came
-      # up short at the next reconcile -- did-fast is only idempotent within
-      # a day, so the replay closed the new day's recurring cards (advancing
-      # their due dates, hiding them from dtd) and re-credited points into
-      # the new day's rows ("why isn't 1st hci appearing today?", plus a
-      # phantom relax +40). A stale loss is alerted once, calmly, and left
-      # for the human: yesterday's row can't be safely written by a replay
-      # that only knows how to target today. Push timestamps carry a full
-      # date for this gate (date-less legacy lines count as stale).
-      rec_today=$(date +%Y-%m-%d)
-      lost=$(awk -F'\t' -v idsfile="$DTD_PROCESSED_IDS" -v today="$rec_today" '
-        BEGIN { while ((getline id < idsfile) > 0) seen[id] = 1 }
-        !($3 in seen) {
-          print (index($1, today "T") == 1 ? "live" : "stale") "\t" $3 "\t" $4
-        }
-      ' "$DTD_PUSHED.log" 2>/dev/null)
-      recovered=""
-      if [[ -n "$lost" ]]; then
-        while IFS=$'\t' read -r rkind rid rcontent; do
-          [[ -z "$rid" ]] && continue
-          if [[ "$rkind" == "stale" ]]; then
-            if [[ -z "${stale_alerted[$rid]}" ]]; then
-              stale_alerted[$rid]=1
-              echo "⚠ unprocessed completion from a previous day NOT replayed (would land on today) — $rcontent" >> "$DTD_LOG"
-            fi
-            continue
-          fi
-          [[ -n "${reinjected[$rid]}" ]] && continue
-          printf '%s\t%s\n' "$rid" "$rcontent" >&4 || break
-          reinjected[$rid]=1
-          recovered="$rcontent"
-          break
-        done <<< "$lost"
-      fi
-      if [[ -n "$recovered" ]]; then
-        # A recovered completion is a SUCCESS, not a failure: the FIFO race is
-        # auto-healed right here and the points still land (the "✓ ..." line
-        # that follows confirms it). So log it CALMLY and do NOT flash the pane
-        # orange -- that alarm signals "a tool call failed and needs you", which
-        # is exactly the wrong message for a loss the worker just fixed by
-        # itself. It was mis-classifying self-heals as failures that made a
-        # working recovery look like "the invariant fired again". A genuine
-        # problem (did-fast erroring on the reprocessed item) still surfaces via
-        # the "✗ ... (did-fast exit N)" branch below.
-        msg="↻ auto-recovered a completion the FIFO dropped, reprocessing — $recovered"
-        echo "$msg" > "$DTD_HDR"
-        echo "$msg" >> "$DTD_LOG"
-        # Drain the reinjected item through the loop before honoring shutdown,
-        # so a completion recovered at the last second is never dropped.
-        continue
       fi
       # AUTO-RETRY of completions did-fast could not land (2026-08-04): the ✗
       # branch below records each failure in $DTD_FAILED as
@@ -437,36 +417,39 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       [[ -f "$DTD_STOP" ]] && break
       continue
     fi
-    [[ -z "$line" ]] && continue
-    # FIFO lines are "id<TAB>content" (enter.sh/done.sh send the fzf row id so
-    # completion closes the EXACT selected task, not a name match — duplicate
-    # names would otherwise complete the wrong instance). Bare content (no tab)
-    # is still accepted for safety.
-    if [[ "$line" == *$'\t'* ]]; then
-      task_id="${line%%$'\t'*}"; task_clean="${line#*$'\t'}"
-    else
-      task_id=""; task_clean="$line"
+    # Dequeue "ts<TAB>done<TAB>id<TAB>content" (fields kept even when id is
+    # empty: quoted (@ps) preserves empty elements).
+    _qcur=$(( _qcur + 1 ))
+    _qf=("${(@ps:\t:)_qlines[$_qcur]}")
+    task_id="${_qf[3]}"; task_clean="${_qf[4]}"
+    [[ -z "$task_clean" ]] && continue
+    # SAME-DAY ONLY (2026-08-10): a session left open across midnight must not
+    # run the previous evening's leftovers against the NEW day (did-fast is
+    # only idempotent within a day: it would close the new day's recurring
+    # cards and credit points to the new day's rows). Alerted once, left for
+    # the human. Date-less legacy lines count as stale.
+    strftime -s _qtoday '%Y-%m-%d' $EPOCHSECONDS
+    if [[ "${_qf[1]}" != "${_qtoday}T"* ]]; then
+      if [[ -z "${stale_alerted[${task_id:-$task_clean}]}" ]]; then
+        stale_alerted[${task_id:-$task_clean}]=1
+        echo "⚠ unprocessed completion from a previous day NOT replayed (would land on today) — $task_clean" >> "$DTD_LOG"
+      fi
+      continue
     fi
-    # Mark processed the INSTANT this line is dequeued from the FIFO --
-    # before calling did-fast at all, not just "before the undo/jq pipeline"
-    # (2026-08-02, second incident: task 6hC5fV8W3qJxwm3R "finish 1 g245
-    # before m5x2" proved did-fast ran its ENTIRE pipeline successfully --
-    # real Todoist close, real Neon ledger entry "T did 1g" at 10:01:19 --
-    # yet nothing after it in this loop ran: no log line, no processed-id
-    # record, even with the earlier fix (2026-08-02, first incident, task
-    # 6gHVV7fjPwqfvq76 "i447") that moved this write to right after
-    # capturing did-fast's exit code. That proves the interruption strikes
-    # somewhere in or around the `result=$(...)` capture itself, EARLIER
-    # than "after did-fast returns" -- so this write can no longer live
-    # after the did-fast call at all. Once a line is dequeued, this loop
-    # WILL attempt it exactly once; that attempt is what "processed" means
-    # here, matching what the invariant check (below) is actually meant to
-    # detect: a message the FIFO never delivered, not one that hit trouble
-    # somewhere downstream. A silent post-did-fast gap (this exact class,
-    # twice now, unreproducible via component testing both times) is a
-    # separate, lower-severity failure mode: the real work still lands
-    # (proven both times), only this shell's own confirmation log line is
-    # missing. See test_dtd_processed_before_pipeline.py.
+    _bids=("$task_id"); _bcont=("$task_clean")
+    _dtd_habit_ids_refresh
+    if _dtd_batchable "$task_id" "$task_clean"; then
+      while (( _qcur < ${#_qlines} && ${#_bids} < 12 )); do
+        _nf=("${(@ps:\t:)_qlines[$(( _qcur + 1 ))]}")
+        [[ "${_nf[1]}" == "${_qtoday}T"* ]] || break
+        _dtd_batchable "${_nf[3]}" "${_nf[4]}" || break
+        _qcur=$(( _qcur + 1 )); _bids+=("${_nf[3]}"); _bcont+=("${_nf[4]}")
+      done
+    fi
+    if (( ${#_bids} > 1 )); then
+      _dtd_run_batch
+      continue
+    fi
     echo "x" >> "$DTD_PROCESSED"
     echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
     echo "⏳ $task_clean" > "$DTD_HDR"
@@ -1452,7 +1435,12 @@ fi
 # the only thing visible, and force sane tty modes so Enter always
 # terminates the read.
 stty sane < /dev/tty 2>/dev/null
-printf "\033[2J\033[H\nEdit (text=rename · @code=domain · N=points · ctrl-u to clear):\n" > /dev/tty
+printf "\033[2J\033[H" > /dev/tty
+# Show the full ctrl-o detail (title, project/labels/due, description,
+# comments, links) above the prompt so the edit has full context
+# (2026-10-10: "make sure it shows all content for that task").
+python3 "$DTD_DETAIL" "\$1" > /dev/tty 2>/dev/null
+printf "\n\033[2m────────\033[0m\nEdit (text=rename · @code=domain · N=points · ctrl-u to clear):\n" > /dev/tty
 REPLY="\$clean"
 vared -p "> " REPLY < /dev/tty > /dev/tty
 edits="\$REPLY"
@@ -1472,6 +1460,8 @@ if [[ -z "\${edits// /}" ]]; then
 fi
 out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
+# Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
+rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
 
 EDITEOF
 chmod +x "$DTD_EDIT"
