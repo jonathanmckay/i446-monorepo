@@ -80,3 +80,19 @@ def test_unacked_break_still_errors():
         E(before="=999", after="=999+5"),
     ])
     assert len(errors) == 1
+
+
+def test_report_stays_small_with_thousands_of_standing_errors(tmp_path, monkeypatch):
+    """2026-10-11: 48 hourly runs x ~3,000 repeated errors = 3.8 MB, which
+    froze Obsidian on every rewrite. Older runs collapse to their header."""
+    rep = tmp_path / "audit.md"
+    monkeypatch.setattr(audit, "REPORT", str(rep))
+    errs = [f"chain BREAK number {i} " + "x" * 80 for i in range(3000)]
+    for _ in range(60):
+        audit.write_report(errs, [], 2979)
+    text = rep.read_text()
+    assert len(text) < 60_000
+    assert text.count("\n## ") == 48
+    assert text.count("- ❌") == audit.MAX_ITEMS
+    assert "2800 more" in text
+    assert "3000 errors, 0 warnings" in text.split("\n## ")[-1]
