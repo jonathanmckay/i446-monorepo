@@ -50,12 +50,14 @@ DOMAIN_LABEL = {
     "g245": "0₲", "0g": "0₲", "m828": "个",
 }
 OK_RATIO, PARTIAL_RATIO = 1.0, 0.8
+STOPWORDS = {"thing", "need", "needed", "with", "that", "this", "from", "have",
+             "done", "make", "more", "less", "good", "week", "day"}
 
 
 # ── week + doc ───────────────────────────────────────────────────────────────
 
-def week_bounds(arg: str | None) -> tuple[date, date]:
-    today = datetime.now(TZ).date()
+def week_bounds(arg: str | None, today: date | None = None) -> tuple[date, date]:
+    today = today or datetime.now(TZ).date()
     if arg:
         d = date.fromisoformat(arg)
         sun = d - timedelta(days=(d.weekday() + 1) % 7)
@@ -126,15 +128,40 @@ def week_days(sun: date) -> list[date]:
     return [sun + timedelta(days=i) for i in range(7)]
 
 
+# points-cache label → Neon 0分 header, for the live fallback read.
+LABEL_0FEN_HEADER = {"i9": "i9", "m5": "m5", "媒": "媒", "思": "思", "hcb": "hcb",
+                     "xk": "xk", "社": "社", "0₲": "0g", "个": "个"}
+
+
+def _neon_day_value(label: str, d: date) -> float | None:
+    """Live 0分 cell for one day. The points cache keeps only POSITIVE
+    day-values, so a net-negative day (hcb on a docked night) is simply
+    absent there; this reads the real number."""
+    try:
+        from neon import excel, cols
+        col = cols.col("0分", LABEL_0FEN_HEADER[label])
+        r = excel.read("0分", col, date=f"{d.month}/{d.day}")
+        if not r.get("ok"):
+            r = excel.read("0分", col, date=f"{d.month}/{d.day}")
+        v = r.get("value") if r.get("ok") else None
+        return float(v) if v not in (None, "") else 0.0
+    except Exception:
+        return None
+
+
 def domain_points(points: dict, label: str, days: list[date]) -> tuple[int, list[str]]:
-    total, missing = 0, []
+    total, missing = 0.0, []
     for d in days:
         day = points.get(d.isoformat())
-        if day is None:
-            missing.append(d.isoformat())
+        if day is not None and label in day:
+            total += float(day[label] or 0)
             continue
-        total += int(day.get(label) or 0)
-    return total, missing
+        live = _neon_day_value(label, d)
+        if live is None:
+            missing.append(d.isoformat())
+        else:
+            total += live
+    return round(total), missing
 
 
 def good_media_days(days: list[date]) -> tuple[int, dict]:
@@ -215,6 +242,15 @@ def _status(actual: float, target: float) -> str:
     return "✅" if r >= OK_RATIO else ("🟡" if r >= PARTIAL_RATIO else "❌")
 
 
+def _stem(w: str) -> str:
+    w = w.lower()
+    if w.endswith("es") and len(w) > 4:
+        return w[:-2]
+    if w.endswith("s") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
 def evaluate(goal: dict, ctx: dict) -> dict:
     text, dom = goal["text"], goal["domain"]
     clean = re.sub(r"\{\d+\}", "", text).strip()
@@ -249,6 +285,16 @@ def evaluate(goal: dict, ctx: dict) -> dict:
             out["needs_question"] = True
         return out
 
+    # Free-text goal: add keyword hits from ANY domain (tax work may not be
+    # filed under qz12), e.g. "taxes" → tasks mentioning "tax".
+    words = {_stem(w) for w in re.findall(r"[A-Za-z]{4,}", clean)} - STOPWORDS
+    if words:
+        seen = {e["content"] for e in out["evidence"]}
+        for t in ctx["tasks"]:
+            low = t["content"].lower()
+            if t["content"] not in seen and any(w in low for w in words):
+                out["evidence"].append({"date": t["date"], "content": t["content"]})
+                seen.add(t["content"])
     out.update(kind="manual", status="❓", note="", needs_question=True)
     return out
 

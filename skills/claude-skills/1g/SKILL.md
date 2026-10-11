@@ -1,7 +1,64 @@
 ---
 name: "1g"
-description: "Set weekly goals for a domain in the 1g tab of Neon. Estimates points and focus bonus, writes to Excel. Usage: /1g <domain>: <goals>"
+description: "Weekly goals. No args: review last week (Sun-Sat): score each goal in the 2g+1g narrative doc against Neon points, 0n media cells and completed Todoist tasks, ask JM about the ones data can't settle, then write a one-emoji verdict sub-bullet under each goal. With args: set weekly goals for a domain in the 1g tab of Neon. Usage: /1g [YYYY-MM-DD] | /1g <domain>: <goals>"
 user-invocable: true
+---
+
+# Review Last Week's Goals (/1g with no args, or /1g YYYY-MM-DD)
+
+Scores each goal in last week's block of the monthly narrative doc
+(`~/vault/g245/5e2/YYYY.MM 2g+1g-narrative.md`, the month the Sunday falls in,
+heading like `- **Oct 4 – Oct 10** —`) and writes the verdict as a sub-bullet
+under each goal. The week is **Sunday–Saturday**: no arg = the most recently
+completed week; a date = the week containing it.
+
+If the argument contains a `:` or is a domain code, it's the goal-setting mode
+below, not a review.
+
+### Step 1: Evaluate
+
+```bash
+python3 ~/i446-monorepo/tools/1g/1g_review.py [YYYY-MM-DD] > /tmp/1g-review.json
+```
+
+Per goal it returns `status`, `note`, `kind`, and `evidence` (the week's
+completed Todoist tasks for that domain, plus keyword hits for free-text goals):
+
+| Goal shape | How it's scored |
+|---|---|
+| `<N>分` | That domain's daily points (dashboard points cache = Neon 0分 per-day totals) summed Sun–Sat. ✅ ≥100%, 🟡 ≥80%, ❌ below |
+| `<N> days good media` | Days whose 0n `1+` (AU) cell is blank or ≤ 0, i.e. no junk `hcmc #1` media; `per_day` shows the bad days |
+| anything else | `❓` + evidence |
+
+`needs_question: true` marks goals the data can't fully settle: free-text goals,
+and points goals with extra text (`unscored_remainder`, e.g. "weight should be 192.x").
+
+### Step 2: Judge, then ask before writing
+
+For each `❓` / `needs_question` goal, read its `evidence`. If the evidence
+clearly settles it, decide the emoji yourself and say why. Otherwise
+**surface it to JM with AskUserQuestion before writing anything** (one question
+per goal, up to 4 per call; options = ✅ done / 🟡 partly / ❌ not done, plus
+what you found). Never guess a ✅.
+
+Status emoji: ✅ met · 🟡 partly / close · ❌ missed · ❓ still unknown (only if
+JM can't say either).
+
+### Step 3: Write verdicts
+
+Write `/tmp/1g-verdicts.json` (`doc` from Step 1, one entry per goal with its
+`text` and `line_no` copied verbatim, the final `status` emoji and a short
+`note` with the numbers, e.g. "729分 of 600分 (122%)") and apply:
+
+```bash
+python3 ~/i446-monorepo/tools/1g/1g_review.py --apply /tmp/1g-verdicts.json
+```
+
+Each verdict lands as `- <emoji> <note> <!--1g-->` one level under its goal;
+re-running replaces it, never duplicates. Then open the doc in Obsidian
+(`/usr/bin/open "obsidian://open?path=<urlencoded>"`) and report a one-line
+summary per goal.
+
 ---
 
 # Set Weekly Goals (/1g)
