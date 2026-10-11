@@ -233,6 +233,31 @@ def test_dock_in_bed_before_22_is_zero():
     assert r["dock"] == 0
 
 
+def test_early_bedtime_before_20_counts_as_night_sleep():
+    """Regression 2026-10-11: 睡觉 19:45-23:59 + 00:00-05:47 logged only the
+    post-midnight half (347 min) and docked 30分 for a 'midnight' bedtime,
+    because the night window required entries to START at >=20:00."""
+    entries = [
+        _te("2026-08-09T19:45:00", 254, _SLEEP, "睡觉"),
+        _te("2026-08-10T00:00:00", 347, _SLEEP, "睡觉"),
+    ]
+    r = _dock_with(entries)
+    assert r["bedtime"].endswith("19:45")
+    assert r["late_minutes"] == 0 and r["dock"] == 0
+    with patch.object(zerot_fast, "gather_entries_local", return_value=entries):
+        assert zerot_fast.compute_sleep(_Y, _S) == 601
+
+
+def test_evening_nap_ending_before_20_is_not_night_sleep():
+    entries = [
+        _te("2026-08-09T17:00:00", 45, _SLEEP, "睡觉"),
+        _te("2026-08-09T22:00:00", 480, _SLEEP, "睡觉"),
+    ]
+    with patch.object(zerot_fast, "gather_entries_local", return_value=entries):
+        assert zerot_fast.compute_sleep(_Y, _S) == 480
+    assert _dock_with(entries)["bedtime"].endswith("22:00")
+
+
 def test_dock_no_entries_returns_none():
     assert _dock_with([_te("2026-08-09T21:00:00", 30, None, "reading")]) is None
 
