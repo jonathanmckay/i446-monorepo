@@ -91,6 +91,16 @@ DTD_HDR="/tmp/dtd-$DTD_ID.hdr"
 # at its boundaries so a slow keypress can be attributed. Read with
 # tools/did/dtd-timing-report.py. Builtin print only -- no extra exec.
 DTD_TIMING="/tmp/dtd-$DTD_ID.timing.log"
+# Usage events (2026-10-10): the per-session /tmp logs die with the session,
+# so nothing recorded how dtd is actually used. One TSV line per event:
+#   epoch \t session \t event \t key \t ids(comma) \t extra
+# events: session (start/end), render (top-15 ids, only when they change),
+# action (a key on task ids; extra = query/choice), outcome (worker verdict
+# per completion; extra = seconds or reason). Appended with zsh's print
+# builtin, never an exec, so a keypress pays nothing measurable.
+# Read by tools/did/dtd_report.py. Machine-local; host is on the session line.
+DTD_EVENTS="${XDG_STATE_HOME:-$HOME/.local/state}/jm/dtd-events.tsv"
+export DTD_EVENTS DTD_ID
 # Router -> done.sh handoff of the resolved task content as a FILE (2026-10-03):
 # print/$(<f) are zsh builtins, so done.sh needs no base64/sed/tr exec at all
 # on the common path (each exec costs 0.07-1.5s under a Defender scan stall).
@@ -326,6 +336,11 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     [[ "${(L)2}" != 0t && "${(L)2}" != "0t "* ]] || return 1   # 0t has its own follow-up run
     return 0
   }
+  # Usage event: one "outcome" line per completion (see DTD_EVENTS).
+  # $1 status, $2 id(s), $3 extra (seconds in did-fast, or a reason).
+  _ev_out() {
+    print -r -- "$EPOCHREALTIME"$'\t'"$DTD_ID"$'\t'outcome$'\t'"$1"$'\t'"$2"$'\t'"${3//$'\t'/ }" >> "$DTD_EVENTS" 2>/dev/null
+  }
   # Restore the optimistic id-hide (enter.sh/done.sh hid the row the instant
   # the key was pressed) for an item that did not complete.
   _dtd_unhide() {
@@ -342,6 +357,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       _pairs+=("${_bids[i]}"$'\t'"${_bcont[i]}")
     done
     echo "⏳ $n habits: ${(j:, :)_bcont}" > "$DTD_HDR"
+    local _t0=$EPOCHREALTIME
     print -- "$EPOCHREALTIME\tdidfast-start\tbatch:$n ${(j:,:)_bids}" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
     result=$(python3 "$DID_FAST" "${(j:, :)_bcont}" 2>>"$DTD_LOG.err")
     rc=$?
@@ -350,6 +366,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     for _r in ${(f)_rows}; do
       _f=("${(@ps:\t:)_r}")
       _st="${_f[2]}"; _disp="${_f[3]}"
+      _ev_out "$_st" "${_f[1]}" "batch:$n $(( EPOCHREALTIME - _t0 ))"
       case "$_st" in
         ok|already|recorded)
           _ok=1
@@ -492,6 +509,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     echo "x" >> "$DTD_PROCESSED"
     echo "${task_id:-$task_clean}" >> "$DTD_PROCESSED_IDS"
     echo "⏳ $task_clean" > "$DTD_HDR"
+    _t0=$EPOCHREALTIME
     if [[ -n "$task_id" ]]; then
       print -- "$EPOCHREALTIME\tdidfast-start\t${task_id:-$task_clean}" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
       result=$(python3 "$DID_FAST" --task-id "$task_id" "$task_clean" 2>>"$DTD_LOG.err")
@@ -504,6 +522,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     if [[ $rc -ne 0 || -z "$result" ]]; then
       echo "✗ $task_clean (did-fast exit $rc, no output)" > "$DTD_HDR"
       echo "✗ $task_clean (did-fast exit $rc, no output)" >> "$DTD_LOG"
+      _ev_out fail "$task_id" "rc=$rc $(( EPOCHREALTIME - _t0 ))"
       # Record it for auto-retry. A failed did-fast is almost always a
       # transient outage (Todoist API or the ssh-to-ix stamp writer briefly
       # unreachable, now surfaced fast by the SIGALRM watchdog's exit 124
@@ -523,6 +542,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
     if [[ -n "$ok" ]]; then
       echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
+      _ev_out ok "$task_id" "$(( EPOCHREALTIME - _t0 ))"
       # A ritual / d359-met close would have refreshed the cache inline;
       # with DIDFAST_DEFER_REFRESH that is now owed -- pay it on next idle.
       if echo "$result" | jq -e '.results[]? | select(.step == "ritual" or .d359 != null)' >/dev/null 2>&1; then
@@ -549,6 +569,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       _vf=("${(@ps:\t:)_vr}")
       case "${_vf[2]}" in
         ok|already|recorded)
+          _ev_out "${_vf[2]}" "$task_id" "$(( EPOCHREALTIME - _t0 ))"
           echo "✓ ${_vf[3]}" > "$DTD_HDR"
           echo "✓ ${_vf[3]}" >> "$DTD_LOG"
           _pending_refresh=1
@@ -569,6 +590,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       _why=$(echo "$result" | jq -r '.agent_needed[0].reason // empty' 2>/dev/null)
       echo "? $task_clean (restored to list)${_why:+ — $_why}" > "$DTD_HDR"
       echo "? $task_clean (restored to list)${_why:+ — $_why}" >> "$DTD_LOG"
+      _ev_out "${_vf[2]:-unknown}" "$task_id" "${_why:-$(( EPOCHREALTIME - _t0 ))}"
     fi
   done < "$DTD_FIFO"
   echo "done" > "$DTD_HDR"
@@ -627,6 +649,7 @@ touch "$DTD_SKIPPED"
 DTD_START="/tmp/dtd-$DTD_ID.start.sh"
 cat > "$DTD_START" << STARTEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}start\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST="\$HOME/i446-monorepo/tools/tg/tg-fast.py"
 HDR="$DTD_HDR"
@@ -1005,6 +1028,7 @@ chmod +x "$DTD_DONE_HIDE"
 DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}done\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 _id="\$1"
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\trouter-start\t\$_id" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
@@ -1052,6 +1076,7 @@ chmod +x "$DTD_DONE_ROUTER"
 DTD_DEFER="/tmp/dtd-$DTD_ID.defer.sh"
 cat > "$DTD_DEFER" << DEFEREOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}defer\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
 HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
@@ -1234,6 +1259,7 @@ chmod +x "$DTD_DEFER"
 DTD_BLOCKARM="/tmp/dtd-$DTD_ID.blockarm.sh"
 cat > "$DTD_BLOCKARM" << ARMEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}arm:\${DTD_PICK_MODE:-delay}\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 BLOCKPICK="$DTD_BLOCKPICK"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
@@ -1297,6 +1323,7 @@ chmod +x "$DTD_BLOCKARM"
 # Applies the picked block (enter/⌃⏎ on a BLOCK:* row) to the armed ids.
 cat > "$DTD_BLOCKAPPLY" << APPLYEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}apply\${_T}\${(j:,:)\${(f)\$(<"$DTD_BLOCKPICK" 2>/dev/null)}}\${_T}\${1#BLOCK:}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 BLOCKPICK="$DTD_BLOCKPICK"
 SNOOZE="$STATE_DIR/dtd-block-snooze.json"
@@ -1403,6 +1430,7 @@ chmod +x "$DTD_BLOCKAPPLY"
 # stdout as fzf actions.
 cat > "$DTD_PICKENTER" << PICKENTEREOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}enter\${_T}\$1\${_T}\${2//\$_T/ }" >> "$DTD_EVENTS" 2>/dev/null
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tpickenter\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 id="\$1"
@@ -1432,6 +1460,7 @@ chmod +x "$DTD_PICKENTER"
 # bare list, exit. So pressing either twice from the schedule screen exits.
 cat > "$DTD_BACK" << BACKEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}back\${_T}\${_T}\${1//\$_T/ }" >> "$DTD_EVENTS" 2>/dev/null
 # Prints the WHOLE action list (esc/ctrl-c bind is just transform(this)), so
 # closing the ctrl-o details pane can leave the query and list alone
 # (2026-10-07: "if I do ctrl+o - escape should close the dialog").
@@ -1465,6 +1494,7 @@ chmod +x "$DTD_BACK"
 DTD_EDIT="/tmp/dtd-$DTD_ID.edit.sh"
 cat > "$DTD_EDIT" << EDITEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}edit\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 EDIT_FAST="\$HOME/i446-monorepo/tools/did/edit-fast.py"
 HDR="$DTD_HDR"
 task="\$1"
@@ -2169,6 +2199,25 @@ for l in normal_lines:
     print(l)
 for l in skipped_lines:
     print(l)
+# Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
+# order, written only when that order changes, so the report can tell what
+# was on screen when each key was pressed and how far down it was.
+try:
+    _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
+    if _evp and _sid:
+        _order = [l.rsplit(chr(9), 1)[-1] for l in claimed_lines + running_lines + normal_lines]
+        _top = ','.join(_order[:15])
+        _lr = '/tmp/dtd-' + _sid + '.lastrender'
+        try:
+            _prev = open(_lr).read()
+        except Exception:
+            _prev = None
+        if _top != _prev:
+            open(_lr, 'w').write(_top)
+            with open(_evp, 'a') as _ef:
+                _ef.write(chr(9).join(['%.3f' % time.time(), _sid, 'render', 'list', _top, str(len(_order))]) + chr(10))
+except Exception:
+    pass
 " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
 print -- "$EPOCHREALTIME\tlist-end\t" >> "$_tl" 2>/dev/null
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
@@ -2343,6 +2392,7 @@ chmod +x "$DTD_DOMAINSEARCH"
 DTD_BUMP="/tmp/dtd-$DTD_ID.bump.sh"
 cat > "$DTD_BUMP" << BUMPEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}bump\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tbump-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 typeset -a ids
@@ -2382,6 +2432,7 @@ chmod +x "$DTD_SKIP"
 DTD_DELETE="/tmp/dtd-$DTD_ID.delete.sh"
 cat > "$DTD_DELETE" << DELETEEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; (( \$# == 1 )) && print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}delete\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 CACHE_FILE="$DTD_CACHE_FILE"
 REMOVED="$DTD_REMOVED"
@@ -2492,6 +2543,7 @@ chmod +x "$DTD_DELETE"
 DTD_SPLIT="/tmp/dtd-$DTD_ID.split.sh"
 cat > "$DTD_SPLIT" << 'SPLITEOF'
 #!/bin/zsh
+_T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}split${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
 # Split a task: claim partial points today, defer the rest to tomorrow.
 # Three dialogs: points, what you did, what remains.
 # All Todoist/Neon writes done inline via Python.
@@ -2697,13 +2749,14 @@ stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 SPLITEOF
 # Substitute placeholder paths
-sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_JOURNAL|$DTD_JOURNAL|g" "$DTD_SPLIT"
+sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_JOURNAL|$DTD_JOURNAL|g; s|PLACEHOLDER_EVENTS|$DTD_EVENTS|g; s|PLACEHOLDER_SID|$DTD_ID|g" "$DTD_SPLIT"
 chmod +x "$DTD_SPLIT"
 
 # --- Agent script used by fzf ctrl-a binding ---
 DTD_AGENT="/tmp/dtd-$DTD_ID.agent.sh"
 cat > "$DTD_AGENT" << 'AGENTEOF'
 #!/bin/zsh
+_T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}agent${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
 # Spawn a Claude agent in a new cmux tab to work on the selected task.
 # Starts a Toggl timer, fetches task context, launches claude interactively.
 
@@ -2842,7 +2895,7 @@ printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || 
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 AGENTEOF
-sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g" "$DTD_AGENT"
+sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_EVENTS|$DTD_EVENTS|g; s|PLACEHOLDER_SID|$DTD_ID|g" "$DTD_AGENT"
 chmod +x "$DTD_AGENT"
 
 # --- Undo script used by fzf ctrl-z binding ---
@@ -2852,6 +2905,7 @@ chmod +x "$DTD_AGENT"
 DTD_UNDO="/tmp/dtd-$DTD_ID.undo.sh"
 cat > "$DTD_UNDO" << UNDOEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}undo\${_T}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 # Don't drop a ctrl-z that lands mid-completion. If a task is still in flight
 # (pushed > processed) the journal entry we need to reverse hasn't been written
@@ -2907,6 +2961,7 @@ chmod +x "$DTD_UNDO"
 DTD_REFRESH="/tmp/dtd-$DTD_ID.refresh.sh"
 cat > "$DTD_REFRESH" << REFRESHEOF
 #!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}refresh\${_T}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 python3 "$DID_FAST" --refresh-cache
 cp "$CACHE" "$DTD_CACHE_FILE"
 : > "$DTD_DOMAIN"   # ctrl-r also clears the domain-search scope
@@ -3163,6 +3218,8 @@ TALLY_PID=$!
 WATCHER_PID=$!
 
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
+# Usage event: session start (host + terminal size) / end (see DTD_EVENTS).
+print -r -- "$EPOCHREALTIME"$'\t'"$DTD_ID"$'\t'session$'\t'start$'\t'$'\t'"${HOST%%.*} ${COLUMNS:-?}x${LINES:-?}" >> "$DTD_EVENTS" 2>/dev/null
 while true; do
   # Refresh date and completed-today on each iteration (handles midnight rollover)
   _dtd_tz_refresh
@@ -3280,6 +3337,7 @@ while true; do
     # Exit forensics (2026-10-06, "dtd is randomly exiting"): 130 = esc/ctrl-c
     # abort (back-abort line just before it), 2 = fzf error, other = unexpected.
     print -- "$EPOCHREALTIME\tfzf-exit\trc=$_fzf_rc" >> "$DTD_TIMING" 2>/dev/null
+    print -r -- "$EPOCHREALTIME"$'\t'"$DTD_ID"$'\t'session$'\t'end$'\t'$'\t'"rc=$_fzf_rc" >> "$DTD_EVENTS" 2>/dev/null
     break
   fi
 

@@ -128,6 +128,7 @@ def test_dtd_launches_and_generates_every_action_script():
             if r.returncode != 0:
                 bad.append(f"{n}: {r.stderr.strip()}")
         assert not bad, "generated scripts fail zsh -n:\n" + "\n".join(bad)
+        _check_usage_event_hooks(found, stem)
     finally:
         # Exit the way a user does (ESC aborts fzf, dtd's loop breaks and it
         # rm -f's its own files). Always keep draining the pty while waiting:
@@ -152,3 +153,56 @@ def test_dtd_launches_and_generates_every_action_script():
                     os.remove(leftover)
                 except OSError:
                     pass
+
+
+# Usage-event hooks (2026-10-10): each action script's first command appends
+# one TSV line to $DTD_EVENTS. Run ONLY that hook line (never the handler body,
+# which would touch real Todoist tasks), redirected to a temp file.
+HOOKS = [  # (script, args, key, ids, extra); None = no line expected
+    ("done-router", ["ID1"], "done", "ID1", ""),
+    ("pickenter", ["ID1", "my q"], "enter", "ID1", "my q"),
+    ("start", ["ID1"], "start", "ID1", ""),
+    ("defer", ["A", "B"], "defer", "A,B", ""),
+    ("blockarm", ["A", "B"], "arm:delay", "A,B", ""),
+    ("blockapply", ["BLOCK:戌"], "apply", None, "戌"),
+    ("edit", ["ID1"], "edit", "ID1", ""),
+    ("bump", ["A", "B"], "bump", "A,B", ""),
+    ("delete", ["ID1"], "delete", "ID1", ""),
+    ("undo", [], "undo", "", ""),
+    ("refresh", [], "refresh", "", ""),
+    ("back", ["q"], "back", "", "q"),
+    ("split", ["ID1"], "split", "ID1", ""),
+    ("agent", ["ID1"], "agent", "ID1", ""),
+]
+
+
+def _check_usage_event_hooks(found, stem):
+    import tempfile
+    sid = os.path.basename(stem)[len("dtd-"):]
+    real = os.path.expanduser("~/.local/state/jm/dtd-events.tsv")
+    problems = []
+    for name, args, key, ids, extra in HOOKS + [("delete", ["A", "B"], None, None, None)]:
+        lines = [l for l in Path(found[name]).read_text().splitlines()
+                 if "action" in l and "dtd-events.tsv" in l]
+        if len(lines) != 1:
+            problems.append(f"{name}: expected one hook line, found {len(lines)}")
+            continue
+        with tempfile.NamedTemporaryFile("r", suffix=".tsv") as tf:
+            hook = lines[0].replace(real, tf.name)
+            subprocess.run(["zsh", "-c", hook, name, *args], capture_output=True, text=True, timeout=5)
+            rows = [r.split("\t") for r in Path(tf.name).read_text().splitlines()]
+        if key is None:
+            if rows:
+                problems.append(f"{name} {args}: multi-select parent must not log, got {rows}")
+            continue
+        if len(rows) != 1 or len(rows[0]) != 6:
+            problems.append(f"{name}: malformed event rows {rows}")
+            continue
+        ts, rsid, ev, rkey, rids, rextra = rows[0]
+        float(ts)
+        want = (sid, "action", key, extra) + (() if ids is None else (ids,))
+        got = (rsid, ev, rkey, rextra) + (() if ids is None else (rids,))
+        if got != want:
+            problems.append(f"{name}: got {got}, want {want}")
+    assert not problems, "usage-event hooks:\n" + "\n".join(problems)
+    assert os.path.exists(stem + ".lastrender"), "list generator never wrote a render event"
