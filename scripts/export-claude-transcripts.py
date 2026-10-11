@@ -2,7 +2,7 @@
 """Export Claude Code session transcripts (.jsonl) to readable markdown files.
 
 Reads ~/.claude/projects/<project>/*.jsonl and writes .md files to
-vault/i447/i446/ai-transcripts/<project>/. Idempotent: skips sessions
+vault/i447/i446/.ai-transcripts/<project>/. Idempotent: skips sessions
 already exported unless --force is passed.
 
 Large sessions (> SEGMENT_TURNS user turns) are split into multiple files
@@ -19,7 +19,7 @@ from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 PROJECTS_DIR_IX = Path.home() / ".claude" / "projects-ix"
-OUTPUT_BASE = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts"
+OUTPUT_BASE = Path.home() / "vault" / "i447" / "i446" / ".ai-transcripts"
 
 # Host-aware roots. We can't rely on hostname (ix is "Jonathans-Mac-mini").
 # Instead: the straylight box is the only one with a mirrored ix tree at

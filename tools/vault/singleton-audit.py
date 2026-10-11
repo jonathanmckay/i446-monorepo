@@ -39,7 +39,7 @@ TASK_LABELS = ["i447"]
 EXCLUDE_PREFIXES = (
     ".", "z_asts", "z_arcv", "z_ibx", "z_meta", "z_old", "z_staging",
     "vault",                       # stale nested copy on Ix (~/vault/vault, Jul 2026; .stignore + .gitignore'd)
-    "i447/i446/ai-transcripts", "i447/i446/dream-runs", "i447/i446/i446-monorepo",
+    "i447/i446/.ai-transcripts", "i447/i446/.dream-runs", "i447/i446/i446-monorepo",
     "h335/m5x2/m5x2-m",            # Google Drive mirror (PDF-heavy, not authored here)
     "hcmc/readwise",               # auto-synced
     "hcmp/o315/blog",              # Hugo site tree

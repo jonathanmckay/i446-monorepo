@@ -43,7 +43,7 @@ Single-layer fails:
   - `.DS_Store`
   - Google Drive mirror folders under `h335/m5x2/` (source of truth lives in Drive)
   - Large binary assets in `z_asts/`
-  - `i447/i446/ai-transcripts/**/*.jsonl` (Claude Code session transcripts, can reach 100s of MB)
+  - `i447/i446/.ai-transcripts/**/*.jsonl` (Claude Code session transcripts, can reach 100s of MB)
   - `i447/i446/llm-sessions.db`
   - `hcmp/o315/blog/` (submodule; re-init separately)
 - `~/vault/.gitmodules` — tracks `i447/i446/i446-monorepo` submodule (this repo).

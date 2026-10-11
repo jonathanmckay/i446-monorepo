@@ -53,7 +53,7 @@ def test_alert_jsonl_is_valid_with_newline(tmp_path):
 
 def test_alert_writes_failed_marker_and_brief_stub(tmp_path):
     # Create a fake dream-run dir so the FAILED marker + stub brief path fires.
-    run_dir = tmp_path / "vault/i447/i446/dream-runs/2026.07.01-v99"
+    run_dir = tmp_path / "vault/i447/i446/.dream-runs/2026.07.01-v99"
     run_dir.mkdir(parents=True)
     _run(tmp_path, "keychain_locked", 'need to unlock "login" keychain')
     assert (run_dir / "FAILED").exists()
