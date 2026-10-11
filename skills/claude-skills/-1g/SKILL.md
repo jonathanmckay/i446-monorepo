@@ -76,10 +76,10 @@ Extract goal items from the user's input. Each line starting with `-` or `*` or 
 - **`{N}` (or no bracket)** → a **block goal**: it goes under the block's 地支 heading in the build order and into Todoist with `#-1g` (Steps 3–4); its `{N}` credits the 0g column on completion. If it has no `{N}`, auto-estimate one (below).
 - **`[N]` only, no `{N}`** → the user is just **adding a plain todo**, not a block goal. Do NOT stamp it into the build order (Step 3) and do NOT give it `#-1g`. Create it exactly like `/todo`: Inbox (no project), an inferred `@domain` label, the `[N]` kept in the content, due today. It is not a goal for the block.
 
-**Auto-estimate bonus points:** If a **block goal** does NOT already contain `{N}`, estimate and append one. Use `{5}` to `{10}` (cap `{15}`) per the bonus budget in `vault/g245/neon-principles.md` (-1g ≈ 5% of a block's 分, ~9 per block):
+**Auto-estimate bonus points:** If a **block goal** does NOT already contain `{N}`, estimate and append one. Use `{5}` to `{15}` (cap `{20}`) per the bonus budget in `vault/g245/neon-principles.md` (-1g ≤ 10% of a block's 分, ≤~18 per block, ≤150/day):
 - Quick/routine tasks (send a message, check something, review): `{5}`
-- Medium tasks (write something, prep, research): `{8}`
-- Ambitious/hard tasks (deep work, build, create, ship): `{10}`, up to `{15}` for the block's one big push
+- Medium tasks (write something, prep, research): `{10}`
+- Ambitious/hard tasks (deep work, build, create, ship): `{15}`, up to `{20}` for the block's one big push
 
 Always add the estimate **to block goals**. Never leave a block goal without `{N}`. (A `[N]`-only plain todo keeps its `[N]` as-is and is never given `{N}`.)
 
