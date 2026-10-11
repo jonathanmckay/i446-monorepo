@@ -1283,6 +1283,31 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 
+# Usage events in dtd's TSV format (tools/tg/janus_events.py): one action + one
+# outcome line per mutating API call, latency in the outcome. Session id is per
+# server process; the client's address is on the action line.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tg"))
+import janus_events as JE  # noqa: E402
+JE.emit("session", "start", (), f"{os.uname().nodename.split('.')[0]} mobile")
+
+
+@app.before_request
+def _ev_start():
+    request._ev_t0 = time.monotonic()
+    if request.method == "POST" and request.path.startswith("/api/"):
+        body = request.get_json(silent=True) or {}
+        ids = [body[k] for k in ("id", "entry_id") if body.get(k)]
+        extra = " ".join(str(body[k]) for k in ("desc", "cmd", "start", "end", "project", "minutes") if body.get(k))
+        JE.emit("action", request.path[5:], ids, f"{request.remote_addr} {extra}")
+
+
+@app.after_request
+def _ev_end(resp):
+    if request.method == "POST" and request.path.startswith("/api/"):
+        secs = time.monotonic() - getattr(request, "_ev_t0", time.monotonic())
+        JE.emit("outcome", request.path[5:], (), f"{secs:.1f}s http={resp.status_code}")
+    return resp
+
 
 @app.route("/api/timeline")
 def api_timeline():

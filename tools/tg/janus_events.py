@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import random
+import sys
 import time
 from pathlib import Path
 
@@ -34,8 +35,11 @@ def emit(event: str, key: str = "", ids=(), extra="", session: str | None = None
         ids = [ids]
     line = "\t".join([f"{time.time():.6f}", _clean(session or SESSION), _clean(event), _clean(key),
                       ",".join(_clean(i) for i in ids if i not in (None, "")), _clean(extra)[:300]])
+    path = PATH
+    if ("pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST")) and not os.environ.get("JANUS_EVENTS"):
+        return  # a test run must never write the real usage log
     try:
-        with open(PATH, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
         pass
