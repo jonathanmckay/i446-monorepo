@@ -386,6 +386,17 @@ def test_junk_sites_highlights_time_logged_under_credit_tag():
     assert r["flagged"] is False                 # the old gap check missed it
 
 
+def test_economist_is_its_own_category_not_junk():
+    with patch.object(ma, "media_minutes_from_aw", return_value={"Economist": 3.9, "The Verge": 1.2}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 10), [], lambda e: None)
+    assert r["categories"] == {"economist": 3.9, "junk": 1.2}
+    assert r["junk_sites"]["passive_min"] == 1
+    assert "Economist" not in r["junk_sites"]["message"]
+    assert r["passive_total_min"] == 5          # still in the overall gap check
+
+
 def test_junk_sites_counts_positive_tags_and_stays_quiet_when_empty():
     entries = [{"project_id": 108359992, "duration": 20 * 60, "tags": ["2"]}]
     ldt = lambda e: datetime(2026, 10, 9, 12, 0, tzinfo=ma.LOCAL_TZ)

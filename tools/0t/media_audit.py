@@ -89,6 +89,9 @@ MEDIA_PROJECT_IDS = {109932707, 108359992}
 # mark junk consumption (youtube/starcraft → hcmc2 #2). Every site the
 # passive trackers watch is junk: it should be logged as hcmc #1, never #-1.
 JUNK_TAGS = {"1", "2", "3"}
+# Labels that are NOT junk get their own category, reported separately and
+# left out of the junk highlight. Everything unlisted is "junk".
+LABEL_CATEGORY = {"Economist": "economist"}
 
 
 
@@ -328,9 +331,20 @@ def toggl_junk_minutes(entries: list, day: date, entry_local_dt) -> int:
     return total
 
 
+def categorize(passive: dict) -> dict[str, dict]:
+    """Split passive per-label minutes into categories (junk unless listed in
+    LABEL_CATEGORY)."""
+    out: dict[str, dict] = {}
+    for label, mins in passive.items():
+        out.setdefault(LABEL_CATEGORY.get(label, "junk"), {})[label] = mins
+    return out
+
+
 def junk_sites_report(passive: dict, junk_logged: int) -> dict:
-    """Highlight for the /0t report: any passive minutes on the tracked sites
-    are junk time that belongs in an hcmc #1 entry, not a credited #-1 one."""
+    """Highlight for the /0t report: any passive minutes on the junk sites
+    belong in an hcmc #1 entry, not a credited #-1 one. Non-junk categories
+    (e.g. economist) are excluded; see LABEL_CATEGORY."""
+    passive = categorize(passive).get("junk", {})
     passive_total = round(sum(passive.values()))
     unlogged = max(0, passive_total - junk_logged)
     sites = ", ".join(f"{k} {round(v)}m" for k, v in
@@ -379,6 +393,8 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
         "flagged": gap > MEDIA_GAP_THRESHOLD_MIN,
         "junk_sites": junk_sites_report(
             passive, toggl_junk_minutes(toggl_entries, day, entry_local_dt)),
+        "categories": {cat: round(sum(v.values()), 1)
+                       for cat, v in categorize(passive).items()},
     }
     if notes:
         result["notes"] = notes

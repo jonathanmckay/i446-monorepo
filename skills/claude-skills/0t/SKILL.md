@@ -41,6 +41,10 @@ The script handles everything:
    YouTube, ...) is junk and belongs in an `hcmc #1` entry, never a credited
    `#-1`. Whenever `media_audit.junk_sites.highlight` is true, put its
    `message` at the TOP of the report, bolded, ahead of sleep.
+   **Categories:** `media_audit.categories` splits passive minutes by category
+   (`junk`, `economist`, ...; mapping in `LABEL_CATEGORY` in media_audit.py).
+   The Economist is its own `economist` category, never junk; report its
+   minutes on their own line when non-zero.
 6. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
 7. Saves Excel on Ix, refreshes dashboard points cache
 
