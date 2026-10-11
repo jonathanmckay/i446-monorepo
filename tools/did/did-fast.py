@@ -2167,10 +2167,10 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
     if not toggl_stop or not toggl_stop.get("minutes"):
         return
     mins = toggl_stop["minutes"]
-    desc = toggl_stop.get("description", "").lower()
+    desc = _timer_key(toggl_stop.get("description", ""))
     var_0n = {v.lower() for v in VARIABLE_0N}
     for r in results:
-        if r.item.name.lower() != desc:
+        if _timer_key(r.item.name) != desc:
             continue
         explicit = (r.item.time_value is not None
                     or r.item.points_override is not None
@@ -2236,7 +2236,7 @@ def synth_kid_time_writes(results: list, toggl_stop: Optional[dict],
         if r.item.time_range:
             minutes = time_range_minutes(*r.item.time_range)
         elif (toggl_stop and toggl_stop.get("minutes")
-                and toggl_stop.get("description", "").lower() == r.item.name.lower()):
+                and _timer_key(toggl_stop.get("description", "")) == _timer_key(r.item.name)):
             minutes = toggl_stop["minutes"]
         elif r.todoist_task and _TIME_EST_RE.search(r.todoist_task.get("content", "")):
             minutes = int(_TIME_EST_RE.search(r.todoist_task["content"]).group(1))
@@ -2253,6 +2253,12 @@ def synth_kid_time_writes(results: list, toggl_stop: Optional[dict],
         out.append(RouteResult(item=kid_item, step="0n", col_num=col,
                                write_value=minutes, kid_time_for=r.item.name))
     return out
+
+
+def _timer_key(s: str) -> str:
+    """Normalized task/timer name: no 😈, no (N)/[N]/{N} annotations,
+    single-spaced, lowercase."""
+    return " ".join(ANNOT_RE.sub("", s.replace("😈", "")).split()).lower()
 
 
 def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
@@ -2284,9 +2290,13 @@ def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
         at_idx = desc_part.find(" @")
         desc = desc_part[:at_idx].strip() if at_idx >= 0 else desc_part.split("(")[0].strip()
 
-        # Check if any item matches the timer description
-        desc_lower = desc.lower()
-        matched = any(n.lower() == desc_lower for n in item_names)
+        # Check if any item matches the timer description. Compared on the
+        # annotation-free form: a timer started from janus/tg keeps "[15]" or
+        # "(30)" in its description ("post babyssiter ad [15]", 2026-10-11)
+        # and a ritual card's name carries 😈 while its timer reads "-1g", so
+        # an exact compare left those timers running after a dtd ⌥⏎.
+        desc_key = _timer_key(desc)
+        matched = bool(desc_key) and any(_timer_key(n) == desc_key for n in item_names)
         if not matched:
             return None
 
@@ -3225,6 +3235,10 @@ def main():
             except Exception as e:  # noqa: BLE001
                 print(f"cache refresh failed: {e}", file=sys.stderr)
         if not items:
+            # Ritual-only completion: stop its timer too (the generic stop in
+            # 3b below is never reached on this early return).
+            if not past_target:
+                stop_matching_toggl([e["name"] for e in ritual_entries])
             _emit({"results": ritual_entries, "agent_needed": []})
             return
 
@@ -3269,7 +3283,7 @@ def main():
     # 3b. Stop matching Toggl timer; backfill variable-task values from
     # the timer's elapsed minutes (dtd: no need to type the time when a
     # matching timer is running)
-    all_names = [r.item.name for r in fast]
+    all_names = [r.item.name for r in fast] + [e["name"] for e in ritual_entries]
     toggl_stop = (stop_matching_toggl(all_names)
                   if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
