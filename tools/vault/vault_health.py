@@ -113,6 +113,10 @@ WIKILINK_RE = re.compile(r"(?<!!)\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\
 DUP_NAMES_OK = {
     "claude",       # per-folder CLAUDE.md instruction files, one per tree by design
     "portfolio",    # h335/m5x2/fund-*/portfolio/portfolio.md, one folder note per fund
+    # 2026-10-11 /1-i446 answers:
+    "m405", "c313", "rl16", "w225",  # property note vs its portfolio-sales-narrative section
+    "reviews",      # h335/f693/reviews (performance) vs hcmc/reviews (books), both folder notes
+    "older",        # h335/m5x2/r202/**/older/ archive-bucket folder notes
 }
 
 
