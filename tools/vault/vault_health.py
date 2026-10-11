@@ -370,9 +370,19 @@ def _tm(host_cmd) -> tuple[str, list[str], bool]:
     return ("warn" if days > 2 else "ok"), [f"latest backup {days}d ago"], days > 2
 
 
+# Hosts that never get Time Machine. Straylight is a Microsoft-managed work
+# Mac (JM 2026-10-11); its vault/monorepo copies are synced to Ix, which is
+# the machine that backs up.
+TM_EXEMPT_HOSTS = ("straylight",)
+
+
 def check_time_machine() -> Finding:
     detail, status, review = [], "ok", False
-    s, d, r = _tm(lambda c: sh(c, shell=True)); detail += [f"{socket.gethostname()}: {x}" for x in d]; status, review = s, r
+    host = socket.gethostname()
+    if host.lower().startswith(TM_EXEMPT_HOSTS):
+        detail.append(f"{host}: exempt (work-managed Mac; Ix holds the backups)")
+    else:
+        s, d, r = _tm(lambda c: sh(c, shell=True)); detail += [f"{host}: {x}" for x in d]; status, review = s, r
     if not on_ix():
         s, d, r = _tm(lambda c: ix(c)); detail += [f"ix: {x}" for x in d]
         status = max(status, s, key=["ok", "warn", "fail"].index); review |= r

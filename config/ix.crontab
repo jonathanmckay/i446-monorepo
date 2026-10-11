@@ -60,3 +60,6 @@
 
 # where: report this Mac's zone for device-priority "today" (lib/where.py, 2026-10-08)
 */10 * * * * /usr/bin/python3 $HOME/i446-monorepo/lib/where.py report >/dev/null 2>&1  # where: report this Mac zone (lib/where.py)
+
+# narrative-month: create next month's g245/5e2 2g+1g narrative doc (+5e2.md link) the Sunday before its first week
+20 4 * * * python3 $HOME/i446-monorepo/tools/1g/narrative_month.py >> $HOME/i446-monorepo/tools/1g/.narrative-month.log 2>&1

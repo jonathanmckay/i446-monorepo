@@ -87,3 +87,16 @@ def test_skill_claims_live_registry_is_clean():
              "1s (20) [45]", "3s (30) [40]", "moral audit (30) [40]", "notes (3) [8]", "s897 (120) [30]", "早餐 (15) [5]"]
     f = vh.check_skill_claims(cards)
     assert f.status == "ok", f.detail
+
+
+def test_time_machine_exempts_work_managed_straylight(monkeypatch):
+    """JM 2026-10-11: Straylight is a work-managed Mac and never gets Time
+    Machine; only Ix's backup is checked from there."""
+    vh = _load()
+    monkeypatch.setattr(vh.socket, "gethostname", lambda: "Straylight-Refit.local")
+    monkeypatch.setattr(vh, "on_ix", lambda: False)
+    monkeypatch.setattr(vh, "ix", lambda c: "2026-10-11-040000" if "latest" in c else "Name : Ix Backup")
+    monkeypatch.setattr(vh, "sh", lambda *a, **k: (_ for _ in ()).throw(AssertionError("local tmutil called")))
+    f = vh.check_time_machine()
+    assert f.status in ("ok", "warn") and not any("no Time Machine destination" in d for d in f.detail)
+    assert f.detail[0].startswith("Straylight-Refit.local: exempt")
