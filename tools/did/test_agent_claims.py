@@ -255,7 +255,7 @@ def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
 
 
 def test_zsh_hook_prefilter_routes_0t_to_python():
-    assert "(d|claim|0t|1s|1s897|1hcmc|notes|0g)" in HOOK.read_text()
+    assert _hook_alternations() == ["d|claim|" + "|".join(ac.SKILL_CLAIMS)] * 2
 
 
 def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
@@ -292,6 +292,41 @@ def test_1s_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
     assert "😈 claimed: 1 s897 (25) [30]" in _fast("/1s897 7.4", session="S8")
 
 
+def _hook_alternations() -> list[str]:
+    import re
+    return re.findall(r"/\(((?:d\|claim)\|[^)]*)\)", HOOK.read_text())
+
+
+def test_hook_prefilter_lists_exactly_the_skill_claims():
+    """The zsh prefilter keeps python off the hot path, so it must name every
+    SKILL_CLAIMS key (prompt form and <command-name> form), no more, no less."""
+    assert _hook_alternations() == ["d|claim|" + "|".join(ac.SKILL_CLAIMS)] * 2
+
+
+def test_skill_claim_is_exact_name_only(hooked, monkeypatch):
+    """2026-10-11: a weekly/quarterly card that isn't on today's list must
+    claim nothing, never a look-alike via the word-overlap fallback."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "Q2", "content": "3s prep notes (10) [5]"},
+                                                      {"id": "Q3", "content": "moral audit followups (5) [5]"}]))
+    assert _fast("/3s") == ""
+    assert _fast("/moralaudit", session="S8") == ""
+
+
+def test_release_mode_and_odd_names(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "I9", "content": "1 i9 (10) [40]"},
+                                                      {"id": "B1", "content": "早餐 (15) [5]"},
+                                                      {"id": "G2", "content": "1 -2g (13) [20]"},
+                                                      {"id": "Q4", "content": "4g checkin (15) [40]"}]))
+    assert "😈 claimed: 1 i9 (10) [40]" in _fast("/1i9") and "releases the claim" in _fast("/1i9")
+    assert "😈 claimed: 早餐" in _fast("/早餐 toast", session="S1") and "releases" in _fast("/早餐", session="S1")
+    assert "😈 claimed: 1 -2g" in _fast("/1-2g", session="S2") and "leave the card open" in _fast("/1-2g", session="S2")
+    assert "😈 claimed: 4g checkin" in _fast("/2026-4g-checkin 2026-Q3", session="S3")
+
+
+def test_no_skill_is_both_linked_and_declined():
+    assert not set(ac.SKILL_CLAIMS) & set(ac.SKILL_NO_CLAIM)
+
+
 def test_notes_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
     monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "N7", "content": "notes (3) [8]"}]))
     out = _fast("/notes")
@@ -309,7 +344,7 @@ def test_hook_unwraps_expanded_slash_command(hooked, monkeypatch):
     assert "😈 claimed: source logging" in _fast(
         "<command-message>d</command-message>\n<command-name>/d</command-name>\n"
         "<command-args>source logging: go</command-args>", session="S7")
-    assert "command-name>[[:space:]]*/(d|claim|0t|1s|1s897|1hcmc|notes|0g)" in HOOK.read_text()
+    assert "command-name>[[:space:]]*/(d|claim|" in HOOK.read_text()
 
 
 def test_0g_claims_its_card_and_says_skill_releases(hooked, monkeypatch):

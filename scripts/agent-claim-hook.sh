@@ -17,10 +17,11 @@ IFS= read -r -d '' -t 1 j 2>/dev/null
 # claim) right here, before the model starts, so dtd shows it in ~1s. Python
 # only runs for these prompts; its stdout lands in the model's context so the
 # /d skill knows it's already done.
-# `/0t`, `/1s`, `/1s897`, `/notes` and `/0g` claim their own card the same way (agent_claims.SKILL_CLAIMS).
+# The skills in agent_claims.SKILL_CLAIMS claim their own card the same way;
+# this alternation must list exactly those keys (test_agent_claims enforces it).
 # A bare `[N]` while holding a claim sets the claimed task's value (not points).
-if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|1s|1s897|1hcmc|notes|0g)([[:space:]]|")'\
-      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|1s|1s897|1hcmc|notes|0g)[[:space:]]*<' \
+if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|0g|notes|早餐|1s|1g|1s897|1hcmc|1hcb|1i9|1m5x2|xk887|1-1n|1-2g|f695|2n|3s|moralaudit|2026-4g-checkin)([[:space:]]|")'\
+      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|0g|notes|早餐|1s|1g|1s897|1hcmc|1hcb|1i9|1m5x2|xk887|1-1n|1-2g|f695|2n|3s|moralaudit|2026-4g-checkin)[[:space:]]*<' \
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi
