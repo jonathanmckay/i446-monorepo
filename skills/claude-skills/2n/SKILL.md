@@ -1,6 +1,6 @@
 ---
 name: "2n"
-description: "Monthly Toggl coverage audit. Finds days in the most recent finished month with under 23:45 of tracked time, numbers every gap of 5+ minutes with a suggested fill (calendar meeting, 睡觉, or the neighbouring entry), and batch-creates the ones you pick. Usage: /2n [YYYY-MM] or /2n fill 1,3,5=睡觉,7=family time @xk87"
+description: "Monthly Toggl coverage audit. Finds days in the most recent finished month with under 23:45 of tracked time, plus every generic-placeholder or ? entry, numbers every gap of 5+ minutes with a suggested fill (calendar meeting, 睡觉, or the neighbouring entry), and batch-creates the ones you pick. Usage: /2n [YYYY-MM] or /2n fill 1,3,5=睡觉,7=family time @xk87"
 user-invocable: true
 ---
 
@@ -44,6 +44,13 @@ What the tool does:
   The last minute (23:59–00:00) counts as covered, because the day-barrier
   rule ends every overnight entry at 23:59 by design.
 - **Floor** is 23:45 (`DEFAULT_FLOOR_MIN`). Days under it are listed.
+- **Placeholders are gaps** (2026-10-11): entries labelled `generic placeholder`
+  or `?` (janus.py's `_PLACEHOLDER_LABELS`) don't count as coverage. Their
+  time is listed as a gap even on a day over the floor, marked `⧗`, with
+  "was `generic placeholder` @code" in the context lines. Filling a `⧗` gap
+  creates the new entry and then deletes the placeholder it replaces (each
+  placeholder once, even if it spans several gaps; a failed delete is
+  reported as `skipped` so you can remove it by hand).
 - **Gaps ≥ 5 min** are listed, **numbered sequentially across the month**
   (#1, #2 …), each with a suggestion (`--min-gap` changes the threshold;
   coverage totals always count every seam). The numbered list is saved to

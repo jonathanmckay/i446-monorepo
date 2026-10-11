@@ -307,10 +307,14 @@ def audit(first: _dt.date, last: _dt.date, entries: list[dict], *,
     gap_no = 0
     while d <= last:
         cov = day_coverage_min(d, entries)
-        gaps = day_gaps(d, entries, min_gap_min) if cov < floor_min else []
+        gaps = day_gaps(d, entries, min_gap_min)
         for g in gaps:
             g["placeholders"] = [p for p in placeholders
                                  if p["start"] < g["end"] and p["end"] > g["start"]]
+        # A day over the floor lists only its placeholder gaps: those are
+        # explicit "fill me in" markers, whatever the day's total.
+        if cov >= floor_min:
+            gaps = [g for g in gaps if g["placeholders"]]
         events = event_fetcher(d) if (use_calendar and gaps) else []
         numbered = []
         for g in gaps:
