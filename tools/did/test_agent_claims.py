@@ -255,7 +255,7 @@ def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
 
 
 def test_zsh_hook_prefilter_routes_0t_to_python():
-    assert "(d|claim|0t|1s897|1hcmc|notes|0g)" in HOOK.read_text()
+    assert "(d|claim|0t|1s|1s897|1hcmc|notes|0g)" in HOOK.read_text()
 
 
 def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
@@ -279,6 +279,19 @@ def test_1hcmc_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
     assert (hooked / "by-session" / "S9").read_text().strip() == "H1"
 
 
+def test_1s_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
+    """2026-10-11: /1s claims '1s' and keeps it (the survey is the manual
+    part); neither '1 s meta' nor '1 s897' may steal the match, and /1s897
+    must still claim its own card."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "S1", "content": "1s (20) [45]"},
+                                                      {"id": "S2", "content": "1 s meta (20) [30]"},
+                                                      {"id": "S3", "content": "1 s897 (25) [30]"}]))
+    out = _fast("/1s")
+    assert "😈 claimed: 1s (20) [45]" in out and "leave the card open" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "S1"
+    assert "😈 claimed: 1 s897 (25) [30]" in _fast("/1s897 7.4", session="S8")
+
+
 def test_notes_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
     monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "N7", "content": "notes (3) [8]"}]))
     out = _fast("/notes")
@@ -296,7 +309,7 @@ def test_hook_unwraps_expanded_slash_command(hooked, monkeypatch):
     assert "😈 claimed: source logging" in _fast(
         "<command-message>d</command-message>\n<command-name>/d</command-name>\n"
         "<command-args>source logging: go</command-args>", session="S7")
-    assert "command-name>[[:space:]]*/(d|claim|0t|1s897|1hcmc|notes|0g)" in HOOK.read_text()
+    assert "command-name>[[:space:]]*/(d|claim|0t|1s|1s897|1hcmc|notes|0g)" in HOOK.read_text()
 
 
 def test_0g_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
