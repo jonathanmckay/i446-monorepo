@@ -19,6 +19,9 @@ Checks (v1, 2026-09-27):
   onedrive-neon  Neon workbook mtime (and Ix↔Straylight parity when run off Ix)
   time-machine   destination configured + latest backup age
   ix-cron        Ix's live crontab matches the committed config/ix.crontab
+  skill-claims   skills whose name matches a recurring Todoist card but that
+                 aren't linked to dtd (agent_claims.SKILL_CLAIMS) or recorded
+                 as declined (SKILL_NO_CLAIM) (added 2026-10-11)
   alerts         z_ibx/alerts.jsonl entries from the last 7 days, grouped
 
 Auto-fixes (only ever these): trigger a Syncthing rescan on a folder that is
@@ -397,6 +400,60 @@ def check_ix_cron() -> Finding:
     return Finding("ix-cron", "ok", f"{len(have)} jobs match config/ix.crontab")
 
 
+_CARD_ANNOT = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")   # did-fast's ANNOT_RE
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[\s_]+", "", s.lower())
+
+
+def _agent_claims():
+    spec = importlib.util.spec_from_file_location("agent_claims_for_health", MONO / "tools/did/agent_claims.py")
+    mod = importlib.util.module_from_spec(spec); sys.modules["agent_claims_for_health"] = mod
+    spec.loader.exec_module(mod); return mod
+
+
+def _recurring_cards() -> list[str]:
+    sys.path.insert(0, str(MONO / "lib"))
+    import todoist
+    return [t.get("content", "") for t in todoist.find_tasks(limit=5000)
+            if (t.get("due") or {}).get("is_recurring")]
+
+
+def unlinked_skill_cards(skill_names, cards, linked, declined) -> list[tuple[str, str]]:
+    """(skill, card) pairs where a skill's name matches a recurring card by
+    name ('1i9' ~ '1 i9', 'moralaudit' ~ 'moral audit', 'f695' ~ '1 f695')
+    and the skill is neither linked nor declined. Name matching is the only
+    signal: grepping SKILL.md for did-fast calls flags /did's own examples."""
+    by_norm: dict[str, str] = {}
+    for c in cards:
+        clean = " ".join(_CARD_ANNOT.sub("", c).split())
+        by_norm.setdefault(_norm(clean), clean)
+    out = []
+    for s in sorted(skill_names):
+        if s in linked or s in declined:
+            continue
+        for key in (_norm(s), "1" + _norm(s)):
+            if key in by_norm:
+                out.append((s, by_norm[key]))
+    return out
+
+
+def check_skill_claims(cards: list[str] | None = None) -> Finding:
+    """New skills that look like they belong to a recurring card should claim
+    it in dtd while they run (/d-style). JM links them in agent_claims.py, or
+    records a no in SKILL_NO_CLAIM so this stops asking."""
+    ac = _agent_claims()
+    skills = [d.name for d in SKILLS.iterdir() if (d / "SKILL.md").exists()]
+    pairs = unlinked_skill_cards(skills, _recurring_cards() if cards is None else cards,
+                                 set(ac.SKILL_CLAIMS), set(ac.SKILL_NO_CLAIM))
+    if not pairs:
+        return Finding("skill-claims", "ok", f"{len(ac.SKILL_CLAIMS)} skills linked to dtd cards; no new candidates")
+    return Finding("skill-claims", "warn", f"{len(pairs)} skill(s) may need a dtd card link",
+                   [f"/{s} → '{c}': link in agent_claims.SKILL_CLAIMS (+ hook prefilter), "
+                    "or decline in SKILL_NO_CLAIM" for s, c in pairs], review=True)
+
+
 def check_alerts(now: dt.datetime) -> Finding:
     if not ALERTS.exists():
         return Finding("alerts", "ok", "no alerts sink")
@@ -431,7 +488,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, lambda: check_alerts(now)):
+               check_ix_cron, check_skill_claims, lambda: check_alerts(now)):
         try:
             out.append(fn())
         except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

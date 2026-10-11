@@ -67,3 +67,23 @@ def test_duplicate_notes_flags_live_dupes_not_journals_or_archives(tmp_path, mon
     assert set(d) == {"epcn"}
     assert d["epcn"]["paths"] == ["hcmc/epcn.md", "hcmp/epcn.md"]
     assert sorted(d["epcn"]["linked_from"]) == ["hcmc/hcmc.md", "hcmp/hcmp.md"]
+
+
+def test_skill_claims_flags_only_unlinked_undeclined_name_matches():
+    vh = _load()
+    cards = ["1 i9 (10) [40]", "moral audit (30) [40]", "1 f695 (10) [25]", "1s (20) [45]", "s897 (120) [30]",
+             "hiit (10) [23]"]
+    pairs = vh.unlinked_skill_cards(["1i9", "moralaudit", "f695", "s", "s897", "did", "newskill"], cards,
+                                    linked={"1i9"}, declined={"s897"})
+    assert pairs == [("f695", "1 f695"), ("moralaudit", "moral audit"), ("s", "1s")]
+
+
+def test_skill_claims_live_registry_is_clean():
+    """Every current skill that name-matches a real recurring card is either
+    linked or declined (card names as of 2026-10-11)."""
+    vh = _load()
+    cards = ["0g (4) [8]", "0t (3) [10]", "1 -1n (10) [15]", "1 -2g (13) [20]", "1 f695 (10) [25]", "1 hcb (5) [15]",
+             "1 hcmc (8) [15]", "1 i9 (10) [40]", "1 m5x2 (30) [30]", "1 s897 (25) [30]", "1g (20) [20]",
+             "1s (20) [45]", "3s (30) [40]", "moral audit (30) [40]", "notes (3) [8]", "s897 (120) [30]", "早餐 (15) [5]"]
+    f = vh.check_skill_claims(cards)
+    assert f.status == "ok", f.detail

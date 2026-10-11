@@ -1,6 +1,6 @@
 ---
 name: "1-i446"
-description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
+description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, skills not yet linked to a dtd card, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
 user-invocable: true
 ---
 

@@ -159,6 +159,13 @@ the `1n+` sheet:
 /did 1 i9
 ```
 
+Then release the dtd claim the `/1i9` prompt took, so its 😈 spinner stops
+(no-op if nothing is claimed):
+
+```bash
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
+```
+
 This closes the recurring `1 i9 (10) [40]` Todoist task (labels
 `1neon`,`i9`) and credits the `1n+` sheet's existing column J the normal
 way (header-name routing in `did-fast.py`), matching every other `1neon`

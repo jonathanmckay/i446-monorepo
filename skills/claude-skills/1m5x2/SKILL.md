@@ -62,6 +62,8 @@ Then, with each question, offer a drafted answer the user can accept with "ok" o
    I=goals, K=minutes. Do not touch J.
 7. **Complete the habit:** `python3 ~/i446-monorepo/tools/did/did-fast.py "1 m5x2"`
    then `did-fast.py --refresh-cache` in the foreground.
+   Then release the dtd claim the `/1m5x2` prompt took (no-op if none):
+   `python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1`
 8. **Report:**
    ```
    m5x2 week {label} ({week_start}–{week_end})

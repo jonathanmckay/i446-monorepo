@@ -32,6 +32,9 @@ python3 ~/i446-monorepo/tools/did/did-fast.py "早餐"
 # (backgrounding it gets torn down before the ~2s refresh finishes — same
 # regression class as the /0g cache-refresh note).
 python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+# The card is closed now: release the dtd claim the prompt took, so its 😈
+# spinner stops. Harmless no-op if nothing is claimed.
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
 ```
 
 If `did-fast.py "早餐"` reports `already done today`, that's fine — don't
