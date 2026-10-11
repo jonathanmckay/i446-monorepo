@@ -7748,5 +7748,25 @@
     "unit": "D096",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-11",
+    "effective": "2026-10-10",
+    "kind": "moveout",
+    "unit_id": "1192",
+    "prop": "tc68",
+    "unit": "B43",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-11",
+    "effective": "2026-10-14",
+    "kind": "leased",
+    "unit_id": "412",
+    "prop": "ps17",
+    "unit": "A10",
+    "tenant": null,
+    "baseline": false
   }
 ]
