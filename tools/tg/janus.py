@@ -58,6 +58,12 @@ from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
 from prompt_toolkit.styles import Style  # noqa: E402
 from prompt_toolkit.mouse_events import MouseEventType  # noqa: E402
+
+# Usage events in dtd's TSV format (janus_events.py). did-fast / tg-fast run as
+# children inherit JMSOURCE_VIA, so the source ledger credits janus, not did-fast.
+os.environ.setdefault("JMSOURCE_VIA", "janus")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import janus_events as JE  # noqa: E402
 from prompt_toolkit.application.current import get_app  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -1855,7 +1861,14 @@ def _blocks_plausible(bp: dict[str, int]) -> bool:
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
+_FLASH_FAIL = re.compile(r"\b(failed|error|refus|not a|invalid|couldn|can't|cannot)", re.I)
+
+
 def flash(msg: str, secs: float = 4.0, style: str = ""):
+    if _FLASH_FAIL.search(msg or ""):
+        JE.emit("outcome", "error", (), msg)
+    elif "cancel" in (msg or "").lower():
+        JE.emit("outcome", "cancel", (), msg)
     STATE.flash = msg
     STATE.flash_until = time.monotonic() + secs
     STATE.flash_style = style or ""
@@ -5611,7 +5624,9 @@ def _run_done_command(app, cmd: str) -> None:
     async def _run():
         flash(f"$ did {cmd}  (stop + done)")
         app.invalidate()
+        t0 = time.monotonic()
         res = await asyncio.to_thread(run_did_fast, cmd)
+        JE.emit("outcome", "done", (), f"{time.monotonic() - t0:.1f}s {cmd} -> {res}")
         flash(res, 8.0)
         app.invalidate()
         await _refresh_parallel(fetch_current, (fetch_today, True), fetch_points)
@@ -5684,8 +5699,27 @@ def _convert_selected_event(ev: dict, app) -> None:
     _enqueue_work(app, label, _run_event_and_refresh, key=cmd)
 
 
+def _sel_ids() -> list:
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not isinstance(item, dict):
+        return []
+    return list(item.get("entry_ids") or ([item["id"]] if item.get("id") else []))
+
+
 @kb.add("enter")
 def _(event):
+    _t = input_buffer.text.strip()
+    if STATE.done_target is not None:
+        JE.emit("action", "done_points", (), _t)
+    elif STATE.split_target is not None:
+        JE.emit("action", "split", [STATE.split_target.get("id")], _t)
+    elif STATE.edit_target is not None:
+        JE.emit("action", "edit", STATE.edit_target.get("ids") or [], _t)
+    elif _t:
+        JE.emit("action", "cmd", (), _t)
+    else:
+        JE.emit("action", "select", _sel_ids(), str(STATE.event_sel or ""))
     if STATE.done_target is not None:
         # Consumed first, unconditionally — same chokepoint discipline as
         # split_target/edit_target below. The input line holds the point
@@ -6195,6 +6229,7 @@ def _(event):
     has no double-append guard for 0分, so a second run would double-award
     (user request 2026-07-27). On a past-day view there's no completion
     record to check, so it runs unconditionally (that's the backfill case)."""
+    JE.emit("action", "done_sel", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
     if STATE.recording is not None:
@@ -6303,6 +6338,7 @@ def _(event):
     Enter cuts (first half keeps the entry id; second half is a fresh
     identical entry). v1 scope: single completed entries — a merged row has
     no single well-defined timeline and a running one has no end yet."""
+    JE.emit("action", "split_arm", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
     if not (isinstance(item, dict) and item.get("kind") == "entry"):
@@ -6352,6 +6388,7 @@ def _(event):
     undo. A merged multi-entry row (contiguous same-desc Toggl entries
     rendered as one line) deletes every constituent id — unlike split,
     there's no single-timeline ambiguity for a delete."""
+    JE.emit("action", "delete", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
     if isinstance(item, dict) and item.get("kind") == "entry":
@@ -6417,10 +6454,13 @@ def _(event):
 
 @kb.add("c-s")
 def _(event):
+    JE.emit("action", "stop", (), "")
     flash("stopping…")
 
     async def _stop():
+        t0 = time.monotonic()
         res = await asyncio.to_thread(run_tg_fast, "stop")
+        JE.emit("outcome", "stop", (), f"{time.monotonic() - t0:.1f}s {res}")
         flash(res)
         event.app.invalidate()
         await _confirm_after_tg(event.app)
@@ -6432,6 +6472,7 @@ def _(event):
 
 @kb.add("c-r")
 def _(event):
+    JE.emit("action", "refresh", (), "")
     flash("refreshing…")
 
     async def _refresh():
@@ -6529,6 +6570,7 @@ def _day_back(event):
         STATE.split_target = None
         input_buffer.reset()
     flash(f"◀ {view_now():%a %-m/%-d}")
+    JE.emit("view", "prev", (), f"{view_now():%Y-%m-%d}")
     _reload_day(event.app)
 
 
@@ -6546,6 +6588,7 @@ def _day_forward(event):
         STATE.split_target = None
         input_buffer.reset()
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
+    JE.emit("view", "next", (), f"{view_now():%Y-%m-%d}")
     _reload_day(event.app)
 
 
@@ -6930,9 +6973,12 @@ async def main():
     app.create_background_task(ticker_gcal(app))
     app.create_background_task(ticker_points(app))
     app.create_background_task(ticker_self_restart(app))
+    _sz = shutil.get_terminal_size((0, 0))
+    JE.emit("session", "start", (), f"{os.uname().nodename.split('.')[0]} {_sz.columns}x{_sz.lines}")
     try:
         await app.run_async()
     finally:
+        JE.emit("session", "end", (), "restart" if _RESTART.get("want") else "")
         _release_pid_file()
 
 
