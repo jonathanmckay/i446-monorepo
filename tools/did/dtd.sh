@@ -2031,8 +2031,9 @@ elif view == 'time':
     unique.sort(key=lambda t: (time_of(t), prank(t.get('priority'))))
 
 DIM = '\033[2m'
-claimed_lines = []
-running_lines = []
+claimed_lines = []   # B: agent waiting on JM
+working_lines = []   # C: agent mid-turn
+running_lines = []   # A: JM's own timer
 normal_lines = []
 skipped_lines = []
 
@@ -2156,17 +2157,23 @@ for t in unique:
         is_running = str(t.get('id', '')) == running_id
     else:
         is_running = bool(running_clean and clean == running_clean)
+    # In-progress tiers (2026-10-11), top to bottom:
+    #   A  JM's own running timer: 🧮 only, domain color (the one he's finishing)
+    #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
+    #   C  agent claim working: spinner + 😈, grey
+    # A wins when JM times a task an agent also holds. 🕐, not ⏰: ⏰ is delay.
+    is_claimed = str(t.get('id', '')) in _claim_ids and not is_running
+    is_working = is_claimed and str(t.get('id', '')) in _agent_ids
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
-        prefix = f'▶ {elapsed}m · {dom_tag}'
+        prefix = f'🧮 {elapsed}m · {dom_tag}'
     else:
         prefix = repeat + dom_tag
-    is_claimed = str(t.get('id', '')) in _claim_ids
-    if str(t.get('id', '')) in _agent_ids:
+    if is_working:
         prefix = _agent_frame + ' 😈 ' + prefix
         color = AGENT_GREY
     elif is_claimed:
-        prefix = '😈 ' + prefix
+        prefix = '🧮 🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)
@@ -2178,12 +2185,14 @@ for t in unique:
         body = body.replace(
             link_text,
             '\x1b]8;;' + link_url + _st + link_text + '\x1b]8;;' + _st, 1)
-    if is_claimed:
-        claimed_lines.append(f'{color}{body}{RESET}{sfx}')
-    elif is_running:
+    if is_running:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
         running_lines.append(f'{color}{body}{RESET}{sfx}')
+    elif is_working:
+        working_lines.append(f'{color}{body}{RESET}{sfx}')
+    elif is_claimed:
+        claimed_lines.append(f'{color}{body}{RESET}{sfx}')
     elif is_skipped:
         skipped_lines.append(f'{color}{body}{RESET}{sfx}')
     elif color:
@@ -2191,9 +2200,7 @@ for t in unique:
     else:
         normal_lines.append(f'{body}{sfx}')
 
-for l in claimed_lines:
-    print(l)
-for l in running_lines:
+for l in running_lines + claimed_lines + working_lines:
     print(l)
 for l in normal_lines:
     print(l)
@@ -2205,7 +2212,7 @@ for l in skipped_lines:
 try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
-        _order = [l.rsplit(chr(9), 1)[-1] for l in claimed_lines + running_lines + normal_lines]
+        _order = [l.rsplit(chr(9), 1)[-1] for l in running_lines + claimed_lines + working_lines + normal_lines]
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:

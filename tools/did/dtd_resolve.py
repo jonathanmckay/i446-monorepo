@@ -26,6 +26,7 @@ def main() -> int:
     plain = re.sub(r"\033\[[0-9;]*m", "", arg)
     plain = re.sub(r"^↻ ", "", plain)
     plain = re.sub(r"^▶ [^·]* · ", "", plain)
+    plain = re.sub(r"^🧮 (?:🕐 )?(?:[^·]* · )?", "", plain)  # in-progress tiers (2026-10-11)
 
     # Todoist v1 ids are opaque alphanumeric strings (e.g. 6gqQ59G5HHVRQR3R),
     # never containing spaces. Try an exact id match first; if none, the arg was

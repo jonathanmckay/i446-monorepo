@@ -111,8 +111,8 @@ def test_only_the_started_task_id_is_marked_running():
         recur_row = _row_for_id(out, "AOS_RECUR")
         oneoff_row = _row_for_id(out, "AOS_ONEOFF")
 
-        assert "▶" in recur_row, "the task whose id matches the timer must show as running"
-        assert "▶" not in oneoff_row, (
+        assert "🧮" in recur_row, "the task whose id matches the timer must show as running"
+        assert "🧮" not in oneoff_row, (
             "a different task that merely shares the same stripped name must "
             "NOT be marked running just because dtd started its namesake")
 
@@ -130,7 +130,7 @@ def test_legacy_two_field_timer_still_falls_back_to_name_match():
         # Documents the known (accepted) legacy limitation: without an id both
         # same-named rows still light up until the timer file is next
         # overwritten by the fixed DTD_START.
-        assert "▶" in recur_row and "▶" in oneoff_row
+        assert "🧮" in recur_row and "🧮" in oneoff_row
 
 
 if __name__ == "__main__":
