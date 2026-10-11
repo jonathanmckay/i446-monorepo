@@ -6772,7 +6772,11 @@ def _no_timer_flash_style() -> str:
 app = Application(layout=Layout(root, focused_element=input_window),
                   key_bindings=kb, full_screen=True, style=style,
                   mouse_support=True,
-                  refresh_interval=0.1)
+                  # 0.25s, not 0.1s (2026-10-11): every animation here flips
+                  # on a 0.5s phase, so 4 redraws/s still shows each flip
+                  # within a quarter second, and the idle redraw loop was
+                  # holding ~20% CPU around the clock.
+                  refresh_interval=0.25)
 
 # prompt_toolkit's own enable_mouse_support() (site-packages
 # prompt_toolkit/output/vt100.py) turns on mode 1003 ("mouse-drag support"

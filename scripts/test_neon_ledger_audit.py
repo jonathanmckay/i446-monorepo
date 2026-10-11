@@ -24,7 +24,7 @@ def test_replay_clean_chain():
         E(before="=1+10", after="=1+10+5"),
     ])
     assert errors == [] and warns == []
-    assert last[("0分", "R", "7/28")][1] == "=1+10+5"
+    assert last[("0分", "R", "r207")][1] == "=1+10+5"
 
 
 def test_replay_detects_break():
@@ -96,3 +96,15 @@ def test_report_stays_small_with_thousands_of_standing_errors(tmp_path, monkeypa
     assert text.count("- ❌") == audit.MAX_ITEMS
     assert "2800 more" in text
     assert "3000 errors, 0 warnings" in text.split("\n## ")[-1]
+
+
+def test_same_cell_by_date_and_row_is_one_chain():
+    """2026-10-11: block-turnover writes 0分!P by date, ritual -1n by row; the
+    daemon logs the resolved row on both, so they must share one chain."""
+    entries = [
+        {"ts": "1", "kind": "write", "sheet": "0分", "col": "P", "date": "10/11", "row": 282, "before": "=0", "after": "=3"},
+        {"ts": "2", "kind": "write", "sheet": "0分", "col": "P", "date": None, "row": 282, "before": "=3", "after": "=3+13"},
+        {"ts": "3", "kind": "write", "sheet": "0分", "col": "P", "date": "10/11", "row": 282, "before": "=3+13", "after": "=3+13+13"},
+    ]
+    errors, _, _ = audit.replay(entries)
+    assert errors == []

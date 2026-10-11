@@ -78,7 +78,12 @@ def iter_entries(paths):
 
 
 def entry_key(e):
-    anchor = e.get("date") or f"r{e.get('row')}"
+    # Row first (2026-10-11): one physical cell was journaled under two keys,
+    # '@10/11' by date-addressed writers (block-turnover) and '@r282' by
+    # row-addressed ones (ritual -1n), so each key's chain missed the other's
+    # writes and logged ~10 false chain breaks a day. The daemon records the
+    # resolved row on every entry; date is only the fallback.
+    anchor = f"r{e['row']}" if e.get("row") is not None else e.get("date")
     return (e.get("sheet", ""), e.get("col", ""), str(anchor))
 
 
