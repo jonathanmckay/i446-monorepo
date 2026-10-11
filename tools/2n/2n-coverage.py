@@ -47,6 +47,10 @@ SLEEP_CODE = "睡觉"
 NIGHT_START, NIGHT_END = 21, 7          # local hours treated as sleep-plausible
 REPORT_DIR = Path.home() / "vault/g245/reviews"
 STATE_PATH = Path.home() / ".local/state/jm/2n-last.json"   # last audit's numbered gaps, for --fill
+# Timer labels that mean "uncategorized" (same set as janus.py's
+# _PLACEHOLDER_LABELS). Their time is a gap to be identified, not coverage
+# (JM 2026-10-11: September had 21 of them, 7h, invisible to /2n).
+PLACEHOLDER_LABELS = {"generic placeholder", "?"}
 
 # Calendar → project resolution, mirroring tools/janus/mobile.py's copy
 # (which itself mirrors tools/tg/janus.py). Not imported: both modules pull
@@ -119,6 +123,7 @@ def fetch_entries(first: _dt.date, last: _dt.date) -> list[dict]:
             continue
         pid = e.get("project_id")
         out.append({
+            "id": e.get("id"),
             "start": start, "end": end,
             "desc": (e.get("description") or "").strip(),
             "code": PROJECT_NAMES.get(pid, "") if pid else "",
@@ -128,6 +133,10 @@ def fetch_entries(first: _dt.date, last: _dt.date) -> list[dict]:
 
 
 # ── Coverage (pure) ────────────────────────────────────────────────────────────
+
+def is_placeholder(e: dict) -> bool:
+    return (e.get("desc") or "").strip().lower() in PLACEHOLDER_LABELS
+
 
 def month_range(arg: str | None, today: _dt.date | None = None) -> tuple[_dt.date, _dt.date]:
     """(first, last) of the month given as YYYY-MM, or of the most recent
@@ -288,12 +297,20 @@ def fetch_day_events(day: _dt.date) -> list[dict]:
 def audit(first: _dt.date, last: _dt.date, entries: list[dict], *,
           floor_min: int = DEFAULT_FLOOR_MIN, min_gap_min: int = DEFAULT_MIN_GAP_MIN,
           use_calendar: bool = True, event_fetcher=fetch_day_events) -> dict:
+    # Placeholder entries don't count as coverage: their time shows up as a
+    # gap, and each gap carries the placeholders inside it so --fill can
+    # replace them instead of stacking a second entry on top.
+    placeholders = [e for e in entries if is_placeholder(e)]
+    entries = [e for e in entries if not is_placeholder(e)]
     days = []
     d = first
     gap_no = 0
     while d <= last:
         cov = day_coverage_min(d, entries)
         gaps = day_gaps(d, entries, min_gap_min) if cov < floor_min else []
+        for g in gaps:
+            g["placeholders"] = [p for p in placeholders
+                                 if p["start"] < g["end"] and p["end"] > g["start"]]
         events = event_fetcher(d) if (use_calendar and gaps) else []
         numbered = []
         for g in gaps:
@@ -314,6 +331,7 @@ def audit(first: _dt.date, last: _dt.date, entries: list[dict], *,
         "floor_min": floor_min, "min_gap_min": min_gap_min, "n_days": len(days),
         "n_short": len(with_gaps), "n_seams_only": sum(1 for x in days if x["seams_only"]),
         "n_gaps": gap_no,
+        "n_placeholder_gaps": sum(1 for x in days for g in x["gaps"] if g["placeholders"]),
         "uncovered_min": sum(DAY_MIN - x["coverage_min"] for x in days),
         "days": days,
     }
@@ -327,7 +345,8 @@ def save_state(a: dict) -> None:
             gaps.append({"id": g["id"], "date": day["date"],
                          "start": g["start"].isoformat(), "end": g["end"].isoformat(),
                          "minutes": g["minutes"], "fill": g["suggest"]["fill"],
-                         "code": g["suggest"]["code"], "confidence": g["suggest"]["confidence"]})
+                         "code": g["suggest"]["code"], "confidence": g["suggest"]["confidence"],
+                         "replace_ids": [p["id"] for p in g["placeholders"] if p.get("id")]})
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps({"month": a["month"], "gaps": gaps}, ensure_ascii=False, indent=1))
 
@@ -363,6 +382,7 @@ def fill_gaps(spec: str) -> int:
     from mcp.toggl_server.config import PROJECT_MAP  # noqa: E402
     wanted = parse_fill_spec(spec)
     created, skipped = [], []
+    deleted: set = set()
     for n, (desc_override, code_override) in sorted(wanted.items()):
         g = by_id.get(n)
         if g is None:
@@ -388,8 +408,21 @@ def fill_gaps(spec: str) -> int:
         except Exception as e:  # noqa: BLE001
             skipped.append(f"#{n}: Toggl error {e}")
             continue
+        # Create first, then delete the placeholder(s) it replaces: a failed
+        # delete leaves an overlap to clean up, never a hole. One placeholder
+        # can span several gaps, so each id is deleted once.
+        note = ""
+        for pid_ in g.get("replace_ids") or []:
+            if pid_ in deleted:
+                continue
+            try:
+                toggl_api.delete_entry(pid_)
+                deleted.add(pid_)
+                note = " (replaced placeholder)"
+            except Exception as e:  # noqa: BLE001
+                skipped.append(f"#{n}: created, but placeholder {pid_} not deleted ({e}); remove it by hand")
         created.append(f"#{n} {g['date']} {g['start'][11:16]}–{g['end'][11:16]} {desc}"
-                       + (f" @{code}" if code else ""))
+                       + (f" @{code}" if code else "") + note)
     for line in created:
         print("created", line)
     for line in skipped:
@@ -412,6 +445,9 @@ def render_md(a: dict) -> str:
     seams = [d for d in a["days"] if d["seams_only"]]
     lines.append(f"**{a['n_short']} of {a['n_days']} days have gaps ≥ {a['min_gap_min']}m** "
                  f"({a['n_gaps']} gaps) · {_hm(a['uncovered_min'])} uncovered in total")
+    if a.get("n_placeholder_gaps"):
+        lines.append(f"{a['n_placeholder_gaps']} gaps are placeholder time (\"generic placeholder\" / \"?\"), "
+                     "marked ⧗; filling one replaces the placeholder entry.")
     if seams:
         lines.append(f"Under the floor from sub-{a['min_gap_min']}m seams only (fine, not listed): "
                      + ", ".join(_dt.date.fromisoformat(d["date"]).strftime("%-m/%-d") for d in seams))
@@ -426,7 +462,8 @@ def render_md(a: dict) -> str:
         for g in day["gaps"]:
             s = g["suggest"]
             tag = f" @{s['code']}" if s["code"] else ""
-            lines.append(f"| {g['id']} | {d.strftime('%a %-m/%-d')} | {_t(g['start'])}–{_t(g['end'])} | "
+            ph = " ⧗" if g.get("placeholders") else ""
+            lines.append(f"| {g['id']}{ph} | {d.strftime('%a %-m/%-d')} | {_t(g['start'])}–{_t(g['end'])} | "
                          f"{g['minutes']} | {s['fill']}{tag} | {s['reason']} | {s['confidence']} |")
     lines.append("")
     lines.append("### Context")
@@ -438,7 +475,10 @@ def render_md(a: dict) -> str:
         for g in day["gaps"]:
             prev = f"after `{g['prev']['desc'] or g['prev']['code']}`" if g["prev"] else "day start"
             nxt = f"before `{g['next']['desc'] or g['next']['code']}`" if g["next"] else "day end"
-            lines.append(f"- #{g['id']} {_t(g['start'])}–{_t(g['end'])}: {prev}, {nxt}")
+            was = "; ".join(f"`{p['desc']}`" + (f" @{p['code']}" if p.get("code") else "")
+                            for p in g.get("placeholders") or [])
+            lines.append(f"- #{g['id']} {_t(g['start'])}–{_t(g['end'])}: {prev}, {nxt}"
+                         + (f"; was {was}" if was else ""))
     lines.append("")
     lines.append("Batch fill: `/2n fill 1,3,5` uses the suggestions; `/2n fill 2=family time @xk87` "
                  "overrides one. `?` and `multiple:` rows need an override.")
@@ -450,7 +490,7 @@ def _jsonable(a: dict) -> dict:
         if isinstance(o, _dt.datetime):
             return o.isoformat()
         if isinstance(o, dict):
-            return {k: conv(v) for k, v in o.items() if k not in ("prev", "next")}
+            return {k: conv(v) for k, v in o.items() if k not in ("prev", "next", "placeholders")}
         if isinstance(o, list):
             return [conv(x) for x in o]
         return o

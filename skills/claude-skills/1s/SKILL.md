@@ -1,12 +1,21 @@
 ---
 name: "1s"
-description: "Weekly strategic review. Copies 1g summary, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
+description: "Weekly strategic review. Copies the week's 1g goals from the monthly 2g+1g narrative doc, opens the 1s survey form (daily 0s answers surfaced inline), then compares goals vs time vs points. Usage: /1s"
 user-invocable: true
 ---
 
 # Weekly Strategic Review (/1s)
 
 Compare what you planned (1g goals) vs what you spent time on (Toggl) vs what you achieved (0分 points) across all domains. Writes a review to vault, then marks the 1s task done.
+
+**Where the goals live (since 2026-09):** the week's block in
+`~/vault/g245/5e2/YYYY.MM 2g+1g-narrative.md`, the month the review week's
+Sunday falls in (so "Sep 27 – Oct 3" is in the September doc). The Neon `1g`
+sheet is retired: it still holds week 9.4's goals and an "u" placeholder in
+A1. Never read goals or the tldr from it. Ix cron
+(`tools/1g/narrative_month.py`, daily 04:20) creates each month's doc, with
+its week headings and its `5e2.md` link, the Sunday before the month's first
+week.
 
 ## Usage
 
@@ -72,38 +81,37 @@ one-line summary; surface any ⚠ clobber flags to the user. This step lives her
 (not launchd) deliberately: macOS TCC blocks CloudStorage for launchd-spawned
 python3, and /1s already runs weekly in a terminal with full access.
 
-#### Step 0a: Copy 1g tldr to 1分+1s
+#### Step 0a: Copy the week's 1g goals to 1分+1s
 
-**Skip this step entirely if the review week is not the most recent completed week** (i.e. the user passed a `week` argument targeting an older week for backfill). The `1g` sheet resets every week (`/1g` overwrites it), so `1g!A1` only ever holds the *current* week's tldr — copying it into an old week's row writes that day's placeholder/garbage text into historical data (regression 2026-08-02: copied "u" into week 6.3's row, ~6 weeks stale). There is no way to recover a past week's tldr from the live sheet; leave the cell as-is for backfills.
+Write a one-line tldr of the review week's goals, built from the narrative
+doc's week block, into the `1g summary` column (`D`) of `1分+1s` at the
+review week's row (col A M.W label, e.g. `10.1`; see `week_row_label` in
+`1s-survey.py`). The narrative doc keeps every week, so this also works for
+backfills. If the week block has no goals, leave D alone and say so; never
+write a placeholder (regressions 2026-08-02 and 2026-10-11 both wrote the
+retired `1g!A1`'s "u" into D).
 
-Read cell `A1` from the `1g` sheet — this contains the weekly goals summary (tldr). Write it to the `1g summary` column (`D`) in the `1分+1s` sheet at the review week's row, found by scanning col A for the M.W label (e.g. `8.2`; see `week_row_label` in `1s-survey.py` for the exact `month.((day-1)//7+1)` formula) — never a hardcoded row number.
-
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set sheet1g to sheet "1g" of wb
-    set sheet1s to sheet "1分+1s" of wb
-    set tldr to string value of range "A1" of sheet1g
-    set weekRow to 0
-    set r to 2
-    repeat while r < 400
-        set aVal to string value of range ("A" & r) of sheet1s
-        if aVal is "M.W_LABEL" then
-            set weekRow to r
-            exit repeat
-        end if
-        if aVal is "" then
-            exit repeat
-        end if
-        set r to r + 1
-    end repeat
-    if weekRow = 0 then return "ERROR: week M.W_LABEL not found in 1分+1s col A"
-    set value of range ("D" & weekRow) of sheet1s to tldr
-    return "OK: wrote 1g tldr to D" & weekRow
-end tell
+```bash
+python3 - <<'PY'
+import importlib.util, json, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from neon import excel
+WEEK_START, LABEL = "YYYY-MM-DD", "M.W"   # review week's Sunday + its M.W label
+out = subprocess.run(["python3", str(Path.home() / "i446-monorepo/tools/1g/1g_review.py"), WEEK_START],
+                     capture_output=True, text=True, check=True).stdout
+goals = json.loads(out)["goals"]
+if not goals:
+    sys.exit("no goals in the narrative week block; D left as-is")
+by = {}
+for g in goals:
+    by.setdefault(g["domain"], []).append(g["text"].strip())
+tldr = " · ".join(f"{d}: {', '.join(t)}" for d, t in by.items())
+row = next(r for r in range(2, 400) if excel.read("1分+1s", "A", row=r)["value"] == LABEL)
+excel.write("1分+1s", "D", row=row, value=tldr)
+print(f"D{row} <- {tldr}")
+PY
 ```
-
-Replace `M.W_LABEL` with the review week's M.W label (e.g. `8.2`).
 
 #### Step 0b: Launch the weekly survey form
 
@@ -166,26 +174,28 @@ Calculate the Sun–Sat range for the target week. Default: the most recent Satu
 
 Set `week_start` (Sunday) and `week_end` (Saturday) as YYYY-MM-DD strings.
 
-**Backfill gate**: if `week_end` is before the most recently completed Saturday
-(i.e. the user targeted an old week, not the current one), **STOP after this
-step** and tell the user Steps 2/5/6/7 can't run correctly — the `1g` sheet
-has no historical archive (same root cause as the Step 0a bug below: `/1g`
-overwrites it weekly, so `1g!A1` and its goal rows only ever hold the
-*current* week's data). Ask how to proceed: drop the goals/target/Δ columns
-and do a time-vs-points-only comparison, abort to survey-only (Step 0b, which
-still works — Toggl and 0分 history are real, only `1g` is not), or take
-manually-supplied goals from the user. Do not silently pull `1g`'s current
-contents and label them as the old week's goals (regression 2026-08-02, week
-6.3 backfill).
+**Backfills work**: the narrative doc keeps every week's goals, so an older
+week is reviewed exactly like the current one. Only weeks before 2026-09-06
+(first narrative month with weekly 1g goals) have no goals; for those, drop the
+goals/target/Δ columns and do a time-vs-points-only comparison.
 
-### Step 2: Pull weekly goals from 1g sheet
+### Step 2: Pull weekly goals from the narrative doc
 
-Read the `1g` sheet in `Neon分v12.2.xlsx` via AppleScript. For each domain section (i9, m5x2, hcmp, hcb, g245, hci, xk87, hcmc, s897):
-- Scan Col A for the domain header
-- Read goals from Col D (text), Col E (分 target), Col F (focus bonus), Col G (% done)
-- Stop when hitting the next domain header or empty section
+```bash
+python3 ~/i446-monorepo/tools/1g/1g_review.py <week_start YYYY-MM-DD>
+```
 
-Collect into a structure: `{domain: [{goal, fen_target, focus_bonus, pct_done}]}`
+Reads the review week's block from `~/vault/g245/5e2/YYYY.MM 2g+1g-narrative.md`
+(month of the week's Sunday) and scores each goal. JSON: `goals[]` with
+`domain`, `text`, `kind`, `status` (✅ / ⚠️ / ❌ / ❓) and `note`. `<N>分` goals
+are scored against that domain's 0分 week total, and "N days good media"
+against the 0n media cells. `❓` = manual goals the data can't settle: judge
+them from Toggl and the `evidence` tasks, and say "unknown" rather than guess.
+✅/❌ marks JM already put in the doc outrank the script. If the doc or the
+week block is missing, say so and stop the goals part; never fall back to the
+`1g` sheet.
+
+Collect into `{domain: [{goal, target, actual, status, note}]}`.
 
 ### Step 3: Pull Toggl time for the week
 
@@ -344,8 +354,8 @@ table still renders; the digest just lacks that week's title/win text.
 ### Step 5: Build comparison table
 
 For each domain, compute:
-- **Goals set**: count of non-empty goals from 1g
-- **分 target**: sum of Col E values for that domain
+- **Goals set**: count of the domain's goals in the narrative week block
+- **分 target**: the domain's `<N>分` goal target from `1g_review.py` (blank if the domain has no 分 goal)
 - **分 actual**: weekly points from 0分
 - **Toggl hours**: time_by_domain / 60, rounded to 1 decimal
 - **Δ**: (actual - target) / target as percentage
@@ -473,7 +483,7 @@ the user submits it (rerun `1s-survey.py` directly if needed).
   conflicts against the canonical workbook on Ix.
 - Batch the multiple writes in this skill into as few helper calls as
   possible to amortize ssh round-trips.
-- The 1g sheet goals reset weekly — read them BEFORE they're overwritten by next week's `/1g`
+- Goals come from the monthly narrative doc (see top); the Neon `1g` sheet is retired and stale. Never read it.
 - Use `toggl_range` for the whole week in one call (see Step 3) — not 7 separate `toggl_date` calls.
 - 0分 column mapping must match exactly. If columns shift, the review will have wrong data.
 - AppleScript calls sequential (no parallel Excel access).

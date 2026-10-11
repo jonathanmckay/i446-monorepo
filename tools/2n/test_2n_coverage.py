@@ -171,3 +171,40 @@ def test_fill_gaps_uses_saved_state_and_skips_unusable_rows(monkeypatch, tmp_pat
     created.clear()
     assert cov.fill_gaps("2=lunch out @xk87") == 0
     assert created[0][0][0] == "lunch out" and created[0][1]["project_id"] == 163129781
+
+
+def test_placeholder_time_is_a_gap_that_names_the_placeholder():
+    """2026-10-11: a day "covered" by `generic placeholder` / `?` entries
+    passed the 23:45 floor, so 7h of uncategorized September time never
+    reached /2n. Placeholder time must be listed like untracked time."""
+    ph = {**_e(18, 57, 19, 5, "generic placeholder", "infra"), "id": 77}
+    entries = [_e(0, 0, 18, 57, "a", "i9"), ph, _e(19, 5, 23, 59, "睡觉", "睡觉")]
+    a = cov.audit(DAY, DAY, entries, event_fetcher=lambda d: [])
+    (g,) = a["days"][0]["gaps"]
+    assert (g["start"].hour, g["start"].minute, g["minutes"]) == (18, 57, 8)
+    assert [p["id"] for p in g["placeholders"]] == [77]
+    assert a["n_placeholder_gaps"] == 1
+    md = cov.render_md(a)
+    assert "| 1 ⧗ |" in md and "was `generic placeholder` @infra" in md
+    q = {**_e(10, 0, 10, 40, "?", ""), "id": 5}
+    a = cov.audit(DAY, DAY, [_e(0, 0, 10, 0, "a"), q, _e(10, 40, 23, 59, "b")], event_fetcher=lambda d: [])
+    assert a["days"][0]["gaps"][0]["minutes"] == 40
+
+
+def test_fill_replaces_placeholders_once_after_creating(monkeypatch, tmp_path):
+    state = tmp_path / "2n-last.json"
+    gap = lambda i, h: {"id": i, "date": "2026-09-20", "start": f"2026-09-20T{h}:00:00-07:00",  # noqa: E731
+                        "end": f"2026-09-20T{h}:30:00-07:00", "minutes": 30, "fill": "walk",
+                        "code": "xk87", "confidence": "med", "replace_ids": [9]}
+    state.write_text(json.dumps({"month": "2026-09", "gaps": [gap(1, "16"), gap(2, "17")]}))
+    monkeypatch.setattr(cov, "STATE_PATH", state)
+    monkeypatch.setattr(cov, "_ensure_toggl_key", lambda: None)
+    calls = []
+    import types, sys as _sys
+    fake_api = types.SimpleNamespace(create_entry=lambda *a, **k: calls.append(("create", a[0])),
+                                     delete_entry=lambda i: calls.append(("delete", i)) or True)
+    monkeypatch.setitem(_sys.modules, "mcp.toggl_server.toggl_api", fake_api)
+    monkeypatch.setitem(_sys.modules, "mcp.toggl_server.config",
+                        types.SimpleNamespace(PROJECT_MAP={"xk87": 163129781}))
+    assert cov.fill_gaps("1,2") == 0
+    assert calls == [("create", "walk"), ("delete", 9), ("create", "walk")]

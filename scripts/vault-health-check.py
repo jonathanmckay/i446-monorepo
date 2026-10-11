@@ -32,7 +32,7 @@ VALID_STATUSES = ["active", "archived", "draft", "rfc"]
 
 # Domain-specific required fields
 DOMAIN_FIELDS = {
-    "h335/d359": ["child"],  # people docs need child field
+    "d359": ["child"],  # people docs need child field
     "h335/m5x2": [],  # property, fund are optional
     "h335/i9": [],  # tenure is optional
     "xk87": [],  # curriculum_level is optional
