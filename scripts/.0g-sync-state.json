@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-11T06:00:04.134910-07:00"
+  "tasks": {
+    "2 outdoor activities with theo": {
+      "todoist_id": "6hjQgvQCfRHvQCcR",
+      "minutes": 80
+    },
+    "email to zero and plans for this m5x2 week": {
+      "todoist_id": "6hjQgvM94pQ4CVp2",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-10-11T08:00:04.112655-07:00"
 }
