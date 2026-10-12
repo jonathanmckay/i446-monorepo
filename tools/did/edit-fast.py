@@ -2,6 +2,13 @@
 """edit-fast.py — unified task edit for dtd's ctrl-g.
 
 Usage: edit-fast.py <query> <edit_string> <cache_file>
+       edit-fast.py --current --id <id> <cache_file>        (form prefill)
+       edit-fast.py --fields --id <id> <cache_file> [--name X] [--domain D]
+                    [--points N] [--desc TEXT]               (form submit)
+
+The ctrl-o/ctrl-g form (2026-10-11) edits one labeled field at a time: title,
+domain, points, description. --current prints the prefill as shell
+assignments; --fields applies only the fields passed, each taken literally.
 
 One prompt edits three things on the highlighted task from a single line:
   - any @code token       → domain label   (swap; mirrors domain-fast)
@@ -110,10 +117,66 @@ def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
     return new_name, domain, points
 
 
+# The numeric tags the row shows separately: (time), [pts], [rate/m], {bonus}.
+# Same set dtd's edit prompt has always stripped from the prefill; other
+# parentheticals ("(see doc)") are part of the name.
+_NUM_ANNOT = re.compile(r"\s*(?:\(\d*\)|\[\d*\]|\[[\d.+]*/m\]|\{\d*\})")
+
+
+def current_fields(task: dict, description: str) -> dict:
+    """The form's prefill: clean name, domain label, [N] points, description."""
+    content = task.get("content") or ""
+    m = re.search(r"\[(\d+)\]", content)
+    dom = [l for l in task.get("labels", []) if l in DOMAINS]
+    return {
+        "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
+        "domain": dom[0] if dom else "",
+        "points": m.group(1) if m else "",
+        "desc": description or "",
+    }
+
+
+def _description(task_id: str) -> str:
+    """Description from task-detail's per-task cache (the form just rendered
+    it), else live from Todoist."""
+    import os
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "jm"
+    try:
+        bundle = json.loads((state / "task-detail" / f"{task_id}.json").read_text())
+        return ((bundle.get("task") or {}).get("description")) or ""
+    except (OSError, ValueError):
+        pass
+    try:
+        sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+        import todoist
+        return (todoist.get_task(task_id) or {}).get("description") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def changed_fields(cur: dict, new: dict) -> dict:
+    """Only the fields whose submitted value differs from the prefill.
+    Name, domain and points are compared stripped; an emptied name, domain
+    or points means "leave it" (there's no removing a title); an emptied
+    description clears it."""
+    out = {}
+    for k in ("name", "domain", "points"):
+        v = (new.get(k) or "").strip()
+        if v and v != (cur.get(k) or "").strip():
+            out[k] = v.lstrip("@") if k == "domain" else v
+    if "desc" in new and (new["desc"] or "").rstrip() != (cur.get("desc") or "").rstrip():
+        out["desc"] = (new["desc"] or "").rstrip()
+    return out
+
+
 def main() -> int:
+    argv = sys.argv[1:]
+    if argv[:1] == ["--current"]:
+        return _main_current(argv[1:])
+    if argv[:1] == ["--fields"]:
+        return _main_fields(argv[1:])
     # Forms:  edit-fast.py --id <id> <edits> <cache_file>   ← dtd
     #         edit-fast.py <query>   <edits> <cache_file>   ← fallback
-    argv = sys.argv[1:]
     task_id = None
     if argv and argv[0] == "--id":
         task_id = argv[1] if len(argv) > 1 else None
@@ -143,7 +206,69 @@ def main() -> int:
     if not task:
         print(f"✗ no task matched: {task_id or query}")
         return 1
+    return apply(task, cache, cache_file, new_name, domain, points)
 
+
+def _load_task(task_id: str, cache_file: str):
+    try:
+        cache = json.loads(Path(cache_file).read_text())
+    except Exception as e:  # noqa: BLE001
+        print(f"✗ cache unreadable: {e}")
+        return None, None
+    task = _pf.resolve_by_id(cache, task_id)
+    if not task:
+        print(f"✗ no task matched: {task_id}")
+    return cache, task
+
+
+def _main_current(argv: list[str]) -> int:
+    import shlex
+    if len(argv) < 3 or argv[0] != "--id":
+        return 2
+    _, task = _load_task(argv[1], argv[2])
+    if not task:
+        return 1
+    cur = current_fields(task, _description(argv[1]))
+    for k, v in cur.items():
+        print(f"cur_{k}={shlex.quote(v)}")
+    print(f"domains={shlex.quote(' '.join(sorted(DOMAINS)))}")
+    return 0
+
+
+def _main_fields(argv: list[str]) -> int:
+    if len(argv) < 3 or argv[0] != "--id":
+        print("✗ usage: edit-fast.py --fields --id <id> <cache_file> [--name X] [--domain D] [--points N] [--desc T]")
+        return 2
+    task_id, cache_file, rest = argv[1], argv[2], argv[3:]
+    new: dict = {}
+    flags = {"--name": "name", "--domain": "domain", "--points": "points", "--desc": "desc"}
+    i = 0
+    while i + 1 < len(rest):
+        if rest[i] in flags:
+            new[flags[rest[i]]] = rest[i + 1]
+        i += 2
+    cache, task = _load_task(task_id, cache_file)
+    if not task:
+        return 1
+    ch = changed_fields(current_fields(task, _description(task_id)), new)
+    if not ch:
+        print(f"✎ {_pf._ANNOT.sub('', task['content']).strip()}: no change")
+        return 0
+    if "domain" in ch and ch["domain"] not in DOMAINS:
+        print(f"✗ unknown domain: {ch['domain']}")
+        return 1
+    pts = None
+    if "points" in ch:
+        if not re.fullmatch(r"\d+", ch["points"].strip("[]")):
+            print(f"✗ points must be a number: {ch['points']}")
+            return 1
+        pts = int(ch["points"].strip("[]"))
+    return apply(task, cache, cache_file, ch.get("name"), ch.get("domain"), pts,
+                 description=ch.get("desc"))
+
+
+def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
+          description: str | None = None) -> int:
     orig_content = task["content"]
     orig_clean = _pf._ANNOT.sub("", orig_content).strip()
     summary: list[str] = []
@@ -154,12 +279,20 @@ def main() -> int:
         new_content = set_name(new_content, new_name)
     if points is not None:
         new_content = _pf.set_points(new_content, points)
+    body = {}
     if new_content != orig_content:
+        body["content"] = new_content
+    if description is not None:
+        body["description"] = description
+    if body:
         try:
-            _df._api("POST", f"/tasks/{task['id']}", {"content": new_content})
+            _df._api("POST", f"/tasks/{task['id']}", body)
         except Exception as e:
-            print(f"✗ Todoist content update failed: {e}")
+            print(f"✗ Todoist update failed: {e}")
             return 1
+    if description is not None:
+        summary.append("description cleared" if not description else "description updated")
+    if new_content != orig_content:
         # Resync the Haiku short on EVERY content change, not just renames —
         # dtd renders `short` preferentially, so a points-only edit ("10")
         # that skipped this kept displaying the OLD [N] until the next full

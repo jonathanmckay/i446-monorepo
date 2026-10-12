@@ -239,3 +239,43 @@ def test_points_only_edit_resyncs_stale_short(tmp_path, monkeypatch):
     assert task.get("short") == "Change LinkedIn title to Player of (30) [10]", (
         "a points-only edit must regenerate the short — dtd renders it "
         "preferentially, so a stale one keeps showing the old [N]")
+
+
+# ── ctrl-o/ctrl-g form: labeled fields (2026-10-11) ──
+
+def _form_task():
+    return {"id": "t1", "content": "write memo (see doc) (30) [20] {5}", "labels": ["i9", "#-1g"]}
+
+
+def test_form_prefill_splits_title_domain_points_description():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "notes here")
+    assert cur == {"name": "write memo (see doc)", "domain": "i9", "points": "20", "desc": "notes here"}
+
+
+def test_form_untouched_fields_change_nothing():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "notes")
+    assert mod.changed_fields(cur, dict(cur)) == {}
+
+
+def test_form_blank_domain_or_points_means_keep_but_blank_description_clears():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "notes")
+    new = dict(cur, domain="", points=" ", desc="")
+    assert mod.changed_fields(cur, new) == {"desc": ""}
+
+
+def test_form_submit_writes_description_with_content_in_one_call(tmp_path, monkeypatch):
+    mod = _load()
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({"tasks": [_form_task()]}))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, path, body: calls.append(body))
+    monkeypatch.setattr(mod, "_description", lambda tid: "old notes")
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: None)
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cache),
+                                      "--name", "write memo (see doc)", "--domain", "i9",
+                                      "--points", "40", "--desc", "new notes"])
+    assert mod.main() == 0
+    assert calls == [{"content": "write memo (see doc) (30) [40] {5}", "description": "new notes"}]

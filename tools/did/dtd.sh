@@ -1515,14 +1515,27 @@ fi
 # terminates the read.
 stty sane < /dev/tty 2>/dev/null
 printf "\033[2J\033[H" > /dev/tty
-# Show the full ctrl-o detail (title, project/labels/due, description,
-# comments, links) above the prompt so the edit has full context
-# (2026-10-10: "make sure it shows all content for that task").
+# ctrl-o and ctrl-g both open this screen (2026-10-11: "ideally ctrl+g and
+# ctrl+o go to the same place, and show the different fields that I could add
+# along with all the context"). The full detail (title, project/labels/due,
+# description, comments, links) sits on top; below it one labeled prompt per
+# field, each naming where its value is written. Enter keeps a field as-is.
 python3 "$DTD_DETAIL" "\$1" > /dev/tty 2>/dev/null
-printf "\n\033[2m────────\033[0m\nEdit (text=rename · @code=domain · N=points · ctrl-u to clear):\n" > /dev/tty
-REPLY="\$clean"
-vared -p "> " REPLY < /dev/tty > /dev/tty
-edits="\$REPLY"
+cur_name="" cur_domain="" cur_points="" cur_desc="" domains=""
+eval "\$(python3 "\$EDIT_FAST" --current --id "\$1" "$DTD_CACHE_FILE" 2>/dev/null)"
+printf "\n\033[2m──────── edit · Enter keeps a field · ctrl-u clears it · blank title cancels ────────\033[0m\n" > /dev/tty
+_field() {  # \$1=var name  \$2=label  \$3=where the value goes
+  printf "\033[1m%s\033[0m \033[2m→ %s\033[0m\n" "\$2" "\$3" > /dev/tty
+  vared -p "  > " "\$1" < /dev/tty > /dev/tty
+}
+f_name="\${cur_name:-\$clean}" f_domain="\$cur_domain" f_points="\$cur_points" f_desc="\$cur_desc"
+_field f_name "Title" "Todoist task name; (time) and {bonus} tags are kept"
+if [[ -n "\${f_name// /}" ]]; then
+  _field f_domain "Domain" "Todoist label: \$domains"
+  _field f_points "Points" "the [N] 分 in the title"
+  _field f_desc "Description" "Todoist description (notes, links; ctrl-v ctrl-j for a new line, empty clears it)"
+fi
+edits="\$f_name"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the prompt above
 # — leaked SGR motion sequences type themselves into fzf's query as literal
@@ -1537,7 +1550,7 @@ if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
   exit 0
 fi
-out=\$(python3 "\$EDIT_FAST" --id "\$1" "\$edits" "$DTD_CACHE_FILE" 2>/dev/null)
+out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --name "\$f_name" --domain "\$f_domain" --points "\$f_points" --desc "\$f_desc" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
@@ -2992,7 +3005,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o: details | ctrl-g: edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -3319,8 +3332,7 @@ while true; do
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
-      --preview "python3 $DTD_DETAIL {2}" --preview-window "up,55%,hidden,wrap,border-bottom" \
-      --bind "ctrl-o:toggle-preview+execute-silent([[ -e '$DTD_PREVIEW_OPEN' ]] && rm -f '$DTD_PREVIEW_OPEN' || : > '$DTD_PREVIEW_OPEN')" \
+      --bind "ctrl-o:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "esc:transform($DTD_BACK {q})" \
       --bind "ctrl-c:transform($DTD_BACK {q})" \
