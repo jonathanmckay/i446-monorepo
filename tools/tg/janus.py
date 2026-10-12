@@ -4606,9 +4606,16 @@ def render_current_bottom() -> list[tuple[str, str]]:
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
     width = _live_width()
+    # Past-day badge on the pinned bar too (bug 2026-10-12: "I can't see time
+    # from 卯 in today's janus"): the header's ◀ badge scrolls off the top on
+    # a tall whole-day view, so after filling in yesterday the screen read as
+    # today. This bar is always visible, so it carries the viewed day as well.
+    badge = f"◀ {view_now():%a %-m/%-d} ⎋ " if STATE.day_offset != 0 else ""
+    badge_frag = [("class:no_entry", badge)] if badge else []
     if not cur:
-        return [("class:idle", " (no timer)"),
-                ("class:time", f"{clock:>{max(0, width - len(' (no timer)'))}}\n")]
+        pad = max(0, width - len(' (no timer)') - dwidth(badge) - len(clock))
+        return [("class:idle", " (no timer)" + " " * pad), *badge_frag,
+                ("class:time", f"{clock}\n")]
     cur_id = cur.get("id")
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
@@ -4646,12 +4653,14 @@ def render_current_bottom() -> list[tuple[str, str]]:
     dot_frags = _rec_level_dot_frags(click) if recording else []
     dots_width = sum(dwidth(t) for _, t, *_ in dot_frags)
     # Narrow pane: truncate the description, never the clock (2026-10-03).
-    left = truncate(left, max(0, width - dots_width - len(clock)))
-    pad = max(0, width - dwidth(left) - dots_width - len(clock))
+    left = truncate(left, max(0, width - dots_width - dwidth(badge) - len(clock)))
+    pad = max(0, width - dwidth(left) - dots_width - dwidth(badge) - len(clock))
     return [
         _frag(f"bold {style}".strip(), left, click),
         *dot_frags,
-        _frag(time_style, f"{'':>{pad}}{clock}\n", click),
+        _frag(time_style, f"{'':>{pad}}", click),
+        *[_frag(st, t, click) for st, t in badge_frag],
+        _frag(time_style, f"{clock}\n", click),
     ]
 
 
