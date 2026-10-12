@@ -32,13 +32,13 @@ launchctl remove com.jm.lease-signerd 2>/dev/null || true
 sleep 1
 
 echo "Clearing stale Chrome profile locks..." >&2
-rm -f ~/.config/m5x2/appfolio_browser_state/Singleton* 2>/dev/null || true
+rm -f ~/.config/m5x2/appfolio_browser_state/Singleton*(N) 2>/dev/null || true
 
 echo "Running relogin..." >&2
-python3 relogin.py
-status=$?
+rc=0
+python3 relogin.py || rc=$?
 
 echo "Restarting lease-signerd..." >&2
 launchctl load ~/Library/LaunchAgents/com.jm.lease-signerd.plist 2>/dev/null || true
 
-exit $status
+exit $rc
