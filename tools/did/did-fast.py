@@ -1780,6 +1780,28 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 # Batched AppleScript writes
 # ---------------------------------------------------------------------------
 
+def _0n_row_lookup(month, day) -> str:
+    """AppleScript that sets `todayRow` to the 0n row whose col-C date is
+    month/day (0 if none). Reads C3:C500 in ONE Apple Event and loops in
+    AppleScript; the old loop asked Excel for each cell, ~286 events, which
+    took ~50s on Ix, and 0l paid it twice (0n write + completion-time stamp):
+    the /0s "marking 0l done" stall (2026-10-12). Runs outside the Excel tell
+    block because `date` is an Excel property name in there."""
+    return f'''tell application "Microsoft Excel"
+    set dateVals to value of range "C3:C500" of sheet "0n" of workbook "Neon分v12.2.xlsx"
+end tell
+set todayRow to 0
+repeat with i from 1 to count of dateVals
+    set cellDate to item 1 of item i of dateVals
+    if class of cellDate is date then
+        if ((month of cellDate) as integer) = {month} and (day of cellDate) = {day} then
+            set todayRow to i + 2
+            exit repeat
+        end if
+    end if
+end repeat'''
+
+
 def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str]:
     """Build AppleScript for batch 0₦ writes."""
     if not writes:
@@ -1816,23 +1838,10 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
             f'    set results to results & "{col}=" & (v{col} as text) & "|"'
         )
 
-    script = f'''tell application "Microsoft Excel"
+    script = f'''{_0n_row_lookup(month, day)}
+if todayRow = 0 then return "ERROR: date {target_date} not found"
+tell application "Microsoft Excel"
     set ws to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of ws
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = {month} and d = {day} then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_date} not found"
     set preOut to ""
 {chr(10).join(pre_lines)}
 {chr(10).join(set_lines)}
@@ -1962,25 +1971,10 @@ def build_0l_time_script(target_date: str) -> str:
     """
     now = _daytime.local_now()
     time_str = now.hour * 100 + now.minute
-    return f'''tell application "Microsoft Excel"
+    return f'''{_0n_row_lookup(target_date.split("/")[0], target_date.split("/")[1])}
+if todayRow = 0 then return "SKIP: date not found"
+tell application "Microsoft Excel"
     set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set targetMonth to {target_date.split("/")[0]}
-    set targetDay to {target_date.split("/")[1]}
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = targetMonth and d = targetDay then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "SKIP: date not found"
     set timeStr to {time_str}
     set value of cell 32 of row todayRow of theSheet to timeStr
     return "OK: N Color=" & timeStr & " row=" & todayRow

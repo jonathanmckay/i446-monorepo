@@ -7768,5 +7768,15 @@
     "unit": "A10",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-12",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "1198",
+    "prop": "tc68",
+    "unit": "B49",
+    "tenant": null,
+    "baseline": false
   }
 ]
