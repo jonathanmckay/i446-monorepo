@@ -2210,8 +2210,12 @@ for t in unique:
 
 # Active rows (tiers A-C) print LAST (2026-10-11): they are shown above the
 # line by dtd-ticker.py's footer, so here they only need to stay searchable
-# and actionable (⌥↵ / enter after typing a few letters), not on top.
-for l in normal_lines + skipped_lines + running_lines + claimed_lines + working_lines:
+# and actionable (⌥↵ / enter after typing a few letters), not on top. They
+# print in REVERSE footer order so that, with fzf's --cycle, ↑ from the top
+# task wraps straight to JM's running task, and each further ↑ walks down the
+# footer (2026-10-12: "press up from the top task takes me to the current task").
+_active = (running_lines + claimed_lines + working_lines)[::-1]
+for l in normal_lines + skipped_lines + _active:
     print(l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
 # order, written only when that order changes, so the report can tell what
@@ -2219,7 +2223,7 @@ for l in normal_lines + skipped_lines + running_lines + claimed_lines + working_
 try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
-        _order = [l.rsplit(chr(9), 1)[-1] for l in normal_lines + skipped_lines + running_lines + claimed_lines + working_lines]
+        _order = [l.rsplit(chr(9), 1)[-1] for l in normal_lines + skipped_lines + _active]
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:
@@ -3313,7 +3317,7 @@ while true; do
   # which stopped the ^[[A^[[B flood but also killed scrolling — bugs 07-14/15.)
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
   rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.days"   # never relaunch into a stale schedule screen
-  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi --cycle \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \

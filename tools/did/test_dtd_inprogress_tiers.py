@@ -77,7 +77,16 @@ def test_tiers_order_running_then_waiting_then_working():
     out = _run("R1")
     ids = _ids(out)
     assert set(ids[:2]) == {"N1", "N2"}, ids
-    assert ids[2:] == ["R1", "I1", "W1", "RC"] or ids[2:] == ["R1", "I1", "RC", "W1"], ids
+    # Printed in reverse footer order, so the running task is the LAST row.
+    assert ids[2:][::-1] in (["R1", "I1", "W1", "RC"], ["R1", "I1", "RC", "W1"]), ids
+
+
+def test_up_from_top_task_wraps_to_running_task():
+    """2026-10-12: "press up from the top task takes me to the current task".
+    fzf --cycle wraps ↑ on row 1 to the last row, which must be the timer."""
+    assert _ids(_run("R1"))[-1] == "R1"
+    dtd = Path(__file__).with_name("dtd.sh").read_text()
+    assert "--layout=reverse-list --no-sort --ansi --cycle" in dtd
 
 
 def test_tier_markers():
@@ -94,7 +103,7 @@ def test_tier_markers():
 def test_running_beats_agent_claim():
     out = _run("RC")
     ids = _ids(out)
-    assert ids.index("RC") < ids.index("I1") < ids.index("W1"), ids
+    assert ids.index("RC") > ids.index("I1") > ids.index("W1"), ids
     row = _row_for_id(out, "RC")
     assert "🧮" in row and "😈" not in row and GREY not in row
 
