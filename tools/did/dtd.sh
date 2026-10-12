@@ -2213,7 +2213,7 @@ for t in unique:
 # and actionable (⌥↵ / enter after typing a few letters), not on top. They
 # print in REVERSE footer order so that, with fzf's --cycle, ↑ from the top
 # task wraps straight to JM's running task, and each further ↑ walks down the
-# footer (2026-10-12: "press up from the top task takes me to the current task").
+# footer (2026-10-12: press up from the top task, land on the current task).
 _active = (running_lines + claimed_lines + working_lines)[::-1]
 for l in normal_lines + skipped_lines + _active:
     print(l)
