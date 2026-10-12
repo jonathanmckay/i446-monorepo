@@ -2942,6 +2942,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     # branches.
     vacated_00 = None
     header_hour = blk_sh
+    # Start (minutes past midnight) of a head0 promoted from a later slot;
+    # empty marks before it are dropped so the card stays chronological.
+    head_floor = None
 
     # ── header: the block's :00 slot ──
     # Free rows never ride the header: the header's event slot belongs to the
@@ -3092,6 +3095,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 left = f"{blk_name} {hs0.hour:02d}:{hs0.minute:02d}"
                 vacated_00 = (blk_sh, 0)
             header_hour = hs0.hour
+            if vacated_00 is not None:
+                head_floor = hs0.hour * 60 + hs0.minute
         elif spill_wait:
             # Bare because the block is still waiting on a spill tail from
             # the previous block (its running entry is the first body row):
@@ -3296,8 +3301,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             occupied.add(vacated_00)
         offsets = range(0 if include_00 else slot_min, 120, slot_min)
         mark_slots = [(blk_sh + off // 60, off % 60) for off in offsets]
+        # Bug 2026-10-12 ("these time entries are obviously not in order"):
+        # 卯 promoted 05:47 find jacket to the header (the 00:00-05:47 sleep
+        # was dropped as a redundant spill), then filled the empty 04:30 and
+        # 05:00 marks UNDER it, so earlier times read below a later header.
         marks = [(hh * 60 + mm, hh, mm, None)
-                 for hh, mm in mark_slots if (hh, mm) not in occupied]
+                 for hh, mm in mark_slots if (hh, mm) not in occupied
+                 and (head_floor is None or hh * 60 + mm > head_floor)]
         rows = rows + marks[:max_rows - len(rows)]
         rows.sort(key=lambda r: r[0])
 

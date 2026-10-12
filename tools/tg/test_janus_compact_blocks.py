@@ -279,3 +279,19 @@ def test_transparent_and_allday_events_do_not_continue():
          "all_day": True},
     ]
     assert mod._block_gcal_cont(12, today) == {}
+
+
+def test_promoted_late_header_drops_earlier_empty_marks():
+    """Bug 2026-10-12 ("these time entries are obviously not in order"):
+    卯's sleep ran 00:00-05:47 and was dropped as a redundant spill, so
+    05:47 find jacket rode the header, and the empty 04:30/05:00 marks were
+    then drawn UNDER it. Every row below the header must be later than it."""
+    mod = _load_tui()
+    m0 = _midnight()
+    picks = [_pick(mod, "find jacket", m0.replace(hour=5, minute=47), 10),
+             _pick(mod, "vibing", m0.replace(hour=5, minute=57), 9)]
+    text = "".join(t for _, t, *_ in mod._compact_block_lines("卯", 4, picks, 0, "4"))
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    assert "05:47" in lines[0] and "find jacket" in lines[0], lines
+    assert not any("04:30" in ln or "05:00" in ln for ln in lines), lines
+    assert "vibing" in lines[1], lines
