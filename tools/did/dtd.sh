@@ -2208,12 +2208,12 @@ for t in unique:
     else:
         normal_lines.append(f'{body}{sfx}')
 
-# Active rows (tiers A-C) print LAST (2026-10-11): they are shown above the
-# line by dtd-ticker.py's footer, so here they only need to stay searchable
-# and actionable (⌥↵ / enter after typing a few letters), not on top. They
-# print in REVERSE footer order so that, with fzf's --cycle, ↑ from the top
-# task wraps straight to JM's running task, and each further ↑ walks down the
-# footer (2026-10-12: press up from the top task, land on the current task).
+# Active rows (tiers A-C) print LAST (2026-10-11), in REVERSE tier order so
+# that, with fzf's --cycle, ↑ from the top task wraps straight to JM's running
+# task, and each further ↑ walks to the waiting, then working, agent claims
+# (2026-10-12: press up from the top task, land on the current task). The
+# footer line that mirrored them is gone (2026-10-12); the footer is now the
+# plain dtd / N done / N left header.
 _active = (running_lines + claimed_lines + working_lines)[::-1]
 for l in normal_lines + skipped_lines + _active:
     print(l)
@@ -3025,13 +3025,18 @@ print -- "\$EPOCHREALTIME\thdr-start\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/nul
 # Builtin reads + expansion (was cat|tr twice = 4 execs; this script runs on
 # every keystroke's result event, so under a Defender exec stall it cost
 # 0.8-1.6s per keypress -- measured 2026-10-03).
-ws=""; [[ -r "$DTD_HDR" ]] && ws="\$(<"$DTD_HDR")"; ws="\${ws//\$'\n'/ }"
-tally=""; [[ -r "$DTD_TALLY" ]] && tally="\$(<"$DTD_TALLY")"; tally="\${tally//\$'\n'/ }"
-if [ -n "\$tally" ]; then
-  printf '%s   %s left   %s   %s' "\$tally" "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
-else
-  printf '%s left   %s   %s' "\${FZF_MATCH_COUNT:-0}" "\$ws" "\$DTD_KEYS"
+# "footer" mode (2026-10-12): the top line is a plain header,
+# "dtd   N done   N left". done = today's count from the Ix tally
+# ("<pts> 分 · <N> done"), left = every row in the list (not the filtered
+# match count, so typing a query doesn't change it).
+if [[ "\$1" == footer ]]; then
+  tally=""; [[ -r "$DTD_TALLY" ]] && tally="\$(<"$DTD_TALLY")"
+  done_n="\${\${tally##*· }%% done*}"; [[ "\$done_n" == <-> ]] || done_n="…"
+  printf '\033[1mdtd\033[0m   %s done   %s left' "\$done_n" "\${FZF_TOTAL_COUNT:-0}"
+  exit 0
 fi
+ws=""; [[ -r "$DTD_HDR" ]] && ws="\$(<"$DTD_HDR")"; ws="\${ws//\$'\n'/ }"
+printf '%s   %s' "\$ws" "\$DTD_KEYS"
 print -- "\$EPOCHREALTIME\thdr-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 HDRGENEOF
 chmod +x "$DTD_HDRGEN"
@@ -3060,8 +3065,10 @@ export TOGGL_MAX_429_DELAY=1
 # sees EOF, and dtd hangs silently on exit forever (2026-07-15: `lsof` showed
 # a live dtd-ticker.py holding fd 3w on the FIFO).
 rm -f "$DTD_PORT"
-python3 "$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER" 3>&- &>/dev/null &
-TICKER_PID=$!
+# The ticker (dtd-ticker.py: live ▶ timer + active-task lines in the footer) is
+# retired (2026-10-12, "forget about the line at the top"): the footer is the
+# static "dtd   N done   N left" header from $DTD_HDRGEN footer.
+TICKER_PID=""
 
 # Day-tally refresher: pull the single Ix computation (points 分 + tasks done)
 # every 15s into $DTD_TALLY so the header shows today's real totals. It reads
@@ -3080,7 +3087,12 @@ try:
     d=json.load(sys.stdin)
     if d.get("ok"): print("%s 分 · %s done" % (d.get("points",0), d.get("done",0)))
 except Exception: pass' 2>/dev/null)
-    [[ -n "$t" ]] && printf '%s' "$t" > "$DTD_TALLY"
+    if [[ -n "$t" && "$t" != "$(<"$DTD_TALLY")" ]]; then
+      printf '%s' "$t" > "$DTD_TALLY"
+      p=$(<"$DTD_PORT" 2>/dev/null)
+      [[ -n "$p" ]] && curl -fsS --max-time 2 -X POST "localhost:$p" \
+        -d "transform-footer($DTD_HDRGEN footer)" &>/dev/null
+    fi
     sleep 15
   done
 ) &>/dev/null &
@@ -3323,8 +3335,8 @@ while true; do
       --listen --header-first \
       --header="$DTD_KEYS" \
       --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
-      --bind "load:transform-header($DTD_HDRGEN)" \
-      --bind "result:transform-header($DTD_HDRGEN)" \
+      --bind "load:transform-header($DTD_HDRGEN)+transform-footer($DTD_HDRGEN footer)" \
+      --bind "result:transform-header($DTD_HDRGEN)+transform-footer($DTD_HDRGEN footer)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first+execute-silent($DTD_DOMAINSEARCH {q})" \
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \

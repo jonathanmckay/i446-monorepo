@@ -79,7 +79,8 @@ def test_stale_branch_uses_ansi_red_matching_the_rest_of_dtd():
 
 # ── Functional: run the real hdrgen body against fake mtimes ──────────────
 
-def _run_hdrgen(tmp_path, self_mtime, live_mtime, dtd_hdr="", dtd_tally=""):
+def _run_hdrgen(tmp_path, self_mtime, live_mtime, dtd_hdr="", dtd_tally="",
+                args=(), env_extra=None):
     fake_self = tmp_path / "dtd.sh"
     fake_self.write_text("#!/bin/zsh\n")
     os.utime(fake_self, (live_mtime, live_mtime))
@@ -110,8 +111,8 @@ def _run_hdrgen(tmp_path, self_mtime, live_mtime, dtd_hdr="", dtd_tally=""):
     script_path.write_text(script)
     script_path.chmod(0o755)
 
-    env = {**os.environ, "DTD_KEYS": "enter: start | ..."}
-    r = subprocess.run(["zsh", str(script_path)], capture_output=True,
+    env = {**os.environ, "DTD_KEYS": "enter: start | ...", **(env_extra or {})}
+    r = subprocess.run(["zsh", str(script_path), *args], capture_output=True,
                        text=True, timeout=5, env=env)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -122,7 +123,7 @@ def test_fresh_code_shows_normal_header(tmp_path):
     out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
                       dtd_hdr="✓ done\n")
     assert "RESTART" not in out
-    assert "left" in out
+    assert "enter: start" in out
 
 
 def test_code_updated_after_launch_shows_restart_warning(tmp_path):
@@ -130,7 +131,7 @@ def test_code_updated_after_launch_shows_restart_warning(tmp_path):
     out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now + 30)
     assert "RESTART DTD" in out
     assert "\033[1;91m" in out
-    assert "left" not in out, "stale header must fully replace, not prefix"
+    assert "enter: start" not in out, "stale header must fully replace, not prefix"
 
 
 def test_one_second_clock_skew_does_not_false_positive(tmp_path):
@@ -145,3 +146,35 @@ def test_one_second_clock_skew_does_not_false_positive(tmp_path):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── Footer header (2026-10-12): "forget about the line at the top. Let's just
+# have a header which says dtd, the number of tasks done, the number of tasks
+# left." The ticker's live timer/active-task footer is retired.
+
+def test_footer_is_dtd_done_left(tmp_path):
+    now = time.time()
+    out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
+                      dtd_tally="182 分 · 7 done", args=("footer",),
+                      env_extra={"FZF_TOTAL_COUNT": "53", "FZF_MATCH_COUNT": "4"})
+    assert out == "\033[1mdtd\033[0m   7 done   53 left"
+
+
+def test_footer_before_first_tally_shows_placeholder(tmp_path):
+    now = time.time()
+    out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now, args=("footer",),
+                      env_extra={"FZF_TOTAL_COUNT": "53"})
+    assert out.endswith("… done   53 left")
+
+
+def test_bottom_line_no_longer_repeats_counts(tmp_path):
+    now = time.time()
+    out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
+                      dtd_tally="182 分 · 7 done", env_extra={"FZF_MATCH_COUNT": "4"})
+    assert "left" not in out and "done" not in out
+
+
+def test_ticker_is_not_launched():
+    src = open(os.path.join(os.path.dirname(__file__), "dtd.sh")).read()
+    assert 'python3 "$DTD_TICKER"' not in src
+    assert "transform-footer($DTD_HDRGEN footer)" in src

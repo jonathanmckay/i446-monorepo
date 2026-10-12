@@ -28,13 +28,6 @@ def _load_ticker():
     return mod
 
 
-def test_dtd_passes_timer_file_to_ticker():
-    """dtd.sh must hand $DTD_TIMER to the ticker so it can watch the fast signal."""
-    src = DTD.read_text()
-    assert '"$DTD_TICKER" "$DTD_PORT" "$DTD_TIMER"' in src, (
-        "ticker launch must pass $DTD_TIMER as the local-signal source")
-
-
 def test_read_timer_file_parses_running_entry(tmp_path):
     mod = _load_ticker()
     f = tmp_path / "dtd.timer"

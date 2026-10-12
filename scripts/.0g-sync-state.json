@@ -1,14 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "productive flight": {
-      "todoist_id": "6hjgpv7pV5QCFqxR",
-      "minutes": 40
-    },
     "3 academic sessions": {
       "todoist_id": "6hjgpv7F236pFwM2",
       "minutes": 40
     }
   },
-  "last_sync": "2026-10-12T14:00:01.311028-07:00"
+  "last_sync": "2026-10-12T16:00:03.547923-07:00"
 }
