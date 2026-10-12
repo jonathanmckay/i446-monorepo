@@ -15,8 +15,9 @@
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
-# ctrl-o detail pane (2026-10-06): full title, description, comments, links,
-# fetched live per task (the snapshot cache carries none of these).
+# Task detail (2026-10-06): full title, description, comments, links, fetched
+# live per task (the snapshot cache carries none of these). Shown at the top of
+# the ctrl-o/ctrl-g edit screen (one screen for both since 2026-10-11).
 DTD_DETAIL="$HOME/i446-monorepo/tools/did/task-detail.py"
 # Per-item verdict on a did-fast run (ok/already/recorded/agent/unknown) and
 # per-item ctrl-z journaling for batched habit runs (2026-10-10).
@@ -611,7 +612,6 @@ DTD_BLOCKAPPLY="/tmp/dtd-$DTD_ID.blockapply.sh"
 # and esc/ctrl-c (back to the list from the picker, else exit).
 DTD_PICKENTER="/tmp/dtd-$DTD_ID.pickenter.sh"
 DTD_BACK="/tmp/dtd-$DTD_ID.back.sh"
-DTD_PREVIEW_OPEN="/tmp/dtd-$DTD_ID.preview-open"  # ctrl-o details pane shown
 # View mode (ctrl-t toggles): empty = default priority order, 'project' = grouped
 # by domain label. Per-session; the list generator reads it as its 8th arg.
 DTD_VIEW="/tmp/dtd-$DTD_ID.view"
@@ -1461,14 +1461,7 @@ chmod +x "$DTD_PICKENTER"
 cat > "$DTD_BACK" << BACKEOF
 #!/bin/zsh
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}back\${_T}\${_T}\${1//\$_T/ }" >> "$DTD_EVENTS" 2>/dev/null
-# Prints the WHOLE action list (esc/ctrl-c bind is just transform(this)), so
-# closing the ctrl-o details pane can leave the query and list alone
-# (2026-10-07: "if I do ctrl+o - escape should close the dialog").
-if [[ -e "$DTD_PREVIEW_OPEN" ]]; then
-  rm -f "$DTD_PREVIEW_OPEN"
-  print -n 'hide-preview'
-  exit 0
-fi
+# Prints the WHOLE action list (esc/ctrl-c bind is just transform(this)).
 acts=""
 if [[ -e "$DTD_BLOCKPICK" ]]; then
   [[ -e "$DTD_BLOCKPICK.custom" ]] && acts="change-prompt(> )+"
@@ -3490,4 +3483,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_PREVIEW_OPEN" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"

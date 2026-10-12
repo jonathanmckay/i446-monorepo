@@ -45,7 +45,7 @@ def test_block_delay_passes_ids():
 
 
 def test_edit_passes_id():
-    assert r'"\$EDIT_FAST" --id "\$1"' in DTD
+    assert r'"\$EDIT_FAST" --fields --id "\$1"' in DTD
 
 
 def test_delete_uses_id_not_name_match():

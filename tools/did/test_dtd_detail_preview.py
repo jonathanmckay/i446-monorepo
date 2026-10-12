@@ -25,14 +25,20 @@ def _load():
     return m
 
 
-def test_binding_and_preview_wiring():
-    assert '--bind "ctrl-o:toggle-preview"' in DTD
-    m = re.search(r'--preview "([^"]*)" --preview-window "([^"]*)"', DTD)
-    assert m, "preview flags missing"
-    assert m.group(1) == "python3 $DTD_DETAIL {2}"  # hidden id field, not the short display name
-    assert "hidden" in m.group(2).split(",")       # never runs (no API calls) until toggled
-    assert 'DTD_DETAIL="$HOME/i446-monorepo/tools/did/task-detail.py"' in DTD
-    assert "ctrl-o: details" in DTD
+def test_ctrl_o_and_ctrl_g_open_the_same_edit_screen():
+    """2026-10-11: "ideally ctrl+g and ctrl+o go to the same place, and show the
+    different fields that I could add along with all the context"."""
+    action = "execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)"
+    assert f'--bind "ctrl-o:{action}"' in DTD
+    assert f'--bind "ctrl-g:{action}"' in DTD
+    assert "--preview " not in DTD
+    edit = DTD[DTD.index('cat > "$DTD_EDIT" << EDITEOF'):]
+    edit = edit[:edit.index("\nEDITEOF\n")]
+    assert 'python3 "$DTD_DETAIL" "\\$1"' in edit           # full context on top
+    for label in ("Title", "Domain", "Points", "Description"):
+        assert f'"{label}" "' in edit                          # each field labeled with its destination
+    assert "--fields --id" in edit
+    assert "ctrl-o/g: details+edit" in DTD
 
 
 def test_render_description_comments_links():

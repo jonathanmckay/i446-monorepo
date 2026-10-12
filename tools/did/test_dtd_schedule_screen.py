@@ -119,21 +119,6 @@ def test_pickenter_rows_and_main_list_use_enter():
 TAIL = "reload()+clear-query+transform-header()"
 
 
-def test_esc_closes_ctrl_o_details_pane_first():
-    """2026-10-07: "if I do ctrl+o - escape should close the dialog" -- and
-    only that: no reload, no clear-query, no abort, schedule screen kept."""
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        s, _ = _gen(tmp, "DTD_BACK", "BACKEOF", extra=f'DTD_PREVIEW_OPEN="{tmp}/pv"')
-        (tmp / "pv").write_text("")
-        (tmp / "blockpick").write_text("A1\n")
-        assert _run(s, "") == "hide-preview"
-        assert not (tmp / "pv").exists() and (tmp / "blockpick").exists()
-        assert _run(s, "") == TAIL, "next esc backs out of the schedule screen as before"
-    assert "ctrl-o:toggle-preview+execute-silent(" in _bind("ctrl-o")
-    assert "$DTD_PREVIEW_OPEN" in _bind("ctrl-o")
-
-
 def test_back_from_schedule_screen_returns_to_list():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
