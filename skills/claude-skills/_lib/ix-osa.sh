@@ -36,7 +36,10 @@ if [ -t 0 ]; then
     exit 4
 fi
 script="$(cat)"
-if [ -z "${script//[[:space:]]/}" ]; then
+# Regex test, not ${script//[[:space:]]/}: bash's pattern substitution is
+# quadratic, and on janus's ~17 KB read script it burned minutes of a full
+# core per call, three calls at a time (2026-10-11).
+if ! [[ "$script" =~ [^[:space:]] ]]; then
     echo "ix-osa.sh: empty AppleScript on stdin" >&2
     exit 4
 fi
