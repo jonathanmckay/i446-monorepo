@@ -1884,7 +1884,8 @@ try:
 except Exception:
     pass
 AGENT_GREY = '\x1b[38;2;110;110;110m'
-# Claimed tasks sort to the top; a working one carries Claude's own spinner
+# Claimed tasks sort to the bottom (the footer shows them above the line); a
+# working one carries Claude's own spinner
 # glyph, advanced on every reload (the watcher reloads twice a second while
 # any claim is working), so the row itself moves.
 _AGENT_SPIN = '·✢✳✶✻✽✻✶✳✢'
@@ -2170,7 +2171,8 @@ for t in unique:
         is_running = str(t.get('id', '')) == running_id
     else:
         is_running = bool(running_clean and clean == running_clean)
-    # In-progress tiers (2026-10-11), top to bottom:
+    # In-progress tiers (2026-10-11), in this order at the BOTTOM of the list;
+    # dtd-ticker.py mirrors them in the footer, above the line:
     #   A  JM's own running timer: 🧮 only, domain color (the one he's finishing)
     #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
     #   C  agent claim working: spinner + 😈, grey
@@ -2213,11 +2215,10 @@ for t in unique:
     else:
         normal_lines.append(f'{body}{sfx}')
 
-for l in running_lines + claimed_lines + working_lines:
-    print(l)
-for l in normal_lines:
-    print(l)
-for l in skipped_lines:
+# Active rows (tiers A-C) print LAST (2026-10-11): they are shown above the
+# line by dtd-ticker.py's footer, so here they only need to stay searchable
+# and actionable (⌥↵ / enter after typing a few letters), not on top.
+for l in normal_lines + skipped_lines + running_lines + claimed_lines + working_lines:
     print(l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
 # order, written only when that order changes, so the report can tell what
@@ -2225,7 +2226,7 @@ for l in skipped_lines:
 try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
-        _order = [l.rsplit(chr(9), 1)[-1] for l in running_lines + claimed_lines + working_lines + normal_lines]
+        _order = [l.rsplit(chr(9), 1)[-1] for l in normal_lines + skipped_lines + running_lines + claimed_lines + working_lines]
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:

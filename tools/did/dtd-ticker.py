@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -225,11 +226,17 @@ def _post(port: int, action: str) -> bool:
         return False
 
 
-# Agent spinner (/claim, 2026-10-05): while any claimed task is mid-turn, the
-# top line carries a spinner + 😈 + the task, so the motion lives here and the
-# list rows stay static (grey). Claims are re-read once a second, not per tick.
-SPIN = "·✢✳✶✻✽✻✶✳✢"   # Claude Code's own spinner glyphs, same as the claimed row
+# In-progress lines (2026-10-11, "any task that is active, AI or me, should be
+# above the line"): the footer is the only part of fzf above the list's
+# separator, so every active task lives here, one line each, in the same tiers
+# the list used: ▶ JM's timer, then 🧮 🕐 claims waiting on JM (domain-free,
+# plain), then spinner + 😈 claims mid-turn (grey). The list keeps those rows at
+# its very bottom so they stay searchable and ⌥↵-able. Claims are re-read once
+# a second, not per tick.
+SPIN = "·✢✳✶✻✽✻✶✳✢"   # Claude Code's own spinner glyphs
 CLAIMS_EVERY = 1.0
+AGENT_GREY = "\033[38;2;110;110;110m"
+NAME_MAX = 60
 
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -238,26 +245,41 @@ except Exception:
     agent_claims = None
 
 
-def agent_suffix(claims: list[str], tick: int) -> str:
-    """'  ⠹ 😈 task' (one claim) / '  ⠹ 😈 ×2' (several) / '' (none)."""
-    if not claims:
-        return ""
+def _footer_name(name: str) -> str:
+    """Task name safe inside change-footer(...): annotations like (60) [10]
+    dropped, any leftover bracket stripped (a ) would end the action)."""
+    name = re.sub(r"\s*[\(\[\{][^()\[\]{}]*[\)\]\}]", "", name)
+    for ch in "()[]{}":
+        name = name.replace(ch, "")
+    name = " ".join(name.split())
+    return name if len(name) <= NAME_MAX else name[:NAME_MAX - 1] + "…"
+
+
+def claim_lines(claims: list[tuple[str, bool]], tick: int) -> str:
+    """One footer line per claim: waiting ones first, then working ones."""
     frame = SPIN[tick % len(SPIN)]
-    if len(claims) == 1:
-        name = claims[0]
-        for ch in "()[]{}":
-            name = name.replace(ch, "")
-        name = " ".join(name.split())[:40]
-        return f"   {frame} 😈 {name}"
-    return f"   {frame} 😈 ×{len(claims)}"
+    out = [f"\n🧮 🕐 {_footer_name(n)}" for n, w in claims if not w]
+    out += [f"\n{AGENT_GREY}{frame} 😈 {_footer_name(n)}\033[0m" for n, w in claims if w]
+    return "".join(out)
 
 
-def _working_names() -> list[str]:
+def _timer_task_id(timer_file) -> str:
+    try:
+        parts = timer_file.read_text().strip().split("\t")
+        return parts[2].strip() if len(parts) > 2 else ""
+    except Exception:
+        return ""
+
+
+def _claims(skip_id: str = "") -> list[tuple[str, bool]]:
+    """(task name, working) for every claim, minus the task JM is timing (the
+    ▶ line already shows it; his timer wins, as in the list)."""
     if agent_claims is None:
         return []
     try:
-        return sorted(r.get("task", "") for r in agent_claims.load().values()
-                      if r.get("working"))
+        recs = agent_claims.load()
+        return sorted((r.get("task", ""), bool(r.get("working")))
+                      for tid, r in recs.items() if tid != skip_id)
     except Exception:
         return []
 
@@ -290,7 +312,7 @@ def main() -> None:
     parent_pid = os.getppid()
     proc_start = time.time()
     tick = 0
-    agents: list[str] = []
+    agents: list[tuple[str, bool]] = []
     last_claims = 0.0
 
     while True:
@@ -349,9 +371,9 @@ def main() -> None:
 
         if now - last_claims >= CLAIMS_EVERY:
             last_claims = now
-            agents = _working_names()
+            agents = _claims(_timer_task_id(timer_file) if start is not None and timer_file else "")
         tick += 1
-        body += agent_suffix(agents, tick)
+        body += claim_lines(agents, tick)
 
         if port is not None:
             ok = _post(port, f"change-footer({body})")

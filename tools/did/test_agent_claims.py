@@ -77,15 +77,20 @@ def test_hook_noop_without_claims_dir(tmp_path):
     assert _hook(tmp_path, "working", "S1").returncode == 0
 
 
-def test_ticker_spinner_suffix():
+def test_ticker_claim_lines_above_the_line():
+    """Every claim gets its own footer line (the footer is above fzf's list
+    separator): waiting first as 🧮 🕐, then working as spinner + 😈."""
     spec = importlib.util.spec_from_file_location("ticker", HERE / "dtd-ticker.py")
     tk = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tk)
-    assert tk.agent_suffix([], 3) == ""
-    one = tk.agent_suffix(["source logging (30) [20]"], 0)
-    assert "😈 source logging 30 20" in one and "(" not in one   # parens break change-footer()
-    assert tk.agent_suffix(["a", "b"], 1).endswith("😈 ×2")
-    assert tk.agent_suffix(["a"], 0) != tk.agent_suffix(["a"], 1)  # it spins
+    assert tk.claim_lines([], 3) == ""
+    out = tk.claim_lines([("source logging (30) [20]", True), ("wait (x [5]", False)], 0)
+    lines = out.split("\n")[1:]
+    assert len(lines) == 2
+    assert lines[0] == "🧮 🕐 wait x"
+    assert "😈 source logging" in lines[1] and "30" not in lines[1]
+    assert not any(c in out for c in "(){}")   # a ) would end change-footer()
+    assert tk.claim_lines([("a", True)], 0) != tk.claim_lines([("a", True)], 1)  # it spins
 
 
 # --- terminal dtd list generator ------------------------------------------
@@ -126,8 +131,8 @@ def test_terminal_dtd_greys_claimed_task(tmp_path):
     bravo = next(l for l in r.stdout.splitlines() if "bravo" in l)
     assert "😈" in alpha and "\x1b[38;2;110;110;110m" in alpha
     assert "😈" not in bravo
-    # order unchanged: the claimed task stays in place
-    assert r.stdout.index("alpha") < r.stdout.index("bravo")
+    # claimed rows sit below the rest: the footer shows them above the line
+    assert r.stdout.index("bravo") < r.stdout.index("alpha")
 
 
 # ── /d fast path (2026-10-05): the UserPromptSubmit hook claims before the

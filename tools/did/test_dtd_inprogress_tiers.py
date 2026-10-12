@@ -72,10 +72,12 @@ def _ids(out: str) -> list[str]:
 
 
 def test_tiers_order_running_then_waiting_then_working():
+    # Active rows sit at the BOTTOM: the footer shows them above the line
+    # (2026-10-11), the list only keeps them searchable/actionable.
     out = _run("R1")
     ids = _ids(out)
-    assert ids[:4] == ["R1", "I1", "W1", "RC"] or ids[:4] == ["R1", "I1", "RC", "W1"], ids
-    assert set(ids[4:6]) == {"N1", "N2"}
+    assert set(ids[:2]) == {"N1", "N2"}, ids
+    assert ids[2:] == ["R1", "I1", "W1", "RC"] or ids[2:] == ["R1", "I1", "RC", "W1"], ids
 
 
 def test_tier_markers():
@@ -91,7 +93,8 @@ def test_tier_markers():
 
 def test_running_beats_agent_claim():
     out = _run("RC")
-    assert _ids(out)[0] == "RC"
+    ids = _ids(out)
+    assert ids.index("RC") < ids.index("I1") < ids.index("W1"), ids
     row = _row_for_id(out, "RC")
     assert "🧮" in row and "😈" not in row and GREY not in row
 
