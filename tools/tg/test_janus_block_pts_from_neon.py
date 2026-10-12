@@ -95,8 +95,10 @@ def test_fetch_points_reads_gio_values_and_mirrors_residual():
     pass and (b) assign the residual cell's value into block_points, rather than
     skipping `=` cells outright."""
     src = (HERE / "janus.py").read_text(encoding="utf-8")
-    # Two G:O reads in the AppleScript: formulas AND values (cells 7..15 twice).
-    assert src.count("repeat with c from 7 to 15") == 2, \
+    # Two G:O reads in the AppleScript: formulas AND values (bulk ranges
+    # since 2026-10-12, see test_janus_points_bulk_read.py).
+    assert 'get formula of range ("G" & r & ":O" & r)' in src and \
+        'get value of range ("G" & r & ":O" & r)' in src, \
         "AppleScript must read G:O as both formulas and values"
     # Parser slices the appended G:O value segment and mirrors the residual.
     assert "gio_vals = parts[20:29]" in src

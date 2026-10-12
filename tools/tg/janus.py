@@ -1624,40 +1624,39 @@ def fetch_points():
         try:
             import subprocess as _sp
             IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
+            # Bulk range reads, one Apple Event each (bug 2026-10-12: "I still
+            # don't see neon points for the day"). The old script fetched B2..B500
+            # and then 28 G:Y cells ONE CELL PER EVENT; with Excel busy on ix that
+            # took ~80s, blew the 15s timeout below every time, and the abandoned
+            # remote osascript kept Excel loaded for the next read. Same output
+            # format: D | G:O formulas | P:Y values | G:O values.
             script = f'''tell application "Microsoft Excel"
     set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
+    set colB to string value of range "B1:B500" of ws
     set todayRow to 0
     repeat with i from 2 to 500
-        if (string value of range ("B" & i) of ws) = "{today_md}" then
+        if (item 1 of item i of colB) = "{today_md}" then
             set todayRow to i
             exit repeat
         end if
     end repeat
     if todayRow = 0 then return "ERR"
+    set r to todayRow as text
     set out to ""
     try
-        set out to (value of range ("D" & todayRow) of ws) as text
+        set out to (value of range ("D" & r) of ws) as text
     end try
-    repeat with c from 7 to 15
-        set v to ""
-        try
-            set v to (get formula of cell c of row todayRow of ws) as text
-        end try
-        set out to out & "|" & v
+    set gf to item 1 of (get formula of range ("G" & r & ":O" & r) of ws)
+    set pv to item 1 of (get value of range ("P" & r & ":Y" & r) of ws)
+    set gv to item 1 of (get value of range ("G" & r & ":O" & r) of ws)
+    repeat with v in gf
+        set out to out & "|" & (v as text)
     end repeat
-    repeat with c from 16 to 25
-        set pv to ""
-        try
-            set pv to (value of cell c of row todayRow of ws) as text
-        end try
-        set out to out & "|" & pv
+    repeat with v in pv
+        set out to out & "|" & (v as text)
     end repeat
-    repeat with c from 7 to 15
-        set gv to ""
-        try
-            set gv to (value of cell c of row todayRow of ws) as text
-        end try
-        set out to out & "|" & gv
+    repeat with v in gv
+        set out to out & "|" & (v as text)
     end repeat
     return out
 end tell'''
