@@ -1914,8 +1914,19 @@ def resolve_block_credit(block: str, cur_block: str,
     return ("credit", neon_cols.col("0分", block))
 
 
+def _idem_key(tag: str, r, target_date: str, col: str) -> Optional[str]:
+    """excel-http idempotency key for one 0分 append: a Todoist task credits a
+    column at most once per target day per append kind. dtd retries a
+    completion whose did-fast was watchdog-killed AFTER its append landed;
+    the daemon drops the replay (bug 2026-10-12: +25 x3 in 0分!U). Name-only
+    items (no task id) get none: repeats of those are legitimate."""
+    tid = (r.todoist_task or {}).get("id") if r is not None else None
+    return f"{tag}:{tid}@{target_date}:{col}" if tid else None
+
+
 def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
-                      src_names: list[str], tag: str) -> subprocess.CompletedProcess:
+                      src_names: list[str], tag: str,
+                      idem: Optional[list] = None) -> subprocess.CompletedProcess:
     """Batch 0分 appends via the excel-http daemon — ONE round-trip (the row
     is resolved once server-side; each append is journaled + chain-checked).
 
@@ -1932,6 +1943,9 @@ def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
     """
     values = [(col, v if isinstance(v, str) else (f"+{v}" if v >= 0 else f"{v}"))
               for col, v in appends]
+    if idem and any(idem):
+        values = [{"col": c, "value": v, **({"idem": k} if k else {})}
+                  for (c, v), k in zip(values, idem)]
     try:
         resp = neon_excel.batch_append("0分", values, date=target_date,
                                        src=_did_src(src_names))
@@ -3362,6 +3376,7 @@ def main():
     if one_n_writes and week_row:
         ref_appends = []
         ref_names = []
+        ref_idem = []
         for r in one_n_writes:
             if not r.fen_col:
                 continue
@@ -3375,14 +3390,16 @@ def main():
             elif r.col_letter:
                 ref_appends.append((r.fen_col, f"+'1n+'!{r.col_letter}5"))
                 ref_names.append(r.item.name)
+                ref_idem.append(_idem_key("1n_0fen", r, target_date, r.fen_col))
         if ref_appends:
             one_n_fen_result = append_0fen_batch(ref_appends, target_date,
-                                                 ref_names, "1n_0fen")
+                                                 ref_names, "1n_0fen", ref_idem)
 
     # 5. Batch 0分 appends via the excel-http daemon (for 0n, todoist, and
     # variable 1n+ items with direct points)
     fen_appends = []
     fen_names = []
+    fen_idem = []
     for r in fast:
         is_hcbi_habit = r.item.name.lower() in HCBI_HABITS
         # A domain routed to the hcbi sheet (hcbp -> hcbi!Y) is the same
@@ -3405,14 +3422,17 @@ def main():
                 and not (r.step == "1n" and not r.is_variable_1n)):
             fen_appends.append((r.fen_col, r.fen_points))
             fen_names.append(r.item.name)
+            fen_idem.append(_idem_key("0fen", r, target_date, r.fen_col))
         # {N} curly points → 0分 column Q (0g bonus)
         if r.item.curly_points and r.item.curly_points > 0:
             fen_appends.append(("Q", r.item.curly_points))
             fen_names.append(r.item.name)
+            fen_idem.append(_idem_key("0fen", r, target_date, "Q"))
 
     fen_result = None
     if fen_appends:
-        fen_result = append_0fen_batch(fen_appends, target_date, fen_names, "0fen")
+        fen_result = append_0fen_batch(fen_appends, target_date, fen_names, "0fen",
+                                       fen_idem)
 
     # 5a. Block-override credits (2026-09-16 feature) — see
     # resolve_block_credit()'s docstring for the "why doesn't this
@@ -3425,7 +3445,7 @@ def main():
     # RouteResult fields step 5 read, keeps this loop's own hcbi exclusion
     # logic (an unrelated guard: hcbi-routed items have no appendable
     # column for step 5a to redirect) textually separate from step 5's.
-    block_override_totals: list[tuple[str, str, int]] = []  # (name, block, pts)
+    block_override_totals: list[tuple[str, str, int, object]] = []  # (name, block, pts, r)
     for r in fast:
         if not r.item.block_override:
             continue
@@ -3444,7 +3464,7 @@ def main():
         if r.item.curly_points and r.item.curly_points > 0:
             item_pts += r.item.curly_points
         if item_pts > 0:
-            block_override_totals.append((r.item.name, r.item.block_override, item_pts))
+            block_override_totals.append((r.item.name, r.item.block_override, item_pts, r))
 
     if block_override_totals:
         import neon_blocks as _nb_override
@@ -3452,7 +3472,8 @@ def main():
         cur_block = _nb_override.current_block(now.hour)
         block_col_appends = []
         block_col_names = []
-        for name, block, pts in block_override_totals:
+        block_col_idem = []
+        for name, block, pts, r in block_override_totals:
             action, detail = resolve_block_credit(block, cur_block, now)
             if action == "skip":
                 continue
@@ -3462,9 +3483,11 @@ def main():
                 continue
             block_col_appends.append((detail, pts))
             block_col_names.append(f"{name} →{block}")
+            block_col_idem.append(_idem_key("block_override", r, target_date, detail))
         if block_col_appends:
             block_result = append_0fen_batch(block_col_appends, target_date,
-                                             block_col_names, "block_override")
+                                             block_col_names, "block_override",
+                                             block_col_idem)
             if block_result.returncode != 0:
                 print(f"⚠ block-override credit failed: {block_result.stderr}",
                       file=sys.stderr)

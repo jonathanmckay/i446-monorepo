@@ -214,3 +214,58 @@ class TestExplicitSaveWatchdog:
             "main() must start save_loop as a daemon thread, or the watchdog "
             "never runs"
         )
+
+
+class TestIdemDedupe:
+    """Regression 2026-10-12: a watchdog-killed did-fast was retried by dtd
+    after its +25 had already landed: +25 three times in 0分!U. Appends
+    carrying an already-journaled idem key are dropped while the earlier
+    append is still in the cell; an undone one (stripped or negated) credits
+    again."""
+
+    @pytest.fixture()
+    def srv(self, monkeypatch):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("excel_http_server", "server.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.IDEM_INDEX.clear()
+        m.IDEM_INDEX["0fen:T1@10/12:U"] = "='0n'!BG286+25"
+        return m
+
+    def test_replay_is_dup(self, srv):
+        assert srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286+25", "+25")
+        # later unrelated appends to the same cell don't hide the replay
+        assert srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286+25+10", "+25")
+
+    def test_unknown_or_missing_key_is_not_dup(self, srv):
+        assert not srv.idem_dup("0fen:T2@10/12:U", "='0n'!BG286+25", "+25")
+        assert not srv.idem_dup(None, "='0n'!BG286+25", "+25")
+
+    def test_undone_append_credits_again(self, srv):
+        # undo-fast stripped the tail
+        assert not srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286", "+25")
+        # undo-fast appended the negation
+        assert not srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286+25+10-25", "+25")
+
+    def test_do_append_short_circuits_dup_before_writing(self, srv, monkeypatch):
+        scripts = []
+
+        def fake_osa(script):
+            scripts.append(script)
+            return 0, "62\t='0n'!BG286+25", ""
+
+        monkeypatch.setattr(srv, "osascript", fake_osa)
+        monkeypatch.setattr(srv, "cell_addr", lambda req: ("U", 283))
+        out = srv.do_append({"sheet": "0分", "col": "U", "date": "10/12",
+                             "value": "+25", "idem": "0fen:T1@10/12:U"})
+        assert out["ok"] and out.get("dup")
+        assert len(scripts) == 1 and "set formula" not in scripts[0]
+
+    def test_journaled_idem_is_indexed(self, srv, monkeypatch, tmp_path):
+        monkeypatch.setattr(srv, "LEDGER_DIR", str(tmp_path))
+        srv.journal({"sheet": "0分", "col": "U", "date": "10/12", "row": 283,
+                     "after": "=5+25", "idem": "0fen:T9@10/12:U"})
+        assert srv.IDEM_INDEX["0fen:T9@10/12:U"] == "=5+25"
+        srv.seed_chain_index()
+        assert srv.IDEM_INDEX["0fen:T9@10/12:U"] == "=5+25"

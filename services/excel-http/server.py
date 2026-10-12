@@ -8,7 +8,7 @@ warms up after a few hits).
 
 Endpoints (POST JSON bodies):
 
-  POST /append   {sheet, col, date, value, src?}  # value like "+10" or "+'1n+'!S20"
+  POST /append   {sheet, col, date, value, src?, idem?}  # value like "+10" or "+'1n+'!S20"
   POST /write    {sheet, col, date|row, value, src?}  # set cell to value (literal or =formula)
   POST /read     {sheet, col, date|row}           # → {value, formula}
   POST /lookup   {sheet, date}                    # → {row}
@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -70,6 +70,10 @@ LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
 LEDGER_LOCK = threading.Lock()
 # (sheet, col, anchor) → last after_formula the ledger recorded for that cell.
 CHAIN_INDEX: dict[tuple[str, str, str], str] = {}
+# idem key → after-formula of the append that first carried it. A caller that
+# can be killed after its write lands (did-fast's 60s watchdog) and is then
+# retried by dtd sends the same key again; see idem_dup().
+IDEM_INDEX: dict[str, str] = {}
 
 
 # ── Ledger ────────────────────────────────────────────────────────────────────
@@ -113,11 +117,14 @@ def seed_chain_index() -> None:
     now = datetime.datetime.now()
     prev = (now.replace(day=1) - datetime.timedelta(days=1))
     CHAIN_INDEX.clear()
+    IDEM_INDEX.clear()
     for p in (ledger_path(prev), ledger_path(now)):
         for e in iter_ledger(p):
             after = e.get("after")
             if after is not None:
                 CHAIN_INDEX[entry_key(e)] = after
+                if e.get("idem"):
+                    IDEM_INDEX[e["idem"]] = after
 
 
 def check_chain(key: tuple[str, str, str], before: str) -> tuple[str, str | None]:
@@ -145,6 +152,8 @@ def journal(entry: dict) -> None:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         if entry.get("after") is not None:
             CHAIN_INDEX[entry_key(entry)] = entry["after"]
+            if entry.get("idem"):
+                IDEM_INDEX[entry["idem"]] = entry["after"]
     except Exception as e:
         sys.stderr.write(f"ledger journal failed: {e}\n")
 
@@ -400,7 +409,7 @@ def _journal_and_respond(kind: str, req: dict, row: int,
         # With the previous entry's after_value, a broken chain's
         # before_value - expected value is the outside (Excel) edit in points.
         entry["before_value"] = before_value
-    for k in ("source", "via"):  # JM Dash source dimension (lib/jmsource)
+    for k in ("source", "via", "idem"):  # source/via: JM Dash dimension (lib/jmsource)
         if req.get(k):
             entry[k] = req[k]
     if state == "broken":
@@ -433,6 +442,7 @@ def do_batch(req: dict) -> dict:
     for item in appends:
         sub = {"sheet": sheet, "col": item.get("col"), "row": row,
                "date": req.get("date"), "value": item.get("value"),
+               "idem": item.get("idem"),
                "src": item.get("src") or req.get("src"),
                "source": req.get("source"), "via": req.get("via")}
         if not sub["col"]:
@@ -481,12 +491,51 @@ end tell
             "formula": formula, "superseded": entry["before"]}
 
 
+def idem_dup(idem: str | None, formula: str, value: str) -> bool:
+    """True when an append carrying `idem` already landed and is still in the
+    cell, i.e. this request is a replay, not a new credit.
+
+    Regression 2026-10-12: a dtd ⌥↵ on "validate no yt [25]" ran did-fast
+    while Excel was slow; the +25 landed at 56s, the 60s watchdog then killed
+    did-fast (exit 124), and dtd's retry queue re-drove the "failed"
+    completion twice: +25 three times in 0分!U. "Still in the cell" = the
+    current formula extends the formula that append produced, without the
+    negation undo-fast appends when it can't strip the tail. So ctrl-z
+    (strip or negate) followed by a re-complete credits again."""
+    prev = IDEM_INDEX.get(idem) if idem else None
+    if prev is None or not formula.startswith(prev):
+        return False
+    neg = "-" + value.lstrip("+")
+    return neg not in formula[len(prev):]
+
+
+def _read_cell(sheet: str, col: str, row: int) -> tuple[str, str] | None:
+    """(value, formula) of one cell, or None if Excel didn't answer."""
+    rc, out, _ = osascript(f'''
+tell application "Microsoft Excel"
+    set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
+    return ((value of theCell) as string) & (character id 9) & (formula of theCell)
+end tell
+''')
+    if rc != 0:
+        return None
+    value, formula = (out.split("\t", 1) + [""])[:2]
+    return value, formula
+
+
 def do_append(req: dict) -> dict:
     addr = cell_addr(req)
     if not addr:
         return {"ok": False, "error": "date_not_found_or_missing_target"}
     col, row = addr
     sheet = req["sheet"]
+    idem = req.get("idem")
+    if idem and idem in IDEM_INDEX:
+        cur = _read_cell(sheet, col, row)
+        if cur and idem_dup(idem, cur[1], str(req.get("value", ""))):
+            sys.stderr.write(f"idem dup skipped: {idem}\n")
+            return {"ok": True, "row": row, "col": col, "value": cur[0],
+                    "formula": cur[1], "chain": "ok", "dup": True}
     val = str(req.get("value", ""))
     val_esc = safe_str(val)
     # "-" is a formula term like "+" (e.g. the 0t sleep dock appends "-7.5");
