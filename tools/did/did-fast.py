@@ -3063,6 +3063,30 @@ def _install_watchdog():
         pass
 
 
+def skip_threshold_zero(r, task_id: Optional[str]) -> Optional[str]:
+    """An EXPLICIT 0 minutes on a 长 threshold habit ("long o314 0", what dtd's
+    minutes prompt sends when JM types 0) means "not this week": skip the
+    recurring card to its next occurrence, like dtd's delay 0, and return that
+    date. Bug 2026-10-12: it only logged "0m < 30m threshold, no credit" and
+    left the card untouched, so "long o314" (due Thu 10/08) came back in dtd
+    every day. Blank / no minutes and nonzero-below-threshold leave the card
+    open (more minutes may follow). Never raises."""
+    if r.item.time_value != 0 or r.item.time_range:
+        return None
+    try:
+        task = (_df.find_task_by_id(task_id) if task_id
+                else _df.find_task(r.item.name))
+        if not (task.get("due") or {}).get("is_recurring"):
+            return None
+        res = _df.handle_recurring(task, _daytime.today().isoformat(), 0,
+                                   skip_copy=True)
+        return res.get("target_date")
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        print(f"⚠ {r.item.name}: skip to next occurrence failed: {e}",
+              file=sys.stderr)
+        return None
+
+
 def _past_target(items: list, past_ok: bool) -> bool:
     """True when --past-ok was given AND the batch's target_date is not
     today: the signal that today-scoped side effects must be skipped."""
@@ -3910,9 +3934,17 @@ def main():
         output["results"].append(entry)
 
     for r in threshold_skipped:
-        output["results"].append({
-            "name": r.item.name, "step": "skipped", "reason": r.error})
-        print(f"  ⏸ {r.error}", file=sys.stderr)
+        entry = {"name": r.item.name, "step": "skipped", "reason": r.error}
+        nxt = (None if points_only or past_target else
+               skip_threshold_zero(r, task_id_override
+                                   if len(threshold_skipped) == 1 else None))
+        if nxt:
+            entry["skipped_to"] = nxt
+            print(f"  ⏭ {r.item.name}: 0m, skipped to next occurrence {nxt}",
+                  file=sys.stderr)
+        else:
+            print(f"  ⏸ {r.error}", file=sys.stderr)
+        output["results"].append(entry)
 
     for r in agent_needed:
         output["agent_needed"].append({
