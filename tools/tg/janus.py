@@ -637,6 +637,10 @@ class State:
         # point value (blank = 0) and completes the /done. Consumed first,
         # same chokepoint discipline as edit_target/split_target.
         self.done_target: dict | None = None
+        # True only while ⌥↵ replays a TYPED command through the Enter
+        # path: every completed range goes to did-fast (Toggl entry +
+        # points in one shot) instead of tg-fast (2026-10-12).
+        self.force_did: bool = False
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
@@ -5726,7 +5730,7 @@ def _sel_ids() -> list:
 
 
 @kb.add("enter")
-def _(event):
+def _on_enter(event):
     _t = input_buffer.text.strip()
     if STATE.done_target is not None:
         JE.emit("action", "done_points", (), _t)
@@ -6114,7 +6118,17 @@ def _(event):
         named "+10 @i9 read COD deck"."""
         has_range = _has_completed_range(part)
         has_bonus = _has_bonus_points(part)
-        use_did = has_bonus or (has_range and bool(re.search(r"\[-?\d+\]", part)))
+        force = getattr(STATE, "force_did", False)
+        use_did = has_bonus or (has_range and (force or bool(re.search(r"\[-?\d+\]", part))))
+        if force and not use_did:
+            flash(f"⌥↵ /did needs a HHMM-HHMM range: {part}", 6.0)
+            return None
+        if use_did:
+            # did-fast's TIME_RANGE_RE is strictly HHMM-HHMM; janus's own
+            # grammar also accepts "600-607" and "9:07-9:30", so normalize.
+            part = re.sub(r"(?<![\d:])(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})(?![\d:])",
+                          lambda m: f"{m.group(1):0>2}{m.group(2)}-{m.group(3):0>2}{m.group(4)}",
+                          part)
         if STATE.day_offset != 0:
             # Viewing another day: typed commands apply to THAT day (user
             # request 2026-07-27 — "tg calls go to yesterday if I'm viewing
@@ -6247,6 +6261,18 @@ def _(event):
     has no double-append guard for 0分, so a second run would double-award
     (user request 2026-07-27). On a past-day view there's no completion
     record to check, so it runs unconditionally (that's the backfill case)."""
+    if (input_buffer.text.strip() and STATE.done_target is None
+            and STATE.split_target is None and STATE.edit_target is None):
+        # ⌥↵ on a just-TYPED command = Enter + /did in one gesture: the
+        # completed range lands in Toggl AND its points are granted via
+        # did-fast (user request 2026-10-12; it used to flash "select a
+        # tracked entry first" and drop the text).
+        STATE.force_did = True
+        try:
+            _on_enter(event)
+        finally:
+            STATE.force_did = False
+        return
     JE.emit("action", "done_sel", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None

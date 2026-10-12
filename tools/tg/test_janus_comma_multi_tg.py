@@ -192,7 +192,7 @@ def test_comma_splits_into_multiple_tg_calls():
     # bonus-routing addition, 2026-09-15) rather than pinned to its exact
     # length, so the next docstring/comment edit in there doesn't retrigger
     # this same failure.
-    body = src[i:i + 5200]
+    body = src[i:i + 6400]
     assert "if p.strip()" in src[i:src.index("\n", i)], (
         "empty segments (stray/trailing commas) must be dropped")
     assert "_resolve_part" in body, (
@@ -242,7 +242,7 @@ def test_flash_preview_labels_did_vs_tg_per_part():
     did-fast routing, a mixed batch could have parts going to either)."""
     src = (HERE / "janus.py").read_text()
     i = src.index('parts = [p.strip() for p in text.split(",")')
-    body = src[i:i + 5200]  # see window-size comment above
+    body = src[i:i + 6400]  # see window-size comment above
     assert "labels = [f\"{'did' if d else 'tg'} {c}\" for c, d in resolved_pairs]" in body
 
 
@@ -250,3 +250,27 @@ if __name__ == "__main__":
     import sys
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_opt_enter_typed_range_forces_did_and_pads_hhmm():
+    """User request 2026-10-12: ⌥↵ on a just-typed "1512-1526 o314" must
+    create the Toggl entry AND /did it, not flash "select a tracked entry
+    first". The ⌥↵ handler sets STATE.force_did and replays Enter."""
+    state, resolve_part, calls = _resolve_part_fn()
+    state.force_did = True
+    assert resolve_part("1512-1526 o314") == ("1512-1526 o314", True)
+    assert resolve_part("600-607 situate @i447") == ("0600-0607 situate @i447", True)
+    assert resolve_part("9:07-9:30 tea") == ("0907-0930 tea", True)
+    assert resolve_part("o314") is None
+    assert any("HHMM-HHMM" in m for m in calls["flash"])
+    state.force_did = False
+    assert resolve_part("1512-1526 o314") == ("1512-1526 o314", False)
+
+
+def test_opt_enter_with_typed_text_replays_enter_as_did():
+    src = (HERE / "janus.py").read_text()
+    h = src[src.index('@kb.add("escape", "enter")'):]
+    h = h[:h.index('JE.emit("action", "done_sel"')]
+    assert "input_buffer.text.strip()" in h
+    assert "STATE.force_did = True" in h and "_on_enter(event)" in h
+    assert "STATE.force_did = False" in h
