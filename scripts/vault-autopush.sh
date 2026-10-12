@@ -22,6 +22,13 @@
 # sees the intermediate states at all; ~/vault only ever gets a single clean
 # jump to a known-good tip, or is left completely untouched on failure.
 
+# GitHub's real rejection reason (GH001 large file, GH013 secret, ...) comes
+# after a "remote: error: Trace: <hash>" line; logging only line 1 hid it.
+push_reason() {
+    grep -m1 -E 'GH0[0-9]+|exceeds|File .* is [0-9.]+ MB|rejected|denied|timed out' /tmp/vault-autopush-push.err \
+        || grep -m1 -v 'Trace:' /tmp/vault-autopush-push.err \
+        || head -1 /tmp/vault-autopush-push.err
+}
 REPO_DIR="$HOME/vault"
 WORKTREE_DIR="/tmp/vault-autopush-wt"
 ALERT_SCRIPT="$HOME/i446-monorepo/scripts/vault-autopush-alert.py"
@@ -30,6 +37,18 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 cd "$REPO_DIR" || { echo "[$TS] ERROR: cd $REPO_DIR failed"; exit 1; }
 
 git add -A
+
+# Never commit a file GitHub will reject (hard limit 100 MB). On 2026-10-11
+# two 330 MB transcript .jsonl files got staged and every push failed for
+# six hours until someone squashed them out by hand. Unstage anything over
+# 95 MB (it stays on disk and in Syncthing) and say so in the log.
+git diff --cached --name-only --diff-filter=AM -z | while IFS= read -r -d '' f; do
+    sz=$(stat -f %z "$f" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 95000000 ]; then
+        git reset -q -- "$f"
+        echo "[$TS] WARN: unstaged $f ($((sz / 1000000)) MB > GitHub's 100 MB limit); add it to .gitignore"
+    fi
+done
 
 if ! git diff --cached --quiet; then
     CHANGED=$(git diff --cached --stat | tail -1)
@@ -62,8 +81,8 @@ if git merge-base --is-ancestor "$REMOTE_HEAD" "$LOCAL_HEAD"; then
         python3 "$ALERT_SCRIPT" --clear
         exit 0
     else
-        echo "[$TS] ERROR: push failed: $(head -1 /tmp/vault-autopush-push.err)"
-        python3 "$ALERT_SCRIPT" --fail "push failed: $(head -1 /tmp/vault-autopush-push.err)"
+        echo "[$TS] ERROR: push failed: $(push_reason)"
+        python3 "$ALERT_SCRIPT" --fail "push failed: $(push_reason)"
         exit 1
     fi
 fi
@@ -120,7 +139,7 @@ if git push -q origin main 2>/tmp/vault-autopush-push.err; then
     echo "[$TS] pushed (rebased via isolated worktree)"
     python3 "$ALERT_SCRIPT" --clear
 else
-    echo "[$TS] ERROR: push failed: $(head -1 /tmp/vault-autopush-push.err)"
-    python3 "$ALERT_SCRIPT" --fail "push failed after clean rebase: $(head -1 /tmp/vault-autopush-push.err)"
+    echo "[$TS] ERROR: push failed: $(push_reason)"
+    python3 "$ALERT_SCRIPT" --fail "push failed after clean rebase: $(push_reason)"
     exit 1
 fi
