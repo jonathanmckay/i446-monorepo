@@ -1,14 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "1 outdoor activity with theo": {
-      "todoist_id": "6hjgpv6m4F92jfqR",
-      "minutes": 40
-    },
-    "go to c702": {
-      "todoist_id": "6hjgpv4rqCp49Pg2",
-      "minutes": 40
-    },
     "productive flight": {
       "todoist_id": "6hjgpv7pV5QCFqxR",
       "minutes": 40
@@ -18,5 +10,5 @@
       "minutes": 40
     }
   },
-  "last_sync": "2026-10-12T10:00:01.193145-07:00"
+  "last_sync": "2026-10-12T12:00:01.721754-07:00"
 }
