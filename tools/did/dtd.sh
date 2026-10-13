@@ -1533,10 +1533,10 @@ python3 "$DTD_DETAIL" "\$1" > /dev/tty 2>/dev/null
 # things in multiple questions when I edit description ... parse what I put
 # in"). Prefilled as  title @domain [N] // description ; edit-fast --line
 # parses it back and applies only what changed.
-cur_line="" domains=""
+cur_line=""
 eval "\$(python3 "\$EDIT_FAST" --current --id "\$1" "$DTD_CACHE_FILE" 2>/dev/null)"
 printf "\n\033[2m──────── edit · title @domain [N] // description · blank line cancels ────────\033[0m\n" > /dev/tty
-printf "\033[2m(time) and {bonus} tags are kept · ctrl-v ctrl-j for a new line · a bare // clears the description\ndomains: %s\033[0m\n" "\$domains" > /dev/tty
+printf "\033[2m(time) and {bonus} tags are kept · ctrl-v ctrl-j for a new line · a bare // clears the description\033[0m\n" > /dev/tty
 f_line="\${cur_line:-\$clean}"
 vared -p "> " f_line < /dev/tty > /dev/tty
 edits="\$f_line"
