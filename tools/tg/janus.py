@@ -6639,7 +6639,7 @@ def _day_forward(event):
 @kb.add("tab", filter=_input_empty)
 @kb.add("down", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the selection cursor forward through everything currently on
+    """Move the selection cursor forward (stopping at the last row) through everything currently on
     screen and selectable — calendar events, real tracked entries, and
     untracked gaps alike (user request 2026-07-17: "select toggl time
     entries as well" / "select empty components"). Tab/↓ to arm one, Enter
@@ -6655,7 +6655,9 @@ def _(event):
         return
     keys = [_sel_key(it) for it in items]
     if STATE.event_sel in keys:
-        i = (keys.index(STATE.event_sel) + 1) % len(keys)
+        # Clamped, not wrapped (user request 2026-10-13): ↓ at the
+        # bottom stays put instead of jumping to the day's first row.
+        i = min(keys.index(STATE.event_sel) + 1, len(keys) - 1)
     else:
         now = view_now()
         past = [j for j, it in enumerate(items)
@@ -6670,14 +6672,14 @@ def _(event):
 @kb.add("s-tab", filter=_input_empty)
 @kb.add("up", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the selection cursor backward. See the "tab" binding above —
+    """Move the selection cursor backward, stopping at the first row. See the "tab" binding above —
     same nearest-to-now start for a fresh selection."""
     items = STATE.visible_events
     if not items:
         return
     keys = [_sel_key(it) for it in items]
     if STATE.event_sel in keys:
-        i = (keys.index(STATE.event_sel) - 1) % len(keys)
+        i = max(keys.index(STATE.event_sel) - 1, 0)  # clamped, see tab
     else:
         now = view_now()
         past = [j for j, it in enumerate(items)
