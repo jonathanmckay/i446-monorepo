@@ -35,9 +35,10 @@ def test_ctrl_o_and_ctrl_g_open_the_same_edit_screen():
     edit = DTD[DTD.index('cat > "$DTD_EDIT" << EDITEOF'):]
     edit = edit[:edit.index("\nEDITEOF\n")]
     assert 'python3 "$DTD_DETAIL" "\\$1"' in edit           # full context on top
-    for label in ("Title", "Domain", "Points", "Description"):
-        assert f'"{label}" "' in edit                          # each field labeled with its destination
-    assert "--fields --id" in edit
+    # 2026-10-13: one prefilled line, not one prompt per field.
+    assert edit.count("vared ") == 1
+    assert "title @domain [N] // description" in edit
+    assert '--fields --id "\\$1" "$DTD_CACHE_FILE" --line' in edit
     assert "ctrl-o/g: details+edit" in DTD
 
 

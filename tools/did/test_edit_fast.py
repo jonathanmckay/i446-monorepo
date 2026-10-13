@@ -279,3 +279,55 @@ def test_form_submit_writes_description_with_content_in_one_call(tmp_path, monke
                                       "--points", "40", "--desc", "new notes"])
     assert mod.main() == 0
     assert calls == [{"content": "write memo (see doc) (30) [40] {5}", "description": "new notes"}]
+
+
+# ── one-line form (2026-10-13): title @domain [N] // description ──
+
+def test_line_prefill_round_trips_to_no_change():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "notes here")
+    line = mod.format_line(cur)
+    assert line == "write memo (see doc) @i9 [20] // notes here"
+    assert mod.changed_fields(cur, mod.parse_line(line)) == {}
+
+
+def test_line_edits_description_only():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "old")
+    new = mod.parse_line("write memo (see doc) @i9 [20] // see https://x.com/a//b")
+    assert mod.changed_fields(cur, new) == {"desc": "see https://x.com/a//b"}
+
+
+def test_line_changes_all_fields_at_once():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "old")
+    new = mod.parse_line("call 3 tenants @m5x2 [40] // new notes")
+    assert mod.changed_fields(cur, new) == {
+        "name": "call 3 tenants", "domain": "m5x2", "points": "40", "desc": "new notes"}
+
+
+def test_line_absent_parts_keep_bare_slashes_clear():
+    mod = _load()
+    cur = mod.current_fields(_form_task(), "old")
+    assert mod.changed_fields(cur, mod.parse_line("write memo (see doc)")) == {}
+    assert mod.changed_fields(cur, mod.parse_line("write memo (see doc) //")) == {"desc": ""}
+    assert mod.changed_fields(cur, mod.parse_line("// only notes")) == {"desc": "only notes"}
+
+
+def test_line_multiline_description():
+    mod = _load()
+    assert mod.parse_line("t // a\nb")["desc"] == "a\nb"
+
+
+def test_line_submit_one_call(tmp_path, monkeypatch):
+    mod = _load()
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({"tasks": [_form_task()]}))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, path, body: calls.append(body))
+    monkeypatch.setattr(mod, "_description", lambda tid: "old notes")
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: None)
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cache),
+                                      "--line", "write memo (see doc) @i9 [40] // new notes"])
+    assert mod.main() == 0
+    assert calls == [{"content": "write memo (see doc) (30) [40] {5}", "description": "new notes"}]

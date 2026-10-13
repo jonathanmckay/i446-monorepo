@@ -72,7 +72,7 @@ def _ids(out: str) -> list[str]:
 
 def test_tiers_order_claims_top_running_bottom():
     # 2026-10-13: agent claims sit at the TOP (working above waiting); JM's
-    # running timer stays the LAST row for the --cycle up-wrap.
+    # running timer stays the LAST row.
     out = _run("R1")
     ids = _ids(out)
     assert set(ids[:2]) == {"W1", "RC"} and ids[2] == "I1", ids
@@ -87,12 +87,12 @@ def test_ai_claimed_task_goes_to_top_not_bottom():
     assert ids.index("I1") < ids.index("N1"), ids
 
 
-def test_up_from_top_task_wraps_to_running_task():
-    """2026-10-12: "press up from the top task takes me to the current task".
-    fzf --cycle wraps ↑ on row 1 to the last row, which must be the timer."""
-    assert _ids(_run("R1"))[-1] == "R1"
+def test_scrolling_does_not_wrap():
+    """2026-10-13: "change dtd scrolling so it doesn't wrap around". fzf
+    --cycle (added 2026-10-12 for an up-from-top jump to the timer) is off."""
     dtd = Path(__file__).with_name("dtd.sh").read_text()
-    assert "--layout=reverse-list --no-sort --ansi --cycle" in dtd
+    fzf_line = next(l for l in dtd.splitlines() if "| fzf --prompt=" in l)
+    assert "--cycle" not in fzf_line, fzf_line
 
 
 def test_tier_markers():

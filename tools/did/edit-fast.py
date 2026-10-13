@@ -4,7 +4,7 @@
 Usage: edit-fast.py <query> <edit_string> <cache_file>
        edit-fast.py --current --id <id> <cache_file>        (form prefill)
        edit-fast.py --fields --id <id> <cache_file> [--name X] [--domain D]
-                    [--points N] [--desc TEXT]               (form submit)
+                    [--points N] [--desc TEXT] [--line L]    (form submit)
 
 The ctrl-o/ctrl-g form (2026-10-11) edits one labeled field at a time: title,
 domain, points, description. --current prints the prefill as shell
@@ -136,6 +136,47 @@ def current_fields(task: dict, description: str) -> dict:
     }
 
 
+# One-line form (2026-10-13: "it shouldn't ask for things in multiple
+# questions ... it should parse what I put in to make the necessary changes in
+# one screen"). The prompt is prefilled with format_line(cur) and parsed back
+# by parse_line(): @code → domain, [N] → points, text after a standalone //
+# → description, the rest → title. Unlike parse_edits, a bare number stays in
+# the title (the prefill always spells points as [N], so "call 3 tenants"
+# must not become [3]). A part that's absent means keep; "//" with nothing
+# after it clears the description.
+_DESC_SEP = re.compile(r"(?:^|\s)//(?:\s|$)")
+
+
+def format_line(cur: dict) -> str:
+    parts = [cur.get("name") or ""]
+    if cur.get("domain"):
+        parts.append("@" + cur["domain"])
+    if cur.get("points"):
+        parts.append(f"[{cur['points']}]")
+    line = " ".join(p for p in parts if p)
+    if cur.get("desc"):
+        line += " // " + cur["desc"]
+    return line
+
+
+def parse_line(line: str) -> dict:
+    out: dict = {}
+    m = _DESC_SEP.search(line)
+    if m:
+        out["desc"] = line[m.end():].strip()
+        line = line[:m.start()]
+    name_tokens: list[str] = []
+    for tok in line.split():
+        if tok.startswith("@") and len(tok) > 1:
+            out["domain"] = tok[1:]
+        elif re.fullmatch(r"\[\d+\]", tok):
+            out["points"] = tok[1:-1]
+        else:
+            name_tokens.append(tok)
+    out["name"] = " ".join(name_tokens)
+    return out
+
+
 def _description(task_id: str) -> str:
     """Description from task-detail's per-task cache (the form just rendered
     it), else live from Todoist."""
@@ -231,6 +272,7 @@ def _main_current(argv: list[str]) -> int:
     cur = current_fields(task, _description(argv[1]))
     for k, v in cur.items():
         print(f"cur_{k}={shlex.quote(v)}")
+    print(f"cur_line={shlex.quote(format_line(cur))}")
     print(f"domains={shlex.quote(' '.join(sorted(DOMAINS)))}")
     return 0
 
@@ -244,7 +286,9 @@ def _main_fields(argv: list[str]) -> int:
     flags = {"--name": "name", "--domain": "domain", "--points": "points", "--desc": "desc"}
     i = 0
     while i + 1 < len(rest):
-        if rest[i] in flags:
+        if rest[i] == "--line":
+            new.update(parse_line(rest[i + 1]))
+        elif rest[i] in flags:
             new[flags[rest[i]]] = rest[i + 1]
         i += 2
     cache, task = _load_task(task_id, cache_file)
