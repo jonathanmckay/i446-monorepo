@@ -2859,13 +2859,13 @@ _PLACEHOLDER_LABELS = {"generic placeholder", "?"}
 # Descriptions that are NEVER merged with a same-desc neighbour: each "?" is
 # a distinct unknown to be identified on its own (user report 2026-09-19:
 # two "?" entries of 33m and 44m rendered as one 78m row). "generic
-# placeholder" stays mergeable — it is /tg's auto-filler, restarted as the
-# previous one stops, and one span is exactly what it means.
-_NO_MERGE_LABELS = {"?"}
+# placeholder" too (user request 2026-10-12): back-to-back placeholders are
+# on-the-go markers, each to be filled in separately afterwards.
+_NO_MERGE_LABELS = _PLACEHOLDER_LABELS
 
 
 def _mergeable_desc(desc: str | None) -> bool:
-    return (desc or "").strip() not in _NO_MERGE_LABELS
+    return (desc or "").strip().lower() not in _NO_MERGE_LABELS
 
 
 def _is_placeholder(label: str) -> bool:
@@ -4321,7 +4321,7 @@ def _detail_merge_past(win_start, win_end) -> list[dict]:
         if en <= s:
             continue
         desc = display_desc(e["desc"]) or "(blank)"
-        if (segs and segs[-1]["desc"] == desc
+        if (segs and segs[-1]["desc"] == desc and _mergeable_desc(e["desc"])
                 and (s - segs[-1]["end"]).total_seconds() <= 60):
             segs[-1]["end"] = en
         else:

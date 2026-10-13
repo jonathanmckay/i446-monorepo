@@ -173,9 +173,9 @@ def test_merged_gapless_entries_are_marked_contiguous():
     today = _midnight()
     _setup_common(mod)
     mod.STATE.entries = [
-        _entry("generic placeholder", today.replace(hour=7, minute=41),
+        _entry("deep work", today.replace(hour=7, minute=41),
                today.replace(hour=7, minute=48), id=201),
-        _entry("generic placeholder", today.replace(hour=7, minute=48),
+        _entry("deep work", today.replace(hour=7, minute=48),
                today.replace(hour=7, minute=49), id=202),
     ]
     mod.view_now = lambda: today.replace(hour=12, minute=5)
@@ -194,9 +194,9 @@ def test_merged_entries_with_a_gap_are_not_contiguous():
     today = _midnight()
     _setup_common(mod)
     mod.STATE.entries = [
-        _entry("generic placeholder", today.replace(hour=7, minute=0),
+        _entry("deep work", today.replace(hour=7, minute=0),
                today.replace(hour=7, minute=10), id=301),
-        _entry("generic placeholder", today.replace(hour=7, minute=40),
+        _entry("deep work", today.replace(hour=7, minute=40),
                today.replace(hour=7, minute=50), id=302),
     ]
     mod.view_now = lambda: today.replace(hour=12, minute=5)
