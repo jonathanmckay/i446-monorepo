@@ -698,6 +698,11 @@ python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
 # the running line in the project's palette color without waiting for (or
 # hitting) the Toggl poll (feature 2026-07-24).
 printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
+# Started-today log (2026-10-13): the list keeps every task started today and
+# not yet done at the top with 🧮, even after the timer moves to another task.
+_sd="\${XDG_STATE_HOME:-\$HOME/.local/state}/jm"
+mkdir -p "\$_sd" 2>/dev/null
+printf '%s\t%s\t%s\n' "\$(date +%Y-%m-%d)" "\$1" "\$(date +%s)" >> "\$_sd/dtd-started" 2>/dev/null
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the two Toggl
 # API calls above — leaked SGR motion sequences type themselves into fzf's
@@ -1672,6 +1677,19 @@ try:
     if _hs > running_started and time.time() - _hs < 4 * 3600:
         running_clean, running_started, running_id = _hint[0].strip().lower(), _hs, _hint[2].strip()
 except Exception: pass
+# Started-today set (2026-10-13: Enter means working on it, so the task gets
+# 🧮 and goes to the top; when the timer moves on and it isn't done, it stays
+# at the top). start.sh appends date/id/epoch to dtd-started on every Enter
+# and ctrl-s; id -> latest start today. Completion hides the row as usual.
+started_at = {}
+try:
+    import os as _os_s
+    _sp = _os_s.path.join(_os_s.environ.get('XDG_STATE_HOME') or _os_s.path.expanduser('~/.local/state'), 'jm', 'dtd-started')
+    for _l in open(_sp):
+        _p = _l.strip().split('\t')
+        if len(_p) >= 3 and _p[0] == today and _p[2].isdigit():
+            started_at[_p[1]] = max(started_at.get(_p[1], 0), int(_p[2]))
+except Exception: pass
 
 # Neon color palette (label → ANSI 256-color)
 COLORS = {
@@ -2047,6 +2065,7 @@ DIM = '\033[2m'
 claimed_lines = []   # B: agent waiting on JM
 working_lines = []   # C: agent mid-turn
 running_lines = []   # A: JM's own timer
+started_lines = []   # A2: JM started it today, timer moved on, not done
 normal_lines = []
 skipped_lines = []
 
@@ -2170,17 +2189,23 @@ for t in unique:
         is_running = str(t.get('id', '')) == running_id
     else:
         is_running = bool(running_clean and clean == running_clean)
-    # In-progress tiers (2026-10-11). B and C print at the TOP of the list,
-    # A (JM's timer) at the bottom; see the print loop below:
-    #   A  JM's own running timer: 🧮 only, domain color (the one he's finishing)
-    #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
+    # In-progress tiers (2026-10-11), all printed at the TOP of the list in
+    # this order (2026-10-13); see the print loop below:
+    #   A  JM's own running timer: 🧮 Nm, domain color
+    #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: 🧮
     #   C  agent claim working: spinner + 😈, grey
-    # A wins when JM times a task an agent also holds. 🕐, not ⏰: ⏰ is delay.
+    #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
+    # A wins when JM times a task an agent also holds; an agent claim beats
+    # A2; a skip beats A2. 🕐, not ⏰: ⏰ is delay.
     is_claimed = str(t.get('id', '')) in _claim_ids and not is_running
     is_working = is_claimed and str(t.get('id', '')) in _agent_ids
+    is_started = (str(t.get('id', '')) in started_at and not is_running
+                  and not is_claimed and not is_skipped)
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
         prefix = f'🧮 {elapsed}m · {dom_tag}'
+    elif is_started:
+        prefix = '🧮 ' + repeat + dom_tag
     else:
         prefix = repeat + dom_tag
     if is_working:
@@ -2203,6 +2228,8 @@ for t in unique:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
         running_lines.append(f'{color}{body}{RESET}{sfx}')
+    elif is_started:
+        started_lines.append((started_at[str(t.get('id', ''))], f'{color}{body}{RESET}{sfx}'))
     elif is_working:
         working_lines.append(f'{color}{body}{RESET}{sfx}')
     elif is_claimed:
@@ -2214,16 +2241,17 @@ for t in unique:
     else:
         normal_lines.append(f'{body}{sfx}')
 
-# Agent claims (tiers B-C) print FIRST (2026-10-13: a task an AI /d's goes to
-# the top, not the bottom), working above waiting. JM's own running timer
-# (tier A) still prints LAST. It went there for fzf's --cycle up-wrap
-# (2026-10-12), but --cycle is gone (2026-10-13: scrolling must not wrap
-# around), so ↑ on the top row now stops there. The footer line that
+# JM's own work prints FIRST (2026-10-13: 'when I hit enter on a task that
+# means I am working on it ... it should be at the top'): the running timer,
+# then tasks started today and not done, most recent start first. Agent
+# claims follow (2026-10-13: a task an AI /d's goes to the top, not the
+# bottom), working above waiting. The running timer used to print LAST for
+# fzf's --cycle up-wrap (2026-10-12); both are gone. The footer line that
 # mirrored them is gone (2026-10-12); the footer is now the plain dtd /
 # N done / N left header.
+_active = running_lines + [l for _, l in sorted(started_lines, key=lambda x: -x[0])]
 _claims = working_lines + claimed_lines
-_active = running_lines
-for l in _claims + normal_lines + skipped_lines + _active:
+for l in _active + _claims + normal_lines + skipped_lines:
     print(l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
 # order, written only when that order changes, so the report can tell what
@@ -2231,7 +2259,7 @@ for l in _claims + normal_lines + skipped_lines + _active:
 try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
-        _order = [l.rsplit(chr(9), 1)[-1] for l in _claims + normal_lines + skipped_lines + _active]
+        _order = [l.rsplit(chr(9), 1)[-1] for l in _active + _claims + normal_lines + skipped_lines]
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:

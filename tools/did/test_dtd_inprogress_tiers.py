@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Regression: dtd's in-progress tiers (2026-10-11).
 
-JM's own running timer (🧮, domain color) is the last row; agent claims
-mid-turn (spinner + 😈, grey) then waiting on JM (🧮 🕐, domain color) are
-the first rows (2026-10-13), everything else between. A task JM is timing stays tier A even if an agent
+2026-10-13 order, top down: JM's running timer (🧮 Nm), tasks JM started
+today (Enter/ctrl-s) that aren't done (🧮, most recent start first), agent
+claims mid-turn (spinner + 😈, grey), agent claims waiting on JM (🧮 🕐),
+then everything else. A task JM is timing stays tier A even if an agent
 also holds it.
 
 Runs the real list-gen payload with HOME pointed at a temp dir whose
@@ -39,7 +40,7 @@ def _claim(root: Path, tid: str, state: str):
     (root / f"{tid}.state").write_text(f"{state} {int(time.time())}\n")
 
 
-def _run(timer_id: str) -> str:
+def _run(timer_id: str, started=(), skipped="") -> str:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         home = tmp / "home"
@@ -49,17 +50,21 @@ def _run(timer_id: str) -> str:
         _claim(claims, "W1", "working")
         _claim(claims, "I1", "idle")
         _claim(claims, "RC", "working")
+        state = home / ".local/state"
+        (state / "jm").mkdir(parents=True)
+        (state / "jm/dtd-started").write_text("".join(
+            f"{day}\t{tid}\t{ts}\n" for day, tid, ts in started))
 
         def w(name, text):
             (tmp / name).write_text(text)
             return str(tmp / name)
         args = [w("cache.json", json.dumps(CACHE)),
                 w("done.json", json.dumps({"date": "2026-10-11", "names": [], "ids": {}})),
-                w("removed", ""), "2026-10-11", "120", w("skipped", ""),
+                w("removed", ""), "2026-10-11", "120", w("skipped", skipped),
                 w("timer", f"x\t{int(time.time()) - 300}\t{timer_id}"), w("view", "")]
         (tmp / "removed.ids").write_text("")
         (tmp / "lg.py").write_text(_listgen_payload())
-        env = {**os.environ, "HOME": str(home)}
+        env = {**os.environ, "HOME": str(home), "XDG_STATE_HOME": str(state)}
         r = subprocess.run([sys.executable, str(tmp / "lg.py"), *args],
                            capture_output=True, text=True, env=env)
         assert r.returncode == 0, r.stderr
@@ -70,19 +75,41 @@ def _ids(out: str) -> list[str]:
     return [l.rsplit("\t", 1)[-1] for l in out.splitlines() if "\t" in l]
 
 
-def test_tiers_order_claims_top_running_bottom():
-    # 2026-10-13: agent claims sit at the TOP (working above waiting); JM's
-    # running timer stays the LAST row.
-    out = _run("R1")
+def test_tiers_order_running_then_claims():
+    # 2026-10-13: JM's running timer is the TOP row, then agent claims
+    # (working above waiting), then the rest.
+    ids = _ids(_run("R1"))
+    assert ids[0] == "R1", ids
+    assert set(ids[1:3]) == {"W1", "RC"} and ids[3] == "I1", ids
+    assert set(ids[4:6]) == {"N1", "N2"}, ids
+
+
+def test_started_not_done_stays_on_top_after_timer_moves():
+    """2026-10-13: "when I hit enter on a task ... put the abacus emoji by it
+    and it should be at the top. When the time entry shifts, if the task is
+    still not done, leave it in dtd, at the top." """
+    now = int(time.time())
+    out = _run("R1", started=[("2026-10-11", "N1", now - 900), ("2026-10-11", "N2", now - 600),
+                              ("2026-10-11", "R1", now - 300), ("2026-10-10", "W1", now)])
     ids = _ids(out)
-    assert set(ids[:2]) == {"W1", "RC"} and ids[2] == "I1", ids
-    assert set(ids[3:5]) == {"N1", "N2"} and ids[-1] == "R1", ids
+    assert ids[:3] == ["R1", "N2", "N1"], ids          # running, then latest start first
+    for i in ("N1", "N2"):
+        row = _row_for_id(out, i)
+        assert "🧮 " in row and "m · " not in row and "🕐" not in row, row
+    assert "😈" in _row_for_id(out, "W1")                 # yesterday's start ignored; claim wins
+
+
+def test_skip_beats_started():
+    out = _run("R1", started=[("2026-10-11", "N1", int(time.time()))], skipped="plain one\n")
+    ids = _ids(out)
+    assert ids[-1] == "N1" and "🧮" not in _row_for_id(out, "N1"), ids
 
 
 def test_ai_claimed_task_goes_to_top_not_bottom():
     """2026-10-13 bug: "when ai /d's a task, it should go to the top not the
-    bottom of the list". A freshly /d'd task is a working claim."""
-    ids = _ids(_run("R1"))
+    bottom of the list". A freshly /d'd task is a working claim. Only JM's
+    own running timer sits above it, so check with no timer running."""
+    ids = _ids(_run(""))
     assert ids[0] in ("W1", "RC"), ids
     assert ids.index("I1") < ids.index("N1"), ids
 
@@ -109,7 +136,7 @@ def test_tier_markers():
 def test_running_beats_agent_claim():
     out = _run("RC")
     ids = _ids(out)
-    assert ids.index("W1") < ids.index("I1") < ids.index("RC") and ids[-1] == "RC", ids
+    assert ids[0] == "RC" and ids.index("W1") < ids.index("I1"), ids
     row = _row_for_id(out, "RC")
     assert "🧮" in row and "😈" not in row and GREY not in row
 
