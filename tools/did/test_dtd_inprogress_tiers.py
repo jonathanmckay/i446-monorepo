@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Regression: dtd's in-progress tiers (2026-10-11).
 
-"I want tasks that are in progress to be above the line in dtd": JM's own
-running timer first (🧮, domain color), then agent claims waiting on JM
-(🧮 🕐, domain color), then agent claims mid-turn (spinner + 😈, grey),
-then everything else. A task JM is timing stays tier A even if an agent
+JM's own running timer (🧮, domain color) is the last row; agent claims
+mid-turn (spinner + 😈, grey) then waiting on JM (🧮 🕐, domain color) are
+the first rows (2026-10-13), everything else between. A task JM is timing stays tier A even if an agent
 also holds it.
 
 Runs the real list-gen payload with HOME pointed at a temp dir whose
@@ -71,14 +70,21 @@ def _ids(out: str) -> list[str]:
     return [l.rsplit("\t", 1)[-1] for l in out.splitlines() if "\t" in l]
 
 
-def test_tiers_order_running_then_waiting_then_working():
-    # Active rows sit at the BOTTOM: the footer shows them above the line
-    # (2026-10-11), the list only keeps them searchable/actionable.
+def test_tiers_order_claims_top_running_bottom():
+    # 2026-10-13: agent claims sit at the TOP (working above waiting); JM's
+    # running timer stays the LAST row for the --cycle up-wrap.
     out = _run("R1")
     ids = _ids(out)
-    assert set(ids[:2]) == {"N1", "N2"}, ids
-    # Printed in reverse footer order, so the running task is the LAST row.
-    assert ids[2:][::-1] in (["R1", "I1", "W1", "RC"], ["R1", "I1", "RC", "W1"]), ids
+    assert set(ids[:2]) == {"W1", "RC"} and ids[2] == "I1", ids
+    assert set(ids[3:5]) == {"N1", "N2"} and ids[-1] == "R1", ids
+
+
+def test_ai_claimed_task_goes_to_top_not_bottom():
+    """2026-10-13 bug: "when ai /d's a task, it should go to the top not the
+    bottom of the list". A freshly /d'd task is a working claim."""
+    ids = _ids(_run("R1"))
+    assert ids[0] in ("W1", "RC"), ids
+    assert ids.index("I1") < ids.index("N1"), ids
 
 
 def test_up_from_top_task_wraps_to_running_task():
@@ -103,7 +109,7 @@ def test_tier_markers():
 def test_running_beats_agent_claim():
     out = _run("RC")
     ids = _ids(out)
-    assert ids.index("RC") > ids.index("I1") > ids.index("W1"), ids
+    assert ids.index("W1") < ids.index("I1") < ids.index("RC") and ids[-1] == "RC", ids
     row = _row_for_id(out, "RC")
     assert "🧮" in row and "😈" not in row and GREY not in row
 

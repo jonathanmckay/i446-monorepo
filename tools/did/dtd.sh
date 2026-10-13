@@ -1877,7 +1877,7 @@ try:
 except Exception:
     pass
 AGENT_GREY = '\x1b[38;2;110;110;110m'
-# Claimed tasks sort to the bottom (the footer shows them above the line); a
+# Claimed tasks sort to the TOP of the list (2026-10-13); a
 # working one carries Claude's own spinner
 # glyph, advanced on every reload (the watcher reloads twice a second while
 # any claim is working), so the row itself moves.
@@ -2164,8 +2164,8 @@ for t in unique:
         is_running = str(t.get('id', '')) == running_id
     else:
         is_running = bool(running_clean and clean == running_clean)
-    # In-progress tiers (2026-10-11), in this order at the BOTTOM of the list;
-    # dtd-ticker.py mirrors them in the footer, above the line:
+    # In-progress tiers (2026-10-11). B and C print at the TOP of the list,
+    # A (JM's timer) at the bottom; see the print loop below:
     #   A  JM's own running timer: 🧮 only, domain color (the one he's finishing)
     #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
     #   C  agent claim working: spinner + 😈, grey
@@ -2208,14 +2208,15 @@ for t in unique:
     else:
         normal_lines.append(f'{body}{sfx}')
 
-# Active rows (tiers A-C) print LAST (2026-10-11), in REVERSE tier order so
-# that, with fzf's --cycle, ↑ from the top task wraps straight to JM's running
-# task, and each further ↑ walks to the waiting, then working, agent claims
-# (2026-10-12: press up from the top task, land on the current task). The
-# footer line that mirrored them is gone (2026-10-12); the footer is now the
-# plain dtd / N done / N left header.
-_active = (running_lines + claimed_lines + working_lines)[::-1]
-for l in normal_lines + skipped_lines + _active:
+# Agent claims (tiers B-C) print FIRST (2026-10-13: a task an AI /d's goes to
+# the top, not the bottom), working above waiting. JM's own running timer
+# (tier A) still prints LAST so that, with fzf's --cycle, ↑ from the top row
+# wraps straight to it (2026-10-12: press up from the top task, land on the
+# current task). The footer line that mirrored them is gone (2026-10-12); the
+# footer is now the plain dtd / N done / N left header.
+_claims = working_lines + claimed_lines
+_active = running_lines
+for l in _claims + normal_lines + skipped_lines + _active:
     print(l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
 # order, written only when that order changes, so the report can tell what
@@ -2223,7 +2224,7 @@ for l in normal_lines + skipped_lines + _active:
 try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
-        _order = [l.rsplit(chr(9), 1)[-1] for l in normal_lines + skipped_lines + _active]
+        _order = [l.rsplit(chr(9), 1)[-1] for l in _claims + normal_lines + skipped_lines + _active]
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:

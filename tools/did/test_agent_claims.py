@@ -131,8 +131,8 @@ def test_terminal_dtd_greys_claimed_task(tmp_path):
     bravo = next(l for l in r.stdout.splitlines() if "bravo" in l)
     assert "😈" in alpha and "\x1b[38;2;110;110;110m" in alpha
     assert "😈" not in bravo
-    # claimed rows sit below the rest: the footer shows them above the line
-    assert r.stdout.index("bravo") < r.stdout.index("alpha")
+    # claimed rows sit at the top of the list (2026-10-13)
+    assert r.stdout.index("alpha") < r.stdout.index("bravo")
 
 
 # ── /d fast path (2026-10-05): the UserPromptSubmit hook claims before the
