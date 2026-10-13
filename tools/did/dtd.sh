@@ -12,6 +12,16 @@
 # latency to fzf startup.
 ( bash "$HOME/i446-monorepo/scripts/term-color.sh" reset 2>/dev/null ) &
 
+# UTF-8 locale guard (bug 2026-10-13): dtd runs on ix inside a tmux server
+# whose environment has no LANG, so zsh treated input as bytes and the edit
+# screen's vared showed a typed 中 as "\xe4<0088><0086>". Exported, so every
+# generated script and python child inherits it.
+if [[ "${LC_ALL:-${LC_CTYPE:-$LANG}}" != *[Uu][Tt][Ff]-8* && "${LC_ALL:-${LC_CTYPE:-$LANG}}" != *[Uu][Tt][Ff]8* ]]; then
+  export LANG=en_US.UTF-8 LC_CTYPE=en_US.UTF-8
+  unset LC_ALL
+fi
+# END UTF-8 locale guard
+
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
