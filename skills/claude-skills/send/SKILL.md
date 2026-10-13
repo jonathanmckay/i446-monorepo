@@ -9,6 +9,8 @@ user-invocable: true
 Send a proactive message to someone. Supports Teams, Outlook email, Gmail, iMessage, and Slack.
 
 ## Response Style
+Bound by `~/i446-monorepo/tools/ibx/PRINCIPLES.md` Part 1: this is the only send path, user-invoked only; never called by cron, watchers, or triage. Any AI-drafted portion is shown and approved before sending.
+
 
 **Minimal output.** After sending, confirm in one line. Examples:
 - `Sent via Teams to Luke Hoban`
