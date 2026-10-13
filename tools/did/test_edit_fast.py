@@ -331,3 +331,35 @@ def test_line_submit_one_call(tmp_path, monkeypatch):
                                       "--line", "write memo (see doc) @i9 [40] // new notes"])
     assert mod.main() == 0
     assert calls == [{"content": "write memo (see doc) (30) [40] {5}", "description": "new notes"}]
+
+
+# ── rename on a host with no Haiku (2026-10-13: ix had no API key) ──
+
+def _long_task():
+    return {"id": "t1", "content": "call the property manager about the water heater (30) [20]", "labels": ["m5x2"]}
+
+
+def _rename(tmp_path, monkeypatch, haiku_result):
+    mod = _load()
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({"tasks": [_long_task()]}))
+    monkeypatch.setattr(mod._df, "_api", lambda *a: None)
+    monkeypatch.setattr(mod, "_description", lambda tid: "")
+    monkeypatch.setattr(mod._short, "shorten_tasks", lambda tasks, **k: haiku_result)
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cache), "--line",
+                                      "call the property manager about the broken water heater in unit 4 @m5x2 [20]"])
+    return mod, cache
+
+
+def test_rename_warns_when_haiku_short_name_fails(tmp_path, monkeypatch, capsys):
+    mod, cache = _rename(tmp_path, monkeypatch, {})
+    assert mod.main() == 0
+    assert "⚠ no short name" in capsys.readouterr().out
+    assert "short" not in json.loads(cache.read_text())["tasks"][0]
+
+
+def test_rename_uses_haiku_short_name(tmp_path, monkeypatch, capsys):
+    mod, cache = _rename(tmp_path, monkeypatch, {"t1": "PM: water heater unit 4 (30) [20]"})
+    assert mod.main() == 0
+    assert "⚠" not in capsys.readouterr().out
+    assert json.loads(cache.read_text())["tasks"][0]["short"] == "PM: water heater unit 4 (30) [20]"

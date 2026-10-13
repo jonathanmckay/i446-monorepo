@@ -68,7 +68,7 @@ def set_name(content: str, new_name: str) -> str:
     return (base + (" " + tail if tail else "")).strip()
 
 
-def _resync_short(cache: dict, task_id: str, new_content: str) -> None:
+def _resync_short(cache: dict, task_id: str, new_content: str) -> bool:
     """Drop the cached Haiku `short` name for the OLD content, then
     regenerate one for the NEW content immediately (via the same
     shorten_tasks() the periodic cache refresh uses) if it's long enough to
@@ -76,7 +76,12 @@ def _resync_short(cache: dict, task_id: str, new_content: str) -> None:
     fzf's raw middle-truncation — eating the trailing (N)/[N] estimate —
     until whenever the next full --refresh-cache happened to run (bug
     2026-07-28: an edited task stayed unshortened, unlike every other long
-    task, which gets shortened by that same refresh pass)."""
+    task, which gets shortened by that same refresh pass).
+
+    Returns False when the new title needs a short name and none came back
+    (2026-10-13: dtd runs on ix, which had no ANTHROPIC_API_KEY, so every
+    rename there silently kept its over-long title). The caller says so in
+    the dtd header instead of failing quietly."""
     short = _short.shorten_tasks([{"id": task_id, "content": new_content}]).get(task_id)
     for v in cache.values():
         if isinstance(v, list):
@@ -86,6 +91,8 @@ def _resync_short(cache: dict, task_id: str, new_content: str) -> None:
                         t["short"] = short
                     else:
                         t.pop("short", None)
+    needs = len(_short.split_estimates(new_content)[0]) > _short.PROSE_CAP
+    return bool(short) or not needs
 
 
 def parse_edits(edit_string: str) -> tuple[str | None, str | None, int | None]:
@@ -342,11 +349,13 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
         # that skipped this kept displaying the OLD [N] until the next full
         # refresh (bug 2026-07-31: "[30]→[10] didn't reflect in render").
         _pf.patch_cache(cache, task["id"], new_content)
-        _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
+        short_ok = _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
         if new_name is not None:
             summary.append(f'name→"{new_name}"')
         if points is not None:
             summary.append(f"[{points}]")
+        if short_ok is False:
+            summary.append("⚠ no short name (Haiku call failed; check ANTHROPIC_API_KEY)")
 
     # 2. domain (labels) — separate Todoist call
     if domain is not None:
