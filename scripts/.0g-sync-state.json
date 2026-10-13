@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-13T06:00:02.556977-07:00"
+  "tasks": {
+    "550 @i9": {
+      "todoist_id": "6hjwGgGgjpC2xv72",
+      "minutes": 50
+    },
+    "document what to do about m5x2": {
+      "todoist_id": "6hjwGgJX5pW2C2WR",
+      "minutes": 20
+    },
+    "check in on taxes": {
+      "todoist_id": "6hjwGgQ7R279FR32",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-10-13T08:00:07.320523-07:00"
 }
