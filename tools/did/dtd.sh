@@ -12,6 +12,16 @@
 # latency to fzf startup.
 ( bash "$HOME/i446-monorepo/scripts/term-color.sh" reset 2>/dev/null ) &
 
+# UTF-8 locale guard (bug 2026-10-13): dtd runs on ix inside a tmux server
+# whose environment has no LANG, so zsh treated input as bytes and the edit
+# screen's vared showed a typed 中 as "\xe4<0088><0086>". Exported, so every
+# generated script and python child inherits it.
+if [[ "${LC_ALL:-${LC_CTYPE:-$LANG}}" != *[Uu][Tt][Ff]-8* && "${LC_ALL:-${LC_CTYPE:-$LANG}}" != *[Uu][Tt][Ff]8* ]]; then
+  export LANG=en_US.UTF-8 LC_CTYPE=en_US.UTF-8
+  unset LC_ALL
+fi
+# END UTF-8 locale guard
+
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
@@ -1511,24 +1521,20 @@ printf "\033[2J\033[H" > /dev/tty
 # ctrl-o and ctrl-g both open this screen (2026-10-11: "ideally ctrl+g and
 # ctrl+o go to the same place, and show the different fields that I could add
 # along with all the context"). The full detail (title, project/labels/due,
-# description, comments, links) sits on top; below it one labeled prompt per
-# field, each naming where its value is written. Enter keeps a field as-is.
+# description, comments, links) sits on top; below it a single prefilled
+# edit line (see below).
 python3 "$DTD_DETAIL" "\$1" > /dev/tty 2>/dev/null
-cur_name="" cur_domain="" cur_points="" cur_desc="" domains=""
+# One line, not one prompt per field (2026-10-13: "it shouldn't ask for
+# things in multiple questions when I edit description ... parse what I put
+# in"). Prefilled as  title @domain [N] // description ; edit-fast --line
+# parses it back and applies only what changed.
+cur_line="" domains=""
 eval "\$(python3 "\$EDIT_FAST" --current --id "\$1" "$DTD_CACHE_FILE" 2>/dev/null)"
-printf "\n\033[2m──────── edit · Enter keeps a field · ctrl-u clears it · blank title cancels ────────\033[0m\n" > /dev/tty
-_field() {  # \$1=var name  \$2=label  \$3=where the value goes
-  printf "\033[1m%s\033[0m \033[2m→ %s\033[0m\n" "\$2" "\$3" > /dev/tty
-  vared -p "  > " "\$1" < /dev/tty > /dev/tty
-}
-f_name="\${cur_name:-\$clean}" f_domain="\$cur_domain" f_points="\$cur_points" f_desc="\$cur_desc"
-_field f_name "Title" "Todoist task name; (time) and {bonus} tags are kept"
-if [[ -n "\${f_name// /}" ]]; then
-  _field f_domain "Domain" "Todoist label: \$domains"
-  _field f_points "Points" "the [N] 分 in the title"
-  _field f_desc "Description" "Todoist description (notes, links; ctrl-v ctrl-j for a new line, empty clears it)"
-fi
-edits="\$f_name"
+printf "\n\033[2m──────── edit · title @domain [N] // description · blank line cancels ────────\033[0m\n" > /dev/tty
+printf "\033[2m(time) and {bonus} tags are kept · ctrl-v ctrl-j for a new line · a bare // clears the description\ndomains: %s\033[0m\n" "\$domains" > /dev/tty
+f_line="\${cur_line:-\$clean}"
+vared -p "> " f_line < /dev/tty > /dev/tty
+edits="\$f_line"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the prompt above
 # — leaked SGR motion sequences type themselves into fzf's query as literal
@@ -1543,7 +1549,7 @@ if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
   exit 0
 fi
-out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --name "\$f_name" --domain "\$f_domain" --points "\$f_points" --desc "\$f_desc" 2>/dev/null)
+out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --line "\$f_line" 2>/dev/null)
 echo "\${out:-✗ edit failed}" > "\$HDR"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
@@ -2210,10 +2216,11 @@ for t in unique:
 
 # Agent claims (tiers B-C) print FIRST (2026-10-13: a task an AI /d's goes to
 # the top, not the bottom), working above waiting. JM's own running timer
-# (tier A) still prints LAST so that, with fzf's --cycle, ↑ from the top row
-# wraps straight to it (2026-10-12: press up from the top task, land on the
-# current task). The footer line that mirrored them is gone (2026-10-12); the
-# footer is now the plain dtd / N done / N left header.
+# (tier A) still prints LAST. It went there for fzf's --cycle up-wrap
+# (2026-10-12), but --cycle is gone (2026-10-13: scrolling must not wrap
+# around), so ↑ on the top row now stops there. The footer line that
+# mirrored them is gone (2026-10-12); the footer is now the plain dtd /
+# N done / N left header.
 _claims = working_lines + claimed_lines
 _active = running_lines
 for l in _claims + normal_lines + skipped_lines + _active:
@@ -3330,7 +3337,7 @@ while true; do
   # which stopped the ^[[A^[[B flood but also killed scrolling — bugs 07-14/15.)
   printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
   rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.days"   # never relaunch into a stale schedule screen
-  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi --cycle \
+  fzf_output=$(eval "$DTD_LIST_CMD" | fzf --prompt="> " --layout=reverse-list --no-sort --ansi \
       --info=inline-right \
       --input-border=horizontal \
       --listen --header-first \
