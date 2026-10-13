@@ -25,6 +25,7 @@ fi
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
+DTD_OPEN_LINK="$HOME/i446-monorepo/tools/did/dtd-open-link.py"   # ctrl-l: task link -> its Chrome profile
 # Task detail (2026-10-06): full title, description, comments, links, fetched
 # live per task (the snapshot cache carries none of these). Shown at the top of
 # the ctrl-o/ctrl-g edit screen (one screen for both since 2026-10-11).
@@ -2163,6 +2164,23 @@ for t in unique:
         link_text = _mdlink.group(1) or '(link)'
         display = re.sub(r'\[([^\]]*)\]\((https?://[^)\s]+)\)',
                          lambda mm: mm.group(1) or '(link)', display)
+    # Every task with a link shows (link) (2026-10-13), opened with ctrl-l in
+    # the task's Chrome profile (dtd-open-link.py). Bare URLs collapse to
+    # (link) too, and a link the Haiku short name dropped, or a named
+    # markdown link, still gets a (link) ahead of the trailing estimates.
+    _bare = re.search(r'https?://[^\s)\]]+', display)
+    if _bare:
+        link_url = link_url or _bare.group(0)
+        display = re.sub(r'https?://[^\s)\]]+', '(link)', display)
+    if not link_url:
+        _rl = re.search(r'https?://[^\s)\]]+', raw)
+        link_url = _rl.group(0) if _rl else None
+    if link_url:
+        link_text = '(link)'
+        if '(link)' not in display:
+            _em = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
+            _cut = _em.start() if _em else len(display)
+            display = display[:_cut].rstrip() + ' (link)' + display[_cut:]
 
     # Middle-truncate if needed (fallback; short names usually fit). cols - 7
     # keeps the whole row ~5 cols thinner, matching the estimate margin above.
@@ -3039,7 +3057,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -3393,6 +3411,7 @@ while true; do
       --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-l:execute-silent(python3 $DTD_OPEN_LINK {2} $DTD_CACHE_FILE $DTD_HDR)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
   _fzf_rc=$?
