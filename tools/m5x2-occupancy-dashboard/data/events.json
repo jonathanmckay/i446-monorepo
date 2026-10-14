@@ -7778,5 +7778,55 @@
     "unit": "B49",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-14",
+    "effective": "2026-10-14",
+    "kind": "movein",
+    "unit_id": "412",
+    "prop": "ps17",
+    "unit": "A10",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-14",
+    "effective": "2026-11-14",
+    "kind": "leased",
+    "unit_id": "1446",
+    "prop": "c702",
+    "unit": "K303",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-14",
+    "effective": "2026-12-18",
+    "kind": "leased",
+    "unit_id": "1164",
+    "prop": "tc68",
+    "unit": "A15",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-14",
+    "effective": "2026-10-14",
+    "kind": "movein",
+    "unit_id": "964",
+    "prop": "kn47 K1",
+    "unit": "L105",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-14",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "218",
+    "prop": "p705",
+    "unit": "02",
+    "tenant": null,
+    "baseline": false
   }
 ]

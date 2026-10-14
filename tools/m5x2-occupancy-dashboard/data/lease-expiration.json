@@ -580,7 +580,7 @@
     "property_name": "c702",
     "unit": "J201",
     "tenant_name": "Abdalla, Hassan",
-    "status": "Pending",
+    "status": "Eligible",
     "lease_sign_date": null,
     "move_in": "2024-12-04",
     "renewal_start_date": null,
@@ -622,18 +622,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "925.00"
-  },
-  {
-    "unit_id": 218,
-    "property_name": "p705",
-    "unit": "02",
-    "tenant_name": "Brunke, Madison D.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-10-10",
-    "move_in": "2025-10-10",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1340.00"
   },
   {
     "unit_id": 369,
@@ -1756,7 +1744,7 @@
     "property_name": "o155-Oak",
     "unit": "C6",
     "tenant_name": "Hanson, Edward A.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-05",
     "move_in": "2025-12-31",
     "renewal_start_date": null,
