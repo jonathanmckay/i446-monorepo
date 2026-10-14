@@ -1395,7 +1395,7 @@ def create_block_rituals(dry_run: bool = False) -> None:
         if tag in open_tags:
             log(f"rituals: {tag} already open — skip")
             continue
-        content = f"{marker} {tag}"
+        content = f"{marker} {r.get('card') or tag}"
         if dry_run:
             log(f"[DRY RUN] create card {content!r} @{label}")
             continue
