@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cs: reference Claude Code sessions by title; fork or resume them from anywhere.
 
-  cs ls [query] [--all]        list sessions (title, age, cwd, id); newest first
+  cs ls [query] [--all] [-l]   list sessions (age, title); newest first. -l adds cwd + id
   cs id <query>                print the best-matching session id
   cs fork <query> [-- args]    new session branched from the match (claude --resume ID --fork-session)
   cs open <query> [-- args]    resume the match in place (same session id)
@@ -11,7 +11,9 @@ Options: --from ix   resolve on another host and copy the transcript here first
 
 Titles come from the lines Claude Code itself writes into each session jsonl:
 {"type":"custom-title"} (/rename or -n) beats {"type":"ai-title"} (auto) beats the
-first prompt. Index cache: ~/.local/state/jm/session-index.json (incremental by mtime).
+first prompt. A first prompt that was a slash command renders as "/cmd args" (the raw
+<command-message> wrapper used to be skipped, leaving ~1/3 of sessions titled by id).
+Index cache: ~/.local/state/jm/session-index.json (incremental by mtime; SCHEMA bump rescans).
 """
 import json, os, re, subprocess, sys, time
 from pathlib import Path
@@ -20,6 +22,27 @@ PROJECTS = Path.home() / '.claude' / 'projects'
 STATE = Path.home() / '.local' / 'state' / 'jm'
 INDEX = STATE / 'session-index.json'
 TITLE_RE = re.compile(rb'"type":"(custom-title|ai-title)","(?:customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"')
+SCHEMA = 2                      # bump when scan_one's output changes; stale records get rescanned
+CMD_RE = re.compile(r'<command-name>\s*/?([^<]*?)\s*</command-name>(?:.*?<command-args>(.*?)</command-args>)?', re.S)
+TAG_RE = re.compile(r'<(system-reminder|command-message|command-name|command-args|local-command-stdout|local-command-caveat|pasted_content[^>]*)>.*?</\1>', re.S)
+SKIP_PREFIXES = ('Base directory for this skill', '<local-command')
+
+
+def prompt_text(o):
+    """Human-readable text of a user record, or '' if it has none (tool results, skill bodies, ...)."""
+    c = (o.get('message') or {}).get('content')
+    if isinstance(c, list):
+        c = ' '.join(b.get('text', '') for b in c if isinstance(b, dict) and b.get('type') == 'text')
+    if not isinstance(c, str) or not c.strip():
+        return ''
+    if c.startswith(SKIP_PREFIXES):
+        return ''
+    m = CMD_RE.search(c)
+    if m:
+        c = '/' + m.group(1) + (' ' + m.group(2) if m.group(2) else '')
+    else:
+        c = TAG_RE.sub('', c)
+    return ' '.join(c.split())[:80]
 
 
 def session_files():
@@ -31,7 +54,7 @@ def session_files():
 
 
 def scan_one(f: Path):
-    rec = {'mtime': f.stat().st_mtime, 'id': f.stem, 'custom': '', 'ai': '', 'cwd': '', 'prompt': '',
+    rec = {'v': SCHEMA, 'mtime': f.stat().st_mtime, 'id': f.stem, 'custom': '', 'ai': '', 'cwd': '', 'prompt': '',
            'proj': f.parent.name}
     try:
         out = subprocess.run(['grep', '-ao', '-E', r'"type":"(custom-title|ai-title)","(customTitle|aiTitle)":"([^"\\]|\\.)*"', str(f)],
@@ -41,7 +64,7 @@ def scan_one(f: Path):
             rec['custom' if m.group(1) == b'custom-title' else 'ai'] = val
         with open(f, 'rb') as fh:
             for i, line in enumerate(fh):
-                if i > 60:
+                if i > 150:
                     break
                 try:
                     o = json.loads(line)
@@ -50,9 +73,9 @@ def scan_one(f: Path):
                 if not rec['cwd'] and o.get('cwd'):
                     rec['cwd'] = o['cwd']
                 if not rec['prompt'] and o.get('type') == 'user' and not o.get('isSidechain'):
-                    c = (o.get('message') or {}).get('content')
-                    if isinstance(c, str) and not c.startswith('<'):
-                        rec['prompt'] = ' '.join(c.split())[:80]
+                    rec['prompt'] = prompt_text(o)
+                if rec['prompt'] and rec['cwd']:
+                    break
     except Exception:
         pass
     return rec
@@ -73,7 +96,7 @@ def load_index(full=False):
             mt = f.stat().st_mtime
         except FileNotFoundError:
             continue
-        if p not in idx or abs(idx[p].get('mtime', 0) - mt) > 1e-6:
+        if p not in idx or idx[p].get('v') != SCHEMA or abs(idx[p].get('mtime', 0) - mt) > 1e-6:
             idx[p] = scan_one(f)
             changed = True
     for p in list(idx):
@@ -112,15 +135,18 @@ def rank(idx, query):
     return hits
 
 
-def cmd_ls(idx, query, show_all):
+def cmd_ls(idx, query, show_all, long=False):
     rows = rank(idx, query) if query else sorted(((0, r['mtime'], p, r) for p, r in idx.items()), key=lambda h: h[1], reverse=True)
     if not show_all and not query:
         rows = rows[:40]
     for _, mt, p, r in rows:
         t = title_of(r)
         mark = '✎' if r['custom'] else ' '
-        cwd = r['cwd'].replace(str(Path.home()), '~')
-        print(f"{age(mt):>4}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}")
+        if long:
+            cwd = r['cwd'].replace(str(Path.home()), '~')
+            print(f"{age(mt):>4}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}")
+        else:
+            print(f"{age(mt):>4}  {mark} {t[:72]}")
 
 
 def resolve(idx, query):
@@ -150,6 +176,7 @@ def remote_fetch(host, query):
 def main(argv):
     full = '--full' in argv; argv = [a for a in argv if a != '--full']
     show_all = '--all' in argv; argv = [a for a in argv if a != '--all']
+    long = any(a in ('-l', '--long') for a in argv); argv = [a for a in argv if a not in ('-l', '--long')]
     do_cd = '--cd' in argv; argv = [a for a in argv if a != '--cd']
     want_path = '--path' in argv; argv = [a for a in argv if a != '--path']
     host = None
@@ -166,7 +193,7 @@ def main(argv):
         n = len(load_index(full=True)); print(f'indexed {n} sessions'); return
     idx = load_index(full)
     if cmd == 'ls':
-        return cmd_ls(idx, query, show_all)
+        return cmd_ls(idx, query, show_all, long)
     if not query:
         sys.exit(f'cs {cmd}: need a title query')
     r = remote_fetch(host, query) if host else resolve(idx, query)
