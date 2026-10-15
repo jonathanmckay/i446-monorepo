@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """cs: reference Claude Code sessions by title; fork or resume them from anywhere.
 
-  cs ls [query] [--all] [-l]   list sessions (age, mark, title, ▸ claimed tasks), newest first.
+  cs ls [query] [--all] [-l]   list sessions (#, age, mark, title, ▸ claimed tasks), newest first.
+                               #: the session's number in the current cmux workspace (Claude panes
+                               counted in reading order, top-left to bottom-right); blank = not open.
                                mark: ✎ title you set, 😈 title the AI wrote, blank = first prompt.
                                Bare ls = last 7 days; a query searches all history; --all lifts
                                the window. -l adds cwd + id
@@ -15,6 +17,7 @@ Options: --from ix   resolve on another host and copy the transcript here first
          --pick      always open the fzf picker, even when the query is unambiguous
          --no-pick   never open fzf; take the best fuzzy match (for scripts)
 
+A bare number (`cs fork 3`) means the Claude pane with that cmux number.
 Matching is fuzzy: words in any order, each word may be a substring, an fzf-style
 in-order subsequence, or a close misspelling (difflib). Titles outrank first prompts;
 ties go to the newest session. With no query, or when the top two matches score the
@@ -224,7 +227,8 @@ def pick(idx, query='', rows=None):
         rows = rank(idx, query) if query else sorted(((0, r['mtime'], p, r) for p, r in idx.items()), key=lambda h: h[1], reverse=True)
     if not rows:
         return None
-    lines = [f"{age(mt):>4}  {mark_of(r)} {title_of(r)[:60]:<60}  {claims_of(r)[:40]:<40}  {r['id']}" for _, mt, p, r in rows]
+    nums = cmux_numbers()
+    lines = [f"{(str(nums[r['id']]) if r['id'] in nums else ''):>2} {age(mt):>4}  {mark_of(r)} {title_of(r)[:60]:<60}  {claims_of(r)[:40]:<40}  {r['id']}" for _, mt, p, r in rows]
     out = subprocess.run(['fzf', '--no-sort', '--layout=reverse', '--height=50%', '--with-nth=1..-2',
                           '--prompt=session> ', '--query', query],
                          input='\n'.join(lines), capture_output=True, text=True)
@@ -235,6 +239,57 @@ def pick(idx, query='', rows=None):
 
 
 LS_WINDOW = 7 * 86400
+
+
+def _cmux(method):
+    try:
+        out = subprocess.run(['cmux', 'rpc', method, '{}'], capture_output=True, text=True, timeout=2,
+                             env={**os.environ, 'CMUX_QUIET': '1'}).stdout
+        return json.loads(out)
+    except Exception:
+        return {}
+
+
+def cmux_numbers():
+    """{session_id: n} for the Claude sessions open in the current cmux workspace, numbered in
+    reading order of their panes (top-left to bottom-right). Session ids come from the live
+    claude processes (CMUX_SURFACE_ID in env + --session-id/--resume in argv); cmux's own
+    resume_binding.checkpoint_id fills in any surface without a visible process. {} outside cmux."""
+    if not shutil.which('cmux') or not os.environ.get('CMUX_SOCKET_PATH', '') and not Path.home().joinpath('.local/state/cmux').exists():
+        return {}
+    panes = _cmux('pane.list').get('panes') or []
+    if not panes:
+        return {}
+    surfaces = _cmux('surface.list').get('surfaces') or []
+    sid_of = {}
+    for sf in surfaces:
+        cp = (sf.get('resume_binding') or {}).get('checkpoint_id')
+        if cp and (sf.get('resume_binding') or {}).get('kind', 'claude') == 'claude':
+            sid_of[sf['id']] = cp
+    try:
+        pids = subprocess.run(['pgrep', '-x', 'claude'], capture_output=True, text=True).stdout.split()
+        if pids:
+            ps = subprocess.run(['ps', '-Eww', '-o', 'pid=,command=', '-p', ','.join(pids)],
+                                capture_output=True, text=True).stdout
+            for line in ps.splitlines():
+                m_s = re.search(r'CMUX_SURFACE_ID=([0-9A-Fa-f-]{36})', line)
+                m_i = re.search(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', line)
+                if m_s and m_i:
+                    sid_of[m_s.group(1)] = m_i.group(1)
+    except Exception:
+        pass
+    order = []
+    for pn in panes:
+        f = pn.get('pixel_frame') or {}
+        for sfid in pn.get('surface_ids') or [pn.get('selected_surface_id')]:
+            if sfid in sid_of:
+                order.append((round(f.get('y', 0) / 40), round(f.get('x', 0)), sid_of[sfid]))
+    order.sort()
+    nums, n = {}, 0
+    for _, _, sid in order:
+        if sid not in nums:
+            n += 1; nums[sid] = n
+    return nums
 
 
 def mark_of(r):
@@ -254,18 +309,36 @@ def cmd_ls(idx, query, show_all, long=False):
         cutoff = time.time() - LS_WINDOW
         rows = [h for h in rows if h[1] >= cutoff]
     width = shutil.get_terminal_size((160, 40)).columns
+    nums = cmux_numbers()
+    if not query:
+        known = {r['id'] for _, _, _, r in rows}
+        for sid, n in nums.items():          # open in cmux but nothing typed yet: no transcript to index
+            if sid not in known and not any(v['id'] == sid for v in idx.values()):
+                rows.insert(0, (0, time.time(), '', {'id': sid, 'custom': '', 'ai': '', 'prompt': '(new session, nothing typed yet)',
+                                                    'cwd': '', 'claims': []}))
     for _, mt, p, r in rows:
         t = title_of(r)
         mark = mark_of(r)
+        num = f"{nums[r['id']]:>2}" if r['id'] in nums else '  '
         if long:
             cwd = r['cwd'].replace(str(Path.home()), '~')
-            line = f"{age(mt):>4}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}  {claims_of(r)}"
+            line = f"{num} {age(mt):>4}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}  {claims_of(r)}"
         else:
-            line = f"{age(mt):>4}  {mark} {t[:60]:<60}  {claims_of(r)}"
+            line = f"{num} {age(mt):>4}  {mark} {t[:60]:<60}  {claims_of(r)}"
         print(line.rstrip()[:width])
 
 
 def resolve(idx, query, force_pick=False, no_pick=False):
+    if query.strip().isdigit() and len(query.strip()) <= 2:
+        n = int(query)
+        for sid, k in cmux_numbers().items():
+            if k == n:
+                for r in idx.values():
+                    if r['id'] == sid:
+                        return r
+        if n in cmux_numbers().values():
+            sys.exit(f'cs: pane {n} is a new Claude session with no transcript yet; nothing to fork or resume')
+        sys.exit(f'cs: no Claude pane numbered {n} in this cmux workspace (see `cs ls`)')
     if force_pick or not query:
         r = pick(idx, query)
         if r is None:
