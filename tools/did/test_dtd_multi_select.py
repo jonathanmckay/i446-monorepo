@@ -30,10 +30,24 @@ def test_batch_bindings_use_plus_placeholder_and_clear_marks():
     # ctrl-v/k, prefixed with DTD_PICK_MODE=days so day rows list first.
     for key, script in (("ctrl-d", "DTD_PICK_MODE=days $DTD_BLOCKARM"), ("ctrl-x", "$DTD_DELETE"),
                         ("ctrl-k", "$DTD_BLOCKARM"), ("ctrl-v", "$DTD_BLOCKARM")):
-        m = re.search(rf'--bind "{key}:execute(?:-silent)?\(({re.escape(script)}[^)]*)\)([^"]*)"', SRC)
+        m = re.search(rf'--bind "{key}:(?:select\+)?execute(?:-silent)?\(({re.escape(script)}[^)]*)\)([^"]*)"', SRC)
         assert m, f"{key} binding not found"
         assert "{+2}" in m.group(1), f"{key} must pass all marked ids via {{+2}}"
         assert "deselect-all" in m.group(2), f"{key} must clear marks after acting"
+
+
+def test_batch_bindings_select_cursor_row_before_acting():
+    """2026-10-15: with marks present, fzf's {+} is ONLY the marked rows; the
+    highlighted (cursor) row is left out unless it was toggled too. JM expects
+    the row under the cursor to count as well, so every {+2} binding runs
+    fzf's `select` (idempotent, cursor stays put) before the action. With no
+    marks the result is unchanged: {+2} already fell back to the cursor row."""
+    for key in ("ctrl-d", "ctrl-x", "ctrl-k", "ctrl-v", "alt-up"):
+        m = re.search(rf'--bind "{key}:([^"]*)"', SRC)
+        assert m, f"{key} binding not found"
+        assert "{+2}" in m.group(1), f"{key} is not a batch binding"
+        assert m.group(1).startswith("select+"), \
+            f"{key} must `select` the cursor row so it joins the {{+2}} batch"
 
 
 def test_single_target_bindings_keep_cursor_only_but_clear_marks():

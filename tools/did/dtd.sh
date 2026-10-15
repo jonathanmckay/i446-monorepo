@@ -3404,13 +3404,13 @@ while true; do
       --bind "ctrl-c:transform($DTD_BACK {q})" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-x:execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-x:select+execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "alt-up:execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-up:select+execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-k:execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-k:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-l:execute-silent(python3 $DTD_OPEN_LINK {2} $DTD_CACHE_FILE $DTD_HDR)+transform-header($DTD_HDRGEN)" \
