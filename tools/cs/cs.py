@@ -2,8 +2,8 @@
 """cs: reference Claude Code sessions by title; fork or resume them from anywhere.
 
   cs ls [query] [--all] [-l]   list sessions (#, age, mark, title, ▸ claimed tasks), newest first.
-                               #: the session's number in the current cmux workspace (Claude panes
-                               counted in reading order, top-left to bottom-right); blank = not open.
+                               #: the session's number in the current cmux workspace (dtd 1, janus 2,
+                               Claude panes 3+ in reading order, top-left to bottom-right); blank = not open.
                                mark: ✎ title you set, 😈 title the AI wrote, blank = first prompt.
                                Bare ls = last 7 days; a query searches all history; --all lifts
                                the window. -l adds cwd + id
@@ -15,15 +15,15 @@
   cs index                     force a full rescan
   cs order [name ...|--clear] pin this workspace's pane numbering (`cs order taxes claude janus`;
                                names are fuzzy or current numbers; unnamed panes follow by position)
-  cs retitle                   rename every numbered Claude pane's cmux tab to 'N · title' (+ dtd 1, janus 2)
+  cs retitle                   rename every pane's cmux tab to 'N · title' (dtd 1, janus 2, Claude 3+)
                                (the session-title hook calls this on start/prompt/stop)
 Options: --from ix   resolve on another host and copy the transcript here first
          --cd        chdir to the session's original cwd before launching
          --pick      always open the fzf picker, even when the query is unambiguous
          --no-pick   never open fzf; take the best fuzzy match (for scripts)
 
-A bare number (`cs fork 3`) means the Claude pane with that cmux number. Numbers follow
-reading order unless `cs order` pinned them (~/.local/state/jm/pane-order.json, per workspace).
+A bare number (`cs fork 3`) means the Claude pane with that cmux number (3 is the first Claude
+pane; 1 and 2 are dtd and janus). Numbers follow reading order unless `cs order` pinned them (~/.local/state/jm/pane-order.json, per workspace).
 Matching is fuzzy: words in any order, each word may be a substring, an fzf-style
 in-order subsequence, or a close misspelling (difflib). Titles outrank first prompts;
 ties go to the newest session. With no query, or when the top two matches score the
@@ -257,9 +257,14 @@ def _cmux(method):
         return {}
 
 
+TOOL_PANES = ('dtd', 'janus')   # non-Claude TUI panes, numbered 1 and 2 in this fixed order
+CLAUDE_FIRST = len(TOOL_PANES) + 1   # Claude panes continue the same series: 3, 4, ...
+
+
 def cmux_panes():
     """[(n, session_id, surface_id, surface_title)] for the Claude sessions open in the current
-    cmux workspace, numbered in reading order of their panes (top-left to bottom-right). Session
+    cmux workspace, numbered from CLAUDE_FIRST (3) in reading order of their panes (top-left to
+    bottom-right); 1 and 2 belong to the dtd and janus TUI panes (TOOL_PANES). Session
     ids come from the live claude processes (CMUX_SURFACE_ID in env + --session-id/--resume in
     argv); cmux's own resume_binding.checkpoint_id fills in any surface without a visible
     process. [] outside cmux."""
@@ -289,11 +294,12 @@ def cmux_panes():
                     sid_of[m_s.group(1)] = m_i.group(1)
     except Exception:
         pass
+    skip = os.environ.get('CS_EXCLUDE_SID', '')   # set by the SessionEnd hook: the exiting session is still in ps
     order = []
     for pn in panes:
         f = pn.get('pixel_frame') or {}
         for sfid in pn.get('surface_ids') or [pn.get('selected_surface_id')]:
-            if sfid in sid_of:
+            if sfid in sid_of and sid_of[sfid] != skip:
                 order.append((round(f.get('y', 0) / 40), round(f.get('x', 0)), sid_of[sfid], sfid))
     order.sort()
     pinned = load_order().get(wsid, [])
@@ -301,7 +307,7 @@ def cmux_panes():
     out, seen = [], set()
     for _, _, sid, sfid in order:
         if sid not in seen:
-            seen.add(sid); out.append((len(out) + 1, sid, sfid, stitle.get(sfid, '')))
+            seen.add(sid); out.append((len(out) + CLAUDE_FIRST, sid, sfid, stitle.get(sfid, '')))
     return out
 
 
@@ -374,12 +380,11 @@ def cmux_numbers():
 
 
 NUM_PREFIX_RE = re.compile(r'^\d{1,2} · ')
-TOOL_PANES = ('dtd', 'janus')   # non-Claude TUI panes, numbered 1 and 2 in this fixed order (own series)
 
 
 def cmd_retitle():
-    """Rename every numbered Claude pane in the current cmux workspace to 'N · title', and the
-    dtd/janus TUI panes to '1 · dtd' / '2 · janus' (their own series, matched by tab title). The title
+    """Rename every numbered Claude pane in the current cmux workspace to 'N · title' (N from 3), and
+    the dtd/janus TUI panes to '1 · dtd' / '2 · janus' (matched by tab title). The title
     is the session-title hook's state file (~/.local/state/jm/session-titles/<sid>) when it
     exists, else the pane's current title; an old 'N · ' prefix is stripped first so numbers never
     stack. Prints one 'N<TAB>surface_id<TAB>title' line per pane renamed, so the hook can tell
@@ -455,6 +460,8 @@ def resolve(idx, query, force_pick=False, no_pick=False, title_only=False):
                         return r
         if n in cmux_numbers().values():
             sys.exit(f'cs: pane {n} is a new Claude session with no transcript yet; nothing to fork or resume')
+        if 0 < n < CLAUDE_FIRST:
+            sys.exit(f'cs: pane {n} is {TOOL_PANES[n - 1]}, not a Claude session (Claude panes start at {CLAUDE_FIRST})')
         sys.exit(f'cs: no Claude pane numbered {n} in this cmux workspace (see `cs ls`)')
     if force_pick or not query:
         r = pick(idx, query)
