@@ -140,7 +140,7 @@ def remote_fetch(host, query):
     if out.returncode or not out.stdout.strip():
         sys.exit(f'cs: {host}: {out.stderr.strip() or "no match"}')
     rpath = out.stdout.strip()
-    rel = Path(rpath).relative_to(Path(rpath).parents[2])  # projects/<proj>/<id>.jsonl
+    rel = Path(rpath).relative_to(Path(rpath).parents[1])  # <proj>/<id>.jsonl
     local = PROJECTS / rel
     local.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['scp', '-q', f'{host}:{rpath}', str(local)], check=True)
