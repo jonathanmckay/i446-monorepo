@@ -72,6 +72,11 @@
             "type": "command",
             "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1",
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
+            "async": true
           }
         ]
       }
