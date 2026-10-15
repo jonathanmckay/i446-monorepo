@@ -12,14 +12,17 @@
   cs open [query] [-- args]    resume the match in place (same session id)
   cs pick [query]              interactive fzf picker; prints the chosen id
   cs index                     force a full rescan
-  cs retitle                   rename every numbered Claude pane's cmux tab to 'N · title'
+  cs order [name ...|--clear] pin this workspace's pane numbering (`cs order taxes claude janus`;
+                               names are fuzzy or current numbers; unnamed panes follow by position)
+  cs retitle                   rename every numbered Claude pane's cmux tab to 'N · title' (+ dtd 1, janus 2)
                                (the session-title hook calls this on start/prompt/stop)
 Options: --from ix   resolve on another host and copy the transcript here first
          --cd        chdir to the session's original cwd before launching
          --pick      always open the fzf picker, even when the query is unambiguous
          --no-pick   never open fzf; take the best fuzzy match (for scripts)
 
-A bare number (`cs fork 3`) means the Claude pane with that cmux number.
+A bare number (`cs fork 3`) means the Claude pane with that cmux number. Numbers follow
+reading order unless `cs order` pinned them (~/.local/state/jm/pane-order.json, per workspace).
 Matching is fuzzy: words in any order, each word may be a substring, an fzf-style
 in-order subsequence, or a close misspelling (difflib). Titles outrank first prompts;
 ties go to the newest session. With no query, or when the top two matches score the
@@ -40,6 +43,7 @@ from pathlib import Path
 PROJECTS = Path.home() / '.claude' / 'projects'
 STATE = Path.home() / '.local' / 'state' / 'jm'
 INDEX = STATE / 'session-index.json'
+ORDER = STATE / 'pane-order.json'   # {workspace_id: [session_id, ...]} pinned by `cs order`
 TITLE_RE = re.compile(rb'"type":"(custom-title|ai-title)","(?:customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"')
 SCHEMA = 6                      # bump when scan_one's output changes; stale records get rescanned
 CMD_RE = re.compile(r'<command-name>\s*/?([^<]*?)\s*</command-name>(?:.*?<command-args>(.*?)</command-args>)?', re.S)
@@ -260,9 +264,11 @@ def cmux_panes():
     process. [] outside cmux."""
     if not shutil.which('cmux') or not os.environ.get('CMUX_SOCKET_PATH', '') and not Path.home().joinpath('.local/state/cmux').exists():
         return []
-    panes = _cmux('pane.list').get('panes') or []
+    pl = _cmux('pane.list')
+    panes = pl.get('panes') or []
     if not panes:
         return []
+    wsid = pl.get('workspace_id') or ''
     surfaces = _cmux('surface.list').get('surfaces') or []
     sid_of, stitle = {}, {}
     for sf in surfaces:
@@ -289,11 +295,76 @@ def cmux_panes():
             if sfid in sid_of:
                 order.append((round(f.get('y', 0) / 40), round(f.get('x', 0)), sid_of[sfid], sfid))
     order.sort()
+    pinned = load_order().get(wsid, [])
+    order.sort(key=lambda t: (pinned.index(t[2]) if t[2] in pinned else len(pinned)))   # stable: pinned first, rest by position
     out, seen = [], set()
     for _, _, sid, sfid in order:
         if sid not in seen:
             seen.add(sid); out.append((len(out) + 1, sid, sfid, stitle.get(sfid, '')))
     return out
+
+
+def load_order():
+    try:
+        return json.loads(ORDER.read_text())
+    except Exception:
+        return {}
+
+
+def cmd_order(idx, args):
+    """`cs order taxes claude janus spokane`: pin the numbering of this workspace's Claude panes.
+    Each arg names one pane (fuzzy, against its tab title, the title hook's state file, and the
+    index title) or is its current number. Unnamed panes follow in reading order. No args: show
+    the current numbering. `cs order --clear`: back to pure reading order. Retitles afterwards."""
+    panes = cmux_panes()
+    if not panes:
+        sys.exit('cs order: no Claude panes in this cmux workspace')
+    wsid = _cmux('pane.list').get('workspace_id') or ''
+    store = load_order()
+    if args and args[0] in ('--clear', 'reset', 'clear'):
+        store.pop(wsid, None)
+    elif args:
+        by_id = {v['id']: v for v in idx.values()}
+        titles = STATE / 'session-titles'
+        chosen = []
+        for a in args:
+            q = a.lower().strip()
+            if q.isdigit():
+                hit = [t for t in panes if t[0] == int(q)]
+                if not hit:
+                    sys.exit(f'cs order: no pane numbered {q}')
+                best = hit[0]
+            else:
+                scored = []
+                for t in panes:
+                    n, sid, sfid, cur = t
+                    f = titles / sid
+                    texts = [NUM_PREFIX_RE.sub('', cur), f.read_text() if f.exists() else '']
+                    r = by_id.get(sid)
+                    if r:
+                        texts += [r['custom'], r['ai'], r['prompt']]
+                    sc = 0.0
+                    for text in texts:
+                        text = text.lower()
+                        if not text:
+                            continue
+                        if q in text:
+                            sc = max(sc, 2.0); continue
+                        ws = [word_score(w, text) for w in q.split()]
+                        if ws and min(ws) > 0:
+                            sc = max(sc, sum(ws) / len(ws))
+                    scored.append((sc, t))
+                scored.sort(key=lambda x: -x[0])
+                if scored[0][0] <= 0 or (len(scored) > 1 and scored[0][0] == scored[1][0]):
+                    sys.exit(f'cs order: {a!r} does not pick out one pane (see `cs ls`)')
+                best = scored[0][1]
+            if best in chosen:
+                sys.exit(f'cs order: {a!r} names a pane already placed')
+            chosen.append(best)
+        store[wsid] = [t[1] for t in chosen]
+    ORDER.parent.mkdir(parents=True, exist_ok=True)
+    ORDER.write_text(json.dumps(store, indent=1))
+    cmd_retitle()
 
 
 def cmux_numbers():
@@ -302,15 +373,26 @@ def cmux_numbers():
 
 
 NUM_PREFIX_RE = re.compile(r'^\d{1,2} · ')
+TOOL_PANES = ('dtd', 'janus')   # non-Claude TUI panes, numbered 1 and 2 in this fixed order (own series)
 
 
 def cmd_retitle():
-    """Rename every numbered Claude pane in the current cmux workspace to 'N · title'. The title
+    """Rename every numbered Claude pane in the current cmux workspace to 'N · title', and the
+    dtd/janus TUI panes to '1 · dtd' / '2 · janus' (their own series, matched by tab title). The title
     is the session-title hook's state file (~/.local/state/jm/session-titles/<sid>) when it
     exists, else the pane's current title; an old 'N · ' prefix is stripped first so numbers never
     stack. Prints one 'N<TAB>surface_id<TAB>title' line per pane renamed, so the hook can tell
     whether its own surface was covered."""
     titles = STATE / 'session-titles'
+    claude_sf = {sfid for _, _, sfid, _ in cmux_panes()}
+    for sf in _cmux('surface.list').get('surfaces') or []:
+        base = NUM_PREFIX_RE.sub('', sf.get('title') or '').strip()
+        if sf['id'] in claude_sf or base.lower() not in TOOL_PANES:
+            continue
+        title = f'{TOOL_PANES.index(base.lower()) + 1} · {base}'
+        subprocess.run(['cmux', 'rename-tab', '--surface', sf['id'], '--', title], capture_output=True,
+                       timeout=2, env={**os.environ, 'CMUX_QUIET': '1'})
+        print(f'{title.split()[0]}\t{sf["id"]}\t{title}')
     for n, sid, sfid, cur in cmux_panes():
         f = titles / sid
         base = f.read_text().strip() if f.exists() else cur
@@ -428,6 +510,8 @@ def main(argv):
     idx = load_index(full)
     if cmd == 'ls':
         return cmd_ls(idx, query, show_all, long)
+    if cmd == 'order':
+        return cmd_order(idx, rest)
     if cmd == 'pick':
         r = pick(idx, query)
         if r is None:
