@@ -12,6 +12,8 @@
   cs open [query] [-- args]    resume the match in place (same session id)
   cs pick [query]              interactive fzf picker; prints the chosen id
   cs index                     force a full rescan
+  cs retitle                   rename every numbered Claude pane's cmux tab to 'N · title'
+                               (the session-title hook calls this on start/prompt/stop)
 Options: --from ix   resolve on another host and copy the transcript here first
          --cd        chdir to the session's original cwd before launching
          --pick      always open the fzf picker, even when the query is unambiguous
@@ -250,19 +252,21 @@ def _cmux(method):
         return {}
 
 
-def cmux_numbers():
-    """{session_id: n} for the Claude sessions open in the current cmux workspace, numbered in
-    reading order of their panes (top-left to bottom-right). Session ids come from the live
-    claude processes (CMUX_SURFACE_ID in env + --session-id/--resume in argv); cmux's own
-    resume_binding.checkpoint_id fills in any surface without a visible process. {} outside cmux."""
+def cmux_panes():
+    """[(n, session_id, surface_id, surface_title)] for the Claude sessions open in the current
+    cmux workspace, numbered in reading order of their panes (top-left to bottom-right). Session
+    ids come from the live claude processes (CMUX_SURFACE_ID in env + --session-id/--resume in
+    argv); cmux's own resume_binding.checkpoint_id fills in any surface without a visible
+    process. [] outside cmux."""
     if not shutil.which('cmux') or not os.environ.get('CMUX_SOCKET_PATH', '') and not Path.home().joinpath('.local/state/cmux').exists():
-        return {}
+        return []
     panes = _cmux('pane.list').get('panes') or []
     if not panes:
-        return {}
+        return []
     surfaces = _cmux('surface.list').get('surfaces') or []
-    sid_of = {}
+    sid_of, stitle = {}, {}
     for sf in surfaces:
+        stitle[sf['id']] = sf.get('title') or ''
         cp = (sf.get('resume_binding') or {}).get('checkpoint_id')
         if cp and (sf.get('resume_binding') or {}).get('kind', 'claude') == 'claude':
             sid_of[sf['id']] = cp
@@ -283,13 +287,40 @@ def cmux_numbers():
         f = pn.get('pixel_frame') or {}
         for sfid in pn.get('surface_ids') or [pn.get('selected_surface_id')]:
             if sfid in sid_of:
-                order.append((round(f.get('y', 0) / 40), round(f.get('x', 0)), sid_of[sfid]))
+                order.append((round(f.get('y', 0) / 40), round(f.get('x', 0)), sid_of[sfid], sfid))
     order.sort()
-    nums, n = {}, 0
-    for _, _, sid in order:
-        if sid not in nums:
-            n += 1; nums[sid] = n
-    return nums
+    out, seen = [], set()
+    for _, _, sid, sfid in order:
+        if sid not in seen:
+            seen.add(sid); out.append((len(out) + 1, sid, sfid, stitle.get(sfid, '')))
+    return out
+
+
+def cmux_numbers():
+    """{session_id: n} from cmux_panes()."""
+    return {sid: n for n, sid, _, _ in cmux_panes()}
+
+
+NUM_PREFIX_RE = re.compile(r'^\d{1,2} · ')
+
+
+def cmd_retitle():
+    """Rename every numbered Claude pane in the current cmux workspace to 'N · title'. The title
+    is the session-title hook's state file (~/.local/state/jm/session-titles/<sid>) when it
+    exists, else the pane's current title; an old 'N · ' prefix is stripped first so numbers never
+    stack. Prints one 'N<TAB>surface_id<TAB>title' line per pane renamed, so the hook can tell
+    whether its own surface was covered."""
+    titles = STATE / 'session-titles'
+    for n, sid, sfid, cur in cmux_panes():
+        f = titles / sid
+        base = f.read_text().strip() if f.exists() else cur
+        base = NUM_PREFIX_RE.sub('', base).strip()
+        if not base:
+            continue
+        title = f'{n} · {base}'
+        subprocess.run(['cmux', 'rename-tab', '--surface', sfid, '--', title], capture_output=True,
+                       timeout=2, env={**os.environ, 'CMUX_QUIET': '1'})
+        print(f'{n}\t{sfid}\t{title}')
 
 
 def mark_of(r):
@@ -392,6 +423,8 @@ def main(argv):
     query = ' '.join(rest)
     if cmd == 'index':
         n = len(load_index(full=True)); print(f'indexed {n} sessions'); return
+    if cmd == 'retitle':
+        return cmd_retitle()
     idx = load_index(full)
     if cmd == 'ls':
         return cmd_ls(idx, query, show_all, long)

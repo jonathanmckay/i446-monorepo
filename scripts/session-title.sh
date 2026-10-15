@@ -27,7 +27,11 @@ state=~/.local/state/jm/session-titles; mkdir -p "$state"
 sid=$(printf '%s' "$input" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null)
 [ -n "$sid" ] && printf '%s\n' "$title" > "$state/$sid"
 if [ -n "$CMUX_PANEL_ID" ] && command -v cmux >/dev/null 2>&1; then
-  cmux rename-tab --surface "$CMUX_PANEL_ID" -- "$title" >/dev/null 2>&1
+  # `cs retitle` renames every numbered Claude pane in this workspace to "N · title" (reading
+  # order), so each session's hook also refreshes its neighbours' numbers. If it did not cover
+  # this surface (cs missing, pane not numbered), fall back to the plain title.
+  done_=$(~/.local/bin/cs retitle 2>/dev/null | grep -F "$CMUX_PANEL_ID")
+  [ -n "$done_" ] || cmux rename-tab --surface "$CMUX_PANEL_ID" -- "$title" >/dev/null 2>&1
 else
   printf '\033]0;%s\007' "$title" > /dev/tty 2>/dev/null
 fi
