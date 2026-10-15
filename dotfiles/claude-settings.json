@@ -108,6 +108,16 @@
             "command": "~/i446-monorepo/scripts/agent-claim-hook.sh idle >/dev/null 2>&1"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
+            "async": true
+          }
+        ]
       }
     ],
     "StopFailure": [
@@ -153,6 +163,16 @@
             "command": "~/i446-monorepo/scripts/agent-claim-hook.sh working 2>/dev/null"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
+            "async": true
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -196,5 +216,9 @@
       "Money and outward-facing actions are pre-negotiated boundaries the user has set for himself: never send a message to another person under his name without him first reading and approving the exact text (drafting is fine, sending is not); never place an order or take another outward-facing action without asking first; never spend money or move funds — propose instead.",
       "Writes to the Neon workbook (~/OneDrive/vault-excel/Neon分v12.2.xlsx) should go through the journaled excel-http daemon on host 'ix' or the documented did-fast/neon-write.py tooling. Raw/direct AppleScript writes to that file bypass the audit ledger and are not trusted the same way."
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/i446-monorepo/scripts/session-statusline.sh"
   }
 }
