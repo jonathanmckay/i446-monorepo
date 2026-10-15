@@ -13,14 +13,17 @@ only opens a new cmux tab so the launch never nests inside the current pane.
 
 ## Steps
 
-1. Open a tab in the current directory, then respawn it with the command. Single-quote
-   the args; pass them through verbatim.
+1. Open a tab in the current directory, then respawn it with the command. The respawned
+   surface has only cmux's shims on PATH and no aliases, so run through an interactive zsh
+   and use the wrapper's full path; the trailing `exec zsh -il` keeps the tab open after
+   claude exits. Pass the args through verbatim.
    ```bash
    cmux new-surface --type terminal --working-directory "$PWD" --focus true
    # parse "OK surface:N ..." then
-   cmux respawn-pane --surface surface:N --command "cc '<args>'"
+   cmux respawn-pane --surface surface:N --command "zsh -ic '~/vault/i447/i446/claude-tracked <args>'; exec zsh -il"
    ```
-   With no args: `--command "cc"`.
+   With no args: `--command "zsh -ic '~/vault/i447/i446/claude-tracked'; exec zsh -il"`.
+   Never write `cc` in the command: in that shell `cc` is the C compiler.
 2. Confirm in one line: `cc <args> → new tab (surface:N)`.
 
 ## Response Style
