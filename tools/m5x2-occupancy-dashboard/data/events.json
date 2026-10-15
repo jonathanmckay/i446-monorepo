@@ -7828,5 +7828,75 @@
     "unit": "02",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-10-15",
+    "kind": "movein",
+    "unit_id": "935",
+    "prop": "kn47 K1",
+    "unit": "J101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-10-16",
+    "kind": "leased",
+    "unit_id": "549",
+    "prop": "rl16",
+    "unit": "B12",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-10-15",
+    "kind": "movein",
+    "unit_id": "210",
+    "prop": "ms22",
+    "unit": "2256",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-11-07",
+    "kind": "ntv",
+    "unit_id": "601",
+    "prop": "rl16",
+    "unit": "D16",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-10-30",
+    "kind": "leased",
+    "unit_id": "1228",
+    "prop": "tc68",
+    "unit": "D079",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-11-20",
+    "kind": "leased",
+    "unit_id": "1273",
+    "prop": "c702",
+    "unit": "A103",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-15",
+    "effective": "2026-10-17",
+    "kind": "leased",
+    "unit_id": "1271",
+    "prop": "c702",
+    "unit": "A101",
+    "tenant": null,
+    "baseline": false
   }
 ]
