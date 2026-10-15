@@ -186,6 +186,10 @@
           {
             "type": "command",
             "command": "~/i446-monorepo/scripts/agent-claim-hook.sh release >/dev/null 2>&1"
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-end.sh >/dev/null 2>&1"
           }
         ]
       }

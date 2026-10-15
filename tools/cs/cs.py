@@ -289,11 +289,12 @@ def cmux_panes():
                     sid_of[m_s.group(1)] = m_i.group(1)
     except Exception:
         pass
+    skip = os.environ.get('CS_EXCLUDE_SID', '')   # set by the SessionEnd hook: the exiting session is still in ps
     order = []
     for pn in panes:
         f = pn.get('pixel_frame') or {}
         for sfid in pn.get('surface_ids') or [pn.get('selected_surface_id')]:
-            if sfid in sid_of:
+            if sfid in sid_of and sid_of[sfid] != skip:
                 order.append((round(f.get('y', 0) / 40), round(f.get('x', 0)), sid_of[sfid], sfid))
     order.sort()
     pinned = load_order().get(wsid, [])
