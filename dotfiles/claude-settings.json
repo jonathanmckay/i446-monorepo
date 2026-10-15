@@ -225,5 +225,9 @@
   "statusLine": {
     "type": "command",
     "command": "~/i446-monorepo/scripts/session-statusline.sh"
+  },
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1"
   }
 }

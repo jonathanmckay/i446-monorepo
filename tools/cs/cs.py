@@ -7,7 +7,8 @@
                                mark: ✎ title you set, 😈 title the AI wrote, blank = first prompt.
                                Bare ls = last 7 days; a query searches all history; --all lifts
                                the window. -l adds cwd + id
-  cs id <query>                print the best-matching session id
+  cs id <query>                print the best-matching session id (-l: id, title, live|idle;
+                               --title: only accept a title/claim match, never a first-prompt one)
   cs fork [query] [-- args]    new session branched from the match (claude --resume ID --fork-session)
   cs open [query] [-- args]    resume the match in place (same session id)
   cs pick [query]              interactive fzf picker; prints the chosen id
@@ -441,7 +442,10 @@ def cmd_ls(idx, query, show_all, long=False):
         print(line.rstrip()[:width])
 
 
-def resolve(idx, query, force_pick=False, no_pick=False):
+TITLE_MIN = 1.4   # fuzzy() score reachable only via a title or a claimed task, never via the first prompt alone
+
+
+def resolve(idx, query, force_pick=False, no_pick=False, title_only=False):
     if query.strip().isdigit() and len(query.strip()) <= 2:
         n = int(query)
         for sid, k in cmux_numbers().items():
@@ -458,8 +462,10 @@ def resolve(idx, query, force_pick=False, no_pick=False):
             sys.exit('cs: nothing picked' if query or shutil.which('fzf') else 'cs: need a title query (fzf not installed)')
         return r
     hits = rank(idx, query)
+    if title_only:
+        hits = [h for h in hits if h[0] >= TITLE_MIN]
     if not hits:
-        sys.exit(f'cs: no session matches {query!r}')
+        sys.exit(f'cs: no session {"title " if title_only else ""}matches {query!r}')
     ambiguous = len(hits) > 1 and abs(hits[1][0] - hits[0][0]) < 1e-9
     if ambiguous and not no_pick:
         r = pick(idx, query, hits)
@@ -493,6 +499,7 @@ def main(argv):
     want_path = '--path' in argv; argv = [a for a in argv if a != '--path']
     force_pick = '--pick' in argv; argv = [a for a in argv if a != '--pick']
     no_pick = '--no-pick' in argv; argv = [a for a in argv if a != '--no-pick']
+    title_only = '--title' in argv; argv = [a for a in argv if a != '--title']
     host = None
     if '--from' in argv:
         i = argv.index('--from'); host = argv[i + 1]; del argv[i:i + 2]
@@ -519,10 +526,15 @@ def main(argv):
         print(r['id']); return
     if host and not query:
         sys.exit(f'cs {cmd}: --from needs a title query')
-    r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick)
+    r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only)
     if cmd == 'id':
         if want_path:
             print(next(p for p, v in idx.items() if v['id'] == r['id']))
+        elif long:
+            live = r['id'] in cmux_numbers() or bool(re.search(
+                rf'--(?:session-id|resume)[ =]{r["id"]}',
+                subprocess.run(['ps', '-axo', 'command='], capture_output=True, text=True).stdout))
+            print(f"{r['id']}\t{title_of(r)}\t{'live' if live else 'idle'}")
         else:
             print(r['id'])
         return
