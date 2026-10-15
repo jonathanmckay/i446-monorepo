@@ -747,8 +747,10 @@ if [[ "\$1" == BLOCK:* ]]; then
   "$DTD_BLOCKAPPLY" "\$1"
   exit 0
 fi
-task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-"\$START" "\$task"
+# Pass the id, not the resolved text: start.sh resolves it itself and logs
+# its arg to dtd-started, which the list matches by id (bug 2026-10-15:
+# Enter logged the task name, so a started task never got 🧮 or moved up).
+"\$START" "\$1"
 ENTEREOF
 chmod +x "$DTD_ENTER"
 

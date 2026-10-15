@@ -43,9 +43,9 @@ def test_enter_body_has_no_completion_branch():
 def test_enter_body_unconditionally_starts():
     body = _enter_body()
     # Exactly one statement of substance after the block-picker early exit:
-    # resolve the id, then always call $START. No if/else branching on
+    # always call $START with the row id. No if/else branching on
     # ritual-card markers or timer-match state.
-    assert '"\\$START" "\\$task"' in body
+    assert '"\\$START" "\\$1"' in body
     assert "is_ritual_card" not in body
     assert "cur_desc" not in body and "timer_desc" not in body
 
@@ -70,3 +70,15 @@ def test_dtd_keys_hint_reflects_the_new_split():
     assert "⌥⏎: done" in SRC or "alt-enter: done" in SRC
     assert "start/complete" not in SRC, (
         "the header hint must not still advertise enter as a completion key")
+
+
+def test_enter_passes_id_so_started_log_matches_by_id():
+    """Bug 2026-10-15: "I started a task but it didn't go to the top with the
+    abacus". enter.sh resolved the id to the task text and passed THAT to
+    start.sh, which logs its arg to dtd-started; the list generator matches
+    started tasks by id, so an Enter-started task never got 🧮. ctrl-s passed
+    {2} (the id) and worked. Both must hand start.sh the id."""
+    body = _enter_body()
+    assert '"\\$START" "\\$task"' not in body
+    assert '"\\$START" "\\$1"' in body
+    assert 'ctrl-s:execute-silent($DTD_START {2})' in SRC
