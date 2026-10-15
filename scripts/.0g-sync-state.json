@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "have a path for life": {
-      "todoist_id": "6hm8hGQ9G2fQmwc2",
-      "minutes": 20
-    },
-    "send alex reachout": {
-      "todoist_id": "6hm8hGWXpxj6qp22",
-      "minutes": 20
-    }
-  },
-  "last_sync": "2026-10-15T03:55:01.627262-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-15T04:00:06.172539-07:00"
 }
