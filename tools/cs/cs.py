@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """cs: reference Claude Code sessions by title; fork or resume them from anywhere.
 
-  cs ls [query] [--all] [-l]   list sessions (age, title), newest first. Bare ls = last 7 days;
-                               a query searches all history; --all lifts the window. -l adds cwd + id
+  cs ls [query] [--all] [-l]   list sessions (age, mark, title, ▸ claimed tasks), newest first.
+                               mark: ✎ title you set, 😈 title the AI wrote, blank = first prompt.
+                               Bare ls = last 7 days; a query searches all history; --all lifts
+                               the window. -l adds cwd + id
   cs id <query>                print the best-matching session id
   cs fork [query] [-- args]    new session branched from the match (claude --resume ID --fork-session)
   cs open [query] [-- args]    resume the match in place (same session id)
@@ -34,16 +36,17 @@ PROJECTS = Path.home() / '.claude' / 'projects'
 STATE = Path.home() / '.local' / 'state' / 'jm'
 INDEX = STATE / 'session-index.json'
 TITLE_RE = re.compile(rb'"type":"(custom-title|ai-title)","(?:customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"')
-SCHEMA = 4                      # bump when scan_one's output changes; stale records get rescanned
+SCHEMA = 6                      # bump when scan_one's output changes; stale records get rescanned
 CMD_RE = re.compile(r'<command-name>\s*/?([^<]*?)\s*</command-name>(?:.*?<command-args>(.*?)</command-args>)?', re.S)
 TAG_RE = re.compile(r'<(system-reminder|command-message|command-name|command-args|local-command-stdout|local-command-caveat|pasted_content[^>]*)>.*?</\1>', re.S)
 SKIP_PREFIXES = ('Base directory for this skill', '<local-command')
-# Task text may not contain a quote or a backslash: inside the JSON string a quote or
-# an escaped newline (\n) ends the task, which keeps skill docs that quote the hook
-# line from matching. "(id …) for /<skill>" is a skill claiming its own card (/0g,
-# /notes, …), not something JM claimed; those are left out.
-CLAIM_GREP = r'\[claim hook\] [^"\\]*😈 claimed: [^"\\]*\(id [A-Za-z0-9]+\)'
-CLAIM_RE = re.compile(r'😈 claimed: ([^"\\]*?) \(id ([A-Za-z0-9]+)\)(?! for /)')
+# Only the hook's own output counts: Claude Code records it as an `attachment` record
+# ({"type":"attachment","attachment":{"type":"hook_success","hookEvent":"UserPromptSubmit",
+# "content":"[claim hook] 😈 claimed: <task> (id …)…"}}). Tool results (a session grepping
+# transcripts), assistant echoes and skill docs quoting the line never match.
+# "(id …) for /<skill>" is a skill claiming its own card (/0g, /notes, …), not something
+# JM claimed: left out.
+CLAIM_RE = re.compile(r'😈 claimed: (.*?) \(id ([A-Za-z0-9]+)\)(?! for /)')
 ANNOT_RE = re.compile(r'\s*(\(\d+\)|\[\s*\d+\s*\]|\{\d+\})')   # (30) [15] {10} task annotations
 MAX_CLAIMS = 3
 
@@ -82,11 +85,20 @@ def scan_one(f: Path):
         for m in TITLE_RE.finditer(out):
             val = json.loads(b'"' + m.group(2) + b'"')
             rec['custom' if m.group(1) == b'custom-title' else 'ai'] = val
-        out = subprocess.run(['grep', '-ao', '-E', CLAIM_GREP, str(f)], capture_output=True).stdout
+        out = subprocess.run(['grep', '-a', '-F', '"hook_success"', str(f)], capture_output=True).stdout
         seen = {}
-        for m in CLAIM_RE.finditer(out.decode('utf-8', 'replace')):
-            seen.pop(m.group(2), None)                 # re-claim moves it to the end (most recent)
-            seen[m.group(2)] = ' '.join(ANNOT_RE.sub('', m.group(1)).split())
+        for line in out.splitlines():
+            if b'[claim hook]' not in line:
+                continue
+            try:
+                a = json.loads(line).get('attachment') or {}
+            except Exception:
+                continue
+            if a.get('type') != 'hook_success' or a.get('hookEvent') != 'UserPromptSubmit':
+                continue
+            for m in CLAIM_RE.finditer(a.get('content') or a.get('stdout') or ''):
+                seen.pop(m.group(2), None)                 # re-claim moves it to the end (most recent)
+                seen[m.group(2)] = ' '.join(ANNOT_RE.sub('', m.group(1)).split())
         rec['claims'] = list(seen.values())[-MAX_CLAIMS:]
         with open(f, 'rb') as fh:
             for i, line in enumerate(fh):
@@ -212,7 +224,7 @@ def pick(idx, query='', rows=None):
         rows = rank(idx, query) if query else sorted(((0, r['mtime'], p, r) for p, r in idx.items()), key=lambda h: h[1], reverse=True)
     if not rows:
         return None
-    lines = [f"{age(mt):>4}  {'✎' if r['custom'] else ' '} {title_of(r)[:72]:<72}  {r['id']}" for _, mt, p, r in rows]
+    lines = [f"{age(mt):>4}  {mark_of(r)} {title_of(r)[:60]:<60}  {claims_of(r)[:40]:<40}  {r['id']}" for _, mt, p, r in rows]
     out = subprocess.run(['fzf', '--no-sort', '--layout=reverse', '--height=50%', '--with-nth=1..-2',
                           '--prompt=session> ', '--query', query],
                          input='\n'.join(lines), capture_output=True, text=True)
@@ -225,10 +237,15 @@ def pick(idx, query='', rows=None):
 LS_WINDOW = 7 * 86400
 
 
+def mark_of(r):
+    """✎ title set by JM (/rename, -n); 😈 title written by the AI; blank = first prompt / id."""
+    return '✎ ' if r['custom'] else '😈' if r['ai'] else '  '
+
+
 def claims_of(r):
-    """'😈 newest · older · oldest' for the row, '' if the session never claimed."""
+    """'▸ newest · older · oldest' for the row, '' if the session never claimed."""
     c = r.get('claims') or []
-    return '😈 ' + ' · '.join(reversed(c)) if c else ''
+    return '▸ ' + ' · '.join(reversed(c)) if c else ''
 
 
 def cmd_ls(idx, query, show_all, long=False):
@@ -239,7 +256,7 @@ def cmd_ls(idx, query, show_all, long=False):
     width = shutil.get_terminal_size((160, 40)).columns
     for _, mt, p, r in rows:
         t = title_of(r)
-        mark = '✎' if r['custom'] else ' '
+        mark = mark_of(r)
         if long:
             cwd = r['cwd'].replace(str(Path.home()), '~')
             line = f"{age(mt):>4}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}  {claims_of(r)}"
