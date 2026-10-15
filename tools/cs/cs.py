@@ -257,6 +257,7 @@ def _cmux(method):
         return {}
 
 
+CLAUDE_PROC_RE = re.compile(r'^\s*\d+\s+(?:\S*/)?claude\s')   # a ps line for a claude process (any path)
 TOOL_PANES = ('dtd', 'janus')   # non-Claude TUI panes, numbered 1 and 2 in this fixed order
 CLAUDE_FIRST = len(TOOL_PANES) + 1   # Claude panes continue the same series: 3, 4, ...
 
@@ -283,15 +284,16 @@ def cmux_panes():
         if cp and (sf.get('resume_binding') or {}).get('kind', 'claude') == 'claude':
             sid_of[sf['id']] = cp
     try:
-        pids = subprocess.run(['pgrep', '-x', 'claude'], capture_output=True, text=True).stdout.split()
-        if pids:
-            ps = subprocess.run(['ps', '-Eww', '-o', 'pid=,command=', '-p', ','.join(pids)],
-                                capture_output=True, text=True).stdout
-            for line in ps.splitlines():
-                m_s = re.search(r'CMUX_SURFACE_ID=([0-9A-Fa-f-]{36})', line)
-                m_i = re.search(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', line)
-                if m_s and m_i:
-                    sid_of[m_s.group(1)] = m_i.group(1)
+        # Scan argv+env of every process rather than `pgrep -x claude`: a claude launched through
+        # cmux's shim keeps its full path as the process name, which pgrep -x does not match.
+        ps = subprocess.run(['ps', '-Eww', '-axo', 'pid=,command='], capture_output=True, text=True).stdout
+        for line in ps.splitlines():
+            if not CLAUDE_PROC_RE.match(line):
+                continue
+            m_s = re.search(r'CMUX_SURFACE_ID=([0-9A-Fa-f-]{36})', line)
+            m_i = re.search(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', line)
+            if m_s and m_i:
+                sid_of[m_s.group(1)] = m_i.group(1)      # a live process beats cmux's recorded binding
     except Exception:
         pass
     skip = os.environ.get('CS_EXCLUDE_SID', '')   # set by the SessionEnd hook: the exiting session is still in ps
@@ -431,8 +433,13 @@ def cmd_ls(idx, query, show_all, long=False):
     nums = cmux_numbers()
     if not query:
         known = {r['id'] for _, _, _, r in rows}
-        for sid, n in nums.items():          # open in cmux but nothing typed yet: no transcript to index
-            if sid not in known and not any(v['id'] == sid for v in idx.values()):
+        for sid, n in nums.items():
+            if sid in known:
+                continue
+            old = next(((p, v) for p, v in idx.items() if v['id'] == sid), None)
+            if old:                          # open in cmux but older than the window: list it anyway
+                rows.insert(0, (0, old[1]['mtime'], old[0], old[1]))
+            else:                            # open in cmux but nothing typed yet: no transcript to index
                 rows.insert(0, (0, time.time(), '', {'id': sid, 'custom': '', 'ai': '', 'prompt': '(new session, nothing typed yet)',
                                                     'cwd': '', 'claims': []}))
     for _, mt, p, r in rows:

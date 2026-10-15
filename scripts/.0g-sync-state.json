@@ -1,22 +1,14 @@
 {
   "version": 1,
   "tasks": {
-    "taxs": {
-      "todoist_id": "6hmMgpf44cx3XgfR",
-      "minutes": 50
-    },
     "1500": {
       "todoist_id": "6hmMgpcGWhhwHrg2",
       "minutes": 50
-    },
-    "mad attach": {
-      "todoist_id": "6hmMgpgh7Hmhx8w2",
-      "minutes": 40
     },
     "china followup": {
       "todoist_id": "6hmMgpjxHjhHGgfR",
       "minutes": 20
     }
   },
-  "last_sync": "2026-10-15T12:00:05.315452-07:00"
+  "last_sync": "2026-10-15T14:00:01.245584-07:00"
 }
