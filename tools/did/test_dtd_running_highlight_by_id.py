@@ -93,6 +93,16 @@ CACHE = {
 }
 
 
+SPIN = "·✢✳✶✻✽✻✶✳✢"   # dtd.sh _AGENT_SPIN: JM's running row leads with a frame (2026-10-16)
+
+
+def _is_running(row: str) -> bool:
+    """A running row leads with a spinner frame and carries 'Nm · ' (was 🧮 Nm)."""
+    import re
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", row).lstrip()
+    return plain[:1] in SPIN and "m · " in plain
+
+
 def _row_for_id(output: str, task_id: str) -> str:
     for line in output.splitlines():
         if line.rsplit("\t", 1)[-1] == task_id:
@@ -111,8 +121,8 @@ def test_only_the_started_task_id_is_marked_running():
         recur_row = _row_for_id(out, "AOS_RECUR")
         oneoff_row = _row_for_id(out, "AOS_ONEOFF")
 
-        assert "🧮" in recur_row, "the task whose id matches the timer must show as running"
-        assert "🧮" not in oneoff_row, (
+        assert _is_running(recur_row), "the task whose id matches the timer must show as running"
+        assert not _is_running(oneoff_row) and "🧮" not in oneoff_row, (
             "a different task that merely shares the same stripped name must "
             "NOT be marked running just because dtd started its namesake")
 
@@ -130,7 +140,7 @@ def test_legacy_two_field_timer_still_falls_back_to_name_match():
         # Documents the known (accepted) legacy limitation: without an id both
         # same-named rows still light up until the timer file is next
         # overwritten by the fixed DTD_START.
-        assert "🧮" in recur_row and "🧮" in oneoff_row
+        assert _is_running(recur_row) and _is_running(oneoff_row)
 
 
 if __name__ == "__main__":

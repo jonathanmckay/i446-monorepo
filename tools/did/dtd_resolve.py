@@ -26,7 +26,10 @@ def main() -> int:
     plain = re.sub(r"\033\[[0-9;]*m", "", arg)
     plain = re.sub(r"^↻ ", "", plain)
     plain = re.sub(r"^▶ [^·]* · ", "", plain)
-    plain = re.sub(r"^🧮 (?:🕐 )?(?:[^·]* · )?", "", plain)  # in-progress tiers (2026-10-11)
+    # In-progress tiers (2026-10-11): lead glyph is 🧮 or a spinner frame (JM's
+    # running timer moves since 2026-10-16; agent rows add 😈), then optional
+    # 🕐 / 😈, then the optional 'Nm · ' elapsed.
+    plain = re.sub(r"^(?:🧮|[·✢✳✶✻✽]) (?:🕐 )?(?:😈 )?(?:[^·]* · )?", "", plain)
 
     # Todoist v1 ids are opaque alphanumeric strings (e.g. 6gqQ59G5HHVRQR3R),
     # never containing spaces. Try an exact id match first; if none, the arg was

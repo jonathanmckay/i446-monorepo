@@ -27,8 +27,8 @@ grep -q 'printf.*> "\\$TIMER"' "$SCRIPT" \
 grep -q 'running_lines' "$SCRIPT" \
   || { echo "FAIL: list generator must promote the running task to the top"; exit 1; }
 
-grep -q '🧮 .* · ' "$SCRIPT" \
-  || { echo "FAIL: running task display must include a timer prefix"; exit 1; }
+grep -q '{_agent_frame} {elapsed}m · ' "$SCRIPT" \
+  || { echo "FAIL: running task display must include a moving timer prefix (spinner Nm · , 2026-10-16)"; exit 1; }
 
 # Bindings now pass the hidden id ({2}); dtd_resolve.py maps it back to the
 # canonical task content and strips the running-task timer prefix in the legacy

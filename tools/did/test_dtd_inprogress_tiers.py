@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Regression: dtd's in-progress tiers (2026-10-11).
 
-2026-10-13 order, top down: JM's running timer (🧮 Nm), tasks JM started
-today (Enter/ctrl-s) that aren't done (🧮, most recent start first), agent
+2026-10-13 order, top down: JM's running timer (spinner Nm since 2026-10-16,
+was 🧮 Nm), tasks JM started today (Enter/ctrl-s) that aren't done (🧮, most
+recent start first), agent
 claims mid-turn (spinner + 😈, grey), agent claims waiting on JM (🧮 🕐),
 then everything else. A task JM is timing stays on top even if an agent
 also holds it; a WORKING claim on it swaps the abacus for spinner + 😈
@@ -23,6 +24,13 @@ from test_dtd_running_highlight_by_id import _listgen_payload, _row_for_id
 
 MONO = Path(__file__).resolve().parents[2]
 GREY = "\x1b[38;2;110;110;110m"
+SPIN = "·✢✳✶✻✽✻✶✳✢"   # Claude Code's spinner glyphs (dtd.sh _AGENT_SPIN)
+
+
+def _lead_glyph(row: str) -> str:
+    """First visible character of a row, ANSI stripped."""
+    import re
+    return re.sub(r"\x1b\[[0-9;]*m", "", row).lstrip()[:1]
 
 
 def _task(tid, name):
@@ -126,7 +134,8 @@ def test_scrolling_does_not_wrap():
 def test_tier_markers():
     out = _run("R1")
     a, b, c = (_row_for_id(out, i) for i in ("R1", "I1", "W1"))
-    assert "🧮 5m · " in a and "😈" not in a and "🕐" not in a and GREY not in a
+    assert _lead_glyph(a) in SPIN and " 5m · " in a, a
+    assert "🧮" not in a and "😈" not in a and "🕐" not in a and GREY not in a
     assert "🧮 🕐 " in b and "😈" not in b and GREY not in b
     assert "😈" in c and "🧮" not in c and c.startswith(GREY)
     for i in ("N1", "N2"):
@@ -148,15 +157,46 @@ def test_working_claim_replaces_abacus_on_timed_task():
 
 def test_idle_claim_loses_to_running_timer():
     """An idle claim on the task JM is timing still renders as his timer
-    (🧮 Nm), not 🧮 🕐: the agent is waiting on him, he is the one working."""
+    (spinner Nm), not 🧮 🕐: the agent is waiting on him, he is the one working."""
     out = _run("RC", rc_state="idle")
     row = _row_for_id(out, "RC")
-    assert "🧮 5m · " in row and "🕐" not in row and "😈" not in row and GREY not in row, row
+    assert _lead_glyph(row) in SPIN and " 5m · " in row, row
+    assert "🧮" not in row and "🕐" not in row and "😈" not in row and GREY not in row, row
+
+
+def test_running_timer_moves_started_keeps_abacus():
+    """2026-10-16: "when my time is on a certain task, it should be a clock
+    ticker or something that is like the claude snowflake that shows movement.
+    If I started but didn't finish, it can just show the abacus." The timed
+    row leads with a spinner frame (domain color, no 😈); a started-not-done
+    row keeps the still 🧮; the frame advances between renders."""
+    now = int(time.time())
+    out = _run("R1", started=[("2026-10-11", "N1", now - 600)])
+    r1, n1 = _row_for_id(out, "R1"), _row_for_id(out, "N1")
+    assert _lead_glyph(r1) in SPIN and "🧮" not in r1 and "😈" not in r1, r1
+    assert "🧮 " in n1 and _lead_glyph(n1) == "🧮", n1
+    assert _ids(out)[:2] == ["R1", "N1"]
+    # the glyph is a function of time, so two renders ~0.5s apart differ
+    time.sleep(0.55)
+    r1b = _row_for_id(_run("R1"), "R1")
+    assert _lead_glyph(r1b) in SPIN and _lead_glyph(r1b) != _lead_glyph(r1), (r1, r1b)
+
+
+def test_watcher_reloads_every_second_while_timer_runs():
+    """The list only re-renders on a reload, so the moving glyph needs the
+    auto-reload watcher to cycle while $DTD_TIMER is non-empty (1s), the way
+    it already does at 0.5s while an agent claim is working."""
+    dtd = Path(__file__).with_name("dtd.sh").read_text()
+    loop = dtd[dtd.index("for _acw in 1 2 3 4; do"):]
+    loop = loop[:loop.index("done")]
+    assert '[[ -s "$DTD_TIMER" ]] && break' in loop, loop
+    assert '[[ -s "$DTD_TIMER" ]] && ac_reload=1' in dtd
 
 
 def test_resolver_strips_tier_prefixes():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    for vis in ("🧮 5m · plain one", "🧮 🕐 plain one", "🧮 🕐 ↻ plain one"):
+    for vis in ("🧮 5m · plain one", "🧮 🕐 plain one", "🧮 🕐 ↻ plain one",
+                "✻ 5m · plain one", "· 5m · plain one", "✽ 😈 5m · plain one", "✢ 😈 plain one"):
         r = subprocess.run([sys.executable, str(Path(__file__).with_name("dtd_resolve.py")),
                             "/nonexistent", vis], capture_output=True, text=True)
         assert r.stdout.strip().endswith("plain one") and "🧮" not in r.stdout, (vis, r.stdout)
