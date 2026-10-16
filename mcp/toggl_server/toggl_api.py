@@ -96,16 +96,18 @@ def _request(method, path, body=None):
                     return result
                 return None
         except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else ""
             # 402 (free-tier cap) and 429 both mean "slow down": arm the shared
-            # cooldown so every process — not just this one — backs off.
+            # cooldown so every process — not just this one — backs off. The
+            # hourly-cap 402 says how long ("reset in N seconds"); use it, or
+            # every poller spends the rest of the hour re-tripping the cap.
             if e.code in (402, 429):
-                throttle.note_rate_limit()
+                throttle.note_quota_reset(throttle.parse_reset_seconds(error_body))
             if e.code == 429 and attempt < _MAX_429_RETRIES - 1:
                 retry_after = e.headers.get("Retry-After")
                 delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
                 time.sleep(min(delay, _MAX_429_DELAY))
                 continue
-            error_body = e.read().decode() if e.fp else ""
             raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")
 
 

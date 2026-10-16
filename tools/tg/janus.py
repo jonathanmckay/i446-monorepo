@@ -676,9 +676,28 @@ def _toggl_blocked() -> bool:
 
 
 def _note_rate_limit():
-    """Enter the back-off window and tell the user how long we're holding off."""
-    STATE.toggl_blocked_until = time.monotonic() + RATE_LIMIT_COOLDOWN
-    flash(f"toggl: rate limited — backing off {RATE_LIMIT_COOLDOWN}s", RATE_LIMIT_COOLDOWN)
+    """Enter the back-off window and tell the user how long we're holding off.
+    The shared throttle knows the server's own reset estimate (the hourly-cap
+    402 says "reset in N seconds"); hold off for the longer of that and the
+    local default, and keep the reason on screen for the whole wait. Before
+    2026-10-16 this flashed for 60s, then every ticker re-polled into the cap
+    and the screen just stopped updating with no explanation."""
+    secs = max(RATE_LIMIT_COOLDOWN, toggl_throttle.cooldown_remaining())
+    STATE.toggl_blocked_until = time.monotonic() + secs
+    _flash_cooldown(secs)
+
+
+def _flash_cooldown(secs: float) -> None:
+    reset_at = dt.datetime.now(_tz()) + dt.timedelta(seconds=secs)
+    flash(f"toggl: rate limited — resets {reset_at:%H:%M} ({int(secs) // 60}m{int(secs) % 60:02d}s), ^R to retry", secs)
+
+
+def _show_shared_cooldown() -> None:
+    """A cooldown armed by ANOTHER process (tg-fast, dtd, 0t) blocks our fetches
+    too; say so instead of silently skipping, once the previous flash has run out."""
+    left = toggl_throttle.cooldown_remaining()
+    if left > 0 and time.monotonic() >= STATE.flash_until:
+        _flash_cooldown(left)
 
 
 # ── Optimistic current-timer view (2026-10-04) ───────────────────────────────
@@ -760,6 +779,7 @@ def fetch_current(cached=False):
     Skipped entirely during a rate-limit cooldown so a 402 isn't made worse by
     the 30s ticker continuing to poll."""
     if _toggl_blocked():
+        _show_shared_cooldown()
         return
     try:
         fetched = (toggl_api.get_current_cached() if cached
