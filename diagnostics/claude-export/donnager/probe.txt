@@ -1,0 +1,7 @@
+1
+---claude sessions count above---
+Donnager
+Microsoft Windows 11 Home
+---vault check---
+False
+---no claude-export.log on this machine likely---

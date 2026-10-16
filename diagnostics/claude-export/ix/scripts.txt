@@ -1,0 +1,3 @@
+--- candidate scripts ---
+-rw-r--r--  1 mckay  staff  12549 Apr 30 08:08 /Users/mckay/i446-monorepo/scripts/export-claude-transcripts.py
+-rwxr-xr-x  1 mckay  staff   7176 Apr 30 08:08 /Users/mckay/i446-monorepo/scripts/export-copilot-transcripts.py

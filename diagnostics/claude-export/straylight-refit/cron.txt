@@ -1,0 +1,2 @@
+--- crontab ---
+0 * * * * python3 ~/i446-monorepo/scripts/export-copilot-transcripts.py >> ~/vault/i447/i446/ai-transcripts/copilot-cli/export.log 2>&1
