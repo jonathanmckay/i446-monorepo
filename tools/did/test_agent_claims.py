@@ -93,6 +93,22 @@ def test_ticker_claim_lines_above_the_line():
     assert tk.claim_lines([("a", True)], 0) != tk.claim_lines([("a", True)], 1)  # it spins
 
 
+def test_ticker_working_claim_shows_even_on_timed_task(tmp_path, monkeypatch):
+    """2026-10-16: a working claim on the task JM is timing still gets its
+    spinner + 😈 footer line; only an idle claim on it is hidden behind ▶."""
+    spec = importlib.util.spec_from_file_location("ticker", HERE / "dtd-ticker.py")
+    tk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tk)
+    root = tmp_path / "claims"
+    ac.claim({"id": "T1", "content": "0t (3) [10]"}, "S1", root=root)
+    ac.claim({"id": "T2", "content": "notes (10) [5]"}, "S2", root=root)
+    ac.set_state("T2", "idle", root=root)
+    monkeypatch.setattr(tk.agent_claims, "CLAIMS_DIR", root)
+    monkeypatch.setattr(tk.agent_claims.load, "__defaults__", (root, None))
+    assert tk._claims("T1") == [("0t (3) [10]", True), ("notes (10) [5]", False)]
+    assert tk._claims("T2") == [("0t (3) [10]", True)]
+
+
 # --- terminal dtd list generator ------------------------------------------
 TODAY = dt.date.today().isoformat()
 DTD = (HERE / "dtd.sh").read_text()

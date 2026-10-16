@@ -2215,10 +2215,13 @@ for t in unique:
     #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: 🧮
     #   C  agent claim working: spinner + 😈, grey
     #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
-    # A wins when JM times a task an agent also holds; an agent claim beats
-    # A2; a skip beats A2. 🕐, not ⏰: ⏰ is delay.
-    is_claimed = str(t.get('id', '')) in _claim_ids and not is_running
-    is_working = is_claimed and str(t.get('id', '')) in _agent_ids
+    # A working claim beats A (2026-10-16: 'when agent started working on
+    # /0t it didn't replace the abacus with a demon icon'): the row keeps its
+    # elapsed minutes and top slot, but the abacus becomes spinner + 😈 and it
+    # greys. An idle claim loses to A (JM's timer wins over 🕐); an agent
+    # claim beats A2; a skip beats A2. 🕐, not ⏰: ⏰ is delay.
+    is_working = str(t.get('id', '')) in _agent_ids
+    is_claimed = is_working or (str(t.get('id', '')) in _claim_ids and not is_running)
     is_started = (str(t.get('id', '')) in started_at and not is_running
                   and not is_claimed and not is_skipped)
     if is_running:
@@ -2229,7 +2232,7 @@ for t in unique:
     else:
         prefix = repeat + dom_tag
     if is_working:
-        prefix = _agent_frame + ' 😈 ' + prefix
+        prefix = _agent_frame + ' 😈 ' + (prefix[2:] if prefix.startswith('🧮 ') else prefix)
         color = AGENT_GREY
     elif is_claimed:
         prefix = '🧮 🕐 ' + prefix

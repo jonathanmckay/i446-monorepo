@@ -4,8 +4,9 @@
 2026-10-13 order, top down: JM's running timer (🧮 Nm), tasks JM started
 today (Enter/ctrl-s) that aren't done (🧮, most recent start first), agent
 claims mid-turn (spinner + 😈, grey), agent claims waiting on JM (🧮 🕐),
-then everything else. A task JM is timing stays tier A even if an agent
-also holds it.
+then everything else. A task JM is timing stays on top even if an agent
+also holds it; a WORKING claim on it swaps the abacus for spinner + 😈
+(2026-10-16), an idle one leaves his timer's 🧮 Nm.
 
 Runs the real list-gen payload with HOME pointed at a temp dir whose
 agent-claims store holds one idle and one working claim.
@@ -40,7 +41,7 @@ def _claim(root: Path, tid: str, state: str):
     (root / f"{tid}.state").write_text(f"{state} {int(time.time())}\n")
 
 
-def _run(timer_id: str, started=(), skipped="") -> str:
+def _run(timer_id: str, started=(), skipped="", rc_state="working") -> str:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         home = tmp / "home"
@@ -49,7 +50,7 @@ def _run(timer_id: str, started=(), skipped="") -> str:
         (home / "i446-monorepo").symlink_to(MONO)
         _claim(claims, "W1", "working")
         _claim(claims, "I1", "idle")
-        _claim(claims, "RC", "working")
+        _claim(claims, "RC", rc_state)
         state = home / ".local/state"
         (state / "jm").mkdir(parents=True)
         (state / "jm/dtd-started").write_text("".join(
@@ -133,12 +134,24 @@ def test_tier_markers():
         assert not any(m in row for m in ("🧮", "🕐", "😈"))
 
 
-def test_running_beats_agent_claim():
+def test_working_claim_replaces_abacus_on_timed_task():
+    """2026-10-16 bug: "when agent started working on /0t it didn't replace
+    the abacus with a demon icon". JM hits Enter on 0t (timer runs on it), the
+    /0t session claims it and goes working: the row stays on top with its
+    minutes, but 🧮 becomes spinner + 😈 and the row greys."""
     out = _run("RC")
     ids = _ids(out)
     assert ids[0] == "RC" and ids.index("W1") < ids.index("I1"), ids
     row = _row_for_id(out, "RC")
-    assert "🧮" in row and "😈" not in row and GREY not in row
+    assert "😈" in row and "🧮" not in row and "5m · " in row and row.startswith(GREY), row
+
+
+def test_idle_claim_loses_to_running_timer():
+    """An idle claim on the task JM is timing still renders as his timer
+    (🧮 Nm), not 🧮 🕐: the agent is waiting on him, he is the one working."""
+    out = _run("RC", rc_state="idle")
+    row = _row_for_id(out, "RC")
+    assert "🧮 5m · " in row and "🕐" not in row and "😈" not in row and GREY not in row, row
 
 
 def test_resolver_strips_tier_prefixes():

@@ -272,14 +272,16 @@ def _timer_task_id(timer_file) -> str:
 
 
 def _claims(skip_id: str = "") -> list[tuple[str, bool]]:
-    """(task name, working) for every claim, minus the task JM is timing (the
-    ▶ line already shows it; his timer wins, as in the list)."""
+    """(task name, working) for every claim, minus an IDLE claim on the task
+    JM is timing (the ▶ line already shows it; his timer wins, as in the
+    list). A working claim on that task still gets its spinner line
+    (2026-10-16: the agent mid-turn must show as 😈 even while JM times it)."""
     if agent_claims is None:
         return []
     try:
         recs = agent_claims.load()
         return sorted((r.get("task", ""), bool(r.get("working")))
-                      for tid, r in recs.items() if tid != skip_id)
+                      for tid, r in recs.items() if tid != skip_id or r.get("working"))
     except Exception:
         return []
 
