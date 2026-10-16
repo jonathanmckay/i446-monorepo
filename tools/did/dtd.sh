@@ -2211,8 +2211,12 @@ for t in unique:
         is_running = bool(running_clean and clean == running_clean)
     # In-progress tiers (2026-10-11), all printed at the TOP of the list in
     # this order (2026-10-13); see the print loop below:
-    #   A  JM's own running timer: 🧮 Nm, domain color
+    #   A  JM's own running timer: spinner Nm, domain color (2026-10-16: 'when
+    #      my time is on a certain task, it should be a clock ticker or
+    #      something like the claude snowflake that shows movement'; the
+    #      watcher reloads once a second while the timer runs so it moves)
     #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: 🧮
+    #      ('if I started but didn't finish, it can just show the abacus')
     #   C  agent claim working: spinner + 😈, grey
     #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
     # A working claim beats A (2026-10-16: 'when agent started working on
@@ -2226,13 +2230,15 @@ for t in unique:
                   and not is_claimed and not is_skipped)
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
-        prefix = f'🧮 {elapsed}m · {dom_tag}'
+        prefix = f'{_agent_frame} {elapsed}m · {dom_tag}'
     elif is_started:
         prefix = '🧮 ' + repeat + dom_tag
     else:
         prefix = repeat + dom_tag
     if is_working:
-        prefix = _agent_frame + ' 😈 ' + (prefix[2:] if prefix.startswith('🧮 ') else prefix)
+        # Drop the tier-A/A2 lead glyph (spinner or abacus) so it isn't doubled.
+        _lead = prefix.split(' ', 1)
+        prefix = _agent_frame + ' 😈 ' + (_lead[1] if len(_lead) == 2 and _lead[0] in ('🧮', _agent_frame) else prefix)
         color = AGENT_GREY
     elif is_claimed:
         prefix = '🧮 🕐 ' + prefix
@@ -3211,6 +3217,8 @@ TALLY_PID=$!
       [[ "$(stat -f %Fm "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)" != "${last_ac:-}" ]] && break
       _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
       (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && break
+      # JM's own timer running: 1s cadence so the top row's glyph moves (2026-10-16).
+      (( _acw >= 2 )) && [[ -s "$DTD_TIMER" ]] && break
     done
     _dtd_tz_refresh
     watch_today="$(date +%Y-%m-%d)"
@@ -3270,6 +3278,7 @@ TALLY_PID=$!
     fi
     _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
     (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && ac_reload=1
+    [[ -s "$DTD_TIMER" ]] && ac_reload=1   # running timer: re-render so its spinner advances
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" ]] && continue
     [[ "$cur_m" == "$last_m" && -z "$ac_reload" ]] && continue
