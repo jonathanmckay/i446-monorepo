@@ -125,6 +125,9 @@ class CloseTodoistTask(unittest.TestCase):
                     raise _mk_http_error(500, b"server err")
                 return _mk_response(204)
             attempts["get"] += 1
+            if attempts["post"] < 2:
+                # the pre-retry read-back (2026-10-16): still open, so retry
+                return _mk_response(200, json.dumps({"id": "T5", "checked": False, "due": None}).encode())
             raise _mk_http_error(404)
 
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):

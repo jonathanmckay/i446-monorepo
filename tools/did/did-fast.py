@@ -2498,29 +2498,65 @@ def defer_todoist_task(task_id: str, defer_date: str, points_claimed: int,
     return True, None
 
 
-def close_todoist_task(task_id: str, _retry: bool = True) -> tuple[str, bool, str | None]:
-    """POST /tasks/{id}/close, then verify. Returns (id, ok, error)."""
+def _close_landed(task_id: str, expected_due: str | None) -> bool:
+    """After a transient failure on POST /close: did the close go through
+    anyway? True when the task reads back checked, or (recurring) its due
+    date is no longer the one the caller saw before closing. Unknown (GET
+    failed, or no expected_due to compare) -> False, i.e. retry as before."""
+    try:
+        _s, body = _todoist_request(f"{TODOIST_BASE}/tasks/{task_id}", "GET")
+        data = json.loads(body)
+    except urllib.error.HTTPError as e:
+        return e.code == 404   # archived = closed
+    except Exception:
+        return False
+    if data.get("checked") is True:
+        return True
+    due = (data.get("due") or {}).get("date")
+    return bool(expected_due) and due is not None and due != expected_due
+
+
+def close_todoist_task(task_id: str, _retry: bool = True,
+                       expected_due: str | None = None) -> tuple[str, bool, str | None]:
+    """POST /tasks/{id}/close, then verify. Returns (id, ok, error).
+
+    The close is NOT idempotent for a recurring task: every POST advances the
+    recurrence one occurrence. A client-side timeout on a POST the server had
+    processed, followed by the blind retry this used to do, closed 0g twice
+    21s apart (2026-10-15 07:33:38 and 07:33:59), so its due jumped two days
+    and the card was missing from dtd all of 2026-10-16. Before retrying, read
+    the task back (_close_landed) and skip the retry when the first close
+    evidently went through. `expected_due` is the due date the caller saw
+    before closing (the cache's), which is what makes that check exact for a
+    recurring task."""
     url = f"{TODOIST_BASE}/tasks/{task_id}/close"
     try:
         _todoist_request(url, method="POST")
     except Exception as e:
         msg, transient = _classify_error(e)
         if transient and _retry:
+            if _close_landed(task_id, expected_due):
+                return task_id, True, None   # the timed-out POST went through
             import time
             time.sleep(0.5)
-            return close_todoist_task(task_id, _retry=False)
+            return close_todoist_task(task_id, _retry=False, expected_due=expected_due)
         return task_id, False, msg
 
     ok, verr = _verify_closed(task_id)
     return task_id, ok, verr
 
 
-def close_todoist_tasks(task_ids: list[str]) -> dict[str, tuple[bool, str | None]]:
+def close_todoist_tasks(task_ids: list[str],
+                        due_by_id: dict[str, str | None] | None = None) -> dict[str, tuple[bool, str | None]]:
+    """`due_by_id`: each task's due date as the caller last saw it, so a retry
+    after a timeout can tell a recurring close that already landed."""
     if not task_ids:
         return {}
     results = {}
+    due_by_id = due_by_id or {}
     with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(close_todoist_task, tid): tid for tid in task_ids}
+        futures = {pool.submit(close_todoist_task, tid, True, due_by_id.get(tid)): tid
+                   for tid in task_ids}
         for future in as_completed(futures):
             tid, ok, err = future.result()
             results[tid] = (ok, err)
@@ -3617,6 +3653,7 @@ def main():
 
     # 6. Close or defer Todoist tasks in parallel
     task_ids = []
+    due_by_id = {}  # tid → due date as cached, for close_todoist_task's retry check
     defer_items = {}  # tid → (defer_date, points_claimed, content)
     id_to_name = {}
     future_skipped = []  # tasks skipped because due date is in the future
@@ -3690,8 +3727,9 @@ def main():
                 catch_up.append((tid, r.todoist_task))
             else:
                 task_ids.append(tid)
+                due_by_id[tid] = r.todoist_task.get("due") or None
 
-    close_results = close_todoist_tasks(task_ids)
+    close_results = close_todoist_tasks(task_ids, due_by_id)
 
     # Fast-forward OVERDUE recurring habits to their next occurrence, leaving
     # a closed dated child behind for the stale occurrence (see

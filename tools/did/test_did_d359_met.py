@@ -82,7 +82,7 @@ def _intercept_segment() -> tuple[str, str]:
 def test_intercept_runs_before_point_credit_and_close():
     src, _seg = _intercept_segment()
     i_intercept = src.index("d359_outreach_slug(")
-    i_close = src.index("close_todoist_tasks(task_ids)")
+    i_close = src.index("close_todoist_tasks(task_ids, due_by_id)")
     i_fen = src.index("fen_appends = []")
     assert i_intercept < i_close
     assert i_intercept < i_fen
