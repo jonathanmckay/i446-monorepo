@@ -244,6 +244,7 @@ def run_form(target: _dt.date) -> dict | None:
         else:
             e.app.layout.focus_next()             # single-line: next field
 
+    @kb.add("escape", eager=True)   # Esc = save and back to dtd (2026-10-16)
     @kb.add("c-s")
     def _(e):
         _submit(e.app)

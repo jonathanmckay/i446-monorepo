@@ -513,6 +513,14 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
         if page_no > 1:
             e.app.exit(result="back")
 
+    # Esc = save this page and leave the survey (2026-10-16: opened inline
+    # from dtd's Enter, Esc must land back on the dtd list). Pages already
+    # queued stay queued; the week's cards are closed only when every page
+    # was submitted.
+    @kb.add("escape", eager=True)
+    def _(e):
+        e.app.exit(result="finish")
+
     @kb.add("c-q")
     @kb.add("c-c")
     def _(e):
@@ -568,9 +576,12 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False) -
         if cfg["sheet"] not in queued:
             queued.append(cfg["sheet"])
         i += 1
+        if action == "finish":
+            break
     # Every page submitted = survey finished → close the week's family cards
-    # (queued behind the Neon writes; see queue_finish_marks).
-    marked = [] if no_mark else queue_finish_marks()
+    # (queued behind the Neon writes; see queue_finish_marks). An Esc before
+    # the last page saves what was filled but leaves the cards open.
+    marked = [] if (no_mark or i < total) else queue_finish_marks()
     all_ok = drain_writes()
     print("xk887 → week %s done (%s)%s" % (
         week_row_label(sunday), ", ".join(queued),
