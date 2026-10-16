@@ -7,6 +7,11 @@
       "Bash(osascript -e *)",
       "Bash(python3 -c *)",
       "Bash(ssh ix:*)"
+    ],
+    "deny": [
+      "Artifact",
+      "ArtifactData",
+      "ArtifactComments"
     ]
   },
   "model": "fable",
