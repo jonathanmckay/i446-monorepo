@@ -754,6 +754,43 @@ fi
 ENTEREOF
 chmod +x "$DTD_ENTER"
 
+# --- Inline survey form wrapper, run by fzf execute() from the Enter router ---
+# (2026-10-16: "hitting enter on that sort of task from dtd will open the form
+# in that cmd line ... when it escapes I go back to the main panel"). Args:
+# <id> <form.py> [form args...]. Starts the task's timer exactly as a plain
+# Enter does ($DTD_ENTER), then runs the full-screen prompt_toolkit form on
+# this tty; fzf repaints the list when it exits. Same tty hygiene as every
+# other interactive execute() script: clear the stale frame first (cmux keeps
+# fzf's last frame on screen), and on the way out reset the mouse-tracking
+# modes the form enabled and drain queued input so nothing types itself into
+# the query. A failing form (non-zero exit: blocked week, write error,
+# traceback) holds its output on screen until a key is pressed -- fzf's
+# redraw would otherwise erase the only explanation instantly.
+DTD_FORM="/tmp/dtd-$DTD_ID.form.sh"
+cat > "$DTD_FORM" << FORMEOF
+#!/bin/zsh
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}form\${_T}\$1\${_T}\${2:t}" >> "$DTD_EVENTS" 2>/dev/null
+id="\$1"; form="\$2"; shift 2
+HDR="$DTD_HDR"
+stty sane < /dev/tty 2>/dev/null
+printf "\033[2J\033[H" > /dev/tty
+"$DTD_ENTER" "\$id" >/dev/null 2>&1
+python3 "\$form" "\$@" < /dev/tty > /dev/tty 2>&1
+rc=\$?
+printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
+stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (DRAIN_ECHO note)
+while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+if (( rc )); then
+  printf '\n[%s exited %d] press any key to return to dtd' "\${form:t}" "\$rc" > /dev/tty
+  read -k 1 _discard < /dev/tty 2>/dev/null
+  echo "✗ \${form:t} exited \$rc" > "\$HDR"
+else
+  echo "✓ \${form:t}" > "\$HDR"
+fi
+exit 0
+FORMEOF
+chmod +x "$DTD_FORM"
+
 # Variable 1n+ habits must prompt for minutes on completion — their points
 # are base + rate×minutes, so a silent complete lands at base/zero (bug
 # 2026-07-26: s897 / family / "1 kids nature" never asked). The name list
@@ -1466,7 +1503,33 @@ elif [[ "\$id" == BLOCK:custom ]]; then
   echo "✎ type a whole number of days, then Enter (esc = back)" > "$DTD_HDR"
   print -n 'change-prompt(📅 delay days > )'
 elif [[ -n "\$id" ]]; then
-  "$DTD_ENTER" "\$id" >/dev/null 2>&1
+  # Survey cards open their form inline (2026-10-16) instead of just starting
+  # the timer: one jq pass (same shape as the done router's) turns the row id
+  # into its bare lowercase content -- 😈 ritual prefix, (N) [N] {N} and a
+  # dated " M.D" suffix stripped -- and a zsh case maps it to a form. The
+  # transform only emits the execute(...); \$DTD_FORM starts the timer and
+  # runs the form, so this router stays well under fzf's 1s Pause threshold.
+  # Everything else is a plain Enter: start the timer, nothing more.
+  _clean=\$(jq -r --arg id "\$id" '
+    (([.[] | select(type=="array")[] | select(.id == \$id) | .content] | first) // "")
+    | gsub("😈"; "")
+    | gsub(" *\\\\([0-9]*\\\\)"; "") | gsub(" *\\\\[[0-9]*\\\\]"; "")
+    | gsub(" *\\\\[[0-9.+]*/m\\\\]"; "") | gsub(" *\\\\{[0-9]*\\\\}"; "")
+    | gsub("  +"; " ") | sub("^ *"; "") | sub(" *\$"; "") | ascii_downcase
+    | sub(" [0-9]{1,2}\\\\.[0-9]{1,2}\$"; "")' "${DTD_CACHE_FILE:-/dev/null}" 2>/dev/null)
+  _form=""
+  case "\$_clean" in
+    0l)                               _form="$HOME/i446-monorepo/tools/0s/0s.py" ;;
+    1s)                               _form="$HOME/i446-monorepo/tools/1s/1s-survey.py --no-mark" ;;
+    "1 xk88"|"1 xk87"|"1 xk87 wknd")  _form="$HOME/i446-monorepo/tools/xk887/xk887-survey.py" ;;
+    "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;
+    -1g)                              _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py" ;;
+  esac
+  if [[ -n "\$_form" ]]; then
+    print -rn -- "execute($DTD_FORM \$id \$_form)"
+  else
+    "$DTD_ENTER" "\$id" >/dev/null 2>&1
+  fi
   [[ -e "$DTD_BLOCKPICK.custom" ]] && { rm -f "$DTD_BLOCKPICK.custom"; print -n 'change-prompt(> )'; }
 fi
 exit 0
@@ -3068,7 +3131,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -3568,4 +3631,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM"

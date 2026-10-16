@@ -439,3 +439,56 @@ def test_shared_running_hint_floats_task_to_top():
         assert _list_order(tmp, f"task 4\t{now - 5 * 3600}\tT4")[0] == "T1", "stale hint ignored"
         # dtd's own newer start beats an older shared hint
         assert _list_order(tmp, f"task 4\t{now - 60}\tT4", f"task 2\t{now}\tT2")[0] == "T2"
+
+
+# --- inline survey forms (2026-10-16) ------------------------------------------
+
+def _gen_with_cache(tmp, rows):
+    import json
+    cache = tmp / "cache.json"
+    cache.write_text(json.dumps({"updated": "x", "today": rows}, ensure_ascii=False))
+    extra = f'DTD_CACHE_FILE="{cache}"; DTD_FORM="{tmp}/form-stub"; HOME="/h"'
+    return _gen(tmp, "DTD_PICKENTER", "PICKENTEREOF", extra=extra)
+
+
+def test_pickenter_survey_cards_emit_execute_of_their_form():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        rows = [{"id": "L", "content": "0l (8) [20]"}, {"id": "S", "content": "1s (20) [45]"},
+                {"id": "X", "content": "1 xk88 (5) [15]"}, {"id": "W", "content": "1 xk87 wknd (20) [20]"},
+                {"id": "D", "content": "1 xk88 10.12"}, {"id": "G", "content": "😈 -1g"},
+                {"id": "M", "content": "Moral audit"}, {"id": "P", "content": "plain task (10) [5]"}]
+        s, log = _gen_with_cache(tmp, rows)
+        want = {"L": "/h/i446-monorepo/tools/0s/0s.py",
+                "S": "/h/i446-monorepo/tools/1s/1s-survey.py --no-mark",
+                "X": "/h/i446-monorepo/tools/xk887/xk887-survey.py",
+                "W": "/h/i446-monorepo/tools/xk887/xk887-survey.py",
+                "D": "/h/i446-monorepo/tools/xk887/xk887-survey.py",   # rescheduled dated copy
+                "G": "/h/i446-monorepo/tools/-1g/-1g-form.py",
+                "M": "/h/i446-monorepo/tools/moralaudit/moralaudit.py"}
+        for rid, form in want.items():
+            log.write_text("")
+            out = _run(s, rid, "")
+            assert out == f"execute({tmp}/form-stub {rid} {form})", (rid, out)
+            assert _calls(log) == [], "the router must not start the timer itself (the wrapper does)"
+        # a plain task still just starts its timer, printing nothing
+        log.write_text("")
+        assert _run(s, "P", "") == ""
+        assert _calls(log) == [[str(tmp / "enter-stub"), "", "P"]]
+
+
+def test_form_wrapper_starts_timer_runs_form_and_holds_on_failure():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        s, log = _gen(tmp, "DTD_FORM", "FORMEOF", extra=f'DTD_EVENTS="{tmp}/ev.tsv"')
+        src = s.read_text()
+        assert '"$DTD_ENTER" "$id"' not in src and f'{tmp}/enter-stub" "$id"' in src
+        assert 'python3 "$form" "$@" < /dev/tty > /dev/tty' in src
+        assert "\\033[?1003l" in src or "\033[?1003l" in src, "mouse-mode reset missing"
+        assert "read -k 1 _discard < /dev/tty" in src and "exited" in src, "failure hold missing"
+        assert src.rstrip().endswith("exit 0")
+
+
+def test_form_wrapper_is_cleaned_up_and_hinted():
+    assert '"$DTD_FORM"' in SRC.split("rm -f")[-1] or '"$DTD_FORM"' in SRC[SRC.rindex("rm -f"):]
+    assert "-1g: form" in SRC

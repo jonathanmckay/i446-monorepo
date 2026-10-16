@@ -332,6 +332,12 @@ def main() -> int:
         print(build_html(answers, target))
         return 0
 
+    if not any((v or "").strip() for v in answers.values()):
+        # Esc on an untouched form (opened by accident from dtd) must not
+        # write an empty dated note or open Obsidian (2026-10-16).
+        print("moralaudit → nothing filled, nothing written.")
+        return 0
+
     try:
         path = write_note(answers, target)
     except Exception as e:

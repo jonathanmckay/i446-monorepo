@@ -71,24 +71,36 @@ def plan(lines: list[str], block: str) -> dict:
     return {"goals": goals, "todos": todos}
 
 
-def _append_on_ix(block: str, goals: list[str]) -> tuple[list[str], str]:
-    """(goals actually added, 'ix' | 'local' | 'local-fallback')."""
+RECOVERY_DIR = Path.home() / ".cache" / "1g-form-recovery"
+
+
+def _append_on_ix(block: str, goals: list[str]) -> list[str]:
+    """Append under `block` on ix's build-order (the single writer) and return
+    the goals actually added. Off-ix, delegate over ssh; if ix is unreachable
+    raise -- NEVER fall back to a local write: ix's goal-less copy would sync
+    back over it the moment --ritual's own ssh stamp succeeds (the 2026-08-11
+    clobber). The caller dumps the goals to RECOVERY_DIR instead."""
     if _on_ix():
-        return nb.append_block_goals(block, goals), "ix"
+        return nb.append_block_goals(block, goals)
     py = (
         "import sys, json; sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')\n"
         "import neon_blocks as nb\n"
         f"print(json.dumps(nb.append_block_goals({block!r}, {goals!r})))\n"
     )
-    try:
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-                            "ix", "python3", "-"], input=py, capture_output=True,
-                           text=True, timeout=20)
-        if r.returncode == 0:
-            return json.loads(r.stdout.strip().splitlines()[-1]), "ix"
-    except Exception:  # noqa: BLE001
-        pass
-    return nb.append_block_goals(block, goals), "local-fallback"
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                        "ix", "python3", "-"], input=py, capture_output=True,
+                       text=True, timeout=20)
+    if r.returncode != 0:
+        raise RuntimeError(f"ssh ix failed: {(r.stderr or '').strip()[-200:]}")
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _dump_recovery(block: str, lines: list[str]) -> Path:
+    RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
+    import datetime as dt
+    p = RECOVERY_DIR / f"{dt.datetime.now().isoformat(timespec='seconds')}.json"
+    p.write_text(json.dumps({"block": block, "goals": lines}, ensure_ascii=False, indent=1))
+    return p
 
 
 def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
@@ -103,10 +115,20 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
         return 0
     import todoist
     msgs = []
+    added: list[str] = []
     if p["goals"]:
-        added, where = _append_on_ix(block, [g["text"] for g in p["goals"]])
-        msgs.append(f"build-order {block}: +{len(added)} ({where})")
+        try:
+            added = _append_on_ix(block, [g["text"] for g in p["goals"]])
+            msgs.append(f"build-order {block}: +{len(added)}")
+        except Exception as e:  # noqa: BLE001 -- ssh down, block header missing, ...
+            rec = _dump_recovery(block, lines)
+            print(f"-1g FAILED: build-order write ({e}); goals saved to {rec}", file=out)
+            return 1
+        # Todoist only for goals the build-order didn't already hold, so an
+        # Esc reflex / resubmit never duplicates tasks.
         for g in p["goals"]:
+            if g["text"] not in added:
+                continue
             try:
                 todoist.create_task(g["text"], labels=[GOAL_LABEL, g["domain"]],
                                     due_string="today", priority=4, project_id=GOALS_PROJECT)
@@ -117,10 +139,15 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
             todoist.create_task(t["text"], labels=[t["domain"]], due_string="today")
         except Exception as e:  # noqa: BLE001
             msgs.append(f"todoist FAILED {t['text']!r}: {e}")
-    for args in (["--refresh-cache"], ["--ritual", "-1g"]) if p["goals"] else (["--refresh-cache"],):
-        subprocess.run([sys.executable, str(DID_FAST), *args],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-    print(f"-1g → {block}: {len(p['goals'])} goals, {len(p['todos'])} todos · " + " · ".join(msgs),
+    # --ritual -1g closes the card AND refreshes the task cache itself (one
+    # blocking refresh, not two); todos-only just needs the refresh.
+    args = ["--ritual", "-1g"] if p["goals"] else ["--refresh-cache"]
+    r = subprocess.run([sys.executable, str(DID_FAST), *args], capture_output=True, text=True,
+                       timeout=120)
+    if r.returncode != 0:
+        msgs.append(f"did-fast {' '.join(args)} FAILED rc={r.returncode}: "
+                    f"{(r.stderr or r.stdout).strip()[-160:]}")
+    print(f"-1g → {block}: {len(added)} goals, {len(p['todos'])} todos · " + " · ".join(msgs),
           file=out)
     return 1 if any("FAILED" in m for m in msgs) else 0
 

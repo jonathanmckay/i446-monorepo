@@ -293,6 +293,11 @@ def main() -> int:
         return 0
 
     filled = sum(1 for k, _l, col, *_ in FIELDS if col and (answers.get(k) or "").strip())
+    if not filled and not answers.get("points_checked", "").strip():
+        # Esc on an untouched form (opened by accident from dtd): no ssh
+        # round trip, no "writing 0 fields" (2026-10-16).
+        print("0s → nothing filled, nothing written.")
+        return 0
     # The Excel write runs over ssh to Ix and can take many seconds; after the
     # full-screen form restores the shell, silence here reads as a frozen
     # terminal (user report 2026-07-25). Say what's happening, immediately.

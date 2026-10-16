@@ -34,7 +34,7 @@ DTD = _HERE / "dtd.sh"
 EXPECTED = {
     "agent", "blockapply", "blockarm", "defer", "delete", "domainsearch",
     "done-hide", "done-router", "done", "edit", "enter", "list", "refresh",
-    "skip", "split", "start", "undo", "view-toggle", "pickenter", "back",
+    "skip", "split", "start", "undo", "view-toggle", "pickenter", "back", "form",
 }
 
 
@@ -173,6 +173,7 @@ HOOKS = [  # (script, args, key, ids, extra); None = no line expected
     ("back", ["q"], "back", "", "q"),
     ("split", ["ID1"], "split", "ID1", ""),
     ("agent", ["ID1"], "agent", "ID1", ""),
+    ("form", ["ID1", "/x/0s.py"], "form", "ID1", "0s.py"),
 ]
 
 

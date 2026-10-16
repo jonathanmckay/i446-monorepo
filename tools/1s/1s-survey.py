@@ -566,7 +566,7 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
         else:
             e.app.layout.focus_next()
 
-    @kb.add("escape")
+    @kb.add("escape", eager=True)   # eager: no 1s meta-chord wait (2026-10-16)
     async def _(e):
         await _submit(e.app)
 
