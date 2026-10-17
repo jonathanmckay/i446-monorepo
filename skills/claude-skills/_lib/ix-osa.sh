@@ -56,9 +56,19 @@ remote="osascript -"
 if grep -q -e "set value" -e "set formula" <<<"$script"; then
     remote='Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; if [ -x "$Q" ]; then "$Q"; else osascript -; fi'
 fi
-out="$(ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-       "${IX_HOST}" "$remote" <<<"$script" 2>/tmp/ix-osa.stderr.$$)"
-rc=$?
+# Already on ix (hostname ix): run locally. ssh-to-self goes via the Tailscale
+# name, which ix itself could not reliably resolve on 2026-10-17 -- Neon writes
+# from the dtd session ON ix failed "unreachable". The rule this wrapper
+# enforces is "only ix writes the workbook"; on ix, local is exactly that.
+_h="$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+if [ "$_h" = "ix" ] || [ "${IX_LOCAL:-}" = "1" ]; then
+    out="$(/bin/sh -c "$remote" <<<"$script" 2>/tmp/ix-osa.stderr.$$)"
+    rc=$?
+else
+    out="$(ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+           "${IX_HOST}" "$remote" <<<"$script" 2>/tmp/ix-osa.stderr.$$)"
+    rc=$?
+fi
 err="$(cat /tmp/ix-osa.stderr.$$ 2>/dev/null)"
 rm -f /tmp/ix-osa.stderr.$$
 

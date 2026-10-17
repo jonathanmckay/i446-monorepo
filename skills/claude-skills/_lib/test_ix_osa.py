@@ -105,3 +105,34 @@ def test_writes_run_through_quiet_wrapper_reads_do_not(ix_osa, monkeypatch):
     ix_osa.run('tell application "Microsoft Excel" to get value of cell "A1"')
     assert "neon-osa-quiet.sh" in calls[0][-1]
     assert calls[1][-2:] == ["osascript", "-"]
+
+
+def test_on_ix_runs_locally_instead_of_ssh_to_self(ix_osa, monkeypatch):
+    """Regression 2026-10-17: dtd ON ix could not write Neon -- did-fast's
+    refresh_headers went through `ssh ix` (ssh-to-self via the Tailscale name,
+    unresolvable that morning) and died "ix unreachable" before any write.
+    On ix the AppleScript must run locally: writes via the quiet wrapper,
+    reads via plain osascript, never ssh. Off ix, ssh as before."""
+    calls = []
+
+    class P:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    monkeypatch.setattr(ix_osa.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or P())
+    monkeypatch.setattr(ix_osa, "_notify_janus", lambda s: None)
+    monkeypatch.setattr(ix_osa.socket, "gethostname", lambda: "ix.local")
+    ix_osa.run('tell application "Microsoft Excel" to set value of cell "A1" to 1')
+    ix_osa.run('tell application "Microsoft Excel" to get value of cell "A1"')
+    assert calls[0][0] != "ssh" and "neon-osa-quiet.sh" in calls[0][-1]
+    assert calls[1] == ["osascript", "-"]
+    monkeypatch.setattr(ix_osa.socket, "gethostname", lambda: "Straylight-Refit.local")
+    ix_osa.run('tell application "Microsoft Excel" to get value of cell "A1"')
+    assert calls[2][0] == "ssh", "off-ix must still go over ssh"
+
+
+def test_sh_helper_runs_locally_on_ix():
+    src = (_LIB / "ix-osa.sh").read_text()
+    assert 'hostname -s' in src and '"$_h" = "ix"' in src
+    assert src.index('"$_h" = "ix"') < src.index("ssh -o ConnectTimeout=3"), "local branch must precede ssh"
