@@ -1,22 +1,18 @@
 {
   "version": 1,
   "tasks": {
-    "tasks below 50": {
-      "todoist_id": "6hmvPPc2Q4jQQ77R",
-      "minutes": 60
+    "2 workouts w/1 weights": {
+      "todoist_id": "6hmvRXCcHMqpQc22",
+      "minutes": 40
     },
-    "no more bad media": {
-      "todoist_id": "6hmvPPgh3RX54wh2",
-      "minutes": 15
+    "kids nature lands end": {
+      "todoist_id": "6hmvRXFm44wX3h4R",
+      "minutes": 40
     },
-    "full hit regardless of bball": {
-      "todoist_id": "6hmvPPgHPCmGchW2",
-      "minutes": 30
-    },
-    "aiden here a success": {
-      "todoist_id": "6hmvPPjcJ5xQfFqR",
+    "2h ic time": {
+      "todoist_id": "6hmvRXFmpQv8GFqR",
       "minutes": 30
     }
   },
-  "last_sync": "2026-10-17T10:00:01.401680-07:00"
+  "last_sync": "2026-10-17T12:00:02.594834-07:00"
 }
