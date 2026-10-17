@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-16T16:00:01.278282-07:00"
+  "tasks": {
+    "tasks below 50": {
+      "todoist_id": "6hmhwcjGcR92cpwR",
+      "minutes": 60
+    },
+    "no more bad media": {
+      "todoist_id": "6hmhwcmjRqVFJMc2",
+      "minutes": 15
+    },
+    "full hit regardless of bball": {
+      "todoist_id": "6hmhwcpgwq33xXx2",
+      "minutes": 30
+    },
+    "aiden here a success": {
+      "todoist_id": "6hmhwcpJRvMj8vjR",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-10-16T18:00:01.894234-07:00"
 }
