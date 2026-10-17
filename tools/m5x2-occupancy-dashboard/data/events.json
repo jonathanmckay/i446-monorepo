@@ -7968,5 +7968,45 @@
     "unit": "D28",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-17",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "259",
+    "prop": "m405",
+    "unit": "14",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-17",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "36",
+    "prop": "s300",
+    "unit": "7",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-17",
+    "effective": "2026-10-17",
+    "kind": "movein",
+    "unit_id": "1271",
+    "prop": "c702",
+    "unit": "A101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-17",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "535",
+    "prop": "rl16",
+    "unit": "A22",
+    "tenant": null,
+    "baseline": false
   }
 ]

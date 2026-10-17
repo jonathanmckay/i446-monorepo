@@ -1852,6 +1852,38 @@ end tell'''
     return script
 
 
+def verify_0n_output(stdout: str, writes: list) -> Optional[str]:
+    """None when the 0n AppleScript's verify echo ("OK:row=N|<col>=<val>|...")
+    confirms every write; otherwise why not. rc 0 alone is not proof: on
+    2026-10-17 the ix-osa helper was mid-edit while dtd retried seven
+    completions on ix, every run returned 0 with no OK echo, did-fast
+    reported "0n ✓", and nothing had been written. Cumulative habits echo
+    old+new, so only their presence is checked."""
+    text = (stdout or "").strip()
+    first = text.splitlines()[0] if text else ""
+    if not first.startswith("OK:row="):
+        return f"0n verify: no OK:row echo ({first[:80]!r})"
+    echoed = {}
+    for seg in first.split("|")[1:]:
+        if "=" in seg:
+            k, v = seg.split("=", 1)
+            echoed[k.strip()] = v.strip()
+    for w in writes:
+        col, want = str(w.col_num), w.write_value
+        got = echoed.get(col)
+        if got is None:
+            return f"0n verify: column {col} missing from echo"
+        if w.item.name in CUMULATIVE_0N:
+            continue
+        try:
+            if abs(float(got) - float(want)) > 1e-6:
+                return f"0n verify: column {col} reads {got}, wrote {want}"
+        except (TypeError, ValueError):
+            if str(got) != str(want):
+                return f"0n verify: column {col} reads {got!r}, wrote {want!r}"
+    return None
+
+
 def _did_src(names: list[str]) -> str:
     """Ledger `src` label for a /did credit: the habit/task names earning it."""
     uniq = list(dict.fromkeys(n for n in names if n))
@@ -4026,12 +4058,15 @@ def main():
             output["1n_0fen_write"]["error"] = one_n_fen_result.stderr.strip() or f"ix-osa exit {one_n_fen_result.returncode}"
 
     if on_result:
+        on_verr = verify_0n_output(on_result.stdout, on_writes) if on_result.returncode == 0 else None
         output["0n_write"] = {
-            "ok": on_result.returncode == 0,
+            "ok": on_result.returncode == 0 and on_verr is None,
             "output": on_result.stdout.strip(),
         }
         if on_result.returncode != 0:
             output["0n_write"]["error"] = on_result.stderr.strip() or f"ix-osa exit {on_result.returncode}"
+        elif on_verr:
+            output["0n_write"]["error"] = on_verr
     if fen_result:
         output["0fen_write"] = {
             "ok": fen_result.returncode == 0,
