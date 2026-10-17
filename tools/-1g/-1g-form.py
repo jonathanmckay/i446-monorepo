@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 LIB = Path.home() / "i446-monorepo" / "lib"
@@ -103,6 +105,36 @@ def _dump_recovery(block: str, lines: list[str]) -> Path:
     return p
 
 
+LOG = Path.home() / ".cache" / "1g-form.log"
+
+
+def _hdr(msg: str) -> None:
+    """Show `msg` in dtd's header line when launched from dtd (DTD_HDR_FILE)."""
+    hdr = os.environ.get("DTD_HDR_FILE")
+    if hdr:
+        try:
+            Path(hdr).write_text(msg + "\n")
+        except OSError:
+            pass
+
+
+def detach(lines: list[str], block: str) -> None:
+    """Run save() in a detached child and return at once, so dtd's list is
+    back on screen immediately instead of after ~5s of Todoist + Excel +
+    cache refresh (user report 2026-10-17: "exiting the -1g dialog and
+    getting back to dtd was a bit too slow"). The child reports into dtd's
+    header via DTD_HDR_FILE and logs to LOG; dtd's cache watcher hides the
+    card once --ritual's refresh lands."""
+    tmp = Path(tempfile.mkstemp(prefix="1g-form-", suffix=".json")[1])
+    tmp.write_text(json.dumps({"goals": lines}, ensure_ascii=False))
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "ab") as log:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--from-json", str(tmp),
+                          "--block", block, "--unlink-json"],
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+    _hdr(f"⏳ -1g → {block}: saving {sum(1 for l in lines if l.strip())} goal(s)…")
+
+
 def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
          out=sys.stdout) -> int:
     block = block or nb.current_block(_local_hour())
@@ -122,7 +154,9 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
             msgs.append(f"build-order {block}: +{len(added)}")
         except Exception as e:  # noqa: BLE001 -- ssh down, block header missing, ...
             rec = _dump_recovery(block, lines)
-            print(f"-1g FAILED: build-order write ({e}); goals saved to {rec}", file=out)
+            msg = f"✗ -1g FAILED: build-order write ({e}); goals saved to {rec}"
+            print(msg, file=out)
+            _hdr(msg)
             return 1
         # Todoist only for goals the build-order didn't already hold, so an
         # Esc reflex / resubmit never duplicates tasks.
@@ -147,9 +181,11 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
     if r.returncode != 0:
         msgs.append(f"did-fast {' '.join(args)} FAILED rc={r.returncode}: "
                     f"{(r.stderr or r.stdout).strip()[-160:]}")
-    print(f"-1g → {block}: {len(added)} goals, {len(p['todos'])} todos · " + " · ".join(msgs),
-          file=out)
-    return 1 if any("FAILED" in m for m in msgs) else 0
+    failed = any("FAILED" in m for m in msgs)
+    summary = f"-1g → {block}: {len(added)} goals, {len(p['todos'])} todos · " + " · ".join(msgs)
+    print(summary, file=out)
+    _hdr(("✗ " if failed else "✓ ") + summary)
+    return 1 if failed else 0
 
 
 def run_form(block: str) -> list[str] | None:
@@ -213,14 +249,22 @@ def main() -> int:
     ap.add_argument("--from-json", help='{"goals": [...]} instead of the form')
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--block", help="地支 block (default: current)")
+    ap.add_argument("--detach", action="store_true",
+                    help="after the form, save in a detached child and exit at once (dtd)")
+    ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
     block = a.block or nb.current_block(_local_hour())
     if a.from_json:
         lines = json.loads(Path(a.from_json).read_text())["goals"]
+        if a.unlink_json:
+            Path(a.from_json).unlink(missing_ok=True)
     else:
         lines = run_form(block)
         if lines is None:
             print("-1g: cancelled")
+            return 0
+        if a.detach and not a.dry_run and any(l.strip() for l in lines):
+            detach(lines, block)
             return 0
     return save(lines, block=block, dry_run=a.dry_run)
 

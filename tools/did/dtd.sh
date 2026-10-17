@@ -772,6 +772,7 @@ cat > "$DTD_FORM" << FORMEOF
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}form\${_T}\$1\${_T}\${2:t}" >> "$DTD_EVENTS" 2>/dev/null
 id="\$1"; form="\$2"; shift 2
 HDR="$DTD_HDR"
+export DTD_HDR_FILE="\$HDR"   # forms that finish in the background report here
 stty sane < /dev/tty 2>/dev/null
 printf "\033[2J\033[H" > /dev/tty
 "$DTD_ENTER" "\$id" >/dev/null 2>&1
@@ -1530,7 +1531,7 @@ elif [[ -n "\$id" ]]; then
     1s)                               _form="$HOME/i446-monorepo/tools/1s/1s-survey.py --no-mark" ;;
     "1 xk88"|"1 xk87"|"1 xk87 wknd")  _form="$HOME/i446-monorepo/tools/xk887/xk887-survey.py" ;;
     "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;
-    -1g)                              _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py" ;;
+    -1g)                              _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --detach" ;;
   esac
   if [[ -n "\$_form" ]]; then
     print -rn -- "execute($DTD_FORM \$id \$_form)"

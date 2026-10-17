@@ -122,3 +122,44 @@ def test_todoist_failure_is_reported_nonzero(form, monkeypatch):
 def test_form_has_escape_save_and_ctrl_q_discard(form):
     src = (HERE / "-1g-form.py").read_text()
     assert '@kb.add("escape", eager=True)' in src and '@kb.add("c-q")' in src
+
+
+def test_detach_spawns_child_and_reports_in_dtd_header(form, monkeypatch, tmp_path):
+    """2026-10-17: returning to dtd waited ~5s on Todoist + Excel + refresh.
+    With --detach the form hands the lines to a detached child and exits at
+    once; the child reports into dtd's header file."""
+    spawned = []
+    monkeypatch.setattr(form.subprocess, "Popen", lambda cmd, **kw: spawned.append((cmd, kw)))
+    hdr = tmp_path / "hdr"
+    monkeypatch.setenv("DTD_HDR_FILE", str(hdr))
+    monkeypatch.setattr(form, "LOG", tmp_path / "log")
+    form.detach(["fix janus", "", ""], "巳")
+    cmd, kw = spawned[0]
+    assert cmd[1].endswith("-1g-form.py") and "--from-json" in cmd and cmd[cmd.index("--block") + 1] == "巳"
+    assert kw["start_new_session"] is True
+    import json as _j
+    payload = _j.loads(Path(cmd[cmd.index("--from-json") + 1]).read_text())
+    assert payload == {"goals": ["fix janus", "", ""]}
+    assert hdr.read_text().startswith("⏳ -1g → 巳")
+
+
+def test_save_reports_result_into_dtd_header(form, monkeypatch, tmp_path):
+    hdr = tmp_path / "hdr"
+    monkeypatch.setenv("DTD_HDR_FILE", str(hdr))
+    monkeypatch.setattr(form, "_append_on_ix", lambda b, g: g)
+
+    class T:
+        @staticmethod
+        def create_task(content, **kw):
+            return {"id": "x"}
+    monkeypatch.setitem(sys.modules, "todoist", T)
+    monkeypatch.setattr(form.subprocess, "run", lambda cmd, **kw: _RC())
+    form.save(["a goal", "", ""], block="巳", out=io.StringIO())
+    assert hdr.read_text().startswith("✓ -1g → 巳: 1 goals")
+
+
+def test_main_detach_skips_blank_form(form, monkeypatch):
+    monkeypatch.setattr(form, "run_form", lambda block: ["", "", ""])
+    monkeypatch.setattr(form, "detach", lambda *a: pytest.fail("blank form must not spawn"))
+    monkeypatch.setattr(sys, "argv", ["-1g-form.py", "--detach", "--block", "巳"])
+    assert form.main() == 0

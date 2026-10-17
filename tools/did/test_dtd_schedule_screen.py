@@ -464,7 +464,7 @@ def test_pickenter_survey_cards_emit_execute_of_their_form():
                 "X": "/h/i446-monorepo/tools/xk887/xk887-survey.py",
                 "W": "/h/i446-monorepo/tools/xk887/xk887-survey.py",
                 "D": "/h/i446-monorepo/tools/xk887/xk887-survey.py",   # rescheduled dated copy
-                "G": "/h/i446-monorepo/tools/-1g/-1g-form.py",
+                "G": "/h/i446-monorepo/tools/-1g/-1g-form.py --detach",
                 "M": "/h/i446-monorepo/tools/moralaudit/moralaudit.py"}
         for rid, form in want.items():
             log.write_text("")
@@ -487,6 +487,7 @@ def test_form_wrapper_starts_timer_runs_form_and_holds_on_failure():
         assert "\\033[?1003l" in src or "\033[?1003l" in src, "mouse-mode reset missing"
         assert "read -k 1 _discard < /dev/tty" in src and "exited" in src, "failure hold missing"
         assert src.rstrip().endswith("exit 0")
+        assert 'export DTD_HDR_FILE="$HDR"' in src, "background forms report into the header"
 
 
 def test_form_wrapper_is_cleaned_up_and_hinted():
