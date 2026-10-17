@@ -273,6 +273,8 @@ def cmux_panes():
         return []
     pl = _cmux('pane.list')
     panes = pl.get('panes') or []
+    global _cmux_answered
+    _cmux_answered = bool(pl)
     if not panes:
         return []
     wsid = pl.get('workspace_id') or ''
@@ -310,6 +312,11 @@ def cmux_panes():
     for _, _, sid, sfid in order:
         if sid not in seen:
             seen.add(sid); out.append((len(out) + CLAUDE_FIRST, sid, sfid, stitle.get(sfid, '')))
+    try:
+        PANES_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        PANES_CACHE.write_text(json.dumps({sid: n for n, sid, _, _ in out}))
+    except Exception:
+        pass
     return out
 
 
@@ -376,9 +383,30 @@ def cmd_order(idx, args):
     cmd_retitle()
 
 
+PANES_CACHE = STATE / 'pane-numbers.json'   # {session_id: n}, written by cmux_panes() whenever cmux answers
+_cmux_answered = False
+
+
+def _live_sids():
+    """Session ids some claude process on this host is running (--session-id/--resume in argv)."""
+    ps = subprocess.run(['ps', '-axo', 'command='], capture_output=True, text=True).stdout
+    return set(re.findall(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', ps))
+
+
 def cmux_numbers():
-    """{session_id: n} from cmux_panes()."""
-    return {sid: n for n, sid, _, _ in cmux_panes()}
+    """{session_id: n} from cmux_panes(). cmux's socket only answers from inside the GUI login
+    session (over ssh/cron `cmux rpc` dies with a broken pipe), so when it does not answer the
+    numbering cached by the last GUI-side call (the session-title hook runs one on every prompt)
+    is used instead, limited to sessions whose claude process is still alive."""
+    nums = {sid: n for n, sid, _, _ in cmux_panes()}
+    if nums or _cmux_answered:
+        return nums
+    try:
+        cached = json.loads(PANES_CACHE.read_text())
+    except Exception:
+        return {}
+    live = _live_sids()
+    return {sid: n for sid, n in cached.items() if sid in live}
 
 
 NUM_PREFIX_RE = re.compile(r'^\d{1,2} · ')
