@@ -775,7 +775,14 @@ HDR="$DTD_HDR"
 stty sane < /dev/tty 2>/dev/null
 printf "\033[2J\033[H" > /dev/tty
 "$DTD_ENTER" "\$id" >/dev/null 2>&1
-python3 "\$form" "\$@" < /dev/tty > /dev/tty 2>&1
+# The form's stdin must be the REAL pty device, not /dev/tty: on macOS kqueue
+# refuses /dev/tty (EINVAL), and prompt_toolkit's event loop add_reader()s
+# stdin, so every inline form died with "OSError: [Errno 22] Invalid
+# argument" (2026-10-17, -1g form). ttyname() of an fd opened on /dev/tty is
+# just "/dev/tty" again, so resolve the controlling terminal through ps.
+_tty=/dev/\$(ps -o tty= -p \$\$ 2>/dev/null | tr -d ' ')
+[[ "\$_tty" == /dev/ttys* ]] || _tty=/dev/tty
+python3 "\$form" "\$@" < "\$_tty" > "\$_tty" 2>&1
 rc=\$?
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (DRAIN_ECHO note)
