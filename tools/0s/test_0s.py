@@ -138,7 +138,7 @@ def test_progress_line_printed_before_slow_neon_write():
     queued = main_src.index("_writer.queue(_write_neon")
     assert announce < queued, "progress line must precede queuing the Excel write"
     assert "flush=True" in main_src[:queued]
-    assert main_src.index("marking 0l done") < main_src.index("subprocess.run")
+    assert main_src.index("marking 0l done") < main_src.index("run_bounded(")
 
 
 def test_did_fast_0l_timeout_has_headroom():
@@ -158,9 +158,9 @@ def test_did_fast_0l_timeout_has_headroom():
         return False
 
     calls = [n for n in ast.walk(main_fn) if isinstance(n, ast.Call)
-             and getattr(n.func, "attr", None) == "run"
+             and (getattr(n.func, "attr", None) == "run" or getattr(n.func, "id", None) == "run_bounded")
              and any(_has_0l(a) for a in n.args)]
-    assert calls, "expected a subprocess.run(...) call passing \"0l\""
+    assert calls, "expected a run_bounded(...) / subprocess.run(...) call passing \"0l\""
     timeout_kw = next(kw for kw in calls[0].keywords if kw.arg == "timeout")
     assert timeout_kw.value.value >= 120, "0l subprocess timeout must have headroom past 60s"
 
@@ -188,9 +188,9 @@ def test_did_fast_0l_call_overrides_internal_watchdog():
         return False
 
     calls = [n for n in ast.walk(main_fn) if isinstance(n, ast.Call)
-             and getattr(n.func, "attr", None) == "run"
+             and (getattr(n.func, "attr", None) == "run" or getattr(n.func, "id", None) == "run_bounded")
              and any(_has_0l(a) for a in n.args)]
-    assert calls, "expected a subprocess.run(...) call passing \"0l\""
+    assert calls, "expected a run_bounded(...) / subprocess.run(...) call passing \"0l\""
     call = calls[0]
     env_kw = next((kw for kw in call.keywords if kw.arg == "env"), None)
     assert env_kw is not None, "did-fast 0l call must pass env= to override DIDFAST_WATCHDOG_SECS"

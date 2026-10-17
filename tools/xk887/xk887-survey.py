@@ -39,7 +39,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
-from review_form_writer import BackgroundWriter  # noqa: E402
+from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "xk887.xlsx"
@@ -273,8 +273,7 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
 
 def write_answers(answers: dict, sunday: _dt.date, sheets=None) -> str:
     script = build_applescript(answers, sunday, sheets=sheets)
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                          text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):
         raise RuntimeError(out or proc.stderr.strip() or "ix-osa failed")
@@ -375,15 +374,13 @@ def queue_finish_marks(today: _dt.date | None = None) -> list[str]:
     cards = open_finish_cards(queue, today or _dt.date.today())
     for card in cards:
         def _mark(card=card):
-            r = subprocess.run(["/usr/bin/python3", str(RUN_PY), card],
-                               capture_output=True, text=True, timeout=120)
+            r = run_bounded(["/usr/bin/python3", str(RUN_PY), card], timeout=120)
             tail = (r.stdout or r.stderr or "").strip().splitlines()
             return "%s: %s" % (card, tail[-1] if tail else "exit %d" % r.returncode)
         _writer.queue(_mark, tag="did-" + card)
     if cards:
         def _refresh():
-            subprocess.run(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"],
-                           capture_output=True, text=True, timeout=60)
+            run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
             return "dtd cache refreshed"
         _writer.queue(_refresh, tag="dtd-refresh")
     return cards

@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
-from review_form_writer import BackgroundWriter  # noqa: E402
+from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
@@ -161,7 +161,7 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
 
 def write_answers(answers: dict, target: _dt.date) -> str:
     script = build_applescript(answers, target)
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True, text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):
         raise RuntimeError(out or proc.stderr.strip() or "ix-osa failed")
@@ -333,9 +333,8 @@ def main() -> int:
             # that internal ceiling still cut 0l off before it finished, so
             # stdout came back empty. Override it to match this call's budget.
             env = dict(os.environ, DIDFAST_WATCHDOG_SECS="110")
-            proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
-                                   capture_output=True, text=True, timeout=120,
-                                   env=env)
+            proc = run_bounded(["/usr/bin/python3", str(DID_FAST), "0l"],
+                               timeout=120, env=env)
             # did-fast always exits 0 and reports per-write ok/error in its
             # JSON stdout — a clean subprocess return does NOT mean the 0n
             # write actually succeeded, so it must be checked explicitly
