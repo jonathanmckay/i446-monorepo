@@ -34,6 +34,7 @@ DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 DEFER_FAST = Path.home() / "i446-monorepo/tools/did/defer-fast.py"
+EDIT_FAST = Path.home() / "i446-monorepo/tools/did/edit-fast.py"
 STATE_DIR = Path.home() / ".local/state/jm"
 CACHE = STATE_DIR / "task-queue.json"
 DONE_FILE = STATE_DIR / "completed-today.json"
@@ -631,6 +632,56 @@ def defer_task(task_id: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def edit_get(task_id: str) -> dict:
+    """ctrl-g prefill: shell out to edit-fast.py --current, which prints the
+    editable fields (name/domain/points/description) plus the full allowed
+    domain list as shlex-quoted shell assignments. Parse them back into JSON
+    for the mobile edit sheet. The description is NOT in build_tasks()' task
+    objects, so this on-demand fetch is the only way the sheet gets it."""
+    import shlex
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(EDIT_FAST), "--current", "--id", task_id, str(CACHE)],
+            capture_output=True, text=True, timeout=20)
+        if proc.returncode != 0:
+            return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:] or "task not found"}
+        fields: dict = {}
+        for line in proc.stdout.splitlines():
+            if "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            toks = shlex.split(v)          # shlex.quote emits exactly one token
+            fields[k] = toks[0] if toks else ""
+        return {
+            "ok": True,
+            "name": fields.get("cur_name", ""),
+            "domain": fields.get("cur_domain", ""),
+            "points": fields.get("cur_points", ""),
+            "desc": fields.get("cur_desc", ""),
+            "domains": (fields.get("domains", "") or "").split(),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def edit_apply(task_id: str, name: str, domain: str, points: str, desc: str) -> dict:
+    """ctrl-g submit: shell out to edit-fast.py --fields. edit-fast diffs each
+    field against the current prefill and applies only what changed (empty
+    name/domain/points mean "leave it"; an empty desc clears it), writing both
+    Todoist and the task-queue cache in place. We pass all four fields; the
+    diff lives in edit-fast so both surfaces behave identically."""
+    try:
+        args = ["/usr/bin/python3", str(EDIT_FAST), "--fields", "--id", task_id, str(CACHE),
+                "--name", name, "--domain", domain, "--points", points, "--desc", desc]
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        out = (proc.stdout or "").strip()
+        if proc.returncode != 0 or out.startswith("✗"):
+            return {"ok": False, "error": (out or proc.stderr or "edit failed")[-300:]}
+        return {"ok": True, "message": out}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _write_snooze(task_id: str, value) -> None:
     """Read-modify-write dtd-block-snooze.json for one task id. Shared by
     every delay-to-later-today path (block-by-hour, next-block, minute-
@@ -1010,6 +1061,27 @@ def api_add():
         return jsonify({"ok": False, "error": "no content"}), 400
     return jsonify(create_todoist_task(content, labels))
 
+@app.route("/api/edit-get")
+def api_edit_get():
+    task_id = str(request.args.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    res = edit_get(task_id)
+    return jsonify(res), (200 if res.get("ok") else 404)
+
+@app.route("/api/edit", methods=["POST"])
+def api_edit():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    res = edit_apply(task_id,
+                     str(body.get("name") or ""),
+                     str(body.get("domain") or ""),
+                     str(body.get("points") or ""),
+                     str(body.get("desc") or ""))
+    return jsonify(res), (200 if res.get("ok") else 400)
+
 @app.route("/")
 def index():
     return render_template_string(PAGE)
@@ -1066,7 +1138,13 @@ PAGE = r"""<!doctype html>
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; }
   .act-day { background:#546e7a; }
   .act-block { background:#8e6fce; }
+  .act-edit { background:#c0873d; }
   .act-start { background:var(--start); color:#001a26; }
+  .editDesc { width:100%; min-height:70px; resize:vertical; background:#1b1b1b; color:#cfcfcf;
+    border:1px solid #3a3a3a; border-radius:8px; padding:11px 12px; font:15px/1.35 inherit;
+    margin-top:10px; }
+  .editDesc:focus { outline:none; border-color:var(--go); }
+  select.sheetInput { margin-top:10px; -webkit-appearance:none; appearance:none; }
   .line { position:relative; display:flex; align-items:center; gap:10px;
     padding:10px 14px; background:var(--bg); min-height:40px;
     transform:translateX(0); transition:transform .05s linear; will-change:transform;
@@ -1153,6 +1231,20 @@ PAGE = r"""<!doctype html>
     </div>
   </div>
 </div>
+<div id="editWrap" class="sheetWrap">
+  <div class="sheet">
+    <div class="sheetLabel" id="editLabel">edit task</div>
+    <input id="editName" class="sheetInput" placeholder="title" autocomplete="off" autocapitalize="off">
+    <select id="editDomain" class="sheetInput"></select>
+    <input id="editPoints" class="sheetInput" inputmode="numeric" placeholder="points" autocomplete="off"
+           style="margin-top:10px">
+    <textarea id="editDesc" class="editDesc" placeholder="description" autocomplete="off"></textarea>
+    <div class="sheetRow">
+      <button id="editCancel">cancel</button>
+      <button id="editGo" class="go">save</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 <script>
 // where beacon (lib/where.py): this phone's zone decides "today" everywhere.
@@ -1233,6 +1325,7 @@ function makeRow(t){
   actions.innerHTML =
     '<button class="act act-day">🗓<br>+1d</button>' +
     '<button class="act act-block">⏰<br>delay</button>' +
+    '<button class="act act-edit">✏️<br>edit</button>' +
     '<button class="act act-start">▶<br>start</button>';
   row.appendChild(actions);
 
@@ -1251,6 +1344,7 @@ function makeRow(t){
   const panel = bindSwipe(row, line, track, actions, t);
   actions.querySelector('.act-day').onclick = ()=> runDelay('day', row, t, panel);
   actions.querySelector('.act-block').onclick = ()=> openDelayMenu(t, row, panel);
+  actions.querySelector('.act-edit').onclick = ()=> openEditMenu(t, panel);
   actions.querySelector('.act-start').onclick = ()=> runStart(t, panel);
   return row;
 }
@@ -1573,6 +1667,65 @@ valInput.addEventListener('keydown', e=>{
   if(e.key==='Enter') submitVal(false);
   if(e.key==='Escape') cancelVal();
 });
+
+// ✏️ edit sheet (swipe-left → edit): mobile port of terminal dtd's ctrl-g
+// one-screen editor. Same editable fields — title, domain, points [N],
+// description — fetched fresh via /api/edit-get (description isn't carried in
+// the task list) and submitted to /api/edit, which diffs against the prefill
+// and applies only what changed. (time) and {bonus} tags are left untouched.
+const editWrap = document.getElementById('editWrap');
+const editName = document.getElementById('editName');
+const editDomain = document.getElementById('editDomain');
+const editPoints = document.getElementById('editPoints');
+const editDesc = document.getElementById('editDesc');
+let editCtx = null;
+
+function closeEdit(){ editWrap.classList.remove('show'); editCtx = null; }
+
+function openEditMenu(t, panel){
+  panel.close();
+  editCtx = {t};
+  editName.value = t.title || '';
+  editPoints.value = t.points || '';
+  editDesc.value = '';
+  editDomain.innerHTML = '<option value="">(loading…)</option>';
+  document.getElementById('editLabel').textContent = 'edit "'+t.title+'"';
+  editWrap.classList.add('show');
+  fetch('/api/edit-get?id='+encodeURIComponent(t.id)).then(r=>r.json()).then(d=>{
+    if(!editCtx || editCtx.t.id !== t.id) return;  // sheet closed/reopened mid-fetch
+    if(!d.ok){ toast(d.error||'could not load task', true); closeEdit(); return; }
+    editName.value = d.name || '';
+    editPoints.value = d.points || '';
+    editDesc.value = d.desc || '';
+    const doms = (d.domains && d.domains.length) ? d.domains.slice() : [];
+    if(d.domain && !doms.includes(d.domain)) doms.unshift(d.domain);
+    editDomain.innerHTML = '<option value="">(no domain)</option>' +
+      doms.map(x=>'<option'+(x===d.domain?' selected':'')+'>'+x+'</option>').join('');
+  }).catch(()=>{ toast('offline · could not load', true); closeEdit(); });
+}
+
+async function submitEdit(){
+  if(!editCtx) return;
+  const id = editCtx.t.id;
+  const payload = { id,
+    name: editName.value.trim(),
+    domain: editDomain.value,
+    points: editPoints.value.replace(/[^0-9]/g,'').trim(),
+    desc: editDesc.value };
+  closeEdit();
+  try {
+    const r = await fetch('/api/edit', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'edit failed', true); return; }
+    toast('✏️ saved');
+    load(true);
+  } catch(e){ toast('offline · not saved', true); }
+}
+
+document.getElementById('editCancel').onclick = closeEdit;
+document.getElementById('editGo').onclick = submitEdit;
+editWrap.addEventListener('click', e=>{ if(e.target===editWrap) closeEdit(); });
 
 load(false);
 </script>
