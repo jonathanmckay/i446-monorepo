@@ -1042,6 +1042,14 @@ PAGE = r"""<!doctype html>
   .tally b { color:var(--go); }
   #reload { background:none; border:1px solid #333; color:var(--dim);
     border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
+  header { flex-wrap:wrap; }
+  #filterWrap { flex-basis:100%; display:flex; gap:6px; margin-top:7px; }
+  #filterInput { flex:1; background:#111; color:#cfcfcf; border:1px solid #333;
+    border-radius:6px; padding:5px 9px; font-family:inherit; font-size:15px; }
+  #filterInput::placeholder { color:#555; }
+  #filterClear { background:none; border:1px solid #333; color:var(--dim);
+    border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
+  #filterClear[hidden] { display:none; }
   main { padding:2px 0 calc(env(safe-area-inset-bottom) + 60px); }
   .row { position:relative; overflow:hidden; }
   .row.agent .line { color:#6e6e6e !important; }
@@ -1105,6 +1113,10 @@ PAGE = r"""<!doctype html>
   <div class="brand">d<b>t</b>d</div>
   <div class="tally"><b id="tot">0</b> 分 · <span id="cnt">0</span> done <span id="agentSpin"><i>◐</i> 😈<span id="agentN"></span></span></div>
   <button id="reload">↻</button>
+  <div id="filterWrap">
+    <input id="filterInput" placeholder="filter: words or a domain (xk87)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button id="filterClear" hidden>✕</button>
+  </div>
 </header>
 <main id="list"><div class="loading">loading…</div></main>
 <button id="fab">+</button>
@@ -1151,6 +1163,21 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 const list = document.getElementById('list');
 const toastEl = document.getElementById('toast');
 let total = 0, count = 0;
+let allTasks = [];   // last /api/tasks payload, unfiltered
+
+// Filter box (2026-10-17, "dtd web has a text box like dtd so I can filter"):
+// every whitespace-separated word must match the row's title, its raw
+// Todoist content, or its domain code -- so typing a bare code (xk87) scopes
+// the list to that domain exactly like terminal dtd's domain search, and a
+// word scopes it like fzf's query. Case-insensitive. The query survives a
+// reload/refresh (filtered re-render) and is remembered per browser.
+function matchesFilter(t, q){
+  const words = (q||'').toLowerCase().split(/\s+/).filter(Boolean);
+  if(!words.length) return true;
+  const hay = ((t.title||'')+' '+(t.raw||'')+' '+(t.domain||'')).toLowerCase();
+  return words.every(w => hay.includes(w));
+}
+function filterTasks(tasks, q){ return tasks.filter(t => matchesFilter(t, q)); }
 
 function toast(msg, err){
   toastEl.textContent = msg;
@@ -1172,7 +1199,8 @@ async function load(refresh){
     const r = await fetch('/api/tasks' + (refresh?'?refresh=1':''));
     const d = await r.json();
     if(!d.ok) throw new Error(d.error||'fetch failed');
-    render(d.tasks);
+    allTasks = d.tasks;
+    render(filterTasks(allTasks, filterInput.value));
     if(d.summary) setTally(d.summary.points, d.summary.done);
   } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
 }
@@ -1182,7 +1210,10 @@ function render(tasks){
   const spin = document.getElementById('agentSpin');
   if(spin){ spin.classList.toggle('on', nAgent>0);
     document.getElementById('agentN').textContent = nAgent>1 ? ' ×'+nAgent : ''; }
-  if(!tasks.length){ list.innerHTML = '<div class="empty">🎉 nothing left for today</div>'; return; }
+  if(!tasks.length){
+    list.innerHTML = '<div class="empty">' + (filterInput.value.trim() && allTasks.length
+      ? 'nothing matches “' + filterInput.value.trim() + '”' : '🎉 nothing left for today') + '</div>';
+    return; }
   list.innerHTML = '';
   for(const t of tasks) list.appendChild(makeRow(t));
 }
@@ -1454,6 +1485,18 @@ async function commit(t){
 }
 
 document.getElementById('reload').onclick = ()=> load(true);
+const filterInput = document.getElementById('filterInput');
+const filterClear = document.getElementById('filterClear');
+function applyFilter(){
+  const q = filterInput.value;
+  filterClear.hidden = !q;
+  try { localStorage.setItem('dtd.filter', q); } catch(e){}
+  render(filterTasks(allTasks, q));
+}
+filterInput.addEventListener('input', applyFilter);
+filterInput.addEventListener('keydown', e => { if(e.key === 'Escape'){ filterInput.value=''; applyFilter(); filterInput.blur(); } });
+filterClear.onclick = ()=> { filterInput.value=''; applyFilter(); };
+try { filterInput.value = localStorage.getItem('dtd.filter') || ''; filterClear.hidden = !filterInput.value; } catch(e){}
 
 const addWrap = document.getElementById('addWrap');
 const addInput = document.getElementById('addInput');
