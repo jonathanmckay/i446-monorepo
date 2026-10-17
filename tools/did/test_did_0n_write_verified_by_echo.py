@@ -56,3 +56,27 @@ def test_output_flag_uses_the_verifier():
     i = src.index('output["0n_write"] = {')
     assert "verify_0n_output(on_result.stdout, on_writes)" in src[i - 300:i]
     assert '"ok": on_result.returncode == 0 and on_verr is None' in src[i:i + 200]
+
+
+def test_dtd_outcome_marks_unverified_0n_write_failed():
+    spec = importlib.util.spec_from_file_location("dtd_outcome_t", HERE / "dtd_outcome.py")
+    oc = importlib.util.module_from_spec(spec)
+    sys.modules["dtd_outcome_t"] = oc
+    spec.loader.exec_module(oc)
+    oc._completed_today = lambda: (set(), set())
+    out = {"results": [{"name": "push", "step": "0n", "value": 1}], "agent_needed": [],
+           "0n_write": {"ok": False, "output": "", "error": "0n verify: no OK:row echo ('')"}}
+    rows = oc.classify(out, [("6gHVjpwWrfCPCMM6", "push (2) [5]")])
+    assert rows[0][1] == "failed" and "0n ✗" in rows[0][2], rows
+    out["0n_write"] = {"ok": True, "output": "OK:row=291|24=1.0|"}
+    assert oc.classify(out, [("6gHVjpwWrfCPCMM6", "push (2) [5]")])[0][1] == "ok"
+
+
+def test_did_fast_exits_nonzero_when_a_write_did_not_land():
+    assert _df._write_failures({"results": [], "0n_write": {"ok": True, "output": "OK:row=1|5=1.0|"}}) == []
+    assert _df._write_failures({"0n_write": {"ok": False, "output": "", "error": "0n verify: no OK:row echo ('')"}}) \
+        == ["0n_write: 0n verify: no OK:row echo ('')"]
+    src = (HERE / "did-fast.py").read_text()
+    i = src.index("    _emit(output)\n")
+    tail = src[i:i + 500]
+    assert "_write_failures(output)" in tail and "sys.exit(2)" in tail

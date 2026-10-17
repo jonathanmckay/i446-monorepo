@@ -38,6 +38,8 @@ HERE = Path(__file__).resolve().parent
 # Top-level did-fast fields undo-fast reads besides results[] (undo-fast.py
 # _undo_done: *_write ok flags gate the Excel reversals).
 _SHARED = ("0n_write", "0fen_write", "hcbi_write", "1n_write", "1n_0fen_write")
+# step -> the top-level write whose ok flag decides whether that step landed.
+_WRITE_KEY = {"0n": "0n_write", "1n": "1n_write"}
 
 
 def _norm(s: str) -> str:
@@ -97,6 +99,17 @@ def classify(out: dict | None, items: list[tuple[str, str]]) -> list[tuple[str, 
         hit = next((r for r in results
                     if _matches(r.get("name", ""), (r.get("todoist") or {}).get("id"), item_id, content)), None)
         if hit:
+            # A step whose Excel write came back not-ok is a FAILED completion,
+            # not an ok one (2026-10-17: seven habits on ix got "0n ✓" while the
+            # 0n write had silently not landed; did-fast now verifies the
+            # AppleScript echo and flags 0n_write.ok=false, and this row must
+            # carry that so dtd retries instead of logging a tick).
+            wkey = _WRITE_KEY.get(hit.get("step", ""))
+            w = (out or {}).get(wkey) if wkey else None
+            if isinstance(w, dict) and w.get("ok") is False:
+                rows.append((item_id, "failed",
+                             f"{hit.get('name', content)} → {hit.get('step', '')} ✗ {w.get('error', 'write failed')}"))
+                continue
             closed = "✓" if (hit.get("todoist") or {}).get("closed") else ""
             rows.append((item_id, "ok", f"{hit.get('name', content)} → {hit.get('step', '')} {closed}".rstrip()))
             continue

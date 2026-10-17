@@ -4101,6 +4101,23 @@ def main():
             pass
 
     _emit(output)
+    failed = _write_failures(output)
+    if failed:
+        # A completion whose Excel write did not land is a failed completion:
+        # exit nonzero so dtd's worker queues the item for its idle-tick retry
+        # (rc 0 made it log "✓ … → 0n" and move on, 2026-10-17) and so a skill
+        # that redirects did-fast's output can still see something went wrong.
+        print("did-fast: " + "; ".join(failed), file=sys.stderr)
+        sys.exit(2)
+
+
+def _write_failures(output: dict) -> list[str]:
+    """'<key>: <error>' for every *_write block in the result whose ok is False."""
+    out = []
+    for k, v in output.items():
+        if k.endswith("_write") and isinstance(v, dict) and v.get("ok") is False:
+            out.append(f"{k}: {v.get('error') or 'failed'}")
+    return out
 
 
 if __name__ == "__main__":
