@@ -483,7 +483,8 @@ def test_form_wrapper_starts_timer_runs_form_and_holds_on_failure():
         s, log = _gen(tmp, "DTD_FORM", "FORMEOF", extra=f'DTD_EVENTS="{tmp}/ev.tsv"')
         src = s.read_text()
         assert '"$DTD_ENTER" "$id"' not in src and f'{tmp}/enter-stub" "$id"' in src
-        assert 'python3 "$form" "$@" < /dev/tty > /dev/tty' in src
+        # the form gets the real pty device (d94b01bd), never bare /dev/tty on macOS
+        assert 'python3 "$form" "$@" < "$_tty" > "$_tty"' in src and "_tty=/dev/$(ps -o tty=" in src
         assert "\\033[?1003l" in src or "\033[?1003l" in src, "mouse-mode reset missing"
         assert "read -k 1 _discard < /dev/tty" in src and "exited" in src, "failure hold missing"
         assert src.rstrip().endswith("exit 0")
