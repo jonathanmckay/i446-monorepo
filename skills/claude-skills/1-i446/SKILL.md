@@ -19,8 +19,10 @@ hand does the same thing interactively, from whichever machine you are on
    ```bash
    python3 ~/i446-monorepo/tools/vault/vault_health.py
    ```
-   Then print the `| Check | Status |` table from the report it names
-   (`~/vault/z_meta/YYYY-MM-DD-1-i446.md`). Say what was auto-fixed.
+   Then print the `| # | Check | Status |` table from the report it names
+   (`~/vault/z_meta/YYYY-MM-DD-1-i446.md`) verbatim: every check numbered
+   and carrying its ✅/⚠️/❌ icon (user request 2026-10-17). Say what was
+   auto-fixed. Review decisions below refer to checks by that number.
 2. Walk the review items **ten at a time, numbered, with a recommended option
    marked (a)** — the same format as the 2026-09-24 singleton review. Do not
    move, delete or rename anything until JM answers each number.
