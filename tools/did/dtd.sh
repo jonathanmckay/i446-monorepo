@@ -726,6 +726,13 @@ printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
 _sd="\${XDG_STATE_HOME:-\$HOME/.local/state}/jm"
 mkdir -p "\$_sd" 2>/dev/null
 printf '%s\t%s\t%s\n' "\$(date +%Y-%m-%d)" "\$1" "\$(date +%s)" >> "\$_sd/dtd-started" 2>/dev/null
+# DTD_FORM runs this in the BACKGROUND while a prompt_toolkit form owns the
+# tty (2026-10-18: Enter on -1g "flashes through a bunch of screens and is
+# not fast" -- the two Toggl calls sat on the form's critical path). Skip
+# every /dev/tty touch below (the drain loop would eat form keystrokes, the
+# mouse reset would kill the form's mouse support) and the HDR write (the
+# form's own exit status is the one that matters there).
+[[ -n "\$DTD_SKIP_TTY_DRAIN" ]] && exit 0
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the two Toggl
 # API calls above — leaked SGR motion sequences type themselves into fzf's
@@ -796,8 +803,14 @@ id="\$1"; form="\$2"; shift 2
 HDR="$DTD_HDR"
 export DTD_HDR_FILE="\$HDR"   # forms that finish in the background report here
 stty sane < /dev/tty 2>/dev/null
-printf "\033[2J\033[H" > /dev/tty
-"$DTD_ENTER" "\$id" >/dev/null 2>&1
+printf "\033[2J\033[H⏳ \${form:t}…" > /dev/tty
+# Timer start runs in the BACKGROUND (2026-10-18: "flashes through a bunch of
+# screens and is not fast" -- its two serial Toggl HTTP calls held a blank
+# screen for seconds before the form appeared). DTD_SKIP_TTY_DRAIN makes
+# start.sh exit before its /dev/tty block (drain loop steals form keystrokes
+# otherwise); </dev/null so no child inherits the tty as stdin (SIGTTIN);
+# &! disowns so a fast Esc exiting this wrapper can't SIGHUP it mid-start.
+DTD_SKIP_TTY_DRAIN=1 "$DTD_ENTER" "\$id" </dev/null >/dev/null 2>&1 &!
 # The form's stdin must be the REAL pty device, not /dev/tty: on macOS kqueue
 # refuses /dev/tty (EINVAL), and prompt_toolkit's event loop add_reader()s
 # stdin, so every inline form died with "OSError: [Errno 22] Invalid
