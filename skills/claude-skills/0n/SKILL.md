@@ -1,6 +1,6 @@
 ---
 name: "0n"
-description: "Mark a 0₦ habit done on a PAST date but credit its points to TODAY. Marks the habit's cell on that date's 0n row, measures the points Excel auto-credited to that day (个 usually; 媒/m5/i9/xk/思 for domain columns; 0g's extra +9), backs them out of that day and appends them to today via the excel-http daemon. Usage: /0n <habit> <date> [value] [--move-only]  e.g. /0n 0l 09.18"
+description: "Mark a 0₦ habit done usually on a PAST date (although sometimes the habit can be due today or tomorrow) but credit its points to TODAY. Marks the habit's cell on that date's 0n row, measures the points Excel auto-credited to that day (个 usually; 媒/m5/i9/xk/思 for domain columns; 0g's extra +9), backs them out of that day and appends them to today via the excel-http daemon (today's row is credited in place, no move). Tomorrow's row only during 戌/亥. Usage: /0n <habit> <date> [value] [--move-only]  e.g. /0n 0l 09.18"
 user-invocable: true
 ---
 
@@ -18,7 +18,7 @@ python3 ~/i446-monorepo/tools/did/0n-backfill.py "<habit>" <date> [value] [--mov
 ```
 
 - `<habit>`: a 0n row-1 header (`0l`, `0t`, `notes`, `ibx i9`, `早餐`, ...). Case/dash-insensitive.
-- `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, or `yesterday`. Must be in the past; for today use `/did`.
+- `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, `yesterday`, or `tomorrow`. Usually past. Today's row works too (credited in place, nothing moves). Tomorrow's row is allowed only during 戌/亥 (18:00–22:00) — for a habit done tonight whose row carries tomorrow's date (e.g. 0l on the wake-date row). Points always land on today.
 - `[value]`: cell value, default `1`.
 - `--move-only`: the 0n cell is already marked (by hand, or an earlier run whose 0分 half failed). Skips the 0n write and moves the row-2 weight only.
 - `--dry-run`: read-only plan.

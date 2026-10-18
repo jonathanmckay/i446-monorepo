@@ -569,6 +569,7 @@ def main(argv):
     force_pick = '--pick' in argv; argv = [a for a in argv if a != '--pick']
     no_pick = '--no-pick' in argv; argv = [a for a in argv if a != '--no-pick']
     title_only = '--title' in argv; argv = [a for a in argv if a != '--title']
+    latest = '--latest' in argv; argv = [a for a in argv if a != '--latest']
     host = None
     if '--from' in argv:
         i = argv.index('--from'); host = argv[i + 1]; del argv[i:i + 2]
@@ -595,7 +596,12 @@ def main(argv):
         print(r['id']); return
     if host and not query:
         sys.exit(f'cs {cmd}: --from needs a title query')
-    r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only)
+    if latest:
+        if not idx:
+            sys.exit('cs: no sessions indexed')
+        r = max(idx.values(), key=lambda v: v['mtime'])
+    else:
+        r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only)
     if cmd == 'id':
         if want_path:
             print(next(p for p, v in idx.items() if v['id'] == r['id']))
@@ -613,6 +619,8 @@ def main(argv):
         args = ['claude', '--resume', r['id']]
         if cmd == 'fork':
             args += ['--fork-session', '-n', f"{title_of(r)[:50]} ⑂"]
+        else:
+            record_host(r['id'])
         os.execvp('claude', args + extra)
     sys.exit(f'cs: unknown command {cmd!r}')
 

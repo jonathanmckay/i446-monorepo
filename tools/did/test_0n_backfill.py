@@ -33,9 +33,34 @@ TODAY = date(2026, 9, 21)
     ("09.18", date(2026, 9, 18)), ("9/18", date(2026, 9, 18)), ("9.18", date(2026, 9, 18)),
     ("2026-09-18", date(2026, 9, 18)), ("yesterday", date(2026, 9, 20)),
     ("12/31", date(2025, 12, 31)),  # M/D after today → last year
+    ("09.21", date(2026, 9, 21)),   # today's own M/D → today (in-place credit)
+    ("09.22", date(2026, 9, 22)),   # tomorrow's own M/D → tomorrow, not last year
+    ("9/22", date(2026, 9, 22)),
+    ("tomorrow", date(2026, 9, 22)),
+    ("09.23", date(2025, 9, 23)),   # day after tomorrow → last year, as before
 ])
 def test_parse_target_date(zb, raw, expect):
     assert zb.parse_target_date(raw, TODAY) == expect
+
+
+def test_parse_target_date_tomorrow_across_year(zb):
+    nye = date(2026, 12, 31)
+    assert zb.parse_target_date("1/1", nye) == date(2027, 1, 1)
+    assert zb.parse_target_date("tomorrow", nye) == date(2027, 1, 1)
+
+
+# ── 戌/亥 advance window (2026-10-17): tomorrow allowed only 18:00-22:00 ─────
+
+@pytest.mark.parametrize("hour,open_", [
+    (17, False),  # 酉
+    (18, True), (19, True),   # 戌
+    (20, True), (21, True),   # 亥
+    (22, False),  # 子
+    (4, False), (12, False),
+])
+def test_advance_window_open(zb, hour, open_):
+    from datetime import datetime
+    assert zb.advance_window_open(datetime(2026, 10, 17, hour, 30)) is open_
 
 
 def test_col_letter(zb):
