@@ -127,12 +127,46 @@ VARIABLE_INPUT = {
 # (bug 2026-08-22: "tasks that should ask for numeric input ... don't").
 _DEFER_DATE = re.compile(r"\s+\d{1,2}\.\d{1,2}$")
 
+# Weekly 1n+ variable-rate habits (did-fast's VARIABLE_1N: s897, family,
+# "1 kids nature", 业写, …) ALSO need a minutes prompt — their points are
+# base + rate×minutes, so completing one with no minutes drops did-fast into
+# its "how many minutes?" refusal and credits nothing (bug 2026-10-17:
+# "1 kids nature" swiped done on the phone never asked, then errored without
+# points). The terminal already prompts for these (dtd.sh:802-821); dtd web
+# never did (the VARIABLE_INPUT comment above flagged it as not-yet-covered).
+# Pull the name set from did-fast at import — same VARIABLE_1N + ONENEON_ALIASES
+# resolution dtd.sh uses — so this can't drift from the routing source of truth.
+def _load_variable_1n_names() -> set:
+    try:
+        import importlib.util
+        did = Path(__file__).resolve().parent.parent / "did" / "did-fast.py"
+        spec = importlib.util.spec_from_file_location("df_var1n", did)
+        df = importlib.util.module_from_spec(spec)
+        sys.modules["df_var1n"] = df  # dataclass decorator looks up cls.__module__
+        spec.loader.exec_module(df)
+        norm = {df.header_normalize(n) for n in df.VARIABLE_1N}
+        names = {n.lower() for n in df.VARIABLE_1N}
+        names |= {a.lower() for a, t in df.ONENEON_ALIASES.items()
+                  if df.header_normalize(t) in norm}
+        return {re.sub(r"\s*\{\d+\}", "", n).strip() for n in names}
+    except Exception:
+        return set()
+
+VARIABLE_1N_NAMES = _load_variable_1n_names()
+
 def variable_prompt(raw: str) -> str | None:
     """The prompt label if `raw` is a variable-input task, else None. A trailing
     " M.D" defer-copy date suffix is stripped first so a deferred variable habit
-    (xk20 7.26 → xk20) still prompts, matching the terminal path."""
+    (xk20 7.26 → xk20) still prompts, matching the terminal path. Covers both
+    the daily 0₦ set (VARIABLE_INPUT) and the weekly 1n+ variable set pulled
+    from did-fast (VARIABLE_1N_NAMES)."""
     key = _DEFER_DATE.sub("", strip_ann(raw).lower().strip()).strip()
-    return VARIABLE_INPUT.get(key)
+    label = VARIABLE_INPUT.get(key)
+    if label:
+        return label
+    if key in VARIABLE_1N_NAMES:
+        return f"{key} minutes"
+    return None
 
 def variable_rate(raw: str) -> int | None:
     """分 per typed unit for a variable task Neon multiplies (hiit: 2/min via
