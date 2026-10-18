@@ -3413,6 +3413,22 @@ def jmreads_review(book_id):
     return jsonify({"ok": ok, "where": msg if ok else None, "error": None if ok else msg}), (200 if ok else 400)
 
 
+@app.route("/jmreads/draft/<book_id>", methods=["POST"])
+def jmreads_draft(book_id):
+    """'Draft' button: append jotted thoughts to the book's review file as a
+    dated blockquote (kept out of the feed; /bookreview picks it up later)."""
+    text = (request.get_json(silent=True) or {}).get("text", "")
+    ok, msg = jmreads.save_draft(book_id, text)
+    return jsonify({"ok": ok, "error": None if ok else msg}), (200 if ok else 400)
+
+
+@app.route("/jmreads/delete/<book_id>", methods=["POST"])
+def jmreads_delete(book_id):
+    """'Delete' button: remove the book's review file from the vault."""
+    ok, msg = jmreads.delete_record(book_id)
+    return jsonify({"ok": ok, "error": None if ok else msg}), (200 if ok else 400)
+
+
 @app.route("/api/reads")
 def api_reads():
     return jsonify(jmreads.data(force=request.args.get("fresh") == "1"))

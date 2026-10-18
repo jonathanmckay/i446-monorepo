@@ -654,6 +654,24 @@ __SHARED_STYLE__
 .review-btn { font: 12px Georgia, serif; padding: 5px 12px; margin-right: 10px; border-radius: 3px; cursor: pointer;
               background: #409d69; color: #fff; border: 1px solid #357f55; }
 .review-btn:disabled { background: var(--badge-bg); color: var(--h2); border-color: var(--grid); cursor: default; }
+.draft-btn { font: 12px Georgia, serif; padding: 5px 12px; margin-right: 10px; border-radius: 3px; cursor: pointer;
+             background: #3f6ea5; color: #fff; border: 1px solid #335a87; }
+.draft-btn:disabled { background: var(--badge-bg); color: var(--h2); border-color: var(--grid); cursor: default; }
+.del-link { font-size: 12px; color: #c0392b !important; border-bottom: 1px dotted #c0392b !important;
+            text-decoration: none; cursor: pointer; }
+#draftDlg { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 30;
+            display: none; align-items: center; justify-content: center; }
+#draftDlg.show { display: flex; }
+#draftDlg .box { background: var(--badge-bg, #222); border: 1px solid var(--grid); border-radius: 8px;
+                 padding: 18px; width: min(560px, 92vw); }
+#draftDlg h3 { margin: 0 0 10px; font-family: Georgia, serif; font-size: 16px; }
+#draftDlg textarea { width: 100%; min-height: 160px; box-sizing: border-box; font: 14px/1.5 Georgia, serif;
+                     padding: 10px; border: 1px solid var(--grid); border-radius: 5px;
+                     background: var(--bg, #fff); color: inherit; resize: vertical; }
+#draftDlg .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
+#draftDlg button { font: 12px Georgia, serif; padding: 6px 14px; border-radius: 3px; cursor: pointer; }
+#draftDlg .save { background: #3f6ea5; color: #fff; border: 1px solid #335a87; }
+#draftDlg .cancel { background: var(--badge-bg); color: var(--h2); border: 1px solid var(--grid); }
 </style>
 </head>
 <body>
@@ -694,6 +712,17 @@ __SHARED_STYLE__
   </div>
 </div>
 
+<div id="draftDlg">
+  <div class="box">
+    <h3 id="draftTitle">Draft</h3>
+    <textarea id="draftText" placeholder="Jot thoughts for the review…"></textarea>
+    <div class="row">
+      <button class="cancel" onclick="closeDraft()">Cancel</button>
+      <button class="save" id="draftSave" onclick="saveDraft()">Save draft</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function cover(b, cls) {
@@ -718,12 +747,40 @@ function ago(iso) {
 }
 function series(b) { return b.series ? ` <span class="muted">(${esc(b.series)}${b.series_number ? ', #' + esc(b.series_number) : ''})</span>` : ''; }
 
+// Draft-in-web (2026-10-18): jot thoughts into the book's review file without
+// opening a Claude tab. Saved as a dated blockquote the later /bookreview uses.
+let draftId = null;
+function openDraft(id, title) {
+  draftId = id;
+  document.getElementById('draftTitle').textContent = 'Draft — ' + title;
+  document.getElementById('draftText').value = '';
+  const btn = document.getElementById('draftSave');
+  btn.disabled = false; btn.textContent = 'Save draft';
+  document.getElementById('draftDlg').classList.add('show');
+  setTimeout(() => document.getElementById('draftText').focus(), 60);
+}
+function closeDraft() { document.getElementById('draftDlg').classList.remove('show'); draftId = null; }
+function saveDraft() {
+  const text = document.getElementById('draftText').value.trim();
+  if (!text) { closeDraft(); return; }
+  const btn = document.getElementById('draftSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  fetch('/jmreads/draft/' + encodeURIComponent(draftId), {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text})})
+    .then(r => r.json()).then(j => {
+      if (j.ok) { btn.textContent = 'Saved ✓'; setTimeout(closeDraft, 500); }
+      else { btn.textContent = 'Failed: ' + (j.error || ''); btn.disabled = false; }
+    }).catch(() => { btn.textContent = 'Failed — offline'; btn.disabled = false; });
+}
+document.getElementById('draftDlg').addEventListener('click', ev => { if (ev.target.id === 'draftDlg') closeDraft(); });
+
 fetch('/api/reads').then(r => r.json()).then(d => {
   // Currently reading
   document.getElementById('reading').innerHTML = d.reading.length ? d.reading.map(b => `
     <div class="book-row">${cover(b)}
       <div><div class="t">${esc(b.title)}</div><div class="a">by ${esc(b.author)}</div>
-      <div class="a">since ${esc(ago(b.date))}${b.pages ? ' · ' + b.pages + ' pages' : ''}</div></div>
+      <div class="a">since ${esc(ago(b.date))}${b.pages ? ' · ' + b.pages + ' pages' : ''}</div>
+      <div style="margin-top:6px"><button class="draft-btn" data-id="${esc(b.id)}" data-title="${esc(b.title)}">Draft</button></div></div>
     </div>`).join('') : '<div class="muted">Nothing in progress. /book started &lt;title&gt;</div>';
 
   // Want to read
@@ -752,8 +809,10 @@ fetch('/api/reads').then(r => r.json()).then(d => {
     const ex = e.type === 'reviewed' && b.excerpt ? `<div class="excerpt">${esc(b.excerpt)}</div>` : '';
     const writeBtn = (b.status !== 'reading' && !b.reviewed)
       ? `<button class="review-btn" data-id="${esc(b.id)}">Write review</button>` : '';
-    const links = [writeBtn, b.url ? `<a href="${esc(b.url)}" target="_blank">Read review</a>` : '',
-                   b.goodreads ? `<a href="${esc(b.goodreads)}" target="_blank">Goodreads</a>` : ''].join('');
+    const draftBtn = b.id ? `<button class="draft-btn" data-id="${esc(b.id)}" data-title="${esc(b.title)}">Draft</button>` : '';
+    const delLink = b.id ? `<a class="del-link" data-id="${esc(b.id)}" data-title="${esc(b.title)}">Delete</a>` : '';
+    const links = [writeBtn, draftBtn, b.url ? `<a href="${esc(b.url)}" target="_blank">Read review</a>` : '',
+                   b.goodreads ? `<a href="${esc(b.goodreads)}" target="_blank">Goodreads</a>` : '', delLink].join('');
     return `<div class="ev">
       <div class="avatar">JM</div>
       <div style="flex:1; min-width:0">
@@ -769,15 +828,30 @@ fetch('/api/reads').then(r => r.json()).then(d => {
     </div>`;
   }).join('') || '<div class="muted">No updates yet.</div>';
 
-  document.getElementById('feed').addEventListener('click', ev => {
-    const btn = ev.target.closest('.review-btn');
-    if (!btn || btn.disabled) return;
-    btn.disabled = true; btn.textContent = 'Opening…';
-    fetch('/jmreads/review/' + encodeURIComponent(btn.dataset.id), {method: 'POST'})
-      .then(r => r.json()).then(j => {
-        btn.textContent = j.ok ? (j.where === 'cmux' ? 'Opened in cmux' : 'Opened in Terminal') : 'Failed';
-        if (!j.ok) { btn.title = j.error || ''; btn.disabled = false; }
-      }).catch(() => { btn.textContent = 'Failed'; btn.disabled = false; });
+  // One delegated handler for all book actions — the buttons appear in the
+  // feed AND the Currently Reading column.
+  document.addEventListener('click', ev => {
+    const rv = ev.target.closest('.review-btn');
+    if (rv && !rv.disabled) {
+      rv.disabled = true; rv.textContent = 'Opening…';
+      fetch('/jmreads/review/' + encodeURIComponent(rv.dataset.id), {method: 'POST'})
+        .then(r => r.json()).then(j => {
+          rv.textContent = j.ok ? (j.where === 'cmux' ? 'Opened in cmux' : 'Opened in Terminal') : 'Failed';
+          if (!j.ok) { rv.title = j.error || ''; rv.disabled = false; }
+        }).catch(() => { rv.textContent = 'Failed'; rv.disabled = false; });
+      return;
+    }
+    const dr = ev.target.closest('.draft-btn');
+    if (dr) { openDraft(dr.dataset.id, dr.dataset.title); return; }
+    const del = ev.target.closest('.del-link');
+    if (del) {
+      if (!confirm('Delete "' + del.dataset.title + '" from the library? The review file is removed from the vault.')) return;
+      fetch('/jmreads/delete/' + encodeURIComponent(del.dataset.id), {method: 'POST'})
+        .then(r => r.json()).then(j => {
+          if (j.ok) location.reload();   // delete invalidated the cache server-side
+          else alert('Delete failed: ' + (j.error || ''));
+        }).catch(() => alert('Delete failed: offline'));
+    }
   });
 
   // Shelf
@@ -794,3 +868,30 @@ fetch('/api/reads').then(r => r.json()).then(d => {
 
 def page(shared_style: str) -> str:
     return PAGE.replace("__SHARED_STYLE__", shared_style)
+
+
+def _cli_fill_covers() -> None:
+    """`python3 jmreads.py --fill-covers`: fetch every missing cover into the
+    on-disk cache (the same one the dashboard serves from), then poke the
+    running dashboard so its cached /api/reads payload picks the covers up.
+    book-add.py spawns this detached right after creating a stub, so a new
+    book's cover is ready by the next page load even if the dashboard is
+    down at add time."""
+    books = load_books() + load_to_read()
+    missing = attach_covers(books)
+    if not missing:
+        print("covers: none missing")
+        return
+    print("covers:", fill_covers(missing))
+    try:
+        urllib.request.urlopen("http://localhost:5558/api/reads?fresh=1", timeout=60)
+    except Exception:
+        pass   # dashboard not running — it rebuilds from the cache on start
+
+
+if __name__ == "__main__":
+    import sys
+    if "--fill-covers" in sys.argv:
+        _cli_fill_covers()
+    else:
+        sys.exit("usage: jmreads.py --fill-covers")
