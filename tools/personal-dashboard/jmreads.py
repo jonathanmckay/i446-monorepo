@@ -5,7 +5,10 @@ which is what the o315 blog publishes from. Each file's YAML frontmatter is a
 book (or film); /book and /bookreview write these files. The o315 blog's own
 content/reviews/ is used to link a published review.
 
-Read-only. Served by dashboard.py at /jmreads (page) and /api/reads (JSON).
+Served by dashboard.py at /jmreads (page) and /api/reads (JSON). Mostly
+read-only; the two writes are save_draft (append jotted thoughts to a review
+file as a dated blockquote) and delete_record (remove a book's file),
+both behind POST endpoints (2026-10-18).
 """
 from __future__ import annotations
 
