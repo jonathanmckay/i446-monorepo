@@ -982,3 +982,21 @@ def test_today_view_is_today_flag(jm, monkeypatch):
     monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
     tl = jm.build_timeline()
     assert tl["is_today"] is True
+
+
+def test_lite_timeline_skips_calendar_and_neon(jm, monkeypatch):
+    """lite=True (first-paint TTFT, 2026-10-18) must never touch the calendar
+    subprocesses or the Neon reads — Toggl entries + gaps only."""
+    e = _entry(jm, 7, 0, 7, 30)
+    monkeypatch.setattr(jm, "_fetch_today", lambda day=None: [e])
+    def boom(*a, **k):
+        raise AssertionError("lite build must not fetch calendar events")
+    monkeypatch.setattr(jm, "_fetch_events_today", boom)
+    from neon import excel
+    def boom_read(*a, **k):
+        raise AssertionError("lite build must not read Neon")
+    monkeypatch.setattr(excel, "read", boom_read)
+    tl = jm.build_timeline(lite=True)
+    assert tl["lite"] is True and tl["points"] is None
+    assert any(r["type"] == "entry" for r in tl["rows"])
+    assert all(r.get("pts") is None for r in tl["rows"] if r["type"] == "divider")

@@ -113,7 +113,17 @@ def _resolve_neon_path():
     rename via the open-workbook match in load_cache_data.
     """
     candidates = []
-    for p in _VAULT_EXCEL.glob("Neon分v*.xlsx"):
+    try:
+        # OneDrive's file provider intermittently fails the scandir with
+        # EINTR (seen 2026-10-18: the whole dashboard crash-looped at import
+        # because this module-level glob raised InterruptedError). Any OS
+        # hiccup here just means "use the fallback name", never a crash.
+        names = list(_VAULT_EXCEL.glob("Neon分v*.xlsx"))
+    except OSError as e:
+        print(f"WARN: neon glob failed ({e}); using {_NEON_FALLBACK_NAME}",
+              file=sys.stderr)
+        names = []
+    for p in names:
         m = re.match(r"Neon分v([\d.]+)\.xlsx$", p.name)
         if not m:
             continue

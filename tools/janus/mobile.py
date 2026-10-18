@@ -659,17 +659,26 @@ def _block_points(today: _dt.date, total: int | None) -> dict[str, int]:
     return out
 
 
-def build_timeline(day: _dt.date | None = None) -> dict:
+def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     """The timeline payload for one day — today (live) by default, or `day`
     for the back/forward navigation (2026-10-18), the mobile mirror of the
     CLI's ctrl+/ / ctrl+= day_offset view. Past-day calls keep _fetch_today /
     _fetch_events_today arg-less on the today path so the existing tests'
-    zero-arg monkeypatched stand-ins keep working."""
+    zero-arg monkeypatched stand-ins keep working.
+
+    lite=True (2026-10-18, first-paint speed): Toggl entries + gaps only —
+    skips the calendar subprocesses (up to CAL_FETCH_TIMEOUT_SEC each) and
+    every Neon/Excel read (Σ分 + 9 block columns), which together dominate the
+    full build's latency. The page renders this in well under a second, then
+    the full payload replaces it when it lands."""
     now = _dt.datetime.now(_tz())
     today = day or now.date()
     is_today = today == now.date()
     entries = _fetch_today() if is_today else _fetch_today(today)
-    events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
+    if lite:
+        events = []
+    else:
+        events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
     logged = _ledger(today)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
@@ -761,18 +770,20 @@ def build_timeline(day: _dt.date | None = None) -> dict:
     emit_dividers_before(edge)
 
     # Σ points for the header (same source as mobile dtd: 0分 col D on Ix).
+    # Skipped on the lite pass — every excel.read is a daemon/ssh round trip.
     points = None
-    try:
-        from neon import excel
-        r = excel.read("0分", "D", date="%d/%d" % (today.month, today.day))
-        if r.get("ok") and str(r.get("value") or "").strip():
-            points = int(float(r["value"]))
-    except Exception as e:
-        print("WARN points:", e, file=sys.stderr)
+    if not lite:
+        try:
+            from neon import excel
+            r = excel.read("0分", "D", date="%d/%d" % (today.month, today.day))
+            if r.get("ok") and str(r.get("value") or "").strip():
+                points = int(float(r["value"]))
+        except Exception as e:
+            print("WARN points:", e, file=sys.stderr)
 
     # Per-block Σ分 and -1₦ ritual score on each divider (user request
     # 2026-10-04: "show both sum of points and -1 sum for every block").
-    block_pts = _block_points(today, points)
+    block_pts = {} if lite else _block_points(today, points)
     # The -1₲ ritual stamps in the build order are today's only — a past-day
     # view would misattribute them, so it just shows none.
     rituals = _block_ritual_scores(now) if is_today else {}
@@ -783,7 +794,7 @@ def build_timeline(day: _dt.date | None = None) -> dict:
 
     since, since_min = untracked_since(entries, now) if is_today else (None, None)
     return {"rows": rows, "tracked_min": tracked_min, "points": points,
-            "date": today.isoformat(), "is_today": is_today,
+            "date": today.isoformat(), "is_today": is_today, "lite": lite,
             "untracked_since": since, "untracked_min": since_min}
 
 
@@ -1360,7 +1371,9 @@ def api_timeline():
         if off:
             off = max(-366, min(0, off))
             day = _dt.datetime.now(_tz()).date() + _dt.timedelta(days=off)
-        return jsonify({"ok": True, **build_timeline(day)})
+        # ?lite=1: Toggl-only fast pass for first paint (no calendar, no Neon).
+        lite = request.args.get("lite") == "1"
+        return jsonify({"ok": True, **build_timeline(day, lite=lite)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -1892,20 +1905,44 @@ function dayBadge(iso){
     document.getElementById(id).style.display = viewingToday ? '' : 'none';
 }
 
-async function load(){
-  list.innerHTML = '<div class="loading">loading…</div>';
-  try {
-    const r = await fetch('/api/timeline' + (dayOffset ? '?offset=' + dayOffset : ''));
-    const d = await r.json();
-    if(!d.ok) throw new Error(d.error||'fetch failed');
-    viewingToday = d.is_today !== false;
-    dayBadge(d.date);
+function apply(d){
+  viewingToday = d.is_today !== false;
+  dayBadge(d.date);
+  // lite pass has no Neon read — keep the dash rather than flashing it empty
+  if(!d.lite || d.points != null)
     document.getElementById('pts').textContent = (d.points==null?'–':d.points);
-    document.getElementById('trk').textContent =
-      Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
-    untrackedBanner(d.untracked_since, d.untracked_min);
-    render(d.rows);
-  } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
+  document.getElementById('trk').textContent =
+    Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
+  untrackedBanner(d.untracked_since, d.untracked_min);
+  render(d.rows);
+}
+
+// Two-phase load (2026-10-18, TTFT): a lite pass (Toggl entries + gaps only,
+// no calendar subprocesses, no Neon/Excel reads) paints the timeline fast;
+// the full payload replaces it when it lands. A stale response from an
+// outdated load (day switched mid-flight) is dropped via loadSeq.
+let loadSeq = 0;
+async function load(){
+  const seq = ++loadSeq;
+  list.innerHTML = '<div class="loading">loading…</div>';
+  const url = lite => '/api/timeline?' +
+    [lite ? 'lite=1' : '', dayOffset ? 'offset=' + dayOffset : ''].filter(Boolean).join('&');
+  let fullDone = false, litePainted = false;
+  fetch(url(true)).then(r => r.json()).then(d => {
+    if(seq === loadSeq && !fullDone && d.ok){ litePainted = true; apply(d); }
+  }).catch(()=>{});
+  try {
+    const r = await fetch(url(false));
+    const d = await r.json();
+    if(seq !== loadSeq) return;
+    if(!d.ok) throw new Error(d.error||'fetch failed');
+    fullDone = true;
+    apply(d);
+  } catch(e){
+    if(seq !== loadSeq) return;
+    if(litePainted) toast('full load failed: '+e.message, true);
+    else list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>';
+  }
 }
 
 function render(rows){

@@ -44,6 +44,10 @@ python3 ~/i446-monorepo/tools/hcmc/book-add.py <title words> [--author X] [--pic
   the path, do not create a duplicate.
 - If the title is ambiguous and the user named an author in prose, pass it
   via `--author`.
+- Cover art is handled automatically: after writing the stub, `book-add.py`
+  spawns `jmreads.py --fill-covers` detached in the background, which fetches
+  the cover into the dashboard's cache and refreshes the running dashboard.
+  Nothing for the skill to do — don't wait on it or report it.
 
 ## Finish path (`/book finished [<title>]`)
 

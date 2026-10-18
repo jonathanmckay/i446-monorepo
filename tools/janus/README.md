@@ -28,6 +28,9 @@ block dividers. Shows today's Toggl entries and the untracked gaps between them.
 - `GET /api/timeline` — entries + gaps + 地支 dividers, tracked minutes, 0分 Σ.
   `?offset=-N` views N days back (the header's ‹ / › buttons, mirroring the
   CLI's ctrl+/ / ctrl+=); past days are view-only (no swipes/fill/cmdbar).
+  `?lite=1` is the fast first-paint pass: Toggl entries + gaps only — no
+  calendar subprocesses, no Neon/Excel reads. The page fires lite + full
+  concurrently and paints lite first (TTFT, 2026-10-18).
 - `POST /api/fill {desc, start, end}` — create a Toggl entry for a gap
 - `POST /api/log {id, desc, minutes, project}` — /did the entry's minutes
 
