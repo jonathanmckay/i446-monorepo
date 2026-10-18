@@ -64,7 +64,7 @@ READ_COLS = [chr(c) for c in range(ord("A"), ord("X") + 1)]
 # at CELL_W each, lowest-priority columns dropped first when the terminal is
 # narrow (--cell / --cols override).
 NUM_COLS = [  # (col, header, width)
-    ("P", "⌈", 5), ("Q", "⌊", 5), ("R", "x̄", 5), ("V", "他⌈", 5), ("W", "他⌊", 5),
+    ("P", "⌈", 4), ("Q", "⌊", 4), ("R", "x̄", 4), ("V", "他⌈", 5), ("W", "他⌊", 5),
     ("K", "霓", 3), ("L", "帮", 3), ("M", "身", 3), ("O", "₹", 6),
 ]
 TEXT_COLS = [  # (col, header) in priority order
@@ -307,21 +307,31 @@ def _cell(cells: dict, col: str, width: int, *, num: bool = False) -> str:
     return paint(" " + _fit(val, width - 1), bg, fg)
 
 
-def layout(width: int, cell_w: int, max_text: int | None) -> list[tuple[str, str]]:
-    """Which text columns fit at cell_w, in priority order (table order is
-    kept as listed in TEXT_COLS)."""
+MIN_TEXT_COLS = 3   # shrink cells (down to MIN_CELL_W) before dropping below this
+MIN_CELL_W = 12
+
+
+def layout(width: int, cell_w: int, max_text: int | None) -> tuple[list[tuple[str, str]], int]:
+    """(text columns that fit, cell width). Priority order decides which
+    columns survive; table order stays as listed in TEXT_COLS. On a narrow
+    pane the cell width shrinks (to MIN_CELL_W) so at least MIN_TEXT_COLS
+    columns show before any are dropped."""
     fixed = DAY_W + sum(w + 1 for _c, _h, w in NUM_COLS)
-    n = max(1, (width - fixed) // (cell_w + 1))
+    avail = max(0, width - fixed)
+    n = avail // (cell_w + 1)
+    if n < MIN_TEXT_COLS:
+        cell_w = max(MIN_CELL_W, avail // MIN_TEXT_COLS - 1)
+        n = max(1, avail // (cell_w + 1))
     if max_text is not None:
         n = min(n, max_text)
     keep = {c for c, _h in TEXT_COLS[:n]}
-    return [(c, h) for c, h in TEXT_COLS if c in keep]
+    return [(c, h) for c, h in TEXT_COLS if c in keep], cell_w
 
 
 def render(dates: list[_dt.date], recs: dict[int, dict], target: _dt.date,
            prev: dict | None, *, cell_w: int = CELL_W, max_text: int | None = None) -> str:
     width = shutil.get_terminal_size((160, 40)).columns
-    text_cols = layout(width, cell_w, max_text)
+    text_cols, cell_w = layout(width, cell_w, max_text)
     out = []
     tlabel = ""
     if (ti := dates.index(target) if target in dates else None) is not None:
