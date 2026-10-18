@@ -6,6 +6,11 @@ set -euo pipefail
 
 # --- Ensure full PATH for MCP servers (npx, uvx, python3) ---
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+# Headless auth (2026-10-17): cron cannot read the Claude Code keychain entry
+# (every nightly run since 2026-09-27 died with "Not logged in"). A long-lived
+# token from `claude setup-token` lives in ~/.claude/oauth-token (mode 600).
+TOKEN_FILE="$HOME/.claude/oauth-token"
+[ -s "$TOKEN_FILE" ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$TOKEN_FILE")"
 
 # --- Config ---
 DREAM_RUNS="$HOME/vault/i447/i446/.dream-runs"
@@ -145,7 +150,8 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] claude=$CLAUDE ($(${CLAUDE} --version 2>/de
 # launchd/SSH sessions can't access the login keychain. If we detect that,
 # try unlocking it. If that fails, we're in a GUI session and it should work.
 KEYCHAIN_OK=1
-if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
+# With CLAUDE_CODE_OAUTH_TOKEN set, claude never touches the keychain: skip the probe.
+if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] && ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Keychain locked, attempting unlock..." >> "$LOG"
   if [[ -f "$HOME/.dream-keychain-pass" ]]; then
     security unlock-keychain -p "$(cat "$HOME/.dream-keychain-pass")" ~/Library/Keychains/login.keychain-db >> "$LOG" 2>&1 || true
