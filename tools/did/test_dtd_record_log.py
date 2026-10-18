@@ -192,3 +192,12 @@ def test_reader_summarizes_both_hosts(tmp_path, monkeypatch):
     s = dl.summarize(dl.load(1))
     assert (s["done"], s["failed"], s["by_bucket"], s["points"]) == (2, 1, {"task": 1, "habit": 1}, 20)
     assert s["picks_with_query"] == 1 and s["picks_beyond_15"] == 1 and s["est_vs_actual"] == [(30, 45)]
+
+
+def test_every_completion_path_records():
+    """The single-item success path (the common one) and the idle-tick retry
+    path must feed dtd_outcome.py too, not only the batch and fallback paths."""
+    i = SRC.index('if [[ -n "$ok" ]]; then')
+    assert 'python3 "$DTD_OUTCOME" - "$rc" "$task_id"' in SRC[i:i + 900]
+    j = SRC.index('(retry)" > "$DTD_HDR"')
+    assert 'python3 "$DTD_OUTCOME" - "$rrc" "$rid"' in SRC[j - 400:j]

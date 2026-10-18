@@ -464,6 +464,7 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
               rjflag="--journal-done"
               echo "$rout" | python3 "$UNDO_FAST" "$rjflag" "$DTD_JOURNAL" "$rid" 2>/dev/null
               rok=$(echo "$rout" | jq -r '.results[]? | "\(.name) → \(.step) \(if .todoist.closed then "✓" else "" end)"' 2>/dev/null)
+              ( print -r -- "$rout" | python3 "$DTD_OUTCOME" - "$rrc" "$rid"$'\t'"$rcontent" >/dev/null 2>>"$DTD_LOG.err" ) &
               echo "✓ ${rok:-$rcontent} (retry)" > "$DTD_HDR"
               echo "✓ ${rok:-$rcontent} (retry)" >> "$DTD_LOG"
             else
@@ -571,6 +572,11 @@ touch "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_S
       echo "✓ $ok" > "$DTD_HDR"
       echo "✓ $ok" >> "$DTD_LOG"
       _ev_out ok "$task_id" "$(( EPOCHREALTIME - _t0 ))"
+      # Record log (2026-10-17): the batch and fallback paths go through
+      # dtd_outcome.py already; this common path never did, so the done
+      # record (estimate vs actual, points, writes, age) is written here,
+      # detached so the worker never waits on it.
+      ( print -r -- "$result" | python3 "$DTD_OUTCOME" - "$rc" "$task_id"$'\t'"$task_clean" >/dev/null 2>>"$DTD_LOG.err" ) &
       # A ritual / d359-met close would have refreshed the cache inline;
       # with DIDFAST_DEFER_REFRESH that is now owed -- pay it on next idle.
       if echo "$result" | jq -e '.results[]? | select(.step == "ritual" or .d359 != null)' >/dev/null 2>&1; then
