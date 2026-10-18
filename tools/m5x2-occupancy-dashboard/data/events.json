@@ -8008,5 +8008,25 @@
     "unit": "A22",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-18",
+    "effective": "2026-11-05",
+    "kind": "ntv",
+    "unit_id": "458",
+    "prop": "c302",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-18",
+    "effective": "2026-10-19",
+    "kind": "ntv",
+    "unit_id": "1033",
+    "prop": "kn47 K2",
+    "unit": "C202",
+    "tenant": null,
+    "baseline": false
   }
 ]
