@@ -317,8 +317,11 @@ def _parse_iso(s: str) -> _dt.datetime:
     return _dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(_tz())
 
 
-def _fetch_today() -> list[dict]:
-    today = _dt.datetime.now(_tz()).date()
+def _fetch_today(day: _dt.date | None = None) -> list[dict]:
+    """Entries clipped to one day — today by default, or `day` for the
+    back/forward day navigation (2026-10-18)."""
+    now = _dt.datetime.now(_tz())
+    today = day or now.date()
     # Toggl's start_date/end_date filter is UTC-based and end-exclusive, so
     # a [today-1, today+1) window ends at 00:00 UTC = 17:00 PDT / 16:00 PST
     # and silently drops every later entry INCLUDING the running timer (bug
@@ -329,7 +332,9 @@ def _fetch_today() -> list[dict]:
     raw = toggl_api.get_entries(
         start_date=(today - _dt.timedelta(days=1)).isoformat(),
         end_date=(today + _dt.timedelta(days=2)).isoformat()) or []
-    now = _dt.datetime.now(_tz())
+    day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
+    # Live edge on today; a past day is complete, so clip at its midnight.
+    clip_end = min(now, day_start + _dt.timedelta(days=1))
     out = []
     for e in raw:
         try:
@@ -338,11 +343,10 @@ def _fetch_today() -> list[dict]:
             continue
         running = (e.get("duration") or 0) < 0 or not e.get("stop")
         en = now if running else _parse_iso(e["stop"])
-        # keep the part that falls inside today
+        # keep the part that falls inside the viewed day
         if en.date() < today or st.date() > today:
             continue
-        day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
-        st_c, en_c = max(st, day_start), min(en, now)
+        st_c, en_c = max(st, day_start), min(en, clip_end)
         if en_c <= st_c:
             continue
         code = PROJECT_NAMES.get(e.get("project_id") or 0, "")
@@ -547,8 +551,8 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
     return out
 
 
-def _fetch_events_today(entries: list[dict]) -> list[dict]:
-    today = _dt.datetime.now(_tz()).date()
+def _fetch_events_today(entries: list[dict], day: _dt.date | None = None) -> list[dict]:
+    today = day or _dt.datetime.now(_tz()).date()
     day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     day_end = day_start + _dt.timedelta(days=1)
     return _filter_events(_fetch_calendar_raw(day_start, day_end), entries)
@@ -655,14 +659,24 @@ def _block_points(today: _dt.date, total: int | None) -> dict[str, int]:
     return out
 
 
-def build_timeline() -> dict:
-    today = _dt.datetime.now(_tz()).date()
+def build_timeline(day: _dt.date | None = None) -> dict:
+    """The timeline payload for one day — today (live) by default, or `day`
+    for the back/forward navigation (2026-10-18), the mobile mirror of the
+    CLI's ctrl+/ / ctrl+= day_offset view. Past-day calls keep _fetch_today /
+    _fetch_events_today arg-less on the today path so the existing tests'
+    zero-arg monkeypatched stand-ins keep working."""
     now = _dt.datetime.now(_tz())
-    entries = _fetch_today()
-    events = _fetch_events_today(entries)
+    today = day or now.date()
+    is_today = today == now.date()
+    entries = _fetch_today() if is_today else _fetch_today(today)
+    events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
     logged = _ledger(today)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
+    # The timeline's "live edge": gaps and dividers run to now on today, but a
+    # past day is complete — they run to its midnight (the CLI anchors a
+    # past-day view to the day's end the same way).
+    edge = now if is_today else day0 + _dt.timedelta(days=1)
 
     def hhmm(dt: _dt.datetime) -> str:
         return dt.strftime("%H:%M")
@@ -675,8 +689,8 @@ def build_timeline() -> dict:
         if e["start"] > cursor:
             raw_gaps.append({"start_dt": cursor, "end_dt": e["start"]})
         cursor = max(cursor, e["end"])
-    if now > cursor:
-        raw_gaps.append({"start_dt": cursor, "end_dt": now})
+    if edge > cursor:
+        raw_gaps.append({"start_dt": cursor, "end_dt": edge})
 
     # 2. Carve each event's window out of whatever gap it falls inside, then
     # 3. split what's left at 地支 boundaries, dropping anything now under
@@ -706,7 +720,7 @@ def build_timeline() -> dict:
         while bidx < len(BLOCKS):
             h, name = BLOCKS[bidx]
             bdt = day0 + _dt.timedelta(hours=h)
-            if bdt > t or bdt > now:
+            if bdt > t or bdt > edge:
                 break
             rows.append({"type": "divider", "label": f"{name} {h:02d}:00",
                          "block": name})
@@ -744,7 +758,7 @@ def build_timeline() -> dict:
                          "is_past": ev["is_past"], "started": ev["started"],
                          "start_iso": ev["start_dt"].isoformat(),
                          "end_iso": ev["end_dt"].isoformat()})
-    emit_dividers_before(now)
+    emit_dividers_before(edge)
 
     # Σ points for the header (same source as mobile dtd: 0分 col D on Ix).
     points = None
@@ -759,15 +773,17 @@ def build_timeline() -> dict:
     # Per-block Σ分 and -1₦ ritual score on each divider (user request
     # 2026-10-04: "show both sum of points and -1 sum for every block").
     block_pts = _block_points(today, points)
-    rituals = _block_ritual_scores(now)
+    # The -1₲ ritual stamps in the build order are today's only — a past-day
+    # view would misattribute them, so it just shows none.
+    rituals = _block_ritual_scores(now) if is_today else {}
     for row in rows:
         if row["type"] == "divider":
             row["pts"] = block_pts.get(row["block"])
             row["n1"] = rituals.get(row["block"])
 
-    since, since_min = untracked_since(entries, now)
+    since, since_min = untracked_since(entries, now) if is_today else (None, None)
     return {"rows": rows, "tracked_min": tracked_min, "points": points,
-            "date": today.isoformat(),
+            "date": today.isoformat(), "is_today": is_today,
             "untracked_since": since, "untracked_min": since_min}
 
 
@@ -1336,7 +1352,15 @@ def _ev_end(resp):
 @app.route("/api/timeline")
 def api_timeline():
     try:
-        return jsonify({"ok": True, **build_timeline()})
+        # ?offset=-N views N days back (the CLI's ctrl+/ / ctrl+=). Clamped
+        # to the past: the future has no entries and offset>0 would just
+        # render a confusing empty day.
+        off = request.args.get("offset", type=int) or 0
+        day = None
+        if off:
+            off = max(-366, min(0, off))
+            day = _dt.datetime.now(_tz()).date() + _dt.timedelta(days=off)
+        return jsonify({"ok": True, **build_timeline(day)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -1690,8 +1714,11 @@ PAGE = r"""<!doctype html>
   header .brand b { color:var(--go); }
   .tally { color:var(--dim); font-variant-numeric:tabular-nums; }
   .tally b { color:var(--go); }
-  #reload { background:none; border:1px solid #333; color:var(--dim);
+  #reload, .navb { background:none; border:1px solid #333; color:var(--dim);
     border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
+  .hbtns { display:flex; gap:6px; }
+  .navb:disabled { opacity:.3; }
+  #dayBadge { display:none; color:#e5a000; font-weight:700; }
   main { padding:2px 0 calc(env(safe-area-inset-bottom) + 60px); }
   .div { color:var(--dim); padding:8px 14px 2px; font-size:12px; letter-spacing:1px;
     border-top:1px solid #242424; display:flex; justify-content:space-between; align-items:center; }
@@ -1757,8 +1784,13 @@ PAGE = r"""<!doctype html>
 <header>
   <div id="untracked"></div>
   <div class="brand">jan<b>u</b>s</div>
+  <span id="dayBadge"></span>
   <div class="tally"><b id="pts">–</b> 分 · <span id="trk">0:00</span></div>
-  <button id="reload">↻</button>
+  <div class="hbtns">
+    <button class="navb" id="dprev" title="previous day">‹</button>
+    <button class="navb" id="dnext" title="next day" disabled>›</button>
+    <button id="reload">↻</button>
+  </div>
   <form id="cmdbar" onsubmit="runCmd(event)">
     <input id="cmd" placeholder="coffee 1400-1415 @epcn · same as the CLI" autocomplete="off"
       autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
@@ -1842,12 +1874,32 @@ function untrackedBanner(since, mins){
   el.classList.add('show');
 }
 
+// Day navigation (2026-10-18): ‹ / › view past days, the mobile mirror of the
+// CLI's ctrl+/ / ctrl+=. Past days are VIEW-ONLY — fill/log/edit/cmdbar all
+// target today on the server, so their entry points hide/unbind off today.
+let dayOffset = 0, viewingToday = true;
+
+function dayBadge(iso){
+  const el = document.getElementById('dayBadge');
+  if(viewingToday){ el.style.display = 'none'; el.textContent = ''; }
+  else {
+    const dt = new Date(iso + 'T12:00:00');
+    el.textContent = '◀ ' + dt.toLocaleDateString(undefined, {weekday:'short', month:'numeric', day:'numeric'});
+    el.style.display = '';
+  }
+  document.getElementById('dnext').disabled = dayOffset === 0;
+  for(const id of ['fab','fabQuick','cmdbar'])
+    document.getElementById(id).style.display = viewingToday ? '' : 'none';
+}
+
 async function load(){
   list.innerHTML = '<div class="loading">loading…</div>';
   try {
-    const r = await fetch('/api/timeline');
+    const r = await fetch('/api/timeline' + (dayOffset ? '?offset=' + dayOffset : ''));
     const d = await r.json();
     if(!d.ok) throw new Error(d.error||'fetch failed');
+    viewingToday = d.is_today !== false;
+    dayBadge(d.date);
     document.getElementById('pts').textContent = (d.points==null?'–':d.points);
     document.getElementById('trk').textContent =
       Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
@@ -1934,7 +1986,7 @@ function makeRow(r){
   }
   line.appendChild(meta);
   row.appendChild(line);
-  bindSwipe(row, line, track, trackEdit, r);
+  if(viewingToday) bindSwipe(row, line, track, trackEdit, r);
   return row;
 }
 
@@ -2217,6 +2269,8 @@ async function doSplit(mode){
 }
 
 document.getElementById('reload').onclick = load;
+document.getElementById('dprev').onclick = ()=>{ dayOffset--; load(); };
+document.getElementById('dnext').onclick = ()=>{ if(dayOffset < 0){ dayOffset++; load(); } };
 loadProjects();
 load();
 </script>

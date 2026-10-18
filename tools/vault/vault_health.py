@@ -338,6 +338,19 @@ def check_skills_backup(now: dt.datetime) -> Finding:
     return Finding("skills-backup", "ok", f"last auto-commit {age_h:.1f}h ago")
 
 
+def check_perm_sync(now: dt.datetime) -> Finding:
+    # claude-perm-sync.py (launchd on Ix, hourly) merges Claude permission
+    # allowlists ix<->straylight and stamps this file only on full success.
+    stamp = Path.home() / ".claude" / "perm-sync-last-success"
+    if not stamp.exists():
+        return Finding("perm-sync", "warn", "no last-success stamp — claude-perm-sync has never completed here", review=True)
+    age_h = (now.timestamp() - float(stamp.read_text().strip())) / 3600
+    if age_h > 48:
+        return Finding("perm-sync", "warn", f"last successful ix<->straylight permission sync {age_h:.0f}h ago "
+                       "(hourly launchd job; is straylight offline or ssh broken?)", review=True)
+    return Finding("perm-sync", "ok", f"last successful sync {age_h:.1f}h ago")
+
+
 def check_onedrive_neon(now: dt.datetime) -> Finding:
     detail = []
     def mtime_local():
@@ -505,7 +518,7 @@ def check_alerts(now: dt.datetime) -> Finding:
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_syncthing(now), lambda: check_git_autopush(now),
-               lambda: check_skills_backup(now), lambda: check_onedrive_neon(now), check_time_machine,
+               lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, check_skill_claims, lambda: check_alerts(now)):
         try:
             out.append(fn())
@@ -522,7 +535,7 @@ def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, Syncthing, git autopush, "
-             "skills backup, OneDrive Neon, Time Machine, alerts. Review items are in the 😈 Todoist task.", "",
+             "skills backup, perm sync, OneDrive Neon, Time Machine, alerts. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed |", "|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.

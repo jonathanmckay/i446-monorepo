@@ -1609,6 +1609,7 @@ elif [[ -n "\$id" ]]; then
     "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;
     "1 hcme")                         _form="$HOME/i446-monorepo/tools/1hcme/1hcme.py" ;;
     -1g)                              _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --detach" ;;
+    0g)                               _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --daily --detach" ;;
   esac
   if [[ -n "\$_form" ]]; then
     print -rn -- "execute($DTD_FORM \$id \$_form)"
@@ -3267,7 +3268,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 1hcme: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is

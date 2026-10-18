@@ -25,7 +25,9 @@ block dividers. Shows today's Toggl entries and the untracked gaps between them.
 ## Endpoints
 
 - `GET /` — mobile UI
-- `GET /api/timeline` — entries + gaps + 地支 dividers, tracked minutes, 0分 Σ
+- `GET /api/timeline` — entries + gaps + 地支 dividers, tracked minutes, 0分 Σ.
+  `?offset=-N` views N days back (the header's ‹ / › buttons, mirroring the
+  CLI's ctrl+/ / ctrl+=); past days are view-only (no swipes/fill/cmdbar).
 - `POST /api/fill {desc, start, end}` — create a Toggl entry for a gap
 - `POST /api/log {id, desc, minutes, project}` — /did the entry's minutes
 

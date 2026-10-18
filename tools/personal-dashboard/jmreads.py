@@ -549,6 +549,49 @@ def request_review(book_id: str) -> tuple[bool, str]:
     return True, r.stdout.strip()
 
 
+def find_book_file(book_id: str) -> Path | None:
+    """The review file whose stem is `book_id`, under a <year>/ folder of the
+    reviews database. Stems are slugs (slugify in book-add.py: word chars and
+    dashes), so anything else — in particular path separators and dots — is
+    rejected outright rather than fed to glob."""
+    if not book_id or not re.fullmatch(r"[\w-]+", book_id):
+        return None
+    for path in sorted(REVIEWS_DIR.glob(f"*/{book_id}.md")):
+        if re.fullmatch(r"\d{4}", path.parent.name):
+            return path
+    return None
+
+
+def save_draft(book_id: str, text: str) -> tuple[bool, str]:
+    """Append web-jotted thoughts to the book's review file. Stored as a
+    dated blockquote: review_excerpt skips `>` lines, so a draft never makes
+    the book count as reviewed (or leak into the feed) — it just waits in the
+    file for /bookreview to use."""
+    path = find_book_file(book_id)
+    if not path:
+        return False, f"unknown book {book_id}"
+    text = (text or "").strip()
+    if not text:
+        return False, "empty draft"
+    stamp = date.today().isoformat()
+    quoted = "\n".join("> " + ln for ln in f"draft {stamp}: {text}".splitlines())
+    with path.open("a", encoding="utf-8") as f:
+        f.write(f"\n{quoted}\n")
+    invalidate()
+    return True, str(path)
+
+
+def delete_record(book_id: str) -> tuple[bool, str]:
+    """Remove a book's review file from the vault (vault-autopush makes this
+    recoverable from git history)."""
+    path = find_book_file(book_id)
+    if not path:
+        return False, f"unknown book {book_id}"
+    path.unlink()
+    invalidate()
+    return True, str(path)
+
+
 def data(force: bool = False) -> dict:
     with _cache_lock:
         if not force and _cache["data"] and time.time() - _cache["t"] < API_TTL:

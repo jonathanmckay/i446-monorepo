@@ -159,7 +159,72 @@ def test_save_reports_result_into_dtd_header(form, monkeypatch, tmp_path):
 
 
 def test_main_detach_skips_blank_form(form, monkeypatch):
-    monkeypatch.setattr(form, "run_form", lambda block: ["", "", ""])
+    monkeypatch.setattr(form, "run_form", lambda block, daily=False: ["", "", ""])
     monkeypatch.setattr(form, "detach", lambda *a: pytest.fail("blank form must not spawn"))
     monkeypatch.setattr(sys, "argv", ["-1g-form.py", "--detach", "--block", "巳"])
     assert form.main() == 0
+
+
+# --- 0g daily mode (2026-10-18: "0g should also go to a form like -1g does") ---
+
+def test_plan_daily_converts_square_to_brace_and_defaults_15(form):
+    assert form.plan_daily(["ship memo @i9 {20}", "call dentist [5]", "walk"]) == \
+        ["ship memo @i9 {20}", "call dentist {5}", "walk {15}"]
+    assert form.plan_daily(["", "", ""]) == []
+    # [N] kept when {N} coexists (square then stays domain points)
+    assert form.plan_daily(["mixed [5] {10}", "", ""]) == ["mixed [5] {10}"]
+
+
+def test_save_daily_appends_0g_logs_syncs_and_marks_habit(form, monkeypatch):
+    appended, ran = [], []
+    monkeypatch.setattr(form, "_append_on_ix",
+                        lambda b, g, daily=False: (appended.append((b, g, daily)) or g))
+    monkeypatch.setattr(form.subprocess, "run", lambda cmd, **kw: (ran.append(cmd), _RC())[1])
+    out = io.StringIO()
+    assert form.save_daily(["fix janus [5]", "", "walk"], out=out) == 0
+    assert appended == [("", ["fix janus {5}", "walk {15}"], True)]
+    # 0g_log (set-time archive), 0g-sync (canonical Todoist path), did-fast 0g, refresh
+    assert [Path(c[1]).name for c in ran] == ["0g_log.py", "0g-sync.py", "did-fast.py", "did-fast.py"]
+    assert ran[0][2:] == ["fix janus {5}", "walk {15}"]
+    assert ran[1][-1] == "sync" and ran[2][-1] == "0g" and ran[3][-1] == "--refresh-cache"
+    assert "2 goals" in out.getvalue()
+
+
+def test_save_daily_all_duplicates_skips_log_but_still_closes_card(form, monkeypatch):
+    ran = []
+    monkeypatch.setattr(form, "_append_on_ix", lambda b, g, daily=False: [])
+    monkeypatch.setattr(form.subprocess, "run", lambda cmd, **kw: (ran.append(cmd), _RC())[1])
+    assert form.save_daily(["already set", "", ""], out=io.StringIO()) == 0
+    assert [Path(c[1]).name for c in ran] == ["0g-sync.py", "did-fast.py", "did-fast.py"]
+
+
+def test_save_daily_ix_unreachable_dumps_recovery(form, monkeypatch, tmp_path):
+    monkeypatch.setattr(form, "_on_ix", lambda: False)
+    monkeypatch.setattr(form, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(form.nb, "append_daily_goals", lambda *a, **k: pytest.fail("no local write"))
+    monkeypatch.setattr(form.subprocess, "run",
+                        lambda cmd, **kw: _RC(255) if cmd[0] == "ssh" else _RC())
+    out = io.StringIO()
+    assert form.save_daily(["a goal", "", ""], out=out) == 1
+    assert "FAILED" in out.getvalue() and list(tmp_path.glob("*.json"))
+
+
+def test_daily_detach_passes_daily_flag_and_reports_header(form, monkeypatch, tmp_path):
+    spawned = []
+    monkeypatch.setattr(form.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
+    hdr = tmp_path / "hdr"
+    monkeypatch.setenv("DTD_HDR_FILE", str(hdr))
+    monkeypatch.setattr(form, "LOG", tmp_path / "log")
+    form.detach(["walk", "", ""], "巳", daily=True)
+    assert "--daily" in spawned[0]
+    assert hdr.read_text().startswith("⏳ 0g: saving 1 goal(s)")
+
+
+def test_main_daily_routes_to_save_daily(form, monkeypatch):
+    called = {}
+    monkeypatch.setattr(form, "run_form", lambda block, daily=False: ["walk", "", ""])
+    monkeypatch.setattr(form, "save_daily", lambda lines, **kw: called.setdefault("lines", lines) and 0 or 0)
+    monkeypatch.setattr(form, "save", lambda *a, **k: pytest.fail("block save must not run"))
+    monkeypatch.setattr(sys, "argv", ["-1g-form.py", "--daily"])
+    assert form.main() == 0
+    assert called["lines"] == ["walk", "", ""]

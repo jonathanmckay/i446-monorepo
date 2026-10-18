@@ -452,3 +452,41 @@ def append_block_goals(block: str, goals: list[str], build_order: Path | None = 
         if added:
             bo.write_text(new_text, encoding="utf-8")
     return added
+
+
+DAILY_SECTION = "## 0₲"
+
+
+def append_daily_goals_text(text: str, goals: list[str]) -> tuple[str, list[str]]:
+    """Pure: add `goals` as flush-left `- [ ] <goal>` under `## 0₲`, after any
+    existing checkbox lines (the live section is flush-left; 0g-sync's regex
+    accepts any indent), never replacing them, skipping goals already present
+    (retry-safe). `### 以后的目标` and everything below stays untouched.
+    Returns (new_text, goals_actually_added). Raises ValueError when the
+    section is missing."""
+    lines = text.split("\n")
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith(DAILY_SECTION))
+    except StopIteration:
+        raise ValueError("## 0₲ section not found in build order")
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("#")), len(lines))
+    cb = re.compile(r"^\s*- \[[ xX]\]\s*(.*)$")
+    existing = [m.group(1).strip() for l in lines[start + 1:end] if (m := cb.match(l))]
+    added = [g for g in goals if g.strip() and g.strip() not in existing]
+    if not added:
+        return text, []
+    last_cb = max((i for i in range(start + 1, end) if cb.match(lines[i])), default=start)
+    new_lines = [f"- [ ] {g.strip()}" for g in added]
+    return "\n".join(lines[:last_cb + 1] + new_lines + lines[last_cb + 1:]), added
+
+
+def append_daily_goals(goals: list[str], build_order: Path | None = None) -> list[str]:
+    """Locked read-modify-write of build-order.md's ## 0₲ section (call ON Ix
+    only -- see build_order_lock). Returns the goals actually added."""
+    bo = build_order or BUILD_ORDER
+    with build_order_lock(bo):
+        text = bo.read_text(encoding="utf-8")
+        new_text, added = append_daily_goals_text(text, goals)
+        if added:
+            bo.write_text(new_text, encoding="utf-8")
+    return added

@@ -81,3 +81,61 @@ def test_locked_writer_on_tmp_copy(tmp_path: Path):
     out = bo.read_text(encoding="utf-8")
     assert "- 未 🎯\n    - [ ] walk 20m {5}\n" in out
     assert (tmp_path / "build-order.lock").exists()
+
+
+BO_DAILY = """# build order
+ 
+ **1₲**
+
+## 0₲
+- [ ] first goal {20}
+- [x] done goal {10}
+
+### 以后的目标
+- [ ] later thing {5}
+
+## -1₲
+- 巳 ☀️
+    - [ ] block goal {10}
+"""
+
+
+def test_append_daily_goals_after_last_checkbox_before_yihou():
+    text, added = nb.append_daily_goals_text(BO_DAILY, ["new goal {15}", "first goal {20}"])
+    assert added == ["new goal {15}"]
+    lines = text.split("\n")
+    i = lines.index("- [x] done goal {10}")
+    assert lines[i + 1] == "- [ ] new goal {15}"
+    assert lines[i + 2] == ""                       # blank line before ### kept
+    assert lines[i + 3] == "### 以后的目标"
+    # 以后的目标 and -1₲ untouched, and idempotent on retry
+    assert text.count("later thing {5}") == 1 and text.count("block goal {10}") == 1
+    again, added2 = nb.append_daily_goals_text(text, ["new goal {15}"])
+    assert added2 == [] and again == text
+
+
+def test_append_daily_goals_empty_section_inserts_after_header():
+    bo = "## 0₲\n\n### 以后的目标\n- [ ] later {5}\n"
+    text, added = nb.append_daily_goals_text(bo, ["a goal {15}"])
+    assert added == ["a goal {15}"]
+    assert text.split("\n")[1] == "- [ ] a goal {15}"
+    # the ### subsection's own checkboxes never count as 0₲ content
+    assert "later {5}" in text and text.count("- [ ]") == 2
+
+
+def test_append_daily_goals_missing_section_raises():
+    try:
+        nb.append_daily_goals_text("# build order\n## -1₲\n", ["x {5}"])
+    except ValueError as e:
+        assert "0₲" in str(e)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_daily_locked_writer_on_tmp_copy(tmp_path: Path):
+    bo = tmp_path / "build-order.md"
+    bo.write_text(BO_DAILY, encoding="utf-8")
+    added = nb.append_daily_goals(["walk 20m {15}"], build_order=bo)
+    assert added == ["walk 20m {15}"]
+    assert "- [ ] walk 20m {15}\n" in bo.read_text(encoding="utf-8")
+    assert (tmp_path / "build-order.lock").exists()

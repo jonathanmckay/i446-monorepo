@@ -954,3 +954,31 @@ def test_dividers_carry_block_points_and_ritual_score(jm, monkeypatch):
     divs = {r["block"]: r for r in tl["rows"] if r["type"] == "divider"}
     assert divs["卯"]["pts"] == 75 and divs["卯"]["n1"] == 13
     assert divs["辰"]["pts"] is None and divs["辰"]["n1"] is None
+
+
+def test_past_day_view_runs_to_midnight(jm, monkeypatch):
+    """build_timeline(past day) is the view-only back/forward navigation
+    (2026-10-18): is_today False, gaps and dividers run to the day's END
+    (not to now), no untracked banner."""
+    yesterday = dt.datetime.now(jm.TZ).date() - dt.timedelta(days=1)
+    mk = lambda h, m: dt.datetime.combine(yesterday, dt.time(h, m), jm.TZ)
+    e = {"id": "1", "desc": "work", "project": "i9",
+         "color": jm.COLORS.get("i9", jm.DEFAULT_COLOR),
+         "start": mk(7, 0), "end": mk(7, 30), "running": False}
+    monkeypatch.setattr(jm, "_fetch_today", lambda day=None: [e])
+    monkeypatch.setattr(jm, "_fetch_events_today", lambda entries, day=None: [])
+    tl = jm.build_timeline(yesterday)
+    assert tl["is_today"] is False
+    assert tl["date"] == yesterday.isoformat()
+    assert (tl["untracked_since"], tl["untracked_min"]) == (None, None)
+    gaps = [r for r in tl["rows"] if r["type"] == "gap"]
+    assert gaps[-1]["end"] == "00:00", "last gap must run to the day's midnight"
+    divs = [r["label"] for r in tl["rows"] if r["type"] == "divider"]
+    assert divs[-1] == "子 22:00", "every block divider of a finished day shows"
+
+
+def test_today_view_is_today_flag(jm, monkeypatch):
+    e = _entry(jm, 7, 0, 7, 30)
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
+    tl = jm.build_timeline()
+    assert tl["is_today"] is True

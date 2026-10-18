@@ -856,6 +856,28 @@ def skip_recurrence(task_id: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def delay_auto(task_id: str) -> dict:
+    """The CLI schedule screen's '↻ 0 / next occurrence / one day' row
+    (BLOCK:dauto → defer-fast 'auto'; user request 2026-10-18 "need to have
+    the 0 delay option like in CLI"): a recurring task skips to its next
+    natural occurrence with NO dated copy; a non-recurring task gets
+    defer-fast's default +1 day. One button that does the right thing for
+    either kind, so the web sheet matches tools/did/dtd.sh exactly."""
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(DEFER_FAST), "--id", task_id, "auto"],
+            capture_output=True, text=True, timeout=20)
+        if proc.returncode != 0:
+            return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:]}
+        data = json.loads(proc.stdout)
+        if data.get("error"):
+            return {"ok": False, "error": data["error"]}
+        return {"ok": True, "recurring": bool(data.get("recurring")),
+                "date": data.get("next_recurrence") or data.get("target_date", "")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def snooze_to_next_block(task_id: str) -> dict:
     """ctrl-v equivalent, scoped to just the NEXT block. Kept as the
     quick-action fast path (still wired to /api/delay-block); the swipe
@@ -1076,6 +1098,14 @@ def api_delay_freeform():
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "until": f"{_dt.datetime.fromtimestamp(epoch, daytime.active_zone()):%H:%M}"})
 
+@app.route("/api/delay-auto", methods=["POST"])
+def api_delay_auto():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    return jsonify(delay_auto(task_id))
+
 @app.route("/api/skip-recurrence", methods=["POST"])
 def api_skip_recurrence():
     body = request.get_json(force=True, silent=True) or {}
@@ -1168,7 +1198,7 @@ PAGE = r"""<!doctype html>
   .row .track::before { content:"✓ done  +" ; white-space:pre; }
   .row .track .p { font-weight:800; }
   .row .actions { position:absolute; top:0; right:0; bottom:0; display:flex; z-index:0; }
-  .row .actions .act { width:60px; border:none; color:#fff; font:700 11px/1.3 inherit;
+  .row .actions .act { width:72px; border:none; color:#fff; font:700 13px/1.3 inherit;
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; }
   .act-day { background:#546e7a; }
   .act-block { background:#8e6fce; }
@@ -1180,7 +1210,7 @@ PAGE = r"""<!doctype html>
   .editDesc:focus { outline:none; border-color:var(--go); }
   select.sheetInput { margin-top:10px; -webkit-appearance:none; appearance:none; }
   .line { position:relative; display:flex; align-items:center; gap:10px;
-    padding:10px 14px; background:var(--bg); min-height:40px;
+    padding:14px; background:var(--bg); min-height:52px;
     transform:translateX(0); transition:transform .05s linear; will-change:transform;
     touch-action:pan-y; }
   .line.snap { transition:transform .22s cubic-bezier(.2,.7,.2,1); }
@@ -1190,8 +1220,8 @@ PAGE = r"""<!doctype html>
   .toast { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 20px);
     transform:translateX(-50%) translateY(16px); background:var(--go); color:#003;
     font-weight:700; padding:9px 18px; border-radius:8px; opacity:0; transition:.22s;
-    z-index:20; font-family:inherit; }
-  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+    z-index:20; font-family:inherit; pointer-events:none; max-width:90vw; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto; }
   .toast.err { background:#ff4081; color:#2a0010; }
   #fab { position:fixed; right:calc(env(safe-area-inset-right) + 18px);
     bottom:calc(env(safe-area-inset-bottom) + 22px); width:52px; height:52px;
@@ -1217,6 +1247,10 @@ PAGE = r"""<!doctype html>
   .sheetRow button.go { background:var(--go); color:#003; border-color:var(--go); }
   .sheetRow input { flex:2; padding:10px; border-radius:8px; border:1px solid #3a3a3a;
     background:#111; color:#eee; font:600 15px inherit; }
+  .delayGrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .delayBtn { padding:15px 8px; min-height:54px; border-radius:10px; border:1px solid #3a3a3a;
+    background:#1b1b1b; color:#cfcfcf; font:700 17px/1.2 inherit; }
+  .delayBtn:active { background:#2a2a2a; }
   .delayBtn.skipBtn { grid-column:1/-1; background:#152a15; border-color:#2e5e2e; color:#9fe09f; }
 </style>
 </head>
@@ -1305,13 +1339,17 @@ function matchesFilter(t, q){
 }
 function filterTasks(tasks, q){ return tasks.filter(t => matchesFilter(t, q)); }
 
+// Errors linger long enough to screenshot (user request 2026-10-18); either
+// kind dismisses on tap. pointer-events gating in .toast CSS keeps the hidden
+// toast from eating taps on the rows underneath it.
 function toast(msg, err){
   toastEl.textContent = msg;
   toastEl.classList.toggle('err', !!err);
   toastEl.classList.add('show');
   clearTimeout(toastEl._t);
-  toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 1500);
+  toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), err ? 8000 : 1500);
 }
+toastEl.onclick = ()=>{ clearTimeout(toastEl._t); toastEl.classList.remove('show'); };
 
 function setTally(p, c){
   total = p||0; count = c||0;
@@ -1319,16 +1357,28 @@ function setTally(p, c){
   document.getElementById('cnt').textContent = count;
 }
 
+// In-place reload (2026-10-18 "prevent a full refresh on every change"): the
+// loading placeholder only ever shows before the FIRST paint — after that the
+// existing rows stay interactive while the fetch runs and are re-rendered in
+// place when it lands. The ↻ button spins instead (a force refresh blocks on
+// Todoist and can take seconds). loadSeq drops out-of-order responses so a
+// slow background load can't overwrite a newer forced one.
+let loadSeq = 0;
 async function load(refresh){
-  list.innerHTML = '<div class="loading">loading…</div>';
+  const seq = ++loadSeq;
+  const rl = document.getElementById('reload');
+  if(!allTasks.length) list.innerHTML = '<div class="loading">loading…</div>';
+  if(refresh){ rl.disabled = true; rl.textContent = '…'; }
   try {
     const r = await fetch('/api/tasks' + (refresh?'?refresh=1':''));
     const d = await r.json();
+    if(seq !== loadSeq) return;
     if(!d.ok) throw new Error(d.error||'fetch failed');
     allTasks = d.tasks;
     render(filterTasks(allTasks, filterInput.value));
     if(d.summary) setTally(d.summary.points, d.summary.done);
-  } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
+  } catch(e){ if(seq === loadSeq) list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
+  finally { if(refresh){ rl.disabled = false; rl.textContent = '↻'; } }
 }
 
 function render(tasks){
@@ -1349,7 +1399,10 @@ function makeRow(t){
   row.className = 'row' + (t.agent ? ' agent' : '');
   const track = document.createElement('div');
   track.className = 'track';
-  track.innerHTML = '<span class="p">'+(t.points||0)+' 分</span>';
+  // Variable-input tasks (user report 2026-10-18): the credit depends on the
+  // value typed AFTER the swipe (minutes/quality/count — Neon computes the
+  // points), so a fixed "+30 分" in the reveal is a lie. Show "? 分" instead.
+  track.innerHTML = '<span class="p">'+(t.variablePrompt ? '?' : (t.points||0))+' 分</span>';
   row.appendChild(track);
 
   // Swipe-left reveal panel: three buttons mirroring terminal dtd's ctrl-d
@@ -1395,7 +1448,7 @@ function makeRow(t){
 function bindSwipe(row, line, track, actions, t){
   let x0=null, dx=0, dragging=false, baseX=0, moved=false;
   const W = () => row.offsetWidth;
-  const AW = () => actions.offsetWidth || 192;
+  const AW = () => actions.offsetWidth || 288;
   const start = x=>{ x0=x; dragging=true; moved=false; line.classList.remove('snap'); };
   const move = x=>{
     if(!dragging) return;
@@ -1510,18 +1563,16 @@ function openDelayMenu(t, row, panel){
       btn.onclick = ()=> submitDelayMinutes(m);
       delayOptions.appendChild(btn);
     }
-    // Skip-to-next-occurrence: recurring tasks only (no dated duplicate, series
-    // intact). Rendered last so it reads as a distinct action from the delays.
-    if(delayCtx.t.recurring){
-      const btn = document.createElement('button');
-      btn.className = 'delayBtn skipBtn';
-      btn.textContent = '⏭ skip to next';
-      btn.onclick = ()=> submitSkip();
-      delayOptions.appendChild(btn);
-    }
-    if(!d.blocks.length && !d.minutes.length && !delayCtx.t.recurring){
-      delayOptions.innerHTML = '<div class="loading">nothing later today</div>';
-    }
+    // ↻ 0: the CLI schedule screen's top row (defer-fast 'auto') — a
+    // recurring task skips to its next occurrence with no dated duplicate
+    // (subsumes the old recurring-only "⏭ skip to next"), anything else
+    // defers one day. Always rendered, like the CLI's.
+    const zero = document.createElement('button');
+    zero.className = 'delayBtn skipBtn';
+    zero.textContent = delayCtx.t.recurring ? '↻ 0 · skip to next occurrence'
+                                            : '↻ 0 · tomorrow';
+    zero.onclick = ()=> submitDelayAuto();
+    delayOptions.appendChild(zero);
   }).catch(()=>{ if(delayCtx) { delayOptions.innerHTML=''; toast('offline · could not load', true); } });
 }
 
@@ -1541,18 +1592,18 @@ async function submitFreeform(){
   } catch(e){ toast('offline · not delayed', true); }
 }
 
-async function submitSkip(){
+async function submitDelayAuto(){
   if(!delayCtx) return;
   const {t, row} = delayCtx;
   closeDelayMenu();
   try {
-    const r = await fetch('/api/skip-recurrence', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await fetch('/api/delay-auto', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({id:t.id})});
     const d = await r.json();
-    if(!d.ok){ toast(d.error||'skip failed', true); return; }
-    toast('⏭ next '+(d.next||'occurrence'));
+    if(!d.ok){ toast(d.error||'delay failed', true); return; }
+    toast((d.recurring ? '⏭ next ' : '🗓 → ')+(d.date||'tomorrow'));
     collapseRow(row);
-  } catch(e){ toast('offline · not skipped', true); }
+  } catch(e){ toast('offline · not delayed', true); }
 }
 
 function closeDelayMenu(){ delayWrap.classList.remove('show'); delayCtx = null; }
