@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """cs: reference Claude Code sessions by title; fork or resume them from anywhere.
 
-  cs ls [query] [--all] [-l]   list sessions (#, age, mark, title, ▸ claimed tasks), newest first.
+  cs ls [query] [--all] [-l]   list sessions (#, age, host, mark, title, ▸ claimed tasks), newest first.
                                #: the session's number in the current cmux workspace (dtd 1, janus 2,
                                Claude panes 3+ in reading order, top-left to bottom-right); blank = not open.
+                               host: machine the session last launched from (ix, sl=straylight,
+                               im=imago-c; blank = before host tracking).
                                mark: ✎ title you set, 😈 title the AI wrote, blank = first prompt.
-                               Bare ls = last 7 days; a query searches all history; --all lifts
-                               the window. -l adds cwd + id
+                               Bare ls = the 6 newest; a query searches all history; --all lifts
+                               the limit. -l adds cwd + id
   cs id <query>                print the best-matching session id (-l: id, title, live|idle;
-                               --title: only accept a title/claim match, never a first-prompt one)
+                               --title: only accept a title/claim match, never a first-prompt one;
+                               --latest: skip matching, take the most recently active session)
   cs fork [query] [-- args]    new session branched from the match (claude --resume ID --fork-session)
   cs open [query] [-- args]    resume the match in place (same session id)
   cs pick [query]              interactive fzf picker; prints the chosen id
@@ -245,7 +248,7 @@ def pick(idx, query='', rows=None):
     return next(r for _, _, _, r in rows if r['id'] == sid)
 
 
-LS_WINDOW = 7 * 86400
+LS_LIMIT = 6   # bare `cs ls` rows; --all or a query lifts it
 
 
 def _cmux(method):
@@ -441,6 +444,30 @@ def cmd_retitle():
         print(f'{n}\t{sfid}\t{title}')
 
 
+HOSTS = STATE / 'session-hosts'   # <sid> → short hostname of the machine that last launched it (claude-tracked writes these)
+HOST_CODES = {'ix': 'ix', 'straylight': 'sl', 'imago-c': 'im'}
+
+
+def host_of(r):
+    """2-char code of the machine the session last launched from; '' before host tracking."""
+    try:
+        h = (HOSTS / r['id']).read_text().strip().lower()
+    except OSError:
+        return ''
+    return HOST_CODES.get(h, h[:2])
+
+
+def record_host(sid):
+    """`cs open` relaunches a session here without going through claude-tracked: keep the host
+    record current ourselves."""
+    import socket
+    try:
+        HOSTS.mkdir(parents=True, exist_ok=True)
+        (HOSTS / sid).write_text(socket.gethostname().split('.')[0].lower())
+    except OSError:
+        pass
+
+
 def mark_of(r):
     """✎ title set by JM (/rename, -n); 😈 title written by the AI; blank = first prompt / id."""
     return '✎ ' if r['custom'] else '😈' if r['ai'] else '  '
@@ -455,8 +482,7 @@ def claims_of(r):
 def cmd_ls(idx, query, show_all, long=False):
     rows = rank(idx, query) if query else sorted(((0, r['mtime'], p, r) for p, r in idx.items()), key=lambda h: h[1], reverse=True)
     if not show_all and not query:
-        cutoff = time.time() - LS_WINDOW
-        rows = [h for h in rows if h[1] >= cutoff]
+        rows = rows[:LS_LIMIT]
     width = shutil.get_terminal_size((160, 40)).columns
     nums = cmux_numbers()
     if not query:
@@ -474,11 +500,12 @@ def cmd_ls(idx, query, show_all, long=False):
         t = title_of(r)
         mark = mark_of(r)
         num = f"{nums[r['id']]:>2}" if r['id'] in nums else '  '
+        host = f'{host_of(r):<2}'
         if long:
             cwd = r['cwd'].replace(str(Path.home()), '~')
-            line = f"{num} {age(mt):>4}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}  {claims_of(r)}"
+            line = f"{num} {age(mt):>4} {host}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}  {claims_of(r)}"
         else:
-            line = f"{num} {age(mt):>4}  {mark} {t[:60]:<60}  {claims_of(r)}"
+            line = f"{num} {age(mt):>4} {host}  {mark} {t[:60]:<60}  {claims_of(r)}"
         print(line.rstrip()[:width])
 
 
