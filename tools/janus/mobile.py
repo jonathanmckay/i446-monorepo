@@ -765,8 +765,32 @@ def build_timeline() -> dict:
             row["pts"] = block_pts.get(row["block"])
             row["n1"] = rituals.get(row["block"])
 
+    since, since_min = untracked_since(entries, now)
     return {"rows": rows, "tracked_min": tracked_min, "points": points,
-            "date": today.isoformat()}
+            "date": today.isoformat(),
+            "untracked_since": since, "untracked_min": since_min}
+
+
+UNTRACKED_BANNER_MIN = 30
+
+
+def untracked_since(entries: list[dict], now: _dt.datetime,
+                    threshold_min: int = UNTRACKED_BANNER_MIN) -> tuple[str | None, int | None]:
+    """("HH:MM", minutes) of the latest completed entry's end when NO timer
+    is running and that end is >= threshold_min ago; (None, None) otherwise
+    — the red "untracked since" banner (2026-10-17). The phone always views
+    today, so there is no past-day case; a day with no entries at all has
+    no "since" to point at and shows nothing."""
+    if any(e.get("running") for e in entries):
+        return None, None
+    ends = [e["end"] for e in entries if not e.get("running")]
+    if not ends:
+        return None, None
+    last = max(ends)
+    mins = int((now - last).total_seconds() // 60)
+    if mins < threshold_min:
+        return None, None
+    return last.strftime("%H:%M"), mins
 
 
 # ---------------------------------------------------------------------------
@@ -1317,11 +1341,9 @@ def api_timeline():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def run_command(text: str) -> dict:
-    """The CLI's typed-command path, for the web command bar (2026-10-05):
-    desktop janus hands whatever you type to tg-fast.py (run_tg_fast), so
-    "coffee", "coffee @epcn", "coffee 1400-1415 #-1" and backdated "1400
-    coffee" mean exactly what they mean in the CLI."""
+def _run_tg_cmd(text: str) -> dict:
+    """One tg-fast.py call → {"ok", "msg"} / {"ok": False, "error"} (the
+    web command bar's result shape; the last output line is the flash)."""
     try:
         proc = subprocess.run(["/usr/bin/python3", str(TG_FAST), text],
                               capture_output=True, text=True, timeout=30)
@@ -1332,6 +1354,214 @@ def run_command(text: str) -> dict:
     if proc.returncode != 0:
         return {"ok": False, "error": msg or f"tg-fast exit {proc.returncode}"}
     return {"ok": True, "msg": msg}
+
+
+def _did_summary(stdout_text: str) -> str:
+    """One toast-able line from did-fast's JSON blob — mirrors desktop
+    janus._did_summary (the last stdout line of a did-fast run is literally
+    "}"): points granted, agent-needed reasons, already-done skips."""
+    try:
+        data = json.loads(stdout_text[stdout_text.index("{"):])
+    except Exception:
+        lines = stdout_text.strip().splitlines()
+        return lines[-1] if lines else "(no output)"
+    bits = []
+    for r in data.get("results", []):
+        name = r.get("name", "?")
+        fen = r.get("0fen") or {}
+        pts = (fen.get("points", 0) or 0) + (fen.get("bonus", 0) or 0)
+        pts += (r.get("hcbi") or {}).get("pts", 0) or 0
+        if not pts and r.get("variable_1n"):
+            pts = r.get("variable_value") or 0
+        closed = " · todoist ✓" if (r.get("todoist") or {}).get("closed") else ""
+        bits.append(f"✓ {name} +{pts}分{closed}" if pts else f"✓ {name}{closed}")
+    for a in data.get("agent_needed", []):
+        bits.append(f"⚠ {a.get('name', '?')}: {a.get('reason', 'needs agent')}")
+    for fs in data.get("future_skipped", []):
+        bits.append(f"⚠ {fs.get('name', '?')}: {fs.get('warning', 'skipped')}")
+    return "  ".join(bits) if bits else "(no results)"
+
+
+def _run_did_cmd(text: str) -> dict:
+    """One did-fast.py call for a typed command (bonus points / [N] range),
+    same result shape as _run_tg_cmd. did-fast is the heavy one (Excel
+    write over ssh + Todoist), hence the longer timeout (see _run_did_fast)."""
+    try:
+        proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
+                              capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "did-fast timed out"}
+    if proc.stdout and "{" in proc.stdout:
+        msg = _did_summary(proc.stdout)
+    else:
+        lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+        msg = lines[-1] if lines else ""
+    if proc.returncode != 0:
+        return {"ok": False, "error": msg or f"did-fast exit {proc.returncode}"}
+    return {"ok": True, "msg": msg}
+
+
+# ─── Typed-command routing (mirrors desktop janus.py _on_enter) ─────────────
+# A trailing " @code" is stripped before the range test so "@m5x2-1" style
+# codes can't be mistaken for a range; a `[N]` after the @code is harmless.
+_COMPLETED_RANGE_RE = re.compile(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)")
+_TRAILING_AT_RE = re.compile(r"\s@\S+\s*$")
+_BONUS_LEAD_RE = re.compile(r"^[+-]\d+(?=\s|$)")   # "+15 @i9", "-10 0g"
+_BONUS_ANY_RE = re.compile(r"(?:^|\s)\+\d+\b")      # "read COD deck +10"
+_POINTS_ANNOT_RE = re.compile(r"\[-?\d+\]")
+# did-fast's TIME_RANGE_RE is strictly HHMM-HHMM; the typed grammar also
+# accepts "600-607" and "9:07-9:30", so a did-bound part is normalized.
+_RANGE_NORM_RE = re.compile(r"(?<![\d:])(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})(?![\d:])")
+
+
+def _has_completed_range(part: str) -> bool:
+    """True if `part` types an explicit HH:MM-HH:MM / HHMM-HHMM completed
+    range (as opposed to a bare description or a backdated "HHMM desc"
+    start with no end yet). Same regex as desktop janus."""
+    return bool(_COMPLETED_RANGE_RE.search(_TRAILING_AT_RE.sub("", part)))
+
+
+def _has_bonus_points(part: str) -> bool:
+    """True if `part` carries a bare `+N` / leading `-N` points token —
+    did-fast's own no-timer immediate-grant syntax ("+10 @i9 read COD
+    deck", "-10 0g"). Only a LEADING -N counts, so "-1t"/"-1g" habit names
+    and "1815-1843" ranges never match."""
+    return bool(_BONUS_LEAD_RE.match(part.strip()) or _BONUS_ANY_RE.search(part))
+
+
+def _normalize_range(part: str) -> str:
+    return _RANGE_NORM_RE.sub(
+        lambda m: f"{m.group(1):0>2}{m.group(2)}-{m.group(3):0>2}{m.group(4)}", part)
+
+
+def resolve_part(part: str) -> tuple[str, bool]:
+    """(command, use_did) for one comma-separated part of a typed command —
+    the did-vs-tg decision of desktop janus's _resolve_part, minus its
+    past-day-view branch (the phone always views today). A bare `+N`/`-N`
+    bonus token ALWAYS goes to did-fast (tg-fast would start a live timer
+    literally named "+15 @i9"); a completed range carrying `[N]` goes to
+    did-fast too (its Step 5.5 creates the same Toggl entry AND writes the
+    points). A backdated start with `[N]` but no end ("1823 desc [30]") is
+    not done yet, so it stays on tg-fast like everything else."""
+    part = part.strip()
+    use_did = _has_bonus_points(part) or (
+        _has_completed_range(part) and bool(_POINTS_ANNOT_RE.search(part)))
+    if use_did:
+        part = _normalize_range(part)
+    return part, use_did
+
+
+def split_parts(text: str) -> list[str]:
+    """Comma splits multiple commands (desktop convention); run in order."""
+    return [p.strip() for p in text.split(",") if p.strip()] or [text.strip()]
+
+
+def _is_plain_switch(cmd: str) -> bool:
+    """A tg-fast part that leaves a NEW timer running (a bare description)
+    or none at all ("stop") — either way the timer has moved off any /d
+    task, so the dtd running hint must go (desktop clears it the same way)."""
+    bare = cmd.strip()
+    return bare.lower() == "stop" or not re.search(r"\d{3,4}", bare)
+
+
+# ─── /d <task>: todo + timer in one (mirrors desktop parse_d_command) ───────
+_D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
+_D_TRAIL_RE = re.compile(r"^(\S.*?)\s+/d$", re.S)   # phone-only: "cook ... @xk87 /d"
+_ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
+DTD_RUNNING_HINT = (Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
+                    / "jm" / "dtd-running-hint")
+AGENT_CLAIMS = Path.home() / "i446-monorepo/tools/did/agent_claims.py"
+
+
+def parse_d_command(text: str) -> tuple[str, str] | None:
+    """`/d <task>` (or `<task> /d`, accepted here because a phone keyboard
+    makes the suffix easier): add <task> to the todo list AND start working
+    on it now. Returns (todoist_content, timer_command): the content keeps
+    (N)/[N] and @code (agent_claims.new_task turns @code into the label);
+    the timer drops the bracketed annotations so tg-fast doesn't name a
+    timer "... [20]". None when the text isn't a /d command."""
+    t = text.strip()
+    m = _D_CMD_RE.match(t) or _D_TRAIL_RE.match(t)
+    if not m:
+        return None
+    content = m.group(1).strip()
+    timer = " ".join(_ANNOT_RE.sub("", content).split())
+    if not timer or not [w for w in timer.split() if not w.startswith("@")]:
+        return None
+    return content, timer
+
+
+def write_dtd_running_hint(task: dict) -> None:
+    """Tell every dtd this task's timer is running so it floats to the top —
+    same file and name<TAB>epoch<TAB>id format as desktop janus."""
+    name = _ANNOT_RE.sub("", task.get("content", "")).strip().lower()
+    try:
+        DTD_RUNNING_HINT.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DTD_RUNNING_HINT.with_suffix(".tmp")
+        tmp.write_text(f"{name}\t{int(time.time())}\t{task.get('id', '')}")
+        tmp.replace(DTD_RUNNING_HINT)
+    except OSError:
+        pass
+
+
+def clear_dtd_running_hint() -> None:
+    try:
+        DTD_RUNNING_HINT.unlink()
+    except OSError:
+        pass
+
+
+def _new_task(content: str) -> dict:
+    """agent_claims.new_task(content) — a due-today Todoist task, @code →
+    label (the same path as Claude's `/d new`). Loaded by path, like
+    desktop janus does: tools/did isn't a package."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("janus_mobile_agent_claims", AGENT_CLAIMS)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.new_task(content)
+
+
+def create_todo_task(content: str) -> str:
+    try:
+        task = _new_task(content)
+        write_dtd_running_hint(task)
+        return f"+todo {task.get('content', content)}"
+    except Exception as e:  # noqa: BLE001 — the timer still starts
+        return f"todo err: {e}"
+
+
+def run_d_command(content: str, timer: str) -> dict:
+    todo = create_todo_task(content)
+    tg = _run_tg_cmd(timer)
+    msg = f"{todo} | {tg.get('msg') or tg.get('error') or ''}"
+    return {"ok": True, "msg": msg} if tg.get("ok") else {"ok": False, "error": msg}
+
+
+def run_command(text: str) -> dict:
+    """The CLI's typed-command path, for the web command bar (2026-10-05),
+    routed like desktop janus's Enter handler (2026-10-17): `/d <task>`
+    creates the todo and starts its timer; each comma-separated part then
+    goes to did-fast (bonus `+N`, or a completed range with `[N]`) or
+    tg-fast (everything else: "coffee @epcn", "1400 coffee", "0000-0550
+    睡觉"), sequentially, one subprocess at a time."""
+    d_cmd = parse_d_command(text)
+    if d_cmd:
+        return run_d_command(*d_cmd)
+    pairs = [resolve_part(p) for p in split_parts(text)]
+    results = []
+    for cmd, use_did in pairs:
+        r = _run_did_cmd(cmd) if use_did else _run_tg_cmd(cmd)
+        if r.get("ok") and not use_did and _is_plain_switch(cmd):
+            clear_dtd_running_hint()  # the timer moved off any /d task
+        results.append(r)
+    if len(results) == 1:
+        return results[0]
+    msgs = [r.get("msg") or r.get("error") or "" for r in results]
+    joined = " | ".join(msgs)
+    if all(r.get("ok") for r in results):
+        return {"ok": True, "msg": joined}
+    return {"ok": False, "error": joined}
 
 
 @app.route("/api/run", methods=["POST"])
@@ -1450,6 +1680,9 @@ PAGE = r"""<!doctype html>
     display:flex; align-items:center; justify-content:space-between;
     border-bottom:1px solid #2a2a2a; }
   header { flex-wrap:wrap; row-gap:7px; }
+  #untracked { flex-basis:100%; order:-1; display:none; background:#e53935; color:#fff;
+    font-weight:700; padding:6px 10px; border-radius:6px; }
+  #untracked.show { display:block; }
   #cmdbar { flex-basis:100%; display:flex; }
   #cmd { flex:1; background:#111; color:inherit; border:1px solid #333; border-radius:8px;
     padding:8px 10px; font:inherit; font-size:16px; }
@@ -1522,6 +1755,7 @@ PAGE = r"""<!doctype html>
 </head>
 <body>
 <header>
+  <div id="untracked"></div>
   <div class="brand">jan<b>u</b>s</div>
   <div class="tally"><b id="pts">–</b> 分 · <span id="trk">0:00</span></div>
   <button id="reload">↻</button>
@@ -1581,7 +1815,11 @@ PAGE = r"""<!doctype html>
 function whereBeacon(){ try { fetch('/api/where', {method:'POST', headers:{'Content-Type':'application/json'},
   body: JSON.stringify({tz: Intl.DateTimeFormat().resolvedOptions().timeZone})}).catch(()=>{}); } catch(e){} }
 whereBeacon();
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') whereBeacon(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  whereBeacon();
+  load();  // the page has no interval poll: re-opening the phone IS the poll
+});
 const list = document.getElementById('list');
 const toastEl = document.getElementById('toast');
 const dlg = document.getElementById('dlg');
@@ -1594,6 +1832,16 @@ function toast(msg, err){
   toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 1800);
 }
 
+// Red pinned banner (2026-10-17): no timer running and the last entry ended
+// >= 30 min ago. Server-computed (untracked_since/untracked_min), refreshed
+// with every timeline load — including the visibility reload below.
+function untrackedBanner(since, mins){
+  const el = document.getElementById('untracked');
+  if(!since){ el.classList.remove('show'); el.textContent = ''; return; }
+  el.textContent = 'untracked since '+since+' · '+mins+'m';
+  el.classList.add('show');
+}
+
 async function load(){
   list.innerHTML = '<div class="loading">loading…</div>';
   try {
@@ -1603,6 +1851,7 @@ async function load(){
     document.getElementById('pts').textContent = (d.points==null?'–':d.points);
     document.getElementById('trk').textContent =
       Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
+    untrackedBanner(d.untracked_since, d.untracked_min);
     render(d.rows);
   } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
 }
@@ -1883,8 +2132,9 @@ function timePicker(el){
 }
 ['d-start','d-end','e-start','e-end'].forEach(id => timePicker(document.getElementById(id)));
 
-// Command bar (2026-10-05): the CLI's "type to run" line. Sent to tg-fast.py
-// verbatim server-side (/api/run), so the syntax is the CLI's exactly.
+// Command bar (2026-10-05): the CLI's "type to run" line. Routed server-side
+// (/api/run → run_command) like desktop janus's Enter: /d, bonus +N and
+// [N] ranges → did-fast, everything else → tg-fast; syntax is the CLI's.
 async function runCmd(ev){
   ev.preventDefault();
   const el = document.getElementById('cmd');

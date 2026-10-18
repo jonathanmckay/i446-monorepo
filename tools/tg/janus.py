@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import difflib
 import hashlib
 import json
 import os
@@ -939,6 +940,10 @@ def fetch_today(force=False):
             _resolve_pending_tag_credits()
         except Exception:  # noqa: BLE001 — credits never break the fetch
             pass
+        try:
+            _auto_sleep_tick(out, yout)
+        except Exception as e:  # noqa: BLE001 — a 睡觉 convenience never breaks the fetch
+            flash(f"auto-睡觉 err: {e}", 6.0)
     except Exception as e:
         # Fetch failed. STATE.entries may currently hold a DIFFERENT day's
         # data (e.g. today's, from before a day-nav) -- rendering it against
@@ -4646,8 +4651,17 @@ def render_current_bottom() -> list[tuple[str, str]]:
     badge = f"◀ {view_now():%a %-m/%-d} ⎋ " if STATE.day_offset != 0 else ""
     badge_frag = [("class:no_entry", badge)] if badge else []
     if not cur:
-        pad = max(0, width - len(' (no timer)') - dwidth(badge) - len(clock))
-        return [("class:idle", " (no timer)" + " " * pad), *badge_frag,
+        label, style = " (no timer)", "class:idle"
+        since = _untracked_since(now)
+        if since is not None:
+            # 2.5h and 6.5h holes on 10-13/10-14 before a catch-up burst
+            # (2026-10-17): the bar is always visible, so it carries the
+            # hole while it is still cheap to fill.
+            gap_m = int((now - since).total_seconds() // 60)
+            label = f" (no timer) · untracked since {since:%H:%M} ({gap_m}m)"
+            style = "class:no_entry"
+        pad = max(0, width - dwidth(label) - dwidth(badge) - len(clock))
+        return [(style, label + " " * pad), *badge_frag,
                 ("class:time", f"{clock}\n")]
     cur_id = cur.get("id")
     try:
@@ -4933,6 +4947,229 @@ def _is_points_log_cmd(part: str) -> bool:
 
 _D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
 _ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
+
+
+# ── Project-code typo guard (2026-10-17) ───────────────────────────────────
+def _known_project_codes() -> set:
+    return set(globals().get("PROJECT_MAP") or {})
+
+
+def _fix_project_codes(part: str, known: set | None = None) -> tuple[str, list, list]:
+    """Rewrite near-miss `@code` tokens to the project code they meant.
+    Returns (text, [(typed, fixed), ...], [unfixable, ...]). A typed code is
+    fixed when difflib finds a close match (≥0.6) or it is a substring of
+    exactly one known code; otherwise it is reported as unfixable. Known
+    codes pass through untouched; with no code table at all nothing is
+    touched (never block a command on a missing config)."""
+    known = _known_project_codes() if known is None else known
+    if not known:
+        return part, [], []
+    fixes: list = []
+    bad: list = []
+
+    def _sub(m):
+        code = m.group(1)
+        if code in known:
+            return m.group(0)
+        cands = difflib.get_close_matches(code, sorted(known), n=1, cutoff=0.6)
+        if not cands:
+            subs = [k for k in known if code in k]
+            cands = subs if len(subs) == 1 else []
+        if cands:
+            fixes.append((code, cands[0]))
+            return "@" + cands[0]
+        bad.append(code)
+        return m.group(0)
+
+    return re.sub(r"(?<!\S)@(\S+)", _sub, part), fixes, bad
+
+
+# ── Bonus-points note (2026-10-17) ─────────────────────────────────────────
+def _bonus_has_note(part: str) -> bool:
+    """True when a ±N 分-log command already says what it is for — anything
+    left after the signed token, @code/#tag tokens and a trailing M/D."""
+    rest = re.sub(r"(?<!\S)[+-]\d+(?=\s|$)", " ", part)
+    rest = re.sub(r"(?<!\S)[@#]\S+", " ", rest)
+    rest = re.sub(r"(?<!\S)\d{1,2}/\d{1,2}(?=\s|$)", " ", rest)
+    return bool(rest.split())
+
+
+def _last_entry_desc() -> str:
+    """The running timer's description, else today's most recently finished
+    non-睡觉 entry's — annotations and @codes stripped. "" when nothing."""
+    cur = STATE.current
+    desc = (cur.get("description") or "") if cur else ""
+    if not desc.strip():
+        done = [e for e in STATE.entries if not e.get("running") and e.get("end_dt")
+                and (e.get("desc") or "").strip() not in ("", "睡觉")]
+        if done:
+            desc = max(done, key=lambda e: e["end_dt"])["desc"]
+    desc = _ANNOT_RE.sub("", desc)
+    return " ".join(w for w in desc.split() if not w.startswith("@"))
+
+
+# ── Long i9 timer: ^S asks for its 分 (2026-10-17) ─────────────────────────
+STOP_DONE_MIN = 20
+STOP_DONE_CODES = ("i9",)
+
+
+def _stop_wants_points(cur: dict, now: dt.datetime) -> bool:
+    """A running timer on a STOP_DONE_CODES project, ≥ STOP_DONE_MIN old,
+    whose description has no 分 recorded today yet: ^S should go through
+    /done (resolve or ask) instead of a silent stop."""
+    try:
+        start = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
+    except Exception:
+        return False
+    code = toggl_project_code(cur.get("project_id"), cur.get("description"))
+    if code not in STOP_DONE_CODES:
+        return False
+    if now - start < dt.timedelta(minutes=STOP_DONE_MIN):
+        return False
+    recorded, _ = _points_recorded_today(cur.get("description") or "")
+    return not recorded
+
+
+# ── Untracked-since (2026-10-17) ───────────────────────────────────────────
+UNTRACKED_WARN_MIN = 30
+
+
+def _untracked_since(now: dt.datetime | None = None):
+    """When no timer runs on TODAY's view and the latest completed entry
+    ended ≥ UNTRACKED_WARN_MIN ago, that end time; else None. An empty day
+    (nothing to be "since") and a future end (the auto-睡觉's 06:00 before
+    06:00) both read as None."""
+    if STATE.day_offset != 0 or STATE.current or not STATE.entries_known:
+        return None
+    now = now or dt.datetime.now(_tz())
+    ends = [e["end_dt"] for e in STATE.entries if not e.get("running") and e.get("end_dt")]
+    if not ends:
+        return None
+    last = max(ends)
+    if last > now or now - last < dt.timedelta(minutes=UNTRACKED_WARN_MIN):
+        return None
+    return last
+
+
+# ── Auto 睡觉 (2026-10-17) ─────────────────────────────────────────────────
+# "default 0000-0600 sleep time, edited to when the first other time log
+# entry exists" (user request 2026-10-17; the log showed 0000-HHMM 睡觉 typed
+# by hand seven mornings out of seven). One host owns it — the always-on
+# one — so two janus instances never both create it; JANUS_AUTO_SLEEP=1/0
+# overrides the host gate. State: ~/.local/state/jm/janus-auto-sleep.json
+# {"date", "id", "adjusted"}; adjusted=True means this day is settled.
+AUTO_SLEEP_STATE = Path(os.environ.get("XDG_STATE_HOME")
+                        or (Path.home() / ".local" / "state")) / "jm" / "janus-auto-sleep.json"
+AUTO_SLEEP_END_H = 6
+AUTO_SLEEP_HOSTS = ("ix",)
+AUTO_SLEEP_CREATE_BEFORE_H = 12   # an empty day past noon is not a sleep question
+AUTO_SLEEP_EXTEND_CAP_H = 10      # never stretch 睡觉 past 10:00 on its own
+
+
+def _auto_sleep_enabled() -> bool:
+    env = os.environ.get("JANUS_AUTO_SLEEP")
+    if env in ("0", "1"):
+        return env == "1"
+    return os.uname().nodename.split(".")[0].lower() in AUTO_SLEEP_HOSTS
+
+
+def _auto_sleep_load() -> dict:
+    try:
+        return json.loads(AUTO_SLEEP_STATE.read_text())
+    except Exception:
+        return {}
+
+
+def _auto_sleep_save(d: dict) -> None:
+    try:
+        AUTO_SLEEP_STATE.parent.mkdir(parents=True, exist_ok=True)
+        AUTO_SLEEP_STATE.write_text(json.dumps(d))
+    except OSError:
+        pass
+
+
+def _auto_sleep_plan(entries: list, yday_entries: list, now: dt.datetime, st: dict):
+    """Pure decision for today. Returns (kind, params) or None:
+      create  — the day is empty before noon and nothing is running over
+                from yesterday: 睡觉 00:00-06:00.
+      adjust  — the auto entry still starts at 00:00 and the first other
+                entry starts elsewhere (earlier or later, up to the cap):
+                move 睡觉's end to that start.
+      delete  — something else starts at 00:00, or a hand-typed 睡觉 from
+                00:00 exists: the auto entry is redundant.
+      settle  — stop watching this day (entry gone/retimed, first entry
+                past the cap, already aligned)."""
+    today = now.date().isoformat()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if st.get("date") != today:
+        st = {}
+    if not st:
+        if entries or any(e.get("running") for e in yday_entries):
+            return None
+        if now.hour >= AUTO_SLEEP_CREATE_BEFORE_H:
+            return None
+        return "create", {"start": midnight, "end": midnight.replace(hour=AUTO_SLEEP_END_H)}
+    if st.get("adjusted") or not st.get("id"):
+        return None
+    sleep = next((e for e in entries if e.get("id") == st["id"]), None)
+    if sleep is None:
+        return "settle", {"reason": "auto 睡觉 entry is gone"}
+    if sleep["start_dt"] != midnight:
+        return "settle", {"reason": "auto 睡觉 was retimed by hand"}
+    others = [e for e in entries if e.get("id") != st["id"]]
+    manual_sleep = [e for e in others if (e.get("desc") or "").strip() == "睡觉"
+                    and e["start_dt"] <= midnight + dt.timedelta(minutes=5)]
+    if manual_sleep:
+        return "delete", {"id": st["id"], "reason": "睡觉 typed by hand"}
+    others = [e for e in others if (e.get("desc") or "").strip() != "睡觉"]
+    if not others:
+        return None
+    first = min(e["start_dt"] for e in others)
+    if first <= midnight + dt.timedelta(minutes=5):
+        return "delete", {"id": st["id"], "reason": f"day starts with {first:%H:%M}"}
+    if first > midnight + dt.timedelta(hours=AUTO_SLEEP_EXTEND_CAP_H):
+        return "settle", {"reason": f"first entry {first:%H:%M} is past the {AUTO_SLEEP_EXTEND_CAP_H}:00 cap"}
+    if abs((first - sleep["end_dt"]).total_seconds()) < 60:
+        return "settle", {"reason": "already aligned"}
+    return "adjust", {"id": st["id"], "start": sleep["start_dt"], "end": first}
+
+
+def _auto_sleep_tick(entries: list, yday_entries: list) -> None:
+    """Runs at the end of every successful fetch_today on today's view."""
+    if not _auto_sleep_enabled() or STATE.day_offset != 0:
+        return
+    now = dt.datetime.now(_tz())
+    plan = _auto_sleep_plan(entries, yday_entries, now, _auto_sleep_load())
+    if not plan:
+        return
+    kind, p = plan
+    today = now.date().isoformat()
+    if kind == "create":
+        pid = (globals().get("PROJECT_MAP") or {}).get("睡觉")
+        res = toggl_api.create_entry("睡觉", p["start"].isoformat(), p["end"].isoformat(),
+                                     int((p["end"] - p["start"]).total_seconds()), pid, None)
+        eid = res.get("id") if isinstance(res, dict) else None
+        _auto_sleep_save({"date": today, "id": eid, "adjusted": eid is None})
+        JE.emit("action", "auto_sleep", [eid] if eid else (), f"create 0000-{p['end']:%H%M}")
+        flash(f"睡觉 00:00-{p['end']:%H:%M} added — the day's first entry retimes it", 6.0)
+        STATE.last_toggl_fetch = 0.0  # next fetch (even a coalesced one) must see it
+    elif kind == "adjust":
+        toggl_api.update_entry(p["id"], stop=p["end"].isoformat(),
+                               duration=int((p["end"] - p["start"]).total_seconds()))
+        _auto_sleep_save({"date": today, "id": p["id"], "adjusted": True})
+        JE.emit("action", "auto_sleep", [p["id"]], f"adjust →{p['end']:%H%M}")
+        flash(f"睡觉 → {p['end']:%H:%M} (first entry of the day)", 6.0)
+        STATE.last_toggl_fetch = 0.0
+    elif kind == "delete":
+        toggl_api.delete_entry(p["id"])
+        _auto_sleep_save({"date": today, "id": p["id"], "adjusted": True})
+        JE.emit("action", "auto_sleep", [p["id"]], f"delete ({p.get('reason', '')})")
+        flash(f"auto 睡觉 removed: {p.get('reason', '')}", 6.0)
+        STATE.last_toggl_fetch = 0.0
+    else:  # settle
+        _auto_sleep_save({"date": today, "id": p.get("id") or _auto_sleep_load().get("id"),
+                          "adjusted": True})
+        JE.emit("action", "auto_sleep", (), f"settle ({p.get('reason', '')})")
 
 
 def parse_d_command(text: str) -> tuple[str, str] | None:
@@ -5866,6 +6103,11 @@ def _on_enter(event):
             input_buffer.text = text
             input_buffer.cursor_position = len(text)
         if code and pid is None:
+            _fixed, _fixes, _bad = _fix_project_codes(f"@{code}")
+            if _fixes:
+                code = _fixes[0][1]
+                pid = PROJECT_MAP.get(code)
+        if code and pid is None:
             _reject(f"unknown project code: {code}")
             return
         if time_range and len(ids) != 1 and not contiguous:
@@ -6061,6 +6303,18 @@ def _on_enter(event):
         flash(f"ignored startup input: {text[:30]}", 4.0)
         return
 
+    # Project-code typo guard (2026-10-17: "@9" cost a Toggl 400 and a
+    # retry, "@m5x" went through with no project at all). A near miss is
+    # corrected in place and shown in the flash; a code nothing matches
+    # hands the text back instead of running it.
+    text, code_fixes, bad_codes = _fix_project_codes(text)
+    if bad_codes:
+        flash(f"unknown project @{bad_codes[0]} — not run; fix it and ⏎", 6.0)
+        input_buffer.text = text
+        input_buffer.cursor_position = len(text)
+        return
+    fix_note = ("  (" + ", ".join(f"@{b}→@{g}" for b, g in code_fixes) + ")") if code_fixes else ""
+
     d_cmd = parse_d_command(text)
     if d_cmd:
         if STATE.day_offset:  # any past-day view
@@ -6068,7 +6322,7 @@ def _on_enter(event):
             return
         content, timer = d_cmd
         _optimistic_start(" ".join(w for w in timer.split() if not w.startswith("@")))
-        flash(f"$ /d {content}")
+        flash(f"$ /d {content}{fix_note}")
         event.app.invalidate()
 
         async def _d_run():
@@ -6138,6 +6392,15 @@ def _on_enter(event):
         named "+10 @i9 read COD deck"."""
         has_range = _has_completed_range(part)
         has_bonus = _has_bonus_points(part)
+        if has_bonus and not _bonus_has_note(part) and re.search(r"(?<!\S)@\S+", part):
+            # "+15 @i9" alone (11 of 15 point grants in the 10-11..10-17
+            # log) left the 分 ledger with no idea what the points were
+            # for. A leading ±N is did-fast's 分-log form: the note goes to
+            # the ledger only (no Todoist match), so riding on the running
+            # or last completed entry's description is free (2026-10-17).
+            note = _last_entry_desc()
+            if note:
+                part = f"{part} {note}"
         force = getattr(STATE, "force_did", False)
         use_did = has_bonus or (has_range and (force or bool(re.search(r"\[-?\d+\]", part))))
         if force and not use_did:
@@ -6179,7 +6442,7 @@ def _on_enter(event):
         return
     resolved = [c for c, _ in resolved_pairs]
     labels = [f"{'did' if d else 'tg'} {c}" for c, d in resolved_pairs]
-    flash(f"$ {' | '.join(labels)}" if len(labels) > 1 else f"$ {labels[0]}")
+    flash((f"$ {' | '.join(labels)}" if len(labels) > 1 else f"$ {labels[0]}") + fix_note)
 
     async def _run_and_refresh():
         results = []
@@ -6296,6 +6559,13 @@ def _(event):
     JE.emit("action", "done_sel", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if item is None and STATE.recording is None:
+        # 8 of the 12 ⌥↵ presses in the 10-11..10-17 event log had nothing
+        # selected and silently did nothing (2026-10-17). Say so, and say
+        # what the gesture wants.
+        hint = "⌥↵ on the ▶ row = /done" if STATE.current else "type `HHMM-HHMM desc` then ⌥↵"
+        flash(f"nothing selected — Tab/click a row first, or {hint}", 5.0)
+        return
     if STATE.recording is not None:
         # ⌥↵ while a d357 recording is live = "the meeting is over" (user
         # request 2026-08-02): stop the recording, finalize the notes, and
@@ -6518,6 +6788,13 @@ def _(event):
 
 @kb.add("c-s")
 def _(event):
+    if STATE.current and _stop_wants_points(STATE.current, dt.datetime.now(_tz())):
+        # A ≥20m i9 timer stopped plainly is exactly where 分 leaked all
+        # week (2026-10-17): route the stop through /done so the points
+        # get resolved or asked for. Same stop, one extra question at most.
+        JE.emit("action", "stop", (), "→ done (long i9 timer)")
+        _run_current_timer_done(event.app)
+        return
     JE.emit("action", "stop", (), "")
     flash("stopping…")
 
