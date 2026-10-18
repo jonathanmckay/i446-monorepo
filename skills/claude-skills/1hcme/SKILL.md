@@ -17,11 +17,14 @@ been written since 1/1/26 (col A's M.W label on that row names the week).
    fill/font colors, so conditional formatting comes through) for the window
    **Friday after the previous check-in → the target week's Saturday**,
    clipped to today. The previous Thursday's own check-in text is shown first.
-2. Renders each day in the terminal with truecolor ANSI chips: the numeric
-   row (霓虹 帮助 身体 ₹ ⌈ ⌊ x̄ 他⌈ 他⌊) and the text fields (Title,
-   Motivation, Win, Learning, Noticed, Thankful, Proud·others,
-   Learn·others, Body), each painted with its Excel cell color. White fills
-   render as terminal default; blank cells are shown as `·`.
+2. Renders one **table row per day** with truecolor cells painted in their
+   Excel colors: day, then the numbers (⌈ ⌊ x̄ 他⌈ 他⌊ 霓 帮 身 ₹), then
+   text columns in priority order (Title, Win, Learning, Thankful, Proud·o,
+   Learn·o, Motivation, Noticed, Body). Each text cell is cut to `--cell N`
+   characters (default 24, ellipsis on the cut); as many text columns as fit
+   the terminal width are shown and the rest are named in a footer. `--cols
+   N` caps the text columns. White fills render as terminal default; blank
+   cells are `·`. The target Thursday's row is bold.
 3. Asks: **What did I learn this week about my emotions that I should
    remember?** One thought per line; blank line or `^D` finishes; an empty
    answer aborts without writing.
@@ -89,6 +92,7 @@ card closed, then dtd returns. The script skips its cmux tab-close when
 - `--print-script --from-text "…"` — print the write AppleScript (`HCME_ROW` env sets the row).
 - `--no-mark` — write X but leave the `1 hcme` card open.
 - `--today YYYY-MM-DD` — override today for tests.
+- `--cell N` / `--cols N` — text cell width / max text columns.
 
 ## Notes
 

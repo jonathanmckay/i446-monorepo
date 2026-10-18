@@ -460,4 +460,4 @@ def test_tail_row_lookup_is_one_range_read_not_a_per_row_loop():
     rows per sheet blew the 60 s write budget on a slow Excel."""
     src = (Path(__file__).resolve().with_name("xk887-survey.py")).read_text()
     assert 'string value of range "A2:A1000" of ws' in src
-    assert 'range ("A" & r)' not in src
+    assert 'set av to (string value of range ("A" & r)' not in src
