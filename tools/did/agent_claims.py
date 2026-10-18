@@ -197,7 +197,7 @@ SKILL_CLAIMS = {
     "1s": "1s", "1g": "1g", "1s897": "1 s897", "1hcmc": "1 hcmc", "1hcb": "1 hcb",
     "1i9": "1 i9", "1m5x2": "1 m5x2", "xk887": "1 xk88", "1-1n": "1 -1n", "1-2g": "1 -2g",
     "f695": "1 f695", "2n": "2n checksum", "3s": "3s", "moralaudit": "moral audit",
-    "2026-4g-checkin": "4g checkin",
+    "2026-4g-checkin": "4g checkin", "1-i446": "1 i446",
 }
 # Skills whose flow closes the card and then releases the claim itself.
 # (/xk887's survey closes '1 xk88' from its own cmux tab after the skill's
@@ -207,7 +207,6 @@ SKILL_RELEASES = {"0t", "notes", "0g", "早餐", "1i9", "1m5x2"}
 SKILL_NO_CLAIM = {
     "s": "/salat alias; the '1s' card is the weekly review",
     "s897": "people-db editor; the 's897' / '1 s897' cards are social time and the weekly review",
-    "1-i446": "'1 i447' covers more than the vault-health review",
     "mealplan": "only the planning half of '1 groceries'",
     "ibx0": "closes 8 inbox cards; a session holds one claim",
     "ate": "/早餐 already covers the 早餐 card",

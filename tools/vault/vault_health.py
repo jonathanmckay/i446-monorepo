@@ -58,9 +58,13 @@ SKILLS = Path.home() / ".claude/skills"
 ST_CONFIG = Path.home() / "Library/Application Support/Syncthing/config.xml"
 ST_URL = "http://127.0.0.1:8384"
 AUTO_MARK = "😈"
-TASK_CONTENT = f"{AUTO_MARK} 1-i446 vault health review (20) [15]"
+# 2026-10-17: the review is the recurring weekly card '1 i446' (every Saturday, i447 project),
+# not a one-off filed each run. The run only refreshes its description; JM completes it in
+# dtd for the [15], so the script never closes it.
+TASK_CONTENT = "1 i446 (20) [15]"
 TASK_LABELS = ["i447"]
-TASK_KEY = "1-i446 vault health review"
+TASK_KEY = "1 i446"
+TASK_PROJECT = "6Crfmq5PmPjqrx4x"   # i447
 
 _SA = importlib.util.spec_from_file_location("singleton_audit", Path(__file__).with_name("singleton-audit.py"))
 singleton_audit = importlib.util.module_from_spec(_SA); sys.modules["singleton_audit"] = singleton_audit
@@ -548,18 +552,18 @@ def build_description(findings: list[Finding], report_rel: str) -> str:
 def upsert_task(findings: list[Finding], report_rel: str, today: dt.date) -> str:
     td = singleton_audit._todoist()
     items = td._fetch_tasks(f"search: {TASK_KEY}")
-    existing = next((t for t in items if isinstance(t, dict) and TASK_KEY in t.get("content", "")), None)
-    if not any(f.review for f in findings):
-        if existing:
-            td.close_task(existing["id"]); return f"all clear; closed task {existing['id']}"
-        return "all clear; no task"
-    desc = build_description(findings, report_rel)
+    existing = next((t for t in items if isinstance(t, dict)
+                     and t.get("content", "").lstrip(AUTO_MARK).strip().startswith(TASK_KEY)), None)
+    clear = not any(f.review for f in findings)
+    desc = f"all clear {today.isoformat()}. Report: {report_rel}" if clear else build_description(findings, report_rel)
+    tag = " (all clear)" if clear else ""
     if existing:
-        td._api("POST", f"/tasks/{existing['id']}", {"description": desc, "due_date": today.isoformat()})
-        return f"updated task {existing['id']}"
-    t = td._api("POST", "/tasks", {"content": TASK_CONTENT, "labels": TASK_LABELS, "due_date": today.isoformat(),
-                                   "description": desc, "duration": 20, "duration_unit": "minute"})
-    return f"created task {t.get('id') if isinstance(t, dict) else '?'}"
+        td._api("POST", f"/tasks/{existing['id']}", {"description": desc})
+        return f"updated task {existing['id']}{tag}"
+    t = td._api("POST", "/tasks", {"content": TASK_CONTENT, "labels": TASK_LABELS, "project_id": TASK_PROJECT,
+                                   "due_string": "every Saturday", "description": desc,
+                                   "duration": 20, "duration_unit": "minute"})
+    return f"created recurring task {t.get('id') if isinstance(t, dict) else '?'}{tag}"
 
 
 def main() -> int:

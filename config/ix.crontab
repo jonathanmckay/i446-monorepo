@@ -51,7 +51,7 @@
 10 5 * * * python3 $HOME/i446-monorepo/tools/personal-dashboard/backfill_toggl_cache.py --days 45 >> $HOME/i446-monorepo/tools/personal-dashboard/.backfill-toggl.log 2>&1
 15 5 * * 0 python3 $HOME/i446-monorepo/tools/personal-dashboard/backfill_toggl_cache.py --days 90 --force >> $HOME/i446-monorepo/tools/personal-dashboard/.backfill-toggl.log 2>&1
 # 1-i446: weekly vault-health review → z_meta report + 😈 Todoist review task (singletons, syncthing, git autopush, backups, alerts)
-40 4 * * 0 python3 $HOME/i446-monorepo/tools/vault/vault_health.py >> $HOME/i446-monorepo/tools/vault/.1-i446.log 2>&1
+40 4 * * 6 python3 $HOME/i446-monorepo/tools/vault/vault_health.py >> $HOME/i446-monorepo/tools/vault/.1-i446.log 2>&1
 # neon-reconcile: twice-daily Neon ledger reconcile (was live on Ix but missing here)
 50 3 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1
 55 23 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1

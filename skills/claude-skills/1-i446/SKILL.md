@@ -6,9 +6,10 @@ user-invocable: true
 
 # /1-i446 — weekly vault health
 
-The Sunday 04:40 cron on Ix runs the same script and files a `😈 1-i446 vault
-health review` Todoist task whose description carries the review items (dtd's
-agent gesture on that task opens Claude with the list). Running this skill by
+The review is the recurring weekly card `1 i446 (20) [15]` (every Saturday,
+i447 project). The Saturday 04:40 cron on Ix runs the same script and refreshes
+that card's description with the review items (dtd's agent gesture on the card
+opens Claude with the list); it never closes the card, JM completes it in dtd. Running this skill by
 hand does the same thing interactively, from whichever machine you are on
 (off-Ix runs reach Ix over ssh for the pusher-side checks).
 
@@ -31,7 +32,7 @@ hand does the same thing interactively, from whichever machine you are on
    or add the name to `vault_health.py`'s `DUP_NAMES_OK`. For
    sync/backup findings: fix what he approves; if a fix is not something a
    script should own, file a Todoist task instead.
-4. Re-run the script. Zero review items closes its own Todoist task.
+4. Re-run the script. Zero review items writes "all clear" to the card; complete it in dtd.
 
 ## Rules
 
