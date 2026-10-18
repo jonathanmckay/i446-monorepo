@@ -126,10 +126,16 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
         '  set ws to worksheet "%s" of wb' % SHEET,
         '  set todayRow to 0',
         '  set tomRow to 0',
-        '  repeat with r from 3 to 600',
-        '    set bv to (string value of range ("B" & r) of ws)',
-        '    if bv = "%s" then set todayRow to r' % target_s,
-        '    if bv = "%s" then set tomRow to r' % next_s,
+        # ONE range read, then an in-memory scan (2026-10-17): the per-row
+        # `string value of range ("B" & r)` loop was 1,200 Apple events and
+        # measured 154 s on ix against 4.6 s for the single read, so every
+        # 0s write blew the 60 s budget ("it didn't write to neon").
+        '  set bvals to string value of range "B3:B600" of ws',
+        '  repeat with i from 1 to count of bvals',
+        '    set bv to item i of bvals',
+        '    if class of bv is list then set bv to item 1 of bv',
+        '    if bv = "%s" then set todayRow to i + 2' % target_s,
+        '    if bv = "%s" then set tomRow to i + 2' % next_s,
         '  end repeat',
         '  if todayRow = 0 then return "ERROR: date %s not found in 0s897 col B"' % target_s,
         '  set wrote to 0',

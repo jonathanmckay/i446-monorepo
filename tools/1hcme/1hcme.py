@@ -137,11 +137,18 @@ def _mdy(d: _dt.date) -> str:
 # Fetch: values + display-format colors, one Ix round trip
 # ---------------------------------------------------------------------------
 
+COLOR_COLS = sorted({c for c, _l in NUM_FIELDS} | {c for c, _l in TEXT_FIELDS})
+FETCH_TIMEOUT = 240  # Excel on Ix can take >1 min per AppleEvent when busy (2026-10-17)
+
+
 def build_fetch_script(dates: list[_dt.date]) -> str:
+    """One row-range read for values, then display-format fill/font only for
+    the rendered columns (2 AppleEvents per cell instead of 3 for every A..X
+    cell — the first cut timed out at 90s against a busy Excel)."""
     conds = "\n".join(
         '    if bv = "%s" then set end of hits to {%d, r}' % (_mdy(d), i)
         for i, d in enumerate(dates))
-    cols = ", ".join('"%s"' % c for c in READ_COLS)
+    ccols = ", ".join('"%s"' % c for c in COLOR_COLS)
     return f'''tell application "Microsoft Excel"
   set ws to worksheet "{SHEET}" of workbook "{WORKBOOK}"
   set tmpB to string value of range "B2:B600" of ws
@@ -158,12 +165,16 @@ def build_fetch_script(dates: list[_dt.date]) -> str:
     set di to item 1 of h
     set rr to item 2 of h
     set out to out & "<<ROW>>" & di & "|" & rr
-    repeat with c in {{{cols}}}
-      set cel to range ((c as text) & rr) of ws
+    set vals to item 1 of (string value of range ("A" & rr & ":X" & rr) of ws)
+    repeat with v in vals
       set vv to ""
       try
-        set vv to (string value of cel) as text
+        set vv to v as text
       end try
+      set out to out & "<<V>>" & vv
+    end repeat
+    repeat with c in {{{ccols}}}
+      set cel to range ((c as text) & rr) of ws
       set bg to {{255, 255, 255}}
       try
         set bg to color of interior object of display format of cel
@@ -172,7 +183,7 @@ def build_fetch_script(dates: list[_dt.date]) -> str:
       try
         set fg to color of font object of display format of cel
       end try
-      set out to out & "<<C>>" & (c as text) & "|" & (item 1 of bg) & "," & (item 2 of bg) & "," & (item 3 of bg) & "|" & (item 1 of fg) & "," & (item 2 of fg) & "," & (item 3 of fg) & "|" & vv
+      set out to out & "<<C>>" & (c as text) & "|" & (item 1 of bg) & "," & (item 2 of bg) & "," & (item 3 of bg) & "|" & (item 1 of fg) & "," & (item 2 of fg) & "," & (item 3 of fg)
     end repeat
   end repeat
   return out
@@ -180,36 +191,41 @@ end tell'''
 
 
 def parse_fetch(raw: str) -> dict[int, dict]:
-    """→ {day_index: {"row": int, "cells": {col: (value, bg, fg)}}}"""
+    """→ {day_index: {"row": int, "cells": {col: (value, bg, fg)}}}
+    Every A..X column gets a value; colors default to white/black for
+    columns not in COLOR_COLS."""
     out: dict[int, dict] = {}
     for chunk in raw.split("<<ROW>>")[1:]:
-        head, *cells = chunk.split("<<C>>")
+        head, _, rest = chunk.partition("<<V>>")
         try:
             di_s, row_s = head.strip().split("|")
             di, row = int(di_s), int(row_s)
         except ValueError:
             continue
-        rec = {"row": row, "cells": {}}
-        for c in cells:
-            parts = c.split("|", 3)
-            if len(parts) < 4:
+        vals_part, _, colors_part = rest.partition("<<C>>")
+        vals = vals_part.split("<<V>>")
+        cells = {}
+        for col, v in zip(READ_COLS, vals):
+            v = v.strip()
+            cells[col] = ("" if v == "missing value" else v, (255, 255, 255), (0, 0, 0))
+        for c in colors_part.split("<<C>>"):
+            parts = c.split("|")
+            if len(parts) != 3:
                 continue
-            col, bg_s, fg_s, val = parts
+            col, bg_s, fg_s = parts
             try:
                 bg = tuple(int(x) for x in bg_s.split(","))
                 fg = tuple(int(x) for x in fg_s.split(","))
             except ValueError:
-                bg, fg = (255, 255, 255), (0, 0, 0)
-            val = val.strip()
-            if val == "missing value":
-                val = ""
-            rec["cells"][col] = (val, bg, fg)
-        out[di] = rec
+                continue
+            if col in cells:
+                cells[col] = (cells[col][0], bg, fg)
+        out[di] = {"row": row, "cells": cells}
     return out
 
 
 def fetch(dates: list[_dt.date]) -> dict[int, dict]:
-    proc = run_bounded([str(IX_OSA)], input=build_fetch_script(dates), timeout=90)
+    proc = run_bounded([str(IX_OSA)], input=build_fetch_script(dates), timeout=FETCH_TIMEOUT)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "ix-osa failed").strip())
     return parse_fetch(proc.stdout)
@@ -351,6 +367,17 @@ def mark_done() -> str:
     return msg[-1] if msg else "(no output from did run.py)"
 
 
+def _hold_pane(args) -> None:
+    """A cmux tab we opened closes the instant this process exits, taking the
+    error with it; under dtd's wrapper the wrapper already waits for a key."""
+    if args.from_text or args.print_context or os.environ.get("DTD_HDR_FILE"):
+        return
+    try:
+        input(DIM + "press Enter to close" + RESET)
+    except EOFError:
+        pass
+
+
 def read_answer() -> str:
     print(BOLD + QUESTION + RESET)
     print(DIM + "(one thought per line; blank line or ^D to finish; empty = abort)" + RESET)
@@ -389,7 +416,14 @@ def main(argv=None) -> int:
 
     dates = window(target, today)
     prev_date = target - _dt.timedelta(days=7)
-    recs = fetch([prev_date] + dates)
+    print(DIM + "loading %s %s → %s from Ix… (Excel can take a minute when busy)" % (
+        SHEET, _mdy(dates[0]), _mdy(dates[-1])) + RESET, flush=True)
+    try:
+        recs = fetch([prev_date] + dates)
+    except Exception as e:  # noqa: BLE001
+        print("✗ could not read %s from Ix: %s" % (SHEET, str(e).strip()[:300]))
+        _hold_pane(args)
+        return 1
     prev = recs.pop(0, None)
     recs = {i - 1: r for i, r in recs.items()}
 
@@ -413,6 +447,7 @@ def main(argv=None) -> int:
 
     if trec is None:
         print("✗ no %s row for Th %s — cannot write %s" % (SHEET, _mdy(target), HCME_COL))
+        _hold_pane(args)
         return 1
     existing = trec["cells"].get(HCME_COL, ("",))[0].strip()
     if existing:
@@ -441,6 +476,7 @@ def main(argv=None) -> int:
         p.write_text(text)
         print("✗ save FAILED: %s" % e)
         print("→ answer saved to %s — replay with --from-text once fixed" % p)
+        _hold_pane(args)
         return 1
     print("✓ %s (week %s)" % (res, trec["cells"].get("A", ("",))[0] or "?"))
 
@@ -450,6 +486,7 @@ def main(argv=None) -> int:
             print("✓ " + mark_done())
         except Exception as e:  # noqa: BLE001
             print("✗ %s mark failed: %s — run `/did %s`" % (HABIT, e, HABIT))
+            _hold_pane(args)
             return 1
 
     # Interactive runs close their own cmux tab after a successful save (same
