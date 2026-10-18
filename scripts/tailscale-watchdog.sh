@@ -109,13 +109,27 @@ case "$FIX" in
     ;;
 esac
 
+# One alert per hour while an outage persists (2026-10-17: a single overnight
+# outage filed 130 identical alerts at the 5-minute cadence and buried the
+# week's alert review). The stamp holds the epoch of the last alert and is
+# cleared on recovery, so the next outage alerts immediately again.
+ALERT_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/jm/tailscale-watchdog.alerted"
+ALERT_EVERY_S=3600
+
 if probe; then
   log "fixed — $FIX remediated, ssh ix healthy"
   notify "recovered" "$FIX auto-fixed; Ix reachable again"
+  rm -f "$ALERT_STAMP"
   drain_queue
   exit 0
 fi
 
-emit_alert "ix_unreachable_persisted" "$FIX: remediation ran but ssh ix still fails — Neon writes are failing"
-notify "IX UNREACHABLE" "auto-fix failed ($FIX) — Neon writes are failing until this is fixed" "Basso"
+last_alert=$(cat "$ALERT_STAMP" 2>/dev/null || echo 0)
+if (( $(date +%s) - last_alert >= ALERT_EVERY_S )); then
+  emit_alert "ix_unreachable_persisted" "$FIX: remediation ran but ssh ix still fails — Neon writes are failing"
+  notify "IX UNREACHABLE" "auto-fix failed ($FIX) — Neon writes are failing until this is fixed" "Basso"
+  mkdir -p "$(dirname "$ALERT_STAMP")" && date +%s > "$ALERT_STAMP"
+else
+  log "still down ($FIX) — alert throttled, last one $(( ($(date +%s) - last_alert) / 60 ))m ago"
+fi
 exit 1
