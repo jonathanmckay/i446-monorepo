@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-18T06:00:04.805157-07:00"
+  "tasks": {
+    "60m 冥想 on plane ride": {
+      "todoist_id": "6hp5r7Whw759mgm2",
+      "minutes": 20
+    },
+    "quick debrief - roadmaps dash - i am alert during the roadmaps": {
+      "todoist_id": "6hp5r7fcJfrPc6R2",
+      "minutes": 80
+    },
+    "start off and delegate theo math": {
+      "todoist_id": "6hp5r7cGR35pGXG2",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-10-18T08:00:04.577098-07:00"
 }
