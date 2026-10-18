@@ -48,3 +48,28 @@ def test_main_applies_ensure_session_id_after_resume_args(ct):
     i = src.index('claude_args, resumed = resume_args(claude_args)')
     j = src.index('claude_args = ensure_session_id(claude_args)')
     assert i < j < src.index("['claude'] + claude_args")
+
+
+def test_cc_ls_lists_sessions_instead_of_fuzzy_forking(ct):
+    """`cc ls` must hand off to `cs ls` (newest first). Before, 'ls' fell into resume_args'
+    fuzzy matcher as a subsequence of 'goals' and forked a month-old session (2026-10-17)."""
+    argv = ct.list_args(['ls'])
+    assert argv is not None and argv[0].endswith('/cs') and argv[1:] == ['ls']
+
+
+def test_cc_ls_passes_query_and_flags_to_cs(ct):
+    assert ct.list_args(['ls', '--all'])[1:] == ['ls', '--all']
+    assert ct.list_args(['list', 'taxes'])[1:] == ['ls', 'taxes']
+
+
+@pytest.mark.parametrize('args', [[], ['taxes pdf review'], ['--resume', 'abc'], ['lsof the thing']])
+def test_non_list_args_are_not_intercepted(ct, args):
+    assert ct.list_args(args) is None
+
+
+def test_main_checks_list_args_before_opening_a_db_session(ct):
+    """Structural guard: the ls hand-off must run before init_session, so listing never records a
+    phantom 'active' row in llm-sessions.db."""
+    src = SCRIPT.read_text()
+    main_src = src[src.index('def main():'):]
+    assert main_src.index('list_args(') < main_src.index('init_session()')
