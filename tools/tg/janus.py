@@ -4994,6 +4994,21 @@ def _bonus_has_note(part: str) -> bool:
     return bool(rest.split())
 
 
+def _ride_bonus_note(part: str) -> str:
+    """"+15 @i9" alone (11 of 15 point grants in the 10-11..10-17 log) left
+    the 分 ledger with no idea what the points were for. A leading ±N is
+    did-fast's 分-log form — the note goes to the ledger only, no Todoist
+    match — so riding on the running or last completed entry's description
+    is free (2026-10-17). Only with an explicit @code: did-fast infers the
+    domain from the note otherwise, and the note would steer it."""
+    if (re.match(r"^[+-]\d+(?=\s|$)", part.strip()) and not _bonus_has_note(part)
+            and re.search(r"(?<!\S)@\S+", part)):
+        note = _last_entry_desc()
+        if note:
+            return f"{part} {note}"
+    return part
+
+
 def _last_entry_desc() -> str:
     """The running timer's description, else today's most recently finished
     non-睡觉 entry's — annotations and @codes stripped. "" when nothing."""
@@ -6346,6 +6361,7 @@ def _on_enter(event):
     # effort closing elsewhere (d357/dtd/-1n ritual stamps): concurrent
     # Toggl calls racing to trim/split each other's entries.
     parts = [p.strip() for p in text.split(",") if p.strip()] or [text]
+    parts = [_ride_bonus_note(p) for p in parts]
 
     def _has_completed_range(part: str) -> bool:
         """True if `part` types an explicit HH:MM-HH:MM / HHMM-HHMM completed
@@ -6392,15 +6408,6 @@ def _on_enter(event):
         named "+10 @i9 read COD deck"."""
         has_range = _has_completed_range(part)
         has_bonus = _has_bonus_points(part)
-        if has_bonus and not _bonus_has_note(part) and re.search(r"(?<!\S)@\S+", part):
-            # "+15 @i9" alone (11 of 15 point grants in the 10-11..10-17
-            # log) left the 分 ledger with no idea what the points were
-            # for. A leading ±N is did-fast's 分-log form: the note goes to
-            # the ledger only (no Todoist match), so riding on the running
-            # or last completed entry's description is free (2026-10-17).
-            note = _last_entry_desc()
-            if note:
-                part = f"{part} {note}"
         force = getattr(STATE, "force_did", False)
         use_did = has_bonus or (has_range and (force or bool(re.search(r"\[-?\d+\]", part))))
         if force and not use_did:
@@ -6442,7 +6449,9 @@ def _on_enter(event):
         return
     resolved = [c for c, _ in resolved_pairs]
     labels = [f"{'did' if d else 'tg'} {c}" for c, d in resolved_pairs]
-    flash((f"$ {' | '.join(labels)}" if len(labels) > 1 else f"$ {labels[0]}") + fix_note)
+    if fix_note:
+        labels[-1] += fix_note
+    flash(f"$ {' | '.join(labels)}" if len(labels) > 1 else f"$ {labels[0]}")
 
     async def _run_and_refresh():
         results = []
