@@ -60,14 +60,17 @@ QUESTION = "What did I learn this week about my emotions that I should remember?
 # Columns pulled from each 0s897 row, in the order they are read (A..X).
 # Rendering below picks from these by letter.
 READ_COLS = [chr(c) for c in range(ord("A"), ord("X") + 1)]
-NUM_FIELDS = [  # (col, label) — rendered as one line of colored chips
-    ("K", "霓虹"), ("L", "帮助"), ("M", "身体"), ("O", "₹"),
-    ("P", "⌈"), ("Q", "⌊"), ("R", "x̄"), ("V", "他⌈"), ("W", "他⌊"),
+# Table layout. Numeric columns are fixed width; text columns share the rest
+# at CELL_W each, lowest-priority columns dropped first when the terminal is
+# narrow (--cell / --cols override).
+NUM_COLS = [  # (col, header, width)
+    ("P", "⌈", 5), ("Q", "⌊", 5), ("R", "x̄", 5), ("V", "他⌈", 5), ("W", "他⌊", 5),
+    ("K", "霓", 3), ("L", "帮", 3), ("M", "身", 3), ("O", "₹", 6),
 ]
-TEXT_FIELDS = [  # (col, label) — one line each, skipped when blank
-    ("E", "Title"), ("D", "Motivation"), ("H", "Win"), ("I", "Learning"),
-    ("F", "Noticed"), ("G", "Thankful"), ("S", "Proud·others"),
-    ("T", "Learn·others"), ("N", "Body"),
+TEXT_COLS = [  # (col, header) in priority order
+    ("E", "Title"), ("H", "Win"), ("I", "Learning"), ("G", "Thankful"),
+    ("S", "Proud·o"), ("T", "Learn·o"), ("D", "Motivation"), ("F", "Noticed"),
+    ("N", "Body"),
 ]
 DAY_ABBR = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]  # weekday() order
 
@@ -137,7 +140,7 @@ def _mdy(d: _dt.date) -> str:
 # Fetch: values + display-format colors, one Ix round trip
 # ---------------------------------------------------------------------------
 
-COLOR_COLS = sorted({c for c, _l in NUM_FIELDS} | {c for c, _l in TEXT_FIELDS})
+COLOR_COLS = sorted({c for c, _h, _w in NUM_COLS} | {c for c, _h in TEXT_COLS})
 FETCH_TIMEOUT = 240  # Excel on Ix can take >1 min per AppleEvent when busy (2026-10-17)
 
 
@@ -262,44 +265,63 @@ def _oneline(s: str) -> str:
     return " / ".join(p.strip() for p in s.splitlines() if p.strip())
 
 
+def _dw(s: str) -> int:
+    """Display width: CJK (W/F) characters take two terminal columns."""
+    import unicodedata
+    return sum(0 if unicodedata.combining(ch) else
+               2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
+
+
 def _clip(s: str, width: int) -> str:
-    return s if len(s) <= width else s[: max(0, width - 1)] + "…"
+    """Cut to `width` display columns, ellipsis on the cut."""
+    if _dw(s) <= width:
+        return s
+    out, w = "", 0
+    for ch in s:
+        cw = _dw(ch)
+        if w + cw > width - 1:
+            break
+        out += ch
+        w += cw
+    return out + "…"
 
 
-def render_day(d: _dt.date, rec: dict | None, width: int) -> str:
-    lines = []
-    label = rec["cells"].get("A", ("", None, None))[0] if rec else ""
-    head = "%s %d/%d" % (DAY_ABBR[d.weekday()], d.month, d.day)
-    if label:
-        head += "  ·  %s" % label
-    lines.append(BOLD + head + RESET)
-    if not rec:
-        lines.append(DIM + "  (no 0s897 row)" + RESET)
-        return "\n".join(lines)
-    cells = rec["cells"]
-    chips = []
-    for col, lab in NUM_FIELDS:
-        val, bg, fg = cells.get(col, ("", (255, 255, 255), (0, 0, 0)))
+def _fit(s: str, width: int) -> str:
+    s = _clip(s, width)
+    return s + " " * (width - _dw(s))
+
+
+DAY_W = 8
+CELL_W = 24
+
+
+def _cell(cells: dict, col: str, width: int, *, num: bool = False) -> str:
+    val, bg, fg = cells.get(col, ("", (255, 255, 255), (0, 0, 0)))
+    val = _oneline(val)
+    if num:
         val = val.strip()
-        chip = paint(" %s " % val, bg, fg) if val else DIM + " · " + RESET
-        chips.append(DIM + lab + RESET + " " + chip)
-    lines.append("  " + "  ".join(chips))
-    labw = max(len(l) for _c, l in TEXT_FIELDS)
-    for col, lab in TEXT_FIELDS:
-        val, bg, fg = cells.get(col, ("", (255, 255, 255), (0, 0, 0)))
-        val = _oneline(val)
-        if not val or val.lower() == "n/a":
-            continue
-        avail = max(20, width - labw - 5)
-        txt = _clip(val, avail)
-        lines.append("  %s %s" % (DIM + lab.ljust(labw) + RESET,
-                                  paint(" " + txt + " ", bg, fg)))
-    return "\n".join(lines)
+    if not val or val.lower() == "n/a":
+        return DIM + ("·".rjust(width - 1) + " " if num else _fit("·", width)) + RESET
+    if num:
+        return paint((_clip(val, width - 1)).rjust(width - 1) + " ", bg, fg)
+    return paint(" " + _fit(val, width - 1), bg, fg)
+
+
+def layout(width: int, cell_w: int, max_text: int | None) -> list[tuple[str, str]]:
+    """Which text columns fit at cell_w, in priority order (table order is
+    kept as listed in TEXT_COLS)."""
+    fixed = DAY_W + sum(w + 1 for _c, _h, w in NUM_COLS)
+    n = max(1, (width - fixed) // (cell_w + 1))
+    if max_text is not None:
+        n = min(n, max_text)
+    keep = {c for c, _h in TEXT_COLS[:n]}
+    return [(c, h) for c, h in TEXT_COLS if c in keep]
 
 
 def render(dates: list[_dt.date], recs: dict[int, dict], target: _dt.date,
-           prev: dict | None) -> str:
-    width = shutil.get_terminal_size((100, 40)).columns
+           prev: dict | None, *, cell_w: int = CELL_W, max_text: int | None = None) -> str:
+    width = shutil.get_terminal_size((160, 40)).columns
+    text_cols = layout(width, cell_w, max_text)
     out = []
     tlabel = ""
     if (ti := dates.index(target) if target in dates else None) is not None:
@@ -314,9 +336,26 @@ def render(dates: list[_dt.date], recs: dict[int, dict], target: _dt.date,
                 if ln.strip():
                     out.append("  " + _clip(ln.strip(), width - 4))
     out.append("")
+    hdr = [BOLD + _fit("day", DAY_W) + RESET]
+    hdr += [BOLD + " " * max(0, w - 1 - _dw(h)) + h + " " + RESET for _c, h, w in NUM_COLS]
+    hdr += [BOLD + _fit(" " + h, cell_w) + RESET for _c, h in text_cols]
+    out.append(" ".join(hdr))
     for i, d in enumerate(dates):
-        out.append(render_day(d, recs.get(i), width))
-        out.append("")
+        rec = recs.get(i)
+        day = "%s %d/%d" % (DAY_ABBR[d.weekday()], d.month, d.day)
+        day = (BOLD if d == target else "") + _fit(day, DAY_W) + RESET
+        if not rec:
+            out.append(day + " " + DIM + "(no 0s897 row)" + RESET)
+            continue
+        cells = rec["cells"]
+        row = [day]
+        row += [_cell(cells, c, w, num=True) for c, _h, w in NUM_COLS]
+        row += [_cell(cells, c, cell_w) for c, _h in text_cols]
+        out.append(" ".join(row))
+    dropped = [h for c, h in TEXT_COLS if c not in dict(text_cols)]
+    if dropped:
+        out.append(DIM + "not shown (narrow terminal): " + ", ".join(dropped) + RESET)
+    out.append("")
     return "\n".join(out)
 
 
@@ -405,6 +444,8 @@ def main(argv=None) -> int:
     ap.add_argument("--print-script", action="store_true")
     ap.add_argument("--no-mark", action="store_true", help="write X, leave the card open")
     ap.add_argument("--today", help="override today (tests)")
+    ap.add_argument("--cell", type=int, default=CELL_W, help="text cell width (chars, default %d)" % CELL_W)
+    ap.add_argument("--cols", type=int, help="max text columns (default: as many as fit)")
     args = ap.parse_args(argv)
 
     today = _dt.date.fromisoformat(args.today) if args.today else _dt.date.today()
@@ -444,7 +485,7 @@ def main(argv=None) -> int:
                 ti = dates.index(target) if target in dates else None
                 trec = recs.get(ti) if ti is not None else None
 
-    print(render(dates, recs, target, prev))
+    print(render(dates, recs, target, prev, cell_w=args.cell, max_text=args.cols))
 
     if trec is None:
         print("✗ no %s row for Th %s — cannot write %s" % (SHEET, _mdy(target), HCME_COL))
