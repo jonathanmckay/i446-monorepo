@@ -1641,6 +1641,25 @@ DTD_EDIT="/tmp/dtd-$DTD_ID.edit.sh"
 cat > "$DTD_EDIT" << EDITEOF
 #!/bin/zsh
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}edit\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
+# ctrl-c on this screen = cancel the edit and go back to the list, NOT quit
+# dtd (2026-10-17: "ctrl-c from the details dialog ... goes to the main
+# screen, not exit all the way"). fzf's Pause() hands us the tty in cooked
+# mode with ISIG on, and the tty raises SIGINT for the WHOLE foreground
+# process group -- fzf included -- so a ^C anywhere in this script killed
+# dtd outright. Undefine the intr (and quit) chars FIRST, before the resolve
+# step below, so ^C/^\ arrive as plain bytes: the ZLE widget further down
+# turns ^C into "empty line + accept", which is the existing blank-line
+# cancel path. A ^C typed while the detail is still fetching is echoed as a
+# literal ^C (cooked mode), waits for the fetch, then cancels at once.
+# The stty sane below would reset intr, so it repeats the undef. Restored
+# explicitly after the drain (ZLE does not snapshot/restore termios).
+stty intr undef quit undef < /dev/tty 2>/dev/null
+zmodload zsh/zle 2>/dev/null
+_dtd_cancel() { BUFFER=""; zle accept-line; }
+zle -N _dtd_cancel
+bindkey -M emacs '^C' _dtd_cancel
+bindkey -M viins '^C' _dtd_cancel
+bindkey -M vicmd '^C' _dtd_cancel
 EDIT_FAST="\$HOME/i446-monorepo/tools/did/edit-fast.py"
 HDR="$DTD_HDR"
 task="\$1"
@@ -1660,6 +1679,7 @@ fi
 # the only thing visible, and force sane tty modes so Enter always
 # terminates the read.
 stty sane < /dev/tty 2>/dev/null
+stty intr undef quit undef < /dev/tty 2>/dev/null  # sane reset intr; keep ^C a byte (see top)
 printf "\033[2J\033[H" > /dev/tty
 # ctrl-o and ctrl-g both open this screen (2026-10-11: "ideally ctrl+g and
 # ctrl+o go to the same place, and show the different fields that I could add
@@ -1688,6 +1708,9 @@ edits="\$f_line"
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
+# Give the tty its interrupt chars back (both exit paths pass here). fzf's
+# Resume() re-applies raw mode anyway; this just leaves no surprise behind.
+stty intr '^C' quit '^\\' < /dev/tty 2>/dev/null
 if [[ -z "\${edits// /}" ]]; then
   echo "edit cancelled" > "\$HDR"
   exit 0
