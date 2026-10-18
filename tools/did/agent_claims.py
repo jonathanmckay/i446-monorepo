@@ -202,7 +202,7 @@ SKILL_CLAIMS = {
 # Skills whose flow closes the card and then releases the claim itself.
 # (/xk887's survey closes '1 xk88' from its own cmux tab after the skill's
 # turn is over, so the skill can't release; it stays a keeper.)
-SKILL_RELEASES = {"0t", "notes", "0g", "早餐", "1i9", "1m5x2", "1hcme"}
+SKILL_RELEASES = {"0t", "notes", "0g", "早餐", "1i9", "1m5x2", "1hcme", "1hcmc"}
 # Skills JM decided NOT to link (2026-10-11), so /1-i446 stops asking.
 SKILL_NO_CLAIM = {
     "s": "/salat alias; the '1s' card is the weekly review",
