@@ -74,6 +74,14 @@ Then release the dtd claim the `/1hcme` prompt took, if any (no-op otherwise):
 python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
 ```
 
+## From dtd
+
+Enter on the `1 hcme` card runs the script inline in the dtd pane (the
+survey-card form map in `tools/did/dtd.sh`, alongside 0l, 1s, xk887, moral
+audit, -1g): timer starts, the week renders, the answer is written and the
+card closed, then dtd returns. The script skips its cmux tab-close when
+`DTD_HDR_FILE` is set, so it never closes dtd's own pane.
+
 ## Flags (scripting / tests)
 
 - `--print-context` — render only; no question, no write, no mark.

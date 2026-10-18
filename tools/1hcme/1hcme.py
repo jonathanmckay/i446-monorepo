@@ -454,8 +454,9 @@ def main(argv=None) -> int:
 
     # Interactive runs close their own cmux tab after a successful save (same
     # convention as 1s-survey.py); failures above return early and leave the
-    # pane open so the error stays readable.
-    if not args.from_text and shutil.which("cmux"):
+    # pane open so the error stays readable. Inside dtd's inline-form wrapper
+    # (DTD_FORM exports DTD_HDR_FILE) the pane IS dtd's — never close it.
+    if not args.from_text and not os.environ.get("DTD_HDR_FILE") and shutil.which("cmux"):
         time.sleep(1.5)
         try:
             subprocess.run(["cmux", "close-surface"], capture_output=True, text=True, timeout=10)
