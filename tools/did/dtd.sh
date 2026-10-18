@@ -111,8 +111,24 @@ DTD_TIMING="/tmp/dtd-$DTD_ID.timing.log"
 # per completion; extra = seconds or reason). Appended with zsh's print
 # builtin, never an exec, so a keypress pays nothing measurable.
 # Read by tools/did/dtd_report.py. Machine-local; host is on the session line.
-DTD_EVENTS="${XDG_STATE_HOME:-$HOME/.local/state}/jm/dtd-events.tsv"
+DTD_EVENTS="${DTD_EVENTS:-${XDG_STATE_HOME:-$HOME/.local/state}/jm/dtd-events.tsv}"
 export DTD_EVENTS DTD_ID
+# Record log (2026-10-17, "what do the logs tell you about making dtd more
+# useful"): one JSON line per pick (which row, under what query, how deep in
+# the list) and per completion (estimate vs actual minutes, points, what
+# did-fast actually wrote, age and impressions of the task), appended by the
+# key routers (zsh print) and dtd_outcome.py. Per host under the synced vault
+# so both machines' days read as one; tools/did/dtd-log.py reads it.
+# DTD_QUERY holds the live fzf query (the change: script stashes it) for the
+# routers that fzf does not hand {q} to. DTD_LIFECYCLE is the list
+# generator's first-seen / impressions-per-day store (machine-local).
+DTD_HOSTSLUG=$(python3 -c 'import re,socket;print(re.sub(r"[^a-z0-9]+","-",socket.gethostname().lower()).strip("-")[:24])' 2>/dev/null || echo host)
+DTD_RECLOG="${DTD_RECLOG:-$HOME/vault/z_ibx/dtd-log/$DTD_HOSTSLUG.jsonl}"
+DTD_QUERY="/tmp/dtd-$DTD_ID.query"
+DTD_ORDER="/tmp/dtd-$DTD_ID.order"      # every row id in list order, rewritten per render
+DTD_LIFECYCLE="${DTD_LIFECYCLE:-${XDG_STATE_HOME:-$HOME/.local/state}/jm/dtd-lifecycle.json}"
+mkdir -p "${DTD_RECLOG:h}" 2>/dev/null
+export DTD_RECLOG DTD_QUERY DTD_ORDER DTD_LIFECYCLE DTD_HOSTSLUG
 # Router -> done.sh handoff of the resolved task content as a FILE (2026-10-03):
 # print/$(<f) are zsh builtins, so done.sh needs no base64/sed/tr exec at all
 # on the common path (each exec costs 0.07-1.5s under a Defender scan stall).
@@ -281,7 +297,7 @@ if [[ -z "$_dtd_refresh_done" && $due_today -lt 30 ]]; then
 fi
 
 # --- Background worker ---
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "/tmp/dtd-$DTD_ID.start.sh" \
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_QUERY" "$DTD_ORDER" "/tmp/dtd-$DTD_ID.start.sh" \
       "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PUSHED.log" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" \
       "$DTD_SESSION" "$DTD_TIMER" "$DTD_STOP" "$DTD_FAILED" "$DTD_FAILED.tmp" \
       "/tmp/dtd-$DTD_ID.removed.ids" "/tmp/dtd-$DTD_ID.blockpick"
@@ -1095,6 +1111,20 @@ _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}
 _id="\$1"
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\trouter-start\t\$_id" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
+# Pick record (2026-10-17): action, row id, the query it was found under,
+# and where it sat in the UNFILTERED list, 1 = top (\$DTD_ORDER: one id per
+# line, written by the list generator). Builtins only: (ie) finds the row.
+_rec_pick() {
+  local _a="\$1" _i="\$2" _q="\$3" _pos="" _n=0
+  if [[ -r "$DTD_ORDER" ]]; then
+    local -a _rows; _rows=("\${(@f)\$(<"$DTD_ORDER")}"); _n=\${#_rows}
+    _pos=\${_rows[(ie)\$_i]}; (( _pos > _n )) && _pos=""
+  fi
+  _q="\${_q//\\\\/\\\\\\\\}"; _q="\${_q//\\"/\\\\\\"}"
+  print -r -- "{\\"ts\\":\$EPOCHREALTIME,\\"host\\":\\"$DTD_HOSTSLUG\\",\\"sid\\":\\"$DTD_ID\\",\\"kind\\":\\"pick\\",\\"action\\":\\"\$_a\\",\\"id\\":\\"\$_i\\",\\"q\\":\\"\$_q\\",\\"pos\\":\${_pos:-null},\\"n\\":\$_n}" >> "$DTD_RECLOG" 2>/dev/null
+}
+_qq=""; [[ -r "$DTD_QUERY" ]] && _qq="\$(<"$DTD_QUERY")"
+[[ "\$_id" == BLOCK:* ]] || _rec_pick done "\$_id" "\$_qq"
 # ONE jq pass (2026-10-02): id lookup + annotation strip + lowercase +
 # dated-suffix strip ("xk26 7.21" -> "xk26", see \$DTD_DONE) + base64 of the
 # raw content, replacing the old jq/sed/tr/base64 pipeline (7 execs). Every exec
@@ -1156,6 +1186,20 @@ for _tid in "\$@"; do
   [[ "\$_tid" == BLOCK:* ]] && continue   # picker rows are not tasks
   _want+=("\$_tid")
 done
+# Pick record (2026-10-17): action, row id, the query it was found under,
+# and where it sat in the UNFILTERED list, 1 = top (\$DTD_ORDER: one id per
+# line, written by the list generator). Builtins only: (ie) finds the row.
+_rec_pick() {
+  local _a="\$1" _i="\$2" _q="\$3" _pos="" _n=0
+  if [[ -r "$DTD_ORDER" ]]; then
+    local -a _rows; _rows=("\${(@f)\$(<"$DTD_ORDER")}"); _n=\${#_rows}
+    _pos=\${_rows[(ie)\$_i]}; (( _pos > _n )) && _pos=""
+  fi
+  _q="\${_q//\\\\/\\\\\\\\}"; _q="\${_q//\\"/\\\\\\"}"
+  print -r -- "{\\"ts\\":\$EPOCHREALTIME,\\"host\\":\\"$DTD_HOSTSLUG\\",\\"sid\\":\\"$DTD_ID\\",\\"kind\\":\\"pick\\",\\"action\\":\\"\$_a\\",\\"id\\":\\"\$_i\\",\\"q\\":\\"\$_q\\",\\"pos\\":\${_pos:-null},\\"n\\":\$_n}" >> "$DTD_RECLOG" 2>/dev/null
+}
+_qq=""; [[ -r "$DTD_QUERY" ]] && _qq="\$(<"$DTD_QUERY")"
+for _tid in "\${_want[@]}"; do _rec_pick defer "\$_tid" "\$_qq"; done
 # ONE jq pass resolves every id -> cleaned name (2026-10-02). The per-id
 # python3 resolve + sed it replaces cost ~0.2s per task (0.6s for three,
 # more under a Defender exec-scan stall), all of it before the prompt could
@@ -1498,6 +1542,19 @@ zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tpickenter\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 id="\$1"
 q="\${2// /}"
+# Pick record (2026-10-17): action, row id, the query it was found under,
+# and where it sat in the UNFILTERED list, 1 = top (\$DTD_ORDER: one id per
+# line, written by the list generator). Builtins only: (ie) finds the row.
+_rec_pick() {
+  local _a="\$1" _i="\$2" _q="\$3" _pos="" _n=0
+  if [[ -r "$DTD_ORDER" ]]; then
+    local -a _rows; _rows=("\${(@f)\$(<"$DTD_ORDER")}"); _n=\${#_rows}
+    _pos=\${_rows[(ie)\$_i]}; (( _pos > _n )) && _pos=""
+  fi
+  _q="\${_q//\\\\/\\\\\\\\}"; _q="\${_q//\\"/\\\\\\"}"
+  print -r -- "{\\"ts\\":\$EPOCHREALTIME,\\"host\\":\\"$DTD_HOSTSLUG\\",\\"sid\\":\\"$DTD_ID\\",\\"kind\\":\\"pick\\",\\"action\\":\\"\$_a\\",\\"id\\":\\"\$_i\\",\\"q\\":\\"\$_q\\",\\"pos\\":\${_pos:-null},\\"n\\":\$_n}" >> "$DTD_RECLOG" 2>/dev/null
+}
+[[ -n "\$id" && "\$id" != BLOCK:* && ! -s "$DTD_BLOCKPICK" ]] && _rec_pick enter "\$id" "\$2"
 # stdout is read by fzf's transform as ACTIONS: print only change-prompt(...)
 # for the custom-days entry (2026-10-04), nothing on every other path.
 if [[ -s "$DTD_BLOCKPICK" ]] && [[ "\$q" == <-> || "\$q" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]]; then
@@ -2360,6 +2417,9 @@ try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
         _order = [l.rsplit(chr(9), 1)[-1] for l in _active + _claims + normal_lines + skipped_lines]
+        _op = _os.environ.get('DTD_ORDER', '')
+        if _op:
+            open(_op + '.tmp', 'w').write(chr(10).join(_order) + chr(10)); _os.replace(_op + '.tmp', _op)
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:
@@ -2370,6 +2430,30 @@ try:
             open(_lr, 'w').write(_top)
             with open(_evp, 'a') as _ef:
                 _ef.write(chr(9).join(['%.3f' % time.time(), _sid, 'render', 'list', _top, str(len(_order))]) + chr(10))
+except Exception:
+    pass
+# Lifecycle store (2026-10-17): first day each id was rendered and how many
+# list regenerations showed it per day, so a completion can carry its age
+# and impression count (dtd_outcome.py reads this) and the backlog tail is
+# measurable. Pruned to 60 days; tmp + rename so a crash never truncates it.
+try:
+    _lcp = _os.environ.get('DTD_LIFECYCLE', '')
+    if _lcp and _order:
+        import json as _lj
+        try:
+            _lc = _lj.load(open(_lcp))
+        except Exception:
+            _lc = {}
+        _fs = _lc.setdefault('first_seen', {}); _dd = _lc.setdefault('days', {})
+        _dk = time.strftime('%Y-%m-%d'); _day = _dd.setdefault(_dk, {})
+        for _oid in _order:
+            if _oid:
+                _fs.setdefault(_oid, _dk); _day[_oid] = _day.get(_oid, 0) + 1
+        for _k in [k for k in _dd if k < time.strftime('%Y-%m-%d', time.localtime(time.time() - 60 * 86400))]:
+            _dd.pop(_k, None)
+        _tmp = _lcp + '.tmp'
+        open(_tmp, 'w').write(_lj.dumps(_lc, separators=(',', ':')))
+        _os.replace(_tmp, _lcp)
 except Exception:
     pass
 " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
@@ -2473,6 +2557,7 @@ DTD_DOMAINSEARCH="/tmp/dtd-$DTD_ID.domainsearch.sh"
 cat > "$DTD_DOMAINSEARCH" << EOF
 #!/bin/zsh
 q="\$1"
+print -rn -- "\$q" > "$DTD_QUERY" 2>/dev/null   # live query for the done/defer routers' pick records
 # On the delay screen a typed number means "delay N days" (Enter applies it,
 # see the enter router): say so in the header as you type (2026-10-04).
 if [[ -s "$DTD_BLOCKPICK" ]]; then

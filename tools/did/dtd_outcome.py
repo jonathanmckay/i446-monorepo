@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import datetime as dt
 import os
 import sys
 import time
@@ -156,6 +158,108 @@ def journal_split(journal: str, out: dict, rows: list[tuple[str, str, str]],
                                     "task_ids": ids, "output": sub})
 
 
+_EST_RE = re.compile(r"\((\d+)\)")
+_PTS_RE = re.compile(r"\[(\d+)\]")
+_BONUS_RE = re.compile(r"\{(\d+)\}")
+RECLOG = os.environ.get("DTD_RECLOG", "")
+LIFECYCLE = Path(os.environ.get("DTD_LIFECYCLE", str(STATE / "dtd-lifecycle.json")))
+TASK_QUEUE = STATE / "task-queue.json"
+
+
+def _kind_of(labels: list[str]) -> str:
+    if "-1neon" in labels:
+        return "ritual"
+    if "#0g" in labels or "#-1g" in labels:
+        return "goal"
+    if "0neon" in labels or "1neon" in labels or "夜neon" in labels:
+        return "habit"
+    return "task"
+
+
+def _cache_entry(item_id: str) -> dict:
+    try:
+        tq = json.loads(TASK_QUEUE.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+    for v in tq.values():
+        if isinstance(v, list):
+            for t in v:
+                if isinstance(t, dict) and str(t.get("id")) == item_id:
+                    return t
+    return {}
+
+
+def _write_summary(w: dict | None) -> str | None:
+    """'OK:row=291|24=1.0|' -> 'row=291 24=1.0'; an error -> 'ERR <error>'."""
+    if not isinstance(w, dict):
+        return None
+    if w.get("ok") is False:
+        return "ERR " + str(w.get("error") or "failed")[:120]
+    first = (w.get("output") or "").strip().splitlines()
+    return " ".join(p for p in (first[0] if first else "").replace("OK:", "").split("|") if p)[:120] or None
+
+
+def done_records(out: dict | None, rows, items, rc: str, now: float | None = None) -> list[dict]:
+    """One record per item (2026-10-17): what was completed, from which
+    bucket, its (N) estimate against the Toggl minutes did-fast stopped, its
+    [N]/{N} points, what did-fast wrote (0n / 0分 / 1n+ echoes), how overdue
+    it was, and how many days / list renders it had been shown. Joined with
+    the routers' pick records by id in tools/did/dtd-log.py."""
+    out = out or {}
+    results = out.get("results") or []
+    toggl = out.get("toggl_stopped") or {}
+    try:
+        lc = json.loads(LIFECYCLE.read_text())
+    except Exception:  # noqa: BLE001
+        lc = {}
+    today = dt.date.today()
+    recs = []
+    for (item_id, content), (_i, status, disp) in zip(items, rows):
+        hit = next((r for r in results
+                    if _matches(r.get("name", ""), (r.get("todoist") or {}).get("id"), item_id, content)), None)
+        ce = _cache_entry(item_id) if item_id else {}
+        labels = ce.get("labels") or []
+        raw = ce.get("content") or content
+        est = _EST_RE.search(raw); pts = _PTS_RE.search(raw); bonus = _BONUS_RE.search(raw)
+        overdue = None
+        try:
+            overdue = (today - dt.date.fromisoformat(str(ce.get("due"))[:10])).days if ce.get("due") else None
+        except ValueError:
+            pass
+        fs = (lc.get("first_seen") or {}).get(item_id)
+        age = None
+        if fs:
+            try:
+                age = (today - dt.date.fromisoformat(fs)).days
+            except ValueError:
+                pass
+        impressions = sum(d.get(item_id, 0) for d in (lc.get("days") or {}).values()) if item_id else 0
+        actual = toggl.get("minutes") if toggl and (not recs) else None   # one stopped timer per did-fast run
+        recs.append({
+            "ts": now or time.time(), "host": os.environ.get("DTD_HOSTSLUG", ""), "sid": os.environ.get("DTD_ID", ""),
+            "kind": "done", "status": status, "id": item_id or None, "content": raw,
+            "bucket": _kind_of(labels), "step": (hit or {}).get("step"),
+            "est": int(est.group(1)) if est else None, "actual": actual,
+            "points": int(pts.group(1)) if pts else None, "bonus": int(bonus.group(1)) if bonus else None,
+            "writes": {k: v for k, v in (("0n", _write_summary(out.get("0n_write"))), ("0fen", _write_summary(out.get("0fen_write"))),
+                                         ("1n", _write_summary(out.get("1n_write"))), ("1n_0fen", _write_summary(out.get("1n_0fen_write")))) if v},
+            "overdue_days": overdue, "age_days": age, "impressions": impressions, "rc": rc,
+        })
+    return recs
+
+
+def record_done(out, rows, items, rc: str) -> None:
+    if not RECLOG:
+        return
+    try:
+        Path(RECLOG).parent.mkdir(parents=True, exist_ok=True)
+        with open(RECLOG, "a") as f:
+            for r in done_records(out, rows, items, rc):
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def record_unknown(raw: str, rc: str, rows, items) -> None:
     bad = [(i, c) for (i, c), (_x, s, _d) in zip(items, rows) if s == "unknown"]
     if not bad:
@@ -184,6 +288,7 @@ def main(argv: list[str]) -> int:
         except Exception as e:  # noqa: BLE001: never block the worker on undo bookkeeping
             print(f"journal split failed: {e}", file=sys.stderr)
     record_unknown(raw, rc, rows, items)
+    record_done(out, rows, items, rc)
     for r in rows:
         print("\t".join(r))
     return 0
