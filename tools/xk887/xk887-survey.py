@@ -218,12 +218,15 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
         L += [
             '  set ws to worksheet "%s" of wb' % sheet,
             '  set lastRow_%s to 1' % v,
-            '  repeat with r from 2 to 1000',
-            '    set av to ""',
-            '    try',
-            '      set av to (string value of range ("A" & r) of ws)',
-            '    end try',
-            '    if av is not "" then set lastRow_%s to r' % v,
+            # ONE range read, then an in-memory scan (2026-10-17): the per-row
+            # `string value of range ("A" & r)` loop was 1,000 Apple events per
+            # sheet; the same loop in 0s measured 154 s on ix against 4.6 s for
+            # the single read, which is why these writes blew their 60 s budget.
+            '  set avals_%s to string value of range "A2:A1000" of ws' % v,
+            '  repeat with i from 1 to count of avals_%s' % v,
+            '    set av to item i of avals_%s' % v,
+            '    if class of av is list then set av to item 1 of av',
+            '    if av is not "" then set lastRow_%s to i + 1' % v,
             '  end repeat',
             '  set tailLabel_%s to ""' % v,
             '  try',

@@ -220,8 +220,8 @@ def test_col_a_matched_via_string_value_not_value():
     DISPLAYED text, same lesson 0s.py already learned for its date column."""
     m = _load()
     script = m.build_applescript({}, dt.date(2026, 7, 19))
-    assert 'string value of range ("A" & r)' in script
-    assert script.count('string value of range ("A" & r)') == len(m.SHEETS)
+    assert 'string value of range "A2:A1000" of ws' in script
+    assert script.count('string value of range "A2:A1000" of ws') == len(m.SHEETS)
 
 
 def test_age_auto_continues_on_new_row_when_blank():
@@ -453,3 +453,11 @@ def test_run_paginated_marks_on_finish_unless_no_mark():
     assert "queue_finish_marks" not in cancel
     main_fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "main")
     assert "--no-mark" in ast.get_source_segment(src, main_fn)
+
+
+def test_tail_row_lookup_is_one_range_read_not_a_per_row_loop():
+    """Same defect class as 0s (2026-10-17): one Apple event per row over 1,000
+    rows per sheet blew the 60 s write budget on a slow Excel."""
+    src = (Path(__file__).resolve().with_name("xk887-survey.py")).read_text()
+    assert 'string value of range "A2:A1000" of ws' in src
+    assert 'range ("A" & r)' not in src
