@@ -165,8 +165,9 @@ def build_fetch_script(dates: list[_dt.date]) -> str:
     set di to item 1 of h
     set rr to item 2 of h
     set out to out & "<<ROW>>" & di & "|" & rr
-    set vals to item 1 of (string value of range ("A" & rr & ":X" & rr) of ws)
-    repeat with v in vals
+    set tmpR to string value of range ("A" & rr & ":X" & rr) of ws
+    set rowVals to item 1 of tmpR
+    repeat with v in rowVals
       set vv to ""
       try
         set vv to v as text
