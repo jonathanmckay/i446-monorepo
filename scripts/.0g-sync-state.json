@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "2 workouts w/1 weights": {
-      "todoist_id": "6hmvRXCcHMqpQc22",
-      "minutes": 40
-    },
-    "2h ic time": {
-      "todoist_id": "6hmvRXFmpQv8GFqR",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-10-17T20:00:03.627291-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-17T22:00:01.931938-07:00"
 }
