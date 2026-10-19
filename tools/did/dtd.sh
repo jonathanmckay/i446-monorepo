@@ -22,6 +22,26 @@ if [[ "${LC_ALL:-${LC_CTYPE:-$LANG}}" != *[Uu][Tt][Ff]-8* && "${LC_ALL:-${LC_CTY
 fi
 # END UTF-8 locale guard
 
+# python3 preflight guard (bug 2026-10-19): /usr/bin/python3 is an Xcode
+# shim. Installing Xcode.app pointed xcode-select at it with the license
+# unaccepted, and every python3 call below died with "You have not agreed to
+# the Xcode license agreements" — all of them 2>/dev/null, so dtd launched to
+# a silent, empty list ("0 left", 0/0). Prefer the Command Line Tools
+# toolchain when the default one is broken (exported, so the worker/router
+# scripts and every did-fast child inherit it); otherwise die with the real
+# error instead of painting nothing.
+_py_err=$(python3 -c 'pass' 2>&1 >/dev/null)
+if (( $? != 0 )); then
+  if DEVELOPER_DIR=/Library/Developer/CommandLineTools python3 -c 'pass' >/dev/null 2>&1; then
+    export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+  else
+    print -u2 -- "dtd: python3 is unusable, refusing to launch an empty list: ${_py_err}"
+    exit 1
+  fi
+fi
+unset _py_err
+# END python3 preflight guard
+
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
