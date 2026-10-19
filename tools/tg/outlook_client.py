@@ -51,6 +51,22 @@ try:
 except ImportError:
     mcp = None
 
+# Hosts that must NEVER fetch from Agency themselves and only read the cache
+# Straylight pushes (tools/tg/outlook-cache-daemon.py). Ix was meant to be
+# cache-only via JANUS_OUTLOOK_CACHE_ONLY=1 in the `janus` ssh entry, but
+# the com.jm.janus-mobile launchd agent never carried that env var, so every
+# phone page load spawned an Agency calendar server that opened a Chrome
+# sign-in tab and waited 15 min (2026-10-18: enough tabs to OOM ix). Decide
+# by hostname so no launcher can forget the flag again.
+CACHE_ONLY_HOSTS = {"ix", "ix.local"}
+
+
+def cache_only() -> bool:
+    if os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
+        return True
+    import socket
+    return socket.gethostname().lower() in CACHE_ONLY_HOSTS
+
 
 def list_events(day_start: dt.datetime, day_end: dt.datetime,
                 force: bool = False) -> list[dict]:
@@ -68,7 +84,7 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
     # (tools/tg/outlook-cache-daemon.py) instead of attempting a fetch that can
     # only time out. JANUS_OUTLOOK_CACHE_ONLY=1 is set by the `janus` ssh
     # entry on Ix.
-    if mcp is None or os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
+    if mcp is None or cache_only():
         if cache_file.exists():
             return _parse_cache(cache_file)
         if mcp is None:

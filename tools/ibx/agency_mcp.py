@@ -63,8 +63,24 @@ _SAFARI_LOGIN_TABS = '''tell application "Safari"
 end tell'''
 
 
+# Chrome exposes the same window/tab model; AzureAuth opens the tab in the
+# DEFAULT browser, which on ix is Chrome (2026-10-18: ~30 login tabs/day on ix
+# — janus-mobile on every phone page load plus the 03:00 dream run — while
+# this guard only ever looked at Safari, so it never fired there. Enough tabs
+# to OOM the box and starve Excel).
+_CHROME_LOGIN_TABS = '''tell application "Google Chrome"
+    set out to ""
+    repeat with w in windows
+        repeat with t in tabs of w
+            set u to URL of t
+            if u contains "%s" then set out to out & u & linefeed
+        end repeat
+    end repeat
+    return out
+end tell'''
+
 class EntraLoginPending(RuntimeError):
-    """A Microsoft sign-in tab is already open and unfinished in Safari.
+    """A Microsoft sign-in tab is already open and unfinished in a browser.
 
     Nothing Agency-backed will work until the user completes it (or closes
     it), so callers should treat this like any other 'MCP unavailable' error
@@ -72,21 +88,28 @@ class EntraLoginPending(RuntimeError):
     another tab."""
 
 
-def _safari_running():
+def _browser_running(app):
     try:
-        r = subprocess.run(["pgrep", "-x", "Safari"], capture_output=True, timeout=5)
+        r = subprocess.run(["pgrep", "-x", app], capture_output=True, timeout=5)
         return r.returncode == 0
     except Exception:
         return False
 
 
-def _safari_login_tab():
-    """URL of an open Microsoft sign-in tab, or None. Never launches Safari."""
-    if not _safari_running():
-        return None
+def _safari_running():
+    return _browser_running("Safari")
+
+
+def _chrome_running():
+    return _browser_running("Google Chrome")
+
+
+def _scan_login_tabs(script):
+    """URL of an open Microsoft sign-in tab per `script`, or None. Callers
+    must confirm the browser is running first: `tell application` launches it."""
     for host in MS_SIGNIN_HOSTS:
         try:
-            r = subprocess.run(["osascript", "-e", _SAFARI_LOGIN_TABS % host],
+            r = subprocess.run(["osascript", "-e", script % host],
                                capture_output=True, text=True, timeout=10)
         except Exception:
             return None
@@ -98,13 +121,31 @@ def _safari_login_tab():
     return None
 
 
+def _safari_login_tab():
+    if not _safari_running():
+        return None
+    return _scan_login_tabs(_SAFARI_LOGIN_TABS)
+
+
+def _chrome_login_tab():
+    if not _chrome_running():
+        return None
+    return _scan_login_tabs(_CHROME_LOGIN_TABS)
+
+
+def _any_login_tab():
+    """First pending sign-in tab in Safari or Chrome (whichever is default
+    gets AzureAuth's tab; checking both costs one pgrep for the other)."""
+    return _safari_login_tab() or _chrome_login_tab()
+
+
 def entra_login_pending(force=False):
     """Return the pending sign-in tab URL, or None. Cached for _LOGIN_TAB_TTL
     seconds so a burst of tool calls costs one AppleScript round-trip."""
     now = time.time()
     if not force and now - _LOGIN_TAB_CACHE["at"] < _LOGIN_TAB_TTL:
         return _LOGIN_TAB_CACHE["url"]
-    url = _safari_login_tab()
+    url = _any_login_tab()
     _LOGIN_TAB_CACHE.update(at=now, url=url)
     return url
 
@@ -113,7 +154,7 @@ def _refuse_if_login_pending(what):
     url = entra_login_pending()
     if url:
         raise EntraLoginPending(
-            f"not {what}: a Microsoft sign-in tab is already waiting in Safari "
+            f"not {what}: a Microsoft sign-in tab is already waiting in a browser "
             f"({url[:80]}...) - finish that sign-in instead of opening another")
 
 

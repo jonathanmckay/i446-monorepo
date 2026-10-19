@@ -104,3 +104,49 @@ def test_osascript_failure_does_not_block(monkeypatch):
 
 def test_pending_error_is_runtimeerror_for_existing_callers():
     assert issubclass(am.EntraLoginPending, RuntimeError)
+
+
+# --- Chrome (2026-10-18) -----------------------------------------------------
+# AzureAuth opens the sign-in tab in the DEFAULT browser. On ix that is Chrome,
+# and the guard only ever looked at Safari, so it never fired there: ~30
+# tabs/day (janus-mobile on every phone page load + the 03:00 dream run)
+# until the box OOMed and starved Excel.
+
+def test_pending_tab_in_chrome_is_detected(monkeypatch):
+    monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: LOGIN_URL)
+    assert am.entra_login_pending(force=True) == LOGIN_URL
+
+
+def test_call_tool_refuses_while_chrome_login_tab_open(monkeypatch):
+    started, called = [], []
+    monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: LOGIN_URL)
+    monkeypatch.setattr(am, "get_server", lambda name: started.append(name) or 1)
+    monkeypatch.setattr(am, "_call_tool_once", lambda *a: called.append(a) or {})
+    with pytest.raises(am.EntraLoginPending):
+        am.call_tool("calendar", "ListEvents", {})
+    assert started == [] and called == []
+
+
+def test_chrome_check_uses_chrome_applescript_and_never_launches_it(monkeypatch):
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+
+        class R:
+            returncode = 0
+            stdout = LOGIN_URL + "\n" if cmd[0] == "osascript" else "123\n"
+        return R()
+
+    monkeypatch.setattr(am.subprocess, "run", fake_run)
+    assert am._chrome_login_tab() == LOGIN_URL
+    assert ran[0][:3] == ["pgrep", "-x", "Google Chrome"], "must check Chrome is running first"
+    assert 'tell application "Google Chrome"' in ran[1][2]
+
+    ran.clear()
+    monkeypatch.setattr(am.subprocess, "run",
+                        lambda cmd, **kw: ran.append(cmd) or type("R", (), {"returncode": 1, "stdout": ""})())
+    assert am._chrome_login_tab() is None
+    assert all(c[0] == "pgrep" for c in ran), "Chrome not running -> no AppleScript (would launch it)"
