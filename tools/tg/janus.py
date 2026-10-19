@@ -5073,12 +5073,30 @@ def _untracked_since(now: dt.datetime | None = None):
 # one — so two janus instances never both create it; JANUS_AUTO_SLEEP=1/0
 # overrides the host gate. State: ~/.local/state/jm/janus-auto-sleep.json
 # {"date", "id", "adjusted"}; adjusted=True means this day is settled.
+#
+# Stale overnight timer (2026-10-19): the empty morning the create path waits
+# for almost never happens — the real failure is a forgotten evening timer
+# (-1g at 20:51 ran until the 05:54 economist on 10/19). Rule, as specified:
+# a yesterday entry still running after midnight that STARTED before 22:00 is
+# cut at 22:00 and 睡觉 22:00-23:59 + 00:00-05:30 take its place; the 00:00
+# piece then rides the normal first-entry retime. A running 睡觉 is the
+# user's own sleep timer and is left alone; a timer started at/after 22:00
+# is an evening that legitimately crossed midnight. Gated to 01:00+ so the
+# first tick after midnight cannot cut a movie still being watched. Each of
+# the three Toggl calls is check-pointed in the state file ("phase":
+# "stale") so a crash mid-way resumes instead of half-applying. Known gap:
+# if the timer is already stopped-and-split by the morning (Ix janus was
+# down overnight), today holds 0000-HHMM <desc> and nothing fires.
 AUTO_SLEEP_STATE = Path(os.environ.get("XDG_STATE_HOME")
                         or (Path.home() / ".local" / "state")) / "jm" / "janus-auto-sleep.json"
 AUTO_SLEEP_END_H = 6
 AUTO_SLEEP_HOSTS = ("ix",)
 AUTO_SLEEP_CREATE_BEFORE_H = 12   # an empty day past noon is not a sleep question
 AUTO_SLEEP_EXTEND_CAP_H = 10      # never stretch 睡觉 past 10:00 on its own
+AUTO_SLEEP_STALE_CUT_H = 22       # a timer running past midnight from before 22:00 ends here
+AUTO_SLEEP_STALE_END = (5, 30)    # ...and the morning 睡觉 runs 00:00-05:30 until retimed
+AUTO_SLEEP_STALE_AFTER_H = 1      # don't judge a running timer before 01:00
+AUTO_SLEEP_STALE_MIN_PIECE_MIN = 5  # no 23:5x-23:59 sliver
 
 
 def _auto_sleep_enabled() -> bool:
@@ -5118,7 +5136,12 @@ def _auto_sleep_plan(entries: list, yday_entries: list, now: dt.datetime, st: di
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     if st.get("date") != today:
         st = {}
+    if st.get("phase") == "stale":
+        return "stale", st  # resume a check-pointed stale-timer fix
     if not st:
+        stale = _auto_sleep_stale(entries, yday_entries, now)
+        if stale:
+            return "stale", stale
         if entries or any(e.get("running") for e in yday_entries):
             return None
         if now.hour >= AUTO_SLEEP_CREATE_BEFORE_H:
@@ -5149,6 +5172,90 @@ def _auto_sleep_plan(entries: list, yday_entries: list, now: dt.datetime, st: di
     return "adjust", {"id": st["id"], "start": sleep["start_dt"], "end": first}
 
 
+def _auto_sleep_stale(entries: list, yday_entries: list, now: dt.datetime):
+    """A yesterday entry still running past midnight that started before
+    22:00 (and is not 睡觉 itself) → the stale-timer plan, else None.
+
+    cut   — where the timer ends: 22:00, or later if another yesterday entry
+            already covers past 22:00 (never overlap a hand-logged evening)
+    y_*   — 睡觉 cut→23:59 on yesterday; y_start is None when the piece
+            would be a sliver (cut ≥ 23:55)
+    t_*   — 睡觉 00:00→05:30 on today, retimed later by the normal path
+    Needs: today empty (a hand entry at 00:30 means awake), 01:00 ≤ now < noon."""
+    if entries or not (AUTO_SLEEP_STALE_AFTER_H <= now.hour < AUTO_SLEEP_CREATE_BEFORE_H):
+        return None
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    y_cut = midnight - dt.timedelta(hours=24 - AUTO_SLEEP_STALE_CUT_H)
+    y_end = midnight - dt.timedelta(minutes=1)
+    running = sorted((e for e in yday_entries
+                      if e.get("running") and e.get("id")
+                      and (e.get("desc") or "").strip() != "睡觉"
+                      and e["start_dt"] < y_cut),
+                     key=lambda e: e["start_dt"])
+    if not running:
+        return None
+    r = running[0]
+    later_ends = [e["end_dt"] for e in yday_entries
+                  if not e.get("running") and e.get("end_dt") and e["end_dt"] > y_cut]
+    cut = min(max([y_cut] + later_ends), y_end)
+    piece_ok = (y_end - cut) >= dt.timedelta(minutes=AUTO_SLEEP_STALE_MIN_PIECE_MIN)
+    h, m = AUTO_SLEEP_STALE_END
+    return {"id": r["id"], "desc": (r.get("desc") or "").strip(), "start": r["start_dt"],
+            "cut": cut, "y_start": cut if piece_ok else None, "y_end": y_end,
+            "t_start": midnight, "t_end": midnight.replace(hour=h, minute=m)}
+
+
+_STALE_DT_KEYS = ("start", "cut", "y_start", "y_end", "t_start", "t_end")
+
+
+def _stale_ser(plan: dict) -> dict:
+    return {k: (v.isoformat() if isinstance(v, dt.datetime) else v) for k, v in plan.items()}
+
+
+def _stale_deser(plan: dict) -> dict:
+    out = dict(plan)
+    for k in _STALE_DT_KEYS:
+        if isinstance(out.get(k), str):
+            out[k] = dt.datetime.fromisoformat(out[k])
+    return out
+
+
+def _auto_sleep_apply_stale(p: dict, today: str) -> dict:
+    """Run (or resume) the three Toggl writes of a stale-timer plan, saving
+    the state file after each so a crash between calls resumes rather than
+    repeats. Returns the final {"date","id","adjusted"} state."""
+    if p.get("phase") == "stale":
+        st = p
+    else:
+        st = {"date": today, "phase": "stale", "plan": _stale_ser(p), "done": {}}
+    plan, done = _stale_deser(st["plan"]), st.setdefault("done", {})
+    _auto_sleep_save(st)
+    pid = (globals().get("PROJECT_MAP") or {}).get("睡觉")
+    if not done.get("cut"):
+        toggl_api.update_entry(plan["id"], stop=plan["cut"].isoformat(),
+                               duration=int((plan["cut"] - plan["start"]).total_seconds()))
+        done["cut"] = True
+        _auto_sleep_save(st)
+    if plan.get("y_start") and "y" not in done:
+        res = toggl_api.create_entry("睡觉", plan["y_start"].isoformat(), plan["y_end"].isoformat(),
+                                     int((plan["y_end"] - plan["y_start"]).total_seconds()), pid, None)
+        done["y"] = res.get("id") if isinstance(res, dict) else None
+        _auto_sleep_save(st)
+    if "t" not in done:
+        res = toggl_api.create_entry("睡觉", plan["t_start"].isoformat(), plan["t_end"].isoformat(),
+                                     int((plan["t_end"] - plan["t_start"]).total_seconds()), pid, None)
+        done["t"] = res.get("id") if isinstance(res, dict) else None
+        _auto_sleep_save(st)
+    final = {"date": today, "id": done.get("t"), "adjusted": done.get("t") is None}
+    _auto_sleep_save(final)
+    ids = [x for x in (plan["id"], done.get("y"), done.get("t")) if isinstance(x, int)]
+    pieces = ([f"{plan['y_start']:%H%M}-2359"] if plan.get("y_start") else []) + \
+             [f"0000-{plan['t_end']:%H%M}"]
+    JE.emit("action", "auto_sleep", ids,
+            f"stale {plan.get('desc', '')} cut {plan['cut']:%H%M}; 睡觉 {' + '.join(pieces)}")
+    return final
+
+
 def _auto_sleep_tick(entries: list, yday_entries: list) -> None:
     """Runs at the end of every successful fetch_today on today's view."""
     if not _auto_sleep_enabled() or STATE.day_offset != 0:
@@ -5159,6 +5266,14 @@ def _auto_sleep_tick(entries: list, yday_entries: list) -> None:
         return
     kind, p = plan
     today = now.date().isoformat()
+    if kind == "stale":
+        _auto_sleep_apply_stale(p, today)
+        desc = (p.get("plan") or p).get("desc", "")
+        flash(f"{desc} ran all night → cut at {AUTO_SLEEP_STALE_CUT_H}:00, 睡觉 added "
+              f"to {AUTO_SLEEP_STALE_END[0]:02d}:{AUTO_SLEEP_STALE_END[1]:02d} — the day's first entry retimes it", 8.0)
+        STATE.current = None           # the stale timer is stopped; don't show it running
+        STATE.last_toggl_fetch = 0.0
+        return
     if kind == "create":
         pid = (globals().get("PROJECT_MAP") or {}).get("睡觉")
         res = toggl_api.create_entry("睡觉", p["start"].isoformat(), p["end"].isoformat(),

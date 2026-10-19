@@ -31,9 +31,16 @@ public struct DtdSummary: Equatable {
 }
 
 public struct DelayOptions: Equatable {
-    public struct Block: Equatable { public let glyph: String; public let hour: Int }
+    public struct Block: Equatable {
+        public let glyph: String
+        public let hour: Int
+        public init(glyph: String, hour: Int) { self.glyph = glyph; self.hour = hour }
+    }
     public let blocks: [Block]
     public let minutes: [Int]
+    public init(blocks: [Block], minutes: [Int]) { self.blocks = blocks; self.minutes = minutes }
+    public static let empty = DelayOptions(blocks: [], minutes: [])
+    public var isEmpty: Bool { blocks.isEmpty && minutes.isEmpty }
 }
 
 /// One row of janus's /api/timeline. type ∈ divider | gap | entry | event.

@@ -160,6 +160,36 @@ def push() -> None:
 
 HOOK_RE = __import__("re").compile(r"^\s*/(?:d|claim)(?:\s+(.*))?$", __import__("re").S)
 
+# dtd sections that are "surfaced" (visible task rows). The 0neon/1neon/夜neon
+# sections are habit cards, never what a Claude thread is working on.
+SURFACED_SECTIONS = ("关键路径", "today")
+BARE_D_MAX = 40
+
+
+def surfaced_tasks(tq: dict) -> list[dict]:
+    seen, out = set(), []
+    for sec in SURFACED_SECTIONS:
+        for t in tq.get(sec) or []:
+            if isinstance(t, dict) and t.get("id") and t["id"] not in seen:
+                seen.add(t["id"])
+                out.append(t)
+    return out
+
+
+def bare_d_line(tasks: list[dict], df, tq: dict | None = None) -> str:
+    """Context line for a bare `/d`: the surfaced dtd tasks with ids, plus
+    the two commands the model can finish with. `tasks` is the fallback when
+    the queue has no surfaced sections (tests, odd caches)."""
+    rows = surfaced_tasks(tq) if tq is not None else []
+    if not rows:
+        rows = tasks
+    opts = "; ".join(f"{t['id']}: {t.get('content', '')}" for t in rows[:BARE_D_MAX])
+    return ("[claim hook] bare /d, nothing claimed yet. Decide what this THREAD as a whole "
+            "is producing (not the latest message), then either claim the surfaced dtd task "
+            "that IS that work: `python3 ~/i446-monorepo/tools/did/agent_claims.py claim <id>` "
+            "or, if none fits, create it: `python3 ~/i446-monorepo/tools/did/agent_claims.py "
+            "new \"<thread goal> (N) [N] @code\"`. Surfaced: " + (opts or "(none)"))
+
 
 def new_task(content: str) -> dict:
     """`/d new <task>`: create it in Todoist, due today, and return it. An
@@ -306,9 +336,14 @@ def hook(payload: str) -> str:
         release(session)
         push()
         return "[claim hook] released this session's claim."
-    if not query:
-        return ""
     df = _did()
+    if not query:
+        # Bare `/d` (2026-10-19): the task is whatever this THREAD is
+        # accomplishing, which only the model knows. Hand it the surfaced
+        # list with ids so it can pick (one claim call) or create (one new
+        # call) without a second round trip; claim nothing here.
+        tq = df.load_task_queue()
+        return bare_d_line(all_tasks(tq), df, tq)
     explicit_new = query.lower().startswith("new ")
     cands = [] if explicit_new else candidates(query, all_tasks(df.load_task_queue()), df)
     if explicit_new or not cands:

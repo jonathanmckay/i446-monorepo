@@ -138,8 +138,8 @@ do {
 do {
     FuchikomaConfig.resetToDefaults()
     eq(FuchikomaConfig.dtdBase, FuchikomaConfig.defaultDtd, "default dtd")
-    FuchikomaConfig.dtdBase = "https://ix.tail9c51d5.ts.net:5560/"
-    eq(FuchikomaConfig.dtdBase, "https://ix.tail9c51d5.ts.net:5560", "trailing slash trimmed")
+    FuchikomaConfig.dtdBase = "https://ix.tail9c51d5.ts.net:8560/"
+    eq(FuchikomaConfig.dtdBase, "https://ix.tail9c51d5.ts.net:8560", "trailing slash trimmed")
     FuchikomaConfig.dtdBase = "   "
     eq(FuchikomaConfig.dtdBase, FuchikomaConfig.defaultDtd, "blank → default")
     eq(FuchikomaConfig.dashboardURL, FuchikomaConfig.defaultDashboard, "dashboard keeps its trailing slash")

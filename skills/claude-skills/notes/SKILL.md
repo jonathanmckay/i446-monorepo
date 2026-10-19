@@ -12,7 +12,9 @@ Sort the raw scratch-pad notes in `~/vault/z_ibx/new-notes.md` into their correc
 
 ### Step 1: Read the inbox
 
-Read `~/vault/z_ibx/new-notes.md`. If the file is empty (only the "DO NOT delete" header line), tell the user there's nothing to sort and skip straight to Step 9 (mark notes habit done) — an empty inbox still completes the habit for today.
+Read `~/vault/z_ibx/new-notes.md`. Then read every file in `~/vault/z_ibx/phone/` (captures dropped by the native phone app via `tools/vault-mobile/server.py`; one file per capture, named `YYYY-MM-DD-HHMMSS-<id4>-<device>.md`, frontmatter `type: capture`). Treat each phone file's body as one more block, with its `created_at` as the block date and its `title` as the first line; the same routing rules apply (`Name d359`, `… d358`, `o314`, `iw01`, Todoist-style tasks).
+
+If new-notes.md is empty (only the "DO NOT delete" header line) AND `z_ibx/phone/` has no files, tell the user there's nothing to sort and skip straight to Step 9 (mark notes habit done) — an empty inbox still completes the habit for today.
 
 ### Step 2: Read the sort instructions
 
@@ -109,6 +111,8 @@ note: DO NOT delete this doc when you clean and categorize everything below this
 
 ```
 
+Then move every routed phone capture out of `~/vault/z_ibx/phone/` into `~/vault/z_ibx/archive/YYYY-MM/phone/` (keep the filename; it is the audit trail back to the device and capture id). Never delete them: a capture that was mis-routed can be recovered from the archive. Leave any capture you could not route in place and say so in the report.
+
 ### Step 6: Report
 
 Tell the user what was sorted:
@@ -189,7 +193,7 @@ Move any non-essential files in `~/vault/z_ibx/` that are older than 14 days to 
 - `mtg-briefs.json`
 - `mtg-postbriefs.json`
 - `.syncthing-test`
-- Directories (`outlook-backfill/`, `overnight/`, `archive/`)
+- Directories (`outlook-backfill/`, `overnight/`, `archive/`, `phone/`)
 
 ```bash
 mkdir -p ~/vault/z_ibx/archive/$(date +%Y-%m)
