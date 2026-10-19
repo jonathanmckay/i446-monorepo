@@ -4,7 +4,7 @@ Phone mirror of the `janus` timeline TUI (`tools/tg/janus.py`), styled like the
 mobile dtd (`tools/dtd/dtd.py`): flat monospace list, Neon domain colors, 地支
 block dividers. Shows today's Toggl entries and the untracked gaps between them.
 
-- **URL (phone):** http://ix:5561  (same access path as dtd/dashboard)
+- **URL (phone):** http://ix:5561  · HTTPS via tailscale serve: https://ix.tail9c51d5.ts.net:8561 (not :5561 — tailscaled on the same port blocks Flask's rebind)  (same access path as dtd/dashboard)
 - **Runs on:** Ix, LaunchAgent `com.jm.janus-mobile` (KeepAlive, RunAtLoad),
   logs `/tmp/janus-mobile.{log,err}`
 - **Source:** `tools/janus/mobile.py` (single file, embedded HTML, Flask only)

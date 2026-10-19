@@ -23,6 +23,9 @@ def _capture(monkeypatch):
         calls.append(args)
         return subprocess.CompletedProcess(args, 0, stdout='{"results": []}', stderr="")
     monkeypatch.setattr(dtd.subprocess, "run", fake_run)
+    # /api/done is idempotent by id (2026-10-19): isolate from this host's
+    # real completed-today.json, or a card done today short-circuits did-fast.
+    monkeypatch.setattr(dtd, "_completed_ids", set)
     return calls
 
 

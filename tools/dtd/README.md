@@ -4,7 +4,7 @@ MVP Todoist replacement for the phone. A swipeable card list of **today | overdu
 tasks; **swipe a card right → runs the real `/did`** (`did-fast.py`): closes the
 Todoist task *and* writes its `[N]`/`{N}` points to Neon.
 
-- **URL (phone):** http://ix:5560  (same access path as the personal dashboard)
+- **URL (phone):** http://ix:5560  · HTTPS via tailscale serve: https://ix.tail9c51d5.ts.net:8560 (not :5560 — tailscaled on the same port blocks Flask's rebind)  (same access path as the personal dashboard)
 - **Runs on:** Ix, LaunchAgent `com.jm.dtd` (KeepAlive, RunAtLoad), logs `/tmp/dtd.{log,err}`
 - **Source:** `~/i446-monorepo/tools/dtd/dtd.py` (single file, embedded HTML, no deps beyond Flask)
 

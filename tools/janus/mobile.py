@@ -1680,8 +1680,19 @@ def api_where():
     attributed to the Tailscale device behind the request IP."""
     import where
     tz = (request.get_json(silent=True) or {}).get("tz", "")
-    dev = where.record_peer(request.remote_addr or "", str(tz))
+    dev = where.record_peer(_peer_ip(), str(tz))
     return jsonify({"ok": bool(dev), "device": dev})
+
+def _peer_ip() -> str:
+    """Same as dtd's: behind `tailscale serve` (https://…:5561) the proxy
+    connects from loopback and the phone's tailnet IP is in X-Forwarded-For;
+    only loopback is trusted to forward."""
+    ip = request.remote_addr or ""
+    if ip in ("127.0.0.1", "::1"):
+        fwd = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if fwd:
+            ip = fwd
+    return ip
 
 
 @app.route("/api/projects")
@@ -2315,4 +2326,8 @@ load();
 </html>"""
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    # threaded=True: Werkzeug's dev server is single-threaded by default, so a
+    # 10–45 s /api/log (did-fast over ssh + Excel) would block /api/timeline
+    # for every other client — the native app's refresh-on-appear would hang
+    # behind a swipe. did-fast's own writes stay serialized server-side.
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
