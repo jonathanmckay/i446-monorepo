@@ -1,0 +1,103 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "CoreCheck-arm64-apple-macosx26.0-debug.exe": ["<CoreCheck-arm64-apple-macosx26.0-debug.exe>"]
+  "CoreCheck-arm64-apple-macosx26.0-debug.module": ["<CoreCheck-arm64-apple-macosx26.0-debug.module>"]
+  "FuchikomaCore-arm64-apple-macosx26.0-debug.module": ["<FuchikomaCore-arm64-apple-macosx26.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<CoreCheck-arm64-apple-macosx26.0-debug.exe>","<CoreCheck-arm64-apple-macosx26.0-debug.module>","<FuchikomaCore-arm64-apple-macosx26.0-debug.module>"]
+  "test": ["<CoreCheck-arm64-apple-macosx26.0-debug.exe>","<CoreCheck-arm64-apple-macosx26.0-debug.module>","<FuchikomaCore-arm64-apple-macosx26.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck":
+    is-mutated: true
+commands:
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist"]
+    description: "Write auxiliary file /Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist"
+
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/main.swift"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources"]
+    description: "Write auxiliary file /Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources"
+
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList"
+
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Api.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Bodies.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Config.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/JSON.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Models.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Parsers.swift"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources"]
+    description: "Write auxiliary file /Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources"
+
+  "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+
+  "<CoreCheck-arm64-apple-macosx26.0-debug.exe>":
+    tool: phony
+    inputs: ["<CoreCheck-arm64-apple-macosx26.0-debug.exe-CodeSigning>"]
+    outputs: ["<CoreCheck-arm64-apple-macosx26.0-debug.exe>"]
+
+  "<CoreCheck-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/CoreCheck.swiftmodule"]
+    outputs: ["<CoreCheck-arm64-apple-macosx26.0-debug.module>"]
+
+  "<FuchikomaCore-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule"]
+    outputs: ["<FuchikomaCore-arm64-apple-macosx26.0-debug.module>"]
+
+  "C.CoreCheck-arm64-apple-macosx26.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/CoreCheck"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug","-o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck","-module-name","CoreCheck","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_CoreCheck_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx13.0","-Xlinker","-add_ast_path","-Xlinker","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/CoreCheck.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
+
+  "C.CoreCheck-arm64-apple-macosx26.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist"]
+    outputs: ["<CoreCheck-arm64-apple-macosx26.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/CoreCheck"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck"]
+
+  "C.CoreCheck-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/main.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/CoreCheck.swiftmodule"]
+    description: "Compiling Swift Module 'CoreCheck' (1 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","CoreCheck","-emit-dependencies","-emit-module","-emit-module-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/CoreCheck.swiftmodule","-output-file-map","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/output-file-map.json","-incremental","-c","@/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources","-I","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j14","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","CoreCheck_main","-swift-version","5","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","fuchikomacore"]
+
+  "C.FuchikomaCore-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Api.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Bodies.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Config.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/JSON.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Models.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Parsers.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources"]
+    outputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule"]
+    description: "Compiling Swift Module 'FuchikomaCore' (6 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","FuchikomaCore","-emit-dependencies","-emit-module","-emit-module-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule","-output-file-map","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources","-I","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j14","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/include/FuchikomaCore-Swift.h","-swift-version","5","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","fuchikomacore"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Package.swift","/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

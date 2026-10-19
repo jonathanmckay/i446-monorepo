@@ -1013,8 +1013,21 @@ def api_where():
     Tailscale device behind the request IP. Non-Tailscale IPs are ignored."""
     import where
     tz = (request.get_json(silent=True) or {}).get("tz", "")
-    dev = where.record_peer(request.remote_addr or "", str(tz))
+    dev = where.record_peer(_peer_ip(), str(tz))
     return jsonify({"ok": bool(dev), "device": dev})
+
+def _peer_ip() -> str:
+    """The phone's IP as the where beacon needs it. Behind `tailscale serve`
+    (https://ix.tail9c51d5.ts.net:5560, 2026-10-19) the proxy connects from
+    loopback and carries the real tailnet peer in X-Forwarded-For; a direct
+    http://100.x hit still arrives as remote_addr. Only loopback is trusted
+    to forward — a spoofed header from a real peer is ignored."""
+    ip = request.remote_addr or ""
+    if ip in ("127.0.0.1", "::1"):
+        fwd = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if fwd:
+            ip = fwd
+    return ip
 
 @app.route("/api/done", methods=["POST"])
 def api_done():
@@ -1022,6 +1035,13 @@ def api_done():
     content = (body.get("content") or "").strip()
     if not content:
         return jsonify({"ok": False, "error": "no content"}), 400
+    task_id = str(body.get("id") or "").strip()
+    if task_id and task_id in _completed_ids():
+        # Idempotent: a retried swipe (phone locked mid-POST, tailnet blip,
+        # native client's retry) must not run did-fast twice — the second
+        # run would credit Neon again. Same shape the first answer had.
+        return jsonify({"ok": True, "already": True, "closed": True,
+                        "points": parse_est(content)[1]})
     res = complete(content, body.get("id"))
     res["points"] = parse_est(content)[1]
     return jsonify(res)

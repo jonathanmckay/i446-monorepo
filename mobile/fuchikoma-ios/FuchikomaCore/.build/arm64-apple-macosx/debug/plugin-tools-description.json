@@ -1,0 +1,498 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.CoreCheck-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources",
+      "importPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "CoreCheck",
+      "moduleOutputPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/CoreCheck.swiftmodule",
+      "objects" : [
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "CoreCheck_main",
+        "-swift-version",
+        "5",
+        "-I",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-L",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-plugin-path",
+        "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "fuchikomacore"
+      ],
+      "outputFileMapPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/CoreCheck.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/main.swift"
+      ],
+      "tempsPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.FuchikomaCore-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources",
+      "importPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Api.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Bodies.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Config.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/JSON.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Models.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Parsers.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "FuchikomaCore",
+      "moduleOutputPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule",
+      "objects" : [
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/include/FuchikomaCore-Swift.h",
+        "-swift-version",
+        "5",
+        "-I",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-L",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-plugin-path",
+        "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "fuchikomacore"
+      ],
+      "outputFileMapPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules/FuchikomaCore.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Api.swift",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Bodies.swift",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Config.swift",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/JSON.swift",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Models.swift",
+        "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Parsers.swift"
+      ],
+      "tempsPath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "CoreCheck" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "CoreCheck",
+      "-package-name",
+      "fuchikomacore",
+      "-c",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/main.swift",
+      "-I",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "CoreCheck_main",
+      "-swift-version",
+      "5",
+      "-I",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-L",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-plugin-path",
+      "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "fuchikomacore",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ],
+    "FuchikomaCore" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "FuchikomaCore",
+      "-package-name",
+      "fuchikomacore",
+      "-c",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Api.swift",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Bodies.swift",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Config.swift",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/JSON.swift",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Models.swift",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Parsers.swift",
+      "-I",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/include/FuchikomaCore-Swift.h",
+      "-swift-version",
+      "5",
+      "-I",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-L",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-plugin-path",
+      "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "fuchikomacore",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "CoreCheck" : [
+      "FuchikomaCore"
+    ],
+    "FuchikomaCore" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck-entitlement.plist"
+    },
+    "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/CoreCheck/main.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/sources"
+    },
+    "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Api.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Bodies.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Config.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/JSON.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Models.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/Parsers.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/CoreCheck.product/Objects.LinkFileList"
+    },
+    "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Api.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Bodies.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Config.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/JSON.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Models.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/Sources/FuchikomaCore/Parsers.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/FuchikomaCore.build/sources"
+    },
+    "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/mckay/vault/i447/i446/i446-monorepo/mobile/fuchikoma-ios/FuchikomaCore/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+    }
+  }
+}
