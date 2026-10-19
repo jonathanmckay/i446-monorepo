@@ -1,14 +1,16 @@
 import SwiftUI
 import FuchikomaCore
 
-/// Three surfaces, one app: dtd (tasks), janus (timeline), dashboard (web).
+/// Four surfaces, one app: dtd (tasks), janus (timeline), dashboard (web),
+/// vault (offline subset + capture).
 /// Stores live here so tab flips never refetch; each tab owns its header.
 struct RootView: View {
-    enum Tab: Hashable { case dtd, janus, dash }
+    enum Tab: Hashable { case dtd, janus, dash, vault }
 
     @State private var tab: Tab = .dtd
     @StateObject private var dtd = DtdStore()
     @StateObject private var janus = JanusStore()
+    @ObservedObject private var vault = VaultTabStore.shared
     @ObservedObject private var toaster = Toaster.shared
     @State private var showSettings = false
     @Environment(\.scenePhase) private var phase
@@ -24,6 +26,9 @@ struct RootView: View {
             DashboardView(onSettings: { showSettings = true })
                 .tabItem { Label("dash", systemImage: "chart.bar") }
                 .tag(Tab.dash)
+            VaultView(store: vault, onSettings: { showSettings = true })
+                .tabItem { Label("vault", systemImage: "books.vertical") }
+                .tag(Tab.vault)
         }
         .overlay(alignment: .bottom) { ToastView(toaster: toaster).padding(.bottom, 56) }
         .sheet(isPresented: $showSettings) {
@@ -37,6 +42,7 @@ struct RootView: View {
                 WhereBeacon.send()
                 dtd.refreshIfStale()
                 janus.refreshIfStale()
+                vault.syncIfStale()
             }
         }
         .preferredColorScheme(.dark)

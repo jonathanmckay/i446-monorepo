@@ -18,6 +18,8 @@ settings:
 packages:
   FuchikomaCore:
     path: FuchikomaCore
+  VaultCore:
+    path: VaultCore
 targets:
   Fuchikoma:
     type: application
@@ -27,6 +29,8 @@ targets:
     dependencies:
       - package: FuchikomaCore
         product: FuchikomaCore
+      - package: VaultCore
+        product: VaultCore
     info:
       path: Fuchikoma/Info.plist
       properties:

@@ -11,6 +11,7 @@ without a rebuild.
 | dtd       | `tools/dtd/dtd.py` (5560)        | `http://100.114.46.109:5560`                  |
 | janus     | `tools/janus/mobile.py` (5561)   | `http://100.114.46.109:5561`                  |
 | dashboard | `tools/personal-dashboard` (5558)| `https://ix.tail9c51d5.ts.net/personal/` (WKWebView) |
+| vault     | `tools/vault-mobile` (5571)      | `https://ix.tail9c51d5.ts.net:8443/vault` (Funnel, bearer token; works with the VPN off) |
 
 HTTPS alternatives via `tailscale serve` on Ix: `https://ix.tail9c51d5.ts.net:8560`
 (dtd) and `:8561` (janus). Not 5560/5561: tailscaled binding the Tailscale IP on
@@ -26,6 +27,10 @@ Fuchikoma/                  SwiftUI app target (iOS 17+)
   DtdStore/DtdView.swift    task list: leading swipe → done, trailing → start / +1d / ⏰
   JanusStore/JanusView.swift timeline: leading → log / stop+log / convert / fill, trailing → edit / split
   DashboardView.swift       WKWebView on the dashboard URL
+  VaultTabStore/VaultView   offline vault subset (recent / browse / search) + capture sheet; read-only notes
+  VaultIntents.swift        "Capture to Fuchikoma" App Intent: Action Button / Siri / lock screen, offline
+VaultCore/                  Swift package: SQLite+FTS5 store, manifest set-diff sync, capture outbox
+  Sources/VaultCheck        store/sync/outbox checks against a URLProtocol stub (`swift run VaultCheck`)
   Platform.swift            UIKit-only bits (background task, haptics), guarded with #if
 FuchikomaCore/              Swift package: Models, Parsers, Bodies, Api, Config
   Sources/CoreCheck         payload-fixture checks (`swift run CoreCheck`) — CommandLineTools has no XCTest
@@ -64,8 +69,28 @@ open Fuchikoma.xcodeproj         # Signing & Capabilities → Team; plug in phon
 ```
 
 Checks without Xcode: `cd FuchikomaCore && swift run CoreCheck` (parsers and
-request bodies against captured server payloads), and a macOS typecheck of the
-UI (`swiftc -typecheck … Fuchikoma/*.swift`, see git log 2026-10-19).
+request bodies against captured server payloads), `cd VaultCore && swift run VaultCheck`
+(offline store, FTS, outbox, sync loop against a stubbed server), and a macOS
+typecheck of the UI:
+
+```
+swiftc -typecheck -I FuchikomaCore/.build/arm64-apple-macosx/debug/Modules \
+  -I VaultCore/.build/arm64-apple-macosx/debug/Modules Fuchikoma/*.swift
+```
+
+## Vault tab (2026-10-19)
+
+The phone holds the subset declared in `vault/z_meta/phone-subset.md` (~9k
+notes, 24 MB) in SQLite; reads and search are local and instant. Sync on
+foreground is one `/manifest` request with `If-None-Match` (a 304 when nothing
+changed), then a full set-diff: changed files are fetched 6 at a time with a
+sha check, deleted files drop out. Captures never edit existing notes: the
+pencil (or the App Intent) writes to a local outbox, and the next sync POSTs
+each one to `/drop`, which files it as `z_ibx/phone/<stamp>-<id4>-<device>.md`
+for `/notes` to route. Setup: long-press the header → paste the device token
+(`ssh ix 'cd ~/i446-monorepo/tools/vault-mobile && python3 server.py token imago-c'`).
+v1 renders notes as plain monospaced text; wikilinks are listed under the body
+and resolve locally ("not on phone" for anything outside the subset).
 
 ## Server-side contract notes (2026-10-19)
 
