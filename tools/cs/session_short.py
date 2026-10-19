@@ -90,13 +90,20 @@ def _haiku_label(title: str) -> str | None:
         short = re.sub(r"\s+", " ", resp.content[0].text.strip().strip('"').strip())
         if not short:
             return None
-        if len(short) > CAP:
-            cut = short[:CAP]
-            sp = cut.rfind(" ")
-            short = (cut[:sp] if sp >= CAP - 10 else cut).rstrip(" -–—:,")
-        return short
+        return trim(short)
     except Exception:
         return None
+
+
+def trim(short: str, cap: int = CAP) -> str:
+    """Cut an overshooting label at a word boundary, never mid-word (the first
+    live run produced "Troubleshoot cmux availabili"). Falls back to a hard
+    cut only when the label is one unbroken token."""
+    if len(short) <= cap:
+        return short
+    cut = short[:cap]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > 0 else cut).rstrip(" -–—:,")
 
 
 def ensure_short(sid: str, title: str, compute=_haiku_label) -> str | None:

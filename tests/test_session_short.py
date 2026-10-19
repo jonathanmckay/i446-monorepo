@@ -43,3 +43,9 @@ def test_failed_compute_caches_nothing(ss):
 
 def test_cap_is_phone_width(ss):
     assert ss.CAP <= 30
+
+
+def test_trim_never_cuts_mid_word(ss):
+    assert ss.trim('Troubleshoot cmux availability on ix', 28) == 'Troubleshoot cmux'
+    assert ss.trim('short enough', 28) == 'short enough'
+    assert ss.trim('x' * 40, 28) == 'x' * 28, 'one unbroken token: hard cut'
