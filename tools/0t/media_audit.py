@@ -1,8 +1,9 @@
 """Passive media-use audit for /0t.
 
 Compares what the passive trackers saw (ActivityWatch on Straylight; Apple
-Screen Time's cross-device store on Ix, once its remote-user FDA + sharing
-are on) against what Toggl says was media time (hcmc/hcmc2), for one local day.
+Screen Time's cross-device store on Ix if it is ever readable, silently
+skipped otherwise) against what Toggl says was media time (hcmc/hcmc2), for
+one local day.
 The interesting output is the gap: passive media minutes with no corresponding
 Toggl entry — the honesty signal the points system runs on.
 
@@ -370,9 +371,9 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
     aww = media_minutes_from_aw_web(day)
     if aww is None:
         notes.append("aw-watcher-web bucket missing (Chrome extension not installed/reporting)")
+    # Unreadable Screen Time is silent by design (2026-10-19): JM never uses
+    # the Ix GUI, so its store says nothing about his phone/iPad time anyway.
     st = media_minutes_from_screentime(day)
-    if st is None:
-        notes.append("Screen Time store on Ix unreadable (needs Ix remote-user FDA + Share Across Devices)")
 
     # Merge sources per label, taking the max per source-label (they overlap
     # only if the same app is measured twice, e.g. desktop YouTube in both

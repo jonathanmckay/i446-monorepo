@@ -347,7 +347,8 @@ def test_media_audit_flags_large_gap():
     assert r["passive_total_min"] == 85
     assert r["toggl_media_min"] == 0
     assert r["flagged"] is True
-    assert any("Screen Time" in n for n in r["notes"])
+    # Unreadable Screen Time is silent (2026-10-19): no note.
+    assert not any("Screen Time" in n for n in r.get("notes", []))
 
 
 def test_media_audit_no_flag_when_toggl_covers_it():

@@ -32,8 +32,8 @@ The script handles everything:
 5. **Media audit** (informational, never written to Neon): compares passive
    trackers against Toggl media time (hcmc/hcmc2) for yesterday. Sources:
    ActivityWatch on Straylight (desktop, AFK-filtered window titles) and the
-   Apple Screen Time cross-device store (phone/iPad — requires Full Disk
-   Access and Share Across Devices; reported as a note until readable).
+   Apple Screen Time cross-device store (phone/iPad; silently skipped when
+   unreadable, which it is on Ix since JM never uses its GUI).
    Sources merge per-label by max (not sum) to avoid double counting.
    If `media_audit.flagged` is true (passive exceeds Toggl by >20 min),
    surface the gap and the per-app passive breakdown prominently to the user.
