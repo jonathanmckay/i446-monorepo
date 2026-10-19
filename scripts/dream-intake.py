@@ -971,37 +971,82 @@ def _annual_goals_4g():
     nits — see dream-ai-context.md 'Goal-leverage orientation'."""
     import openpyxl  # available in the intake env
     path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
-    if not path.exists():
-        return {"error": f"{path} not found", "goals": []}
-    yy = datetime.date.today().strftime("%y")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
-        sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
-                     wb.sheetnames[0])
-        ws = wb[sheet]
-        goals, tldr = [], None
-        for row in ws.iter_rows(values_only=True):
-            cells = list(row)
-            c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
-            c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
-            blob = (c0 + " " + c1).lower()
-            if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
-                tldr = (c1 or c0)
-                continue
-            # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
-            if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
-                pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
-                earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
-                goals.append({
-                    "domain": c0,
-                    "goal": c1,
-                    "target_fen": cells[2],
-                    "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
-                    "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
-                })
-        return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
-    finally:
-        wb.close()
+        if not path.exists():
+            raise FileNotFoundError(path)
+        yy = datetime.date.today().strftime("%y")
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
+                         wb.sheetnames[0])
+            ws = wb[sheet]
+            goals, tldr = [], None
+            for row in ws.iter_rows(values_only=True):
+                cells = list(row)
+                c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
+                c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
+                blob = (c0 + " " + c1).lower()
+                if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
+                    tldr = (c1 or c0)
+                    continue
+                # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
+                if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
+                    pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
+                    earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
+                    goals.append({
+                        "domain": c0,
+                        "goal": c1,
+                        "target_fen": cells[2],
+                        "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
+                        "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
+                    })
+            return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
+        finally:
+            wb.close()
+    except Exception as e:
+        # OneDrive under macOS TCC routinely denies headless/cron reads
+        # ("Operation not permitted") — which left Dream with NO annual frame
+        # at all (source returned null). Degrade gracefully to the readable
+        # vault narrative so every run still anchors to the year's bets.
+        # Permanent fix: grant Full Disk Access to the intake's python on ix
+        # (one setting that also unlocks Safari history, screen-time, iMessage).
+        return _annual_goals_4g_vault_fallback(str(e))
+
+
+def _annual_goals_4g_vault_fallback(err):
+    """Coarse annual frame from the vault Current-State note when the OneDrive
+    4g workbook is unreadable. Narrative only (no per-goal 分 targets)."""
+    year = datetime.date.today().year
+    doc = Path.home() / "vault" / "g245" / "5e4" / f"4⎡{year} Current State.md"
+    out = {"error": f"4g xlsx unreadable ({err}); using vault fallback",
+           "source": "vault-fallback", "tldr": None, "year_bets": [], "goals": []}
+    if not doc.exists():
+        return out
+    try:
+        lines = doc.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return out
+    # tl;dr line (e.g. "**tl;dr:** ...")
+    for ln in lines:
+        low = ln.lower()
+        if "tl;dr" in low:
+            out["tldr"] = ln.split(":", 1)[-1].strip(" *") if ":" in ln else ln.strip(" *")
+            break
+    # Current-year bullet block under "# Years" (a top-level "- <year>" item
+    # followed by indented sub-bullets).
+    collecting = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("-") and stripped.lstrip("- ").startswith(str(year)):
+            collecting = True
+            continue
+        if collecting:
+            # stop at the next top-level bullet or a new heading
+            if (ln and not ln[0].isspace() and stripped.startswith("-")) or stripped.startswith("#"):
+                break
+            if stripped.startswith("-"):
+                out["year_bets"].append(stripped.lstrip("- ").strip())
+    return out
 
 
 # ---------------------------------------------------------------------------
