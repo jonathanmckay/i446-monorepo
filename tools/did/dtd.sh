@@ -80,7 +80,7 @@ DONE="$STATE_DIR/completed-today.json"
 # date.today() — honor the override with no per-call plumbing. Absent or
 # malformed travel.json is silently a no-op (TZ stays whatever the OS has).
 # 2026-10-08: the zone is now daytime's full resolution — /travel override,
-# else the nearest device's zone (lib/where.py: imago → fuchikoma →
+# else the nearest device's zone (lib/where.py: imago-c → fuchikoma →
 # straylight → ix, never backwards). One python call here; the loops below
 # re-read the resolved file with zsh builtins (_dtd_tz_refresh).
 _travel_tz=$(python3 "$HOME/i446-monorepo/lib/daytime.py" --tz-env 2>/dev/null)
