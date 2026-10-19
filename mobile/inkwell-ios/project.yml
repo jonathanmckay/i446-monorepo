@@ -1,0 +1,54 @@
+# XcodeGen spec → `xcodegen generate` writes Inkwell.xcodeproj (gitignored).
+# Open the project in Xcode, pick your team under Signing & Capabilities,
+# plug in the phone, ⌘R.
+name: Inkwell
+options:
+  bundleIdPrefix: com.mckay
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  xcodeVersion: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"            # language mode 5: the dynamic [String: Any] JSON layer is not Sendable
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""            # set after Apple Developer enrollment (or choose the team in Xcode once)
+packages:
+  InkwellCore:
+    path: InkwellCore
+  VaultCore:
+    path: VaultCore
+targets:
+  Inkwell:
+    type: application
+    platform: iOS
+    sources:
+      - path: Inkwell
+    dependencies:
+      - package: InkwellCore
+        product: InkwellCore
+      - package: VaultCore
+        product: VaultCore
+    info:
+      path: Inkwell/Info.plist
+      properties:
+        CFBundleDisplayName: Inkwell
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+        # Defaults are http://100.x (Tailscale IP). ATS cannot except an IP
+        # literal, so plain http needs the global switch. Switch the endpoints
+        # to https://ix.tail9c51d5.ts.net:8560/8561 in-app to avoid it entirely.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mckay.inkwell
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
