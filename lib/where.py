@@ -1,6 +1,6 @@
 """where — which timezone JM is in, from the device nearest him.
 
-Device priority (JM, 2026-10-08): imago (iPhone) → fuchikoma (Android) →
+Device priority (JM, 2026-10-08; imago-c replaced imago 2026-10-19): imago-c (iPhone) → fuchikoma (Android) →
 straylight (laptop) → ix (home server). Each device keeps one report in the
 Syncthing-synced vault, ~/vault/z_ibx/where/<device>.json:
 
@@ -37,8 +37,8 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-PRIORITY = ["imago", "fuchikoma", "straylight", "ix"]
-PHONES = {"imago", "fuchikoma"}  # reported by the Ix servers they browse
+PRIORITY = ["imago-c", "fuchikoma", "straylight", "ix"]
+PHONES = {"imago-c", "fuchikoma"}  # reported by the Ix servers they browse
 WHERE_DIR = Path.home() / "vault" / "z_ibx" / "where"
 ACTIVE_FILE = Path.home() / ".local" / "state" / "jm" / "active_tz.json"
 SEEN_EVERY = 1800  # rewrite an unchanged report at most this often (git/Syncthing churn)

@@ -16,27 +16,27 @@ def rep(tz, since, seen):
 def test_priority_order():
     r = {"ix": rep("America/Los_Angeles", 0, 100 * H),
          "straylight": rep("Asia/Tokyo", 10 * H, 100 * H),
-         "imago": rep("Asia/Tokyo", 10 * H, 50 * H)}
-    assert where.pick(r) == ("imago", "Asia/Tokyo")
+         "imago-c": rep("Asia/Tokyo", 10 * H, 50 * H)}
+    assert where.pick(r) == ("imago-c", "Asia/Tokyo")
 
 
 def test_phone_beats_laptop_left_home():
     # laptop stayed home (Pacific, fresh); phone travelled and reported Tokyo
     r = {"straylight": rep("America/Los_Angeles", 0, 100 * H),
-         "imago": rep("Asia/Tokyo", 90 * H, 95 * H)}
+         "imago-c": rep("Asia/Tokyo", 90 * H, 95 * H)}
     assert where.pick(r)[1] == "Asia/Tokyo"
 
 
 def test_laptop_move_after_phone_last_seen_wins():
     # flew home; laptop flipped to Pacific after the phone's last Tokyo report
-    r = {"imago": rep("Asia/Tokyo", 10 * H, 50 * H),
+    r = {"imago-c": rep("Asia/Tokyo", 10 * H, 50 * H),
          "straylight": rep("America/Los_Angeles", 60 * H, 100 * H)}
     assert where.pick(r) == ("straylight", "America/Los_Angeles")
 
 
 def test_stale_phone_does_not_expire_to_ix():
     # Ix is always fresh but never moves: it must not win by freshness alone
-    r = {"imago": rep("Asia/Tokyo", 10 * H, 11 * H),
+    r = {"imago-c": rep("Asia/Tokyo", 10 * H, 11 * H),
          "ix": rep("America/Los_Angeles", 0, 1000 * H)}
     assert where.pick(r)[1] == "Asia/Tokyo"
 
@@ -61,14 +61,14 @@ def test_hold_allows_forward():
 
 def test_record_throttles_and_tracks_since(tmp_path, monkeypatch):
     monkeypatch.setattr(where, "WHERE_DIR", tmp_path)
-    assert where.record("imago", "Asia/Tokyo", now=1000)
-    assert not where.record("imago", "Asia/Tokyo", now=1100)          # throttled
-    assert where.record("imago", "Asia/Tokyo", now=1000 + where.SEEN_EVERY)
-    r = where._read("imago")
+    assert where.record("imago-c", "Asia/Tokyo", now=1000)
+    assert not where.record("imago-c", "Asia/Tokyo", now=1100)          # throttled
+    assert where.record("imago-c", "Asia/Tokyo", now=1000 + where.SEEN_EVERY)
+    r = where._read("imago-c")
     assert r["since"] == 1000 and r["seen"] == 1000 + where.SEEN_EVERY
-    assert where.record("imago", "America/Los_Angeles", now=9999)      # change: new since
-    assert where._read("imago")["since"] == 9999
-    assert not where.record("imago", "Not/AZone", now=10**6)
+    assert where.record("imago-c", "America/Los_Angeles", now=9999)      # change: new since
+    assert where._read("imago-c")["since"] == 9999
+    assert not where.record("imago-c", "Not/AZone", now=10**6)
     assert not where.record("evilbox", "Asia/Tokyo", now=10**6)
 
 
@@ -79,7 +79,7 @@ def test_peer_device_rejects_non_tailscale():
 
 def test_record_peer_accepts_phones_only(tmp_path, monkeypatch):
     monkeypatch.setattr(where, "WHERE_DIR", tmp_path)
-    monkeypatch.setattr(where, "peer_device", lambda ip: {"1": "imago", "2": "straylight"}.get(ip))
-    assert where.record_peer("1", "Asia/Tokyo") == "imago"
+    monkeypatch.setattr(where, "peer_device", lambda ip: {"1": "imago-c", "2": "straylight"}.get(ip))
+    assert where.record_peer("1", "Asia/Tokyo") == "imago-c"
     assert where.record_peer("2", "Asia/Tokyo") is None, "Macs self-report; one writer per file"
     assert not (tmp_path / "straylight.json").exists()

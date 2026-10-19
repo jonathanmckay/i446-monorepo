@@ -21,7 +21,7 @@ Resolution order for the active timezone:
      /travel command. Deliberately NOT auto-detected (IP geolocation, phone
      push, etc.) — see /travel's own docs for why.
   2. where.active_tz() (2026-10-08): the zone of the device nearest JM,
-     imago → fuchikoma → straylight → ix, never moving "today" backwards.
+     imago-c → fuchikoma → straylight → ix, never moving "today" backwards.
      Auto-detection, overriding the 2026-08-23 no-auto decision at JM's
      request; the never-backwards hold in where.py is what makes it safe for
      the equality-polling rollover logic. See lib/where.py.
