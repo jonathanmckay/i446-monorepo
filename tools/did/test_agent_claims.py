@@ -341,7 +341,8 @@ def test_release_mode_and_odd_names(hooked, monkeypatch):
                                                       {"id": "Q4", "content": "4g checkin (15) [40]"}]))
     assert "😈 claimed: 1 i9 (10) [40]" in _fast("/1i9") and "releases the claim" in _fast("/1i9")
     assert "😈 claimed: 早餐" in _fast("/早餐 toast", session="S1") and "releases" in _fast("/早餐", session="S1")
-    assert "😈 claimed: 1 -2g" in _fast("/1-2g", session="S2") and "leave the card open" in _fast("/1-2g", session="S2")
+    # 2026-10-19: /1-2g applies its own edits and closes the card, so it releases.
+    assert "😈 claimed: 1 -2g" in _fast("/1-2g", session="S2") and "releases the claim" in _fast("/1-2g", session="S2")
     assert "😈 claimed: 4g checkin" in _fast("/2026-4g-checkin 2026-Q3", session="S3")
 
 
