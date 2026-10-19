@@ -15,7 +15,8 @@ struct DtdView: View {
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                       actionIcon: "plus", onAction: { addText = ""; showAdd = true })
+                       actionIcon: "plus", onAction: { addText = ""; showAdd = true },
+                       onRetry: { store.reload() })
             taskList
         }
         .background(Theme.bg)

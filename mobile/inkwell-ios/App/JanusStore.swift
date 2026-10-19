@@ -28,8 +28,11 @@ final class JanusStore: ObservableObject {
     var status: String { lastError.map { "⚠ " + $0 } ?? base }
 
     func reload() { Task { await load() } }
+    /// Same rule as DtdStore: a failed or never-done load retries at once on
+    /// foreground; a good one only when stale.
     func refreshIfStale() {
-        guard loadedOnce, let at = loadedAt, Date().timeIntervalSince(at) > 120 else { return }
+        if lastError != nil || !loadedOnce { Task { await load() }; return }
+        guard let at = loadedAt, Date().timeIntervalSince(at) > 120 else { return }
         Task { await load() }
     }
 

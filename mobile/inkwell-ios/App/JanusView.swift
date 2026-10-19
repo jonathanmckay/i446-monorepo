@@ -17,7 +17,8 @@ struct JanusView: View {
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                       actionIcon: "plus", onAction: { fillTarget = FillTarget(gap: nil) })
+                       actionIcon: "plus", onAction: { fillTarget = FillTarget(gap: nil) },
+                       onRetry: { store.reload() })
             List {
                 ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
                     if r.isDivider {

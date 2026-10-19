@@ -1,16 +1,18 @@
-# Inkwell (iOS) — native dtd + janus (+ dashboard) for iPhone
+# inkwell-ios — three iPhone apps: dtd, janus, Inkwell
 
-Swift port of the Android client, Fuchikoma (`../neg1n-watch/fuchikoma`). One app, three
-tabs, a thin SwiftUI client over the Flask JSON APIs that already serve the
-mobile web pages on Ix. No business logic lives in the app: every swipe is one
+Swift port of the Android client, Fuchikoma (`../neg1n-watch/fuchikoma`). One
+source tree (`App/`), three XcodeGen app targets with their own home-screen
+icons (2026-10-19): **dtd** (task list), **janus** (timeline), **Inkwell**
+(vault subset + capture, plus the dashboard web view). Thin SwiftUI clients over
+the Flask JSON APIs that already serve the mobile web pages on Ix. No business logic lives in the app: every swipe is one
 POST to the endpoint the web page calls, so server fixes land on the phone
 without a rebuild.
 
-| tab       | server                           | default endpoint                              |
-|-----------|----------------------------------|-----------------------------------------------|
-| dtd       | `tools/dtd/dtd.py` (5560)        | `http://100.114.46.109:5560`                  |
-| janus     | `tools/janus/mobile.py` (5561)   | `http://100.114.46.109:5561`                  |
-| dashboard | `tools/personal-dashboard` (5558)| `https://ix.tail9c51d5.ts.net/personal/` (WKWebView) |
+| app     | bundle id          | compile flag | server                                        |
+|---------|--------------------|--------------|-----------------------------------------------|
+| dtd     | com.mckay.dtd      | APP_DTD      | `tools/dtd/dtd.py` (5560) `http://100.114.46.109:5560` |
+| janus   | com.mckay.janus    | APP_JANUS    | `tools/janus/mobile.py` (5561) `http://100.114.46.109:5561` |
+| Inkwell | com.mckay.inkwell  | APP_INKWELL  | vault: `tools/vault-mobile` (Funnel :8443/vault); dash: `https://ix.tail9c51d5.ts.net/personal/` (WKWebView) |
 | vault     | `tools/vault-mobile` (5571)      | `https://ix.tail9c51d5.ts.net:8443/vault` (Funnel, bearer token; works with the VPN off) |
 
 HTTPS alternatives via `tailscale serve` on Ix: `https://ix.tail9c51d5.ts.net:8560`
@@ -64,8 +66,15 @@ TestFlight build); Developer Mode on the iPhone (Settings › Privacy & Security
 ```
 brew install xcodegen            # already on Straylight
 cd mobile/inkwell-ios
-xcodegen generate                # writes Inkwell.xcodeproj
-open Inkwell.xcodeproj         # Signing & Capabilities → Team; plug in phone; ⌘R
+xcodegen generate                # writes Inkwell.xcodeproj (three schemes)
+# build + install all three over the cable (team is pinned in project.yml):
+UDID=$(xcrun devicectl list devices | awk '/connected/{print $3}' | head -1)
+for s in dtd janus Inkwell; do
+  xcodebuild -project Inkwell.xcodeproj -scheme $s -destination "id=$UDID" \
+    -allowProvisioningUpdates -derivedDataPath build/DerivedData build
+  xcrun devicectl device install app --device $UDID build/DerivedData/Build/Products/Debug-iphoneos/$s.app
+done
+# free Apple ID: profiles expire after 7 days → rerun the loop
 ```
 
 Checks without Xcode: `cd InkwellCore && swift run CoreCheck` (parsers and

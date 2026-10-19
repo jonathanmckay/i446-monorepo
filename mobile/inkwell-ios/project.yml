@@ -1,6 +1,6 @@
 # XcodeGen spec → `xcodegen generate` writes Inkwell.xcodeproj (gitignored).
-# Open the project in Xcode, pick your team under Signing & Capabilities,
-# plug in the phone, ⌘R.
+# Three app targets over one source tree (App/): dtd, janus, Inkwell.
+# Each target sets one compilation condition that RootView switches on.
 name: Inkwell
 options:
   bundleIdPrefix: com.mckay
@@ -15,40 +15,87 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: L3YRH72ZW7    # Jonathan McKay (Personal Team), picked in Xcode 2026-10-19
+    TARGETED_DEVICE_FAMILY: "1"
+    SUPPORTS_MACCATALYST: NO
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 packages:
   InkwellCore:
     path: InkwellCore
   VaultCore:
     path: VaultCore
+
+# Shared Info.plist keys. Defaults are http://100.x (Tailscale IP). ATS cannot
+# except an IP literal, so plain http needs the global switch. Switch the
+# endpoints to https://ix.tail9c51d5.ts.net:8560/8561 in-app to avoid it.
+_info: &info
+  CFBundleShortVersionString: $(MARKETING_VERSION)
+  CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+  UILaunchScreen: {}
+  UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+  UIUserInterfaceStyle: Dark
+  ITSAppUsesNonExemptEncryption: false
+  NSAppTransportSecurity:
+    NSAllowsArbitraryLoads: true
+
 targets:
+  dtd:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: ["Vault*.swift", "DashboardView.swift"]
+      - path: Icons/dtd.xcassets
+    dependencies:
+      - package: InkwellCore
+        product: InkwellCore
+    info:
+      path: App/Info-dtd.plist
+      properties:
+        <<: *info
+        CFBundleDisplayName: dtd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mckay.dtd
+        PRODUCT_NAME: dtd
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: APP_DTD $(inherited)
+  janus:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: ["Vault*.swift", "DashboardView.swift"]
+      - path: Icons/janus.xcassets
+    dependencies:
+      - package: InkwellCore
+        product: InkwellCore
+    info:
+      path: App/Info-janus.plist
+      properties:
+        <<: *info
+        CFBundleDisplayName: janus
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mckay.janus
+        PRODUCT_NAME: janus
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: APP_JANUS $(inherited)
   Inkwell:
     type: application
     platform: iOS
     sources:
-      - path: Inkwell
+      - path: App
+      - path: Icons/inkwell.xcassets
     dependencies:
       - package: InkwellCore
         product: InkwellCore
       - package: VaultCore
         product: VaultCore
     info:
-      path: Inkwell/Info.plist
+      path: App/Info-inkwell.plist
       properties:
+        <<: *info
         CFBundleDisplayName: Inkwell
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        UILaunchScreen: {}
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
-        UIUserInterfaceStyle: Dark
-        ITSAppUsesNonExemptEncryption: false
-        # Defaults are http://100.x (Tailscale IP). ATS cannot except an IP
-        # literal, so plain http needs the global switch. Switch the endpoints
-        # to https://ix.tail9c51d5.ts.net:8560/8561 in-app to avoid it entirely.
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mckay.inkwell
-        TARGETED_DEVICE_FAMILY: "1"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SUPPORTS_MACCATALYST: NO
+        PRODUCT_NAME: Inkwell
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: APP_INKWELL $(inherited)

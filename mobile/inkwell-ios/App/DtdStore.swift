@@ -23,9 +23,12 @@ final class DtdStore: ObservableObject {
 
     func reload() { Task { await load(refresh: true) } }
 
-    /// Foreground refresh if the list is older than the server's own cache TTL.
+    /// Foreground refresh: retry at once if the last load failed or never
+    /// happened (app opened on a plane, tailnet came up later — 2026-10-19),
+    /// otherwise only if the list is older than the server's own cache TTL.
     func refreshIfStale() {
-        guard loadedOnce, let at = loadedAt, Date().timeIntervalSince(at) > 180 else { return }
+        if lastError != nil || !loadedOnce { Task { await load(refresh: false) }; return }
+        guard let at = loadedAt, Date().timeIntervalSince(at) > 180 else { return }
         Task { await load(refresh: false) }
     }
 

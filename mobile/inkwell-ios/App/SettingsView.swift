@@ -1,6 +1,8 @@
 import SwiftUI
 import InkwellCore
+#if APP_INKWELL
 import VaultCore
+#endif
 
 /// Endpoints (long-press any header). Persisted in UserDefaults, so a moved
 /// service never needs a rebuild. Saved → both stores reload.
@@ -10,8 +12,10 @@ struct SettingsView: View {
     @State private var dtd = InkwellConfig.dtdBase
     @State private var janus = InkwellConfig.janusBase
     @State private var dash = InkwellConfig.dashboardURL
+    #if APP_INKWELL
     @State private var vaultBase = VaultConfig.base
     @State private var vaultToken = VaultConfig.token
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -19,12 +23,14 @@ struct SettingsView: View {
                 Section("dtd base") { field($dtd) }
                 Section("janus base") { field($janus) }
                 Section("dashboard url") { field($dash) }
+                #if APP_INKWELL
                 Section("vault base") { field($vaultBase) }
                 Section {
                     SecureField("bearer token", text: $vaultToken).font(Theme.monoSmall)
                 } header: { Text("vault token") } footer: {
                     Text("mint on ix: python3 tools/vault-mobile/server.py token <device>")
                 }
+                #endif
                 Section {
                     Button("defaults") {
                         InkwellConfig.resetToDefaults()
@@ -42,9 +48,11 @@ struct SettingsView: View {
                         InkwellConfig.dtdBase = dtd
                         InkwellConfig.janusBase = janus
                         InkwellConfig.dashboardURL = dash
+                        #if APP_INKWELL
                         VaultConfig.base = vaultBase
                         VaultConfig.token = vaultToken
                         VaultTabStore.shared.runSync(force: true)
+                        #endif
                         onSave(); dismiss()
                     }
                 }

@@ -265,11 +265,16 @@ def media_minutes_from_screentime(day: date) -> dict | None:
     """Per-label media minutes from the Screen Time cross-device store ON IX.
 
     Straylight is Intune-managed (TCC/Screen Time policy-locked), so the sync
-    target is Ix — personal, un-enrolled, already /0t's ssh workhorse. Requires
-    on Ix: Remote Login's "allow full disk access for remote users" + Screen
-    Time App & Website Activity + Share Across Devices (and on the iPhone).
-    Returns None when unreadable/absent. Schema per DFIR documentation of
-    RMAdminStore (USAGE tables) — treat failures as absence.
+    target is Ix — personal, un-enrolled, already /0t's ssh workhorse.
+
+    DEAD END (verified 2026-10-19): on macOS 26.5 the com.apple.ScreenTimeAgent
+    folder under DARWIN_USER_DIR is a SIP data vault. With Remote Login's
+    "allow full disk access for remote users" ON (Safari/Mail/Messages read
+    fine over ssh) it still returns EPERM, and sudo would not help either.
+    Only SIP-off or Apple-entitled processes can open it. Left in place so it
+    works if that ever changes; until then this source is always None and
+    phone/iPad media time is not audited.
+    Schema per DFIR documentation of RMAdminStore (USAGE tables).
     """
     apple = 978307200  # 2001-01-01 epoch offset
     lo = int(datetime.combine(day, datetime.min.time(), tzinfo=_local_tz()).timestamp()) - apple
