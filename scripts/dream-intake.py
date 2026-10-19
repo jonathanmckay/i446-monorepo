@@ -415,6 +415,21 @@ def _appfolio_rent_roll():
 # Source 5: appfolio_work_orders
 # ---------------------------------------------------------------------------
 
+# AppFolio's work_order report status enum. A WO counts as "open" unless it is
+# in a terminal (closed) state. See _appfolio_work_orders for the full history.
+_WO_CLOSED_STATUSES = {"completed", "complete", "canceled", "cancelled", "closed"}
+
+
+def _wo_is_open(status: str) -> bool:
+    """True if an AppFolio work-order status represents an open WO.
+
+    The open statuses (New/Scheduled/Assigned/Estimated/In Progress/On Hold)
+    share no common substring, so detection is by exclusion of the closed set.
+    """
+    s = (status or "").strip().lower()
+    return bool(s) and s not in _WO_CLOSED_STATUSES
+
+
 @source("appfolio_work_orders", "AppFolio open/overdue work orders by property")
 def _appfolio_work_orders():
     vhost = _CREDS.get("af_vhost", "")
@@ -431,6 +446,11 @@ def _appfolio_work_orders():
     results = data.get("results", [])
 
     today = datetime.date.today()
+    # The old filter tested for the substrings "open"/"in progress"/"pending",
+    # which match NONE of the actual open statuses (New/Scheduled/Assigned/
+    # Estimated) -> reported total_open=0 against ~1,270 genuinely-open WOs
+    # (v162 fix; same diagnosis first staged on the unmerged dream/2026.06.03
+    # branch). _wo_is_open inverts the test. See _WO_CLOSED_STATUSES above.
     by_property: dict[str, dict] = {}
     for row in results:
         prop = row.get("property_name", row.get("property", "Unknown"))
@@ -439,14 +459,19 @@ def _appfolio_work_orders():
         p = by_property[prop]
         p["total"] += 1
 
-        status = (row.get("status", "") or "").lower()
-        if "open" in status or "in progress" in status or "pending" in status:
+        if _wo_is_open(row.get("status", "")):
             p["open"] += 1
-            # Check overdue
-            due = row.get("due_date", "")
+            # Check overdue. AppFolio's work_order report has no generic
+            # due_date; fall back through the SLA-ish date fields it does expose.
+            due = (
+                row.get("scheduled_end")
+                or row.get("follow_up_on")
+                or row.get("due_date")
+                or ""
+            )
             if due:
                 try:
-                    due_date = datetime.date.fromisoformat(due[:10])
+                    due_date = datetime.date.fromisoformat(str(due)[:10])
                     if due_date < today:
                         p["overdue"] += 1
                 except ValueError:
