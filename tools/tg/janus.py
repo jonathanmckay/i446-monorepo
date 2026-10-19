@@ -4946,6 +4946,9 @@ def _is_points_log_cmd(part: str) -> bool:
 
 
 _D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
+# Trailing form (2026-10-19): "QBR in person [180] /d". Without it the text fell
+# through to the plain timer path and the literal "/d" became the Toggl description.
+_D_TRAIL_RE = re.compile(r"^(\S.*?)\s+/d$", re.S)
 _ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
 
 
@@ -5308,10 +5311,15 @@ def parse_d_command(text: str) -> tuple[str, str] | None:
     (N)/[N] and @code (agent_claims.new_task turns @code into the label); the
     timer drops the bracketed annotations so tg-fast doesn't name a timer
     "... [20]". None when the text isn't a /d command."""
-    m = _D_CMD_RE.match(text.strip())
-    if not m:
-        return None
-    content = m.group(1).strip()
+    t = text.strip()
+    m = _D_CMD_RE.match(t)
+    if m:
+        content = m.group(1).strip()
+    else:
+        m = _D_TRAIL_RE.match(t)
+        if not m:
+            return None
+        content = m.group(1).strip()
     timer = " ".join(_ANNOT_RE.sub("", content).split())
     if not timer or not [w for w in timer.split() if not w.startswith("@")]:
         return None

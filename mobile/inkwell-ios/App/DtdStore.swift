@@ -15,11 +15,23 @@ final class DtdStore: ObservableObject {
 
     private let api = Api()
     private var loadedAt: Date? = nil
+    private var cachedAt: Date? = nil
     private var base: String { InkwellConfig.dtdBase }
     private let toast = Toaster.shared
 
+    init() {
+        // Paint the last known list immediately; the fetch in .task refreshes it.
+        if let (j, at) = PayloadCache.load("dtd") {
+            tasks = Parsers.tasks(j); summary = Parsers.summary(j); cachedAt = at
+        }
+    }
+
     var title: String { "\(summary.points)分 · dtd · \(summary.done) done · \(tasks.count) left" }
-    var status: String { lastError.map { "⚠ " + $0 } ?? base }
+    var status: String {
+        if let e = lastError { return "⚠ " + e }
+        if !loadedOnce, let at = cachedAt { return "cached \(PayloadCache.clock(at)) · refreshing…" }
+        return base
+    }
 
     func reload() { Task { await load(refresh: true) } }
 
@@ -42,6 +54,7 @@ final class DtdStore: ObservableObject {
             loadedAt = Date()
             tasks = Parsers.tasks(j)
             summary = Parsers.summary(j)
+            PayloadCache.save("dtd", j)
         case .error(let m):
             lastError = m
         }

@@ -14,11 +14,17 @@ struct JanusView: View {
         let gap: TimelineRow?
     }
 
+    @State private var cmd = ""
+    @FocusState private var cmdFocused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        actionIcon: "plus", onAction: { fillTarget = FillTarget(gap: nil) },
                        onRetry: { store.reload() })
+            commandBar
+            CurrentTimerCard(row: store.running, busy: store.busy,
+                             onDone: { r in store.onRight(r) }, onEdit: { r in editTarget = r })
             List {
                 ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
                     if r.isDivider {
@@ -59,15 +65,106 @@ struct JanusView: View {
             .refreshable { await store.load() }
         }
         .background(Theme.bg)
-        .task { if !store.loadedOnce { await store.load() } }
+        .task {
+            if !store.loadedOnce { await store.load() }
+            // "open with the text box" (2026-10-19): the command bar takes focus on launch.
+            try? await Task.sleep(for: .milliseconds(350))
+            cmdFocused = true
+        }
         .sheet(item: $fillTarget) { t in
-            FillSheet(gap: t.gap) { desc, start, end in store.fill(desc: desc, start: start, end: end) }
+            FillSheet(gap: t.gap) { desc, start, end, project in
+                store.fill(desc: desc, start: start, end: end, project: project) }
         }
         .sheet(item: $editTarget) { r in
             EditSheet(row: r, loadCodes: { await store.projectCodes() },
                       onSave: { d, s, e, p in store.edit(r, desc: d, start: s, end: e, project: p) },
                       onSplit: { mode in store.split(r, mode: mode) })
         }
+    }
+}
+
+extension JanusView {
+    /// Same command bar as the web page: whatever the CLI accepts.
+    var commandBar: some View {
+        HStack(spacing: 8) {
+            TextField("coffee 1400-1415 @epcn · same as the CLI", text: $cmd)
+                .font(Theme.mono).foregroundStyle(Theme.fg)
+                .focused($cmdFocused)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .submitLabel(.go)
+                #endif
+                .onSubmit { submit() }
+            Button(action: submit) { Image(systemName: "return").font(.title3) }
+                .buttonStyle(.plain).foregroundStyle(cmd.isEmpty ? Theme.dim : Theme.accent)
+                .disabled(cmd.isEmpty || store.busy)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color(white: 0.1)).clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 14).padding(.bottom, 6)
+    }
+
+    private func submit() {
+        let t = cmd.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        cmd = ""
+        store.run(t)
+    }
+}
+
+/// The live timer, pinned above the list: description in its project color,
+/// project · since · elapsed (ticks every second), done / edit buttons.
+struct CurrentTimerCard: View {
+    let row: TimelineRow?
+    let busy: Bool
+    var onDone: (TimelineRow) -> Void
+    var onEdit: (TimelineRow) -> Void
+
+    var body: some View {
+        Group {
+            if let r = row {
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("▶ " + r.desc + (r.tags.isEmpty ? "" : "  #" + r.tags.joined(separator: " #")))
+                                .font(Theme.mono).foregroundStyle(Color(hex: r.color)).lineLimit(2)
+                            Text([r.project.isEmpty ? nil : "@" + r.project, "since " + r.start,
+                                  CurrentTimerCard.elapsed(since: r.start, now: ctx.date),
+                                  r.points.map { "\($0)分" }].compactMap { $0 }.joined(separator: " · "))
+                                .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                        }
+                        Spacer(minLength: 6)
+                        Button { onEdit(r) } label: { Image(systemName: "pencil").font(.title3) }
+                            .buttonStyle(.plain).foregroundStyle(Theme.edit)
+                        Button { onDone(r) } label: { Image(systemName: "checkmark.circle.fill").font(.title) }
+                            .buttonStyle(.plain).foregroundStyle(Theme.done)
+                    }
+                    .disabled(busy)
+                }
+            } else {
+                Text("no timer running · type above to start one")
+                    .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color(white: 0.07)).clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 14).padding(.bottom, 6)
+    }
+
+    /// "HH:MM" start today → "1h07m" / "42m". Past midnight the start was
+    /// yesterday; janus splits at the day barrier, so treat it as today.
+    static func elapsed(since hhmm: String, now: Date) -> String {
+        let parts = hhmm.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return "" }
+        var c = Calendar.current.dateComponents([.year, .month, .day], from: now)
+        c.hour = parts[0]; c.minute = parts[1]; c.second = 0
+        guard let start = Calendar.current.date(from: c) else { return "" }
+        var secs = Int(now.timeIntervalSince(start))
+        if secs < 0 { secs += 86400 }
+        let h = secs / 3600, m = (secs % 3600) / 60, s = secs % 60
+        return h > 0 ? String(format: "%dh%02dm", h, m) : String(format: "%dm%02ds", m, s)
     }
 }
 
@@ -109,17 +206,24 @@ struct TimelineRowView: View {
 /// Fill a gap (start/end prefilled) or start something "now" (ongoing).
 struct FillSheet: View {
     let gap: TimelineRow?
-    var onSave: (String, String, String) -> Void
+    var onSave: (String, String, String, String) -> Void   // desc, start, end, project
     @Environment(\.dismiss) private var dismiss
     @State private var desc = ""
     @State private var start = ""
     @State private var end = ""
+    @State private var project = ""
     @State private var ongoing = false
+    @FocusState private var descFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("description  (@code picks the project)", text: $desc)
+                TextField("description", text: $desc).focused($descFocused)
+                TextField("project code (or @code in the description)", text: $project)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
                 TextField("start HH:MM", text: $start)
                 Toggle("ongoing (no end)", isOn: $ongoing)
                 if !ongoing { TextField("end HH:MM", text: $end) }
@@ -133,7 +237,8 @@ struct FillSheet: View {
                         let d = desc.trimmingCharacters(in: .whitespaces)
                         guard !d.isEmpty else { Toaster.shared.show("description required"); return }
                         onSave(d, start.trimmingCharacters(in: .whitespaces),
-                               ongoing ? "" : end.trimmingCharacters(in: .whitespaces))
+                               ongoing ? "" : end.trimmingCharacters(in: .whitespaces),
+                               project.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "@")))
                         dismiss()
                     }
                 }
@@ -145,6 +250,7 @@ struct FillSheet: View {
                 let f = DateFormatter(); f.dateFormat = "HH:mm"
                 start = f.string(from: Date()); ongoing = true
             }
+            descFocused = true
         }
         .sheetMedium()
     }
@@ -169,8 +275,21 @@ struct EditSheet: View {
                 TextField("description", text: $desc)
                 TextField("start HH:MM", text: $start)
                 TextField(row.running ? "end (blank = still running)" : "end HH:MM", text: $end)
-                Picker("project", selection: $project) {
-                    ForEach(codes, id: \.self) { Text($0.isEmpty ? "–" : $0).tag($0) }
+                TextField("project code (free text)", text: $project)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                if codes.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(codes.filter { !$0.isEmpty }, id: \.self) { c in
+                                Button(c) { project = c }
+                                    .font(Theme.monoSmall).buttonStyle(.bordered)
+                                    .tint(c == project ? Theme.accent : Theme.dim)
+                            }
+                        }
+                    }
                 }
                 Section {
                     Button("split ▲ (keep top)") { onSplit("top"); dismiss() }

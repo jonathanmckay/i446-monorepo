@@ -14,6 +14,10 @@ struct VaultView: View {
     @State private var query = ""
     @State private var showCapture = false
     @State private var path = NavigationPath()
+    @State private var openedInbox = false
+    /// Where the app lands (2026-10-19): the notes inbox, the one file worth
+    /// reading on a phone first. Falls back to the list until it has synced.
+    static let landing = "z_ibx/new-notes.md"
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -31,7 +35,14 @@ struct VaultView: View {
             .navigationDestination(for: DirEntry.self) { d in FolderView(store: store, dir: d.path) }
         }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
-        .task { store.syncIfStale() }
+        .task { store.syncIfStale(); openInboxOnce() }
+        .onChange(of: store.fileCount) { _, _ in openInboxOnce() }
+    }
+
+    private func openInboxOnce() {
+        guard !openedInbox, path.isEmpty, store.read(VaultView.landing) != nil else { return }
+        openedInbox = true
+        path.append(VaultView.landing)
     }
 
     @ViewBuilder private var content: some View {

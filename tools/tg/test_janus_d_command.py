@@ -25,6 +25,14 @@ def test_parse_d_command_splits_todo_content_from_timer():
         "plane, then bags {10}", "plane, then bags")
 
 
+def test_parse_d_command_accepts_trailing_marker_without_leaking_it_into_timer():
+    # Bug 2026-10-19: "QBR in person [180] /d" started a Toggl timer named
+    # "QBR in person [180] /d" instead of creating the task.
+    mod = _load()
+    assert mod.parse_d_command("QBR in person [180] /d") == (
+        "QBR in person [180]", "QBR in person")
+
+
 def test_parse_d_command_ignores_non_d_input():
     mod = _load()
     for text in ("/done", "/d", "/d   ", "/d [20]", "/d @i9", "d foo", "read /d foo", "/did x"):
