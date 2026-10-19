@@ -379,3 +379,37 @@ def test_0g_claims_its_card_and_says_skill_releases(hooked, monkeypatch):
     assert "😈 claimed: 0g (4) [8]" in out and "releases the claim" in out
     assert (hooked / "by-session" / "S9").read_text().strip() == "G0"
     assert _fast("/0gx", session="S8") == ""
+
+
+# ── bare `/d` (2026-10-19): claim the task this THREAD is doing; the hook
+#    only hands the model the surfaced list, the model picks or creates. ──
+
+def test_bare_d_hands_model_the_surfaced_list_and_claims_nothing(hooked):
+    out = _fast("/d")
+    assert out.startswith("[claim hook] bare /d")
+    assert "T1: source logging (30) [20]" in out and "T2: source review" in out
+    assert "agent_claims.py claim <id>" in out and "agent_claims.py new" in out
+    assert "THREAD" in out, "must steer the model to the thread's deliverable, not the last message"
+    assert ac.load(hooked) == {}, "bare /d must not claim or create anything in the hook"
+
+
+def test_bare_d_with_trailing_space_is_still_bare(hooked):
+    assert _fast("/d ").startswith("[claim hook] bare /d")
+    assert ac.load(hooked) == {}
+
+
+def test_bare_d_lists_only_surfaced_sections(hooked):
+    tq = {"today": [{"id": "A", "content": "alpha (10) [5]"}],
+          "关键路径": [{"id": "C", "content": "critical"}],
+          "0neon": [{"id": "H", "content": "0t"}],
+          "1neon": [{"id": "W", "content": "1 xk88"}]}
+    out = ac.bare_d_line(ac.all_tasks(tq), None, tq)
+    assert "C: critical" in out and "A: alpha" in out
+    assert "H: 0t" not in out and "W: 1 xk88" not in out, "habit cards are never a thread's task"
+    assert out.index("C: critical") < out.index("A: alpha"), "critical path first"
+
+
+def test_zsh_hook_prefilter_routes_bare_d_to_python():
+    """`"prompt": "/d"` must reach python: the alternation allows a closing quote after /d."""
+    src = HOOK.read_text()
+    assert '([[:space:]]|")' in src

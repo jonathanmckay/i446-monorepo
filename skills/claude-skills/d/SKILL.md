@@ -1,6 +1,6 @@
 ---
 name: "d"
-description: "Tie this session to a dtd task (→dtd): moves it to the top of dtd with a live spinner while you work, then does the request. No match in dtd = it creates the task first, then claims it. Usage: /d <task>[: request] | /d new <task>[: request] | /d off"
+description: "Tie this session to a dtd task (→dtd): moves it to the top of dtd with a live spinner while you work, then does the request. No match in dtd = it creates the task first, then claims it. Bare /d picks (or creates) the task for what this thread is accomplishing. Usage: /d [<task>[: request]] | /d new <task>[: request] | /d off"
 user-invocable: true
 ---
 
@@ -13,6 +13,20 @@ user-invocable: true
   token becomes its label), then claims it, so work that isn't in dtd yet
   still shows up there as underway.
 - `/d off` releases.
+- **Bare `/d`** (2026-10-19) attaches this session to the task it is *already*
+  working on. The hook leaves a `[claim hook] bare /d ...` line listing the
+  surfaced dtd tasks with ids. Then:
+  1. State the **thread goal**: the deliverable this whole conversation is
+     producing, not the latest message. One line, ≤ 8 words, names the output
+     ("fix -1n points lost to hung Excel", "cc-pick phone labels").
+  2. Pick the surfaced task that IS that work (same deliverable, not merely the
+     same domain). If one fits →
+     `python3 ~/i446-monorepo/tools/did/agent_claims.py claim <id>`.
+  3. If none fits → create it from the thread goal, with estimates and label
+     inferred exactly as /todo does:
+     `python3 ~/i446-monorepo/tools/did/agent_claims.py new "<thread goal> (N) [N] @code"`.
+  4. Confirm in one line: `😈 claimed: <task>` or `created and 😈 claimed: <task>`.
+  Never ask which task; never claim a look-alike just because it shares a domain.
 
 The UserPromptSubmit hook (`scripts/agent-claim-hook.sh` → `agent_claims.py hook`)
 already did the work before you saw this prompt, and left one line in your
