@@ -17,15 +17,29 @@ final class JanusStore: ObservableObject {
 
     private let api = Api()
     private var loadedAt: Date? = nil
+    private var cachedAt: Date? = nil
     private var base: String { InkwellConfig.janusBase }
     private let toast = Toaster.shared
+
+    init() {
+        if let (j, at) = PayloadCache.load("janus") {
+            let t = Parsers.timeline(j); timeline = t; rows = t.rows; cachedAt = at
+        }
+    }
+
+    /// The live Toggl entry, if any (the top card + what the command bar acts on).
+    var running: TimelineRow? { rows.first { $0.running } }
 
     var title: String {
         let pts = timeline?.points.map { "\($0)分" } ?? "–分"
         let tracked = timeline.map { String(format: "%d:%02d", $0.trackedMin / 60, $0.trackedMin % 60) } ?? "0:00"
         return "\(pts) · janus · \(tracked) tracked"
     }
-    var status: String { lastError.map { "⚠ " + $0 } ?? base }
+    var status: String {
+        if let e = lastError { return "⚠ " + e }
+        if !loadedOnce, let at = cachedAt { return "cached \(PayloadCache.clock(at)) · refreshing…" }
+        return base
+    }
 
     func reload() { Task { await load() } }
     /// Same rule as DtdStore: a failed or never-done load retries at once on
@@ -43,6 +57,7 @@ final class JanusStore: ObservableObject {
             loadedOnce = true; lastError = nil; loadedAt = Date()
             let t = Parsers.timeline(j)
             timeline = t; rows = t.rows
+            PayloadCache.save("janus", j)
         case .error(let m):
             lastError = m
         }
@@ -85,8 +100,18 @@ final class JanusStore: ObservableObject {
         }
     }
 
-    func fill(desc: String, start: String, end: String) {
-        act("/api/fill", Bodies.fill(desc: desc, start: start, end: end)) { _ in "saved ✓" }
+    /// The CLI's typed-command path (web command bar): "coffee @epcn",
+    /// "1400 coffee", "0000-0550 睡觉", "+5", "/d <task>". Server routes each
+    /// comma-separated part to tg-fast or did-fast.
+    func run(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        act("/api/run", ["text": t]) { d in d.string("msg", "ok ✓") }
+    }
+
+    func fill(desc: String, start: String, end: String, project: String = "") {
+        act("/api/fill", Bodies.fill(desc: desc, start: start, end: end, project: project)) { d in
+            d.bool("running") ? "▶ started" + (d.string("project").isEmpty ? "" : " → " + d.string("project")) + " ✓" : "saved ✓" }
     }
     func edit(_ r: TimelineRow, desc: String, start: String, end: String, project: String) {
         act("/api/edit", Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project)) { _ in "edited ✓" }

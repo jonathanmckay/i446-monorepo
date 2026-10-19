@@ -112,6 +112,8 @@ do {
     eq(ev["start_iso"] as? String, "2026-09-24T12:30:00-07:00", "event start_iso")
     eq(Bodies.split(id: "1", mode: "bottom")["mode"] as? String, "bottom", "split mode")
     eq(Bodies.fill(desc: "nap", start: "13:00", end: "")["end"] as? String, "", "fill open end")
+    check(Bodies.fill(desc: "nap", start: "13:00", end: "")["project"] == nil, "fill omits empty project")
+    eq(Bodies.fill(desc: "nap", start: "13:00", end: "", project: "hcb")["project"] as? String, "hcb", "fill carries project")
     for b in [log, ev, Bodies.done(Parsers.tasks(JSON.parse(tasksJson)!)[0])] {
         check(JSONSerialization.isValidJSONObject(b), "body serializes")
     }
