@@ -30,8 +30,48 @@ CS = Path.home() / 'i446-monorepo' / 'tools' / 'cs' / 'cs.py'
 CC = Path.home() / 'vault' / 'i447' / 'i446' / 'claude-tracked'
 PROJECTS = Path.home() / '.claude' / 'projects'
 NEW = '__new__'
-RECENT = 10          # idle local sessions shown under the live ones
+RECENT = 10          # idle local sessions a host lists (--list); the phone shows MAX_ROWS of the merged set
+MAX_ROWS = 4         # sessions on the phone picker besides "+ new" (JM 2026-10-18: "4 max")
 SSH_TIMEOUT = 4
+SESSION_SHORT = Path.home() / 'i446-monorepo' / 'tools' / 'cs' / 'session_short.py'
+
+
+def load_session_short():
+    try:
+        loader = importlib.machinery.SourceFileLoader('session_short', str(SESSION_SHORT))
+        spec = importlib.util.spec_from_loader('session_short', loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+_SS = None
+
+
+def display_title(sid, title):
+    """The phone-width label: the Haiku topic label cached by session_short
+    (precomputed by the session-title hook; never computed here, a pick must
+    not wait on an API call), else the raw title cut to the same width."""
+    global _SS
+    if _SS is None:
+        _SS = load_session_short() or False
+    cap = _SS.CAP if _SS else 28
+    if _SS:
+        try:
+            short = _SS.cached_short(sid, title)
+            if short:
+                return short
+        except Exception:
+            pass
+    return title[:cap]
+
+
+def cap_rows(remote, local, limit=MAX_ROWS):
+    """Merge remote panes (first) and local rows, keeping the first `limit`.
+    Both lists arrive in priority order (panes, other live, then idle by age)."""
+    return (list(remote) + list(local))[:limit]
 
 
 def load_cs():
@@ -64,12 +104,13 @@ def local_rows(cs):
     for path, r in sorted(idx.items(), key=lambda kv: (kv[1]['id'] not in nums, nums.get(kv[1]['id'], 0),
                                                        -kv[1]['mtime'])):
         sid, title = r['id'], cs.title_of(r)
+        shown = display_title(sid, title)
         if sid in nums:
-            label = f'{nums[sid]:>2}     {cs.mark_of(r)} {title[:46]}'
+            label = f'{nums[sid]:>2}     {cs.mark_of(r)} {shown}'
         elif sid in live:
-            label = f' ·     {cs.mark_of(r)} {title[:46]}'
+            label = f' ·     {cs.mark_of(r)} {shown}'
         else:
-            label = f'   {cs.age(r["mtime"]):>4} {cs.mark_of(r)} {title[:46]}'
+            label = f'   {cs.age(r["mtime"]):>4} {cs.mark_of(r)} {shown}'
         out.append((label, sid, sid in live, path, title))
     n_live = sum(1 for row in out if row[2])
     return out[:n_live + RECENT]
@@ -89,7 +130,9 @@ def remote_rows(host):
         if len(parts) < 5 or parts[2] != 'live':
             continue
         label, sid, _, path, title = parts[:5]
-        out.append((f'{label[:52]:<52} {host[:3]}', sid, True, path, title, host))
+        # 40 = number(2)+pad(5)+mark(2)+space+28-char label; wider padding pushed
+        # the host tag off a portrait phone screen (~48 cols).
+        out.append((f'{label[:40]:<40} {host[:3]}', sid, True, path, title, host))
     return out
 
 
@@ -123,10 +166,11 @@ def main(argv):
         return
     if not shutil.which('fzf'):
         sys.exit('cc-pick: fzf not installed')
-    table = [(' +     new session', NEW, False, '', '', None)]
+    remote = []
     for host in remote_hosts():
-        table += remote_rows(host)
-    table += [(label, sid, live, str(path), title, None) for label, sid, live, path, title in mine]
+        remote += remote_rows(host)
+    local = [(label, sid, live, str(path), title, None) for label, sid, live, path, title in mine]
+    table = [(' +     new session', NEW, False, '', '', None)] + cap_rows(remote, local)
     lines = '\n'.join(f'{row[0]}\t{i}' for i, row in enumerate(table))
     r = subprocess.run(['fzf', '--no-sort', '--layout=reverse', '--height=100%', '--delimiter=\t',
                         '--with-nth=1', '--prompt=session> ', '--header=panes/live → fork · idle → resume'],

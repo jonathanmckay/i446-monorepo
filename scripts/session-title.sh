@@ -26,6 +26,10 @@ PY
 state=~/.local/state/jm/session-titles; mkdir -p "$state"
 sid=$(printf '%s' "$input" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null)
 [ -n "$sid" ] && printf '%s\n' "$title" > "$state/$sid"
+# Precompute the phone-width Haiku topic label for cc-pick (Imago) in the
+# background: the picker only reads the cache, so this is the one place the
+# API call happens. Fully detached — the hook must return immediately.
+[ -n "$sid" ] && (nohup python3 ~/i446-monorepo/tools/cs/session_short.py "$sid" "$title" >/dev/null 2>&1 &)
 if [ -n "$CMUX_PANEL_ID" ] && command -v cmux >/dev/null 2>&1; then
   # `cs retitle` renames every numbered Claude pane in this workspace to "N · title" (reading
   # order), so each session's hook also refreshes its neighbours' numbers. If it did not cover
