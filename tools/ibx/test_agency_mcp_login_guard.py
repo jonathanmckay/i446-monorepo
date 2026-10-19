@@ -60,6 +60,7 @@ def test_get_server_reuses_healthy_server_without_checking_safari(monkeypatch):
 
 def test_no_login_tab_means_normal_path(monkeypatch):
     monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: None)
     monkeypatch.setattr(am, "get_server", lambda name: 1)
     monkeypatch.setattr(am, "_call_tool_once", lambda *a: {"ok": True})
     assert am.call_tool("calendar", "ListEvents", {}) == {"ok": True}
@@ -76,6 +77,11 @@ def test_remote_endpoint_skips_guard(monkeypatch):
 def test_guard_is_cached_per_burst(monkeypatch):
     calls = []
     monkeypatch.setattr(am, "_safari_login_tab", lambda: calls.append(1) or None)
+    # Stub Chrome too: since entra_login_pending now consults
+    # `_safari_login_tab() or _chrome_login_tab()`, leaving Chrome unstubbed
+    # runs the real (slow, 10s-per-host) AppleScript on every call, which blows
+    # the _LOGIN_TAB_TTL cache and makes this burst-caching assertion fail.
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: None)
     monkeypatch.setattr(am, "get_server", lambda name: 1)
     monkeypatch.setattr(am, "_call_tool_once", lambda *a: {})
     for _ in range(5):

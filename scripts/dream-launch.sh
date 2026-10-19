@@ -91,7 +91,20 @@ mkdir -p "$RUN_DIR/logs" "$RUN_DIR/staged" "$RUN_DIR/drafts" "$RUN_DIR/approvals
 # --- Backfill date tracking ---
 # Each night, Dream also scans one historical day's conversation logs.
 # State file tracks the backfill pointer; advances one day back each run.
-BACKFILL_STATE="$DREAM_RUNS/.backfill-pointer"
+# Host-local (2026-10-19): this pointer used to live under $DREAM_RUNS, a
+# Syncthing-synced vault path. A second host's dream run (and an older script
+# writing a bare `date` string) clobbered it nightly — 142 "corrupted backfill
+# pointer" resets since May, which also silently defeated the backfill (it kept
+# resetting to yesterday and never advanced). Dream runs on one host; its state
+# belongs on that host's disk, off the synced volume.
+BACKFILL_STATE="$HOME/.cache/dream/backfill-pointer"
+mkdir -p "$(dirname "$BACKFILL_STATE")"
+# One-time migration: seed from the old synced pointer only if it is still valid.
+_OLD_BACKFILL_STATE="$DREAM_RUNS/.backfill-pointer"
+if [[ ! -f "$BACKFILL_STATE" && -f "$_OLD_BACKFILL_STATE" ]]; then
+  _OLD_VAL=$(cat "$_OLD_BACKFILL_STATE" 2>/dev/null)
+  [[ "$_OLD_VAL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && echo "$_OLD_VAL" > "$BACKFILL_STATE"
+fi
 BACKFILL_STOP="2026-03-01"  # stop when we reach March 1
 if [[ -f "$BACKFILL_STATE" ]]; then
   BACKFILL_DATE=$(cat "$BACKFILL_STATE")
