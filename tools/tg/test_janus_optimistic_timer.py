@@ -102,3 +102,27 @@ def test_handlers_go_optimistic_before_the_job():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_optimistic_start_paints_project_from_first_frame(monkeypatch):
+    """Bug 2026-10-19: the row shown at timer start had project_id None, so it
+    rendered uncolored until Toggl's /current caught up seconds later. The
+    project is now resolved locally: explicit @code, then tg-fast's shortcode
+    table, then the task-queue label."""
+    pm = {"i9": 209635316, "hcm": 108359995}
+    monkeypatch.setattr(J, "PROJECT_MAP", pm, raising=False)
+    J.STATE.current = None
+    J._optimistic_start("deep work", raw="deep work @i9")
+    assert J.STATE.current["project_id"] == pm["i9"]
+    J._optimistic_start("stats", raw="stats")           # tg-fast shortcode -> i9
+    assert J.STATE.current["project_id"] == pm["i9"]
+    J._optimistic_start("冥想")                          # raw defaults to desc
+    assert J.STATE.current["project_id"] == pm["hcm"]
+    J._optimistic_start("no such thing xyz", raw="no such thing xyz @nope")
+    assert J.STATE.current["project_id"] is None
+
+
+def test_switch_and_d_paths_pass_the_raw_command():
+    i_sw = SRC.index("_optimistic_start(desc, raw=bare)")
+    i_d = SRC.index("_optimistic_start(\" \".join(w for w in timer.split() if not w.startswith(\"@\")), raw=timer)")
+    assert i_sw > 0 and i_d > 0

@@ -18,7 +18,7 @@
       "ArtifactComments"
     ]
   },
-  "model": "haiku",
+  "model": "fable",
   "hooks": {
     "PermissionRequest": [
       {
