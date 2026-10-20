@@ -1852,6 +1852,54 @@ end tell'''
     return script
 
 
+def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
+                        src: Optional[str] = None):
+    """0n habit writes through the excel-http daemon (POST /batch_write), one
+    round-trip, journaled + double-written to the semantic ledger
+    (Neon-off-Excel step 2, 2026-10-19). Returns a CompletedProcess-shaped
+    object whose stdout mimics build_0n_script's echo
+    ("OK:row=N|<col>=<val>|...\nPRE\t<col>\t<prev>") so verify_0n_output and
+    parse_pre_lines (ctrl-z pre-images) are unchanged; None when the daemon
+    is unreachable or refuses, in which case the caller falls back to the raw
+    AppleScript path. Cumulative habits (CUMULATIVE_0N) use mode "add"."""
+    if not writes:
+        return None
+    body = []
+    for w in writes:
+        body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
+                     "mode": "add" if w.item.name in CUMULATIVE_0N else "set"})
+    try:
+        resp = neon_excel.batch_write(
+            "0n", body, date=target_date,
+            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+    except Exception as e:  # noqa: BLE001
+        print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
+        return None
+    if not resp or not resp.get("ok") or resp.get("fallback"):
+        print(f"0n daemon write unavailable ({(resp or {}).get('error')}), falling back to ix-osa",
+              file=sys.stderr)
+        return None
+    results = resp.get("results") or []
+    if len(results) != len(writes):
+        print(f"0n daemon write echo mismatch ({len(results)}/{len(writes)}); treating as failed",
+              file=sys.stderr)
+        return None
+    echo = f"OK:row={resp.get('row')}|"
+    pre_lines = []
+    for w, r in zip(writes, results):
+        echo += f"{w.col_num}={r.get('value', '')}|"
+        prev = r.get("before_value") or ""
+        if prev == "missing value":
+            prev = ""
+        pre_lines.append(f"PRE\t{w.col_num}\t{prev}")
+    broken = resp.get("chain_broken_cols")
+    if broken:
+        print(f"0n ledger chain broken on {broken} (edited outside the daemon)", file=sys.stderr)
+    return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=0,
+                                       stdout=echo + "\n" + "\n".join(pre_lines) + "\n",
+                                       stderr="")
+
+
 def verify_0n_output(stdout: str, writes: list) -> Optional[str]:
     """None when the 0n AppleScript's verify echo ("OK:row=N|<col>=<val>|...")
     confirms every write; otherwise why not. rc 0 alone is not proof: on
@@ -2003,8 +2051,9 @@ def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
 
 def build_0l_time_script(target_date: str) -> str:
     """0l special case: stamp the completion time (HHMM) into 0n's
-    "N Color" column (cell 32) for the target date's row. 0n write —
-    stays raw AppleScript (only 0fen writes are daemon-routed).
+    "N Color" column (cell 32) for the target date's row. Since 2026-10-19
+    this is the daemon-down FALLBACK only; the primary path is the daemon
+    /batch_write call in step 4a-ii (journaled, numeric HHMM).
 
     The stamped time value is computed HERE (via _daytime.local_now(),
     the traveler's actual current time), not inside the AppleScript via
@@ -3397,9 +3446,13 @@ def main():
 
     on_result = None
     if on_writes:
-        script = build_0n_script(on_writes, target_date)
-        if script:
-            on_result = ix_run(script, timeout=30.0)
+        # Daemon first (journaled + semantic ledger); the raw ix-osa script
+        # is the daemon-down fallback only (Neon-off-Excel step 2).
+        on_result = write_0n_via_daemon(on_writes, target_date)
+        if on_result is None:
+            script = build_0n_script(on_writes, target_date)
+            if script:
+                on_result = ix_run(script, timeout=30.0)
 
     # 4a-i. "night hcmc" side effect: carve a real Toggl entry for the
     # pre-sleep audiobook listening out of the 睡觉/"generic placeholder"
@@ -3435,9 +3488,20 @@ def main():
     # (never on a past day: that stamps NOW's HHMM into the old row's AF and
     # drags the all-colors bonus -- the same hazard /0n documents)
     if not past_target and any(r.item.name.lower() == "0l" for r in on_writes):
-        ol_time_result = ix_run(build_0l_time_script(target_date), timeout=15.0)
-        if ol_time_result.returncode == 0:
-            print(f"0l completion: {ol_time_result.stdout.strip()}", file=sys.stderr)
+        _ol_now = _daytime.local_now()
+        # batch_write, not write(): the HHMM must land as a NUMBER (0分!E and
+        # the sub-1000 checks compare it numerically); /write quotes strings.
+        _ol_resp = neon_excel.batch_write(
+            "0n", [{"col": neon_cols.col_letter(32), "value": _ol_now.hour * 100 + _ol_now.minute}],
+            date=target_date, src="did 0l completion time")
+        if _ol_resp.get("ok") and not _ol_resp.get("fallback"):
+            _ol_r = (_ol_resp.get("results") or [{}])[0]
+            print(f"0l completion: N Color={_ol_r.get('value')} row={_ol_resp.get('row')}",
+                  file=sys.stderr)
+        else:
+            ol_time_result = ix_run(build_0l_time_script(target_date), timeout=15.0)
+            if ol_time_result.returncode == 0:
+                print(f"0l completion: {ol_time_result.stdout.strip()}", file=sys.stderr)
 
     # 4b. Batch 1n+ writes
     one_n_writes = [r for r in fast if r.step == "1n" and r.col_letter]

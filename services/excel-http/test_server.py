@@ -311,3 +311,78 @@ class TestSemanticDoubleWrite:
         assert srv.LEDGER_DB_STATE["errors"] == 1
         assert "db locked" in srv.LEDGER_DB_STATE["last_error"]
         assert "semantic ledger write failed" in capsys.readouterr().err
+
+
+class TestBatchWrite:
+    """/batch_write: N 0n-style value writes in one osascript call, each
+    journaled + double-written, with pre-images echoed back (step 2)."""
+
+    @pytest.fixture()
+    def srv(self, tmp_path, monkeypatch):
+        import importlib.util, os, sys
+        monkeypatch.setenv("NEON_DB", str(tmp_path / "neon.db"))
+        for m in [k for k in sys.modules if k == "neon" or k.startswith("neon.")]:
+            del sys.modules[m]
+        spec = importlib.util.spec_from_file_location(
+            "excel_http_server_bw", os.path.join(os.path.dirname(__file__), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.LEDGER_DIR = str(tmp_path / "jsonl")
+        m.CHAIN_INDEX.clear()
+        return m
+
+    def _run(self, srv, monkeypatch, req, echo):
+        captured = {}
+
+        def fake_osa(script):
+            captured["script"] = script
+            return 0, echo, ""
+        monkeypatch.setattr(srv, "osascript", fake_osa)
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 293)
+        return srv.do_batch_write(req), captured["script"]
+
+    def test_numbers_land_unquoted_and_add_mode_accumulates(self, srv, monkeypatch):
+        req = {"sheet": "0n", "date": "10/19", "src": "did hiit, xk20",
+               "writes": [{"col": "AE", "value": 1}, {"col": "AJ", "value": 15, "mode": "add"}]}
+        echo = "\t\t1\t1\x1e\t30\t45\t45\x1e"
+        resp, script = self._run(srv, monkeypatch, req, echo)
+        assert 'cell ("AE293")' in script and "set value of theCell to 1\n" in script
+        assert 'set value of theCell to "1"' not in script               # number, not text
+        assert "(oldValue as number) + 15" in script                     # cumulative add
+        assert 'if oldValue = "" or oldValue = "0" then' in script       # blank → plain set
+        assert resp["ok"] and resp["row"] == 293 and len(resp["results"]) == 2
+        ae, aj = resp["results"]
+        assert ae["value"] == "1" and ae["before_value"] == "" and ae["mode"] == "set"
+        assert aj["value"] == "45" and aj["before_value"] == "30" and aj["mode"] == "add"
+
+    def test_each_cell_is_journaled_and_in_the_semantic_ledger(self, srv, monkeypatch):
+        req = {"sheet": "0n", "date": "10/19", "src": "did hiit",
+               "writes": [{"col": "AE", "value": 1}, {"col": "AF", "value": 1830}]}
+        resp, _ = self._run(srv, monkeypatch, req, "\t\t1\t1\x1e\t\t1830\t1830\x1e")
+        import glob, json
+        lines = [json.loads(l) for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)]
+        assert [(e["kind"], e["sheet"], e["col"], e["value"], e["src"]) for e in lines] == [
+            ("write", "0n", "AE", "1", "did hiit"), ("write", "0n", "AF", "1830", "did hiit")]
+        rows = srv.neon_ledger.recent(5)
+        assert sorted((r[3], r[4], r[5], r[7]) for r in rows) == [
+            ("AE", "hiit", "set", 1.0), ("AF", "N color", "set", 1830.0)]
+
+    def test_formula_and_string_values(self, srv, monkeypatch):
+        req = {"sheet": "0n", "row": 293,
+               "writes": [{"col": "V", "value": "=1+1"}, {"col": "V", "value": "a \"q\""}]}
+        _, script = self._run(srv, monkeypatch, req, "\t\t2\t=1+1\x1e\t\ta \"q\"\ta \"q\"\x1e")
+        assert 'set formula of theCell to "=1+1"' in script
+        assert 'set value of theCell to "a \\"q\\""' in script
+
+    def test_echo_mismatch_and_bad_input_fail_closed(self, srv, monkeypatch):
+        resp, _ = self._run(srv, monkeypatch,
+                            {"sheet": "0n", "row": 293, "writes": [{"col": "AE", "value": 1}]},
+                            "\t\t1\t1\x1e\t\t2\t2\x1e")
+        assert not resp["ok"] and resp["error"].startswith("echo_mismatch")
+        assert not srv.do_batch_write({"sheet": "0n", "row": 293, "writes": []})["ok"]
+        assert not srv.do_batch_write({"sheet": "0n", "row": 293,
+                                       "writes": [{"col": "AE1", "value": 1}]})["ok"]
+
+    def test_route_registered(self, srv):
+        assert srv.ROUTES["/batch_write"] is srv.do_batch_write
+        assert "/batch_write" not in srv.NO_EXCEL

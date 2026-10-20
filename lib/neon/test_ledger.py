@@ -183,3 +183,26 @@ def test_status_counts_kinds(db):
     ledger.record(_e(), db)
     s = ledger.status(db)
     assert s["events"] == 1 and s["kinds"] == {"credit": 1}
+
+
+# ── cols helpers added for the ledger / step 2 ───────────────────────────────
+
+@pytest.mark.parametrize("n,letter", [(1, "A"), (26, "Z"), (27, "AA"), (31, "AE"), (32, "AF"),
+                                      (52, "AZ"), (53, "BA"), (702, "ZZ"), (703, "AAA")])
+def test_col_letter(n, letter):
+    from neon import cols
+    assert cols.col_letter(n) == letter
+
+
+def test_col_letter_rejects_zero():
+    from neon import cols
+    with pytest.raises(ValueError):
+        cols.col_letter(0)
+
+
+def test_header_for_reverse_lookup():
+    from neon import cols
+    assert cols.header_for("0分", "R") == "i9"
+    assert cols.header_for("0n", "AF") == "N color"
+    with pytest.raises(KeyError):
+        cols.header_for("0分", "ZZZ")
