@@ -1146,7 +1146,18 @@ def _sel_key(item: dict):
     if kind == "empty":
         return ("empty", item["start_dt"])
     if kind == "current":
-        return ("current", item.get("start_dt"), tuple(item.get("entry_ids") or []))
+        # Keyed on the entry id when Toggl has told us one -- the identity
+        # that survives an optimistic-vs-fetched start_dt differing by a few
+        # seconds (bug 2026-10-20: the cursor could never leave the running
+        # row -- its key changed between presses, so every ↑/↓ was a "fresh"
+        # selection that re-landed on the most recent row). Before the id is
+        # known, the start floored to the minute. A switch A→B still changes
+        # the key (different id / start), which is what 2026-09-07 needed.
+        ids = tuple(item.get("entry_ids") or [])
+        if ids:
+            return ("current", ids)
+        st = item.get("start_dt")
+        return ("current", st.replace(second=0, microsecond=0) if st else None)
     return _event_key(item)
 
 
@@ -7174,8 +7185,38 @@ def _day_forward(event):
     _reload_day(event.app)
 
 
+# An armed edit/split pre-fills the command line, which used to gate ↑/↓
+# off entirely: select an entry, ⏎ (edit armed), then no arrow worked until
+# Esc -- "janus won't let me use arrows to navigate entries" (2026-10-20).
+# Arrows now cancel the armed edit and move; a hand-typed command keeps the
+# gate (↑/↓ are the command line's own history keys then).
+_edit_armed = Condition(lambda: STATE.edit_target is not None or STATE.split_target is not None)
+
+
+def _cancel_armed_edit_for_nav() -> None:
+    if STATE.edit_target is not None or STATE.split_target is not None:
+        STATE.edit_target = None
+        STATE.split_target = None
+        input_buffer.reset()
+        flash("edit cancelled")
+
+
+def _cursor_index(keys: list) -> int | None:
+    """Index of the current selection, tolerating a running-row key that
+    moved (see _sel_key): a stale ("current", …) selection still counts as
+    the running row rather than resetting the cursor."""
+    if STATE.event_sel in keys:
+        return keys.index(STATE.event_sel)
+    sel = STATE.event_sel
+    if isinstance(sel, tuple) and sel and sel[0] == "current":
+        for j, k in enumerate(keys):
+            if isinstance(k, tuple) and k and k[0] == "current":
+                return j
+    return None
+
+
 @kb.add("tab", filter=_input_empty)
-@kb.add("down", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
+@kb.add("down", filter=_input_empty | _edit_armed)  # arrow-key alias (user request 2026-07-17)
 def _(event):
     """Move the selection cursor forward (stopping at the last row) through everything currently on
     screen and selectable — calendar events, real tracked entries, and
@@ -7188,14 +7229,16 @@ def _(event):
     at the far top of the screen — ~20 presses from tonight's entries, which
     read as "can't select them at all" (user report 2026-07-27: "two
     meaningful entries in this block and last, but I can't select either")."""
+    _cancel_armed_edit_for_nav()
     items = STATE.visible_events
     if not items:
         return
     keys = [_sel_key(it) for it in items]
-    if STATE.event_sel in keys:
+    cur = _cursor_index(keys)
+    if cur is not None:
         # Clamped, not wrapped (user request 2026-10-13): ↓ at the
         # bottom stays put instead of jumping to the day's first row.
-        i = min(keys.index(STATE.event_sel) + 1, len(keys) - 1)
+        i = min(cur + 1, len(keys) - 1)
     else:
         now = view_now()
         past = [j for j, it in enumerate(items)
@@ -7208,16 +7251,18 @@ def _(event):
 
 
 @kb.add("s-tab", filter=_input_empty)
-@kb.add("up", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
+@kb.add("up", filter=_input_empty | _edit_armed)  # arrow-key alias (user request 2026-07-17)
 def _(event):
     """Move the selection cursor backward, stopping at the first row. See the "tab" binding above —
     same nearest-to-now start for a fresh selection."""
+    _cancel_armed_edit_for_nav()
     items = STATE.visible_events
     if not items:
         return
     keys = [_sel_key(it) for it in items]
-    if STATE.event_sel in keys:
-        i = max(keys.index(STATE.event_sel) - 1, 0)  # clamped, see tab
+    cur = _cursor_index(keys)
+    if cur is not None:
+        i = max(cur - 1, 0)  # clamped, see tab
     else:
         now = view_now()
         past = [j for j, it in enumerate(items)
