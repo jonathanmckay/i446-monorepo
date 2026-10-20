@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "ask questions and": {
-      "todoist_id": "6hpHXmGQF62j4J3R",
-      "minutes": 15
-    },
     "have a good suzzallo session": {
       "todoist_id": "6hpJPP7H2f275hC2",
       "minutes": 40
@@ -14,5 +10,5 @@
       "minutes": 15
     }
   },
-  "last_sync": "2026-10-19T16:00:04.341218-07:00"
+  "last_sync": "2026-10-19T18:00:02.537716-07:00"
 }
