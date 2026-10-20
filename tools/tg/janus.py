@@ -744,9 +744,51 @@ def _optimistic_stop() -> None:
     _optimistic_set(None, cur.get("id"))
 
 
-def _optimistic_start(desc: str) -> None:
+_TG_MOD = None  # lazy tg-fast module, project-inference tables only
+
+
+def _guess_project_code(raw: str) -> str:
+    """Resolve the project a just-typed timer command WILL get, locally and
+    instantly, so the optimistic row is painted in its color from the first
+    frame (bug 2026-10-19: the row came up uncolored and only took its project
+    once Toggl's /current caught up, seconds later -- "makes me think it's
+    wrong every time"). Same precedence as tg-fast.resolve(): explicit @code,
+    then its shortcode/domain tables, then the task-queue label; the one
+    thing skipped is tg-fast's cache-miss subprocess refresh, which has no
+    place on a paint path. Never raises; "" when nothing matches."""
+    try:
+        m = re.search(r"(?<!\S)@(\S+)", raw or "")
+        if m and m.group(1) in _known_project_codes():
+            return m.group(1)
+        global _TG_MOD
+        if _TG_MOD is None:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location("tg_fast_tables", TG_FAST)
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _TG_MOD = _mod
+        key = " ".join(w for w in (raw or "").split()
+                       if not w.startswith(("@", "#"))
+                       and not re.fullmatch(r"[+\[({]\d+[\])}]?", w)).lower()
+        if key in _TG_MOD.SHORTCODES:
+            return _TG_MOD.SHORTCODES[key][0]
+        if key in _TG_MOD.DOMAINS:
+            return key
+        pm = _TG_MOD._ONE_PREFIX.match(key)
+        if pm and pm.group(1) in _TG_MOD.DOMAINS:
+            return pm.group(1)
+        return _TG_MOD._search_task_cache(raw or "", _known_project_codes()) or ""
+    except Exception:  # noqa: BLE001 -- inference is a nicety, never a blocker
+        return ""
+
+
+def _optimistic_start(desc: str, raw: str | None = None) -> None:
+    """`raw` is the command as typed (with any @code) so the row's project
+    can be guessed up front; defaults to the description."""
     cur = STATE.current or {}
-    _optimistic_set({"description": desc, "id": None, "project_id": None,
+    code = _guess_project_code(raw if raw is not None else desc)
+    pid = (globals().get("PROJECT_MAP") or {}).get(code)
+    _optimistic_set({"description": desc, "id": None, "project_id": pid,
                      "start": dt.datetime.now(_tz()).isoformat(),
                      "tags": [], "_optimistic": True}, cur.get("id"))
 
@@ -6476,7 +6518,7 @@ def _on_enter(event):
             flash("/d starts work now — go back to today first", 5.0)
             return
         content, timer = d_cmd
-        _optimistic_start(" ".join(w for w in timer.split() if not w.startswith("@")))
+        _optimistic_start(" ".join(w for w in timer.split() if not w.startswith("@")), raw=timer)
         flash(f"$ /d {content}{fix_note}")
         event.app.invalidate()
 
@@ -6626,7 +6668,7 @@ def _on_enter(event):
                             if not w.startswith("@") and not re.fullmatch(r"[+\[(]\d+[\])]?", w))
             if desc:
                 clear_dtd_running_hint()  # the timer moves off any /d task
-                _optimistic_start(desc)
+                _optimistic_start(desc, raw=bare)
         event.app.invalidate()
     event.app.create_background_task(_run_and_refresh())
 
