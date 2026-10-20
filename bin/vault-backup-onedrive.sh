@@ -15,7 +15,7 @@
 #   - the GFS prune (needs listdir + delete) hops through ssh-to-localhost,
 #     whose sshd context has full disk access (verified 2026-07-27).
 set -uo pipefail
-DEST="$HOME/OneDrive/vault-backups"
+DEST="$HOME/OneDrive/vault-backups.noindex"
 STAGE="$HOME/.cache/vault-backup-staging"
 STAMP=$(date +%Y%m%d)
 NAME="vault-backup-$STAMP.tar.zst"
@@ -51,7 +51,7 @@ rm -f "$STAGE/$NAME"
 echo "wrote $(du -h "$OUT" | cut -f1) $(date)" >> "$LOG"
 
 # --- GFS prune (via ssh-to-localhost: launchd can't listdir/delete here) ---
-ssh -o BatchMode=yes -o ConnectTimeout=5 localhost 'python3 - "$HOME/OneDrive/vault-backups"' >> "$LOG" 2>&1 <<"PYEOF"
+ssh -o BatchMode=yes -o ConnectTimeout=5 localhost 'python3 - "$HOME/OneDrive/vault-backups.noindex"' >> "$LOG" 2>&1 <<"PYEOF"
 import os, re, sys
 from datetime import date, datetime
 

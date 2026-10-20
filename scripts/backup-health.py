@@ -33,7 +33,7 @@ import time
 
 VAULT = os.path.expanduser("~/vault")
 MONOREPO = os.path.expanduser("~/i446-monorepo")
-ONEDRIVE_BACKUPS = os.path.expanduser("~/OneDrive/vault-backups")
+ONEDRIVE_BACKUPS = os.path.expanduser("~/OneDrive/vault-backups.noindex")
 HEALTH_JSON = os.path.join(VAULT, "i447", "backup-health.json")
 
 HOURS = 3600.0
