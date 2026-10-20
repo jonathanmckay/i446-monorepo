@@ -5353,6 +5353,22 @@ def clear_dtd_running_hint() -> None:
         pass
 
 
+def record_dtd_started(task_id: str) -> None:
+    """Log a started-today entry where dtd reads it (dtd-started: date, id,
+    epoch). dtd draws the 🧮 abacus from that file; its start.sh writes it on
+    Enter/ctrl-s. Janus starts must write it too, or the task loses its abacus
+    as soon as the timer moves on (bug 2026-10-19)."""
+    if not task_id:
+        return
+    try:
+        state = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")) / "jm"
+        state.mkdir(parents=True, exist_ok=True)
+        with open(state / "dtd-started", "a") as f:
+            f.write(f"{dt.date.today().isoformat()}\t{task_id}\t{int(time.time())}\n")
+    except OSError:
+        pass
+
+
 def create_todo_task(content: str) -> str:
     """Create a due-today Todoist task through agent_claims.new_task (the
     same path as Claude's `/d new`). Returns a short status for the flash."""
@@ -5364,6 +5380,7 @@ def create_todo_task(content: str) -> str:
         _spec.loader.exec_module(_mod)
         task = _mod.new_task(content)
         write_dtd_running_hint(task)
+        record_dtd_started(task.get("id", ""))
         return f"+todo {task.get('content', content)}"
     except Exception as e:  # noqa: BLE001 — the timer still starts
         return f"todo err: {e}"
