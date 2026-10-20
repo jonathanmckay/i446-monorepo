@@ -30,4 +30,5 @@ def _isolate_toggl_caches(monkeypatch, tmp_path):
     from toggl_server import toggl_api
     monkeypatch.setattr(toggl_api, "CURRENT_CACHE", tmp_path / "toggl-current.json")
     monkeypatch.setattr(toggl_api, "JANUS_PID", tmp_path / "janus.pid")
+    monkeypatch.setattr(toggl_api, "PROJECTS_CACHE", tmp_path / "toggl-projects.json")
     yield

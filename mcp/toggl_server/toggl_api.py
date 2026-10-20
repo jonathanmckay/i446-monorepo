@@ -141,7 +141,13 @@ def _request(method, path, body=None, base=None, want_headers=False):
     data = json.dumps(body).encode() if body else None
     bucket = throttle.bucket_for(path, method)
     left = throttle.quota_remaining(bucket)
-    if left > 0:
+    if left > 0 and method == "GET":
+        # Only READS are refused locally: a poll into an exhausted bucket is
+        # a guaranteed 402 and there are many of them. A WRITE always goes
+        # out -- Toggl's bucket accounting proved too opaque to predict
+        # (2026-10-20: a POST showed 599 left while GETs were at 0, then a
+        # POST 402'd 20 minutes later), and refusing a start/create on a
+        # local guess is an outage; a wasted 402 is one request.
         _log_request(method, path, "skip-402", None)
         raise RuntimeError(
             f"Toggl API {method} {path} -> 402 (hourly quota for the {bucket} bucket is "
@@ -373,9 +379,32 @@ def get_entries(start_date=None, end_date=None, include_running=True):
     return entries
 
 
-def get_projects():
-    """List all workspace projects (id, name, active, ...)."""
-    return _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/projects")
+PROJECTS_CACHE = Path.home() / ".cache" / "toggl-projects.json"
+PROJECTS_CACHE_TTL = 3600.0
+
+
+def get_projects(max_age=PROJECTS_CACHE_TTL):
+    """List all workspace projects (id, name, active, ...). Disk-cached for
+    max_age seconds (2026-10-20: tg-fast resolved the project on EVERY /tg
+    through a live /workspaces/{id}/projects read, so each habit switch
+    spent a workspace-bucket request on a list that changes a few times a
+    year). max_age=0 forces a live read."""
+    try:
+        raw = json.loads(PROJECTS_CACHE.read_text())
+        if max_age and time.time() - float(raw["ts"]) <= max_age:
+            return raw["projects"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    projects = _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/projects")
+    if isinstance(projects, list):
+        try:
+            PROJECTS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = PROJECTS_CACHE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"ts": time.time(), "projects": projects}))
+            tmp.replace(PROJECTS_CACHE)
+        except OSError:
+            pass
+    return projects
 
 
 def _credit_value_tags(entry):
@@ -425,11 +454,7 @@ def update_entry(entry_id, **fields):
 
 def delete_entry(entry_id):
     path = f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
-    left = throttle.quota_remaining(throttle.bucket_for(path, "DELETE"))
-    if left > 0:
-        raise RuntimeError(f"Toggl API DELETE {path} -> 402 (hourly quota exhausted; "
-                           f"resets in {int(left)}s; request not sent)")
-    was_running = _cached_is(entry_id)
+    was_running = _cached_is(entry_id)  # writes are never refused locally, see _request
     _guard_network()
     throttle.acquire()  # same client-side pacing as _request()
     req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")

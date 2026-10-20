@@ -102,6 +102,28 @@ def test_user_402_does_not_block_workspace_requests(iso, monkeypatch):
     assert len(urls) == n, "an exhausted bucket must not cost a network request"
 
 
+def test_writes_are_never_refused_locally(iso, monkeypatch):
+    """The 09:30 outage: an armed cooldown on the writes' bucket must not make
+    the fail-fast refuse a start/create. The write goes out; Toggl decides."""
+    throttle.note_quota_reset(900.0, bucket="write")
+    sent = []
+    monkeypatch.setattr(toggl_api.urllib.request, "urlopen",
+                        lambda req, *a, **k: sent.append(req.full_url) or _Resp(b'{"id": 4, "duration": -1}'))
+    assert toggl_api.start_timer("teams")["id"] == 4
+    assert sent, "the POST must be attempted"
+
+
+def test_get_projects_is_disk_cached(iso, monkeypatch):
+    calls = []
+    monkeypatch.setattr(toggl_api.urllib.request, "urlopen",
+                        lambda req, *a, **k: calls.append(req.full_url) or _Resp(b'[{"id": 1, "name": "i9"}]'))
+    assert toggl_api.get_projects()[0]["name"] == "i9"
+    assert toggl_api.get_projects()[0]["name"] == "i9"
+    assert len(calls) == 1, "second call within the TTL is served from disk"
+    toggl_api.get_projects(max_age=0)
+    assert len(calls) == 2
+
+
 def test_zero_remaining_header_arms_cooldown_proactively(iso, monkeypatch):
     monkeypatch.setattr(toggl_api.urllib.request, "urlopen", lambda req, *a, **k: _Resp(
         b'null', {"X-Toggl-Quota-Remaining": "0", "X-Toggl-Quota-Resets-In": "900"}))
