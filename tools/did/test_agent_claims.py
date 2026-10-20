@@ -414,3 +414,71 @@ def test_zsh_hook_prefilter_routes_bare_d_to_python():
     """`"prompt": "/d"` must reach python: the alternation allows a closing quote after /d."""
     src = HOOK.read_text()
     assert '([[:space:]]|")' in src
+
+
+# --- background subagents keep the claim working (2026-10-19) ---------------
+def _hook_json(home, state, payload):
+    env = dict(os.environ, HOME=str(home))
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    return subprocess.run([str(HOOK), state], input=json.dumps(payload),
+                          text=True, env=env, capture_output=True, timeout=10)
+
+
+def _state(root):
+    return (root / "T1.state").read_text().split()[0]
+
+
+def test_stop_keeps_working_while_background_subagent_runs(tmp_path):
+    """Bug 2026-10-19: Stop wrote idle while an Agent launched in the background
+    was still running, so dtd showed the card as waiting on JM mid-work."""
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    assert _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a1"}).returncode == 0
+    agents = root / "by-session/S1.agents"
+    assert agents.read_text().split()[0] == "a1" and _state(root) == "working"
+    _hook(tmp_path, "idle", "S1")                      # main turn ends, agent still running
+    assert _state(root) == "working"
+    _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a2"})
+    _hook_json(tmp_path, "subagent-stop", {"session_id": "S1", "agent_id": "a1"})
+    assert agents.read_text().split()[0] == "a2"       # a1 dropped, a2 still live
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "working"
+    _hook_json(tmp_path, "subagent-stop", {"session_id": "S1", "agent_id": "a2"})
+    assert not agents.exists() and _state(root) == "working"   # parent resumes to read the result
+    _hook(tmp_path, "idle", "S1")                      # ...and its own Stop goes idle
+    assert _state(root) == "idle"
+
+
+def test_subagent_started_before_the_claim_still_counts(tmp_path):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a1"})
+    assert (root / "by-session/S1.agents").exists()    # tracked even with no claim yet
+    ac.claim(TASK, "S1", root=root, now=1000)
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "working"
+
+
+def test_stale_subagent_entry_cannot_pin_the_card(tmp_path):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    (root / "by-session/S1.agents").write_text("dead 100\n")   # epoch 100: long gone
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "idle"
+
+
+def test_release_drops_the_agents_file(tmp_path):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a1"})
+    _hook(tmp_path, "release", "S1")
+    assert not (root / "by-session/S1.agents").exists()
+
+
+def test_subagent_hooks_are_registered_in_claude_settings():
+    cfg_path = Path.home() / ".claude/settings.json"
+    if not cfg_path.exists():
+        pytest.skip("no ~/.claude/settings.json on this host")
+    hooks = json.loads(cfg_path.read_text()).get("hooks", {})
+    for ev, mode in (("SubagentStart", "subagent-start"), ("SubagentStop", "subagent-stop")):
+        cmds = [h.get("command", "") for g in hooks.get(ev, []) for h in g.get("hooks", [])]
+        assert any(f"agent-claim-hook.sh {mode}" in c for c in cmds), ev
