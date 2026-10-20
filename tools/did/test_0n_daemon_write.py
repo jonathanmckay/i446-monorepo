@@ -84,3 +84,91 @@ def test_0l_time_stamp_goes_through_batch_write_as_number():
     assert "neon_excel.batch_write(" in seg
     assert '"value": _ol_now.hour * 100 + _ol_now.minute}' in seg, "HHMM must be a number, not str()"
     assert "build_0l_time_script(target_date)" in seg, "raw script stays as the fallback"
+
+
+# ---------------------------------------------------------------------------
+# Step 2b: 1n+ via /batch_write, hcbi via /batch
+# ---------------------------------------------------------------------------
+
+def _w1n(df, name, col, value=1, cumulative=0, variable=False):
+    return df.RouteResult(item=SimpleNamespace(name=name), step="1n", col_letter=col,
+                          write_value=value, is_cumulative_1n=bool(cumulative),
+                          cumulative_increment=cumulative, is_variable_1n=variable)
+
+
+def test_1n_daemon_path_maps_modes_and_synthesizes_echo(df, monkeypatch):
+    seen = {}
+
+    def fake_bw(sheet, writes, *, date=None, row=None, src=None):
+        seen.update(sheet=sheet, writes=writes, date=date, src=src)
+        return {"ok": True, "row": 20, "results": [
+            {"ok": True, "col": "D", "value": "75", "formula": "=0+30+45", "before": "=0+30",
+             "before_value": "30", "mode": "append", "chain": "ok"},
+            {"ok": True, "col": "K", "value": "1", "formula": "1", "before": "", "before_value": "1",
+             "mode": "set", "chain": "ok"},
+            {"ok": True, "col": "S", "value": "20", "formula": "=20", "before": "", "before_value": "",
+             "mode": "append", "chain": "ok"},
+        ]}
+    monkeypatch.setattr(df.neon_excel, "batch_write", fake_bw)
+    writes = [_w1n(df, "family", "D", value=45, variable=True),
+              _w1n(df, "1 cal", "K", value=1),
+              _w1n(df, "问学 wk", "S", cumulative=20)]
+    res = df.write_1n_via_daemon(writes, "10.3")
+    assert seen["sheet"] == "1n+" and seen["date"] == "10.3"
+    assert seen["writes"] == [{"col": "D", "value": "+45", "mode": "append"},
+                              {"col": "K", "value": 1, "mode": "set"},
+                              {"col": "S", "value": "+20", "mode": "append"}]
+    assert res.returncode == 0 and res.stdout.startswith("OK:weekRow=20|D=75|K=1|S=20|")
+    import re
+    assert re.search(r"weekRow=(\d+)", res.stdout).group(1) == "20"       # step 4c's regex
+    # PRE restore rule: formula if present, else numeric value (a plain-number
+    # cell can echo formula "" with value "1"), else blank
+    assert df.parse_pre_lines(res.stdout) == {"D": "=0+30", "K": "1", "S": ""}
+
+
+@pytest.mark.parametrize("r,expected", [
+    ({"before": "=0+30", "before_value": "30"}, "=0+30"),
+    ({"before": "", "before_value": "1"}, "1"),
+    ({"before": "1", "before_value": "1"}, "1"),
+    ({"before": "", "before_value": ""}, ""),
+    ({"before": "", "before_value": "missing value"}, ""),
+    ({}, ""),
+])
+def test_pre_image_text_restore_rule(df, r, expected):
+    assert df._pre_image_text(r) == expected
+
+
+def test_1n_daemon_unavailable_returns_none(df, monkeypatch):
+    monkeypatch.setattr(df.neon_excel, "batch_write",
+                        lambda *a, **k: {"ok": False, "error": "date_not_found_or_missing_target"})
+    assert df.write_1n_via_daemon([_w1n(df, "1 cal", "K")], "10.3") is None
+
+
+def test_hcbi_via_daemon_batch_with_idem(df, monkeypatch):
+    seen = {}
+
+    def fake_ba(sheet, items, *, date=None, row=None, src=None):
+        seen.update(sheet=sheet, items=items, date=date, src=src)
+        return {"ok": True, "row": 197, "results": [{"ok": True, "col": "I", "value": "2", "chain": "ok"}]}
+    monkeypatch.setattr(df.neon_excel, "batch_append", fake_ba)
+    res = df.append_hcbi_via_daemon([{"col": "I", "value": "+1", "idem": "hcbi:T1@10/19:I"},
+                                     {"col": "Y", "value": "+15", "idem": None}], "10/19", src="did hiit")
+    assert seen["sheet"] == "hcbi" and seen["date"] == "10/19" and seen["src"] == "did hiit"
+    assert seen["items"] == [{"col": "I", "value": "+1", "idem": "hcbi:T1@10/19:I"},
+                             {"col": "Y", "value": "+15"}]                 # None idem dropped
+    assert res.returncode == 0 and res.stdout == "OK:hcbi row=197"
+
+
+def test_hcbi_daemon_failure_is_rc1_with_stderr(df, monkeypatch):
+    monkeypatch.setattr(df.neon_excel, "batch_append",
+                        lambda *a, **k: {"ok": False, "results": [{"ok": False, "error": "osascript_timeout"}]})
+    res = df.append_hcbi_via_daemon([{"col": "I", "value": "+1"}], "10/19", src="did")
+    assert res.returncode == 1 and "osascript_timeout" in res.stderr
+
+
+def test_step4b_calls_daemon_before_raw_1n_script():
+    src = (HERE / "did-fast.py").read_text()
+    i_daemon = src.index("one_n_result = write_1n_via_daemon(one_n_writes, week_mw)")
+    i_raw = src.index("script = build_1n_script(one_n_writes, week_mw)", i_daemon)
+    assert "if one_n_result is None:" in src[i_daemon:i_raw]
+    assert "build_hcbi_script" not in src.replace("# build_hcbi_script AppleScript", "")

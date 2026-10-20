@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -439,7 +439,7 @@ def _journal_and_respond(kind: str, req: dict, row: int,
         # With the previous entry's after_value, a broken chain's
         # before_value - expected value is the outside (Excel) edit in points.
         entry["before_value"] = before_value
-    for k in ("source", "via", "idem"):  # source/via: JM Dash dimension (lib/jmsource)
+    for k in ("source", "via", "idem", "week"):  # source/via: JM Dash dimension (lib/jmsource)
         if req.get(k):
             entry[k] = req[k]
     if state == "broken":
@@ -503,9 +503,11 @@ def _as_setter(value) -> str:
 
 def do_batch_write(req: dict) -> dict:
     """N value/formula writes to one sheet/date in ONE osascript call:
-    {sheet, date|row, writes: [{col, value, mode?: "set"|"add", src?}], src?}.
+    {sheet, date|row, writes: [{col, value, mode?: "set"|"add"|"append", src?}], src?}.
     `mode: "add"` adds to a numeric cell (0n cumulative habits: 问学, xk20…),
-    first write on a blank/0 cell behaves like "set". Each cell is journaled
+    first write on a blank/0 cell behaves like "set"; `mode: "append"` is
+    /append's formula concatenation ("+45" → `=old+45`, journaled as kind
+    append) for 1n+ minutes and hcbi. Each cell is journaled
     (and double-written to the semantic ledger) individually, with its
     pre-image, and echoed back so the caller can verify what landed.
     Exists so did-fast's habit completions (previously a raw ix-osa
@@ -536,6 +538,15 @@ def do_batch_write(req: dict) -> dict:
                       f'    else\n'
                       f'        set value of theCell to (oldValue as number) + {value}\n'
                       f'    end if')
+        elif mode == "append":
+            # Formula append with /append's exact normalization (shared
+            # fragment): 1n+ cumulative/variable minutes, hcbi "+N".
+            empty_set, nonempty_set = _append_setters(str(value))
+            setter = (f'if oldFormula = "" or oldFormula = "0" then\n'
+                      f'        {empty_set}\n'
+                      f'    else\n'
+                      f'        {nonempty_set}\n'
+                      f'    end if')
         blocks.append(f'''
     set theCell to cell ("{col}{row}") of theSheet
     set oldFormula to formula of theCell
@@ -561,7 +572,14 @@ end tell
         sub = {"sheet": sheet, "col": col, "row": row, "date": req.get("date"),
                "value": value, "src": w.get("src") or req.get("src"),
                "source": req.get("source"), "via": req.get("via")}
-        r = _journal_and_respond("write", sub, row, before, new_value, formula, before_value)
+        if sheet == "1n+":
+            # The "date" that resolved the row is a week label ("10.3"), not
+            # an M/D: journal 1n+ cells row-anchored like every existing 1n+
+            # entry (chain_key r<row>) and keep the label as `week`.
+            sub["date"], sub["week"] = None, req.get("date")
+        r = _journal_and_respond("append" if mode == "append" else "write",
+                                 sub, row, before, new_value, formula, before_value)
+        r["before"] = before
         r["before_value"] = before_value
         r["mode"] = mode
         results.append(r)
@@ -638,20 +656,11 @@ end tell
     return value, formula
 
 
-def do_append(req: dict) -> dict:
-    addr = cell_addr(req)
-    if not addr:
-        return {"ok": False, "error": "date_not_found_or_missing_target"}
-    col, row = addr
-    sheet = req["sheet"]
-    idem = req.get("idem")
-    if idem and idem in IDEM_INDEX:
-        cur = _read_cell(sheet, col, row)
-        if cur and idem_dup(idem, cur[1], str(req.get("value", ""))):
-            sys.stderr.write(f"idem dup skipped: {idem}\n")
-            return {"ok": True, "row": row, "col": col, "value": cur[0],
-                    "formula": cur[1], "chain": "ok", "dup": True}
-    val = str(req.get("value", ""))
+def _append_setters(val: str) -> tuple[str, str]:
+    """(empty_set, nonempty_set) AppleScript for appending `val` to theCell
+    whose current formula is `oldFormula`. ONE implementation for /append and
+    /batch_write mode "append" so the 2026-07-14 bare-number normalization
+    can never drift between them."""
     val_esc = safe_str(val)
     # "-" is a formula term like "+" (e.g. the 0t sleep dock appends "-7.5");
     # without it a negative append takes the string branch and produces
@@ -676,6 +685,24 @@ def do_append(req: dict) -> dict:
         clean_esc = safe_str(val.lstrip(", "))
         empty_set = f'set value of theCell to "{clean_esc}"'
         nonempty_set = f'set formula of theCell to oldFormula & "{val_esc}"'
+    return empty_set, nonempty_set
+
+
+def do_append(req: dict) -> dict:
+    addr = cell_addr(req)
+    if not addr:
+        return {"ok": False, "error": "date_not_found_or_missing_target"}
+    col, row = addr
+    sheet = req["sheet"]
+    idem = req.get("idem")
+    if idem and idem in IDEM_INDEX:
+        cur = _read_cell(sheet, col, row)
+        if cur and idem_dup(idem, cur[1], str(req.get("value", ""))):
+            sys.stderr.write(f"idem dup skipped: {idem}\n")
+            return {"ok": True, "row": row, "col": col, "value": cur[0],
+                    "formula": cur[1], "chain": "ok", "dup": True}
+    val = str(req.get("value", ""))
+    empty_set, nonempty_set = _append_setters(val)
     script = f'''
 tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"

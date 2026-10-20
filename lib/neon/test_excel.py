@@ -8,6 +8,8 @@ via /ate.
 """
 import importlib.util
 import subprocess
+
+import pytest
 import sys
 from pathlib import Path
 
@@ -35,6 +37,7 @@ def _generated_script(monkeypatch, *, existing_formula, value):
         return FakeResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("NEON_TEST_TRANSPORT_OK", "1")   # subprocess is faked above
     excel._ssh_fallback("append", "hcbi", "I", None, 197, value)
     return captured["script"]
 
@@ -93,3 +96,76 @@ def test_fallback_append_treats_minus_as_formula_term():
     the numeric branch or it lands as non-computing text on bare-number cells."""
     src = (HERE / "excel.py").read_text()
     assert 'startswith(("+", "=", "-"))' in src
+
+
+# ---------------------------------------------------------------------------
+# Step 2b (2026-10-19): batch_write fallback + numeric write fallback
+# ---------------------------------------------------------------------------
+
+def _capture_scripts(monkeypatch):
+    scripts = []
+
+    class FakeResult:
+        returncode = 0
+        stdout = "45|45"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        if "tell application" in cmd[-1]:
+            scripts.append(cmd[-1])
+        return FakeResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("NEON_TEST_TRANSPORT_OK", "1")   # subprocess is faked above
+    return scripts
+
+
+def test_fallback_write_keeps_numbers_numeric(monkeypatch):
+    scripts = _capture_scripts(monkeypatch)
+    excel._ssh_fallback("write", "0n", "AF", None, 293, 1830)
+    excel._ssh_fallback("write", "0n", "AF", None, 293, "1830")
+    excel._ssh_fallback("write", "1n+", "D", None, 20, "=0+30")
+    assert "set value of theCell to 1830\n" in scripts[0]          # number unquoted
+    assert 'set value of theCell to "1830"' in scripts[1]          # string stays quoted
+    assert 'set formula of theCell to "=0+30"' in scripts[2]
+
+
+def test_batch_write_fallback_maps_modes(monkeypatch):
+    monkeypatch.setattr(excel, "_curl", lambda *a, **k: None)      # daemon down
+    calls = []
+
+    def fake_fallback(op, sheet, col, date, row, value, src=None):
+        calls.append((op, sheet, col, date, row, value, src))
+        return {"ok": True, "row": 293, "col": col, "value": str(value), "formula": "", "fallback": True}
+
+    monkeypatch.setattr(excel, "_ssh_fallback", fake_fallback)
+    out = excel.batch_write("0n", [{"col": "AE", "value": 1},
+                                   {"col": "D", "value": "+45", "mode": "append"},
+                                   {"col": "AJ", "value": 15, "mode": "add"}],
+                            date="10/19", src="did x")
+    assert out["fallback"] is True and out["ok"] is False           # add mode cannot be reproduced
+    assert out["row"] == 293
+    assert calls == [("write", "0n", "AE", "10/19", None, 1, "did x"),
+                     ("append", "0n", "D", "10/19", 293, "+45", "did x")]  # row reused after lookup
+    assert out["results"][2] == {"ok": False, "col": "AJ", "error": "add_mode_needs_daemon",
+                                 "fallback": True}
+
+
+def test_batch_write_prefers_daemon(monkeypatch):
+    monkeypatch.setattr(excel, "_curl", lambda path, body=None, **k: {"ok": True, "row": 1, "path": path})
+    monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: pytest.fail("fallback must not run"))
+    assert excel.batch_write("0n", [{"col": "AE", "value": 1}], date="10/19")["path"] == "/batch_write"
+
+
+def test_live_calls_are_refused_under_pytest(monkeypatch):
+    """Regression (2026-10-19): a test that forgot to mock batch_write cleared
+    two real cells on Ix. Any transport call from inside pytest must raise
+    unless the test explicitly opts in with subprocess faked."""
+    monkeypatch.delenv("NEON_TEST_TRANSPORT_OK", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("transport must not run"))
+    with pytest.raises(RuntimeError, match="live Neon call from a test"):
+        excel.batch_write("0n", [{"col": "H", "value": 1}], row=156)
+    with pytest.raises(RuntimeError):
+        excel.read("0n", "H", row=156)
+    with pytest.raises(RuntimeError):
+        excel._ssh_fallback("write", "0n", "H", None, 156, 1)

@@ -1,7 +1,18 @@
 #!/bin/zsh
-# agent-claim-hook.sh <working|idle|release> — Claude Code hook for /claim.
-# UserPromptSubmit → working, Stop → idle, SessionEnd → release. See
-# tools/did/agent_claims.py for the store. 2026-10-05.
+# agent-claim-hook.sh <working|idle|release|subagent-start|subagent-stop>
+# Claude Code hook for /claim. UserPromptSubmit → working, Stop → idle,
+# SessionEnd → release, SubagentStart/SubagentStop → track in-flight
+# subagents. See tools/did/agent_claims.py for the store. 2026-10-05.
+#
+# Background subagents (2026-10-19): a turn can end (Stop) while an Agent it
+# launched in the background is still working, and the session resumes with
+# no UserPromptSubmit when that agent reports back. Stop used to write idle
+# regardless, so the dtd card showed 🧮 🕐 "waiting on JM" mid-work ("neon
+# off excel should still be claimed by 3"). SubagentStart/Stop now keep a
+# per-session list of running agent ids; Stop writes working while any are
+# still running, and SubagentStop writes working because the parent resumes
+# to process the result (its own Stop then decides). Entries older than
+# AGENT_STALE_S are ignored so a killed subagent can't pin the card forever.
 #
 # Runs on EVERY prompt and turn end in every session, so the common case (this
 # session holds no claim) must cost nothing: builtins only, no python, no jq.
@@ -25,17 +36,50 @@ if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi
+zmodload zsh/datetime zsh/files 2>/dev/null
+AGENT_STALE_S=7200
+# In-flight subagents of this session: "<agent_id> <epoch>" per line. Kept
+# for every session (builtins only), claimed or not, so a claim made after
+# the agent started still sees it.
+A="$D/by-session/$sid.agents"
+aid=""
+[[ "$j" =~ '"agent_id"[[:space:]]*:[[:space:]]*"([^"]+)"' ]] && aid="${match[1]}"
+_live_agents() {   # prints the still-fresh entries, minus $1 if given
+  local l out=() keep
+  [[ -f "$A" ]] || return 0
+  for l in "${(@f)$(<"$A")}"; do
+    [[ -z "$l" ]] && continue
+    keep=1
+    [[ -n "$1" && "${l%% *}" == "$1" ]] && keep=0
+    (( EPOCHSECONDS - ${${l##* }:-0} > AGENT_STALE_S )) && keep=0
+    (( keep )) && out+=("$l")
+  done
+  (( ${#out} )) && print -rl -- "${out[@]}"
+}
+if [[ -n "$sid" ]]; then
+  case "$1" in
+    subagent-start)
+      [[ -n "$aid" ]] && { mkdir -p "$D/by-session" 2>/dev/null; print -r -- "$aid $EPOCHSECONDS" >> "$A" 2>/dev/null; } ;;
+    subagent-stop)
+      live="$(_live_agents "$aid")"
+      if [[ -n "$live" ]]; then print -r -- "$live" > "$A" 2>/dev/null; else rm -f "$A" 2>/dev/null; fi ;;
+  esac
+fi
 [[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0
 tid="$(<"$D/by-session/$sid")"
 tid="${tid//[[:space:]]/}"
 [[ -n "$tid" ]] || exit 0
-zmodload zsh/datetime zsh/files 2>/dev/null
+state=""
 case "$1" in
-  working|idle)
-    print -r -- "$1 $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
+  working|subagent-start|subagent-stop) state=working ;;
+  idle) [[ -n "$(_live_agents)" ]] && state=working || state=idle ;;
+esac
+case "$1" in
+  working|idle|subagent-start|subagent-stop)
+    print -r -- "$state $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
       && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null ;;
   release)
-    rm -f "$D/$tid.json" "$D/$tid.state" "$D/by-session/$sid" 2>/dev/null ;;
+    rm -f "$D/$tid.json" "$D/$tid.state" "$D/by-session/$sid" "$A" 2>/dev/null ;;
 esac
 # Mirror to Ix right away (Syncthing is ~1 min); detached so the hook returns now.
 "$HOME/i446-monorepo/scripts/agent-claims-push.sh" &!

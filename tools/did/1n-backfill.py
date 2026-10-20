@@ -233,7 +233,9 @@ def main() -> int:
         item = df.ParsedItem(raw=key, name=key)
         w = df.RouteResult(item=item, step="1n", col_letter=col, fen_col=fen_col,
                            write_value=cell_value, is_variable_1n=is_var)
-        res = ix_run(df.build_1n_script([w], week_mw), timeout=30.0)
+        res = df.write_1n_via_daemon([w], week_mw, src=out["src"])  # journaled; None → raw
+        if res is None:
+            res = ix_run(df.build_1n_script([w], week_mw), timeout=30.0)
         if res.returncode != 0 or not res.stdout.startswith("OK"):
             raise SystemExit(f"ERROR: 1n+ write failed: {res.stderr or res.stdout}")
         out["cell_written"] = res.stdout.splitlines()[0]

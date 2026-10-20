@@ -47,8 +47,21 @@ DAEMON_TIMEOUT = 25
 WORKBOOK = "Neon分v12.2.xlsx"
 
 
+def _guard_tests() -> None:
+    """A unit test that forgets to monkeypatch this module must never reach
+    the live workbook. 2026-10-19: test_undo_fast mocked read/write but not
+    the new batch_write, and its fake "undo" cleared two real cells on Ix.
+    pytest sets PYTEST_CURRENT_TEST; a test that genuinely wants the
+    transport (with subprocess faked) sets NEON_TEST_TRANSPORT_OK=1."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("NEON_TEST_TRANSPORT_OK"):
+        raise RuntimeError("neon.excel: live Neon call from a test — monkeypatch "
+                           "neon.excel (read/write/append/batch_append/batch_write) "
+                           "or set NEON_TEST_TRANSPORT_OK=1 with subprocess faked")
+
+
 def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict | None:
     """Invoke the daemon (over SSH, or locally when already on ix). Returns parsed JSON, or None on failure."""
+    _guard_tests()
     if body is None:
         cmd = f"curl -sS -m {CURL_TIMEOUT} http://localhost:{DAEMON_PORT}{path}"
     else:
@@ -160,9 +173,11 @@ def batch_write(sheet: str, writes: list, *, date: str | None = None,
     numbers stay numbers, "=…" is a formula, "add" accumulates onto a numeric
     cell. Each cell comes back with before_value / value / formula / chain.
 
-    No ssh fallback: the one caller (did-fast 0n habits) keeps its raw
-    AppleScript path for the daemon-down case, so a daemon outage is reported
-    as {"ok": False, "fallback": True} rather than silently half-journaled."""
+    Daemon down: per-cell ssh+osascript fallback for mode "set" (numbers
+    stay numbers) and "append" (/append semantics); mode "add" cannot be
+    reproduced without the daemon's read-modify-write, so that item fails and
+    the response carries fallback=True — did-fast's 0n path then uses its
+    own raw script, which supports add."""
     body: dict[str, Any] = {"sheet": sheet, "writes": list(writes)}
     if date is not None:
         body["date"] = date
@@ -174,7 +189,22 @@ def batch_write(sheet: str, writes: list, *, date: str | None = None,
     out = _curl("/batch_write", body)
     if out:
         return out
-    return {"ok": False, "error": "daemon_unreachable", "fallback": True}
+    results = []
+    for w in writes:
+        mode = w.get("mode") or "set"
+        if mode == "add":
+            results.append({"ok": False, "col": w.get("col"), "error": "add_mode_needs_daemon",
+                            "fallback": True})
+            continue
+        op = "append" if mode == "append" else "write"
+        r = _ssh_fallback(op, sheet, w["col"], date, row, w.get("value"),
+                          src=w.get("src") or src)
+        r["mode"] = mode
+        results.append(r)
+        if row is None and r.get("row"):
+            row = r["row"]  # one lookup, reused for the rest of the batch
+    return {"ok": all(r.get("ok") for r in results), "row": row,
+            "results": results, "fallback": True}
 
 
 def read(sheet: str, col: str, *, date: str | None = None,
@@ -231,8 +261,9 @@ def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
 
 def _ssh_fallback(op: str, sheet: str, col: str,
                   date: str | None, row: int | None,
-                  value: str | None, src: str | None = None) -> dict[str, Any]:
+                  value: Any, src: str | None = None) -> dict[str, Any]:
     """If the daemon is unreachable, fall back to one-shot ssh+osascript."""
+    _guard_tests()
     if row is None and date is not None:
         dc = _DATE_COL.get(sheet, "B")
         # Match an M/D text cell OR a real Excel date cell (0n col C) by month/day
@@ -315,12 +346,19 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'end tell'
         )
     else:  # write
-        v = (value or "").replace("\\", "\\\\").replace('"', '\\"')
-        setter = "formula" if (value or "").startswith("=") else "value"
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            # A JSON number (0n minutes / HHMM / habit mark) must land as a
+            # NUMBER on the fallback path too: 0分!E and the sub-1000 checks
+            # compare 0n!AF numerically (same rule as the daemon's _as_setter).
+            set_line = f'  set value of theCell to {value}\n'
+        else:
+            v = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+            setter = "formula" if str(value or "").startswith("=") else "value"
+            set_line = f'  set {setter} of theCell to "{v}"\n'
         script = (
             f'tell application "Microsoft Excel"\n'
             f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}"\n'
-            f'  set {setter} of theCell to "{v}"\n'
+            f'{set_line}'
             f'  return ((value of theCell) as string) & "|" & (formula of theCell)\n'
             f'end tell'
         )

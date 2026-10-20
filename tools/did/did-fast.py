@@ -1900,6 +1900,68 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
                                        stderr="")
 
 
+def _pre_image_text(r: dict) -> str:
+    """Restore-safe pre-image for a PRE line from a /batch_write result: the
+    formula when the cell held one, else the numeric value, else blank. A
+    plain-number 1n+ cell can echo formula "" with value "1" (ledger
+    2026-10-02..13), so `before` alone would let ctrl-z wipe a real mark."""
+    before = (r.get("before") or "").strip()
+    if before.startswith("="):
+        return before
+    bv = (r.get("before_value") or "").strip()
+    if bv in ("", "missing value"):
+        return ""
+    return bv
+
+
+def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
+                        src: Optional[str] = None):
+    """1n+ week-cell writes through the daemon (POST /batch_write, one
+    round-trip, journaled row-anchored with `week`, double-written). Mirrors
+    build_1n_script: cumulative → append "+inc", variable → append "+minutes",
+    standard → set minutes (1 when unknown). Synthesizes the raw script's
+    echo ("weekRow=N|<col>=<val>|…" + PRE lines) so the week_row regex and
+    parse_pre_lines are unchanged. None → caller falls back to the raw
+    script (daemon unreachable / week row missing)."""
+    if not writes:
+        return None
+    body = []
+    for w in writes:
+        if w.is_cumulative_1n:
+            body.append({"col": w.col_letter, "value": f"+{w.cumulative_increment}", "mode": "append"})
+        elif w.is_variable_1n:
+            body.append({"col": w.col_letter, "value": f"+{w.write_value or 1}", "mode": "append"})
+        else:
+            body.append({"col": w.col_letter, "value": w.write_value or 1, "mode": "set"})
+    try:
+        resp = neon_excel.batch_write(
+            "1n+", body, date=week_mw,
+            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+    except Exception as e:  # noqa: BLE001
+        print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
+        return None
+    if not resp or not resp.get("ok") or resp.get("fallback"):
+        print(f"1n+ daemon write unavailable ({(resp or {}).get('error')}), falling back to ix-osa",
+              file=sys.stderr)
+        return None
+    results = resp.get("results") or []
+    if len(results) != len(writes):
+        print(f"1n+ daemon write echo mismatch ({len(results)}/{len(writes)}); treating as failed",
+              file=sys.stderr)
+        return None
+    echo = f"weekRow={resp.get('row')}|"
+    pre_lines = []
+    for w, r in zip(writes, results):
+        echo += f"{w.col_letter}={r.get('value', '')}|"
+        pre_lines.append(f"PRE\t{w.col_letter}\t{_pre_image_text(r)}")
+    broken = resp.get("chain_broken_cols")
+    if broken:
+        print(f"1n+ ledger chain broken on {broken} (edited outside the daemon)", file=sys.stderr)
+    return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=0,
+                                       stdout="OK:" + echo + "\n" + "\n".join(pre_lines) + "\n",
+                                       stderr="")
+
+
 def verify_0n_output(stdout: str, writes: list) -> Optional[str]:
     """None when the 0n AppleScript's verify echo ("OK:row=N|<col>=<val>|...")
     confirms every write; otherwise why not. rc 0 alone is not proof: on
@@ -2076,38 +2138,28 @@ tell application "Microsoft Excel"
 end tell'''
 
 
-def build_hcbi_script(appends: list[tuple[str, int]], target_date: str) -> Optional[str]:
-    """Build AppleScript for batch hcbi appends. appends = [(col_letter, minutes), ...]
-    Uses column B for date lookup (M/D format), appends +N to formula."""
-    if not appends:
-        return None
-
-    append_lines = []
-    for col, mins in appends:
-        append_lines.append(f'''    set theCell to range ("{col}" & todayRow) of ws
-    set oldFormula to formula of theCell
-    if oldFormula = "" or oldFormula = "0" then
-        set formula of theCell to "=0+{mins}"
-    else if character 1 of oldFormula is not "=" then
-        set formula of theCell to "=" & oldFormula & "+{mins}"
-    else
-        set formula of theCell to oldFormula & "+{mins}"
-    end if''')
-
-    script = f'''tell application "Microsoft Excel"
-    set ws to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of range ("B" & i) of ws) = "{target_date}" then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_date} not found in hcbi"
-{chr(10).join(append_lines)}
-    return "OK:hcbi row=" & todayRow
-end tell'''
-    return script
+def append_hcbi_via_daemon(appends: list[dict], target_date: str, src: str):
+    """hcbi "+N" appends through the daemon (POST /batch, one round-trip).
+    appends = [{"col", "value": "+N", "idem"?}]. Returns a CompletedProcess-
+    shaped object with the old script's "OK:hcbi row=N" echo (undo-fast and
+    the output JSON key off returncode/stdout), rc 1 + stderr on failure."""
+    items = [{k: v for k, v in a.items() if v is not None} for a in appends]
+    try:
+        resp = neon_excel.batch_append("hcbi", items, date=target_date, src=src)
+    except Exception as e:  # noqa: BLE001
+        return subprocess.CompletedProcess(args=["excel-http", "/batch"], returncode=1,
+                                           stdout="", stderr=f"hcbi daemon append failed: {e}")
+    if not resp or not resp.get("ok"):
+        err = (resp or {}).get("error") or "; ".join(
+            str(r.get("error")) for r in (resp or {}).get("results", []) if not r.get("ok"))
+        return subprocess.CompletedProcess(args=["excel-http", "/batch"], returncode=1,
+                                           stdout="", stderr=f"hcbi daemon append failed: {err}")
+    row = resp.get("row") or ((resp.get("results") or [{}])[0].get("row"))
+    broken = resp.get("chain_broken_cols")
+    if broken:
+        print(f"hcbi ledger chain broken on {broken} (edited outside the daemon)", file=sys.stderr)
+    return subprocess.CompletedProcess(args=["excel-http", "/batch"], returncode=0,
+                                       stdout=f"OK:hcbi row={row}", stderr="")
 
 
 def build_1n_script(writes: list[RouteResult], week_mw: str) -> Optional[str]:
@@ -3513,9 +3565,14 @@ def main():
         _week_date = (date.fromisoformat(target_date_iso(items[0].target_date, _daytime.today()))
                       if past_target else _daytime.today())
         week_mw = calc_week_mw(_week_date)
-        script = build_1n_script(one_n_writes, week_mw)
-        if script:
-            one_n_result = ix_run(script, timeout=30.0)
+        # Daemon first (journaled + semantic ledger); raw ix-osa script is
+        # the daemon-down fallback only (Neon-off-Excel step 2b).
+        one_n_result = write_1n_via_daemon(one_n_writes, week_mw)
+        if one_n_result is None:
+            script = build_1n_script(one_n_writes, week_mw)
+            if script:
+                one_n_result = ix_run(script, timeout=30.0)
+        if one_n_result is not None:
             # Parse weekRow from output for 0分 cell references
             if one_n_result.returncode == 0:
                 import re as _re
@@ -3655,18 +3712,22 @@ def main():
         if hcbi_col:
             mins = r.item.time_value or r.write_value or 0
             if mins > 0:
-                hcbi_appends.append((hcbi_col, mins))
+                hcbi_appends.append({"col": hcbi_col, "value": f"+{mins}",
+                                     "idem": _idem_key("hcbi", r, target_date, hcbi_col)})
         # hcbi-routed DOMAIN points (hcbp -> hcbi!Y): the points step 5
         # skipped for this item land here instead, same formula-append.
         dom_col = _hcbi_domain_col(r.fen_col)
         if (dom_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
-            hcbi_appends.append((dom_col, r.fen_points))
+            hcbi_appends.append({"col": dom_col, "value": f"+{r.fen_points}",
+                                 "idem": _idem_key("hcbi", r, target_date, dom_col)})
     hcbi_result = None
     if hcbi_appends:
-        script = build_hcbi_script(hcbi_appends, target_date)
-        if script:
-            hcbi_result = ix_run(script, timeout=30.0)
+        # Daemon /batch (journaled, idempotent, double-written; the client's
+        # own ssh fallback covers daemon-down). Replaced the raw
+        # build_hcbi_script AppleScript 2026-10-19 (Neon-off-Excel step 2b).
+        hcbi_result = append_hcbi_via_daemon(hcbi_appends, target_date,
+                                             src="did " + ", ".join(r.item.name for r in fast))
 
     # 5c. Prayer marker: write ☀️ to build order for current block.
     # ☀️ is the صلاة prayer marker: -2n/inbound, wakeup, and the 1-1n heatmap

@@ -202,6 +202,26 @@
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh subagent-start >/dev/null 2>&1"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh subagent-stop >/dev/null 2>&1"
+          }
+        ]
+      }
     ]
   },
   "statusLine": {

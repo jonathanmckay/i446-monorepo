@@ -1,6 +1,7 @@
 """Tests for excel-http server — structural checks via AST."""
 
 import ast
+import os
 import re
 import textwrap
 
@@ -9,7 +10,7 @@ import pytest
 
 def _load_func_source(name: str) -> str:
     """Extract a top-level function's source from server.py."""
-    text = open("server.py").read()
+    text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
     tree = ast.parse(text)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == name:
@@ -18,7 +19,9 @@ def _load_func_source(name: str) -> str:
 
 
 def _load_do_append_source() -> str:
-    return _load_func_source("do_append")
+    # The append normalization lives in _append_setters (shared with
+    # /batch_write mode "append" since 1.9.0); the guards are asserted on both.
+    return _load_func_source("do_append") + "\n" + _load_func_source("_append_setters")
 
 
 class TestAppendStringValues:
@@ -59,14 +62,14 @@ class TestThreadingAndTimeoutHardening:
     the process was alive and the port was LISTENing."""
 
     def test_uses_threading_http_server(self):
-        src = open("server.py").read()
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
         assert "ThreadingHTTPServer" in src, (
             "must not use a plain single-threaded HTTPServer — one stalled "
             "connection must not block every other request"
         )
 
     def test_handler_has_socket_timeout(self):
-        src = open("server.py").read()
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
         assert re.search(r"class Handler\(BaseHTTPRequestHandler\):\s*\n(\s*#.*\n)*\s*timeout\s*=\s*\d+", src), (
             "Handler must set a socket timeout, or a stalled read blocks forever"
         )
@@ -75,7 +78,7 @@ class TestThreadingAndTimeoutHardening:
         # Threading fixes the stalled-read wedge, but concurrent AppleEvents
         # to Excel from multiple threads is its own hazard — must be
         # serialized with a lock around the actual Excel-touching call.
-        src = open("server.py").read()
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
         assert "EXCEL_LOCK" in src and "threading.Lock()" in src
         assert "with EXCEL_LOCK:" in src
 
@@ -89,14 +92,14 @@ class TestPinnedWorkbook:
     must be pinned to the actual workbook, never 'active workbook'."""
 
     def test_no_active_workbook_references(self):
-        src = open("server.py").read()
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
         assert "active workbook" not in src, (
             "must not target Excel's frontmost workbook — pin to the named "
             "Neon workbook instead, or writes silently go to the wrong file"
         )
 
     def test_workbook_constant_defined_and_used(self):
-        src = open("server.py").read()
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
         assert 'WORKBOOK = "Neon分v12.2.xlsx"' in src
         assert src.count('workbook "{WORKBOOK}"') >= 4, (
             "lookup_row, do_append, do_write, and do_read must all pin to "
@@ -177,7 +180,7 @@ def test_append_treats_minus_as_formula_term():
     """The 0t sleep dock appends "-7.5"; without "-" in the numeric check a
     negative append takes the string branch and produces non-computing text
     on bare-number cells (same class as the 2026-07-14 "+2" regression)."""
-    text = open("server.py").read()
+    text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")).read()
     assert 'startswith(("+", "=", "-"))' in text
 
 
@@ -226,7 +229,7 @@ class TestIdemDedupe:
     @pytest.fixture()
     def srv(self, monkeypatch):
         import importlib.util
-        spec = importlib.util.spec_from_file_location("excel_http_server", "server.py")
+        spec = importlib.util.spec_from_file_location("excel_http_server", os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py"))
         m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(m)
         m.IDEM_INDEX.clear()
@@ -386,3 +389,73 @@ class TestBatchWrite:
     def test_route_registered(self, srv):
         assert srv.ROUTES["/batch_write"] is srv.do_batch_write
         assert "/batch_write" not in srv.NO_EXCEL
+
+
+class TestBatchWriteAppendMode:
+    """/batch_write mode "append" (step 2b): shares /append's normalization
+    fragment, journals as kind append, echoes `before`, and anchors 1n+ by
+    row with a `week` label instead of polluting `date`."""
+
+    @pytest.fixture()
+    def srv(self, tmp_path, monkeypatch):
+        import importlib.util, os, sys
+        monkeypatch.setenv("NEON_DB", str(tmp_path / "neon.db"))
+        for m in [k for k in sys.modules if k == "neon" or k.startswith("neon.")]:
+            del sys.modules[m]
+        spec = importlib.util.spec_from_file_location(
+            "excel_http_server_bwa", os.path.join(os.path.dirname(__file__), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.LEDGER_DIR = str(tmp_path / "jsonl")
+        m.CHAIN_INDEX.clear()
+        return m
+
+    def _run(self, srv, monkeypatch, req, echo):
+        captured = {}
+
+        def fake_osa(script):
+            captured["script"] = script
+            return 0, echo, ""
+        monkeypatch.setattr(srv, "osascript", fake_osa)
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 20)
+        return srv.do_batch_write(req), captured["script"]
+
+    def test_append_mode_uses_shared_fragment(self, srv, monkeypatch):
+        req = {"sheet": "1n+", "date": "10.3", "src": "did family",
+               "writes": [{"col": "D", "value": "+45", "mode": "append"},
+                          {"col": "K", "value": 1, "mode": "set"}]}
+        echo = "\t\t45\t=45\x1e\t\t1\t1\x1e"
+        resp, script = self._run(srv, monkeypatch, req, echo)
+        assert 'if oldFormula = "" or oldFormula = "0" then' in script
+        assert 'set formula of theCell to "=45"' in script                 # empty-cell append
+        assert 'if oldFormula does not start with "="' in script           # bare-number guard
+        assert 'set formula of theCell to "=" & oldFormula & "+45"' in script
+        assert resp["ok"] and resp["results"][0]["mode"] == "append"
+        assert resp["results"][0]["before"] == "" and resp["results"][0]["value"] == "45"
+
+    def test_append_mode_matches_do_append_fragment(self, srv):
+        e1, n1 = srv._append_setters("+45")
+        assert "=45" in e1 and 'oldFormula & "+45"' in n1
+        e2, n2 = srv._append_setters(", eggs")                            # string append
+        assert 'set value of theCell to "eggs"' == e2
+
+    def test_1n_cells_journal_row_anchored_with_week(self, srv, monkeypatch):
+        req = {"sheet": "1n+", "date": "10.3", "src": "did family",
+               "writes": [{"col": "D", "value": "+45", "mode": "append"},
+                          {"col": "K", "value": 1}]}
+        self._run(srv, monkeypatch, req, "\t\t45\t=45\x1e\t\t1\t1\x1e")
+        import glob, json
+        lines = [json.loads(l) for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)]
+        assert [(e["kind"], e["col"], e["date"], e.get("week"), e["row"]) for e in lines] == [
+            ("append", "D", None, "10.3", 20), ("write", "K", None, "10.3", 20)]
+        # semantic ledger: the "+45" is a credit (same as a /batch append), the mark a set
+        rows = sorted((r[3], r[5], r[6]) for r in srv.neon_ledger.recent(5))
+        assert rows == [("D", "credit", 45.0), ("K", "set", None)]
+        # chain index anchored on the row, like every pre-existing 1n+ entry
+        assert ("1n+", "D", "r20") in srv.CHAIN_INDEX and ("1n+", "D", "10.3") not in srv.CHAIN_INDEX
+
+    def test_0n_cells_still_journal_by_date(self, srv, monkeypatch):
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 293)
+        req = {"sheet": "0n", "date": "10/19", "writes": [{"col": "AE", "value": 1}]}
+        resp, _ = self._run(srv, monkeypatch, req, "\t\t1\t1\x1e")
+        assert ("0n", "AE", "10/19") in srv.CHAIN_INDEX

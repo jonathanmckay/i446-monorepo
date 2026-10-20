@@ -2859,6 +2859,8 @@ CACHE_FILE="PLACEHOLDER_CACHE"
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 
 task_id="$1"
+TIMING="PLACEHOLDER_TIMING"
+print -- "$EPOCHREALTIME\tsplit-start\t$task_id" >> "$TIMING" 2>/dev/null
 task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1")  # id -> canonical content (display/clean only)
 
 # Extract points and (N) duration from task. Points come in TWO mutually
@@ -2889,10 +2891,12 @@ pts_today=""; done_desc=""; remaining_desc=""; remaining_override=""
 if [[ -n "${DTD_SPLIT_PROMPT:-}" && -r /dev/tty ]]; then
   _form_out=$(mktemp -t dtdsplit.XXXXXX)
   stty sane < /dev/tty 2>/dev/null
+  print -- "$EPOCHREALTIME\tsplit-form-open\t$task_id" >> "$TIMING" 2>/dev/null
   if python3 "$HOME/i446-monorepo/tools/did/split-form.py" --title "$task" --total "$total" \
        --open "$bracket" --close "$close" --out "$_form_out" < /dev/tty > /dev/tty 2>/dev/null; then
     { IFS= read -r pts_today; IFS= read -r done_desc; IFS= read -r remaining_desc; IFS= read -r remaining_override; } < "$_form_out"
   fi
+  print -- "$EPOCHREALTIME\tsplit-form-close\t$task_id" >> "$TIMING" 2>/dev/null
   rm -f "$_form_out"
 fi
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "cancelled" > "$HDR"; exit 0; }
@@ -2908,6 +2912,17 @@ if [[ "$clean" == *"…"* ]]; then
 fi
 echo "⏳ splitting: $clean" > "$HDR"
 
+# The writes run in the BACKGROUND (2026-10-19: "slow to get back to dtd once
+# complete"). Four sequential Todoist calls + a did-fast Neon write (3-4 s on
+# its own) + the undo journal held fzf blocked for 5-8 s after the form.
+# Same shape as alt-enter: hide the row now (REMOVED), hand the tty back,
+# and let the writer flip the header from ⏳ to ✂ (or ⚠) when it lands.
+# </dev/null so no child inherits the tty; &! disowns so fzf's reload can't
+# SIGHUP it; stdout/err to a log so a traceback is still findable.
+echo "$clean" | tr '[:upper:]' '[:lower:]' >> "$REMOVED"
+print -- "$EPOCHREALTIME\tsplit-bg\t$task_id" >> "$TIMING" 2>/dev/null
+{
+trap '' HUP   # outlive the tty: a dtd exit (or a closing pane) mid-write must not kill the writer
 # Find the original Todoist task and get its labels/project
 python3 -c "
 import json, re, sys, urllib.request
@@ -3042,6 +3057,9 @@ if not (didfast_out or {}).get('results'):
     msg = f'⚠ split: {open_b}{pts_today}{close_b} NOT logged (did-fast: no domain) / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
 " "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}"
+print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
+} </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
+print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null
 
 # Flush tty input buffered while the osascript GUI dialogs held focus. With the
 # terminal idle behind the dialogs, two-finger touchpad scroll emits ESC[A/ESC[B
@@ -3054,7 +3072,7 @@ stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 SPLITEOF
 # Substitute placeholder paths
-sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_JOURNAL|$DTD_JOURNAL|g; s|PLACEHOLDER_EVENTS|$DTD_EVENTS|g; s|PLACEHOLDER_SID|$DTD_ID|g" "$DTD_SPLIT"
+sed -i '' "s|PLACEHOLDER_HDR|$DTD_HDR|g; s|PLACEHOLDER_REMOVED|$DTD_REMOVED|g; s|PLACEHOLDER_CACHE|$DTD_CACHE_FILE|g; s|PLACEHOLDER_JOURNAL|$DTD_JOURNAL|g; s|PLACEHOLDER_EVENTS|$DTD_EVENTS|g; s|PLACEHOLDER_SID|$DTD_ID|g; s|PLACEHOLDER_TIMING|$DTD_TIMING|g" "$DTD_SPLIT"
 chmod +x "$DTD_SPLIT"
 
 # --- Agent script used by fzf ctrl-a binding ---

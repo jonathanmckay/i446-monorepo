@@ -69,6 +69,9 @@ def _fake_urlopen_with_individual(payload_by_kind, individual_by_id):
 def df(tmp_path, monkeypatch):
     mod = _load()
     monkeypatch.setattr(mod, "TASK_QUEUE_PATH", tmp_path / "task-queue.json")
+    # Never let the real completed-today.json (or its vault mirror, see
+    # conftest.py) leak into carry-forward decisions.
+    monkeypatch.setattr(mod.mc, "COMPLETED", tmp_path / "completed-today.json")
     return mod
 
 
