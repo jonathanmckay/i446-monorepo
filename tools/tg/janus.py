@@ -935,8 +935,9 @@ def fetch_today(force=False):
     and bypasses the burst throttle. force=False (the 5-min ticker, day-nav keys)
     coalesces: it's skipped if another fetch landed within TOGGL_MIN_INTERVAL, so
     rapid Ctrl+←/→ scrubbing or back-to-back commands don't each hit the API. All
-    fetches are skipped during a workspace-bucket post-402 cooldown."""
-    if _toggl_blocked("ws"):
+    fetches are skipped during a /me-bucket post-402 cooldown (entries and the
+    running timer are both /me reads; writes have their own bucket)."""
+    if _toggl_blocked("user"):
         # Skipped, not failed: still never leave ANOTHER day's entries on
         # screen (2026-10-06: a 402 cooldown spanning midnight kept showing
         # 10/5's entries at their clock times on 10/6, and a restart during
@@ -1003,7 +1004,7 @@ def fetch_today(force=False):
         # one exists, rather than leaving mismatched-day data in place.
         _load_viewed_day_cache(force=True)
         if "402" in str(e):
-            _note_rate_limit("ws")
+            _note_rate_limit("user")
         else:
             flash(f"toggl today err: {e}")
 

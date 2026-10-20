@@ -58,7 +58,7 @@ struct RootView: View {
         }
     }
     private var bottomPad: CGFloat { 56 }
-    private func reloadAll() { vault.syncIfStale() }
-    private func refreshAll() { vault.syncIfStale() }
+    private func reloadAll() { vault.fetchLanding(VaultView.landing); vault.runSync(force: true) }
+    private func refreshAll() { vault.fetchLanding(VaultView.landing); vault.syncIfStale() }
     #endif
 }

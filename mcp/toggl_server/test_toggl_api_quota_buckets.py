@@ -58,8 +58,24 @@ def iso(monkeypatch, tmp_path):
 def test_bucket_for_paths():
     assert throttle.bucket_for("/me/time_entries/current") == "user"
     assert throttle.bucket_for("/me/time_entries?start_date=x") == "user"
-    assert throttle.bucket_for("/workspaces/1/time_entries") == "ws"
+    assert throttle.bucket_for("/workspaces/1/projects") == "ws"
     assert throttle.bucket_for("/workspace/1/search/time_entries") == "ws"
+    assert throttle.bucket_for("/workspaces/1/time_entries", "POST") == "ws"
+    assert throttle.bucket_for("/workspaces/1/time_entries/5", "DELETE") == "ws"
+
+
+def test_workspace_read_402_never_blocks_a_write(iso, monkeypatch):
+    """The 09:30 outage: workspace GETs at 0 arm the ws cooldown, but the
+    fail-fast must still send a POST (Toggl decides; a refusal is an outage)."""
+    def fake(req, *a, **k):
+        if req.get_method() == "GET":
+            raise _http_error(402, BODY_402)
+        return _Resp(b'{"id": 3, "duration": -1}', {"X-Toggl-Quota-Remaining": "599"})
+    monkeypatch.setattr(toggl_api.urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError, match="402"):
+        toggl_api.get_projects(max_age=0)
+    assert throttle.cooling_down("ws")
+    assert toggl_api.start_timer("teams")["id"] == 3
 
 
 def test_user_402_does_not_block_workspace_requests(iso, monkeypatch):
@@ -76,13 +92,35 @@ def test_user_402_does_not_block_workspace_requests(iso, monkeypatch):
         toggl_api.get_current()
     assert throttle.cooling_down("user") and not throttle.cooling_down("ws")
     assert throttle.cooling_down(), "no-arg view stays conservative (any bucket)"
-    # Writes keep flowing on the workspace bucket …
+    # Writes keep flowing on their own bucket …
     assert toggl_api.stop_timer(1)["id"] == 1
     # … and the exhausted bucket is not even sent to.
     n = len(urls)
     with pytest.raises(RuntimeError, match="not sent"):
         toggl_api.get_current()
     assert len(urls) == n, "an exhausted bucket must not cost a network request"
+
+
+def test_writes_are_never_refused_locally(iso, monkeypatch):
+    """The 09:30 outage: an armed cooldown on the writes' bucket must not make
+    the fail-fast refuse a start/create. The write goes out; Toggl decides."""
+    throttle.note_quota_reset(900.0, bucket="ws")
+    sent = []
+    monkeypatch.setattr(toggl_api.urllib.request, "urlopen",
+                        lambda req, *a, **k: sent.append(req.full_url) or _Resp(b'{"id": 4, "duration": -1}'))
+    assert toggl_api.start_timer("teams")["id"] == 4
+    assert sent, "the POST must be attempted"
+
+
+def test_get_projects_is_disk_cached(iso, monkeypatch):
+    calls = []
+    monkeypatch.setattr(toggl_api.urllib.request, "urlopen",
+                        lambda req, *a, **k: calls.append(req.full_url) or _Resp(b'[{"id": 1, "name": "i9"}]'))
+    assert toggl_api.get_projects()[0]["name"] == "i9"
+    assert toggl_api.get_projects()[0]["name"] == "i9"
+    assert len(calls) == 1, "second call within the TTL is served from disk"
+    toggl_api.get_projects(max_age=0)
+    assert len(calls) == 2
 
 
 def test_zero_remaining_header_arms_cooldown_proactively(iso, monkeypatch):

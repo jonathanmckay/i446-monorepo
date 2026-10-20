@@ -139,9 +139,14 @@ def _request(method, path, body=None, base=None, want_headers=False):
     want_headers=True returns (result, headers) for paginated endpoints."""
     url = f"{base or BASE_URL}{path}"
     data = json.dumps(body).encode() if body else None
-    bucket = throttle.bucket_for(path)
+    bucket = throttle.bucket_for(path, method)
     left = throttle.quota_remaining(bucket)
-    if left > 0:
+    if left > 0 and method == "GET":
+        # Only READS are refused locally: a poll into an exhausted bucket is
+        # a guaranteed 402 and there are many of them. A WRITE always goes
+        # out and Toggl decides: refusing a start/create on a local guess is
+        # an outage (2026-10-20, half an hour of "can't add entries"); a
+        # wasted 402 is one request.
         _log_request(method, path, "skip-402", None)
         raise RuntimeError(
             f"Toggl API {method} {path} -> 402 (hourly quota for the {bucket} bucket is "
@@ -189,6 +194,8 @@ def _request(method, path, body=None, base=None, want_headers=False):
 
 
 def _log_request(method, path, status, headers):
+    if urllib.request.urlopen is not _REAL_URLOPEN:
+        return  # a mocked response is not traffic (2026-10-20: a test's fake "599 left" misled the diagnosis)
     try:
         prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "?"
         rem = _header_float(headers, "X-Toggl-Quota-Remaining")
@@ -373,9 +380,32 @@ def get_entries(start_date=None, end_date=None, include_running=True):
     return entries
 
 
-def get_projects():
-    """List all workspace projects (id, name, active, ...)."""
-    return _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/projects")
+PROJECTS_CACHE = Path.home() / ".cache" / "toggl-projects.json"
+PROJECTS_CACHE_TTL = 3600.0
+
+
+def get_projects(max_age=PROJECTS_CACHE_TTL):
+    """List all workspace projects (id, name, active, ...). Disk-cached for
+    max_age seconds (2026-10-20: tg-fast resolved the project on EVERY /tg
+    through a live /workspaces/{id}/projects read, so each habit switch
+    spent a workspace-bucket request on a list that changes a few times a
+    year). max_age=0 forces a live read."""
+    try:
+        raw = json.loads(PROJECTS_CACHE.read_text())
+        if max_age and time.time() - float(raw["ts"]) <= max_age:
+            return raw["projects"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    projects = _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/projects")
+    if isinstance(projects, list):
+        try:
+            PROJECTS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = PROJECTS_CACHE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"ts": time.time(), "projects": projects}))
+            tmp.replace(PROJECTS_CACHE)
+        except OSError:
+            pass
+    return projects
 
 
 def _credit_value_tags(entry):
@@ -425,11 +455,7 @@ def update_entry(entry_id, **fields):
 
 def delete_entry(entry_id):
     path = f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
-    left = throttle.quota_remaining(throttle.bucket_for(path))
-    if left > 0:
-        raise RuntimeError(f"Toggl API DELETE {path} -> 402 (hourly quota exhausted; "
-                           f"resets in {int(left)}s; request not sent)")
-    was_running = _cached_is(entry_id)
+    was_running = _cached_is(entry_id)  # writes are never refused locally, see _request
     _guard_network()
     throttle.acquire()  # same client-side pacing as _request()
     req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")
@@ -447,7 +473,7 @@ def delete_entry(entry_id):
         body = e.read().decode() if e.fp else ""
         if e.code == 402:
             throttle.note_quota_reset(throttle.parse_reset_seconds(body),
-                                      bucket=throttle.bucket_for(path))
+                                      bucket=throttle.bucket_for(path, "DELETE"))
         elif e.code == 429:
             throttle.note_rate_limit()
         raise RuntimeError(f"Toggl API DELETE -> {e.code}: {body}")

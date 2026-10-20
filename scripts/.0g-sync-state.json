@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-20T08:20:10.917729-07:00"
+  "tasks": {
+    "500分 i9": {
+      "todoist_id": "6hpXw9PJCx3pw9wR",
+      "minutes": 50
+    },
+    "september email done": {
+      "todoist_id": "6hpXw9fMxm7HG592",
+      "minutes": 20
+    },
+    "75分 hcbp": {
+      "todoist_id": "6hpXw9r26rF6gfX2",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-10-20T10:00:06.614837-07:00"
 }

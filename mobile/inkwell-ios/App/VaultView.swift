@@ -43,14 +43,14 @@ struct VaultView: View {
             .buttonStyle(.plain).padding(.trailing, 18).padding(.bottom, 10)
         }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
-        .task { store.syncIfStale() }
+        .task { store.fetchLanding(VaultView.landing); store.syncIfStale() }
     }
 
     @ViewBuilder private var content: some View {
         switch mode {
         case .inbox:
             if store.read(VaultView.landing) != nil {
-                NoteView(store: store, path: VaultView.landing)
+                NoteView(store: store, path: VaultView.landing).id(store.landingVersion)
             } else {
                 VStack(spacing: 10) {
                     Text(store.syncing ? "syncing the vault…" : "new-notes is not on the phone yet")

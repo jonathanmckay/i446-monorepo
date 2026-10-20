@@ -12,7 +12,8 @@ Toggl enforces two different limits (engineering.toggl.com/docs/track, 2026-10):
    windows. A 402 on one bucket says nothing about the other, so the quota
    cooldown is tracked PER BUCKET (`quota_until_user`, `quota_until_ws`):
    before this, one exhausted read bucket parked every write too. Reads are
-   kept on /me ON PURPOSE so read load can never block adding an entry.
+   kept on /me ON PURPOSE so read load can never block adding an entry, and
+   writes are a bucket of their own (see bucket_for).
 
 The tricky part: `tg-fast` spawns a fresh PROCESS per /tg command, so an
 in-process limiter can't coordinate across invocations. This paces EVERY
@@ -55,13 +56,18 @@ MAX_COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_MAX_COOLDOWN", "3600.0"))
 RESET_MARGIN = 5.0  # s past the server's reset estimate before the first retry
 _RESET_RE = re.compile(r"reset in (\d+) seconds", re.IGNORECASE)
 
-# Toggl's hourly quota buckets. "user" = /api/v9/me/* (all our reads);
-# "ws" = everything workspace-scoped (all our writes), incl. the Reports API.
+# Toggl's hourly quota buckets, as measured 2026-10-20 from live headers:
+# "user" = /api/v9/me/* reads (240/hr, window at :00); "ws" = everything
+# workspace-scoped, reads AND writes (GET /workspaces/{id}, /projects, /tags,
+# the Reports API, POST/PUT/PATCH/DELETE time_entries; 600/hr sliding). An
+# earlier "writes have their own counter" reading came from a mocked test
+# response that had leaked into the request log. Writes are never refused
+# locally whatever their bucket says (see toggl_api._request).
 BUCKETS = ("user", "ws")
 
 
-def bucket_for(path: str) -> str:
-    """Which hourly-quota bucket an API path is charged to."""
+def bucket_for(path: str, method: str = "GET") -> str:
+    """Which hourly-quota bucket an API call is charged to."""
     return "user" if (path or "").startswith("/me") else "ws"
 
 

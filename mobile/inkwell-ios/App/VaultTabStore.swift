@@ -18,6 +18,10 @@ final class VaultTabStore: ObservableObject {
     @Published var fileCount = 0
     @Published var pendingCount = 0
     @Published var lastSyncAt: String? = nil
+    /// Bumped when the landing note is (re)fetched so its view re-reads.
+    @Published var landingVersion = 0
+    private let api = VaultApi()
+    private var landingFetchedAt: TimeInterval = 0
 
     private var lastSyncMonotonic: TimeInterval = 0
 
@@ -51,6 +55,27 @@ final class VaultTabStore: ObservableObject {
     func refreshCounts() {
         fileCount = store.fileCount
         pendingCount = store.pendingCount
+    }
+
+    /// Open-in-1s (2026-10-20): fetch the ONE note the root screen shows
+    /// straight from /file, before and independent of the full sync, so a
+    /// fresh install paints new-notes in one round trip instead of after
+    /// hundreds. Stored through the same upsert the sync uses; the next
+    /// manifest pass reconciles mtime/sha. Re-fetched at most once a minute.
+    func fetchLanding(_ path: String) {
+        guard VaultConfig.hasToken else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - landingFetchedAt > 60 else { return }
+        landingFetchedAt = now
+        Task {
+            if case .ok(let f) = await api.file(path) {
+                let e = ManifestEntry(p: path, m: Int(Date().timeIntervalSince1970), s: f.body.utf8.count,
+                                      h: f.manifestSha.isEmpty ? f.sha : f.manifestSha)
+                try? store.upsert(e, body: f.body, sha: f.sha)
+                refreshCounts()
+                landingVersion += 1
+            }
+        }
     }
 
     /// Foreground hook: cheap when nothing changed (one 304).
