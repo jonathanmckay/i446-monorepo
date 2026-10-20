@@ -25,10 +25,41 @@ from __future__ import annotations
 import copy
 import datetime as _dt
 import json
+import os
 import queue
+import signal
+import subprocess
 import threading
 from pathlib import Path
 from typing import Callable
+
+
+def run_bounded(cmd: list[str], *, timeout: float, input: str | None = None,
+                env: dict | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output=True, text=True, timeout=...) that really
+    returns by `timeout`. The child gets its own process group and the WHOLE
+    group is killed on timeout: plain run() kills only the direct child, and a
+    grandchild still holding the captured pipes (ix-osa.sh -> sh -> lockf ->
+    bash -> osascript waiting on Excel) keeps communicate() blocked past every
+    timeout in the chain. 2026-10-17: the 0s form sat 21 minutes after submit
+    inside dtd's inline-form wrapper ("when 0s completes it doesn't go back to
+    dtd main screen"), with its Neon write long since landed."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE if input is not None else None,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         env=env, start_new_session=True)
+    try:
+        out, err = p.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            out, err = p.communicate(timeout=5)
+        except Exception:  # noqa: BLE001
+            out, err = "", ""
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 class BackgroundWriter:

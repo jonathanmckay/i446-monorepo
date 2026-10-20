@@ -60,12 +60,12 @@ def test_worker_breaks_on_stop_flag_instead_of_looping_forever():
     # The break check must come BEFORE the unconditional continue, in the
     # same branch, or it can never be reached.
     stop_pos = body.index('[[ -f "$DTD_STOP" ]] && break')
-    branch_start = body.index('if ! IFS= read -r -t 2 line; then')
+    branch_start = body.index('if (( ${#_qlines} <= _qcur )); then')
     continue_pos = body.index("continue", stop_pos)
     fi_pos = body.index("\n    fi\n", branch_start)
     assert branch_start < stop_pos < continue_pos < fi_pos, (
-        "the stop check must live inside the read-timeout branch, before "
-        "its continue")
+        "the stop check must live inside the queue-drained idle branch, "
+        "before its continue")
 
 
 def test_main_loop_signals_stop_before_closing_fd3():

@@ -6,6 +6,11 @@ Starts server processes on demand, handles SSE JSON-RPC protocol.
 Uses pidfiles so that a single agency process per server type is shared
 across all callers (ibx0, cron jobs, prewarm, etc). Previous behavior
 spawned a new process per Python session, leading to dozens of zombies.
+
+Interactive-login guard (2026-09-25): if Safari already shows an unfinished
+Microsoft sign-in tab, get_server()/call_tool() raise EntraLoginPending
+instead of letting Agency open another one every 15 minutes. See the
+comment block above EntraLoginPending.
 """
 
 import atexit
@@ -27,6 +32,130 @@ AGENCY_BIN = os.environ.get(
 _PIDFILE_DIR = Path.home() / ".config" / "agency" / "pids"
 _servers = {}  # name -> {"proc": Popen|None, "port": int}
 _lock = threading.Lock()
+
+# --- Interactive-login guard ------------------------------------------------
+# Agency has no silent/non-interactive mode: when its Entra token cache is
+# invalid it opens a NEW browser tab on login.microsoftonline.com (via
+# AzureAuth) and waits 15 minutes for a human, both at server start and on
+# every 401 from a tool call. Unattended (dream 03:00 cron, dashboard jobs)
+# that produced a fresh tab every 15 minutes, 50-90 a day for weeks, and a
+# Safari that nobody could sign in to fast enough (2026-09-25). One pending
+# tab is the user's cue to sign in; a second one is noise. So: if Safari
+# already has an unfinished Microsoft sign-in tab, refuse to start a server
+# or forward a tool call, and raise EntraLoginPending (a RuntimeError, so
+# every existing caller's error path handles it as "MCP unavailable").
+# A list, not a tuple, and no "login"/"auth" in the name: GitGuardian's generic
+# Authentication Tuple detector flags `<login_*> = ("x", "y")` as a leaked
+# username/password pair (false positive, incident 2026-09-27 on 4180afc).
+MS_SIGNIN_HOSTS = ["login.microsoftonline.com", "login.live.com"]
+_LOGIN_TAB_CACHE = {"at": 0.0, "url": None}
+_LOGIN_TAB_TTL = 10.0  # seconds; one osascript per burst of calls, not per call
+
+_SAFARI_LOGIN_TABS = '''tell application "Safari"
+    set out to ""
+    repeat with w in windows
+        repeat with t in tabs of w
+            set u to URL of t
+            if u contains "%s" then set out to out & u & linefeed
+        end repeat
+    end repeat
+    return out
+end tell'''
+
+
+# Chrome exposes the same window/tab model; AzureAuth opens the tab in the
+# DEFAULT browser, which on ix is Chrome (2026-10-18: ~30 login tabs/day on ix
+# — janus-mobile on every phone page load plus the 03:00 dream run — while
+# this guard only ever looked at Safari, so it never fired there. Enough tabs
+# to OOM the box and starve Excel).
+_CHROME_LOGIN_TABS = '''tell application "Google Chrome"
+    set out to ""
+    repeat with w in windows
+        repeat with t in tabs of w
+            set u to URL of t
+            if u contains "%s" then set out to out & u & linefeed
+        end repeat
+    end repeat
+    return out
+end tell'''
+
+class EntraLoginPending(RuntimeError):
+    """A Microsoft sign-in tab is already open and unfinished in a browser.
+
+    Nothing Agency-backed will work until the user completes it (or closes
+    it), so callers should treat this like any other 'MCP unavailable' error
+    and move on. Not retried, not restarted: a fresh process would only open
+    another tab."""
+
+
+def _browser_running(app):
+    try:
+        r = subprocess.run(["pgrep", "-x", app], capture_output=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _safari_running():
+    return _browser_running("Safari")
+
+
+def _chrome_running():
+    return _browser_running("Google Chrome")
+
+
+def _scan_login_tabs(script):
+    """URL of an open Microsoft sign-in tab per `script`, or None. Callers
+    must confirm the browser is running first: `tell application` launches it."""
+    for host in MS_SIGNIN_HOSTS:
+        try:
+            r = subprocess.run(["osascript", "-e", script % host],
+                               capture_output=True, text=True, timeout=10)
+        except Exception:
+            return None
+        if r.returncode != 0:
+            return None  # Automation permission denied etc. -> can't tell, don't block
+        for line in r.stdout.splitlines():
+            if line.strip():
+                return line.strip()
+    return None
+
+
+def _safari_login_tab():
+    if not _safari_running():
+        return None
+    return _scan_login_tabs(_SAFARI_LOGIN_TABS)
+
+
+def _chrome_login_tab():
+    if not _chrome_running():
+        return None
+    return _scan_login_tabs(_CHROME_LOGIN_TABS)
+
+
+def _any_login_tab():
+    """First pending sign-in tab in Safari or Chrome (whichever is default
+    gets AzureAuth's tab; checking both costs one pgrep for the other)."""
+    return _safari_login_tab() or _chrome_login_tab()
+
+
+def entra_login_pending(force=False):
+    """Return the pending sign-in tab URL, or None. Cached for _LOGIN_TAB_TTL
+    seconds so a burst of tool calls costs one AppleScript round-trip."""
+    now = time.time()
+    if not force and now - _LOGIN_TAB_CACHE["at"] < _LOGIN_TAB_TTL:
+        return _LOGIN_TAB_CACHE["url"]
+    url = _any_login_tab()
+    _LOGIN_TAB_CACHE.update(at=now, url=url)
+    return url
+
+
+def _refuse_if_login_pending(what):
+    url = entra_login_pending()
+    if url:
+        raise EntraLoginPending(
+            f"not {what}: a Microsoft sign-in tab is already waiting in a browser "
+            f"({url[:80]}...) - finish that sign-in instead of opening another")
 
 
 def _pidfile(name):
@@ -131,7 +260,9 @@ def get_server(name):
                 except Exception:
                     pass
 
-        # Start fresh
+        # Start fresh -- unless a sign-in tab is already waiting: starting
+        # would open a second one (see EntraLoginPending).
+        _refuse_if_login_pending(f"starting agency mcp {name}")
         proc, port = _start_server(name)
         _servers[name] = {"proc": proc, "port": port, "pid": proc.pid}
         return port
@@ -204,6 +335,9 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
     if remote:
         host, port = remote
         return _call_tool_once(host, port, server_name, tool_name, arguments, timeout)
+    # Even a healthy, already-running server opens a new sign-in tab on the
+    # first 401 it meets, so the guard applies per call, not just per start.
+    _refuse_if_login_pending(f"calling {server_name}/{tool_name}")
     try:
         port = get_server(server_name)
         return _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)

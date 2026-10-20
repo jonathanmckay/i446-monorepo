@@ -6,9 +6,14 @@ set -euo pipefail
 
 # --- Ensure full PATH for MCP servers (npx, uvx, python3) ---
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+# Headless auth (2026-10-17): cron cannot read the Claude Code keychain entry
+# (every nightly run since 2026-09-27 died with "Not logged in"). A long-lived
+# token from `claude setup-token` lives in ~/.claude/oauth-token (mode 600).
+TOKEN_FILE="$HOME/.claude/oauth-token"
+[ -s "$TOKEN_FILE" ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$TOKEN_FILE")"
 
 # --- Config ---
-DREAM_RUNS="$HOME/vault/i447/i446/dream-runs"
+DREAM_RUNS="$HOME/vault/i447/i446/.dream-runs"
 PROMPT_BASE="$HOME/vault/i447/i446/dream-prompt-base.md"
 CLAUDE="/opt/homebrew/bin/claude"
 DEFAULT_BUDGET=300
@@ -86,7 +91,20 @@ mkdir -p "$RUN_DIR/logs" "$RUN_DIR/staged" "$RUN_DIR/drafts" "$RUN_DIR/approvals
 # --- Backfill date tracking ---
 # Each night, Dream also scans one historical day's conversation logs.
 # State file tracks the backfill pointer; advances one day back each run.
-BACKFILL_STATE="$DREAM_RUNS/.backfill-pointer"
+# Host-local (2026-10-19): this pointer used to live under $DREAM_RUNS, a
+# Syncthing-synced vault path. A second host's dream run (and an older script
+# writing a bare `date` string) clobbered it nightly — 142 "corrupted backfill
+# pointer" resets since May, which also silently defeated the backfill (it kept
+# resetting to yesterday and never advanced). Dream runs on one host; its state
+# belongs on that host's disk, off the synced volume.
+BACKFILL_STATE="$HOME/.cache/dream/backfill-pointer"
+mkdir -p "$(dirname "$BACKFILL_STATE")"
+# One-time migration: seed from the old synced pointer only if it is still valid.
+_OLD_BACKFILL_STATE="$DREAM_RUNS/.backfill-pointer"
+if [[ ! -f "$BACKFILL_STATE" && -f "$_OLD_BACKFILL_STATE" ]]; then
+  _OLD_VAL=$(cat "$_OLD_BACKFILL_STATE" 2>/dev/null)
+  [[ "$_OLD_VAL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && echo "$_OLD_VAL" > "$BACKFILL_STATE"
+fi
 BACKFILL_STOP="2026-03-01"  # stop when we reach March 1
 if [[ -f "$BACKFILL_STATE" ]]; then
   BACKFILL_DATE=$(cat "$BACKFILL_STATE")
@@ -145,7 +163,8 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] claude=$CLAUDE ($(${CLAUDE} --version 2>/de
 # launchd/SSH sessions can't access the login keychain. If we detect that,
 # try unlocking it. If that fails, we're in a GUI session and it should work.
 KEYCHAIN_OK=1
-if ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
+# With CLAUDE_CODE_OAUTH_TOKEN set, claude never touches the keychain: skip the probe.
+if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] && ! security find-generic-password -s 'Claude Code-credentials' -w >/dev/null 2>&1; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Keychain locked, attempting unlock..." >> "$LOG"
   if [[ -f "$HOME/.dream-keychain-pass" ]]; then
     security unlock-keychain -p "$(cat "$HOME/.dream-keychain-pass")" ~/Library/Keychains/login.keychain-db >> "$LOG" 2>&1 || true

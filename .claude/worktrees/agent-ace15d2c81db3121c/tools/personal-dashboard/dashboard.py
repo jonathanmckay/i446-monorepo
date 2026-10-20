@@ -23,6 +23,9 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
+sys.path.insert(0, str(Path(__file__).parent))
+import jmreads  # noqa: E402  /jmreads Goodreads-style page (hcmc reviews / o315)
+import events  # noqa: E402  /slice: points + time as one table, sliced by project or source
 
 
 def _tz() -> ZoneInfo:
@@ -110,7 +113,17 @@ def _resolve_neon_path():
     rename via the open-workbook match in load_cache_data.
     """
     candidates = []
-    for p in _VAULT_EXCEL.glob("Neon分v*.xlsx"):
+    try:
+        # OneDrive's file provider intermittently fails the scandir with
+        # EINTR (seen 2026-10-18: the whole dashboard crash-looped at import
+        # because this module-level glob raised InterruptedError). Any OS
+        # hiccup here just means "use the fallback name", never a crash.
+        names = list(_VAULT_EXCEL.glob("Neon分v*.xlsx"))
+    except OSError as e:
+        print(f"WARN: neon glob failed ({e}); using {_NEON_FALLBACK_NAME}",
+              file=sys.stderr)
+        names = []
+    for p in names:
         m = re.match(r"Neon分v([\d.]+)\.xlsx$", p.name)
         if not m:
             continue
@@ -400,9 +413,11 @@ CACHE_CARDS = [
     # sum, each itself a SUM of the two per-domain cells) — replaced the
     # separate hcbp/hcbc cards 2026-08-10 per JM; extended from Q3-only to
     # Q2+Q3 2026-09-06 per JM so the card reflects the running total across
-    # both quarters, not just the current one.
-    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q2+Q3",
-     "color": "#f81d78", "extra": [{"col": "X", "row": 375, "sheet": "hcbi"}]},
+    # both quarters, not just the current one. Q4 (hcbi!X381) added
+    # 2026-10-06 per JM, label now Q2-Q4.
+    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q2-Q4",
+     "color": "#f81d78", "extra": [{"col": "X", "row": 375, "sheet": "hcbi"},
+                                   {"col": "X", "row": 381, "sheet": "hcbi"}]},
     {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
@@ -2101,6 +2116,7 @@ def api_refresh():
         _WEEKLY_CACHE["ts"] = 0.0
     with _GRANULAR_LOCK:
         _GRANULAR_CACHE.clear()
+    jmreads.invalidate()
     return jsonify({"status": "ok"})
 
 
@@ -2477,6 +2493,8 @@ HTML = """<!DOCTYPE html>
   <div style="display:flex;align-items:baseline;gap:16px;">
     <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
     <div style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">Oct 2 '27: <span id="daysLeftVal" style="color:var(--text);font-weight:600;"></span><script>document.getElementById('daysLeftVal').textContent=Math.ceil((new Date('2027-10-02')-new Date())/864e5)+'d';</script></div>
+    <a class="nav-link" href="/jmreads">READS</a>
+    <a class="nav-link" href="/slice">SLICE</a>
     <a class="nav-link" href="/more">MORE →</a>
   </div>
 </div>
@@ -2502,17 +2520,31 @@ HTML = """<!DOCTYPE html>
     <div class="chart-wrap"><canvas id="timeChart"></canvas></div>
     <div class="summary" id="timeSummary"></div>
   </div>
-  <div class="card">
+  <div class="card" style="display:none">
     <h2><span id="pointsLabel">Points / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap"><canvas id="pointsChart"></canvas></div>
     <div class="summary" id="pointsSummary"></div>
   </div>
-  <div class="card">
+  <div class="card" style="display:none">
     <h2 title="Cells detected changed outside the excel-http pipeline (ledger chain breaks + acked manual edits), distinct cells per bucket. Detection is lazy: an edit surfaces on that cell's next pipeline write or the hourly audit — a lower bound, and sync clobbers register too."><span id="neonEditsLabel">Neon Manual Edits / Day</span><span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap xs"><canvas id="neonEditsChart"></canvas></div>
     <div class="summary" id="neonEditsSummary"></div>
   </div>
+  <!-- Points/time by project or source (replaced Points and Manual Edits
+       charts 2026-10-05). Same page as /slice, embedded; it reports its
+       height so the frame never scrolls. -->
+  <div class="card" style="grid-column: 1 / -1; padding: 0;">
+    <iframe id="sliceFrame" src="/slice?embed=1" title="slice" scrolling="no"
+            style="width:100%; height:900px; border:0; display:block; background:transparent;"></iframe>
+  </div>
 </div>
+<script>
+window.addEventListener('message', e => {
+  if (e.data && e.data.sliceHeight) {
+    document.getElementById('sliceFrame').style.height = e.data.sliceHeight + 'px';
+  }
+});
+</script>
 
 <script>
 """ + _SHARED_JS_HEAD + """
@@ -2833,11 +2865,131 @@ function renderEmailChart(data) {
   &nbsp;·&nbsp;
   <a href="/f695" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ f695 weekly reports</a>
   &nbsp;·&nbsp;
+  <a href="/jmreads" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ jmreads</a>
+  &nbsp;·&nbsp;
   <a href="https://m5x2.github.io/appfolio-dashboards-site/" style="color:var(--h2); text-decoration:none; border-bottom:1px dotted var(--h2);">→ m5x2 AppFolio dash</a>
 </div>
 
 </body>
 </html>"""
+
+
+SLICE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<title>jm slice</title>
+""" + _SHARED_STYLE + """
+<style>
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 16px; font-size: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--nav); border-radius: 4px; overflow: hidden; }
+.seg button { background: var(--card); color: var(--h2); border: 0; padding: 4px 10px; font: inherit; letter-spacing: 1px; cursor: pointer; }
+.seg button.on { background: var(--nav); color: var(--text); }
+.ctl-label { color: var(--h2); letter-spacing: 1px; margin-right: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; font-size: 12px; }
+.chip { border: 1px solid var(--nav); border-radius: 12px; padding: 2px 10px; cursor: pointer; color: var(--h2); user-select: none; }
+.chip.on { color: var(--text); border-color: var(--h1); }
+.chip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.note { font-size: 11px; color: var(--h2); margin-top: 10px; }
+</style>
+</head>
+<body>
+{% if not embed %}
+<div class="topbar">
+  <h1>JM DASH · SLICE</h1>
+  <a class="nav-link" href="/">← DASH</a>
+</div>
+{% else %}
+<style>body { margin: 0; padding: 0; background: transparent; } body > .card { margin: 0; }</style>
+<script>
+// Embedded in the main dash: report height so the parent sizes the iframe.
+new ResizeObserver(() => parent.postMessage({sliceHeight: document.documentElement.scrollHeight}, '*'))
+  .observe(document.body);
+</script>
+{% endif %}
+<div class="card">
+  <div class="controls">
+    <span><span class="ctl-label">METRIC</span><span class="seg" data-key="metric"><button data-v="points" class="on">POINTS</button><button data-v="time">TIME</button></span></span>
+    <span><span class="ctl-label">GROUP</span><span class="seg" data-key="group_by"><button data-v="project" class="on">PROJECT</button><button data-v="source">SOURCE</button><button data-v="tool">TOOL</button></span></span>
+    <span><span class="ctl-label">GRAIN</span><span class="seg" data-key="grain"><button data-v="block">BLOCK</button><button data-v="day" class="on">DAY</button><button data-v="week">WEEK</button><button data-v="month">MONTH</button></span></span>
+    <span><span class="ctl-label">DAYS</span><span class="seg" data-key="days"><button data-v="7">7</button><button data-v="14" class="on">14</button><button data-v="30">30</button><button data-v="90">90</button></span></span>
+  </div>
+  <div><span class="ctl-label">PROJECT</span><div class="chips" id="projectChips"></div></div>
+  <div><span class="ctl-label">SOURCE</span><div class="chips" id="sourceChips"></div></div>
+  <h2 style="margin-top:12px">Sum <span id="sumUnit"></span></h2>
+  <div class="chart-wrap" style="height:320px"><canvas id="sliceChart"></canvas></div>
+  <div class="summary" id="sliceSummary"></div>
+  <h2 style="margin-top:24px">Count · events</h2>
+  <div class="chart-wrap sm"><canvas id="countChart"></canvas></div>
+  <div class="summary" id="countSummary"></div>
+  <div class="note">Count = real events: ledger point writes with a nonzero change, or Toggl entries. The synthetic "unknown" remainder (and older Toggl days from the daily cache) count as 0 events.</div>
+  <div class="note" id="sliceNote"></div>
+</div>
+<script>
+""" + _SHARED_JS_HEAD + """
+const state = {metric: 'points', group_by: 'project', grain: 'day', days: '14', project: new Set(), source: new Set()};
+let chart = null, countChart = null;
+const LS = 'jmSlice';
+try { const s = JSON.parse(localStorage.getItem(LS) || '{}');
+  for (const k of ['metric','group_by','grain','days']) if (s[k]) state[k] = s[k];
+  for (const k of ['project','source']) if (s[k]) state[k] = new Set(s[k]);
+} catch (e) {}
+function save() { try { localStorage.setItem(LS, JSON.stringify({...state, project: [...state.project], source: [...state.source]})); } catch (e) {} }
+
+document.querySelectorAll('.seg').forEach(seg => {
+  const key = seg.dataset.key;
+  seg.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', b.dataset.v === state[key]);
+    b.onclick = () => {
+      state[key] = b.dataset.v;
+      if (key === 'metric') { state.project.clear(); state.source.clear(); }
+      seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      save(); load();
+    };
+  });
+});
+
+function chips(el, key, values, colors) {
+  el.innerHTML = '';
+  values.forEach(v => {
+    const c = document.createElement('span');
+    c.className = 'chip' + (state[key].has(v) ? ' on' : '');
+    c.innerHTML = `<i style="background:${colors[v] || '#888'}"></i>${v}`;
+    c.onclick = () => { state[key].has(v) ? state[key].delete(v) : state[key].add(v); save(); load(); };
+    el.appendChild(c);
+  });
+}
+
+async function load() {
+  const q = new URLSearchParams({metric: state.metric, group_by: state.group_by, grain: state.grain, days: state.days,
+    project: [...state.project].join(','), source: [...state.source].join(',')});
+  const d = await (await fetch('/api/slice?' + q)).json();
+  chips(document.getElementById('projectChips'), 'project', d.dims.project, d.colors);
+  chips(document.getElementById('sourceChips'), 'source', d.dims.source, d.colors);
+  document.getElementById('sumUnit').textContent = '· ' + d.unit;
+  const draw = (old, canvasId, summaryId, q, unit) => {
+    const names = Object.keys(q.series);
+    const datasets = names.map(n => ({label: n, data: q.series[n], backgroundColor: d.colors[n] || '#888', borderWidth: 0}));
+    if (old) old.destroy();
+    const c = new Chart(document.getElementById(canvasId), {type: 'bar', data: {labels: q.labels, datasets},
+      options: {...CHART_DEFAULTS, plugins: {legend: {display: true, labels: {color: TICK, boxWidth: 10, font: {size: 10}}}}}});
+    const total = names.reduce((a, n) => a + q.totals[n], 0);
+    document.getElementById(summaryId).innerHTML =
+      `<div class="badge"><span>total</span> ${Math.round(total)} ${unit}</div>` +
+      names.map(n => `<div class="badge"><span>${n}</span> ${Math.round(q.totals[n])}</div>`).join('');
+    return c;
+  };
+  chart = draw(chart, 'sliceChart', 'sliceSummary', d, d.unit);
+  countChart = draw(countChart, 'countChart', 'countSummary', d.count, 'events');
+  const notes = [];
+  if (d.grain === 'block' && d.dropped) notes.push(`${Math.round(d.dropped)} ${d.unit} with no time of day (unattributed remainder, older Toggl days) left out of the block view.`);
+  if (d.dims.source.includes('unknown')) notes.push('unknown = recorded before source tracking, or (points) credited by formula with no ledger write.');
+  document.getElementById('sliceNote').textContent = notes.join(' ');
+}
+load();
+</script>
+</body>
+</html>
+"""
 
 
 MORE_HTML = """<!DOCTYPE html>
@@ -2873,6 +3025,8 @@ MORE_HTML = """<!DOCTYPE html>
 
 <div style="text-align:center; margin:24px 0 12px; font-size:13px; color:var(--muted);">
   <a href="/1s" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ 1s weekly</a>
+  &nbsp;·&nbsp;
+  <a href="/jmreads" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ jmreads</a>
   &nbsp;·&nbsp;
   <a href="http://ix:5555" style="color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted);">→ jm-ai-dash</a>
   &nbsp;·&nbsp;
@@ -3121,6 +3275,91 @@ def auth_ga4():
     return "GA4 OAuth complete. Tokens saved. Pageviews should now load on the dashboard."
 
 
+# ── /slice: one points/time chart, filter + group by project or source ────────
+
+_SLICE_CACHE = {}
+_SLICE_TTL = 120  # seconds
+_TOGGL_LIVE_DAYS = 85  # v9 /me/time_entries reaches back ~90 days
+
+
+def _slice_rows(days):
+    """events.py rows for the trailing `days` days (both metrics), cached."""
+    hit = _SLICE_CACHE.get(days)
+    if hit and time.time() - hit[0] < _SLICE_TTL:
+        return hit[1]
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    day_list = [(start + timedelta(days=i)).isoformat() for i in range(days)]
+    col_project = {_points_col_letter(i): c["label"] for i, c in POINTS_COLS.items()}
+    col_project.setdefault("Z", "n156")
+
+    ledger = events.load_ledger(start, end, NEON_LEDGER_DIR)
+    pts = [r for r in events.points_events(ledger, col_project)
+           if day_list[0] <= r["day"] <= day_list[-1]]
+    labels = [c["label"] for c in POINTS_COLS.values()]
+    pts += events.unattributed_points(pts, load_points_all(), labels, day_list)
+
+    live_days = min(days, _TOGGL_LIVE_DAYS)
+    entries = _fetch_toggl_entries(live_days, end=end)
+    tm = events.time_events(
+        entries, events.jmsource_index("time"), events.time_cutover(),
+        lambda pid: PROJECT_ID_TO_CODE.get(pid, "no project") if pid else "no project",
+        _tz())
+    live_floor = (end - timedelta(days=live_days - 1)).isoformat()
+    tm = [r for r in tm if live_floor <= r["day"] <= day_list[-1]]
+    older = [d for d in day_list if d < live_floor]
+    if older:
+        daily, _ = load_toggl_daily_cache()
+        tm += events.time_events_from_daily_cache(daily, older)
+
+    rows = pts + tm
+    _SLICE_CACHE[days] = (time.time(), rows)
+    return rows
+
+
+def _slice_colors():
+    colors = {c["label"]: c["color"] for c in POINTS_COLS.values()}
+    colors.update(PROJECT_COLORS)
+    colors.update({"cli": "#00e676", "1p-app": "#2979ff", "3p-app": "#ff9100",
+                   "3p-app · excel": "#ff9100", "3p-app · toggl": "#ffc400",
+                   "watch": "#aa00ff", "unknown": "#616161", "excel": "#ff9100",
+                   "toggl": "#ffc400", "unattributed": "#616161"})
+    return colors
+
+
+@app.route("/api/slice")
+def api_slice():
+    metric = request.args.get("metric", "points")
+    grain = request.args.get("grain", "day")
+    group_by = request.args.get("group_by", "project")
+    try:
+        days = max(1, min(int(request.args.get("days", 14)), 366))
+    except ValueError:
+        days = 14
+    if metric not in ("points", "time") or grain not in ("day", "week", "month", "block") \
+            or group_by not in ("project", "source", "tool"):
+        return jsonify({"error": "bad metric, grain, or group_by"}), 400
+    if grain == "block":
+        days = min(days, 7)
+    filters = {k: [v for v in request.args.get(k, "").split(",") if v]
+               for k in ("project", "source")}
+    rows = _slice_rows(days)
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    out = events.query(rows, metric, start, end, grain, filters, group_by)
+    out["count"] = events.query(rows, metric, start, end, grain, filters, group_by,
+                                measure="count")
+    out.update(metric=metric, grain=grain, group_by=group_by, days=days,
+               dims=events.dimension_values(rows, metric), colors=_slice_colors(),
+               unit="分" if metric == "points" else "min")
+    return jsonify(out)
+
+
+@app.route("/slice")
+def slice_page():
+    return render_template_string(SLICE_HTML, embed=request.args.get("embed") == "1")
+
+
 @app.route("/")
 def index():
     return render_template_string(HTML)
@@ -3152,6 +3391,57 @@ def f695():
     if not p.exists():
         return "f695 weekly-reports grid not found (cron builds it daily on ix)", 404
     return p.read_text()
+
+
+@app.route("/jmreads")
+def jmreads_page():
+    """Goodreads-style reading page: currently reading, the year's reading
+    challenge, and a feed of JM's book updates (see jmreads.py)."""
+    return jmreads.page(_SHARED_STYLE)
+
+
+@app.route("/jmreads/cover/<key>")
+def jmreads_cover(key):
+    """Serve a book cover cached on disk by jmreads.fill_covers."""
+    from flask import send_file, abort
+    path = jmreads.cover_path(key)
+    if not path:
+        abort(404)
+    head = path.read_bytes()[:4]
+    mime = "image/png" if head.startswith(b"\x89PN") else "image/gif" if head.startswith(b"GIF") \
+        else "image/webp" if head.startswith(b"RIF") else "image/jpeg"
+    resp = send_file(path, mimetype=mime)
+    resp.headers["Cache-Control"] = "public, max-age=604800"
+    return resp
+
+
+@app.route("/jmreads/review/<book_id>", methods=["POST"])
+def jmreads_review(book_id):
+    """'Write review' button: open /bookreview for this book in a new Claude
+    tab on Straylight (cmux, else Terminal)."""
+    ok, msg = jmreads.request_review(book_id)
+    return jsonify({"ok": ok, "where": msg if ok else None, "error": None if ok else msg}), (200 if ok else 400)
+
+
+@app.route("/jmreads/draft/<book_id>", methods=["POST"])
+def jmreads_draft(book_id):
+    """'Draft' button: append jotted thoughts to the book's review file as a
+    dated blockquote (kept out of the feed; /bookreview picks it up later)."""
+    text = (request.get_json(silent=True) or {}).get("text", "")
+    ok, msg = jmreads.save_draft(book_id, text)
+    return jsonify({"ok": ok, "error": None if ok else msg}), (200 if ok else 400)
+
+
+@app.route("/jmreads/delete/<book_id>", methods=["POST"])
+def jmreads_delete(book_id):
+    """'Delete' button: remove the book's review file from the vault."""
+    ok, msg = jmreads.delete_record(book_id)
+    return jsonify({"ok": ok, "error": None if ok else msg}), (200 if ok else 400)
+
+
+@app.route("/api/reads")
+def api_reads():
+    return jsonify(jmreads.data(force=request.args.get("fresh") == "1"))
 
 
 if __name__ == "__main__":

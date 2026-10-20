@@ -44,6 +44,22 @@ class RitualActionListenerService : WearableListenerService() {
                 WorkManager.getInstance(applicationContext).enqueueUniqueWork(
                     "neg1n_complete_$tag", ExistingWorkPolicy.KEEP, request)
             }
+            "/neg1n_goal" -> {
+                val text = String(event.data, Charsets.UTF_8)
+                Log.i(TAG, "RitualActionListenerService: goal request text=$text")
+                // Same guard stamp as a completion: setting the goal closes
+                // the -1g ritual server-side, and a sync fetch racing it
+                // would otherwise push -1g back to not-done (see Neg1nConfig
+                // PREF_COMPLETION_STARTED_AT).
+                applicationContext.getSharedPreferences(Neg1nConfig.PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putLong(Neg1nConfig.PREF_COMPLETION_STARTED_AT, System.currentTimeMillis()).apply()
+                val request = OneTimeWorkRequestBuilder<SetGoalWorker>()
+                    .setInputData(setGoalInputData(text))
+                    .build()
+                // KEEP: a re-delivered message must not post the goal twice.
+                WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+                    "neg1n_goal", ExistingWorkPolicy.KEEP, request)
+            }
             "/neg1n_sync_now" -> {
                 Log.i(TAG, "RitualActionListenerService: sync-now request")
                 SyncScheduler.syncNow(applicationContext)

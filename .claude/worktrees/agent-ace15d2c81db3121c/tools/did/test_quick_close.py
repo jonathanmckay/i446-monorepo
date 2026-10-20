@@ -64,9 +64,14 @@ def test_dtd_wires_quick_close_into_the_completion_path():
     (2026-07-31: "always opt+enter to mark done"), so it no longer has its
     own copy of this call."""
     src = (HERE / "dtd.sh").read_text()
-    assert src.count("quick-close.py") == 1, "done.sh only"
-    # Backgrounded subshell, output discarded — alt-enter must never block on the network.
-    assert src.count('quick-close.py" "\\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &') == 1
+    calls = [l for l in src.splitlines()
+             if "quick-close.py" in l and not l.lstrip().startswith("#")]
+    assert len(calls) == 1, f"done.sh only, got: {calls!r}"
+    # Backgrounded in a subshell, output discarded — alt-enter must never
+    # block on the network (2026-07-31: wrapped in (...) so done.sh's own
+    # job control never waits on it).
+    assert calls[0].strip() == \
+        '(python3 "$HOME/i446-monorepo/tools/did/quick-close.py" "\\$1" "$DTD_CACHE_FILE" >/dev/null 2>&1 &)'
 
 
 if __name__ == "__main__":

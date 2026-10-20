@@ -111,7 +111,7 @@ def test_check_week_flags_missing_days(monkeypatch):
     ctx = {"titles": [(0, "t"), (1, "t"), (3, "t"), (4, "t"), (5, "t"), (6, "t")]}
     # 0l done every day except day 2; tracking fine except day 6.
     raw_0l = "".join("<<D>>%d<<F>>1.0" % i for i in range(7) if i != 2)
-    monkeypatch.setattr(m.subprocess, "run",
+    monkeypatch.setattr(m, "run_bounded",
                         lambda *a, **k: type("P", (), {"returncode": 0, "stdout": raw_0l, "stderr": ""})())
     monkeypatch.setattr(m, "_toggl_minutes_by_day",
                         lambda ds: {d: (600 if i == 6 else 1400) for i, d in enumerate(ds)})
@@ -128,7 +128,7 @@ def test_check_week_clear_when_complete(monkeypatch):
     dates = [dt.date(2026, 7, 12) + dt.timedelta(days=i) for i in range(7)]
     ctx = {"titles": [(i, "t") for i in range(7)]}
     raw_0l = "".join("<<D>>%d<<F>>1.0" % i for i in range(7))
-    monkeypatch.setattr(m.subprocess, "run",
+    monkeypatch.setattr(m, "run_bounded",
                         lambda *a, **k: type("P", (), {"returncode": 0, "stdout": raw_0l, "stderr": ""})())
     monkeypatch.setattr(m, "_toggl_minutes_by_day",
                         lambda ds: {d: 1400 for d in ds})

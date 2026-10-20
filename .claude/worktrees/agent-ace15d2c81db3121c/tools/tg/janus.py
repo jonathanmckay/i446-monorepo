@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import difflib
 import hashlib
 import json
 import os
@@ -58,6 +59,12 @@ from prompt_toolkit.layout.controls import FormattedTextControl, BufferControl  
 from prompt_toolkit.layout.dimension import Dimension  # noqa: E402
 from prompt_toolkit.styles import Style  # noqa: E402
 from prompt_toolkit.mouse_events import MouseEventType  # noqa: E402
+
+# Usage events in dtd's TSV format (janus_events.py). did-fast / tg-fast run as
+# children inherit JMSOURCE_VIA, so the source ledger credits janus, not did-fast.
+os.environ.setdefault("JMSOURCE_VIA", "janus")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import janus_events as JE  # noqa: E402
 from prompt_toolkit.application.current import get_app  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -220,6 +227,72 @@ def _code_is_stale(now=None) -> bool:
         except OSError:
             _stale_state["stale"] = False
     return _stale_state["stale"]
+
+
+# Idle self-restart (2026-09-29). The red "⚠ RESTART" header above was the
+# whole mechanism, and it kept being missed: the placeholder-prefill fix
+# shipped 2026-09-28 sat on disk for a day while the running janus (started
+# 09-27) showed the old behaviour ("I thought I added code yesterday").
+# So once the file has been newer for STALE_RESTART_SETTLE_S (long enough
+# for a Syncthing delivery or an editor save to settle) AND the UI is idle
+# (nothing typed, no edit/split armed, nothing selected, no recording in
+# flight), the app exits cleanly and re-execs itself. State that matters
+# survives on disk: the PID file is re-asserted, a live d357 recording is
+# re-adopted, the day cache is re-read. Nothing is lost that a manual
+# restart wouldn't also drop.
+_RESTART = {"want": False, "stale_since": 0.0, "sel": None}
+STALE_RESTART_SETTLE_S = 15.0
+STALE_RESTART_POLL_S = 5
+# A row selection blocks the restart only while it is FRESH. Tab-selecting a
+# row and walking away is common (2026-09-29: a stale janus sat for 10+
+# minutes with the red header up, empty input, no edit armed — the only
+# thing holding it was a forgotten selection), and losing a selection that
+# nobody has touched for this long costs nothing.
+STALE_RESTART_SEL_IDLE_S = 120.0
+
+
+def _should_self_restart(stale: bool, now: float, *, input_text: str,
+                         edit_target, split_target, event_sel, recording,
+                         state: dict | None = None) -> bool:
+    """Pure decision: restart only after `stale` has held for the settle
+    window and the UI is idle. Resets the settle clock whenever the code
+    stops reading as stale (a restart already happened, or the mtime
+    guard was a false alarm)."""
+    st = _RESTART if state is None else state
+    # Track how long the CURRENT selection has been sitting unchanged; a
+    # selection that changes restarts its own clock.
+    prev = st.get("sel")
+    if event_sel is None:
+        st["sel"] = None
+    elif prev is None or prev[0] != event_sel:
+        st["sel"] = (event_sel, now)
+    if not stale:
+        st["stale_since"] = 0.0
+        return False
+    if not st["stale_since"]:
+        st["stale_since"] = now
+        return False
+    if now - st["stale_since"] < STALE_RESTART_SETTLE_S:
+        return False
+    if input_text or edit_target is not None or split_target is not None or recording:
+        return False
+    if st["sel"] is not None and now - st["sel"][1] < STALE_RESTART_SEL_IDLE_S:
+        return False
+    return True
+
+
+async def ticker_self_restart(app):
+    while True:
+        await asyncio.sleep(STALE_RESTART_POLL_S)
+        if _should_self_restart(_code_is_stale(), time.monotonic(),
+                                input_text=input_buffer.text,
+                                edit_target=STATE.edit_target,
+                                split_target=STATE.split_target,
+                                event_sel=STATE.event_sel,
+                                recording=STATE.recording):
+            _RESTART["want"] = True
+            app.exit()  # run_async() returns → __main__ re-execs (terminal restored first)
+            return
 BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
 BLOCK_EMOJIS = ["☀️", "📧", "🎯", "⏱️", "✅", "😈"]
 
@@ -322,14 +395,20 @@ DAILY_DOZEN_COLORS = {
 }
 DAILY_DOZEN_ORDER = ["bn", "br", "fr", "cr", "gr", "vg", "fx", "g", "nt", "sp", "wtr"]
 # hcbi columns X (food 分) / Y (hcbp) hold each domain's running Q<n>
-# total — rendered as a labeled "behind" chip only when negative (same
-# "only show what's owed" convention as HABIT_YTD_COLORS below), in that
-# domain's own PROJECT_COLORS hue. "hcb" reads column X's SECOND row
-# (e.g. X378 in Q3 2026), which is =SUM(X<label row>:Y<label row>) — the
-# combined hcbc+hcbp total — not the label row's food-only subtotal
-# (switched 2026-08-12: the persistent header chip should track overall
-# hcb standing, not just food).
+# total, in that domain's own PROJECT_COLORS hue. "hcbp" is a labeled
+# "behind" chip shown only when negative (same "only show what's owed"
+# convention as HABIT_YTD_COLORS below). "hcb" is the OVERALL hcb standing
+# and is always shown, signed (HCBI_ALWAYS_SHOWN — bug 2026-10-01 "janus
+# still not showing overall hcb points": the total had gone positive, so
+# the negative-only filter hid the one chip meant to be persistent). Its
+# value is the sheet's own combined cell HCBI_HCB_TOTAL_CELL (hcbi!X388,
+# "Q2+Q3" = SUM(X378,X375) as of 2026-10-01 — JM edits that formula when
+# the window moves; the jm dashboard's hcbp+hcbc card is the same number).
+# janus used to derive Q<n-1>+Q<n> from the quarter rows itself, which
+# disagreed with the sheet (+264 vs -928) — per JM 2026-10-01, read X388.
 HCBI_BEHIND_DOMAINS = {"hcb": "#f81d78", "hcbp": PROJECT_COLORS["hcbp"]}
+HCBI_ALWAYS_SHOWN = {"hcb"}
+HCBI_HCB_TOTAL_CELL = "X388"
 
 # Radioactive — the palette's one unassigned signature neon. The ₦ accent:
 # block-header -1₦ scores render in it (user request 2026-07-21: "the neon
@@ -422,6 +501,7 @@ def toggl_project_code(pid, desc: str | None = None) -> str:
 class State:
     def __init__(self):
         self.current = None  # running entry
+        self.optimistic = None  # see _optimistic_set
         # Whether STATE.current reflects a CONFIRMED Toggl read. False until the
         # first successful fetch, and reset whenever a fetch fails (e.g. the
         # free-tier 402 rate limit). The idle nag (whole-screen flash + red NO
@@ -447,6 +527,7 @@ class State:
         # Toggl actually had filled (2026-07-15).
         self.entries_known = False
         self.entries_yday: list[dict] = []  # yesterday's (for 卯 sleep total)
+        self.entries_day = None  # date STATE.entries belongs to (None = unloaded)
         self.events: list[dict] = []  # today's combined calendar events (gcal + outlook)
         self.scroll_min = 0  # detail band scroll (minutes offset from now)
         self.day_offset = 0  # 0=today, -1=yesterday, … (≤0; for filling gaps)
@@ -557,6 +638,10 @@ class State:
         # point value (blank = 0) and completes the /done. Consumed first,
         # same chokepoint discipline as edit_target/split_target.
         self.done_target: dict | None = None
+        # True only while ⌥↵ replays a TYPED command through the Enter
+        # path: every completed range goes to did-fast (Toggl entry +
+        # points in one shot) instead of tg-fast (2026-10-12).
+        self.force_did: bool = False
         # True while a past-event → did-fast conversion subprocess is running
         # (Enter on a selected ALREADY-ENDED event). did-fast is a ~10-45s,
         # Excel-writing call — unlike tg-fast's plain Toggl start, a second
@@ -592,9 +677,140 @@ def _toggl_blocked() -> bool:
 
 
 def _note_rate_limit():
-    """Enter the back-off window and tell the user how long we're holding off."""
-    STATE.toggl_blocked_until = time.monotonic() + RATE_LIMIT_COOLDOWN
-    flash(f"toggl: rate limited — backing off {RATE_LIMIT_COOLDOWN}s", RATE_LIMIT_COOLDOWN)
+    """Enter the back-off window and tell the user how long we're holding off.
+    The shared throttle knows the server's own reset estimate (the hourly-cap
+    402 says "reset in N seconds"); hold off for the longer of that and the
+    local default, and keep the reason on screen for the whole wait. Before
+    2026-10-16 this flashed for 60s, then every ticker re-polled into the cap
+    and the screen just stopped updating with no explanation."""
+    secs = max(RATE_LIMIT_COOLDOWN, toggl_throttle.cooldown_remaining())
+    STATE.toggl_blocked_until = time.monotonic() + secs
+    _flash_cooldown(secs)
+
+
+def _flash_cooldown(secs: float) -> None:
+    reset_at = dt.datetime.now(_tz()) + dt.timedelta(seconds=secs)
+    flash(f"toggl: rate limited — resets {reset_at:%H:%M} ({int(secs) // 60}m{int(secs) % 60:02d}s), ^R to retry", secs)
+
+
+def _show_shared_cooldown() -> None:
+    """A cooldown armed by ANOTHER process (tg-fast, dtd, 0t) blocks our fetches
+    too; say so instead of silently skipping, once the previous flash has run out."""
+    left = toggl_throttle.cooldown_remaining()
+    if left > 0 and time.monotonic() >= STATE.flash_until:
+        _flash_cooldown(left)
+
+
+# ── Optimistic current-timer view (2026-10-04) ───────────────────────────────
+# Janus used to repaint the timer row only after the whole job finished
+# (did-fast 4-11s, then serial Toggl re-reads), so a stop/done/switch looked
+# frozen. Now the handler sets the row it EXPECTS immediately; fetch_current
+# keeps that view while Toggl still reports the old timer (its /current lags,
+# and the 30s shared cache can be older still), and lets reality win once
+# it differs or the hold expires. dtd's equivalent is fzf's `exclude`.
+OPTIMISTIC_HOLD_S = 20.0
+
+
+def _optimistic_set(expected: dict | None, stale_id) -> None:
+    """Show `expected` (None = no timer) as the current timer right now, and
+    ignore fetched states still showing timer `stale_id` for a while."""
+    STATE.current = expected
+    STATE.current_known = True
+    if expected is None and STATE.no_timer_since is None:
+        STATE.no_timer_since = time.monotonic()
+    STATE.optimistic = {"stale_id": stale_id,
+                        "until": time.monotonic() + OPTIMISTIC_HOLD_S}
+
+
+def _optimistic_holds(fetched) -> bool:
+    opt = getattr(STATE, "optimistic", None)
+    if not opt:
+        return False
+    if time.monotonic() > opt["until"]:
+        STATE.optimistic = None
+        return False
+    fid = (fetched or {}).get("id")
+    if fid == opt["stale_id"]:
+        # Toggl still shows the pre-action state: the timer we just ended or
+        # replaced, or (stale_id None) still no timer after a start.
+        return True
+    STATE.optimistic = None  # Toggl caught up (or changed some other way)
+    return False
+
+
+def _optimistic_stop() -> None:
+    clear_dtd_running_hint()
+    cur = STATE.current or {}
+    _optimistic_set(None, cur.get("id"))
+
+
+_TG_MOD = None  # lazy tg-fast module, project-inference tables only
+
+
+def _guess_project_code(raw: str) -> str:
+    """Resolve the project a just-typed timer command WILL get, locally and
+    instantly, so the optimistic row is painted in its color from the first
+    frame (bug 2026-10-19: the row came up uncolored and only took its project
+    once Toggl's /current caught up, seconds later -- "makes me think it's
+    wrong every time"). Same precedence as tg-fast.resolve(): explicit @code,
+    then its shortcode/domain tables, then the task-queue label; the one
+    thing skipped is tg-fast's cache-miss subprocess refresh, which has no
+    place on a paint path. Never raises; "" when nothing matches."""
+    try:
+        m = re.search(r"(?<!\S)@(\S+)", raw or "")
+        if m and m.group(1) in _known_project_codes():
+            return m.group(1)
+        global _TG_MOD
+        if _TG_MOD is None:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location("tg_fast_tables", TG_FAST)
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _TG_MOD = _mod
+        key = " ".join(w for w in (raw or "").split()
+                       if not w.startswith(("@", "#"))
+                       and not re.fullmatch(r"[+\[({]\d+[\])}]?", w)).lower()
+        if key in _TG_MOD.SHORTCODES:
+            return _TG_MOD.SHORTCODES[key][0]
+        if key in _TG_MOD.DOMAINS:
+            return key
+        pm = _TG_MOD._ONE_PREFIX.match(key)
+        if pm and pm.group(1) in _TG_MOD.DOMAINS:
+            return pm.group(1)
+        return _TG_MOD._search_task_cache(raw or "", _known_project_codes()) or ""
+    except Exception:  # noqa: BLE001 -- inference is a nicety, never a blocker
+        return ""
+
+
+def _optimistic_start(desc: str, raw: str | None = None) -> None:
+    """`raw` is the command as typed (with any @code) so the row's project
+    can be guessed up front; defaults to the description."""
+    cur = STATE.current or {}
+    code = _guess_project_code(raw if raw is not None else desc)
+    pid = (globals().get("PROJECT_MAP") or {}).get(code)
+    _optimistic_set({"description": desc, "id": None, "project_id": pid,
+                     "start": dt.datetime.now(_tz()).isoformat(),
+                     "tags": [], "_optimistic": True}, cur.get("id"))
+
+
+async def _refresh_parallel(*fns) -> None:
+    """Run the post-command re-reads concurrently instead of back to back
+    (each is an independent network read; serial they added ~1s per action)."""
+    await asyncio.gather(*(asyncio.to_thread(*(f if isinstance(f, tuple) else (f,)))
+                           for f in fns))
+
+
+async def _confirm_after_tg(app) -> None:
+    """After a tg-fast switch/stop: one re-read pair at 1.0s, and a second at
+    2.5s only if Toggl still showed the stale timer. Was 3 live /current reads
+    + 1 entries read per command (0.4/0.8/1.5s), which fed the hourly quota
+    that 402'd on 2026-10-01."""
+    for delay in (1.0, 1.5):
+        await asyncio.sleep(delay)
+        await _refresh_parallel(fetch_current, (fetch_today, True))
+        app.invalidate()
+        if not getattr(STATE, "optimistic", None):
+            return
 
 
 def fetch_current(cached=False):
@@ -606,10 +822,14 @@ def fetch_current(cached=False):
     Skipped entirely during a rate-limit cooldown so a 402 isn't made worse by
     the 30s ticker continuing to poll."""
     if _toggl_blocked():
+        _show_shared_cooldown()
         return
     try:
-        STATE.current = (toggl_api.get_current_cached() if cached
-                         else toggl_api.get_current())
+        fetched = (toggl_api.get_current_cached() if cached
+                   else toggl_api.get_current())
+        if _optimistic_holds(fetched):
+            return  # keep the optimistic view until Toggl reflects the action
+        STATE.current = fetched
         STATE.current_known = True
         STATE.last_current_fetch = time.monotonic()
         if STATE.current:
@@ -676,6 +896,30 @@ def _read_day_cache(date_iso: str) -> list[dict] | None:
              "end_dt": dt.datetime.fromisoformat(e["end_dt"])} for e in raw]
 
 
+def _load_viewed_day_cache(force=False) -> None:
+    """Point STATE.entries at the VIEWED day's last-confirmed cache when no
+    live fetch can run. force=False is the skipped-fetch path: a no-op while
+    the loaded entries already belong to the viewed day. With no cache, clear
+    and mark unconfirmed, so gap flashing (and render_morning's warning)
+    don't read "haven't fetched yet" as "confirmed empty" -- and so another
+    day's entries are never drawn at their clock times on this one."""
+    viewed = view_now().date()
+    if not force and STATE.entries_day == viewed:
+        return
+    cached = _read_day_cache(viewed.isoformat())
+    cached_yday = _read_day_cache((viewed - dt.timedelta(days=1)).isoformat())
+    if cached is not None:
+        STATE.entries = cached
+        STATE.entries_yday = cached_yday or []
+        STATE.entries_known = True
+    else:
+        if STATE.entries_day != viewed:
+            STATE.entries = []
+            STATE.entries_yday = cached_yday or []
+        STATE.entries_known = False
+    STATE.entries_day = viewed
+
+
 def fetch_today(force=False):
     """Reload the viewed day's Toggl entries.
 
@@ -685,6 +929,11 @@ def fetch_today(force=False):
     rapid Ctrl+←/→ scrubbing or back-to-back commands don't each hit the API. All
     fetches are skipped during a post-402 cooldown."""
     if _toggl_blocked():
+        # Skipped, not failed: still never leave ANOTHER day's entries on
+        # screen (2026-10-06: a 402 cooldown spanning midnight kept showing
+        # 10/5's entries at their clock times on 10/6, and a restart during
+        # the cooldown showed none at all, despite a confirmed 10/6 cache).
+        _load_viewed_day_cache()
         return
     # Coalesce bursts — but a 0 sentinel means "never fetched", so the first
     # (startup) read always runs even when monotonic() is still small.
@@ -723,6 +972,7 @@ def fetch_today(force=False):
             })
         out.sort(key=lambda x: x["start_dt"])
         STATE.entries = out
+        STATE.entries_day = today
         STATE.entries_known = True
         STATE.entries_yday = yout
         STATE.last_toggl_fetch = time.monotonic()
@@ -732,6 +982,10 @@ def fetch_today(force=False):
             _resolve_pending_tag_credits()
         except Exception:  # noqa: BLE001 — credits never break the fetch
             pass
+        try:
+            _auto_sleep_tick(out, yout)
+        except Exception as e:  # noqa: BLE001 — a 睡觉 convenience never breaks the fetch
+            flash(f"auto-睡觉 err: {e}", 6.0)
     except Exception as e:
         # Fetch failed. STATE.entries may currently hold a DIFFERENT day's
         # data (e.g. today's, from before a day-nav) -- rendering it against
@@ -739,18 +993,7 @@ def fetch_today(force=False):
         # reads as a confident empty day (user report 2026-09-07). Fall back
         # to the specific viewed day's own last-CONFIRMED cache instead, if
         # one exists, rather than leaving mismatched-day data in place.
-        viewed = view_now().date()
-        cached = _read_day_cache(viewed.isoformat())
-        cached_yday = _read_day_cache((viewed - dt.timedelta(days=1)).isoformat())
-        if cached is not None:
-            STATE.entries = cached
-            STATE.entries_yday = cached_yday or []
-            STATE.entries_known = True
-        else:
-            # Truly nothing to fall back on -- mark unconfirmed so gap
-            # flashing (and render_morning's own warning) don't treat
-            # "haven't fetched yet" as "confirmed empty".
-            STATE.entries_known = False
+        _load_viewed_day_cache(force=True)
         if "402" in str(e):
             _note_rate_limit()
         else:
@@ -1013,6 +1256,64 @@ def _cursor_marker(is_sel: bool) -> list[tuple]:
     return []
 
 
+def _main_scroll() -> int:
+    """main_window's current vertical scroll, or 0 before the layout exists
+    (module-level tests that call render_all() directly)."""
+    win = globals().get("main_window")
+    return int(getattr(win, "vertical_scroll", 0) or 0)
+
+
+def _hold_scroll(parts: list, vertical_scroll: int) -> list:
+    """Pin main_window's scroll where it is when no row carries the cursor.
+
+    prompt_toolkit scrolls a Window to keep its content's cursor visible on
+    EVERY render, and a FormattedTextControl with no "[SetCursorPosition]"
+    fragment reports the cursor at line 0 (Window._scroll_without_
+    linewrapping: `cursor_position or Point(0, 0)`). So once _cursor_marker's
+    0.3s window expired, every 0.1s refresh snapped the view back to the top
+    -- which, on a terminal too short for the whole day, made the bottom
+    rows unselectable: Tab scrolled the last entry into view for a third of
+    a second, then the pane jumped to the top and the selection sat off-
+    screen (user report 2026-09-28: "if the window is too short, it won't
+    let me select the last available entry, it will just rescroll back to
+    the top"). Mouse-wheel scrolling was pinned the same way.
+
+    Fix: when no fragment already positions the cursor, put an empty
+    "[SetCursorPosition]" fragment at the start of the line currently at the
+    top of the viewport. The cursor is then neither above nor below the
+    visible part, so prompt_toolkit leaves vertical_scroll alone; the
+    selection-time marker (still emitted for 0.3s by _cursor_marker) keeps
+    winning while it lasts. Clamped to the last line so a shrunken document
+    can't point past its end."""
+    if any("[SetCursorPosition]" in str(f[0]) for f in parts):
+        return parts
+    line_count = 1 + sum(str(f[1]).count("\n") for f in parts)
+    target = max(0, min(int(vertical_scroll), line_count - 1))
+    if target == 0:
+        return [("[SetCursorPosition]", "")] + list(parts)
+    line = 0
+    for i, f in enumerate(parts):
+        text = str(f[1])
+        n = text.count("\n")
+        if line + n >= target:
+            # The target line starts right after the (target - line)-th
+            # newline inside this fragment: split it there.
+            k = target - line
+            idx = -1
+            for _ in range(k):
+                idx = text.index("\n", idx + 1)
+            head, tail = text[: idx + 1], text[idx + 1:]
+            out = list(parts[:i])
+            if head:
+                out.append((f[0], head) + tuple(f[2:]))
+            out.append(("[SetCursorPosition]", ""))
+            out.append((f[0], tail) + tuple(f[2:]))
+            out.extend(parts[i + 1:])
+            return out
+        line += n
+    return list(parts)
+
+
 def _row_selection(key) -> tuple[bool, object | None, list[tuple]]:
     """(is_selected, click_handler, cursor_marker) for a selectable row —
     every branch in _compact_block_lines needs exactly these three things
@@ -1063,6 +1364,17 @@ def _entry_edit_prefill(item: dict) -> str:
         elif item.get("dur_min"):
             end = item["start_dt"] + dt.timedelta(minutes=item["dur_min"])
             rng = f" {item['start_dt']:%H%M}-{end:%H%M}"
+    # A placeholder ("generic placeholder", "?") is by definition text the
+    # user is about to REPLACE, so handing it back only makes them delete
+    # it first (user request 2026-09-28: "just put the time and the cursor
+    # after that so I can fill in the project and task"). Prefill the time
+    # range alone, trailing space, cursor at the end: typing "desc @code"
+    # and Enter goes through _parse_edit_text unchanged (range is found
+    # anywhere in the line; the rest is the new description + code). Only
+    # when a range exists — with none, the bare "" would read like an
+    # empty new command line, so fall back to the full form.
+    if rng and _is_placeholder(item.get("raw_desc") or ""):
+        return rng.strip() + " "
     return f"{item['raw_desc']}{suffix}{rng}"
 
 
@@ -1115,7 +1427,11 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     if m_time:
         time_range = (m_time.group(1), m_time.group(2))  # group(2) None → open-ended
         text = (text[:m_time.start()] + " " + text[m_time.end():]).strip()
-    m_code = re.match(r"^(.*?)(?:\s+@(\S+))?$", text.strip())
+    # "@i9" alone (no leading space) must still be a project code: it's how
+    # you re-project a row without retyping its name. The old pattern needed
+    # whitespace before "@", so a bare "@i9" became the DESCRIPTION and no
+    # project was set (bug 2026-10-05: "I can't assign the 1 f694 task to i9").
+    m_code = re.match(r"^(.*?)(?:(?:^|\s+)@(\S+))?$", text.strip())
     body = (m_code.group(1) or "").strip() if m_code else text.strip()
     code = m_code.group(2) if m_code else None
     return (body or None), code, time_range, tags
@@ -1379,40 +1695,39 @@ def fetch_points():
         try:
             import subprocess as _sp
             IX_OSA = str(Path.home() / ".claude/skills/_lib/ix-osa.sh")
+            # Bulk range reads, one Apple Event each (bug 2026-10-12: "I still
+            # don't see neon points for the day"). The old script fetched B2..B500
+            # and then 28 G:Y cells ONE CELL PER EVENT; with Excel busy on ix that
+            # took ~80s, blew the 15s timeout below every time, and the abandoned
+            # remote osascript kept Excel loaded for the next read. Same output
+            # format: D | G:O formulas | P:Y values | G:O values.
             script = f'''tell application "Microsoft Excel"
     set ws to sheet "0分" of workbook "Neon分v12.2.xlsx"
+    set colB to string value of range "B1:B500" of ws
     set todayRow to 0
     repeat with i from 2 to 500
-        if (string value of range ("B" & i) of ws) = "{today_md}" then
+        if (item 1 of item i of colB) = "{today_md}" then
             set todayRow to i
             exit repeat
         end if
     end repeat
     if todayRow = 0 then return "ERR"
+    set r to todayRow as text
     set out to ""
     try
-        set out to (value of range ("D" & todayRow) of ws) as text
+        set out to (value of range ("D" & r) of ws) as text
     end try
-    repeat with c from 7 to 15
-        set v to ""
-        try
-            set v to (get formula of cell c of row todayRow of ws) as text
-        end try
-        set out to out & "|" & v
+    set gf to item 1 of (get formula of range ("G" & r & ":O" & r) of ws)
+    set pv to item 1 of (get value of range ("P" & r & ":Y" & r) of ws)
+    set gv to item 1 of (get value of range ("G" & r & ":O" & r) of ws)
+    repeat with v in gf
+        set out to out & "|" & (v as text)
     end repeat
-    repeat with c from 16 to 25
-        set pv to ""
-        try
-            set pv to (value of cell c of row todayRow of ws) as text
-        end try
-        set out to out & "|" & pv
+    repeat with v in pv
+        set out to out & "|" & (v as text)
     end repeat
-    repeat with c from 7 to 15
-        set gv to ""
-        try
-            set gv to (value of cell c of row todayRow of ws) as text
-        end try
-        set out to out & "|" & gv
+    repeat with v in gv
+        set out to out & "|" & (v as text)
     end repeat
     return out
 end tell'''
@@ -1589,7 +1904,17 @@ def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:
     # in P outweighs earnings) `0 <= total + 2` is false with an EMPTY bp, which
     # logged every clean read of that day as torn (2026-09-24, same bug as the
     # negative-total rejection in _total_trustworthy).
-    return not bp or sum(bp.values()) <= total + 2
+    #
+    # Tolerance scales with the block count: every block value is rounded to
+    # an int individually (the sheet holds fractions like 67.64 / 214.29 from
+    # minutes/7 variable tasks), so a perfectly consistent row can read up to
+    # 0.5 × len(bp) above the rounded Σ. A fixed +2 rejected FIVE consecutive
+    # clean reads on 2026-09-28 23:54-23:59 (Σ 1367 vs eight rounded blocks
+    # summing to 1370), and a janus started inside such a window shows no
+    # block points at all until the sheet happens to change (user report
+    # 2026-09-29: "janus showing nothing from neon"). A real torn read is
+    # hundreds over (975 of 728), never a few.
+    return not bp or sum(bp.values()) <= total + 2 + (len(bp) + 1) // 2
 
 
 def _blocks_plausible(bp: dict[str, int]) -> bool:
@@ -1606,7 +1931,14 @@ def _blocks_plausible(bp: dict[str, int]) -> bool:
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
+_FLASH_FAIL = re.compile(r"\b(failed|error|refus|not a|invalid|couldn|can't|cannot)", re.I)
+
+
 def flash(msg: str, secs: float = 4.0, style: str = ""):
+    if _FLASH_FAIL.search(msg or ""):
+        JE.emit("outcome", "error", (), msg)
+    elif "cancel" in (msg or "").lower():
+        JE.emit("outcome", "cancel", (), msg)
     STATE.flash = msg
     STATE.flash_until = time.monotonic() + secs
     STATE.flash_style = style or ""
@@ -1820,6 +2152,36 @@ def display_desc(desc: str) -> str:
 
 # ─── Renderers ─────────────────────────────────────────────────────────────
 
+def _live_width() -> int:
+    """Usable line width RIGHT NOW. WIDTH_HINT is fixed at startup, so a pane
+    narrowed afterwards kept getting 64-column lines and the right-edge clock
+    fell off (bug 2026-10-03: "make sure the time shows even if the window is
+    small"). Never wider than WIDTH_HINT; narrower when the pane is."""
+    try:
+        if sys.stdout.isatty():
+            cols = shutil.get_terminal_size().columns
+            if cols > 1:
+                return min(WIDTH_HINT, cols - 1)
+    except Exception:
+        pass
+    return WIDTH_HINT
+
+
+def _fit_clock_line(left: str, rights: list[str], width: int, fill: str = "─") -> str:
+    """left + fill + right on one line of `width` display columns, where the
+    right edge (the clock) is the part that must survive. `rights` runs from
+    the fullest form to the minimal one (e.g. "Sat 10/3 08:58:48 " then
+    "08:58:48 "): the first that fits beside an untruncated left wins;
+    otherwise the minimal right is kept and the LEFT is truncated."""
+    for right in rights:
+        if dwidth(left) + dwidth(right) <= width:
+            return left + fill * max(0, width - dwidth(left) - dwidth(right)) + right
+    right = rights[-1]
+    room = max(0, width - dwidth(right))
+    left = truncate(left, room)
+    return left + fill * max(0, room - dwidth(left)) + right
+
+
 def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(_tz())
     # int(round()) at every 分 render site: the sheet now carries fractional
@@ -1846,22 +2208,23 @@ def render_header() -> list[tuple[str, str]]:
     clock = f"{now:%H:%M:%S} "
     # The running process is behind the file on disk → tell the user to restart;
     # the whole header goes red so it can't be missed.
+    # The clock is the part that must survive a narrow pane: the date drops
+    # first, then the left text truncates (_fit_clock_line). A past-day view
+    # keeps its viewed date, which is the point of that badge.
+    width = _live_width()
     if _code_is_stale():
         left = f" {pts_str}janus · ⚠ RESTART — code updated "
-        right = f"{now:%a %-m/%-d} " + clock
-        line = left + "─" * max(0, WIDTH_HINT - len(left) - len(right)) + right
+        line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
         left = f" {pts_str}janus "
-        right = f"{now:%a %-m/%-d} " + clock
-        line = left + "─" * max(0, WIDTH_HINT - len(left) - len(right)) + right
+        line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:header", line + "\n")]
     # Viewing a past day: badge it (◀ ... ⎋ today) so it's never mistaken for
     # today; the viewed date itself rides the right edge with the clock.
     viewed = view_now()
     left = f" {pts_str}janus · ◀ ⎋ today "
-    right = f"{viewed:%a %-m/%-d} " + clock
-    line = left + "─" * max(0, WIDTH_HINT - len(left) - len(right)) + right
+    line = _fit_clock_line(left, [f"{viewed:%a %-m/%-d} " + clock], width)
     return [("class:no_entry", line + "\n")]
 
 
@@ -1940,13 +2303,20 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
     the rest of this fetch.
 
     If prev_q_label is non-empty, a second independent search finds THAT
-    quarter's own combined X cell and appends it after a ";" so "hcb"
-    becomes a running Q<n-1>+Q<n> total (2026-09-06 per JM, matching the
-    same change in the jm dashboard's CACHE_CARDS) rather than resetting to
-    zero every quarter boundary. Kept as a separate try/search rather than
+    quarter's row pair and appends its E:Y two-row block after a ";" (same
+    "row1|row2" shape as the current quarter) so "hcb" (2026-09-06 per JM,
+    matching the jm dashboard's CACHE_CARDS), the Daily Dozen deficits and
+    "hcbp" (2026-10-01: on day one of Q4 the dozen read all-zero so no
+    category showed, and hcbp showed Q4's lone -86 instead of the running
+    1323-86) all carry Q<n-1>+Q<n> instead of resetting to zero at every
+    quarter boundary. Kept as a separate try/search rather than
     folding into the block above so a missing prior-quarter row (e.g. Q1,
     with no Q0) degrades to "just this quarter" instead of losing the
-    whole segment."""
+    whole segment.
+
+    A final try appends "#" + the value of HCBI_HCB_TOTAL_CELL (hcbi!X388,
+    the sheet's own combined hcb total) — "hcb" is read from there, never
+    derived from the quarter rows (per JM 2026-10-01)."""
     prev_block = ""
     if prev_q_label:
         prev_block = f'''
@@ -1965,11 +2335,25 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
             end if
         end repeat
         if pRow > 0 then
-            set pv to ""
-            try
-                set pv to (value of range ("X" & (pRow + 1)) of wsP) as text
-            end try
-            set out to out & ";" & pv
+            set tmpP to value of range ("E" & pRow & ":Y" & (pRow + 1)) of wsP
+            set pRow1 to item 1 of tmpP
+            set pRow2 to item 2 of tmpP
+            set out to out & ";"
+            repeat with i from 1 to (count of pRow1)
+                set dv to ""
+                try
+                    set dv to (item i of pRow1) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+            set out to out & "|"
+            repeat with i from 1 to (count of pRow2)
+                set dv to ""
+                try
+                    set dv to (item i of pRow2) as text
+                end try
+                set out to out & dv & ","
+            end repeat
         end if
     end try'''
     return f'''    try
@@ -2011,7 +2395,65 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
                 set out to out & dv & ","
             end repeat
         end if
-    end try{prev_block}'''
+    end try{prev_block}
+    try
+        set wsT to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set out to out & "#" & ((value of range "{HCBI_HCB_TOTAL_CELL}" of wsT) as text)
+    end try'''
+
+
+def _dozen_rows(raw: str) -> tuple[list[str], list[str]]:
+    rows = raw.split("|")
+    r1 = rows[0].split(",") if len(rows) > 0 else []
+    r2 = rows[1].split(",") if len(rows) > 1 else []
+    return r1, r2
+
+
+def _dozen_cell(r1: list[str], r2: list[str], offset: int) -> str:
+    """offset is 1-based within E:Y (E=1 .. Y=21); the value lives on
+    whichever of the two rows is non-blank for that column."""
+    v1 = r1[offset - 1].strip() if offset - 1 < len(r1) else ""
+    v2 = r2[offset - 1].strip() if offset - 1 < len(r2) else ""
+    return v1 or v2
+
+
+def _num(s: str) -> float | None:
+    try:
+        return float(s.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_dozen_segment(cur_raw: str, prev_raw: str = "", total_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
+    """(daily_dozen, hcbi_behind) from the hcbi segment: the current
+    quarter's "row1|row2" E:Y block plus, when present, the previous
+    quarter's block in the same shape. Every figure is the RUNNING
+    Q<n-1>+Q<n> value — a category/domain counts as present when either
+    quarter has a value. "hcbp" is column Y on either row. "hcb" is NOT
+    derived from the quarter rows at all: it is total_raw, the value of
+    HCBI_HCB_TOTAL_CELL (hcbi!X388) — absent when that read failed, so the
+    chip disappears rather than showing a number the sheet doesn't. A
+    legacy prev segment that is a bare number (pre-2026-10-01 scripts
+    emitted just the prior row-below X) is ignored."""
+    c1, c2 = _dozen_rows(cur_raw)
+    if prev_raw and "|" not in prev_raw and "," not in prev_raw:
+        p1, p2 = [], []
+    else:
+        p1, p2 = _dozen_rows(prev_raw) if prev_raw else ([], [])
+    dozen: list[tuple[str, float]] = []
+    for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
+        cur, prev = _num(_dozen_cell(c1, c2, offset)), _num(_dozen_cell(p1, p2, offset))
+        if cur is None and prev is None:
+            continue
+        dozen.append((key, (cur or 0.0) + (prev or 0.0)))
+    behind: dict[str, float] = {}
+    hcb_total = _num(total_raw)
+    if hcb_total is not None:
+        behind["hcb"] = hcb_total
+    hcbp_cur, hcbp_prev = _num(_dozen_cell(c1, c2, 21)), _num(_dozen_cell(p1, p2, 21))
+    if hcbp_cur is not None or hcbp_prev is not None:
+        behind["hcbp"] = (hcbp_cur or 0.0) + (hcbp_prev or 0.0)
+    return dozen, behind
 
 
 def fetch_habits_today():
@@ -2094,9 +2536,12 @@ end tell'''
         raw = segs[0] if len(segs) > 0 else ""
         ytd_raw = segs[1] if len(segs) > 1 else ""
         dozen_raw = segs[2] if len(segs) > 2 else ""
-        # prev-quarter's combined X cell rides at the end of this segment
-        # after a ";" (see _dozen_applescript_lines' prev_block) — peel it
-        # off before the "|"-delimited dRow1/dRow2 parsing below.
+        # Segment shape: <cur rows>[;<prev-quarter rows>][#<hcbi!X388>] (see
+        # _dozen_applescript_lines) — peel the "#" total and the ";" prev
+        # block off before the "|"-delimited dRow1/dRow2 parsing below.
+        hcb_total_raw = ""
+        if "#" in dozen_raw:
+            dozen_raw, hcb_total_raw = dozen_raw.split("#", 1)
         prev_hcb_raw = ""
         if ";" in dozen_raw:
             dozen_raw, prev_hcb_raw = dozen_raw.split(";", 1)
@@ -2107,51 +2552,7 @@ end tell'''
             except ValueError:
                 pass
         STATE.habits_ytd = ytd
-        dozen_rows = dozen_raw.split("|")
-        dozen_row1 = dozen_rows[0].split(",") if len(dozen_rows) > 0 else []
-        dozen_row2 = dozen_rows[1].split(",") if len(dozen_rows) > 1 else []
-
-        def _dozen_cell(offset: int) -> str:
-            # offset is 1-based within E:Y (E=1 .. Y=21); the value lives on
-            # whichever of the two rows is non-blank for that column.
-            v1 = dozen_row1[offset - 1].strip() if offset - 1 < len(dozen_row1) else ""
-            v2 = dozen_row2[offset - 1].strip() if offset - 1 < len(dozen_row2) else ""
-            return v1 or v2
-        dozen: list[tuple[str, float]] = []
-        for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
-            raw_v = _dozen_cell(offset)
-            if raw_v:
-                try:
-                    dozen.append((key, float(raw_v)))
-                except ValueError:
-                    pass
-        behind: dict[str, float] = {}
-        # "hcb" reads column X's row2 specifically (the label row's own X is
-        # the food-only subtotal, not the combined total this chip wants —
-        # see _dozen_applescript_lines) — no v1-or-v2 fallback. Summed with
-        # the previous quarter's own combined cell (prev_hcb_raw) so the chip
-        # tracks a running Q<n-1>+Q<n> total, matching the jm dashboard.
-        raw_hcb = dozen_row2[19].strip() if len(dozen_row2) > 19 else ""
-        hcb_total = None
-        if raw_hcb:
-            try:
-                hcb_total = float(raw_hcb)
-            except ValueError:
-                pass
-        if prev_hcb_raw.strip():
-            try:
-                hcb_total = (hcb_total or 0.0) + float(prev_hcb_raw.strip())
-            except ValueError:
-                pass
-        if hcb_total is not None:
-            behind["hcb"] = hcb_total
-        for key, offset in (("hcbp", 21),):
-            raw_v = _dozen_cell(offset)
-            if raw_v:
-                try:
-                    behind[key] = float(raw_v)
-                except ValueError:
-                    pass
+        dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw, hcb_total_raw)
         STATE.daily_dozen = dozen
         STATE.hcbi_behind = behind
         habits = []
@@ -2323,8 +2724,9 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
       ("still open").
     - line 2: this quarter's Daily Dozen (hcbi sheet) — a bare-number chip
       for each category that's currently BEHIND (negative; neutral/positive
-      categories are omitted), packed the same way, followed by a labeled
-      "behind" chip for any HCBI_BEHIND_DOMAINS total that's negative.
+      categories are omitted), packed the same way, followed by the labeled
+      overall "hcb" standing (always, signed — HCBI_ALWAYS_SHOWN) and a
+      "behind" chip for any other HCBI_BEHIND_DOMAINS total that's negative.
     - line 3 (2026-09-17): today's 分 by domain, one padded cell per 0分
       column P:Y in sheet order/fills — see _domain_pts_chips.
     Each line independently drops whatever doesn't fit in WIDTH_HINT."""
@@ -2378,9 +2780,12 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     dozen_chips = _pack_number_chips(
         [(f"bold bg:{DAILY_DOZEN_COLORS.get(key, '#444444')} #ffffff", f"{v:g}")
          for key, v in STATE.daily_dozen if v < 0])
+    # "hcb" is the overall standing and stays up whatever its sign
+    # (HCBI_ALWAYS_SHOWN); "hcbp" is a behind chip, negative only.
     dozen_chips += [(f"bold bg:{color} #ffffff", f"{name} {int(round(STATE.hcbi_behind[name])):+d} ")
                     for name, color in HCBI_BEHIND_DOMAINS.items()
-                    if STATE.hcbi_behind.get(name, 0) < 0]
+                    if name in STATE.hcbi_behind
+                    and (name in HCBI_ALWAYS_SHOWN or STATE.hcbi_behind[name] < 0)]
     habit_line = done_chips + pending_chips
     reserve = dwidth(prayer_chip[1]) if prayer_chip else 0
     habit_row = _habit_row(habit_line, budget=max(0, WIDTH_HINT - reserve))
@@ -2521,13 +2926,13 @@ _PLACEHOLDER_LABELS = {"generic placeholder", "?"}
 # Descriptions that are NEVER merged with a same-desc neighbour: each "?" is
 # a distinct unknown to be identified on its own (user report 2026-09-19:
 # two "?" entries of 33m and 44m rendered as one 78m row). "generic
-# placeholder" stays mergeable — it is /tg's auto-filler, restarted as the
-# previous one stops, and one span is exactly what it means.
-_NO_MERGE_LABELS = {"?"}
+# placeholder" too (user request 2026-10-12): back-to-back placeholders are
+# on-the-go markers, each to be filled in separately afterwards.
+_NO_MERGE_LABELS = _PLACEHOLDER_LABELS
 
 
 def _mergeable_desc(desc: str | None) -> bool:
-    return (desc or "").strip() not in _NO_MERGE_LABELS
+    return (desc or "").strip().lower() not in _NO_MERGE_LABELS
 
 
 def _is_placeholder(label: str) -> bool:
@@ -2607,6 +3012,9 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
     # branches.
     vacated_00 = None
     header_hour = blk_sh
+    # Start (minutes past midnight) of a head0 promoted from a later slot;
+    # empty marks before it are dropped so the card stays chronological.
+    head_floor = None
 
     # ── header: the block's :00 slot ──
     # Free rows never ride the header: the header's event slot belongs to the
@@ -2757,6 +3165,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 left = f"{blk_name} {hs0.hour:02d}:{hs0.minute:02d}"
                 vacated_00 = (blk_sh, 0)
             header_hour = hs0.hour
+            if vacated_00 is not None:
+                head_floor = hs0.hour * 60 + hs0.minute
         elif spill_wait:
             # Bare because the block is still waiting on a spill tail from
             # the previous block (its running entry is the first body row):
@@ -2961,8 +3371,13 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             occupied.add(vacated_00)
         offsets = range(0 if include_00 else slot_min, 120, slot_min)
         mark_slots = [(blk_sh + off // 60, off % 60) for off in offsets]
+        # Bug 2026-10-12 ("these time entries are obviously not in order"):
+        # 卯 promoted 05:47 find jacket to the header (the 00:00-05:47 sleep
+        # was dropped as a redundant spill), then filled the empty 04:30 and
+        # 05:00 marks UNDER it, so earlier times read below a later header.
         marks = [(hh * 60 + mm, hh, mm, None)
-                 for hh, mm in mark_slots if (hh, mm) not in occupied]
+                 for hh, mm in mark_slots if (hh, mm) not in occupied
+                 and (head_floor is None or hh * 60 + mm > head_floor)]
         rows = rows + marks[:max_rows - len(rows)]
         rows.sort(key=lambda r: r[0])
 
@@ -3973,7 +4388,7 @@ def _detail_merge_past(win_start, win_end) -> list[dict]:
         if en <= s:
             continue
         desc = display_desc(e["desc"]) or "(blank)"
-        if (segs and segs[-1]["desc"] == desc
+        if (segs and segs[-1]["desc"] == desc and _mergeable_desc(e["desc"])
                 and (s - segs[-1]["end"]).total_seconds() <= 60):
             segs[-1]["end"] = en
         else:
@@ -4270,9 +4685,26 @@ def render_current_bottom() -> list[tuple[str, str]]:
     now = dt.datetime.now(_tz())
     clock = f"{now:%H:%M:%S} "  # wall clock: no sub-second; heartbeat lives on the task timer
     cur = STATE.current
+    width = _live_width()
+    # Past-day badge on the pinned bar too (bug 2026-10-12: "I can't see time
+    # from 卯 in today's janus"): the header's ◀ badge scrolls off the top on
+    # a tall whole-day view, so after filling in yesterday the screen read as
+    # today. This bar is always visible, so it carries the viewed day as well.
+    badge = f"◀ {view_now():%a %-m/%-d} ⎋ " if STATE.day_offset != 0 else ""
+    badge_frag = [("class:no_entry", badge)] if badge else []
     if not cur:
-        return [("class:idle", " (no timer)"),
-                ("class:time", f"{clock:>{max(0, WIDTH_HINT - len(' (no timer)'))}}\n")]
+        label, style = " (no timer)", "class:idle"
+        since = _untracked_since(now)
+        if since is not None:
+            # 2.5h and 6.5h holes on 10-13/10-14 before a catch-up burst
+            # (2026-10-17): the bar is always visible, so it carries the
+            # hole while it is still cheap to fill.
+            gap_m = int((now - since).total_seconds() // 60)
+            label = f" (no timer) · untracked since {since:%H:%M} ({gap_m}m)"
+            style = "class:no_entry"
+        pad = max(0, width - dwidth(label) - dwidth(badge) - len(clock))
+        return [(style, label + " " * pad), *badge_frag,
+                ("class:time", f"{clock}\n")]
     cur_id = cur.get("id")
     try:
         st = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
@@ -4309,11 +4741,15 @@ def render_current_bottom() -> list[tuple[str, str]]:
         time_style = "class:time"
     dot_frags = _rec_level_dot_frags(click) if recording else []
     dots_width = sum(dwidth(t) for _, t, *_ in dot_frags)
-    pad = max(0, WIDTH_HINT - dwidth(left) - dots_width - len(clock))
+    # Narrow pane: truncate the description, never the clock (2026-10-03).
+    left = truncate(left, max(0, width - dots_width - dwidth(badge) - len(clock)))
+    pad = max(0, width - dwidth(left) - dots_width - dwidth(badge) - len(clock))
     return [
         _frag(f"bold {style}".strip(), left, click),
         *dot_frags,
-        _frag(time_style, f"{'':>{pad}}{clock}\n", click),
+        _frag(time_style, f"{'':>{pad}}", click),
+        *[_frag(st, t, click) for st, t in badge_frag],
+        _frag(time_style, f"{clock}\n", click),
     ]
 
 
@@ -4526,7 +4962,9 @@ def render_all() -> list[tuple[str, str]]:
             "project_id": STATE.current.get("project_id"),
             "running": True,
         })
-    return parts
+    # Hold the viewport where it is once the selection marker expires —
+    # see _hold_scroll (bug 2026-09-28: short terminals snapped to the top).
+    return _hold_scroll(parts, _main_scroll())
 
 
 # NB: the current-timer mirror (render_current_bottom) is pinned ABOVE the input
@@ -4547,6 +4985,447 @@ def _is_points_log_cmd(part: str) -> bool:
     LEADING "-N" counts: "-1t"/"-1g" habit names and "1815-1843" ranges
     never match (the digits must be followed by whitespace or end)."""
     return bool(_POINTS_LOG_CMD_RE.match(part.strip()))
+
+
+_D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
+# Trailing form (2026-10-19): "QBR in person [180] /d". Without it the text fell
+# through to the plain timer path and the literal "/d" became the Toggl description.
+_D_TRAIL_RE = re.compile(r"^(\S.*?)\s+/d$", re.S)
+_ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
+
+
+# ── Project-code typo guard (2026-10-17) ───────────────────────────────────
+def _known_project_codes() -> set:
+    return set(globals().get("PROJECT_MAP") or {})
+
+
+def _fix_project_codes(part: str, known: set | None = None) -> tuple[str, list, list]:
+    """Rewrite near-miss `@code` tokens to the project code they meant.
+    Returns (text, [(typed, fixed), ...], [unfixable, ...]). A typed code is
+    fixed when difflib finds a close match (≥0.6) or it is a substring of
+    exactly one known code; otherwise it is reported as unfixable. Known
+    codes pass through untouched; with no code table at all nothing is
+    touched (never block a command on a missing config)."""
+    known = _known_project_codes() if known is None else known
+    if not known:
+        return part, [], []
+    fixes: list = []
+    bad: list = []
+
+    def _sub(m):
+        code = m.group(1)
+        if code in known:
+            return m.group(0)
+        cands = difflib.get_close_matches(code, sorted(known), n=1, cutoff=0.6)
+        if not cands:
+            subs = [k for k in known if code in k]
+            cands = subs if len(subs) == 1 else []
+        if cands:
+            fixes.append((code, cands[0]))
+            return "@" + cands[0]
+        bad.append(code)
+        return m.group(0)
+
+    return re.sub(r"(?<!\S)@(\S+)", _sub, part), fixes, bad
+
+
+# ── Bonus-points note (2026-10-17) ─────────────────────────────────────────
+def _bonus_has_note(part: str) -> bool:
+    """True when a ±N 分-log command already says what it is for — anything
+    left after the signed token, @code/#tag tokens and a trailing M/D."""
+    rest = re.sub(r"(?<!\S)[+-]\d+(?=\s|$)", " ", part)
+    rest = re.sub(r"(?<!\S)[@#]\S+", " ", rest)
+    rest = re.sub(r"(?<!\S)\d{1,2}/\d{1,2}(?=\s|$)", " ", rest)
+    return bool(rest.split())
+
+
+def _ride_bonus_note(part: str) -> str:
+    """"+15 @i9" alone (11 of 15 point grants in the 10-11..10-17 log) left
+    the 分 ledger with no idea what the points were for. A leading ±N is
+    did-fast's 分-log form — the note goes to the ledger only, no Todoist
+    match — so riding on the running or last completed entry's description
+    is free (2026-10-17). Only with an explicit @code: did-fast infers the
+    domain from the note otherwise, and the note would steer it."""
+    if (re.match(r"^[+-]\d+(?=\s|$)", part.strip()) and not _bonus_has_note(part)
+            and re.search(r"(?<!\S)@\S+", part)):
+        note = _last_entry_desc()
+        if note:
+            return f"{part} {note}"
+    return part
+
+
+def _last_entry_desc() -> str:
+    """The running timer's description, else today's most recently finished
+    non-睡觉 entry's — annotations and @codes stripped. "" when nothing."""
+    cur = STATE.current
+    desc = (cur.get("description") or "") if cur else ""
+    if not desc.strip():
+        done = [e for e in STATE.entries if not e.get("running") and e.get("end_dt")
+                and (e.get("desc") or "").strip() not in ("", "睡觉")]
+        if done:
+            desc = max(done, key=lambda e: e["end_dt"])["desc"]
+    desc = _ANNOT_RE.sub("", desc)
+    return " ".join(w for w in desc.split() if not w.startswith("@"))
+
+
+# ── Long i9 timer: ^S asks for its 分 (2026-10-17) ─────────────────────────
+STOP_DONE_MIN = 20
+STOP_DONE_CODES = ("i9",)
+
+
+def _stop_wants_points(cur: dict, now: dt.datetime) -> bool:
+    """A running timer on a STOP_DONE_CODES project, ≥ STOP_DONE_MIN old,
+    whose description has no 分 recorded today yet: ^S should go through
+    /done (resolve or ask) instead of a silent stop."""
+    try:
+        start = dt.datetime.fromisoformat(cur.get("start", "")).astimezone(_tz())
+    except Exception:
+        return False
+    code = toggl_project_code(cur.get("project_id"), cur.get("description"))
+    if code not in STOP_DONE_CODES:
+        return False
+    if now - start < dt.timedelta(minutes=STOP_DONE_MIN):
+        return False
+    recorded, _ = _points_recorded_today(cur.get("description") or "")
+    return not recorded
+
+
+# ── Untracked-since (2026-10-17) ───────────────────────────────────────────
+UNTRACKED_WARN_MIN = 30
+
+
+def _untracked_since(now: dt.datetime | None = None):
+    """When no timer runs on TODAY's view and the latest completed entry
+    ended ≥ UNTRACKED_WARN_MIN ago, that end time; else None. An empty day
+    (nothing to be "since") and a future end (the auto-睡觉's 06:00 before
+    06:00) both read as None."""
+    if STATE.day_offset != 0 or STATE.current or not STATE.entries_known:
+        return None
+    now = now or dt.datetime.now(_tz())
+    ends = [e["end_dt"] for e in STATE.entries if not e.get("running") and e.get("end_dt")]
+    if not ends:
+        return None
+    last = max(ends)
+    if last > now or now - last < dt.timedelta(minutes=UNTRACKED_WARN_MIN):
+        return None
+    return last
+
+
+# ── Auto 睡觉 (2026-10-17) ─────────────────────────────────────────────────
+# "default 0000-0600 sleep time, edited to when the first other time log
+# entry exists" (user request 2026-10-17; the log showed 0000-HHMM 睡觉 typed
+# by hand seven mornings out of seven). One host owns it — the always-on
+# one — so two janus instances never both create it; JANUS_AUTO_SLEEP=1/0
+# overrides the host gate. State: ~/.local/state/jm/janus-auto-sleep.json
+# {"date", "id", "adjusted"}; adjusted=True means this day is settled.
+#
+# Stale overnight timer (2026-10-19): the empty morning the create path waits
+# for almost never happens — the real failure is a forgotten evening timer
+# (-1g at 20:51 ran until the 05:54 economist on 10/19). Rule, as specified:
+# a yesterday entry still running after midnight that STARTED before 22:00 is
+# cut at 22:00 and 睡觉 22:00-23:59 + 00:00-05:30 take its place; the 00:00
+# piece then rides the normal first-entry retime. A running 睡觉 is the
+# user's own sleep timer and is left alone; a timer started at/after 22:00
+# is an evening that legitimately crossed midnight. Gated to 01:00+ so the
+# first tick after midnight cannot cut a movie still being watched. Each of
+# the three Toggl calls is check-pointed in the state file ("phase":
+# "stale") so a crash mid-way resumes instead of half-applying. Known gap:
+# if the timer is already stopped-and-split by the morning (Ix janus was
+# down overnight), today holds 0000-HHMM <desc> and nothing fires.
+AUTO_SLEEP_STATE = Path(os.environ.get("XDG_STATE_HOME")
+                        or (Path.home() / ".local" / "state")) / "jm" / "janus-auto-sleep.json"
+AUTO_SLEEP_END_H = 6
+AUTO_SLEEP_HOSTS = ("ix",)
+AUTO_SLEEP_CREATE_BEFORE_H = 12   # an empty day past noon is not a sleep question
+AUTO_SLEEP_EXTEND_CAP_H = 10      # never stretch 睡觉 past 10:00 on its own
+AUTO_SLEEP_STALE_CUT_H = 22       # a timer running past midnight from before 22:00 ends here
+AUTO_SLEEP_STALE_END = (5, 30)    # ...and the morning 睡觉 runs 00:00-05:30 until retimed
+AUTO_SLEEP_STALE_AFTER_H = 1      # don't judge a running timer before 01:00
+AUTO_SLEEP_STALE_MIN_PIECE_MIN = 5  # no 23:5x-23:59 sliver
+
+
+def _auto_sleep_enabled() -> bool:
+    env = os.environ.get("JANUS_AUTO_SLEEP")
+    if env in ("0", "1"):
+        return env == "1"
+    return os.uname().nodename.split(".")[0].lower() in AUTO_SLEEP_HOSTS
+
+
+def _auto_sleep_load() -> dict:
+    try:
+        return json.loads(AUTO_SLEEP_STATE.read_text())
+    except Exception:
+        return {}
+
+
+def _auto_sleep_save(d: dict) -> None:
+    try:
+        AUTO_SLEEP_STATE.parent.mkdir(parents=True, exist_ok=True)
+        AUTO_SLEEP_STATE.write_text(json.dumps(d))
+    except OSError:
+        pass
+
+
+def _auto_sleep_plan(entries: list, yday_entries: list, now: dt.datetime, st: dict):
+    """Pure decision for today. Returns (kind, params) or None:
+      create  — the day is empty before noon and nothing is running over
+                from yesterday: 睡觉 00:00-06:00.
+      adjust  — the auto entry still starts at 00:00 and the first other
+                entry starts elsewhere (earlier or later, up to the cap):
+                move 睡觉's end to that start.
+      delete  — something else starts at 00:00, or a hand-typed 睡觉 from
+                00:00 exists: the auto entry is redundant.
+      settle  — stop watching this day (entry gone/retimed, first entry
+                past the cap, already aligned)."""
+    today = now.date().isoformat()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if st.get("date") != today:
+        st = {}
+    if st.get("phase") == "stale":
+        return "stale", st  # resume a check-pointed stale-timer fix
+    if not st:
+        stale = _auto_sleep_stale(entries, yday_entries, now)
+        if stale:
+            return "stale", stale
+        if entries or any(e.get("running") for e in yday_entries):
+            return None
+        if now.hour >= AUTO_SLEEP_CREATE_BEFORE_H:
+            return None
+        return "create", {"start": midnight, "end": midnight.replace(hour=AUTO_SLEEP_END_H)}
+    if st.get("adjusted") or not st.get("id"):
+        return None
+    sleep = next((e for e in entries if e.get("id") == st["id"]), None)
+    if sleep is None:
+        return "settle", {"reason": "auto 睡觉 entry is gone"}
+    if sleep["start_dt"] != midnight:
+        return "settle", {"reason": "auto 睡觉 was retimed by hand"}
+    others = [e for e in entries if e.get("id") != st["id"]]
+    manual_sleep = [e for e in others if (e.get("desc") or "").strip() == "睡觉"
+                    and e["start_dt"] <= midnight + dt.timedelta(minutes=5)]
+    if manual_sleep:
+        return "delete", {"id": st["id"], "reason": "睡觉 typed by hand"}
+    others = [e for e in others if (e.get("desc") or "").strip() != "睡觉"]
+    if not others:
+        return None
+    first = min(e["start_dt"] for e in others)
+    if first <= midnight + dt.timedelta(minutes=5):
+        return "delete", {"id": st["id"], "reason": f"day starts with {first:%H:%M}"}
+    if first > midnight + dt.timedelta(hours=AUTO_SLEEP_EXTEND_CAP_H):
+        return "settle", {"reason": f"first entry {first:%H:%M} is past the {AUTO_SLEEP_EXTEND_CAP_H}:00 cap"}
+    if abs((first - sleep["end_dt"]).total_seconds()) < 60:
+        return "settle", {"reason": "already aligned"}
+    return "adjust", {"id": st["id"], "start": sleep["start_dt"], "end": first}
+
+
+def _auto_sleep_stale(entries: list, yday_entries: list, now: dt.datetime):
+    """A yesterday entry still running past midnight that started before
+    22:00 (and is not 睡觉 itself) → the stale-timer plan, else None.
+
+    cut   — where the timer ends: 22:00, or later if another yesterday entry
+            already covers past 22:00 (never overlap a hand-logged evening)
+    y_*   — 睡觉 cut→23:59 on yesterday; y_start is None when the piece
+            would be a sliver (cut ≥ 23:55)
+    t_*   — 睡觉 00:00→05:30 on today, retimed later by the normal path
+    Needs: today empty (a hand entry at 00:30 means awake), 01:00 ≤ now < noon."""
+    if entries or not (AUTO_SLEEP_STALE_AFTER_H <= now.hour < AUTO_SLEEP_CREATE_BEFORE_H):
+        return None
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    y_cut = midnight - dt.timedelta(hours=24 - AUTO_SLEEP_STALE_CUT_H)
+    y_end = midnight - dt.timedelta(minutes=1)
+    running = sorted((e for e in yday_entries
+                      if e.get("running") and e.get("id")
+                      and (e.get("desc") or "").strip() != "睡觉"
+                      and e["start_dt"] < y_cut),
+                     key=lambda e: e["start_dt"])
+    if not running:
+        return None
+    r = running[0]
+    later_ends = [e["end_dt"] for e in yday_entries
+                  if not e.get("running") and e.get("end_dt") and e["end_dt"] > y_cut]
+    cut = min(max([y_cut] + later_ends), y_end)
+    piece_ok = (y_end - cut) >= dt.timedelta(minutes=AUTO_SLEEP_STALE_MIN_PIECE_MIN)
+    h, m = AUTO_SLEEP_STALE_END
+    return {"id": r["id"], "desc": (r.get("desc") or "").strip(), "start": r["start_dt"],
+            "cut": cut, "y_start": cut if piece_ok else None, "y_end": y_end,
+            "t_start": midnight, "t_end": midnight.replace(hour=h, minute=m)}
+
+
+_STALE_DT_KEYS = ("start", "cut", "y_start", "y_end", "t_start", "t_end")
+
+
+def _stale_ser(plan: dict) -> dict:
+    return {k: (v.isoformat() if isinstance(v, dt.datetime) else v) for k, v in plan.items()}
+
+
+def _stale_deser(plan: dict) -> dict:
+    out = dict(plan)
+    for k in _STALE_DT_KEYS:
+        if isinstance(out.get(k), str):
+            out[k] = dt.datetime.fromisoformat(out[k])
+    return out
+
+
+def _auto_sleep_apply_stale(p: dict, today: str) -> dict:
+    """Run (or resume) the three Toggl writes of a stale-timer plan, saving
+    the state file after each so a crash between calls resumes rather than
+    repeats. Returns the final {"date","id","adjusted"} state."""
+    if p.get("phase") == "stale":
+        st = p
+    else:
+        st = {"date": today, "phase": "stale", "plan": _stale_ser(p), "done": {}}
+    plan, done = _stale_deser(st["plan"]), st.setdefault("done", {})
+    _auto_sleep_save(st)
+    pid = (globals().get("PROJECT_MAP") or {}).get("睡觉")
+    if not done.get("cut"):
+        toggl_api.update_entry(plan["id"], stop=plan["cut"].isoformat(),
+                               duration=int((plan["cut"] - plan["start"]).total_seconds()))
+        done["cut"] = True
+        _auto_sleep_save(st)
+    if plan.get("y_start") and "y" not in done:
+        res = toggl_api.create_entry("睡觉", plan["y_start"].isoformat(), plan["y_end"].isoformat(),
+                                     int((plan["y_end"] - plan["y_start"]).total_seconds()), pid, None)
+        done["y"] = res.get("id") if isinstance(res, dict) else None
+        _auto_sleep_save(st)
+    if "t" not in done:
+        res = toggl_api.create_entry("睡觉", plan["t_start"].isoformat(), plan["t_end"].isoformat(),
+                                     int((plan["t_end"] - plan["t_start"]).total_seconds()), pid, None)
+        done["t"] = res.get("id") if isinstance(res, dict) else None
+        _auto_sleep_save(st)
+    final = {"date": today, "id": done.get("t"), "adjusted": done.get("t") is None}
+    _auto_sleep_save(final)
+    ids = [x for x in (plan["id"], done.get("y"), done.get("t")) if isinstance(x, int)]
+    pieces = ([f"{plan['y_start']:%H%M}-2359"] if plan.get("y_start") else []) + \
+             [f"0000-{plan['t_end']:%H%M}"]
+    JE.emit("action", "auto_sleep", ids,
+            f"stale {plan.get('desc', '')} cut {plan['cut']:%H%M}; 睡觉 {' + '.join(pieces)}")
+    return final
+
+
+def _auto_sleep_tick(entries: list, yday_entries: list) -> None:
+    """Runs at the end of every successful fetch_today on today's view."""
+    if not _auto_sleep_enabled() or STATE.day_offset != 0:
+        return
+    now = dt.datetime.now(_tz())
+    plan = _auto_sleep_plan(entries, yday_entries, now, _auto_sleep_load())
+    if not plan:
+        return
+    kind, p = plan
+    today = now.date().isoformat()
+    if kind == "stale":
+        _auto_sleep_apply_stale(p, today)
+        desc = (p.get("plan") or p).get("desc", "")
+        flash(f"{desc} ran all night → cut at {AUTO_SLEEP_STALE_CUT_H}:00, 睡觉 added "
+              f"to {AUTO_SLEEP_STALE_END[0]:02d}:{AUTO_SLEEP_STALE_END[1]:02d} — the day's first entry retimes it", 8.0)
+        STATE.current = None           # the stale timer is stopped; don't show it running
+        STATE.last_toggl_fetch = 0.0
+        return
+    if kind == "create":
+        pid = (globals().get("PROJECT_MAP") or {}).get("睡觉")
+        res = toggl_api.create_entry("睡觉", p["start"].isoformat(), p["end"].isoformat(),
+                                     int((p["end"] - p["start"]).total_seconds()), pid, None)
+        eid = res.get("id") if isinstance(res, dict) else None
+        _auto_sleep_save({"date": today, "id": eid, "adjusted": eid is None})
+        JE.emit("action", "auto_sleep", [eid] if eid else (), f"create 0000-{p['end']:%H%M}")
+        flash(f"睡觉 00:00-{p['end']:%H:%M} added — the day's first entry retimes it", 6.0)
+        STATE.last_toggl_fetch = 0.0  # next fetch (even a coalesced one) must see it
+    elif kind == "adjust":
+        toggl_api.update_entry(p["id"], stop=p["end"].isoformat(),
+                               duration=int((p["end"] - p["start"]).total_seconds()))
+        _auto_sleep_save({"date": today, "id": p["id"], "adjusted": True})
+        JE.emit("action", "auto_sleep", [p["id"]], f"adjust →{p['end']:%H%M}")
+        flash(f"睡觉 → {p['end']:%H:%M} (first entry of the day)", 6.0)
+        STATE.last_toggl_fetch = 0.0
+    elif kind == "delete":
+        toggl_api.delete_entry(p["id"])
+        _auto_sleep_save({"date": today, "id": p["id"], "adjusted": True})
+        JE.emit("action", "auto_sleep", [p["id"]], f"delete ({p.get('reason', '')})")
+        flash(f"auto 睡觉 removed: {p.get('reason', '')}", 6.0)
+        STATE.last_toggl_fetch = 0.0
+    else:  # settle
+        _auto_sleep_save({"date": today, "id": p.get("id") or _auto_sleep_load().get("id"),
+                          "adjusted": True})
+        JE.emit("action", "auto_sleep", (), f"settle ({p.get('reason', '')})")
+
+
+def parse_d_command(text: str) -> tuple[str, str] | None:
+    """`/d <task>` (2026-10-06): add <task> to the todo list AND start working
+    on it now. Returns (todoist_content, timer_command): the content keeps
+    (N)/[N] and @code (agent_claims.new_task turns @code into the label); the
+    timer drops the bracketed annotations so tg-fast doesn't name a timer
+    "... [20]". None when the text isn't a /d command."""
+    t = text.strip()
+    m = _D_CMD_RE.match(t)
+    if m:
+        content = m.group(1).strip()
+    else:
+        m = _D_TRAIL_RE.match(t)
+        if not m:
+            return None
+        content = m.group(1).strip()
+    timer = " ".join(_ANNOT_RE.sub("", content).split())
+    if not timer or not [w for w in timer.split() if not w.startswith("@")]:
+        return None
+    return content, timer
+
+
+DTD_RUNNING_HINT = Path(os.environ.get("XDG_STATE_HOME")
+                        or (Path.home() / ".local" / "state")) / "jm" / "dtd-running-hint"
+
+
+def write_dtd_running_hint(task: dict) -> None:
+    """Tell every dtd this task's timer is running, so it floats to the top
+    of dtd (2026-10-06: "make sure it goes to the top, otherwise I won't see
+    it"). dtd's own timer file is per-instance and only written by its own
+    start path; this shared hint uses the same name<TAB>epoch<TAB>id format."""
+    name = _ANNOT_RE.sub("", task.get("content", "")).strip().lower()
+    try:
+        DTD_RUNNING_HINT.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DTD_RUNNING_HINT.with_suffix(".tmp")
+        tmp.write_text(f"{name}\t{int(time.time())}\t{task.get('id', '')}")
+        tmp.replace(DTD_RUNNING_HINT)
+    except OSError:
+        pass
+
+
+def clear_dtd_running_hint() -> None:
+    """The timer moved on (switch/stop): the /d task no longer runs."""
+    try:
+        DTD_RUNNING_HINT.unlink()
+    except OSError:
+        pass
+
+
+def record_dtd_started(task_id: str) -> None:
+    """Log a started-today entry where dtd reads it (dtd-started: date, id,
+    epoch). dtd draws the 🧮 abacus from that file; its start.sh writes it on
+    Enter/ctrl-s. Janus starts must write it too, or the task loses its abacus
+    as soon as the timer moves on (bug 2026-10-19)."""
+    if not task_id:
+        return
+    try:
+        state = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")) / "jm"
+        state.mkdir(parents=True, exist_ok=True)
+        with open(state / "dtd-started", "a") as f:
+            f.write(f"{dt.date.today().isoformat()}\t{task_id}\t{int(time.time())}\n")
+    except OSError:
+        pass
+
+
+def create_todo_task(content: str) -> str:
+    """Create a due-today Todoist task through agent_claims.new_task (the
+    same path as Claude's `/d new`). Returns a short status for the flash."""
+    try:
+        import importlib.util as _ilu
+        _p = Path("~/i446-monorepo/tools/did/agent_claims.py").expanduser()
+        _spec = _ilu.spec_from_file_location("janus_agent_claims", _p)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        task = _mod.new_task(content)
+        write_dtd_running_hint(task)
+        record_dtd_started(task.get("id", ""))
+        return f"+todo {task.get('content', content)}"
+    except Exception as e:  # noqa: BLE001 — the timer still starts
+        return f"todo err: {e}"
 
 
 def run_tg_fast(text: str) -> str:
@@ -4736,6 +5615,8 @@ def _did_summary(stdout_text: str) -> str:
         fen = r.get("0fen") or {}
         pts = fen.get("points", 0) or 0
         pts += fen.get("bonus", 0) or 0
+        # hcbi-routed domain points (hcbp -> hcbi!Y) carry no "0fen" entry.
+        pts += (r.get("hcbi") or {}).get("pts", 0) or 0
         if not pts and r.get("variable_1n"):
             pts = r.get("variable_value") or 0
         td = r.get("todoist") or {}
@@ -4751,16 +5632,58 @@ def _did_summary(stdout_text: str) -> str:
     return "  ".join(bits) if bits else "(no results)"
 
 
-def run_did_fast(text: str) -> str:
+def _did_flags() -> tuple[str, ...]:
+    """did-fast flags for the CURRENT view: on a past-day view every did-fast
+    run carries --past-ok so the write lands on the viewed day with no
+    today-side effects (user request 2026-09-28: "if I add points on a
+    previous day, those points accrue to the day I'm viewing")."""
+    return ("--past-ok",) if STATE.day_offset != 0 else ()
+
+
+def _did_argv(text: str, flags: tuple[str, ...] = ()) -> list[str]:
+    """Flags are their OWN argv elements, before the command text: did-fast
+    parses flags out of sys.argv, and its trailing-token date parse would
+    otherwise read a flag appended to the text as the last token and drop
+    the M/D date."""
+    return ["python3", DID_FAST, *flags, text]
+
+
+def _is_loggable_on_past_day(part: str) -> bool:
+    """A plain typed part (no range, no +N) that did-fast can credit to a
+    past day: an open Todoist task carrying [N] points, or a known 0₦/1n+
+    habit name. Anything else (an ad-hoc description) would just start a
+    timer TODAY, so the caller keeps rejecting it.
+
+    User request 2026-09-28: "if I add points on a previous day, those
+    points accrue to the day I'm viewing." _resolve_part routes such a part
+    through did-fast with the viewed M/D appended, and run_did_fast adds
+    --past-ok (see _did_flags) so a habit's 0n cell lands on that day's row
+    -- Excel's formulas credit the day -- with none of today's side effects
+    (did-fast skips the timer stop, 0l time stamp, completed-today record
+    and this week's 1n+ row under that flag)."""
+    bare = re.sub(r"\s@\S+\s*$", "", part).strip()
+    if not bare:
+        return False
+    if _resolvable_points(bare) is not None:
+        return True
+    name = re.sub(r"\s+\d+\s*$", "", bare).strip()  # "0l 30" -> "0l"
+    return bool(_habit_tags([name]))
+
+
+def run_did_fast(text: str, flags: tuple[str, ...] | None = None) -> str:
     """Like run_tg_fast, but for did-fast.py — used to convert an ALREADY-
     ENDED calendar event into a completed Toggl entry AND grant its points in
     one shot (the tg-fast path only ever starts a running timer, no points).
     did-fast is a much heavier call: an Excel write over ix-osa plus Todoist
     round-trips, commonly 10-20s and occasionally more — hence the longer
     timeout than run_tg_fast's 15s."""
+    if flags is None:
+        # Every did-fast run from a past-day view carries --past-ok; the flag
+        # is inert when the command targets today (see did-fast _past_target).
+        flags = _did_flags()
     try:
         proc = subprocess.run(
-            ["python3", DID_FAST, text],
+            _did_argv(text, flags),
             capture_output=True, text=True, timeout=45,
         )
         if proc.stdout and "{" in proc.stdout:
@@ -4889,6 +5812,18 @@ async def _work_consumer(app):
 
 D357_QUICK = str(Path.home() / "i446-monorepo/tools/meet/d357_quick.py")
 D357_STATE = Path.home() / ".local/state/jm/d357-state.json"
+# Meetings are recorded on the Mac you're sitting at, not wherever Janus runs.
+# `ssh janus` runs Janus on Ix and sets JANUS_RECORD_HOST=straylight, so d357
+# start/stop are sent back over ssh (2026-10-04). Unset = run locally.
+RECORD_HOST = os.environ.get("JANUS_RECORD_HOST", "").strip()
+
+
+def _d357_argv(*args: str) -> list[str]:
+    if not RECORD_HOST:
+        return ["python3", D357_QUICK, *args]
+    import shlex
+    remote = "python3 ~/i446-monorepo/tools/meet/d357_quick.py " + " ".join(shlex.quote(a) for a in args)
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", RECORD_HOST, remote]
 
 
 def _load_recording_state() -> None:
@@ -5060,7 +5995,7 @@ def _spawn_d357_stop() -> None:
     (up to 5 min) Whisper + filing wait in its own detached process — the
     serial work queue must never block on transcription."""
     try:
-        subprocess.Popen(["python3", D357_QUICK, "stop"],
+        subprocess.Popen(_d357_argv("stop"),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     except Exception as e:  # noqa: BLE001
@@ -5165,14 +6100,18 @@ def _run_done_command(app, cmd: str) -> None:
     async def _run():
         flash(f"$ did {cmd}  (stop + done)")
         app.invalidate()
+        t0 = time.monotonic()
         res = await asyncio.to_thread(run_did_fast, cmd)
+        JE.emit("outcome", "done", (), f"{time.monotonic() - t0:.1f}s {cmd} -> {res}")
         flash(res, 8.0)
         app.invalidate()
-        await asyncio.to_thread(fetch_current)
-        await asyncio.to_thread(fetch_today, True)
-        await asyncio.to_thread(fetch_points)
+        await _refresh_parallel(fetch_current, (fetch_today, True), fetch_points)
         app.invalidate()
 
+    # Timer row clears NOW; did-fast (Todoist + Excel + Toggl trim) runs in
+    # the background queue and the re-reads reconcile afterwards.
+    _optimistic_stop()
+    app.invalidate()
     _enqueue_work(app, f"did {cmd}", _run, key=cmd)
 
 
@@ -5211,14 +6150,13 @@ def _convert_selected_event(ev: dict, app) -> None:
             # landed by the time the subprocess returns — no need for
             # tg-fast's tight (0.4, 0.8, 1.5) poll against Toggl's
             # propagation lag, just one forced re-read of both.
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
+            await _refresh_parallel((fetch_today, True), fetch_points)
             app.invalidate()
         else:
             # Kick off the recording; the wrapper reports its audio verdict.
-            args = ["python3", D357_QUICK, "start", title]
+            args = _d357_argv("start", title)
             if ev_minutes:
-                args += ["--minutes", str(ev_minutes + 5)]
+                args = _d357_argv("start", title, "--minutes", str(ev_minutes + 5))
             r = await asyncio.to_thread(
                 subprocess.run, args, capture_output=True, text=True, timeout=60)
             out = (r.stdout or "").strip().splitlines()
@@ -5229,19 +6167,35 @@ def _convert_selected_event(ev: dict, app) -> None:
             else:
                 flash(f"⚠ d357 did NOT start: {line or 'no output'}", 10.0)
             app.invalidate()
-            polls = (0.4, 0.8, 1.5)
-            for i, delay in enumerate(polls):
-                await asyncio.sleep(delay)
-                await asyncio.to_thread(fetch_current)
-                if i == len(polls) - 1:
-                    await asyncio.to_thread(fetch_today, True)
-                app.invalidate()
+            await _confirm_after_tg(app)
 
+    if not is_past:
+        _optimistic_start(title)   # the meeting timer shows at once
+        app.invalidate()
     _enqueue_work(app, label, _run_event_and_refresh, key=cmd)
 
 
+def _sel_ids() -> list:
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not isinstance(item, dict):
+        return []
+    return list(item.get("entry_ids") or ([item["id"]] if item.get("id") else []))
+
+
 @kb.add("enter")
-def _(event):
+def _on_enter(event):
+    _t = input_buffer.text.strip()
+    if STATE.done_target is not None:
+        JE.emit("action", "done_points", (), _t)
+    elif STATE.split_target is not None:
+        JE.emit("action", "split", [STATE.split_target.get("id")], _t)
+    elif STATE.edit_target is not None:
+        JE.emit("action", "edit", STATE.edit_target.get("ids") or [], _t)
+    elif _t:
+        JE.emit("action", "cmd", (), _t)
+    else:
+        JE.emit("action", "select", _sel_ids(), str(STATE.event_sel or ""))
     if STATE.done_target is not None:
         # Consumed first, unconditionally — same chokepoint discipline as
         # split_target/edit_target below. The input line holds the point
@@ -5345,6 +6299,11 @@ def _(event):
             flash(f"{msg} — target cleared, press enter again to log this as new", 6.0)
             input_buffer.text = text
             input_buffer.cursor_position = len(text)
+        if code and pid is None:
+            _fixed, _fixes, _bad = _fix_project_codes(f"@{code}")
+            if _fixes:
+                code = _fixes[0][1]
+                pid = PROJECT_MAP.get(code)
         if code and pid is None:
             _reject(f"unknown project code: {code}")
             return
@@ -5541,6 +6500,38 @@ def _(event):
         flash(f"ignored startup input: {text[:30]}", 4.0)
         return
 
+    # Project-code typo guard (2026-10-17: "@9" cost a Toggl 400 and a
+    # retry, "@m5x" went through with no project at all). A near miss is
+    # corrected in place and shown in the flash; a code nothing matches
+    # hands the text back instead of running it.
+    text, code_fixes, bad_codes = _fix_project_codes(text)
+    if bad_codes:
+        flash(f"unknown project @{bad_codes[0]} — not run; fix it and ⏎", 6.0)
+        input_buffer.text = text
+        input_buffer.cursor_position = len(text)
+        return
+    fix_note = ("  (" + ", ".join(f"@{b}→@{g}" for b, g in code_fixes) + ")") if code_fixes else ""
+
+    d_cmd = parse_d_command(text)
+    if d_cmd:
+        if STATE.day_offset:  # any past-day view
+            flash("/d starts work now — go back to today first", 5.0)
+            return
+        content, timer = d_cmd
+        _optimistic_start(" ".join(w for w in timer.split() if not w.startswith("@")), raw=timer)
+        flash(f"$ /d {content}{fix_note}")
+        event.app.invalidate()
+
+        async def _d_run():
+            todo, tg = await asyncio.gather(asyncio.to_thread(create_todo_task, content),
+                                            asyncio.to_thread(run_tg_fast, timer))
+            flash(f"{todo} | {tg}", 6.0)
+            event.app.invalidate()
+            await _confirm_after_tg(event.app)
+
+        event.app.create_background_task(_d_run())
+        return
+
     # Comma splits multiple /tg calls (2026-08-05 user request) — mirrors
     # /did's own comma/semicolon split convention. Each part gets the SAME
     # day-offset resolution (viewed-day --date append / live-command
@@ -5552,6 +6543,7 @@ def _(event):
     # effort closing elsewhere (d357/dtd/-1n ritual stamps): concurrent
     # Toggl calls racing to trim/split each other's entries.
     parts = [p.strip() for p in text.split(",") if p.strip()] or [text]
+    parts = [_ride_bonus_note(p) for p in parts]
 
     def _has_completed_range(part: str) -> bool:
         """True if `part` types an explicit HH:MM-HH:MM / HHMM-HHMM completed
@@ -5598,7 +6590,17 @@ def _(event):
         named "+10 @i9 read COD deck"."""
         has_range = _has_completed_range(part)
         has_bonus = _has_bonus_points(part)
-        use_did = has_bonus or (has_range and bool(re.search(r"\[-?\d+\]", part)))
+        force = getattr(STATE, "force_did", False)
+        use_did = has_bonus or (has_range and (force or bool(re.search(r"\[-?\d+\]", part))))
+        if force and not use_did:
+            flash(f"⌥↵ /did needs a HHMM-HHMM range: {part}", 6.0)
+            return None
+        if use_did:
+            # did-fast's TIME_RANGE_RE is strictly HHMM-HHMM; janus's own
+            # grammar also accepts "600-607" and "9:07-9:30", so normalize.
+            part = re.sub(r"(?<![\d:])(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})(?![\d:])",
+                          lambda m: f"{m.group(1):0>2}{m.group(2)}-{m.group(3):0>2}{m.group(4)}",
+                          part)
         if STATE.day_offset != 0:
             # Viewing another day: typed commands apply to THAT day (user
             # request 2026-07-27 — "tg calls go to yesterday if I'm viewing
@@ -5610,6 +6612,8 @@ def _(event):
             viewed = view_now().date()
             low = part.lower()
             live_ok = low in ("stop", "today", "current") or low.startswith(("del ", "--resolve "))
+            if not (has_range or use_did or live_ok) and _is_loggable_on_past_day(part):
+                use_did = True  # credit the viewed day (2026-09-28; see _is_loggable_on_past_day)
             if has_range or use_did:
                 # did-fast and tg-fast take the target date in different
                 # shapes — did-fast reads a trailing "M/D" token, tg-fast a
@@ -5627,6 +6631,8 @@ def _(event):
         return
     resolved = [c for c, _ in resolved_pairs]
     labels = [f"{'did' if d else 'tg'} {c}" for c, d in resolved_pairs]
+    if fix_note:
+        labels[-1] += fix_note
     flash(f"$ {' | '.join(labels)}" if len(labels) > 1 else f"$ {labels[0]}")
 
     async def _run_and_refresh():
@@ -5642,20 +6648,28 @@ def _(event):
             # by the time the subprocess returns (mirrors
             # _convert_selected_event's is_past refresh) — no propagation-lag
             # poll needed for those parts, just a forced re-read of both.
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
+            await _refresh_parallel((fetch_today, True), fetch_points)
             event.app.invalidate()
         if any(not d for _, d in resolved_pairs):
             # At least one part went through tg-fast, which still has
-            # Toggl's own propagation lag to poll through.
-            polls = (0.4, 0.8, 1.5)
-            for i, delay in enumerate(polls):
-                await asyncio.sleep(delay)
-                await asyncio.to_thread(fetch_current)
-                if i == len(polls) - 1:
-                    await asyncio.to_thread(fetch_today, True)
-                event.app.invalidate()
+            # Toggl's own propagation lag to confirm through.
+            await _confirm_after_tg(event.app)
 
+    # Optimistic timer row for a plain switch/stop typed as the LAST part
+    # (the one that leaves the timer running): a bare description becomes the
+    # new running timer at once; ranges/backdates (digits) wait for Toggl.
+    last_cmd, last_did = resolved_pairs[-1]
+    if not last_did:
+        bare = last_cmd.strip()
+        if bare.lower() == "stop":
+            _optimistic_stop()
+        elif not re.search(r"\d{3,4}", bare):
+            desc = " ".join(w for w in bare.split()
+                            if not w.startswith("@") and not re.fullmatch(r"[+\[(]\d+[\])]?", w))
+            if desc:
+                clear_dtd_running_hint()  # the timer moves off any /d task
+                _optimistic_start(desc, raw=bare)
+        event.app.invalidate()
     event.app.create_background_task(_run_and_refresh())
 
 
@@ -5721,8 +6735,28 @@ def _(event):
     has no double-append guard for 0分, so a second run would double-award
     (user request 2026-07-27). On a past-day view there's no completion
     record to check, so it runs unconditionally (that's the backfill case)."""
+    if (input_buffer.text.strip() and STATE.done_target is None
+            and STATE.split_target is None and STATE.edit_target is None):
+        # ⌥↵ on a just-TYPED command = Enter + /did in one gesture: the
+        # completed range lands in Toggl AND its points are granted via
+        # did-fast (user request 2026-10-12; it used to flash "select a
+        # tracked entry first" and drop the text).
+        STATE.force_did = True
+        try:
+            _on_enter(event)
+        finally:
+            STATE.force_did = False
+        return
+    JE.emit("action", "done_sel", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if item is None and STATE.recording is None:
+        # 8 of the 12 ⌥↵ presses in the 10-11..10-17 event log had nothing
+        # selected and silently did nothing (2026-10-17). Say so, and say
+        # what the gesture wants.
+        hint = "⌥↵ on the ▶ row = /done" if STATE.current else "type `HHMM-HHMM desc` then ⌥↵"
+        flash(f"nothing selected — Tab/click a row first, or {hint}", 5.0)
+        return
     if STATE.recording is not None:
         # ⌥↵ while a d357 recording is live = "the meeting is over" (user
         # request 2026-08-02): stop the recording, finalize the notes, and
@@ -5800,8 +6834,10 @@ def _(event):
     # range, so only a literal re-press of THIS row collides here (user
     # report 2026-08-10: desc-only matching refused a second real hiit
     # session and a second xk22 kid-time block as "already recorded").
-    if STATE.day_offset == 0 and _cmd_done_today(cmd):
-        flash(f"already recorded today: {cmd} — not re-running", 6.0)
+    # Past-day views are guarded too (2026-09-28): the command already
+    # carries the viewed M/D, so the key is distinct per day.
+    if _cmd_done_today(cmd):
+        flash(f"already recorded: {cmd} — not re-running", 6.0)
         return
     STATE.event_sel = None
 
@@ -5827,6 +6863,7 @@ def _(event):
     Enter cuts (first half keeps the entry id; second half is a fresh
     identical entry). v1 scope: single completed entries — a merged row has
     no single well-defined timeline and a running one has no end yet."""
+    JE.emit("action", "split_arm", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
     if not (isinstance(item, dict) and item.get("kind") == "entry"):
@@ -5876,6 +6913,7 @@ def _(event):
     undo. A merged multi-entry row (contiguous same-desc Toggl entries
     rendered as one line) deletes every constituent id — unlike split,
     there's no single-timeline ambiguity for a delete."""
+    JE.emit("action", "delete", _sel_ids(), "")
     sel = STATE.event_sel
     item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
     if isinstance(item, dict) and item.get("kind") == "entry":
@@ -5941,25 +6979,32 @@ def _(event):
 
 @kb.add("c-s")
 def _(event):
+    if STATE.current and _stop_wants_points(STATE.current, dt.datetime.now(_tz())):
+        # A ≥20m i9 timer stopped plainly is exactly where 分 leaked all
+        # week (2026-10-17): route the stop through /done so the points
+        # get resolved or asked for. Same stop, one extra question at most.
+        JE.emit("action", "stop", (), "→ done (long i9 timer)")
+        _run_current_timer_done(event.app)
+        return
+    JE.emit("action", "stop", (), "")
     flash("stopping…")
 
     async def _stop():
+        t0 = time.monotonic()
         res = await asyncio.to_thread(run_tg_fast, "stop")
+        JE.emit("outcome", "stop", (), f"{time.monotonic() - t0:.1f}s {res}")
         flash(res)
         event.app.invalidate()
-        polls = (0.4, 0.8, 1.5)
-        for i, delay in enumerate(polls):
-            await asyncio.sleep(delay)
-            await asyncio.to_thread(fetch_current)
-            if i == len(polls) - 1:
-                await asyncio.to_thread(fetch_today, True)
-            event.app.invalidate()
+        await _confirm_after_tg(event.app)
 
+    _optimistic_stop()
+    event.app.invalidate()
     event.app.create_background_task(_stop())
 
 
 @kb.add("c-r")
 def _(event):
+    JE.emit("action", "refresh", (), "")
     flash("refreshing…")
 
     async def _refresh():
@@ -6057,6 +7102,7 @@ def _day_back(event):
         STATE.split_target = None
         input_buffer.reset()
     flash(f"◀ {view_now():%a %-m/%-d}")
+    JE.emit("view", "prev", (), f"{view_now():%Y-%m-%d}")
     _reload_day(event.app)
 
 
@@ -6074,13 +7120,14 @@ def _day_forward(event):
         STATE.split_target = None
         input_buffer.reset()
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
+    JE.emit("view", "next", (), f"{view_now():%Y-%m-%d}")
     _reload_day(event.app)
 
 
 @kb.add("tab", filter=_input_empty)
 @kb.add("down", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the selection cursor forward through everything currently on
+    """Move the selection cursor forward (stopping at the last row) through everything currently on
     screen and selectable — calendar events, real tracked entries, and
     untracked gaps alike (user request 2026-07-17: "select toggl time
     entries as well" / "select empty components"). Tab/↓ to arm one, Enter
@@ -6096,7 +7143,9 @@ def _(event):
         return
     keys = [_sel_key(it) for it in items]
     if STATE.event_sel in keys:
-        i = (keys.index(STATE.event_sel) + 1) % len(keys)
+        # Clamped, not wrapped (user request 2026-10-13): ↓ at the
+        # bottom stays put instead of jumping to the day's first row.
+        i = min(keys.index(STATE.event_sel) + 1, len(keys) - 1)
     else:
         now = view_now()
         past = [j for j, it in enumerate(items)
@@ -6111,14 +7160,14 @@ def _(event):
 @kb.add("s-tab", filter=_input_empty)
 @kb.add("up", filter=_input_empty)  # arrow-key alias (user request 2026-07-17)
 def _(event):
-    """Cycle the selection cursor backward. See the "tab" binding above —
+    """Move the selection cursor backward, stopping at the first row. See the "tab" binding above —
     same nearest-to-now start for a fresh selection."""
     items = STATE.visible_events
     if not items:
         return
     keys = [_sel_key(it) for it in items]
     if STATE.event_sel in keys:
-        i = (keys.index(STATE.event_sel) - 1) % len(keys)
+        i = max(keys.index(STATE.event_sel) - 1, 0)  # clamped, see tab
     else:
         now = view_now()
         past = [j for j, it in enumerate(items)
@@ -6257,7 +7306,11 @@ def _no_timer_flash_style() -> str:
 app = Application(layout=Layout(root, focused_element=input_window),
                   key_bindings=kb, full_screen=True, style=style,
                   mouse_support=True,
-                  refresh_interval=0.1)
+                  # 0.25s, not 0.1s (2026-10-11): every animation here flips
+                  # on a 0.5s phase, so 4 redraws/s still shows each flip
+                  # within a quarter second, and the idle redraw loop was
+                  # holding ~20% CPU around the clock.
+                  refresh_interval=0.25)
 
 # prompt_toolkit's own enable_mouse_support() (site-packages
 # prompt_toolkit/output/vt100.py) turns on mode 1003 ("mouse-drag support"
@@ -6439,6 +7492,9 @@ async def main():
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGUSR1, lambda: loop.create_task(_sigusr1_refresh()))
+    # SIGTERM → clean exit (ix-tui's network switch, 2026-10-08): restores the
+    # terminal and releases the pid file instead of dying mid-screen.
+    loop.add_signal_handler(signal.SIGTERM, lambda: app.exit() if app.is_running else None)
 
     # Write PID so other tools can signal us
     _assert_pid_file()
@@ -6454,9 +7510,13 @@ async def main():
     app.create_background_task(ticker_today(app))
     app.create_background_task(ticker_gcal(app))
     app.create_background_task(ticker_points(app))
+    app.create_background_task(ticker_self_restart(app))
+    _sz = shutil.get_terminal_size((0, 0))
+    JE.emit("session", "start", (), f"{os.uname().nodename.split('.')[0]} {_sz.columns}x{_sz.lines}")
     try:
         await app.run_async()
     finally:
+        JE.emit("session", "end", (), "restart" if _RESTART.get("want") else "")
         _release_pid_file()
 
 
@@ -6469,3 +7529,7 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+    if _RESTART["want"] and _SRC is not None:
+        # Idle self-restart (see ticker_self_restart): same interpreter, same
+        # file, same args — replaces this process so the pane keeps its tty.
+        os.execv(sys.executable, [sys.executable, str(_SRC), *sys.argv[1:]])

@@ -62,19 +62,29 @@ def eval_num(expr: str | None) -> float | None:
     return float(eval(s, {"__builtins__": {}}))  # noqa: S307 — charset-restricted
 
 
-def parse_groups(spec: str | None) -> list[tuple[str, int]]:
+_NUM = r"\d*\.?\d+"
+
+
+def parse_groups(spec: str | None) -> list[tuple[str, float]]:
     """'{wtr, flx x 2, vegetables x 2, grain, beans, spice}' →
     [('wtr',1), ('fx',2), ('vg',2), ('g',1), ('bn',1), ('sp',1)].
-    Accepts '(…)', '{…}', 'br 3', 'br:3', 'flax x2', 'flax x 2'."""
+    Accepts '(…)', '{…}', 'br 3', 'br:3', 'flax x2', 'flax x 2', and the
+    count-first form '3 bean' / '.5 wtr' (2026-09-25: as typed in /ate;
+    fractional counts are real for water — half a glass is half a glass)."""
     if not spec:
         return []
     s = spec.strip().strip("(){}[]").strip()
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, float]] = []
     for item in filter(None, (x.strip() for x in s.split(","))):
-        m = re.fullmatch(r"([A-Za-z]+)\s*(?:[:x×]\s*|\s+)?(\d+)?", item)
+        m = (re.fullmatch(rf"([A-Za-z]+)\s*(?:[:x×]\s*|\s+)?({_NUM})?", item)
+             or re.fullmatch(rf"({_NUM})\s*(?:[x×]\s*)?([A-Za-z]+)", item))
         if not m:
             raise ValueError(f"unrecognised group item: {item!r}")
-        name, cnt = m.group(1).lower(), int(m.group(2) or 1)
+        a, b = m.group(1), m.group(2)
+        name, raw_cnt = (a, b) if a[0].isalpha() else (b, a)
+        cnt = float(raw_cnt or 1)
+        cnt = int(cnt) if cnt.is_integer() else cnt
+        name = name.lower()
         if name not in GROUP_ALIASES:
             raise ValueError(f"unknown Daily Dozen group: {name!r}")
         out.append((GROUP_ALIASES[name], cnt))
@@ -82,7 +92,7 @@ def parse_groups(spec: str | None) -> list[tuple[str, int]]:
 
 
 def build_appends(name: str | None, kcal: float | None, protein: float | None,
-                  groups: list[tuple[str, int]], band: dict, *, skip_food: bool) -> list[dict]:
+                  groups: list[tuple[str, float]], band: dict, *, skip_food: bool) -> list[dict]:
     """The batch items for one entry: name/kcal/protein into the band's
     triad, then one append per Daily Dozen group."""
     from neon import cols
@@ -96,7 +106,7 @@ def build_appends(name: str | None, kcal: float | None, protein: float | None,
         if protein is not None:
             items.append({"col": protein_col, "value": f"+{protein:g}"})
     for ab, n in groups:
-        items.append({"col": cols.daily_dozen_col(ab), "value": f"+{n}"})
+        items.append({"col": cols.daily_dozen_col(ab), "value": f"+{n:g}"})
     return items
 
 

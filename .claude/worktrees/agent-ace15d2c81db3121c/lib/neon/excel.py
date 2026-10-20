@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import shlex
 import socket
 import subprocess
+import sys
 from typing import Any
 
 DAEMON_HOST = "ix"
@@ -79,6 +81,19 @@ def health() -> bool:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _surface() -> dict[str, str]:
+    """source/via for the ledger (JM Dash's source dimension, lib/jmsource).
+    Best-effort: a missing jmsource just leaves the fields off."""
+    try:
+        lib = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        return {"source": jmsource.default_source(), "via": jmsource.default_via()}
+    except Exception:
+        return {}
+
+
 def append(sheet: str, col: str, *, date: str | None = None,
            row: int | None = None, value: str, src: str | None = None) -> dict[str, Any]:
     """Append `value` (e.g. '+10', "+'1n+'!S20") to a cell formula.
@@ -93,6 +108,7 @@ def append(sheet: str, col: str, *, date: str | None = None,
         body["row"] = row
     if src:
         body["src"] = src
+    body.update(_surface())
     out = _curl("/append", body)
     if out:
         return out
@@ -108,6 +124,7 @@ def write(sheet: str, col: str, *, date: str | None = None,
         body["row"] = row
     if src:
         body["src"] = src
+    body.update(_surface())
     out = _curl("/write", body)
     if out:
         return out
@@ -127,12 +144,37 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
         body["row"] = row
     if src:
         body["src"] = src
+    body.update(_surface())
     out = _curl("/batch", body)
     if out:
         return out
     results = [_ssh_fallback("append", sheet, it["col"], date, row, it["value"],
                              src=it.get("src") or src) for it in items]
     return {"ok": all(r.get("ok") for r in results), "results": results, "fallback": True}
+
+
+def batch_write(sheet: str, writes: list, *, date: str | None = None,
+                row: int | None = None, src: str | None = None) -> dict[str, Any]:
+    """N value/formula writes to one sheet/date in a single daemon round-trip
+    (POST /batch_write). `writes` = [{"col": "AE", "value": 1, "mode": "set"|"add"}, …];
+    numbers stay numbers, "=…" is a formula, "add" accumulates onto a numeric
+    cell. Each cell comes back with before_value / value / formula / chain.
+
+    No ssh fallback: the one caller (did-fast 0n habits) keeps its raw
+    AppleScript path for the daemon-down case, so a daemon outage is reported
+    as {"ok": False, "fallback": True} rather than silently half-journaled."""
+    body: dict[str, Any] = {"sheet": sheet, "writes": list(writes)}
+    if date is not None:
+        body["date"] = date
+    if row is not None:
+        body["row"] = row
+    if src:
+        body["src"] = src
+    body.update(_surface())
+    out = _curl("/batch_write", body)
+    if out:
+        return out
+    return {"ok": False, "error": "daemon_unreachable", "fallback": True}
 
 
 def read(sheet: str, col: str, *, date: str | None = None,
@@ -175,6 +217,7 @@ def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
         "kind": op, "sheet": sheet, "col": col, "row": row, "date": date,
         "value": value, "before": None, "after": after_formula,
         "src": src, "fallback": True, "host": socket.gethostname(),
+        **_surface(),
     }
     line = json.dumps(entry, ensure_ascii=False)
     path = f"{LEDGER_DIR}/{now.strftime('%Y-%m')}.jsonl"
@@ -282,6 +325,11 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'end tell'
         )
     osa = f"osascript -e {shlex.quote(script)}"
+    if op in ("append", "write"):
+        # Excel events off for the write, so the Neon audit macro only logs
+        # edits made in Excel itself (scripts/neon-osa-quiet.sh).
+        osa = ('Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; '
+               f'if [ -x "$Q" ]; then "$Q" -e {shlex.quote(script)}; else {osa}; fi')
     r = subprocess.run(
         ["sh", "-c", osa] if IS_IX else ["ssh", DAEMON_HOST, osa],
         capture_output=True, text=True, timeout=45,

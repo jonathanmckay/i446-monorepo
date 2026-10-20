@@ -246,6 +246,66 @@ def test_points_mismatch_wired_into_main(cs):
     assert 'emit_alert("weekly_points_mismatch", w)' in src
 
 
+# ─── daily_points_mismatches (2026-09-25) ────────────────────────────────────
+# Regression: "1st hci" 0n row 2 (⊖分, the credit the sheet pays) said 26 while
+# the card and manifest had said [15] since the manifest was seeded 2026-06-14;
+# 8 more daily cards were off the same way. Only weekly 1n+ points were ever
+# compared against the sheet.
+
+_MANIFEST_2 = {"habits": {
+    "1st-hci": {"match": "1st hci", "content": "1st hci (15) [26]"},
+    "2nd-hci": {"match": "2nd hci", "content": "2nd hci (15) [15]"},
+    "cpap": {"match": "CPAP", "content": "CPAP (15) [20]"},
+    "hiit": {"match": "hiit", "content": "hiit (10) [23]"},
+    "xk20": {"match": "xk20", "content": "xk20 (30) [35]"},
+}}
+_PTS_2 = {"1st hci": 26, "2nd hci": 7, "cpap": 20, "hiit": 7, "wake up": 6}
+
+
+def test_daily_points_card_drift_flagged(cs):
+    warns = cs.daily_points_mismatches(
+        _PTS_2, _MANIFEST_2, [{"content": "1st hci (15) [15]"}])
+    assert len(warns) == 2  # manifest 2nd hci [15]≠7, card 1st hci [15]≠26
+    assert any("1st hci" in w and "[26]" in w and "card has [15]" in w for w in warns)
+    assert any("2nd hci" in w and "[7]" in w and "manifest has [15]" in w for w in warns)
+
+
+def test_daily_points_match_no_warning(cs):
+    warns = cs.daily_points_mismatches(
+        _PTS_2, {"habits": {"cpap": _MANIFEST_2["habits"]["cpap"]}},
+        [{"content": "CPAP (15) [20]"}, {"content": "😈 CPAP (15) [20]"}])
+    assert warns == []
+
+
+def test_daily_points_skips_variable_and_blank_columns(cs):
+    # hiit is VARIABLE_0N (timer-priced, card [N] nominal); xk20 has no row 2.
+    warns = cs.daily_points_mismatches(
+        _PTS_2, {"habits": {k: _MANIFEST_2["habits"][k] for k in ("hiit", "xk20")}},
+        [{"content": "hiit (10) [23]"}, {"content": "xk20 (30) [35]"}])
+    assert warns == []
+
+
+def test_parse_0n_points_keeps_column_alignment(cs):
+    # Blank header cells between habits must not shift row-2 values.
+    pts = cs.parse_0n_points("睡觉\t\tcpap\twake up \t1st hci\t",
+                             "30\t\t20\t6\t26\t")
+    assert pts == {"睡觉": 30, "cpap": 20, "wake up": 6, "1st hci": 26}
+
+
+def test_variable_0n_matches_did_fast(cs):
+    df = _load("df_sync2", str(Path.home() / "i446-monorepo/tools/did/did-fast.py"))
+    assert cs.VARIABLE_0N == df.VARIABLE_0N, (
+        "neon-task-checksum's VARIABLE_0N copy drifted from did-fast's — sync them")
+
+
+def test_daily_points_wired_into_main(cs):
+    import inspect
+    src = inspect.getsource(cs)
+    assert "daily_pts_warnings = daily_points_mismatches(pts_0n, manifest, daily_tasks)" in src
+    assert '"points_mismatches": daily_pts_warnings' in src
+    assert 'emit_alert("daily_points_mismatch", w)' in src
+
+
 # ─── daily NA-suppression (2026-07-28) ───────────────────────────────────────
 # Regression: "cleared out 1st hci from dtd... but I see it here again." This
 # script re-implements validate-daily-habits.py's missing/recreate logic (its
@@ -284,3 +344,13 @@ def test_driver_gates_fix_on_guard(cs):
     assert "args.fix and not skip_weekly" in src
     assert 'emit_alert("checksum_recreate_skipped"' in src
     assert 'emit_alert("weekly_habit_duplicate"' in src
+
+
+def test_no_card_habits_are_never_expected_or_recreated(cs):
+    """一起饭 lives on the calendar; deleting its card must stick (2026-10-05)."""
+    import ast
+    assert "一起饭" in cs.NO_CARD
+    src = (_HERE / "neon-task-checksum.py").read_text()
+    main = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    assert "NO_CARD" in ast.unparse(main), "main() must drop NO_CARD from weekly expectations"

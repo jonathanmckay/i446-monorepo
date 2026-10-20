@@ -45,12 +45,16 @@ object Neg1nConfig {
      * (same domain, same color — the two ARE the same color elsewhere too,
      * not a coloring bug here), -1ibx→i9, -1t→n156. Tag -> (display label,
      * bar color). */
+    // Display labels are the ritual cards' exact Todoist/dtd names (the
+    // auto_marker + tag from config/block-rituals.json, e.g. "😈 -1g"), not
+    // English paraphrases — the watch list and the dtd CLI must show the same
+    // names (2026-09-27, per JM).
     val RITUALS: List<Triple<String, String, Int>> = listOf(
-        Triple("سمش", "prayer", 0xFFAA00FF.toInt()),   // hcm
-        Triple("-1g", "-1g", 0xFF00E676.toInt()),       // g245
-        Triple("-1ibx", "inbox", 0xFF2979FF.toInt()),   // i9
-        Triple("-1t", "time", 0xFF1249B4.toInt()),      // n156
-        Triple("-1l", "tasks", 0xFF00E676.toInt()),     // g245
+        Triple("سمش", "😈 سمش", 0xFFAA00FF.toInt()),   // hcm
+        Triple("-1g", "😈 -1g", 0xFF00E676.toInt()),       // g245
+        Triple("-1ibx", "😈 -1ibx", 0xFF2979FF.toInt()),   // i9
+        Triple("-1t", "😈 -1t", 0xFF1249B4.toInt()),      // n156
+        Triple("-1l", "😈 -1l", 0xFF00E676.toInt()),     // g245
     )
 
     /** Neutral "not done yet" color — same for every bar regardless of

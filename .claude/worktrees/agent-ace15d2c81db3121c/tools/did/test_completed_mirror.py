@@ -73,3 +73,52 @@ def test_absorb_is_idempotent(mc):
         "date": today, "names": ["once"], "ids": {}}))
     assert mc.absorb_remote() == 1
     assert mc.absorb_remote() == 0
+
+
+# ── Undo across hosts (2026-10-08): last-writer-wins on done_at vs undone ──
+
+def _remote(mc, name, data):
+    mc.MIRROR_DIR.mkdir(parents=True, exist_ok=True)
+    (mc.MIRROR_DIR / f"completed-today-{name}.json").write_text(json.dumps(data))
+
+
+def test_undo_is_not_resurrected_by_other_hosts_copy(mc):
+    """The original bug: undo here, the other host's mirror still lists the
+    name, absorb_remote put it right back."""
+    today = date.today().isoformat()
+    mc.append_names(["stats"])
+    done_t = json.loads(mc.COMPLETED.read_text())["done_at"]["stats"]
+    _remote(mc, "otherbox", {"date": today, "names": ["stats"], "done_at": {"stats": done_t}})
+    mc.remove_names(["stats"])
+    mc.absorb_remote()
+    assert "stats" not in json.loads(mc.COMPLETED.read_text())["names"]
+    assert "stats" in json.loads(mc._mirror_path().read_text())["undone"], "undo must be mirrored"
+
+
+def test_remote_undo_removes_local_completion(mc):
+    today = date.today().isoformat()
+    mc.append_names(["stats"])
+    t = json.loads(mc.COMPLETED.read_text())["done_at"]["stats"]
+    _remote(mc, "otherbox", {"date": today, "names": [], "undone": {"stats": t + 5}})
+    assert mc.absorb_remote() == -1
+    assert "stats" not in json.loads(mc.COMPLETED.read_text())["names"]
+
+
+def test_recompletion_after_remote_undo_wins(mc):
+    today = date.today().isoformat()
+    _remote(mc, "otherbox", {"date": today, "names": [], "undone": {"stats": 100.0}})
+    mc.absorb_remote()
+    mc.append_names(["stats"])  # done_at = now >> 100
+    mc.absorb_remote()
+    assert "stats" in json.loads(mc.COMPLETED.read_text())["names"]
+
+
+def test_legacy_remote_without_timestamps_still_absorbs(mc):
+    _remote(mc, "otherbox", {"date": date.today().isoformat(), "names": ["xk20"]})
+    assert mc.absorb_remote() == 1
+
+
+def test_absorb_skips_sync_conflict_copies(mc):
+    _remote(mc, "otherbox.sync-conflict-20260101-000000-ABC", {
+        "date": date.today().isoformat(), "names": ["ghost"]})
+    assert mc.absorb_remote() == 0

@@ -456,6 +456,91 @@ def _osascript(script: str, timeout: int = 180):
     )
 
 
+EXCEL_APP = "Microsoft Excel"
+EXCEL_PROBE_TIMEOUT = 20   # a healthy Excel answers "name of every workbook" in <1s
+EXCEL_OPEN_WAIT = 90       # seconds to wait for the 8 MB OneDrive workbook to load
+
+
+def _excel_probe(timeout: int = EXCEL_PROBE_TIMEOUT) -> tuple[str, list[str]]:
+    """(state, open_workbook_names). state ∈ {"not_running", "hung", "ok"}.
+
+    "hung" = the process exists but a trivial AppleEvent didn't return within
+    `timeout` — Excel's main thread is stuck (modal dialog, wedged AppleEvent
+    handler) and every Neon read/write will time out the same way."""
+    running = subprocess.run(["pgrep", "-x", EXCEL_APP], capture_output=True, text=True)
+    if not running.stdout.strip():
+        return "not_running", []
+    try:
+        r = _osascript(f'tell application "{EXCEL_APP}" to return name of every workbook',
+                       timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "hung", []
+    names = [n.strip() for n in (r.stdout or "").split(",") if n.strip()]
+    return "ok", names
+
+
+def ensure_excel_ready(kill_if_hung: bool = True, dry_run: bool = False) -> str:
+    """Guarantee Excel is responsive with the Neon workbook open; recover if not.
+
+    Returns one of: "ok", "opened", "relaunched", "hung", "failed", "not_ix".
+
+    Three failure shapes, all seen live:
+      - not running (post-reboot, 2026-07-19/20): launch Excel with the workbook.
+      - running, workbook not open: open it by POSIX path.
+      - running but HUNG (2026-10-18): Excel's main thread sat inside an
+        AppleEvent handler for 9h, no workbook open, 0% CPU. Every write
+        from 10:00 on failed "osascript_timeout", so five block fires' -1₦
+        reconciles were lost and the neon-open launchd job (05:55) couldn't
+        help because this mode had been removed from the CLI on 2026-07-28.
+        Nothing short of killing the process recovers that state, so when
+        `kill_if_hung` is set the daemon does exactly that (SIGTERM, then
+        SIGKILL after 10s) and relaunches with the workbook. The ix workbook
+        is AutoSaved + force-saved every SAVE_INTERVAL by excel-http, and a
+        hung Excel lands no writes, so the kill loses nothing.
+
+    Only ever acts on ix (the single Excel writer); on any other host it is
+    a no-op so a stray Straylight run can't kill the user's own Excel."""
+    if not neon_excel.IS_IX:
+        log("ensure-excel: not on ix — skipped")
+        return "not_ix"
+    state, names = _excel_probe()
+    if state == "ok" and NEON_XLSX.name in names:
+        return "ok"
+    log(f"ensure-excel: state={state} workbooks={names}")
+    relaunched = False
+    if state == "hung":
+        if not kill_if_hung or dry_run:
+            log("ensure-excel: Excel hung — not killing (kill_if_hung=False or dry run)")
+            return "hung"
+        log("ensure-excel: Excel hung — terminating it to recover")
+        subprocess.run(["pkill", "-x", EXCEL_APP], capture_output=True)
+        for _ in range(10):
+            time.sleep(1)
+            if not subprocess.run(["pgrep", "-x", EXCEL_APP],
+                                  capture_output=True, text=True).stdout.strip():
+                break
+        else:
+            subprocess.run(["pkill", "-9", "-x", EXCEL_APP], capture_output=True)
+            time.sleep(3)
+        relaunched = True
+    elif state == "not_running":
+        relaunched = True
+    if dry_run:
+        log(f"[DRY RUN] would open {NEON_XLSX} in Excel")
+        return state
+    subprocess.run(["open", "-a", EXCEL_APP, str(NEON_XLSX)], capture_output=True)
+    deadline = time.time() + EXCEL_OPEN_WAIT
+    while time.time() < deadline:
+        time.sleep(5)
+        state, names = _excel_probe()
+        if state == "ok" and NEON_XLSX.name in names:
+            result = "relaunched" if relaunched else "opened"
+            log(f"ensure-excel: {result} — {NEON_XLSX.name} is open")
+            return result
+    log(f"ensure-excel: FAILED — after {EXCEL_OPEN_WAIT}s state={state} workbooks={names}")
+    return "failed"
+
+
 # AppleScript that finds the row for a given M/D date string, then runs an
 # inline cell-op subscript and returns its result.
 NEON_FIND_ROW_TEMPLATE = r'''
@@ -1395,7 +1480,7 @@ def create_block_rituals(dry_run: bool = False) -> None:
         if tag in open_tags:
             log(f"rituals: {tag} already open — skip")
             continue
-        content = f"{marker} {tag}"
+        content = f"{marker} {r.get('card') or tag}"
         if dry_run:
             log(f"[DRY RUN] create card {content!r} @{label}")
             continue
@@ -1456,12 +1541,25 @@ def delete_block_rituals(dry_run: bool = False, live: dict | None = None) -> Non
         try:
             if earned:
                 _todoist_write(f"/tasks/{tid}/close", {}, token)
+                _record_close(tid)
                 log(f"rituals: ✓ {content} (earned at block close)")
             else:
                 _todoist_write(f"/tasks/{tid}", None, token, method="DELETE")
                 log(f"rituals: − {content}")
         except Exception as e:
             log(f"rituals: {verb} {content!r} ERROR {e}")
+
+
+def _record_close(task_id) -> None:
+    """Log a first-party close for JM Dash's source dimension (lib/jmsource)."""
+    try:
+        lib = str(Path.home() / "i446-monorepo" / "lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        jmsource.record("task", task_id)
+    except Exception:
+        pass
 
 
 def _refresh_dtd_cache(dry_run: bool = False) -> None:
@@ -1542,6 +1640,13 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
 
     block_name = HOUR_TO_BRANCH_BLOCK.get(hour)
     log(f"lock-and-mark: hour={hour:02d}, block={block_name}")
+
+    # Excel health gate BEFORE any cell write. A hung Excel (2026-10-18: 9h
+    # stuck in an AppleEvent handler) makes every lock/reconcile below time
+    # out, and the retry/self-heal paths only retry the same dead target.
+    # Recovering it here (relaunch, or kill+relaunch when hung) is what lets
+    # the 20s probe cost buy back the whole fire's writes.
+    ensure_excel_ready(dry_run=dry_run)
 
     lock_col = LOCK_AT_FIRE_HOUR.get(hour)
     if lock_col:
@@ -2054,7 +2159,8 @@ def run_toggl_sync(dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description="Build-order daemon")
     parser.add_argument("mode", choices=["link-meetings", "lock-and-mark", "archive",
-                                         "toggl-sync", "toggl-point-sync", "compute-p"])
+                                         "toggl-sync", "toggl-point-sync", "compute-p",
+                                         "ensure-open"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hour", type=int, default=None,
                         help="(lock-and-mark/compute-p only) override current hour for testing")
@@ -2076,6 +2182,14 @@ def main():
         cur = _branch_for_hour(h)
         formula, total, _parts = compute_p_formula(dt.date.today(), h, current_block=cur)
         print(f"P_RESULT\t{formula}\t{total}")
+    elif args.mode == "ensure-open":
+        # com.jm.neon-open launchd agent (ix, 05:55 daily + RunAtLoad). This
+        # mode was dropped in the 2026-07-28 excel-http refactor and the agent
+        # errored "invalid choice" every morning until 2026-10-18.
+        state = ensure_excel_ready(dry_run=args.dry_run)
+        log(f"ensure-open: {state}")
+        if state in ("hung", "failed"):
+            sys.exit(1)
     else:
         run_archive(dry_run=args.dry_run)
 

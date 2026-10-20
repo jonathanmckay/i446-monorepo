@@ -4,7 +4,7 @@ Phone mirror of the `janus` timeline TUI (`tools/tg/janus.py`), styled like the
 mobile dtd (`tools/dtd/dtd.py`): flat monospace list, Neon domain colors, 地支
 block dividers. Shows today's Toggl entries and the untracked gaps between them.
 
-- **URL (phone):** http://ix:5561  (same access path as dtd/dashboard)
+- **URL (phone):** http://ix:5561  · HTTPS via tailscale serve: https://ix.tail9c51d5.ts.net:8561 (not :5561 — tailscaled on the same port blocks Flask's rebind)  (same access path as dtd/dashboard)
 - **Runs on:** Ix, LaunchAgent `com.jm.janus-mobile` (KeepAlive, RunAtLoad),
   logs `/tmp/janus-mobile.{log,err}`
 - **Source:** `tools/janus/mobile.py` (single file, embedded HTML, Flask only)
@@ -25,7 +25,12 @@ block dividers. Shows today's Toggl entries and the untracked gaps between them.
 ## Endpoints
 
 - `GET /` — mobile UI
-- `GET /api/timeline` — entries + gaps + 地支 dividers, tracked minutes, 0分 Σ
+- `GET /api/timeline` — entries + gaps + 地支 dividers, tracked minutes, 0分 Σ.
+  `?offset=-N` views N days back (the header's ‹ / › buttons, mirroring the
+  CLI's ctrl+/ / ctrl+=); past days are view-only (no swipes/fill/cmdbar).
+  `?lite=1` is the fast first-paint pass: Toggl entries + gaps only — no
+  calendar subprocesses, no Neon/Excel reads. The page fires lite + full
+  concurrently and paints lite first (TTFT, 2026-10-18).
 - `POST /api/fill {desc, start, end}` — create a Toggl entry for a gap
 - `POST /api/log {id, desc, minutes, project}` — /did the entry's minutes
 

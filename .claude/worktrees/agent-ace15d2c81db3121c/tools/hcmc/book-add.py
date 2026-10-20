@@ -123,6 +123,22 @@ def make_note(c, today):
     return "\n".join(fm) + body
 
 
+JMREADS = os.path.expanduser("~/i446-monorepo/tools/personal-dashboard/jmreads.py")
+
+
+def kick_cover_fetch():
+    """Warm the jmreads cover cache for the new book, detached, so /book never
+    waits on Open Library and the dashboard has the cover by its next load
+    (user request 2026-10-18). Best-effort: the stub is already written."""
+    import subprocess
+    try:
+        subprocess.Popen([sys.executable, JMREADS, "--fill-covers"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as e:
+        print(f"WARN: cover fetch not started ({e})", file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("title", nargs="+")
@@ -166,6 +182,7 @@ def main():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(note)
+        kick_cover_fetch()
 
     meta = " · ".join(str(x) for x in (chosen.get("year"),
                       f"{chosen['pages']}pp" if chosen.get("pages") else None) if x)

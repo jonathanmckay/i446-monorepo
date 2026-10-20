@@ -233,6 +233,31 @@ def test_dock_in_bed_before_22_is_zero():
     assert r["dock"] == 0
 
 
+def test_early_bedtime_before_20_counts_as_night_sleep():
+    """Regression 2026-10-11: 睡觉 19:45-23:59 + 00:00-05:47 logged only the
+    post-midnight half (347 min) and docked 30分 for a 'midnight' bedtime,
+    because the night window required entries to START at >=20:00."""
+    entries = [
+        _te("2026-08-09T19:45:00", 254, _SLEEP, "睡觉"),
+        _te("2026-08-10T00:00:00", 347, _SLEEP, "睡觉"),
+    ]
+    r = _dock_with(entries)
+    assert r["bedtime"].endswith("19:45")
+    assert r["late_minutes"] == 0 and r["dock"] == 0
+    with patch.object(zerot_fast, "gather_entries_local", return_value=entries):
+        assert zerot_fast.compute_sleep(_Y, _S) == 601
+
+
+def test_evening_nap_ending_before_20_is_not_night_sleep():
+    entries = [
+        _te("2026-08-09T17:00:00", 45, _SLEEP, "睡觉"),
+        _te("2026-08-09T22:00:00", 480, _SLEEP, "睡觉"),
+    ]
+    with patch.object(zerot_fast, "gather_entries_local", return_value=entries):
+        assert zerot_fast.compute_sleep(_Y, _S) == 480
+    assert _dock_with(entries)["bedtime"].endswith("22:00")
+
+
 def test_dock_no_entries_returns_none():
     assert _dock_with([_te("2026-08-09T21:00:00", 30, None, "reading")]) is None
 
@@ -322,7 +347,8 @@ def test_media_audit_flags_large_gap():
     assert r["passive_total_min"] == 85
     assert r["toggl_media_min"] == 0
     assert r["flagged"] is True
-    assert any("Screen Time" in n for n in r["notes"])
+    # Unreadable Screen Time is silent (2026-10-19): no note.
+    assert not any("Screen Time" in n for n in r.get("notes", []))
 
 
 def test_media_audit_no_flag_when_toggl_covers_it():
@@ -342,6 +368,50 @@ def test_media_audit_merges_sources_by_max_not_sum():
     assert r["passive"]["YouTube"] == 60.0   # max, not 105
     assert r["passive"]["Audible"] == 30.0
     assert r["passive_total_min"] == 90
+
+
+def test_junk_sites_highlights_time_logged_under_credit_tag():
+    """2026-10-10: Verge/Techmeme/Reddit time belongs in hcmc #1 (junk); an
+    hcmc #-1 entry covering it earns 媒分 it shouldn't, so /0t highlights it."""
+    entries = [{"project_id": 109932707, "duration": 30 * 60, "tags": ["-1"]}]
+    ldt = lambda e: datetime(2026, 10, 9, 21, 13, tzinfo=ma.LOCAL_TZ)
+    with patch.object(ma, "media_minutes_from_aw", return_value={"The Verge": 9.0, "Techmeme": 3.0}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={"Reddit": 0.7}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 9), entries, ldt)
+    j = r["junk_sites"]
+    assert j["highlight"] is True
+    assert j["logged_as_junk_min"] == 0          # the #-1 entry doesn't count
+    assert j["unlogged_min"] == 13
+    assert "hcmc #1" in j["message"] and "The Verge 9m" in j["message"]
+    assert r["flagged"] is False                 # the old gap check missed it
+
+
+def test_economist_is_its_own_category_not_junk():
+    with patch.object(ma, "media_minutes_from_aw", return_value={"Economist": 3.9, "The Verge": 1.2}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 10), [], lambda e: None)
+    assert r["categories"] == {"economist": 3.9, "junk": 1.2}
+    assert r["junk_sites"]["passive_min"] == 1
+    assert "Economist" not in r["junk_sites"]["message"]
+    assert r["passive_total_min"] == 5          # still in the overall gap check
+
+
+def test_junk_sites_counts_positive_tags_and_stays_quiet_when_empty():
+    entries = [{"project_id": 108359992, "duration": 20 * 60, "tags": ["2"]}]
+    ldt = lambda e: datetime(2026, 10, 9, 12, 0, tzinfo=ma.LOCAL_TZ)
+    with patch.object(ma, "media_minutes_from_aw", return_value={"YouTube": 15.0}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 9), entries, ldt)
+    assert r["junk_sites"]["logged_as_junk_min"] == 20
+    assert r["junk_sites"]["unlogged_min"] == 0
+    with patch.object(ma, "media_minutes_from_aw", return_value={}), \
+         patch.object(ma, "media_minutes_from_aw_web", return_value={}), \
+         patch.object(ma, "media_minutes_from_screentime", return_value=None):
+        r = ma.media_audit(date(2026, 10, 9), [], ldt)
+    assert r["junk_sites"]["highlight"] is False and "message" not in r["junk_sites"]
 
 
 def test_mark_done_skips_did_fast_when_0t_already_completed_today():

@@ -312,6 +312,19 @@ def create_task(content: str, labels: list[str], project_id: str | None,
 def close_task(task_id: str) -> None:
     """Close (complete) a Todoist task."""
     _api("POST", f"/tasks/{task_id}/close")
+    _record_close(task_id)
+
+
+def _record_close(task_id) -> None:
+    """Log a first-party close for JM Dash's source dimension (lib/jmsource)."""
+    try:
+        lib = str(Path.home() / "i446-monorepo" / "lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        jmsource.record("task", task_id)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

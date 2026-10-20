@@ -49,7 +49,7 @@ EXCLUDE_PATH_PREFIXES: tuple[str, ...] = ()
 NO_EDIT_PREFIXES = (
     "z_ibx/",
     "hcmc/readwise/",
-    "i447/i446/ai-transcripts/",
+    "i447/i446/.ai-transcripts/",
 )
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".pdf", ".heic", ".mp4", ".mov", ".webm"}
 

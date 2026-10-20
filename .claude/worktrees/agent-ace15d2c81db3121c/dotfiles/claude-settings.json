@@ -7,9 +7,14 @@
       "Bash(osascript -e *)",
       "Bash(python3 -c *)",
       "Bash(ssh ix:*)"
+    ],
+    "deny": [
+      "Artifact",
+      "ArtifactData",
+      "ArtifactComments"
     ]
   },
-  "model": "claude-fable-5-1[1m]",
+  "model": "fable",
   "hooks": {
     "PermissionRequest": [
       {
@@ -72,6 +77,11 @@
             "type": "command",
             "command": "~/vault/i447/i446/i446-monorepo/scripts/term-color.sh black >/dev/null 2>&1",
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
+            "async": true
           }
         ]
       }
@@ -98,6 +108,24 @@
           {
             "type": "command",
             "command": "/Users/mckay/.claude/sync-stats.sh"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh idle >/dev/null 2>&1"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
+            "async": true
           }
         ]
       }
@@ -137,6 +165,38 @@
             "command": "~/i446-monorepo/scripts/backup-health-alert.sh 2>/dev/null"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh working 2>/dev/null"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/agent-claim-hook.sh release >/dev/null 2>&1"
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/session-end.sh >/dev/null 2>&1"
+          }
+        ]
       }
     ]
   },
@@ -164,18 +224,19 @@
       "Direct/raw AppleScript or Excel writes to Neon分v12.2.xlsx that bypass the journaled excel-http daemon (ix-osa.sh) or the did-fast/neon-write.py tooling — those writes aren't captured in the neon-ledger audit.",
       "Editing or disabling launchd/cron jobs, hooks in ~/.claude/settings.json, or automation like term-color.sh / tailscale-watchdog."
     ],
-    "hard_deny": [
-      "$defaults",
-      "Sending a message, email, or DM to another person as Jonathan McKay (iMessage, Gmail, Slack, Teams) without him first reading and approving the exact text.",
-      "Placing orders, submitting AppFolio actions that affect tenants or leases (notices, rent changes, evictions), or any other outward-facing action on his behalf without asking first.",
-      "Any action that spends money or moves funds.",
-      "Reading or exfiltrating credentials/secrets from .env files, gcp-oauth.keys.json, or other credential stores under ~/i446-monorepo or ~/.config."
-    ],
     "environment": [
       "$defaults",
       "This is Jonathan McKay's personal automation monorepo (~/i446-monorepo, symlinked from ~/vault/i447/i446/i446-monorepo) and its companion Obsidian vault (~/vault). It runs his personal productivity system: Toggl time tracking, Todoist tasks, a Neon points/habit-tracking Excel workbook, and AppFolio property-management integrations for McKay Capital rental properties.",
       "Money and outward-facing actions are pre-negotiated boundaries the user has set for himself: never send a message to another person under his name without him first reading and approving the exact text (drafting is fine, sending is not); never place an order or take another outward-facing action without asking first; never spend money or move funds — propose instead.",
       "Writes to the Neon workbook (~/OneDrive/vault-excel/Neon分v12.2.xlsx) should go through the journaled excel-http daemon on host 'ix' or the documented did-fast/neon-write.py tooling. Raw/direct AppleScript writes to that file bypass the audit ledger and are not trusted the same way."
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/i446-monorepo/scripts/session-statusline.sh"
+  },
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1"
   }
 }

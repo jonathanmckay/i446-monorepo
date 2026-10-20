@@ -102,6 +102,6 @@ def test_entry_grant_points_handler_uses_fallback_chain_in_source():
     m = _load_tui()
     src = inspect.getsource(m)
     handler_start = src.index('@kb.add("escape", "enter")')
-    handler_src = src[handler_start:handler_start + 4000]
+    handler_src = src[handler_start:handler_start + 5200]
     assert "code = toggl_project_code(item.get(\"project_id\"), desc)" in handler_src
     assert "code = _calendar_fallback_code(desc, start, end)" in handler_src

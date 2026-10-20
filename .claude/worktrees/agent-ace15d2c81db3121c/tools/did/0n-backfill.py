@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""0n-backfill.py — /0n: mark a 0₦ habit done on a PAST date, credit the points TODAY.
+"""0n-backfill.py — /0n: mark a 0₦ habit done on its own row (past, today, or
+tomorrow during 戌/亥), credit the points TODAY.
 
 Usage:
     0n-backfill.py <habit> <date> [value] [--move-only] [--dry-run]
 
-    <date>   09.18 | 9/18 | 9.18 | 2026-09-18 | yesterday   (must be a past date)
+    <date>   09.18 | 9/18 | 9.18 | 2026-09-18 | yesterday | tomorrow
+             Usually a past date. TODAY is also fine: the mark lands on
+             today's row and Excel credits today directly, so nothing moves.
+             TOMORROW is allowed only during 戌/亥 (18:00-22:00 local), so the
+             next day's row can be pre-marked at wind-down with the points
+             still landing today (2026-10-17, per JM). Points ALWAYS land on
+             today, whichever day the mark goes to.
     [value]  cell value to write (default 1). Cumulative / variable habits
              (问学, xk20, 冥想, ...) are refused: their points are minute- or
              Toggl-derived and flow through 1n+, not through 0n row 2.
@@ -60,6 +67,7 @@ ix_run = _ix_mod.run
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel as neon_excel  # noqa: E402
+import blocks  # noqa: E402
 import daytime  # noqa: E402
 
 _DID_PATH = Path(__file__).resolve().parent / "did-fast.py"
@@ -96,19 +104,32 @@ def col_letter(n: int) -> str:
 
 
 def parse_target_date(raw: str, today: date) -> date:
-    """'09.18' | '9/18' | '9.18' | '2026-09-18' | 'yesterday' → date.
-    M/D with no year picks last year when that M/D is after today."""
+    """'09.18' | '9/18' | '9.18' | '2026-09-18' | 'yesterday' | 'tomorrow' → date.
+    M/D with no year: tomorrow's own M/D means tomorrow (advance marking,
+    gated to 戌/亥 in main); any other M/D after today picks last year.
+    Last year's tomorrow-date needs the ISO form."""
     raw = raw.strip().lower()
     if raw == "yesterday":
         return today - timedelta(days=1)
+    if raw == "tomorrow":
+        return today + timedelta(days=1)
     if len(raw) == 10 and raw[4] == "-":
         return date.fromisoformat(raw)
     sep = "." if "." in raw else "/"
     m, d = (int(p) for p in raw.split(sep))
+    tomorrow = today + timedelta(days=1)
+    if (m, d) == (tomorrow.month, tomorrow.day):
+        return tomorrow
     y = today.year
     if (m, d) > (today.month, today.day):
         y -= 1
     return date(y, m, d)
+
+
+def advance_window_open(now: datetime) -> bool:
+    """Tomorrow may be marked early only during 戌/亥 — the two evening
+    wind-down blocks (18:00-22:00 local on the 04:00-wake schedule)."""
+    return blocks.BLOCK_START["戌"] <= now.hour < blocks.BLOCK_START["亥"] + 2
 
 
 def fmt_num(x: float) -> str:
@@ -118,6 +139,19 @@ def fmt_num(x: float) -> str:
 
 def signed(x: float) -> str:
     return ("+" if x >= 0 else "-") + fmt_num(abs(x))
+
+
+def already_credited(pre0n: str) -> bool:
+    """True when the 0n cell already holds a mark: any value other than blank
+    or 0 (2026-09-28, per JM: /0n on an already-marked day just reports that
+    credit was taken -- no need to check Neon first)."""
+    txt = (pre0n or "").strip()
+    if txt == "":
+        return False
+    try:
+        return float(txt) != 0
+    except ValueError:
+        return True  # non-numeric text in the cell still counts as marked
 
 
 def parse_num(s: str) -> float:
@@ -194,7 +228,7 @@ def build_script(habit_col: int, month: int, day: int, value, do_write: bool) ->
     if do_write:
         # Guard inside the script: a non-empty cell is never overwritten, so
         # "already marked" needs no revert round-trip.
-        write_block = f'''    if (pv as text) = "" then
+        write_block = f'''    if (pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0" then
         set value of cell {habit_col} of row nRow of ws to {value}
         calculate
         set pv2 to value of cell {habit_col} of row nRow of ws
@@ -290,8 +324,17 @@ def main() -> int:
 
     today = daytime.today()
     target = parse_target_date(a.date, today)
-    if target >= today:
-        raise SystemExit(f"ERROR: {target} is not a past date; use /did for today")
+    tomorrow = today + timedelta(days=1)
+    if target > tomorrow:
+        raise SystemExit(f"ERROR: {target} is more than one day ahead; "
+                         "/0n reaches at most tomorrow (during 戌/亥)")
+    if target == tomorrow and not advance_window_open(daytime.local_now()):
+        raise SystemExit(f"ERROR: {target} is tomorrow; marking tomorrow is only "
+                         "allowed during 戌/亥 (18:00-22:00 local)")
+    in_place = target == today  # mark today's row: Excel credits today, no move
+    if in_place and a.move_only:
+        raise SystemExit("ERROR: --move-only with today's date is meaningless; "
+                         "the points already sit on today")
 
     df = _did()
     key, col = resolve_habit(df, a.habit)
@@ -335,15 +378,22 @@ def main() -> int:
         deltas = {fen_col_for_habit(col): weight * value}
         out["basis"] = "row-2 weight (move-only, no delta measured)"
     elif a.dry_run:
-        if pre0n != "":
-            out["warning"] = f"0n cell already = {pre0n}; a real run will refuse (use --move-only)"
+        if already_credited(pre0n):
+            out["warning"] = (f"0n cell already = {pre0n}; a real run will report "
+                              "'credit already taken' and award nothing (use --move-only to force the move)")
         deltas = {fen_col_for_habit(col): weight * value}
         out["basis"] = "row-2 weight (dry-run estimate)"
     else:
-        if pre0n != "":
-            # the script skipped the write (guarded in AppleScript)
-            raise SystemExit(f"ERROR: 0n!{col_letter(col)} on {past_md} already = {pre0n}. "
-                             f"If its points still sit on {past_md}, rerun with --move-only.")
+        if already_credited(pre0n):
+            # The script skipped the write (guarded in AppleScript). Not an
+            # error: the day is already marked, so its points were credited
+            # when it was marked. Report and award nothing (2026-09-28).
+            out.update({"already_credited": True, "moves": [], "points_awarded": 0,
+                        "message": (f"credit already taken: 0n!{col_letter(col)} on {past_md} = {pre0n}; "
+                                    "no additional points awarded (--move-only forces the move if "
+                                    f"the points still sit on {past_md})")})
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            return 0
         deltas = compute_deltas(r["PRE"], r["POST"])
         expected = weight * value
         if not deltas_match_expected(deltas, expected, col):
@@ -358,6 +408,18 @@ def main() -> int:
     out["moves"] = moves
     if a.dry_run:
         out["dry_run"] = True
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    if in_place:
+        # Target row IS today: the 0n mark already credited today's 0分 by
+        # formula. A back-out/credit pair on the same row would be ledger noise.
+        out["in_place"] = True
+        out["credit"] = {"date": today_md, "ok": True, "note": "credited by formula, no move"}
+        try:
+            out["dashboard"] = save_and_refresh()
+        except Exception as e:  # noqa: BLE001
+            out["dashboard"] = f"ERROR: {e}"
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 

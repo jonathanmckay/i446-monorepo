@@ -16,8 +16,8 @@ from pathlib import Path
 
 SESSION_STORE = Path.home() / ".copilot" / "session-store.db"
 SESSION_STORE_IX = Path.home() / ".copilot" / "session-store-ix.db"
-OUTPUT_DIR = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts" / "copilot-cli"
-OUTPUT_DIR_IX = Path.home() / "vault" / "i447" / "i446" / "ai-transcripts" / "ix" / "copilot-cli"
+OUTPUT_DIR = Path.home() / "vault" / "i447" / "i446" / ".ai-transcripts" / "copilot-cli"
+OUTPUT_DIR_IX = Path.home() / "vault" / "i447" / "i446" / ".ai-transcripts" / "ix" / "copilot-cli"
 
 # Host-aware sources. We can't rely on hostname (ix is "Jonathans-Mac-mini").
 # The straylight box is the only one with a mirrored ix DB at SESSION_STORE_IX.

@@ -214,3 +214,175 @@ class TestExplicitSaveWatchdog:
             "main() must start save_loop as a daemon thread, or the watchdog "
             "never runs"
         )
+
+
+class TestIdemDedupe:
+    """Regression 2026-10-12: a watchdog-killed did-fast was retried by dtd
+    after its +25 had already landed: +25 three times in 0分!U. Appends
+    carrying an already-journaled idem key are dropped while the earlier
+    append is still in the cell; an undone one (stripped or negated) credits
+    again."""
+
+    @pytest.fixture()
+    def srv(self, monkeypatch):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("excel_http_server", "server.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.IDEM_INDEX.clear()
+        m.IDEM_INDEX["0fen:T1@10/12:U"] = "='0n'!BG286+25"
+        return m
+
+    def test_replay_is_dup(self, srv):
+        assert srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286+25", "+25")
+        # later unrelated appends to the same cell don't hide the replay
+        assert srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286+25+10", "+25")
+
+    def test_unknown_or_missing_key_is_not_dup(self, srv):
+        assert not srv.idem_dup("0fen:T2@10/12:U", "='0n'!BG286+25", "+25")
+        assert not srv.idem_dup(None, "='0n'!BG286+25", "+25")
+
+    def test_undone_append_credits_again(self, srv):
+        # undo-fast stripped the tail
+        assert not srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286", "+25")
+        # undo-fast appended the negation
+        assert not srv.idem_dup("0fen:T1@10/12:U", "='0n'!BG286+25+10-25", "+25")
+
+    def test_do_append_short_circuits_dup_before_writing(self, srv, monkeypatch):
+        scripts = []
+
+        def fake_osa(script):
+            scripts.append(script)
+            return 0, "62\t='0n'!BG286+25", ""
+
+        monkeypatch.setattr(srv, "osascript", fake_osa)
+        monkeypatch.setattr(srv, "cell_addr", lambda req: ("U", 283))
+        out = srv.do_append({"sheet": "0分", "col": "U", "date": "10/12",
+                             "value": "+25", "idem": "0fen:T1@10/12:U"})
+        assert out["ok"] and out.get("dup")
+        assert len(scripts) == 1 and "set formula" not in scripts[0]
+
+    def test_journaled_idem_is_indexed(self, srv, monkeypatch, tmp_path):
+        monkeypatch.setattr(srv, "LEDGER_DIR", str(tmp_path))
+        srv.journal({"sheet": "0分", "col": "U", "date": "10/12", "row": 283,
+                     "after": "=5+25", "idem": "0fen:T9@10/12:U"})
+        assert srv.IDEM_INDEX["0fen:T9@10/12:U"] == "=5+25"
+        srv.seed_chain_index()
+        assert srv.IDEM_INDEX["0fen:T9@10/12:U"] == "=5+25"
+
+
+class TestSemanticDoubleWrite:
+    """Neon-off-Excel step 1: journal() mirrors every entry into the SQLite
+    ledger, after the JSONL append, and a ledger failure can only log."""
+
+    @pytest.fixture()
+    def srv(self, tmp_path, monkeypatch):
+        import importlib.util
+        monkeypatch.setenv("NEON_DB", str(tmp_path / "neon.db"))
+        import os, sys
+        for m in [k for k in sys.modules if k == "neon" or k.startswith("neon.")]:
+            del sys.modules[m]
+        spec = importlib.util.spec_from_file_location(
+            "excel_http_server_dw", os.path.join(os.path.dirname(__file__), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.LEDGER_DIR = str(tmp_path / "jsonl")
+        return m
+
+    def test_journal_lands_in_jsonl_and_sqlite(self, srv):
+        assert srv.neon_ledger is not None and srv.LEDGER_DB_STATE["ok"]
+        srv.journal({"ts": "2026-10-19T08:30:00", "kind": "append", "sheet": "0分", "col": "R",
+                     "row": 290, "date": "10/19", "value": "+15", "before": "=1",
+                     "after": "=1+15", "after_value": "16.0", "before_value": "1.0",
+                     "src": "test", "chain": "ok"})
+        import glob, json
+        lines = [l for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)]
+        assert len(lines) == 1 and json.loads(lines[0])["value"] == "+15"
+        rows = srv.neon_ledger.recent(5)
+        assert len(rows) == 1 and rows[0][5] == "credit" and rows[0][6] == 15.0
+
+    def test_ledger_failure_only_logs(self, srv, monkeypatch, capsys):
+        def boom(entry):
+            raise RuntimeError("db locked")
+        monkeypatch.setattr(srv.neon_ledger, "record", boom)
+        srv.journal({"ts": "2026-10-19T08:30:00", "kind": "append", "sheet": "0分", "col": "R",
+                     "row": 290, "date": "10/19", "value": "+15", "before": "=1",
+                     "after": "=1+15", "after_value": "16.0", "src": "t", "chain": "ok"})
+        assert srv.LEDGER_DB_STATE["errors"] == 1
+        assert "db locked" in srv.LEDGER_DB_STATE["last_error"]
+        assert "semantic ledger write failed" in capsys.readouterr().err
+
+
+class TestBatchWrite:
+    """/batch_write: N 0n-style value writes in one osascript call, each
+    journaled + double-written, with pre-images echoed back (step 2)."""
+
+    @pytest.fixture()
+    def srv(self, tmp_path, monkeypatch):
+        import importlib.util, os, sys
+        monkeypatch.setenv("NEON_DB", str(tmp_path / "neon.db"))
+        for m in [k for k in sys.modules if k == "neon" or k.startswith("neon.")]:
+            del sys.modules[m]
+        spec = importlib.util.spec_from_file_location(
+            "excel_http_server_bw", os.path.join(os.path.dirname(__file__), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.LEDGER_DIR = str(tmp_path / "jsonl")
+        m.CHAIN_INDEX.clear()
+        return m
+
+    def _run(self, srv, monkeypatch, req, echo):
+        captured = {}
+
+        def fake_osa(script):
+            captured["script"] = script
+            return 0, echo, ""
+        monkeypatch.setattr(srv, "osascript", fake_osa)
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 293)
+        return srv.do_batch_write(req), captured["script"]
+
+    def test_numbers_land_unquoted_and_add_mode_accumulates(self, srv, monkeypatch):
+        req = {"sheet": "0n", "date": "10/19", "src": "did hiit, xk20",
+               "writes": [{"col": "AE", "value": 1}, {"col": "AJ", "value": 15, "mode": "add"}]}
+        echo = "\t\t1\t1\x1e\t30\t45\t45\x1e"
+        resp, script = self._run(srv, monkeypatch, req, echo)
+        assert 'cell ("AE293")' in script and "set value of theCell to 1\n" in script
+        assert 'set value of theCell to "1"' not in script               # number, not text
+        assert "(oldValue as number) + 15" in script                     # cumulative add
+        assert 'if oldValue = "" or oldValue = "0" then' in script       # blank → plain set
+        assert resp["ok"] and resp["row"] == 293 and len(resp["results"]) == 2
+        ae, aj = resp["results"]
+        assert ae["value"] == "1" and ae["before_value"] == "" and ae["mode"] == "set"
+        assert aj["value"] == "45" and aj["before_value"] == "30" and aj["mode"] == "add"
+
+    def test_each_cell_is_journaled_and_in_the_semantic_ledger(self, srv, monkeypatch):
+        req = {"sheet": "0n", "date": "10/19", "src": "did hiit",
+               "writes": [{"col": "AE", "value": 1}, {"col": "AF", "value": 1830}]}
+        resp, _ = self._run(srv, monkeypatch, req, "\t\t1\t1\x1e\t\t1830\t1830\x1e")
+        import glob, json
+        lines = [json.loads(l) for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)]
+        assert [(e["kind"], e["sheet"], e["col"], e["value"], e["src"]) for e in lines] == [
+            ("write", "0n", "AE", "1", "did hiit"), ("write", "0n", "AF", "1830", "did hiit")]
+        rows = srv.neon_ledger.recent(5)
+        assert sorted((r[3], r[4], r[5], r[7]) for r in rows) == [
+            ("AE", "hiit", "set", 1.0), ("AF", "N color", "set", 1830.0)]
+
+    def test_formula_and_string_values(self, srv, monkeypatch):
+        req = {"sheet": "0n", "row": 293,
+               "writes": [{"col": "V", "value": "=1+1"}, {"col": "V", "value": "a \"q\""}]}
+        _, script = self._run(srv, monkeypatch, req, "\t\t2\t=1+1\x1e\t\ta \"q\"\ta \"q\"\x1e")
+        assert 'set formula of theCell to "=1+1"' in script
+        assert 'set value of theCell to "a \\"q\\""' in script
+
+    def test_echo_mismatch_and_bad_input_fail_closed(self, srv, monkeypatch):
+        resp, _ = self._run(srv, monkeypatch,
+                            {"sheet": "0n", "row": 293, "writes": [{"col": "AE", "value": 1}]},
+                            "\t\t1\t1\x1e\t\t2\t2\x1e")
+        assert not resp["ok"] and resp["error"].startswith("echo_mismatch")
+        assert not srv.do_batch_write({"sheet": "0n", "row": 293, "writes": []})["ok"]
+        assert not srv.do_batch_write({"sheet": "0n", "row": 293,
+                                       "writes": [{"col": "AE1", "value": 1}]})["ok"]
+
+    def test_route_registered(self, srv):
+        assert srv.ROUTES["/batch_write"] is srv.do_batch_write
+        assert "/batch_write" not in srv.NO_EXCEL

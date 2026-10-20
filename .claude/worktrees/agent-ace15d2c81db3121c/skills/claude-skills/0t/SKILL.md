@@ -32,15 +32,23 @@ The script handles everything:
 5. **Media audit** (informational, never written to Neon): compares passive
    trackers against Toggl media time (hcmc/hcmc2) for yesterday. Sources:
    ActivityWatch on Straylight (desktop, AFK-filtered window titles) and the
-   Apple Screen Time cross-device store (phone/iPad — requires Full Disk
-   Access and Share Across Devices; reported as a note until readable).
+   Apple Screen Time cross-device store (phone/iPad; silently skipped when
+   unreadable, which it is on Ix since JM never uses its GUI).
    Sources merge per-label by max (not sum) to avoid double counting.
    If `media_audit.flagged` is true (passive exceeds Toggl by >20 min),
    surface the gap and the per-app passive breakdown prominently to the user.
+   **Junk-site highlight:** every tracked site (Verge, Techmeme, Reddit,
+   YouTube, ...) is junk and belongs in an `hcmc #1` entry, never a credited
+   `#-1`. Whenever `media_audit.junk_sites.highlight` is true, put its
+   `message` at the TOP of the report, bolded, ahead of sleep.
+   **Categories:** `media_audit.categories` splits passive minutes by category
+   (`junk`, `economist`, ...; mapping in `LABEL_CATEGORY` in media_audit.py).
+   The Economist is its own `economist` category, never junk; report its
+   minutes on their own line when non-zero.
 6. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
 7. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit`, `did`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `did`, `dashboard`.
 
 Note: the dashboard points cache only keeps positive day-values, so on the rare
 night where the dock pushes hcb net-negative the dashboard shows a blank for
@@ -137,6 +145,7 @@ Sleep logged: N min → 0₦ D (睡觉), today's row
 - All Excel writes go through Ix via `~/.claude/skills/_lib/ix-osa.sh`. NEVER write locally.
 - If Ix is unreachable: the helper exits non-zero. Surface the failure, do NOT silently mark complete.
 - If sleep entries are mislabeled (wrong project), the total will be off; fix in Toggl first.
+- **Daily safety net on Ix:** cron `0 14 * * *` runs `~/bin/run_0t.sh` (in `i446-monorepo/bin`, sibling of `run_0r_archive.sh`). It skips if `tools/0t/0t_done_today.py` says 0t is already done today (completed-today mirror after absorbing other hosts, OR the Todoist `0t` daily task's due date already advanced past today), otherwise runs `0t-fast.py` directly and only escalates to headless `claude -p "/0t"` (prompt: `bin/0t-prompt.txt`) if the script fails. Failures append to `~/vault/z_ibx/alerts.jsonl` via `bin/cron-alert.sh`. Logs: `~/.cache/0t/YYYY-MM-DD.log` on Ix. 14:00 is chosen because the sleep window (yesterday >=20:00 + today <14:00) is closed by then.
 
 ## Dependencies
 

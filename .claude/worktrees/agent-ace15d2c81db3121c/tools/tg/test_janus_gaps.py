@@ -136,11 +136,15 @@ def test_fetch_today_marks_entries_known_on_success_and_unknown_on_failure():
     i_end = src.index("\n\n\n", i_def)
     body = src[i_def:i_end]
     assert "STATE.entries_known = True" in body
-    assert "STATE.entries_known = False" in body
-    # The success assignment must come before the failure one in source order
+    # The failure path delegates to _load_viewed_day_cache (2026-10-06), which
+    # marks unknown when there's no cache to fall back on.
+    assert "_load_viewed_day_cache(force=True)" in body
+    i_h = src.index("def _load_viewed_day_cache(")
+    assert "STATE.entries_known = False" in src[i_h:src.index("\n\n\n", i_h)]
+    # The success assignment must come before the failure call in source order
     # (try body, then except block) so a successful read isn't immediately
     # undone by leftover except-block logic.
-    assert body.index("STATE.entries_known = True") < body.index("STATE.entries_known = False")
+    assert body.index("STATE.entries_known = True") < body.index("_load_viewed_day_cache(force=True)")
 
 
 def test_gap_alarm_on_toggles_each_half_second():

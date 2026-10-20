@@ -220,8 +220,8 @@ def test_col_a_matched_via_string_value_not_value():
     DISPLAYED text, same lesson 0s.py already learned for its date column."""
     m = _load()
     script = m.build_applescript({}, dt.date(2026, 7, 19))
-    assert 'string value of range ("A" & r)' in script
-    assert script.count('string value of range ("A" & r)') == len(m.SHEETS)
+    assert 'string value of range "A2:A1000" of ws' in script
+    assert script.count('string value of range "A2:A1000" of ws') == len(m.SHEETS)
 
 
 def test_age_auto_continues_on_new_row_when_blank():
@@ -387,3 +387,77 @@ def test_drain_writes_reports_failure_and_dumps_recovery(monkeypatch, tmp_path):
     m.queue_write({"xk88_good": "x"}, dt.date(2026, 7, 19), m.SHEETS[0])
     assert m.drain_writes() is False
     assert list(tmp_path.glob("*xk88*.json")), "a failed background write must still dump recovery"
+
+
+# ── finishing the survey closes the open family cards (2026-09-29) ──────────
+
+def _queue():
+    return {"1neon": [
+        {"id": "a", "content": "1 xk88 (5) [15]", "labels": ["1neon", "xk88"], "due": "2026-09-29"},
+        {"id": "b", "content": "1 xk87 wknd (20) [20]", "labels": ["1neon", "xk87"], "due": "2026-09-29"},
+        {"id": "c", "content": "1 xk87 (20) [45]", "labels": ["1neon", "xk87"], "due": "2026-10-06"},
+        {"id": "d", "content": "1 s897 (25) [30]", "labels": ["1neon", "s897"], "due": "2026-09-29"},
+    ]}
+
+
+def test_open_finish_cards_matches_exact_names_due_today_or_earlier():
+    m = _load()
+    assert m.open_finish_cards(_queue(), dt.date(2026, 9, 29)) == ["1 xk88"]
+    # once the xk87 card's due date arrives it joins, in FINISH_CARDS order
+    assert m.open_finish_cards(_queue(), dt.date(2026, 10, 6)) == ["1 xk88", "1 xk87"]
+    # overdue still counts as on the list
+    assert m.open_finish_cards(_queue(), dt.date(2026, 10, 9)) == ["1 xk88", "1 xk87"]
+
+
+def test_open_finish_cards_never_matches_wknd_variant_or_empty_cache():
+    m = _load()
+    q = {"1neon": [{"content": "1 xk87 wknd (20) [20]", "due": "2026-09-01"}]}
+    assert m.open_finish_cards(q, dt.date(2026, 9, 29)) == []
+    assert m.open_finish_cards({}, dt.date(2026, 9, 29)) == []
+    # a card with no due date is treated as open
+    assert m.open_finish_cards({"1neon": [{"content": "1 xk88"}]}, dt.date(2026, 9, 29)) == ["1 xk88"]
+
+
+def test_queue_finish_marks_queues_one_run_per_open_card(monkeypatch, tmp_path):
+    m = _load()
+    cache = tmp_path / "task-queue.json"
+    import json as _json
+    cache.write_text(_json.dumps(_queue()))
+    monkeypatch.setattr(m, "TASK_QUEUE", cache)
+    queued = []
+    monkeypatch.setattr(m._writer, "queue", lambda fn, *a, **k: queued.append(k.get("tag")))
+    assert m.queue_finish_marks(dt.date(2026, 10, 6)) == ["1 xk88", "1 xk87"]
+    assert queued == ["did-1 xk88", "did-1 xk87", "dtd-refresh"]
+
+
+def test_queue_finish_marks_missing_cache_is_a_noop(monkeypatch, tmp_path):
+    m = _load()
+    monkeypatch.setattr(m, "TASK_QUEUE", tmp_path / "absent.json")
+    queued = []
+    monkeypatch.setattr(m._writer, "queue", lambda fn, *a, **k: queued.append(k.get("tag")))
+    assert m.queue_finish_marks(dt.date(2026, 9, 29)) == []
+    assert queued == []
+
+
+def test_run_paginated_marks_on_finish_unless_no_mark():
+    import ast
+    src = (HERE / "xk887-survey.py").read_text()
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run_paginated")
+    body = ast.get_source_segment(src, fn)
+    assert "queue_finish_marks()" in body and "no_mark" in body
+    # the marks are queued BEFORE the final drain, so they are waited on
+    assert body.index("queue_finish_marks()") < body.rindex("drain_writes()")
+    # the cancel path never marks
+    cancel = body[body.index("if action is None:"):body.index("if action == \"back\":")]
+    assert "queue_finish_marks" not in cancel
+    main_fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "main")
+    assert "--no-mark" in ast.get_source_segment(src, main_fn)
+
+
+def test_tail_row_lookup_is_one_range_read_not_a_per_row_loop():
+    """Same defect class as 0s (2026-10-17): one Apple event per row over 1,000
+    rows per sheet blew the 60 s write budget on a slow Excel."""
+    src = (Path(__file__).resolve().with_name("xk887-survey.py")).read_text()
+    assert 'string value of range "A2:A1000" of ws' in src
+    assert 'set av to (string value of range ("A" & r)' not in src

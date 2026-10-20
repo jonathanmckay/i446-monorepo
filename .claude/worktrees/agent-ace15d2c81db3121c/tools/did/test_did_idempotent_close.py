@@ -38,7 +38,7 @@ def test_guard_skips_recurring_already_done():
     assert "mc._normalize(r.item.name) in done_today" in src
     # The skip must precede the close call (close_todoist_tasks) in source.
     skip_pos = src.index("in done_today")
-    close_pos = src.index("close_todoist_tasks(task_ids)")
+    close_pos = src.index("close_todoist_tasks(task_ids, due_by_id)")
     assert skip_pos < close_pos, "idempotency skip must run before the Todoist close"
     # And it routes through future_skipped so callers see the warning.
     seg = src[skip_pos:close_pos]

@@ -40,5 +40,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+    // RemoteInputIntentHelper: Wear's system text entry (keyboard + voice
+    // dictation) for the -1g goal tap — see RitualListActivity.
+    implementation("androidx.wear:wear-input:1.1.0")
     testImplementation("junit:junit:4.13.2")
 }

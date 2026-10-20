@@ -64,7 +64,9 @@ while IFS= read -r line; do
         continue
     fi
 
-    echo "$script" | ssh -o ConnectTimeout=3 -o BatchMode=yes ix osascript - 2>/dev/null
+    # Replayed writes run with Excel events off (scripts/neon-osa-quiet.sh).
+    echo "$script" | ssh -o ConnectTimeout=3 -o BatchMode=yes ix \
+        'Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; if [ -x "$Q" ]; then "$Q"; else osascript -; fi' 2>/dev/null
     rc=$?
     if [ "$rc" -eq 0 ]; then
         echo "    OK"

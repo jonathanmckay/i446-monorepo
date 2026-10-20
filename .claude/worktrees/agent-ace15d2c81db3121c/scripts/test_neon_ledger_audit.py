@@ -24,7 +24,7 @@ def test_replay_clean_chain():
         E(before="=1+10", after="=1+10+5"),
     ])
     assert errors == [] and warns == []
-    assert last[("0分", "R", "7/28")][1] == "=1+10+5"
+    assert last[("0分", "R", "r207")][1] == "=1+10+5"
 
 
 def test_replay_detects_break():
@@ -80,3 +80,31 @@ def test_unacked_break_still_errors():
         E(before="=999", after="=999+5"),
     ])
     assert len(errors) == 1
+
+
+def test_report_stays_small_with_thousands_of_standing_errors(tmp_path, monkeypatch):
+    """2026-10-11: 48 hourly runs x ~3,000 repeated errors = 3.8 MB, which
+    froze Obsidian on every rewrite. Older runs collapse to their header."""
+    rep = tmp_path / "audit.md"
+    monkeypatch.setattr(audit, "REPORT", str(rep))
+    errs = [f"chain BREAK number {i} " + "x" * 80 for i in range(3000)]
+    for _ in range(60):
+        audit.write_report(errs, [], 2979)
+    text = rep.read_text()
+    assert len(text) < 60_000
+    assert text.count("\n## ") == 48
+    assert text.count("- ❌") == audit.MAX_ITEMS
+    assert "2800 more" in text
+    assert "3000 errors, 0 warnings" in text.split("\n## ")[-1]
+
+
+def test_same_cell_by_date_and_row_is_one_chain():
+    """2026-10-11: block-turnover writes 0分!P by date, ritual -1n by row; the
+    daemon logs the resolved row on both, so they must share one chain."""
+    entries = [
+        {"ts": "1", "kind": "write", "sheet": "0分", "col": "P", "date": "10/11", "row": 282, "before": "=0", "after": "=3"},
+        {"ts": "2", "kind": "write", "sheet": "0分", "col": "P", "date": None, "row": 282, "before": "=3", "after": "=3+13"},
+        {"ts": "3", "kind": "write", "sheet": "0分", "col": "P", "date": "10/11", "row": 282, "before": "=3+13", "after": "=3+13+13"},
+    ]
+    errors, _, _ = audit.replay(entries)
+    assert errors == []

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -225,6 +226,66 @@ def _post(port: int, action: str) -> bool:
         return False
 
 
+# In-progress lines (2026-10-11, "any task that is active, AI or me, should be
+# above the line"): the footer is the only part of fzf above the list's
+# separator, so every active task lives here, one line each, in the same tiers
+# the list used: ▶ JM's timer, then 🧮 🕐 claims waiting on JM (domain-free,
+# plain), then spinner + 😈 claims mid-turn (grey). The list keeps those rows at
+# its very bottom so they stay searchable and ⌥↵-able. Claims are re-read once
+# a second, not per tick.
+SPIN = "·✢✳✶✻✽✻✶✳✢"   # Claude Code's own spinner glyphs
+CLAIMS_EVERY = 1.0
+AGENT_GREY = "\033[38;2;110;110;110m"
+NAME_MAX = 60
+
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import agent_claims  # type: ignore
+except Exception:
+    agent_claims = None
+
+
+def _footer_name(name: str) -> str:
+    """Task name safe inside change-footer(...): annotations like (60) [10]
+    dropped, any leftover bracket stripped (a ) would end the action)."""
+    name = re.sub(r"\s*[\(\[\{][^()\[\]{}]*[\)\]\}]", "", name)
+    for ch in "()[]{}":
+        name = name.replace(ch, "")
+    name = " ".join(name.split())
+    return name if len(name) <= NAME_MAX else name[:NAME_MAX - 1] + "…"
+
+
+def claim_lines(claims: list[tuple[str, bool]], tick: int) -> str:
+    """One footer line per claim: waiting ones first, then working ones."""
+    frame = SPIN[tick % len(SPIN)]
+    out = [f"\n🧮 🕐 {_footer_name(n)}" for n, w in claims if not w]
+    out += [f"\n{AGENT_GREY}{frame} 😈 {_footer_name(n)}\033[0m" for n, w in claims if w]
+    return "".join(out)
+
+
+def _timer_task_id(timer_file) -> str:
+    try:
+        parts = timer_file.read_text().strip().split("\t")
+        return parts[2].strip() if len(parts) > 2 else ""
+    except Exception:
+        return ""
+
+
+def _claims(skip_id: str = "") -> list[tuple[str, bool]]:
+    """(task name, working) for every claim, minus an IDLE claim on the task
+    JM is timing (the ▶ line already shows it; his timer wins, as in the
+    list). A working claim on that task still gets its spinner line
+    (2026-10-16: the agent mid-turn must show as 😈 even while JM times it)."""
+    if agent_claims is None:
+        return []
+    try:
+        recs = agent_claims.load()
+        return sorted((r.get("task", ""), bool(r.get("working")))
+                      for tid, r in recs.items() if tid != skip_id or r.get("working"))
+    except Exception:
+        return []
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         return
@@ -252,6 +313,9 @@ def main() -> None:
     # with no PID-reuse race, unlike polling an external PID by number.
     parent_pid = os.getppid()
     proc_start = time.time()
+    tick = 0
+    agents: list[tuple[str, bool]] = []
+    last_claims = 0.0
 
     while True:
         if not port_file.exists():   # picker exited and cleaned up
@@ -306,6 +370,12 @@ def main() -> None:
                 body = f"{ansi}{body}\033[0m"
         else:
             body = "▶ (idle)"
+
+        if now - last_claims >= CLAIMS_EVERY:
+            last_claims = now
+            agents = _claims(_timer_task_id(timer_file) if start is not None and timer_file else "")
+        tick += 1
+        body += claim_lines(agents, tick)
 
         if port is not None:
             ok = _post(port, f"change-footer({body})")

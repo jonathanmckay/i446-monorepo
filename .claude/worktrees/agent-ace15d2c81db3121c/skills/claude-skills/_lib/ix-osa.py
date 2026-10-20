@@ -21,6 +21,7 @@ import datetime
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -35,6 +36,13 @@ UNREACHABLE_MSG = (
 # Overridable for tests.
 QUEUE_PATH = Path(os.environ.get("IX_WRITE_QUEUE",
                                  str(Path.home() / ".claude/ix-write-queue.jsonl")))
+
+
+# Pipeline writes run with Excel events off (scripts/neon-osa-quiet.sh) so the
+# Neon audit macro only logs edits made in Excel itself. Falls back to plain
+# osascript if the wrapper hasn't synced to ix yet.
+QUIET_REMOTE = ('Q="$HOME/i446-monorepo/scripts/neon-osa-quiet.sh"; '
+                'if [ -x "$Q" ]; then "$Q"; else osascript -; fi')
 
 
 def _is_write(script: str) -> bool:
@@ -70,19 +78,34 @@ class IxResult:
     stderr: str
 
 
+def on_ix() -> bool:
+    """True when this process already runs on ix (same test as did-fast's
+    _on_ix). Then the AppleScript runs locally: ssh-to-self goes through the
+    Tailscale name, which ix could not reliably resolve on 2026-10-17, so dtd
+    completions on ix died in refresh_headers with "ix unreachable" before
+    writing anything. The OneDrive-conflict rule this wrapper enforces is
+    "only ix writes the workbook"; on ix, local IS the single writer."""
+    host = socket.gethostname().lower()
+    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
+
+
 def run(script: str, *, timeout: float = 30.0) -> IxResult:
     """Run AppleScript on ix. Never falls back to local osascript."""
     if not script or not script.strip():
         return IxResult(4, "", "ix-osa: empty AppleScript")
 
-    cmd = [
-        "ssh",
-        "-o", "ConnectTimeout=3",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
-        IX_HOST,
-        "osascript", "-",
-    ]
+    remote = [QUIET_REMOTE] if _is_write(script) else ["osascript", "-"]
+    if on_ix():
+        cmd = ["/bin/sh", "-c", QUIET_REMOTE] if _is_write(script) else ["osascript", "-"]
+    else:
+        cmd = [
+            "ssh",
+            "-o", "ConnectTimeout=3",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            IX_HOST,
+            *remote,
+        ]
     try:
         proc = subprocess.run(
             cmd, input=script, text=True, capture_output=True, timeout=timeout,

@@ -357,14 +357,28 @@ def close_todoist_task():
         task_id = json.loads(TASK_STATE_FILE.read_text()).get("task_id")
         if not task_id:
             return
-        _req.post(
+        r = _req.post(
             f"https://api.todoist.com/api/v1/tasks/{task_id}/close",
             headers={"Authorization": f"Bearer {TODOIST_TOKEN}"},
             timeout=5,
         )
+        if r.ok:
+            _record_close(task_id)
         TASK_STATE_FILE.write_text(json.dumps({"task_id": None}))
     except Exception:
         pass
+
+def _record_close(task_id) -> None:
+    """Log a first-party close for JM Dash's source dimension (lib/jmsource)."""
+    try:
+        lib = str(Path.home() / "i446-monorepo" / "lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import jmsource
+        jmsource.record("task", task_id)
+    except Exception:
+        pass
+
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 

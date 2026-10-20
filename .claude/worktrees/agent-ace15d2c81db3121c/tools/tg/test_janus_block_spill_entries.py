@@ -141,7 +141,11 @@ def test_current_block_shows_spilled_run_with_title():
     # 2026-08-10 / 2026-09-17: "there should be zero :00 rows"). A RUNNING
     # spill still gets its titled row (see the 亥:xx test below).
     assert "run" not in hai, f"finished spill must not repeat in 亥:\n{hai}"
-    assert "◇ │" in hai, "the spilled hour still shows as continuation marks"
+    # 2026-10-12 ("these time entries are obviously not in order"): the
+    # spilled hour's ◇ │ marks (20:15-20:45) used to render UNDER the
+    # promoted "亥 21:01 snack" header. Nothing below the header may be
+    # earlier than it.
+    assert "20:" not in hai.split("\n", 1)[1], f"rows earlier than the header:\n{hai}"
     spilled = [it for it in mod.STATE.visible_events
                if isinstance(it, dict) and it.get("kind") == "entry"
                and it.get("entry_ids") == [42]]

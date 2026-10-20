@@ -17,7 +17,7 @@ ts=$(date -u +%FT%TZ)
 
 if [ -n "$SSH_CONNECTION" ]; then
     client_ip=$(printf '%s' "$SSH_CONNECTION" | awk '{print $1}')
-    # Resolve Tailscale device name (e.g. imago = iPhone, straylight-refit = laptop).
+    # Resolve Tailscale device name (e.g. imago-c = iPhone, straylight-refit = laptop).
     # Best-effort: empty string if tailscale not installed or IP is non-Tailscale.
     client_device=$(tailscale whois "$client_ip" 2>/dev/null | awk '/^  Name:/{print $2; exit}' | cut -d. -f1)
     printf '{"client":"ssh","ssh_connection":"%s","client_ip":"%s","client_device":"%s","ts":"%s"}\n' \

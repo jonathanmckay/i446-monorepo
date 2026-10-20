@@ -1,6 +1,6 @@
 ---
 name: "0n"
-description: "Mark a 0₦ habit done on a PAST date but credit its points to TODAY. Marks the habit's cell on that date's 0n row, measures the points Excel auto-credited to that day (个 usually; 媒/m5/i9/xk/思 for domain columns; 0g's extra +9), backs them out of that day and appends them to today via the excel-http daemon. Usage: /0n <habit> <date> [value] [--move-only]  e.g. /0n 0l 09.18"
+description: "Mark a 0₦ habit done usually on a PAST date (although sometimes the habit can be due today or tomorrow) but credit its points to TODAY. Marks the habit's cell on that date's 0n row, measures the points Excel auto-credited to that day (个 usually; 媒/m5/i9/xk/思 for domain columns; 0g's extra +9), backs them out of that day and appends them to today via the excel-http daemon (today's row is credited in place, no move). Tomorrow's row only during 戌/亥. Usage: /0n <habit> <date> [value] [--move-only]  e.g. /0n 0l 09.18"
 user-invocable: true
 ---
 
@@ -18,7 +18,7 @@ python3 ~/i446-monorepo/tools/did/0n-backfill.py "<habit>" <date> [value] [--mov
 ```
 
 - `<habit>`: a 0n row-1 header (`0l`, `0t`, `notes`, `ibx i9`, `早餐`, ...). Case/dash-insensitive.
-- `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, or `yesterday`. Must be in the past; for today use `/did`.
+- `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, `yesterday`, or `tomorrow`. Usually past. Today's row works too (credited in place, nothing moves). Tomorrow's row is allowed only during 戌/亥 (18:00–22:00) — for a habit done tonight whose row carries tomorrow's date (e.g. 0l on the wake-date row). Points always land on today.
 - `[value]`: cell value, default `1`.
 - `--move-only`: the 0n cell is already marked (by hand, or an earlier run whose 0分 half failed). Skips the 0n write and moves the row-2 weight only.
 - `--dry-run`: read-only plan.
@@ -31,6 +31,14 @@ Refuses cumulative/variable habits (`问学`, `xk20/22/26`, `冥想`, `o314`, `�
 2. Guard: Σ(measured 0分 change) must equal weight × value (0g may add exactly +9 on 0分!Q). Otherwise the 0n write is reverted and nothing moves.
 3. Daemon `batch_append` (ledger `src: "0n backfill <habit> <date>"`): `-N` per changed column on the past date, `+N` on today. Never touches 0分 D/E/F/G:O and never stamps the 0l/0t time in 0n!AF (that would drag the 111 all-colors bonus).
 4. Saves the workbook and refreshes the dashboard points cache (same refresher as `/0t`).
+
+## Already marked
+
+If the 0n cell for that date already holds a value other than blank or 0,
+the script writes nothing and exits 0 with `already_credited: true` and
+`points_awarded: 0`. Report it as "credit already taken for <habit> on <date>,
+no additional points". Only pass `--move-only` when the user says the
+points genuinely still sit on the past day.
 
 ## Report
 

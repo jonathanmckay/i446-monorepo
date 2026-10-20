@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
-from review_form_writer import BackgroundWriter  # noqa: E402
+from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "Neon分v12.2.xlsx"
@@ -196,8 +196,7 @@ def parse_context(raw: str, dates: list[_dt.date]) -> dict[str, list[tuple[int, 
 
 def fetch_context(dates: list[_dt.date]) -> dict[str, list[tuple[int, str]]]:
     script = build_context_script(dates)
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                          text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     if proc.returncode != 0:
         return {k: [] for k in DAILY_COLS}
     return parse_context(proc.stdout, dates)
@@ -320,8 +319,7 @@ def check_week(dates: list[_dt.date], ctx: dict | None = None) -> dict:
     missing_0s = [dates[i] for i in range(7) if i not in filled]
 
     missing_0l = list(dates)
-    proc = subprocess.run([str(IX_OSA)], input=build_0l_script(dates),
-                          capture_output=True, text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=build_0l_script(dates), timeout=60)
     if proc.returncode == 0:
         done = set()
         for chunk in proc.stdout.split("<<D>>")[1:]:
@@ -403,8 +401,7 @@ def build_applescript(answers: dict, sunday: _dt.date) -> str:
 
 def write_answers(answers: dict, sunday: _dt.date) -> str:
     script = build_applescript(answers, sunday)
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                          text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):
         raise RuntimeError(out or proc.stderr.strip() or "ix-osa failed")
@@ -566,7 +563,7 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
         else:
             e.app.layout.focus_next()
 
-    @kb.add("escape")
+    @kb.add("escape", eager=True)   # eager: no 1s meta-chord wait (2026-10-16)
     async def _(e):
         await _submit(e.app)
 

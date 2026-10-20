@@ -31,7 +31,7 @@ Scan row 1 of the `1₦+` sheet (starting at column B) to find the column matchi
 - Row 2 = p(t) values
 - Row 3 = e(分) default points
 - Rows 4+ = weekly data rows (column A = period code like "sf21", column B = week index like "3.5")
-- **Current week row** = find the row where column B matches `M.W` where M = current month number and W = current week-of-month (1–5). Week-of-month: week 1 = days 1–7, week 2 = 8–14, week 3 = 15–21, week 4 = 22–28, week 5 = 29–31. All rows have col A pre-populated, so do NOT use "last non-empty col A" — that will land on the wrong row. Instead match col B numerically. E.g. March 30 → month=3, week=5 → B=3.5 → row 16.
+- **Current week row** = find the row where column B matches `M.W`, the 4-4-5 fiscal-week label: get it from `python3 -c 'import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib"); from neon import weeks; from datetime import date; print(weeks.fiscal_week_label(date.today()))'`. Week `1.1` starts on the first Sunday on/after Jan 1; Sundays fill slots in order; months 3/6/9/12 hold 5 rows, the rest 4. It is NOT calendar week-of-month (Sun Aug 30 2026 → `9.1`, Thu Oct 1 2026 → `9.5`). All rows have col A pre-populated, so do NOT use "last non-empty col A" — that will land on the wrong row. Instead match col B as text.
 
 ```applescript
 tell application "Microsoft Excel"
@@ -88,7 +88,7 @@ ssh ix "curl -s -X POST localhost:9876/append -H 'Content-Type: application/json
 - `<COL>` — the 0分 column from Step 3
 - `<M/D>` — today's date (e.g. `3/30`)
 - `<task>` — the task name, so the audit ledger records which 1₦+ task this was
-- If **no points override**: `POINTS_EXPR` = `'1n+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (found by scanning column A downward from row 4 for the last non-empty row). The `'` characters in that reference fight the nested ssh/curl quoting — use the Python client for this case:
+- If **no points override**: `POINTS_EXPR` = `'1n+'!{colLetter}{weekRow}` where `weekRow` is the current week's row (the row whose column B equals the 4-4-5 fiscal M.W label from Step 2 — never "last non-empty col A"). The `'` characters in that reference fight the nested ssh/curl quoting — use the Python client for this case:
 
   ```python
   import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")

@@ -1,6 +1,6 @@
 ---
 name: "bookreview"
-description: "Write a book review. Interactive: prompts for bullets, drafts in Obsidian for manual editing, then publishes to Goodreads/blog when approved. Usage: /bookreview <title>"
+description: "Write a book review. Interactive: prompts for bullets, drafts in Obsidian for manual editing, publishes to the o315 blog on PUBLISH, then posts the review + stars to Goodreads via Chrome on PUSH. Usage: /bookreview <title>"
 user-invocable: true
 ---
 
@@ -140,7 +140,7 @@ PY
 
 ```
 Draft saved and opened in Obsidian for manual editing.
-When ready, send PUBLISH and I'll copy the final text, open Goodreads, and sync it to the o315 blog.
+When ready, send PUBLISH to deploy it to the o315 blog, then PUSH to post it to Goodreads.
 ```
 
 ### Step 6: Publish after manual edit
@@ -149,38 +149,16 @@ Only continue when the user explicitly sends `PUBLISH` (or `publish`). Then:
 
 1. Re-read the saved review file from disk so any manual Obsidian edits are included.
 
-2. **Copy review text to clipboard** (without frontmatter) so the user can paste directly:
+2. **Goodreads is handled by PUSH** (Step 6b below), not here. Do not open
+   Goodreads or copy to the clipboard during PUBLISH.
 
-```bash
-# Copy just the review body to clipboard
-python3 - <<'PY' | pbcopy
-from pathlib import Path
-p = Path("/Users/mckay/vault/hcmc/reviews/YYYY/title.md")
-text = p.read_text()
-if text.startswith("---"):
-    text = text.split("---", 2)[2].lstrip()
-print(text, end="")
-PY
-```
-
-3. **Open Goodreads** in Chrome so the user can paste the review:
-
-```bash
-open -a "Google Chrome" "https://www.goodreads.com/book/show/<search_query>"
-```
-
-Use a Goodreads search URL:
-```bash
-open -a "Google Chrome" "https://www.goodreads.com/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('TITLE AUTHOR'))")"
-```
-
-4. **Publish to the o315 blog** by syncing generated blog copies from the vault source of truth:
+3. **Publish to the o315 blog** by syncing generated blog copies from the vault source of truth:
 
 ```bash
 cd /Users/mckay/vault/hcmp/o315/blog && python3 scripts/sync-vault-reviews.py
 ```
 
-5. **Commit, push, and verify the deploy:**
+4. **Commit, push, and verify the deploy:**
 
 ```bash
 cd /Users/mckay/vault/hcmp/o315/blog
@@ -200,7 +178,7 @@ gh run watch <run_id> --repo jonathanmckay/o315-blog-v3
 
 If the deploy fails, check `gh run view <run_id> --repo jonathanmckay/o315-blog-v3 --log-failed` and fix before continuing.
 
-6. **Verify the review is live** by fetching the prod URL:
+5. **Verify the review is live** by fetching the prod URL:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" "https://jonathanmckay.com/reviews/<slug>/"
@@ -214,10 +192,69 @@ open -a "Google Chrome" "https://jonathanmckay.com/reviews/<slug>/"
 
 If not `200`, diagnose and fix. The review is not done until it loads in prod.
 
+### Step 6b: PUSH — post the review to Goodreads
+
+Trigger: the user sends `PUSH` (or `push`, `goodreads`) after PUBLISH. Also
+accept `PUSH` on its own for a review file that is already published, and
+`/bookreview push <title>` to run only this step on an existing review.
+Posting is the user's explicit instruction; do not ask again.
+
+Uses `mcp__claude-in-chrome__*` (one ToolSearch:
+`select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__find,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__tabs_close_mcp`).
+Goodreads is signed in on the **m5c7.com** Chrome profile; if two browsers
+are connected, make sure the in-use one is that profile (navigate a tab to
+`https://myaccount.google.com` and read the email; `select_browser` the other
+if needed). If the extension isn't connected, `open -a "Google Chrome" https://claude.ai/chrome`,
+wait ~6s, retry once; then report `WARN: Goodreads not posted — extension not connected` and stop.
+Live-verified 2026-10-01 (Horus Rising).
+
+1. **Prepare the text.** Re-read the review file from disk. Body = everything
+   after the frontmatter. Convert to Goodreads markup: `**x**` → `<b>x</b>`,
+   `*x*` → `<i>x</i>`, keep blank lines between paragraphs, strip trailing
+   whitespace, drop any markdown links to `[text](url)` → `text`. Score =
+   frontmatter `score` (1-5, same scale as Goodreads stars). `finished:` date
+   if present.
+2. **Find the book.** `tabs_context_mcp` (`createIfEmpty: true`) →
+   `tabs_create_mcp` → `navigate` to `https://www.goodreads.com/search?q=<isbn>`
+   (fallback `<title> <author>` URL-encoded). `wait` 2s. `find`
+   `"search result link for the book titled <title>"`; take the `/book/show/<id>`
+   from its href (re-run `find` once if it races the load).
+3. **Open the editor**: `navigate` to `https://www.goodreads.com/review/edit/<id>`.
+   `wait` 2s. If the page says *"you have also reviewed the following editions
+   of this book"*, the user's shelf/rating lives on another edition: `find`
+   `"link to the already-reviewed edition"`, click it (lands on that edition's
+   book page), then `navigate` to `https://www.goodreads.com/review/edit/<that id>`.
+   Keep everything on the edition that already carries the rating.
+4. **Stars.** `find` `"current star rating value or selected star for this book"`.
+   If it reports `Rating <score> out of 5`, leave it. Otherwise `find`
+   `"Rate <score> out of 5 button"` and click it. Skip stars entirely if the
+   review has no `score`.
+5. **Text.** `find` `"review text area Write your review"` → click it. If it
+   already contains text, `computer` `key` `cmd+a` first. Then `computer`
+   `type` the prepared text (newlines are fine in this textarea).
+6. **Date finished.** If `finished:` is today, `find` `"Set to today button next to Date finished (optional)"`
+   and click it. Otherwise leave the dates alone.
+7. **Post.** `find` `"Post your review submit button"` → click. `wait` 3s.
+   The tab must now be at `https://www.goodreads.com/review/show/<review_id>`
+   with title `<name>'s review of <title> | Goodreads`. If it isn't, one
+   screenshot, report `WARN: Goodreads post not confirmed`, and leave the tab
+   open for the user.
+8. **Record the URL**: add `goodreads_review: "<review url>"` to the review
+   file's frontmatter (after `source:`), so a later PUSH edits rather than
+   duplicates (Goodreads's `/review/edit/<book id>` already loads the existing
+   review for the same edition, so re-running PUSH updates in place).
+9. `tabs_close_mcp` the tab.
+
 ### Step 7: Report
 
+After PUBLISH:
 ```
 Published: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
 Live at: https://jonathanmckay.com/reviews/<slug>/
-Goodreads opened, final review copied to clipboard, blog deployed and verified.
+Send PUSH to post it to Goodreads.
+```
+
+After PUSH:
+```
+Goodreads: <review url> (N stars, date finished set)
 ```

@@ -22,6 +22,13 @@
 # sees the intermediate states at all; ~/vault only ever gets a single clean
 # jump to a known-good tip, or is left completely untouched on failure.
 
+# GitHub's real rejection reason (GH001 large file, GH013 secret, ...) comes
+# after a "remote: error: Trace: <hash>" line; logging only line 1 hid it.
+push_reason() {
+    grep -m1 -E 'GH0[0-9]+|exceeds|File .* is [0-9.]+ MB|rejected|denied|timed out' /tmp/vault-autopush-push.err \
+        || grep -m1 -v 'Trace:' /tmp/vault-autopush-push.err \
+        || head -1 /tmp/vault-autopush-push.err
+}
 REPO_DIR="$HOME/vault"
 WORKTREE_DIR="/tmp/vault-autopush-wt"
 ALERT_SCRIPT="$HOME/i446-monorepo/scripts/vault-autopush-alert.py"
@@ -30,6 +37,18 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 cd "$REPO_DIR" || { echo "[$TS] ERROR: cd $REPO_DIR failed"; exit 1; }
 
 git add -A
+
+# Never commit a file GitHub will reject (hard limit 100 MB). On 2026-10-11
+# two 330 MB transcript .jsonl files got staged and every push failed for
+# six hours until someone squashed them out by hand. Unstage anything over
+# 95 MB (it stays on disk and in Syncthing) and say so in the log.
+git diff --cached --name-only --diff-filter=AM -z | while IFS= read -r -d '' f; do
+    sz=$(stat -f %z "$f" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 95000000 ]; then
+        git reset -q -- "$f"
+        echo "[$TS] WARN: unstaged $f ($((sz / 1000000)) MB > GitHub's 100 MB limit); add it to .gitignore"
+    fi
+done
 
 if ! git diff --cached --quiet; then
     CHANGED=$(git diff --cached --stat | tail -1)
@@ -62,8 +81,8 @@ if git merge-base --is-ancestor "$REMOTE_HEAD" "$LOCAL_HEAD"; then
         python3 "$ALERT_SCRIPT" --clear
         exit 0
     else
-        echo "[$TS] ERROR: push failed: $(head -1 /tmp/vault-autopush-push.err)"
-        python3 "$ALERT_SCRIPT" --fail "push failed: $(head -1 /tmp/vault-autopush-push.err)"
+        echo "[$TS] ERROR: push failed: $(push_reason)"
+        python3 "$ALERT_SCRIPT" --fail "push failed: $(push_reason)"
         exit 1
     fi
 fi
@@ -82,6 +101,24 @@ fi
     2>/tmp/vault-autopush-rebase.err
 REBASE_RC=$?
 
+if [ $REBASE_RC -ne 0 ] && [ "${AUTOPUSH_RECONCILE:-0}" = "1" ]; then
+    # Reconcile fallback (2026-10-02, opt-in via AUTOPUSH_RECONCILE=1 in the
+    # cron line). ~/vault is the Syncthing-replicated truth; when a Straylight
+    # session commits+pushes a file and then keeps editing it, origin holds a
+    # stale version while every working tree (and this repo's snapshot) holds
+    # the newer one, and the rebase conflicts forever (i447/i448, 2026-10-01).
+    # Still inside the isolated worktree: abort the rebase, merge origin/main
+    # with local content winning on conflicting hunks, and carry on exactly
+    # as a clean rebase would (reset ~/vault to the new tip, push).
+    (cd "$WORKTREE_DIR" && git rebase --abort 2>/dev/null; git checkout -q --detach "$LOCAL_HEAD" 2>/dev/null)
+    if (cd "$WORKTREE_DIR" && git -c submodule.recurse=false merge -X ours --no-edit -q \
+            -m "vault backup: reconcile with origin/main $(date '+%Y-%m-%d %H:%M:%S')" origin/main) 2>>/tmp/vault-autopush-rebase.err; then
+        echo "[$TS] reconciled: rebase conflicted; merged origin/main with local content winning"
+        REBASE_RC=0
+    else
+        (cd "$WORKTREE_DIR" && git merge --abort 2>/dev/null)
+    fi
+fi
 if [ $REBASE_RC -ne 0 ]; then
     (cd "$WORKTREE_DIR" && git rebase --abort 2>/dev/null)
     git worktree remove --force "$WORKTREE_DIR" 2>/dev/null
@@ -102,7 +139,7 @@ if git push -q origin main 2>/tmp/vault-autopush-push.err; then
     echo "[$TS] pushed (rebased via isolated worktree)"
     python3 "$ALERT_SCRIPT" --clear
 else
-    echo "[$TS] ERROR: push failed: $(head -1 /tmp/vault-autopush-push.err)"
-    python3 "$ALERT_SCRIPT" --fail "push failed after clean rebase: $(head -1 /tmp/vault-autopush-push.err)"
+    echo "[$TS] ERROR: push failed: $(push_reason)"
+    python3 "$ALERT_SCRIPT" --fail "push failed after clean rebase: $(push_reason)"
     exit 1
 fi

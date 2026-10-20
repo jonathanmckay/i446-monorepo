@@ -49,15 +49,6 @@ def _tally_block() -> str:
     return DTD[start:end]
 
 
-def test_ticker_closes_fd3_before_launch():
-    line = _ticker_line()
-    assert "3>&-" in line, (
-        "the ticker command must close its inherited fd 3 (3>&- before "
-        "exec'ing python3) or the ticker process holds the FIFO write end "
-        "open for its whole lifetime, blocking the worker's read loop from "
-        "ever seeing EOF")
-
-
 def test_tally_closes_fd3_before_loop():
     block = _tally_block()
     i_open_paren = block.index("(")
@@ -74,13 +65,12 @@ def test_tally_closes_fd3_before_loop():
         "where the tally job holds an extra writer on the FIFO")
 
 
-def test_exec_fifo_writer_precedes_ticker_and_tally():
-    """Sanity: both jobs must be forked AFTER `exec 3>"$DTD_FIFO"` (else fd 3
-    wouldn't be inherited at all and the bug — and this fix — wouldn't apply)."""
+def test_exec_fifo_writer_precedes_tally():
+    """Sanity: the tally job must be forked AFTER `exec 3>"$DTD_FIFO"` (else fd
+    3 wouldn't be inherited at all and the bug — and this fix — wouldn't
+    apply). The ticker is no longer launched (2026-10-12, footer retired)."""
     i_exec_open = DTD.index('exec 3>"$DTD_FIFO"')
-    i_ticker = DTD.index('python3 "$DTD_TICKER"')
     i_tally = DTD.index("# Day-tally refresher:")
-    assert i_exec_open < i_ticker
     assert i_exec_open < i_tally
 
 

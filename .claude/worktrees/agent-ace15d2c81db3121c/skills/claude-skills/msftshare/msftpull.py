@@ -92,7 +92,7 @@ def vault_source_for(shadow_rel: str) -> Path | None:
     try:
         r = subprocess.run(
             ["rg", "-l", "--glob", "!.stversions", "--glob", "!z_old",
-             "--glob", "!ai-transcripts", "--glob", "!dream-runs",
+             "--glob", "!.ai-transcripts", "--glob", "!.dream-runs",
              "-F", shadow_rel, str(VAULT)],
             capture_output=True, text=True, timeout=60)
     except Exception:

@@ -37,6 +37,7 @@ from neon import excel  # noqa: E402
 
 LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
 REPORT = os.path.expanduser("~/vault/g245/neon-ledger-audit.md")
+MAX_ITEMS = 200  # per report section; the ledger JSONL is the full record
 MIRROR_SHEET = "分ledger"
 MIRROR_ROWS = 300
 WORKBOOK = "Neon分v12.2.xlsx"
@@ -77,7 +78,12 @@ def iter_entries(paths):
 
 
 def entry_key(e):
-    anchor = e.get("date") or f"r{e.get('row')}"
+    # Row first (2026-10-11): one physical cell was journaled under two keys,
+    # '@10/11' by date-addressed writers (block-turnover) and '@r282' by
+    # row-addressed ones (ritual -1n), so each key's chain missed the other's
+    # writes and logged ~10 false chain breaks a day. The daemon records the
+    # resolved row on every entry; date is only the fallback.
+    anchor = f"r{e['row']}" if e.get("row") is not None else e.get("date")
     return (e.get("sheet", ""), e.get("col", ""), str(anchor))
 
 
@@ -178,9 +184,12 @@ end tell
 def write_report(errors, warns, n_entries):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     status = "❌ ERRORS" if errors else ("⚠️ warnings" if warns else "✅ clean")
-    lines = [f"## {now} — {status} ({n_entries} ledger entries checked)", ""]
-    lines += [f"- ❌ {e}" for e in errors]
-    lines += [f"- ⚠️ {w}" for w in warns]
+    lines = [f"## {now} — {status} ({n_entries} ledger entries checked, "
+             f"{len(errors)} errors, {len(warns)} warnings)", ""]
+    items = [f"- ❌ {e}" for e in errors] + [f"- ⚠️ {w}" for w in warns]
+    lines += items[:MAX_ITEMS]
+    if len(items) > MAX_ITEMS:
+        lines.append(f"- … {len(items) - MAX_ITEMS} more; run scripts/neon-ledger-audit.py for the full list")
     lines.append("")
     section = "\n".join(lines)
     try:
@@ -193,9 +202,15 @@ def write_report(errors, warns, n_entries):
     # 2026-08-16, which crashes Obsidian's renderer on vault index (found via
     # bisection). Keep the newest MAX_SECTIONS runs; the ledger JSONL remains
     # the full history.
+    # 2026-10-11: the cap alone wasn't enough. ~3,000 standing September
+    # chain-break errors repeated in every hourly section put 48 runs at
+    # 3.8 MB, and each hourly rewrite froze Obsidian again. Only the newest
+    # run keeps its item list (capped at MAX_ITEMS); older runs keep just
+    # their header line, which carries the counts.
     MAX_SECTIONS = 48
     old_sections = ("## " + tail).split("\n## ") if tail else []
-    kept = "\n## ".join(old_sections[:MAX_SECTIONS - 1])
+    old_sections = [sec.split("\n", 1)[0].removeprefix("## ") for sec in old_sections]
+    kept = "\n".join("## " + h for h in old_sections[:MAX_SECTIONS - 1])
     body = head + "\n" + section + ("\n" + kept if kept else "")
     with open(REPORT, "w", encoding="utf-8") as f:
         f.write(body)

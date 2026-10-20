@@ -11,7 +11,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_form_writer import BackgroundWriter  # noqa: E402
+from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
+import subprocess  # noqa: E402
+import pytest  # noqa: E402
 
 
 def test_queue_returns_immediately_even_if_fn_is_slow():
@@ -138,3 +140,19 @@ def test_drain_is_a_noop_when_nothing_was_ever_queued():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_run_bounded_returns_at_timeout_even_when_a_grandchild_holds_the_pipe():
+    """2026-10-17: 0s sat 21 minutes after submit. subprocess.run(timeout=60)
+    kills only the direct child; a grandchild (lockf/bash/osascript under
+    ix-osa.sh) keeps the captured pipes open and communicate() never returns.
+    run_bounded kills the whole process group, so the timeout is real."""
+    t0 = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_bounded(["sh", "-c", "(sleep 30) & wait"], timeout=1)
+    assert time.monotonic() - t0 < 6, "timeout must not wait for the grandchild"
+
+
+def test_run_bounded_normal_run_captures_output():
+    r = run_bounded(["sh", "-c", "cat; echo err >&2; exit 3"], input="hello", timeout=5)
+    assert (r.returncode, r.stdout, r.stderr.strip()) == (3, "hello", "err")

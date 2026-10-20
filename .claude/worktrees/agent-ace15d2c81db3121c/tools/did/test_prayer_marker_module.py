@@ -98,6 +98,12 @@ def test_stamp_is_section_scoped(tmp_path):
 def test_salah_skill_invokes_prayer_marker():
     """/ص must call prayer_marker.py — the regression that started this bug was
     /ص writing only Neon AP and never the build-order ☀️."""
-    skill = Path.home() / ".claude/skills/ص/SKILL.md"
+    # 2026-07-21: the skill no longer scripts the stamp itself; it delegates
+    # everything to tools/did/salat-fast.py, which runs prayer_marker.py.
+    # Check the chain against the repo's own copies, not the ~/.claude install.
+    here = Path(__file__).resolve().parent
+    skill = here.parents[1] / "skills" / "claude-skills" / "ص" / "SKILL.md"
     text = skill.read_text()
-    assert "prayer_marker.py" in text, "/ص must invoke prayer_marker.py to stamp ☀️"
+    assert "tools/did/salat-fast.py" in text, "/ص must run salat-fast.py"
+    fast = (here / "salat-fast.py").read_text()
+    assert '"prayer_marker.py"' in fast, "salat-fast.py must invoke prayer_marker.py to stamp ☀️"

@@ -52,6 +52,31 @@ def test_variable_prompt_deferred_suffix_no_false_positive():
     assert dtd.variable_prompt("xk20 (30) [35]") == "xk20 minutes (Theo)"
 
 
+def test_variable_prompt_covers_weekly_1n_habits():
+    """Regression (2026-10-17): a weekly 1n+ variable-rate habit ("1 kids
+    nature") swiped complete on the phone never asked for minutes and then
+    errored without crediting any points. Its points are a per-minute rate, so
+    did-fast refuses to complete it without minutes ("how many minutes?"). The
+    terminal already prompts for the whole VARIABLE_1N set (dtd.sh:802-821);
+    dtd web only knew the daily VARIABLE_INPUT set. variable_prompt() must now
+    also prompt for the 1n+ set pulled from did-fast."""
+    assert dtd.variable_prompt("1 kids nature") == "1 kids nature minutes"
+    assert dtd.variable_prompt("s897 (30) [30]") == "s897 minutes"
+    assert dtd.variable_prompt("family") == "family minutes"
+    # deferred one-off copy: trailing " M.D" stripped, still prompts
+    assert dtd.variable_prompt("1 kids nature 10.17") == "1 kids nature minutes"
+
+
+def test_variable_1n_names_loaded_from_did_fast():
+    """The 1n+ name set is imported live from did-fast so dtd web can't drift
+    from the routing source of truth. A silent import failure (e.g. the module
+    not registered in sys.modules before exec, which breaks dataclass field
+    resolution) would leave the set empty and regress the fix above to a no-op,
+    so guard it: the set must be non-empty and contain the canonical name."""
+    assert "1 kids nature" in dtd.VARIABLE_1N_NAMES
+    assert len(dtd.VARIABLE_1N_NAMES) >= 5
+
+
 def test_build_tasks_exposes_variable_prompt_field(monkeypatch, tmp_path):
     import datetime as dt
     import json
@@ -78,3 +103,25 @@ def test_build_tasks_exposes_variable_prompt_field(monkeypatch, tmp_path):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_variable_rate_reports_hiit_2x():
+    """2026-10-04: dtd web toasted the card's static [23] for hiit whatever
+    minutes were typed; Neon credits 2×minutes (hcbi!Y). The frontend
+    multiplies the typed value by variableRate."""
+    assert dtd.variable_rate("hiit (10) [23]") == 2
+    assert dtd.variable_rate("hiit 10.5") == 2  # deferred copy
+    assert dtd.variable_rate("xk22 (20) [25]") is None
+    assert dtd.variable_rate("plain task [10]") is None
+
+
+def test_complete_reports_unroutable_item_as_failure(monkeypatch):
+    """2026-10-04: an @m828 task returns agent_needed with exit 0; dtd web
+    used to toast +N 分 for points that were never written."""
+    class P:
+        returncode = 0
+        stdout = '{"results": [], "agent_needed": [{"name": "x", "reason": "no match, needs domain disambiguation"}]}'
+        stderr = ""
+    monkeypatch.setattr(dtd.subprocess, "run", lambda *a, **k: P())
+    r = dtd.complete("x [10] @m828")
+    assert not r["ok"] and "not logged" in r["error"]

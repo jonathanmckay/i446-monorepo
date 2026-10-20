@@ -26,6 +26,17 @@ def test_parse_groups_accepts_the_loose_skill_syntax():
     assert m.parse_groups("(berries 3, grains 1)") == [("br", 3), ("g", 1)]
     assert m.parse_groups("br:3, flax x2") == [("br", 3), ("fx", 2)]
     assert m.parse_groups(None) == [] and m.parse_groups("") == []
+
+
+def test_parse_groups_count_first_and_fractional():
+    """2026-09-25: typed as '(.5 wtr,3 bean,nt,3 vegetable, flax)' and rejected
+    with 'unrecognised group item'. Count-first is how the user actually
+    writes it; half a glass of water is a legitimate fraction."""
+    m = _load()
+    assert m.parse_groups("(.5 wtr,3 bean,nt,3 vegetable, flax)") == \
+        [("wtr", 0.5), ("bn", 3), ("nt", 1), ("vg", 3), ("fx", 1)]
+    assert m.parse_groups("2 x flax, wtr 1.5") == [("fx", 2), ("wtr", 1.5)]
+    assert m.parse_groups("bean 3") == [("bn", 3)]   # trailing-count form unchanged
     with pytest.raises(ValueError):
         m.parse_groups("plutonium 2")
 

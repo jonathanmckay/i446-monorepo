@@ -41,6 +41,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# JM Dash source dimension (lib/jmsource): writes made through this phone UI,
+# including did-fast/tg-fast subprocesses it spawns, are 1p-app, not cli.
+os.environ["JMSOURCE"] = "1p-app"
+os.environ["JMSOURCE_VIA"] = "janus-mobile"
 from zoneinfo import ZoneInfo
 
 # Toggl API key: env first, else the MCP config (same fallback toggl_cli uses —
@@ -139,7 +144,9 @@ COLORS = {
     "n156": "#1249b4", "hcmc": "#0d3b66", "m5x2": "#d50032", "m828": "#9b0023",
     "hcb": "#f81d78",
     "hcbp": "#ff4081", "infra": "#9e9e9e", "i444": "#616161", "i447": "#a89c8a",
-    "hcm": "#aa00ff", "hcmp": "#7c4dff", "hcmr": "#bda6ff", "家": "#ff4136",
+    # 家 = family: Pool Party teal, same as tools/tg/janus.py (was #ff4136,
+    # an orange that clashed with xk87/xk88 — user report 2026-10-04).
+    "hcm": "#aa00ff", "hcmp": "#7c4dff", "hcmr": "#bda6ff", "家": "#00b8d4",
     "睡觉": "#666666",
 }
 DEFAULT_COLOR = "#bdbdbd"
@@ -147,7 +154,55 @@ DEFAULT_COLOR = "#bdbdbd"
 BLOCKS = [(4, "卯"), (6, "辰"), (8, "巳"), (10, "午"), (12, "未"),
           (14, "申"), (16, "酉"), (18, "戌"), (20, "亥"), (22, "子")]
 
+# Per-block 分 lives in 0分 G:O (headed 卯..亥; 子 has no column) — the same
+# cells tools/tg/janus.py's fetch_points mirrors into its block headers.
+BLOCK_PTS_COLS = dict(zip(["卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"],
+                          "GHIJKLMNO"))
+BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
+RITUALS_CFG = Path.home() / "i446-monorepo/config/block-rituals.json"
+_RITUAL_PTS_FALLBACK = {"☀️": 1, "📧": 3, "🎯": 3, "⏱️": 3, "✅": 3}
+
 _AT = re.compile(r"\s*@(\S+)")
+
+
+def _parse_tags(raw) -> list[str]:
+    """Free-typed tags → clean Toggl tag list. Accepts a list or one string
+    split on commas/whitespace (no existing Toggl tag contains a space);
+    a leading '#' is dropped so '#-1' lands as the real value tag '-1'
+    (tag_credits.VALUE_TAGS) rather than minting a look-alike. Order kept,
+    duplicates dropped."""
+    parts = raw if isinstance(raw, list) else re.split(r"[,\s]+", raw or "")
+    out: list[str] = []
+    for t in parts:
+        t = str(t).strip().lstrip("#").strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _resolve_project(code: str) -> tuple[int | None, str]:
+    """Free-text project → (Toggl project id, canonical code). Exact
+    PROJECT_MAP code first, then case-insensitive, then a live Toggl
+    project NAME match (catches projects not in the static map). Unknown
+    text returns (None, "") — callers refuse rather than silently creating
+    a project from a typo."""
+    code = (code or "").strip().lstrip("@").strip()
+    if not code:
+        return None, ""
+    if code in PROJECT_MAP:
+        return PROJECT_MAP[code], code
+    low = code.lower()
+    for k, v in PROJECT_MAP.items():
+        if k.lower() == low:
+            return v, k
+    try:
+        for p in toggl_api.get_projects() or []:
+            name = (p.get("name") or "").strip()
+            if p.get("active", True) and name.lower() == low and p.get("id"):
+                return p["id"], name
+    except Exception as e:  # offline / rate-limited
+        print("WARN get_projects:", e, file=sys.stderr)
+    return None, ""
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import state_paths  # noqa: E402
@@ -262,8 +317,11 @@ def _parse_iso(s: str) -> _dt.datetime:
     return _dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(_tz())
 
 
-def _fetch_today() -> list[dict]:
-    today = _dt.datetime.now(_tz()).date()
+def _fetch_today(day: _dt.date | None = None) -> list[dict]:
+    """Entries clipped to one day — today by default, or `day` for the
+    back/forward day navigation (2026-10-18)."""
+    now = _dt.datetime.now(_tz())
+    today = day or now.date()
     # Toggl's start_date/end_date filter is UTC-based and end-exclusive, so
     # a [today-1, today+1) window ends at 00:00 UTC = 17:00 PDT / 16:00 PST
     # and silently drops every later entry INCLUDING the running timer (bug
@@ -274,7 +332,9 @@ def _fetch_today() -> list[dict]:
     raw = toggl_api.get_entries(
         start_date=(today - _dt.timedelta(days=1)).isoformat(),
         end_date=(today + _dt.timedelta(days=2)).isoformat()) or []
-    now = _dt.datetime.now(_tz())
+    day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
+    # Live edge on today; a past day is complete, so clip at its midnight.
+    clip_end = min(now, day_start + _dt.timedelta(days=1))
     out = []
     for e in raw:
         try:
@@ -283,11 +343,10 @@ def _fetch_today() -> list[dict]:
             continue
         running = (e.get("duration") or 0) < 0 or not e.get("stop")
         en = now if running else _parse_iso(e["stop"])
-        # keep the part that falls inside today
+        # keep the part that falls inside the viewed day
         if en.date() < today or st.date() > today:
             continue
-        day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
-        st_c, en_c = max(st, day_start), min(en, now)
+        st_c, en_c = max(st, day_start), min(en, clip_end)
         if en_c <= st_c:
             continue
         code = PROJECT_NAMES.get(e.get("project_id") or 0, "")
@@ -492,8 +551,8 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
     return out
 
 
-def _fetch_events_today(entries: list[dict]) -> list[dict]:
-    today = _dt.datetime.now(_tz()).date()
+def _fetch_events_today(entries: list[dict], day: _dt.date | None = None) -> list[dict]:
+    today = day or _dt.datetime.now(_tz()).date()
     day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     day_end = day_start + _dt.timedelta(days=1)
     return _filter_events(_fetch_calendar_raw(day_start, day_end), entries)
@@ -536,14 +595,97 @@ def _split_gap_at_boundaries(start_dt: _dt.datetime, end_dt: _dt.datetime,
     return [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
 
 
-def build_timeline() -> dict:
-    today = _dt.datetime.now(_tz()).date()
+def _ritual_pts() -> dict[str, int]:
+    try:
+        rj = json.loads(RITUALS_CFG.read_text())
+        return {r["emoji"]: int(r["points"]) for r in rj["rituals"]}
+    except Exception:
+        return dict(_RITUAL_PTS_FALLBACK)
+
+
+def _block_ritual_scores(now: _dt.datetime) -> dict[str, int]:
+    """{branch: -1₦ score} from the build order's -1₲ section: the sum of the
+    stamped ritual emojis' points (config/block-rituals.json). Mirrors
+    tools/tg/janus.py's _read_block_emojis + _ritual_pts_label, including
+    its guard that a block whose start hour is still ahead never scores
+    (the build order can carry pre-stamped future headers)."""
+    try:
+        text = BUILD_ORDER.read_text()
+    except Exception:
+        return {}
+    pts = _ritual_pts()
+    start = {name: h for h, name in BLOCKS}
+    out: dict[str, int] = {}
+    in_section = False
+    for line in text.splitlines():
+        if line.strip().startswith("## -1₲"):
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if not in_section or not line.startswith("- "):
+            continue
+        tail = line[2:].strip()
+        if not tail or start.get(tail[0]) is None or start[tail[0]] > now.hour:
+            continue
+        score = sum(p for e, p in pts.items() if e in tail)
+        if score:
+            out[tail[0]] = score
+    return out
+
+
+def _block_points(today: _dt.date, total: int | None) -> dict[str, int]:
+    """{branch: 分} straight from 0分 G:O's computed values (a locked
+    literal or the live residual formula — both are what Neon shows).
+    Clamped to the day's Σ like janus.py's _block_display_pts: a block is a
+    residual of D, so a torn read above Σ is impossible and gets capped.
+    Skipped entirely when the Σ read already failed — with the daemon down,
+    each read would fall back to a multi-second ssh+osascript round trip."""
+    if total is None:
+        return {}
+    from neon import excel
+    date = "%d/%d" % (today.month, today.day)
+    out: dict[str, int] = {}
+    for name, col in BLOCK_PTS_COLS.items():
+        try:
+            r = excel.read("0分", col, date=date)
+            v = str(r.get("value") or "").strip() if r.get("ok") else ""
+            if v:
+                n = int(round(float(v)))
+                if n:
+                    out[name] = min(n, total) if total > 0 else n
+        except Exception as e:
+            print(f"WARN block pts {name}:", e, file=sys.stderr)
+    return out
+
+
+def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
+    """The timeline payload for one day — today (live) by default, or `day`
+    for the back/forward navigation (2026-10-18), the mobile mirror of the
+    CLI's ctrl+/ / ctrl+= day_offset view. Past-day calls keep _fetch_today /
+    _fetch_events_today arg-less on the today path so the existing tests'
+    zero-arg monkeypatched stand-ins keep working.
+
+    lite=True (2026-10-18, first-paint speed): Toggl entries + gaps only —
+    skips the calendar subprocesses (up to CAL_FETCH_TIMEOUT_SEC each) and
+    every Neon/Excel read (Σ分 + 9 block columns), which together dominate the
+    full build's latency. The page renders this in well under a second, then
+    the full payload replaces it when it lands."""
     now = _dt.datetime.now(_tz())
-    entries = _fetch_today()
-    events = _fetch_events_today(entries)
+    today = day or now.date()
+    is_today = today == now.date()
+    entries = _fetch_today() if is_today else _fetch_today(today)
+    if lite:
+        events = []
+    else:
+        events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
     logged = _ledger(today)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
+    # The timeline's "live edge": gaps and dividers run to now on today, but a
+    # past day is complete — they run to its midnight (the CLI anchors a
+    # past-day view to the day's end the same way).
+    edge = now if is_today else day0 + _dt.timedelta(days=1)
 
     def hhmm(dt: _dt.datetime) -> str:
         return dt.strftime("%H:%M")
@@ -556,8 +698,8 @@ def build_timeline() -> dict:
         if e["start"] > cursor:
             raw_gaps.append({"start_dt": cursor, "end_dt": e["start"]})
         cursor = max(cursor, e["end"])
-    if now > cursor:
-        raw_gaps.append({"start_dt": cursor, "end_dt": now})
+    if edge > cursor:
+        raw_gaps.append({"start_dt": cursor, "end_dt": edge})
 
     # 2. Carve each event's window out of whatever gap it falls inside, then
     # 3. split what's left at 地支 boundaries, dropping anything now under
@@ -587,9 +729,10 @@ def build_timeline() -> dict:
         while bidx < len(BLOCKS):
             h, name = BLOCKS[bidx]
             bdt = day0 + _dt.timedelta(hours=h)
-            if bdt > t or bdt > now:
+            if bdt > t or bdt > edge:
                 break
-            rows.append({"type": "divider", "label": f"{name} {h:02d}:00"})
+            rows.append({"type": "divider", "label": f"{name} {h:02d}:00",
+                         "block": name})
             bidx += 1
 
     for it in stream:
@@ -613,7 +756,8 @@ def build_timeline() -> dict:
                          # _resolvable_points) — lets the swipe label show
                          # what will ACTUALLY be credited (2026-08-15) rather
                          # than always implying "minutes = points".
-                         "points": _resolvable_points(e["desc"], known_habits)})
+                         "points": _resolvable_points(e["desc"], known_habits),
+                         "rate_points": _habit_rate_points(e["desc"], mins)})
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
@@ -623,20 +767,57 @@ def build_timeline() -> dict:
                          "is_past": ev["is_past"], "started": ev["started"],
                          "start_iso": ev["start_dt"].isoformat(),
                          "end_iso": ev["end_dt"].isoformat()})
-    emit_dividers_before(now)
+    emit_dividers_before(edge)
 
     # Σ points for the header (same source as mobile dtd: 0分 col D on Ix).
+    # Skipped on the lite pass — every excel.read is a daemon/ssh round trip.
     points = None
-    try:
-        from neon import excel
-        r = excel.read("0分", "D", date="%d/%d" % (today.month, today.day))
-        if r.get("ok") and str(r.get("value") or "").strip():
-            points = int(float(r["value"]))
-    except Exception as e:
-        print("WARN points:", e, file=sys.stderr)
+    if not lite:
+        try:
+            from neon import excel
+            r = excel.read("0分", "D", date="%d/%d" % (today.month, today.day))
+            if r.get("ok") and str(r.get("value") or "").strip():
+                points = int(float(r["value"]))
+        except Exception as e:
+            print("WARN points:", e, file=sys.stderr)
 
+    # Per-block Σ分 and -1₦ ritual score on each divider (user request
+    # 2026-10-04: "show both sum of points and -1 sum for every block").
+    block_pts = {} if lite else _block_points(today, points)
+    # The -1₲ ritual stamps in the build order are today's only — a past-day
+    # view would misattribute them, so it just shows none.
+    rituals = _block_ritual_scores(now) if is_today else {}
+    for row in rows:
+        if row["type"] == "divider":
+            row["pts"] = block_pts.get(row["block"])
+            row["n1"] = rituals.get(row["block"])
+
+    since, since_min = untracked_since(entries, now) if is_today else (None, None)
     return {"rows": rows, "tracked_min": tracked_min, "points": points,
-            "date": today.isoformat()}
+            "date": today.isoformat(), "is_today": is_today, "lite": lite,
+            "untracked_since": since, "untracked_min": since_min}
+
+
+UNTRACKED_BANNER_MIN = 30
+
+
+def untracked_since(entries: list[dict], now: _dt.datetime,
+                    threshold_min: int = UNTRACKED_BANNER_MIN) -> tuple[str | None, int | None]:
+    """("HH:MM", minutes) of the latest completed entry's end when NO timer
+    is running and that end is >= threshold_min ago; (None, None) otherwise
+    — the red "untracked since" banner (2026-10-17). The phone always views
+    today, so there is no past-day case; a day with no entries at all has
+    no "since" to point at and shows nothing."""
+    if any(e.get("running") for e in entries):
+        return None, None
+    ends = [e["end"] for e in entries if not e.get("running")]
+    if not ends:
+        return None, None
+    last = max(ends)
+    mins = int((now - last).total_seconds() // 60)
+    if mins < threshold_min:
+        return None, None
+    return last.strftime("%H:%M"), mins
 
 
 # ---------------------------------------------------------------------------
@@ -662,11 +843,17 @@ def _hhmm_parts(s: str) -> tuple[int, int]:
     return h, int(m.group(2))
 
 
-def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
+def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
+             tags: list[str] | None = None, project: str = "") -> dict:
     m = _AT.search(desc)
-    code = m.group(1) if m else ""
+    code = project or (m.group(1) if m else "")
     desc_clean = _AT.sub("", desc).strip()
-    pid = PROJECT_MAP.get(code)
+    pid = None
+    if code:
+        pid, code = _resolve_project(code)
+        if pid is None:
+            return {"ok": False, "error": f"unknown project @{project or m.group(1)}"}
+    tags = _parse_tags(tags or [])
     today = _dt.datetime.now(_tz()).date()
 
     # No end time -> start a live, still-running Toggl timer instead of a
@@ -681,9 +868,10 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
                 st = _dt.datetime.combine(today, _dt.time(*_hhmm_parts(start_hhmm)), _tz())
             except Exception:
                 return {"ok": False, "error": "bad time format (HH:MM)"}
-            start_iso = st.strftime("%Y-%m-%dT%H:%M:%S%z")
+            start_iso = _toggl_iso(st)
         try:
-            r = toggl_api.start_timer(desc_clean, project_id=pid, start_time=start_iso)
+            r = toggl_api.start_timer(desc_clean, project_id=pid, tags=tags or None,
+                                     start_time=start_iso)
             return {"ok": bool(r), "project": code, "running": True}
         except Exception as e:
             return {"ok": False, "error": str(e)[:200]}
@@ -696,16 +884,21 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str) -> dict:
     if en <= st:
         return {"ok": False, "error": "end must be after start"}
     dur = int((en - st).total_seconds())
-    fmt = "%Y-%m-%dT%H:%M:%S%z"
     try:
-        r = toggl_api.create_entry(desc_clean, st.strftime(fmt), en.strftime(fmt), dur,
-                                   project_id=pid)
+        r = toggl_api.create_entry(desc_clean, _toggl_iso(st), _toggl_iso(en), dur,
+                                   project_id=pid, tags=tags or None)
         return {"ok": bool(r), "project": code}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
 
-_FMT = "%Y-%m-%dT%H:%M:%S%z"
+def _toggl_iso(d: _dt.datetime) -> str:
+    """RFC3339 with a COLON in the UTC offset (…-07:00) — the format Toggl's
+    v9 API requires. strftime('%z') emits '-0700' (no colon) and Toggl 400s
+    on it: "Invalid time format" (bug 2026-09-27). isoformat() supplies the
+    colon; drop microseconds to keep the old second-granularity serialization.
+    Requires an aware datetime — every caller here builds one via _tz()."""
+    return d.replace(microsecond=0).isoformat()
 
 
 def _get_entry(entry_id: str) -> dict | None:
@@ -765,7 +958,7 @@ def _would_touch_logged(entry_id: str, start_dt: _dt.datetime, end_dt: _dt.datet
 
 
 def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
-               project_code: str) -> dict:
+               project_code: str, tags: list[str] | None = None) -> dict:
     """Edit description/project/time. Time changes go through the same
     trim_range() MECE-keeping path the desktop TUI uses. Guards (2026-08-06
     review): refuses to touch a cross-midnight entry's clipped time (can't
@@ -785,10 +978,14 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
         return {"ok": False, "error": "description required"}
     fields: dict = {"description": desc}
     if project_code:
-        pid = PROJECT_MAP.get(project_code)
+        pid, _code = _resolve_project(project_code)
         if pid is None:
             return {"ok": False, "error": f"unknown project @{project_code}"}
         fields["project_id"] = pid
+    # tags=None leaves them untouched; a list (even empty) is the full new
+    # set — the dialog field is prefilled with the current tags.
+    if tags is not None:
+        fields["tags"] = _parse_tags(tags)
 
     # Normalize colon-less numpad input to canonical HH:MM up front (see
     # _hhmm_parts): the inputmode=numeric fields can't retype a deleted colon,
@@ -827,7 +1024,7 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
             # No fixed end to reason about yet — just move the start.
             if new_start >= _dt.datetime.now(_tz()):
                 return {"ok": False, "error": "start must be in the past"}
-            fields["start"] = new_start.strftime(_FMT)
+            fields["start"] = _toggl_iso(new_start)
         else:
             try:
                 new_end = (_dt.datetime.combine(today, _dt.time(*map(int, end_hhmm.split(":"))), _tz())
@@ -845,8 +1042,8 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
                 toggl_api.trim_range(new_start, new_end, exclude_ids={e.get("id")})
             except Exception as ex:
                 return {"ok": False, "error": f"trim failed (entry not yet moved): {ex}"[:200]}
-            fields["start"] = new_start.strftime(_FMT)
-            fields["stop"] = new_end.strftime(_FMT)
+            fields["start"] = _toggl_iso(new_start)
+            fields["stop"] = _toggl_iso(new_end)
             fields["duration"] = int((new_end - new_start).total_seconds())
 
     try:
@@ -895,9 +1092,9 @@ def split_entry(entry_id: str, mode: str) -> dict:
     tags = e.get("tags") or None
 
     try:
-        toggl_api.create_entry(desc, cut.strftime(_FMT), end.strftime(_FMT),
+        toggl_api.create_entry(desc, _toggl_iso(cut), _toggl_iso(end),
                                int((end - cut).total_seconds()), proj_id, tags)
-        toggl_api.update_entry(e.get("id"), stop=cut.strftime(_FMT),
+        toggl_api.update_entry(e.get("id"), stop=_toggl_iso(cut),
                                duration=int((cut - start).total_seconds()))
     except Exception as ex:
         return {"ok": False, "error": str(ex)[:200]}
@@ -933,10 +1130,25 @@ def registered_habit_names() -> set[str]:
         known = {df.header_normalize(k)
                  for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
         known |= {df.header_normalize(a) for a in df.ONENEON_ALIASES}
+        # did-fast's plain ALIASES ("hit" → hiit, ...) also route by name.
+        known |= {df.header_normalize(a) for a in df.ALIASES}
         return known
     except Exception as e:
         print("WARN registered_habit_names:", e, file=sys.stderr)
         return set()
+
+
+def _habit_rate_points(desc: str, minutes: int) -> int | None:
+    """分 Neon will credit for a multiplied 0n habit entry (hiit: 2×min via
+    hcbi!Y), resolving did-fast's ALIASES first so "hit" counts too. Display
+    only — the swipe still sends minutes to 0n and the sheet multiplies."""
+    from neon.rates import zero_n_points
+    key = _norm_key(desc)
+    try:
+        key = _load_df_mod().ALIASES.get(key, key)
+    except Exception:
+        pass
+    return zero_n_points(key, minutes)
 
 
 def habit_tags(tags: list[str]) -> list[str]:
@@ -1122,13 +1334,279 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 
+# Usage events in dtd's TSV format (tools/tg/janus_events.py): one action + one
+# outcome line per mutating API call, latency in the outcome. Session id is per
+# server process; the client's address is on the action line.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tg"))
+import janus_events as JE  # noqa: E402
+JE.emit("session", "start", (), f"{os.uname().nodename.split('.')[0]} mobile")
+
+
+@app.before_request
+def _ev_start():
+    request._ev_t0 = time.monotonic()
+    if request.method == "POST" and request.path.startswith("/api/"):
+        body = request.get_json(silent=True) or {}
+        ids = [body[k] for k in ("id", "entry_id") if body.get(k)]
+        extra = " ".join(str(body[k]) for k in ("desc", "cmd", "start", "end", "project", "minutes") if body.get(k))
+        JE.emit("action", request.path[5:], ids, f"{request.remote_addr} {extra}")
+
+
+@app.after_request
+def _ev_end(resp):
+    if request.method == "POST" and request.path.startswith("/api/"):
+        secs = time.monotonic() - getattr(request, "_ev_t0", time.monotonic())
+        JE.emit("outcome", request.path[5:], (), f"{secs:.1f}s http={resp.status_code}")
+    return resp
+
 
 @app.route("/api/timeline")
 def api_timeline():
     try:
-        return jsonify({"ok": True, **build_timeline()})
+        # ?offset=-N views N days back (the CLI's ctrl+/ / ctrl+=). Clamped
+        # to the past: the future has no entries and offset>0 would just
+        # render a confusing empty day.
+        off = request.args.get("offset", type=int) or 0
+        day = None
+        if off:
+            off = max(-366, min(0, off))
+            day = _dt.datetime.now(_tz()).date() + _dt.timedelta(days=off)
+        # ?lite=1: Toggl-only fast pass for first paint (no calendar, no Neon).
+        lite = request.args.get("lite") == "1"
+        return jsonify({"ok": True, **build_timeline(day, lite=lite)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _run_tg_cmd(text: str) -> dict:
+    """One tg-fast.py call → {"ok", "msg"} / {"ok": False, "error"} (the
+    web command bar's result shape; the last output line is the flash)."""
+    try:
+        proc = subprocess.run(["/usr/bin/python3", str(TG_FAST), text],
+                              capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "tg-fast timed out"}
+    lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+    msg = lines[-1] if lines else ""
+    if proc.returncode != 0:
+        return {"ok": False, "error": msg or f"tg-fast exit {proc.returncode}"}
+    return {"ok": True, "msg": msg}
+
+
+def _did_summary(stdout_text: str) -> str:
+    """One toast-able line from did-fast's JSON blob — mirrors desktop
+    janus._did_summary (the last stdout line of a did-fast run is literally
+    "}"): points granted, agent-needed reasons, already-done skips."""
+    try:
+        data = json.loads(stdout_text[stdout_text.index("{"):])
+    except Exception:
+        lines = stdout_text.strip().splitlines()
+        return lines[-1] if lines else "(no output)"
+    bits = []
+    for r in data.get("results", []):
+        name = r.get("name", "?")
+        fen = r.get("0fen") or {}
+        pts = (fen.get("points", 0) or 0) + (fen.get("bonus", 0) or 0)
+        pts += (r.get("hcbi") or {}).get("pts", 0) or 0
+        if not pts and r.get("variable_1n"):
+            pts = r.get("variable_value") or 0
+        closed = " · todoist ✓" if (r.get("todoist") or {}).get("closed") else ""
+        bits.append(f"✓ {name} +{pts}分{closed}" if pts else f"✓ {name}{closed}")
+    for a in data.get("agent_needed", []):
+        bits.append(f"⚠ {a.get('name', '?')}: {a.get('reason', 'needs agent')}")
+    for fs in data.get("future_skipped", []):
+        bits.append(f"⚠ {fs.get('name', '?')}: {fs.get('warning', 'skipped')}")
+    return "  ".join(bits) if bits else "(no results)"
+
+
+def _run_did_cmd(text: str) -> dict:
+    """One did-fast.py call for a typed command (bonus points / [N] range),
+    same result shape as _run_tg_cmd. did-fast is the heavy one (Excel
+    write over ssh + Todoist), hence the longer timeout (see _run_did_fast)."""
+    try:
+        proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
+                              capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "did-fast timed out"}
+    if proc.stdout and "{" in proc.stdout:
+        msg = _did_summary(proc.stdout)
+    else:
+        lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+        msg = lines[-1] if lines else ""
+    if proc.returncode != 0:
+        return {"ok": False, "error": msg or f"did-fast exit {proc.returncode}"}
+    return {"ok": True, "msg": msg}
+
+
+# ─── Typed-command routing (mirrors desktop janus.py _on_enter) ─────────────
+# A trailing " @code" is stripped before the range test so "@m5x2-1" style
+# codes can't be mistaken for a range; a `[N]` after the @code is harmless.
+_COMPLETED_RANGE_RE = re.compile(r"(?:^|\s)\d{1,4}(?::\d{2})?\s*-\s*\d{1,4}(?::\d{2})?(?=\s|$)")
+_TRAILING_AT_RE = re.compile(r"\s@\S+\s*$")
+_BONUS_LEAD_RE = re.compile(r"^[+-]\d+(?=\s|$)")   # "+15 @i9", "-10 0g"
+_BONUS_ANY_RE = re.compile(r"(?:^|\s)\+\d+\b")      # "read COD deck +10"
+_POINTS_ANNOT_RE = re.compile(r"\[-?\d+\]")
+# did-fast's TIME_RANGE_RE is strictly HHMM-HHMM; the typed grammar also
+# accepts "600-607" and "9:07-9:30", so a did-bound part is normalized.
+_RANGE_NORM_RE = re.compile(r"(?<![\d:])(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})(?![\d:])")
+
+
+def _has_completed_range(part: str) -> bool:
+    """True if `part` types an explicit HH:MM-HH:MM / HHMM-HHMM completed
+    range (as opposed to a bare description or a backdated "HHMM desc"
+    start with no end yet). Same regex as desktop janus."""
+    return bool(_COMPLETED_RANGE_RE.search(_TRAILING_AT_RE.sub("", part)))
+
+
+def _has_bonus_points(part: str) -> bool:
+    """True if `part` carries a bare `+N` / leading `-N` points token —
+    did-fast's own no-timer immediate-grant syntax ("+10 @i9 read COD
+    deck", "-10 0g"). Only a LEADING -N counts, so "-1t"/"-1g" habit names
+    and "1815-1843" ranges never match."""
+    return bool(_BONUS_LEAD_RE.match(part.strip()) or _BONUS_ANY_RE.search(part))
+
+
+def _normalize_range(part: str) -> str:
+    return _RANGE_NORM_RE.sub(
+        lambda m: f"{m.group(1):0>2}{m.group(2)}-{m.group(3):0>2}{m.group(4)}", part)
+
+
+def resolve_part(part: str) -> tuple[str, bool]:
+    """(command, use_did) for one comma-separated part of a typed command —
+    the did-vs-tg decision of desktop janus's _resolve_part, minus its
+    past-day-view branch (the phone always views today). A bare `+N`/`-N`
+    bonus token ALWAYS goes to did-fast (tg-fast would start a live timer
+    literally named "+15 @i9"); a completed range carrying `[N]` goes to
+    did-fast too (its Step 5.5 creates the same Toggl entry AND writes the
+    points). A backdated start with `[N]` but no end ("1823 desc [30]") is
+    not done yet, so it stays on tg-fast like everything else."""
+    part = part.strip()
+    use_did = _has_bonus_points(part) or (
+        _has_completed_range(part) and bool(_POINTS_ANNOT_RE.search(part)))
+    if use_did:
+        part = _normalize_range(part)
+    return part, use_did
+
+
+def split_parts(text: str) -> list[str]:
+    """Comma splits multiple commands (desktop convention); run in order."""
+    return [p.strip() for p in text.split(",") if p.strip()] or [text.strip()]
+
+
+def _is_plain_switch(cmd: str) -> bool:
+    """A tg-fast part that leaves a NEW timer running (a bare description)
+    or none at all ("stop") — either way the timer has moved off any /d
+    task, so the dtd running hint must go (desktop clears it the same way)."""
+    bare = cmd.strip()
+    return bare.lower() == "stop" or not re.search(r"\d{3,4}", bare)
+
+
+# ─── /d <task>: todo + timer in one (mirrors desktop parse_d_command) ───────
+_D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
+_D_TRAIL_RE = re.compile(r"^(\S.*?)\s+/d$", re.S)   # phone-only: "cook ... @xk87 /d"
+_ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
+DTD_RUNNING_HINT = (Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
+                    / "jm" / "dtd-running-hint")
+AGENT_CLAIMS = Path.home() / "i446-monorepo/tools/did/agent_claims.py"
+
+
+def parse_d_command(text: str) -> tuple[str, str] | None:
+    """`/d <task>` (or `<task> /d`, accepted here because a phone keyboard
+    makes the suffix easier): add <task> to the todo list AND start working
+    on it now. Returns (todoist_content, timer_command): the content keeps
+    (N)/[N] and @code (agent_claims.new_task turns @code into the label);
+    the timer drops the bracketed annotations so tg-fast doesn't name a
+    timer "... [20]". None when the text isn't a /d command."""
+    t = text.strip()
+    m = _D_CMD_RE.match(t) or _D_TRAIL_RE.match(t)
+    if not m:
+        return None
+    content = m.group(1).strip()
+    timer = " ".join(_ANNOT_RE.sub("", content).split())
+    if not timer or not [w for w in timer.split() if not w.startswith("@")]:
+        return None
+    return content, timer
+
+
+def write_dtd_running_hint(task: dict) -> None:
+    """Tell every dtd this task's timer is running so it floats to the top —
+    same file and name<TAB>epoch<TAB>id format as desktop janus."""
+    name = _ANNOT_RE.sub("", task.get("content", "")).strip().lower()
+    try:
+        DTD_RUNNING_HINT.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DTD_RUNNING_HINT.with_suffix(".tmp")
+        tmp.write_text(f"{name}\t{int(time.time())}\t{task.get('id', '')}")
+        tmp.replace(DTD_RUNNING_HINT)
+    except OSError:
+        pass
+
+
+def clear_dtd_running_hint() -> None:
+    try:
+        DTD_RUNNING_HINT.unlink()
+    except OSError:
+        pass
+
+
+def _new_task(content: str) -> dict:
+    """agent_claims.new_task(content) — a due-today Todoist task, @code →
+    label (the same path as Claude's `/d new`). Loaded by path, like
+    desktop janus does: tools/did isn't a package."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("janus_mobile_agent_claims", AGENT_CLAIMS)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.new_task(content)
+
+
+def create_todo_task(content: str) -> str:
+    try:
+        task = _new_task(content)
+        write_dtd_running_hint(task)
+        return f"+todo {task.get('content', content)}"
+    except Exception as e:  # noqa: BLE001 — the timer still starts
+        return f"todo err: {e}"
+
+
+def run_d_command(content: str, timer: str) -> dict:
+    todo = create_todo_task(content)
+    tg = _run_tg_cmd(timer)
+    msg = f"{todo} | {tg.get('msg') or tg.get('error') or ''}"
+    return {"ok": True, "msg": msg} if tg.get("ok") else {"ok": False, "error": msg}
+
+
+def run_command(text: str) -> dict:
+    """The CLI's typed-command path, for the web command bar (2026-10-05),
+    routed like desktop janus's Enter handler (2026-10-17): `/d <task>`
+    creates the todo and starts its timer; each comma-separated part then
+    goes to did-fast (bonus `+N`, or a completed range with `[N]`) or
+    tg-fast (everything else: "coffee @epcn", "1400 coffee", "0000-0550
+    睡觉"), sequentially, one subprocess at a time."""
+    d_cmd = parse_d_command(text)
+    if d_cmd:
+        return run_d_command(*d_cmd)
+    pairs = [resolve_part(p) for p in split_parts(text)]
+    results = []
+    for cmd, use_did in pairs:
+        r = _run_did_cmd(cmd) if use_did else _run_tg_cmd(cmd)
+        if r.get("ok") and not use_did and _is_plain_switch(cmd):
+            clear_dtd_running_hint()  # the timer moved off any /d task
+        results.append(r)
+    if len(results) == 1:
+        return results[0]
+    msgs = [r.get("msg") or r.get("error") or "" for r in results]
+    joined = " | ".join(msgs)
+    if all(r.get("ok") for r in results):
+        return {"ok": True, "msg": joined}
+    return {"ok": False, "error": joined}
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    text = ((request.get_json(force=True, silent=True) or {}).get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "nothing to run"}), 400
+    return jsonify(run_command(text))
 
 
 @app.route("/api/fill", methods=["POST"])
@@ -1137,7 +1615,8 @@ def api_fill():
     desc = (b.get("desc") or "").strip()
     if not desc:
         return jsonify({"ok": False, "error": "no description"}), 400
-    return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or ""))
+    return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or "",
+                            tags=b.get("tags") or [], project=(b.get("project") or "").strip()))
 
 
 @app.route("/api/log", methods=["POST"])
@@ -1157,7 +1636,8 @@ def api_edit():
         return jsonify({"ok": False, "error": "id required"}), 400
     r = edit_entry(str(b["id"]), b.get("desc") or "",
                    (b.get("start") or "").strip(), (b.get("end") or "").strip(),
-                   (b.get("project") or "").strip())
+                   (b.get("project") or "").strip(),
+                   tags=b.get("tags") if "tags" in b else None)
     if not r.get("ok"):
         # A refused edit only ever surfaced as a phone toast, which is gone
         # by the time anyone asks "what did it say?" (2026-09-24). One line
@@ -1194,6 +1674,27 @@ def api_done_current():
     return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip()))
 
 
+@app.route("/api/where", methods=["POST"])
+def api_where():
+    """Phone beacon (lib/where.py), same as dtd web's: browser zone,
+    attributed to the Tailscale device behind the request IP."""
+    import where
+    tz = (request.get_json(silent=True) or {}).get("tz", "")
+    dev = where.record_peer(_peer_ip(), str(tz))
+    return jsonify({"ok": bool(dev), "device": dev})
+
+def _peer_ip() -> str:
+    """Same as dtd's: behind `tailscale serve` (https://…:5561) the proxy
+    connects from loopback and the phone's tailnet IP is in X-Forwarded-For;
+    only loopback is trusted to forward."""
+    ip = request.remote_addr or ""
+    if ip in ("127.0.0.1", "::1"):
+        fwd = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if fwd:
+            ip = fwd
+    return ip
+
+
 @app.route("/api/projects")
 def api_projects():
     return jsonify({"ok": True, "codes": sorted(PROJECT_MAP.keys())})
@@ -1226,15 +1727,31 @@ PAGE = r"""<!doctype html>
     background:#1b1b1bee; backdrop-filter:blur(6px);
     display:flex; align-items:center; justify-content:space-between;
     border-bottom:1px solid #2a2a2a; }
+  header { flex-wrap:wrap; row-gap:7px; }
+  #untracked { flex-basis:100%; order:-1; display:none; background:#e53935; color:#fff;
+    font-weight:700; padding:6px 10px; border-radius:6px; }
+  #untracked.show { display:block; }
+  #cmdbar { flex-basis:100%; display:flex; }
+  #cmd { flex:1; background:#111; color:inherit; border:1px solid #333; border-radius:8px;
+    padding:8px 10px; font:inherit; font-size:16px; }
   header .brand { font-weight:700; letter-spacing:1px; }
   header .brand b { color:var(--go); }
   .tally { color:var(--dim); font-variant-numeric:tabular-nums; }
   .tally b { color:var(--go); }
-  #reload { background:none; border:1px solid #333; color:var(--dim);
+  #reload, .navb { background:none; border:1px solid #333; color:var(--dim);
     border-radius:6px; padding:3px 9px; font-family:inherit; font-size:15px; }
+  .hbtns { display:flex; gap:6px; }
+  .navb:disabled { opacity:.3; }
+  #dayBadge { display:none; color:#e5a000; font-weight:700; }
   main { padding:2px 0 calc(env(safe-area-inset-bottom) + 60px); }
   .div { color:var(--dim); padding:8px 14px 2px; font-size:12px; letter-spacing:1px;
-    border-top:1px solid #242424; }
+    border-top:1px solid #242424; display:flex; justify-content:space-between; align-items:center; }
+  .div .bp { letter-spacing:0; font-variant-numeric:tabular-nums; }
+  .div .bp b { color:var(--go); }
+  .div .n1 { background:#b3261e; color:#fff; font-weight:700; border-radius:4px;
+    padding:0 5px; margin-left:6px; }
+  .tags { font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; max-width:30%; }
   .row { position:relative; overflow:hidden; }
   .row .track { position:absolute; inset:0; background:var(--go); color:#003;
     font-weight:800; display:flex; align-items:center; padding-left:16px; opacity:0; }
@@ -1249,7 +1766,6 @@ PAGE = r"""<!doctype html>
   .meta { white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--dim); }
   .gaprow .ttl { color:var(--gap); font-style:italic; }
   .logged .ttl::after { content:" ✓"; color:var(--go); }
-  .logged { opacity:.45; }
   .running .ttl::before { content:"▶ "; color:var(--go); }
   .eventrow { border-left:2px dashed currentColor; padding-left:12px; }
   .eventrow .ttl::before { content:"◇ "; }
@@ -1267,7 +1783,7 @@ PAGE = r"""<!doctype html>
   #dlg .card, #editDlg .card { background:#232323; width:100%; padding:16px 16px
     calc(env(safe-area-inset-bottom) + 16px); border-radius:14px 14px 0 0; }
   #dlg h3, #editDlg h3 { margin:0 0 12px; font-size:15px; color:#cfcfcf; font-weight:700; }
-  #dlg input, #editDlg input, #editDlg select { width:100%; background:#1b1b1b; border:1px solid #333;
+  #dlg input, #editDlg input { width:100%; background:#1b1b1b; border:1px solid #333;
     color:#cfcfcf; font:15px ui-monospace,Menlo,monospace; border-radius:8px; padding:10px 12px;
     margin-bottom:10px; }
   #dlg .times, #editDlg .times { display:flex; gap:10px; }
@@ -1290,9 +1806,19 @@ PAGE = r"""<!doctype html>
 </head>
 <body>
 <header>
+  <div id="untracked"></div>
   <div class="brand">jan<b>u</b>s</div>
+  <span id="dayBadge"></span>
   <div class="tally"><b id="pts">–</b> 分 · <span id="trk">0:00</span></div>
-  <button id="reload">↻</button>
+  <div class="hbtns">
+    <button class="navb" id="dprev" title="previous day">‹</button>
+    <button class="navb" id="dnext" title="next day" disabled>›</button>
+    <button id="reload">↻</button>
+  </div>
+  <form id="cmdbar" onsubmit="runCmd(event)">
+    <input id="cmd" placeholder="coffee 1400-1415 @epcn · same as the CLI" autocomplete="off"
+      autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+  </form>
 </header>
 <main id="list"><div class="loading">loading…</div></main>
 
@@ -1300,12 +1826,13 @@ PAGE = r"""<!doctype html>
   <div class="card">
     <h3 id="dlgTitle">fill gap</h3>
     <input id="d-desc" placeholder="description (@code for project)" autocomplete="off">
+    <input id="d-tags" placeholder="tags (comma or space separated)" autocomplete="off" autocapitalize="off">
     <label id="d-ongoing-row" class="ongoing-row">
       <input type="checkbox" id="d-ongoing" onchange="toggleOngoing()"> ongoing (no end yet)
     </label>
     <div class="times">
-      <input id="d-start" inputmode="numeric" placeholder="HH:MM">
-      <input id="d-end" inputmode="numeric" placeholder="HH:MM">
+      <input id="d-start" type="time" step="60">
+      <input id="d-end" type="time" step="60">
     </div>
     <div class="btns">
       <button class="cancel" onclick="closeDlg()">cancel</button>
@@ -1319,10 +1846,12 @@ PAGE = r"""<!doctype html>
     <h3>edit entry</h3>
     <input id="e-desc" placeholder="description" autocomplete="off">
     <div class="times">
-      <input id="e-start" inputmode="numeric" placeholder="HH:MM">
-      <input id="e-end" inputmode="numeric" placeholder="HH:MM">
+      <input id="e-start" type="time" step="60">
+      <input id="e-end" type="time" step="60">
     </div>
-    <select id="e-project"></select>
+    <input id="e-project" list="projlist" placeholder="project (free text)" autocomplete="off" autocapitalize="off">
+    <datalist id="projlist"></datalist>
+    <input id="e-tags" placeholder="tags (comma or space separated)" autocomplete="off" autocapitalize="off">
     <div class="btns">
       <button class="cancel" onclick="closeEditDlg()">cancel</button>
       <button class="save" onclick="saveEdit()">save</button>
@@ -1338,6 +1867,15 @@ PAGE = r"""<!doctype html>
 <div class="toast" id="toast"></div>
 
 <script>
+// where beacon (lib/where.py): this phone's zone decides "today" everywhere.
+function whereBeacon(){ try { fetch('/api/where', {method:'POST', headers:{'Content-Type':'application/json'},
+  body: JSON.stringify({tz: Intl.DateTimeFormat().resolvedOptions().timeZone})}).catch(()=>{}); } catch(e){} }
+whereBeacon();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  whereBeacon();
+  load();  // the page has no interval poll: re-opening the phone IS the poll
+});
 const list = document.getElementById('list');
 const toastEl = document.getElementById('toast');
 const dlg = document.getElementById('dlg');
@@ -1350,17 +1888,72 @@ function toast(msg, err){
   toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 1800);
 }
 
-async function load(){
-  list.innerHTML = '<div class="loading">loading…</div>';
-  try {
-    const r = await fetch('/api/timeline');
-    const d = await r.json();
-    if(!d.ok) throw new Error(d.error||'fetch failed');
+// Red pinned banner (2026-10-17): no timer running and the last entry ended
+// >= 30 min ago. Server-computed (untracked_since/untracked_min), refreshed
+// with every timeline load — including the visibility reload below.
+function untrackedBanner(since, mins){
+  const el = document.getElementById('untracked');
+  if(!since){ el.classList.remove('show'); el.textContent = ''; return; }
+  el.textContent = 'untracked since '+since+' · '+mins+'m';
+  el.classList.add('show');
+}
+
+// Day navigation (2026-10-18): ‹ / › view past days, the mobile mirror of the
+// CLI's ctrl+/ / ctrl+=. Past days are VIEW-ONLY — fill/log/edit/cmdbar all
+// target today on the server, so their entry points hide/unbind off today.
+let dayOffset = 0, viewingToday = true;
+
+function dayBadge(iso){
+  const el = document.getElementById('dayBadge');
+  if(viewingToday){ el.style.display = 'none'; el.textContent = ''; }
+  else {
+    const dt = new Date(iso + 'T12:00:00');
+    el.textContent = '◀ ' + dt.toLocaleDateString(undefined, {weekday:'short', month:'numeric', day:'numeric'});
+    el.style.display = '';
+  }
+  document.getElementById('dnext').disabled = dayOffset === 0;
+  for(const id of ['fab','fabQuick','cmdbar'])
+    document.getElementById(id).style.display = viewingToday ? '' : 'none';
+}
+
+function apply(d){
+  viewingToday = d.is_today !== false;
+  dayBadge(d.date);
+  // lite pass has no Neon read — keep the dash rather than flashing it empty
+  if(!d.lite || d.points != null)
     document.getElementById('pts').textContent = (d.points==null?'–':d.points);
-    document.getElementById('trk').textContent =
-      Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
-    render(d.rows);
-  } catch(e){ list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>'; }
+  document.getElementById('trk').textContent =
+    Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
+  untrackedBanner(d.untracked_since, d.untracked_min);
+  render(d.rows);
+}
+
+// Two-phase load (2026-10-18, TTFT): a lite pass (Toggl entries + gaps only,
+// no calendar subprocesses, no Neon/Excel reads) paints the timeline fast;
+// the full payload replaces it when it lands. A stale response from an
+// outdated load (day switched mid-flight) is dropped via loadSeq.
+let loadSeq = 0;
+async function load(){
+  const seq = ++loadSeq;
+  list.innerHTML = '<div class="loading">loading…</div>';
+  const url = lite => '/api/timeline?' +
+    [lite ? 'lite=1' : '', dayOffset ? 'offset=' + dayOffset : ''].filter(Boolean).join('&');
+  let fullDone = false, litePainted = false;
+  fetch(url(true)).then(r => r.json()).then(d => {
+    if(seq === loadSeq && !fullDone && d.ok){ litePainted = true; apply(d); }
+  }).catch(()=>{});
+  try {
+    const r = await fetch(url(false));
+    const d = await r.json();
+    if(seq !== loadSeq) return;
+    if(!d.ok) throw new Error(d.error||'fetch failed');
+    fullDone = true;
+    apply(d);
+  } catch(e){
+    if(seq !== loadSeq) return;
+    if(litePainted) toast('full load failed: '+e.message, true);
+    else list.innerHTML = '<div class="empty">⚠ '+e.message+'</div>';
+  }
 }
 
 function render(rows){
@@ -1369,7 +1962,18 @@ function render(rows){
   for(const r of rows){
     if(r.type === 'divider'){
       const d = document.createElement('div');
-      d.className = 'div'; d.textContent = r.label;
+      d.className = 'div';
+      const lab = document.createElement('span'); lab.textContent = r.label;
+      d.appendChild(lab);
+      // Block Σ分 (0分 G:O) + -1₦ ritual score chip, like desktop janus.
+      if(r.pts != null || r.n1 != null){
+        const bp = document.createElement('span'); bp.className = 'bp';
+        if(r.pts != null){ const b = document.createElement('b'); b.textContent = r.pts;
+          bp.appendChild(b); bp.appendChild(document.createTextNode('分')); }
+        if(r.n1 != null){ const n = document.createElement('span'); n.className = 'n1';
+          n.textContent = r.n1; bp.appendChild(n); }
+        d.appendChild(bp);
+      }
       list.appendChild(d);
     } else {
       list.appendChild(makeRow(r));
@@ -1387,7 +1991,10 @@ function trackLabel(r){
   // elapsed minutes (2026-08-15: those two numbers are frequently
   // different, and the swipe used to always imply minutes = points).
   if(r.running) return r.points != null ? 'done ✓ ('+r.points+'分)' : 'done ✓ (stop + log)';
-  return r.points != null ? 'log '+r.points+'分' : 'neon log 分 ('+r.minutes+'m)';
+  if(r.points != null) return 'log '+r.points+'分';
+  // Multiplied 0n habit (hiit = 2×min in Neon) — show the real credit.
+  if(r.rate_points != null) return 'log '+r.rate_points+'分 ('+r.minutes+'m)';
+  return 'neon log 分 ('+r.minutes+'m)';
 }
 
 function makeRow(r){
@@ -1418,9 +2025,16 @@ function makeRow(r){
   const meta = document.createElement('span');
   meta.className = 'meta';
   meta.textContent = r.start+'–'+r.end+' · '+r.minutes+'m';
-  line.appendChild(ttl); line.appendChild(meta);
+  line.appendChild(ttl);
+  if(r.tags && r.tags.length){
+    const tg = document.createElement('span');
+    tg.className = 'tags';
+    tg.textContent = r.tags.map(t=>'#'+t).join(' ');
+    line.appendChild(tg);
+  }
+  line.appendChild(meta);
   row.appendChild(line);
-  bindSwipe(row, line, track, trackEdit, r);
+  if(viewingToday) bindSwipe(row, line, track, trackEdit, r);
   return row;
 }
 
@@ -1464,6 +2078,7 @@ function act(row, line, r){
     gapCtx = r;
     document.getElementById('dlgTitle').textContent = 'fill gap';
     document.getElementById('d-desc').value = '';
+    document.getElementById('d-tags').value = '';
     document.getElementById('d-start').value = r.start;
     document.getElementById('d-end').value = r.end;
     document.getElementById('d-ongoing-row').style.display = 'none';
@@ -1528,7 +2143,7 @@ async function commitLog(line, r){
       toast(d.needs_agent ? 'no route — use /did on desktop' : 'log failed', true);
       return;
     }
-    let msg = '+'+r.minutes+'m → '+(d.step||'neon');
+    let msg = (r.rate_points != null ? '+'+r.rate_points+'分' : '+'+r.minutes+'m')+' → '+(d.step||'neon');
     if(d.tag_steps && d.tag_steps.length) msg += ' + '+d.tag_steps.join(', ');
     toast(msg+' ✓');
   } catch(e){ line.classList.remove('logged'); toast('offline', true); }
@@ -1548,7 +2163,7 @@ function toggleOngoing(){
     const pad = n => String(n).padStart(2,'0');
     const hhmm = d => pad(d.getHours())+':'+pad(d.getMinutes());
     const now = new Date();
-    if(startEl.value.trim().toLowerCase() === 'now') startEl.value = hhmm(new Date(now - 15*60000));
+    if(!startEl.value.trim() || startEl.value.trim().toLowerCase() === 'now') startEl.value = hhmm(new Date(now - 15*60000));
     if(!endEl.value.trim()) endEl.value = hhmm(now);
   }
 }
@@ -1557,10 +2172,13 @@ function openAddDlg(){
   gapCtx = null;  // not filling a specific gap — /api/fill just needs desc/start/end
   document.getElementById('dlgTitle').textContent = 'add entry';
   document.getElementById('d-desc').value = '';
+  document.getElementById('d-tags').value = '';
   // Default: start now, ongoing (no end) — the common case is "starting
   // something right now", not backfilling a finished block. Un-checking
   // "ongoing" still allows logging a specific past completed span.
-  document.getElementById('d-start').value = 'now';
+  // type=time can't hold a "now" sentinel: prefill the current minute.
+  { const pad = n => String(n).padStart(2,'0'), n = new Date();
+    document.getElementById('d-start').value = pad(n.getHours())+':'+pad(n.getMinutes()); }
   document.getElementById('d-ongoing-row').style.display = '';
   document.getElementById('d-ongoing').checked = true;
   toggleOngoing();
@@ -1574,12 +2192,13 @@ async function saveDlg(){
   const start = document.getElementById('d-start').value.trim();
   const ongoing = document.getElementById('d-ongoing').checked;
   const end = ongoing ? '' : document.getElementById('d-end').value.trim();
+  const tags = document.getElementById('d-tags').value.trim();
   if(!desc){ toast('need a description', true); return; }
   closeDlg();
   try {
     const r = await fetch('/api/fill', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({desc, start, end})});
+      body: JSON.stringify({desc, start, end, tags})});
     const d = await r.json();
     if(!d.ok){ toast(d.error||'create failed', true); return; }
     toast(d.running ? 'started ✓'+(d.project?' → '+d.project:'') : 'tracked ✓'+(d.project?' → '+d.project:''));
@@ -1602,13 +2221,45 @@ async function quickPlaceholder(){
   } catch(e){ toast('offline', true); }
 }
 
+// Time fields (2026-10-05): native iOS time wheel (type=time) instead of a
+// number pad, and a tap CLEARS the field so you pick fresh instead of first
+// deleting the old HH:MM. Dismissing the wheel without picking restores the
+// old value, so a stray tap never blanks a time (blank is "unchanged"/"now"
+// to the server anyway).
+function timePicker(el){
+  el.addEventListener('focus', ()=>{ el.dataset.prev = el.value; el.value = ''; });
+  el.addEventListener('blur', ()=>{ if(!el.value && el.dataset.prev) el.value = el.dataset.prev; });
+}
+['d-start','d-end','e-start','e-end'].forEach(id => timePicker(document.getElementById(id)));
+
+// Command bar (2026-10-05): the CLI's "type to run" line. Routed server-side
+// (/api/run → run_command) like desktop janus's Enter: /d, bonus +N and
+// [N] ranges → did-fast, everything else → tg-fast; syntax is the CLI's.
+async function runCmd(ev){
+  ev.preventDefault();
+  const el = document.getElementById('cmd');
+  const text = el.value.trim();
+  if(!text) return;
+  el.value = ''; el.blur();
+  try {
+    const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text})});
+    const d = await r.json();
+    if(!d.ok){ toast(d.error||'failed', true); el.value = text; return; }
+    toast((d.msg||'done')+' ✓');
+    load();
+  } catch(e){ toast('offline', true); el.value = text; }
+}
+
 let projectCodes = [];
 async function loadProjects(){
   try {
     const r = await fetch('/api/projects');
     const d = await r.json();
     if(d.ok) projectCodes = d.codes;
-  } catch(e){ /* dropdown just stays empty — non-fatal */ }
+    document.getElementById('projlist').innerHTML =
+      projectCodes.map(c=>'<option value="'+c+'">').join('');
+  } catch(e){ /* suggestions just stay empty — free text still works */ }
 }
 
 const editDlg = document.getElementById('editDlg');
@@ -1621,9 +2272,8 @@ function openEdit(r){
   const endEl = document.getElementById('e-end');
   endEl.value = r.end;
   endEl.disabled = !!r.running;   // no fixed end yet — stop it first (desktop mirrors this)
-  const sel = document.getElementById('e-project');
-  sel.innerHTML = '<option value="">(none)</option>' +
-    projectCodes.map(c=>'<option value="'+c+'"'+(c===r.project?' selected':'')+'>'+c+'</option>').join('');
+  document.getElementById('e-project').value = r.project || '';
+  document.getElementById('e-tags').value = (r.tags||[]).join(' ');
   editDlg.classList.add('show');
 }
 
@@ -1635,14 +2285,15 @@ async function saveEdit(){
   const start = document.getElementById('e-start').value.trim();
   const endEl = document.getElementById('e-end');
   const end = endEl.disabled ? '' : endEl.value.trim();
-  const project = document.getElementById('e-project').value;
+  const project = document.getElementById('e-project').value.trim();
+  const tags = document.getElementById('e-tags').value.trim();
   if(!desc){ toast('need a description', true); return; }
   const id = editCtx.id;
   closeEditDlg();
   try {
     const r = await fetch('/api/edit', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id, desc, start, end, project})});
+      body: JSON.stringify({id, desc, start, end, project, tags})});
     const d = await r.json();
     if(!d.ok){ toast(d.error||'edit failed', true); return; }
     toast('saved ✓');
@@ -1666,6 +2317,8 @@ async function doSplit(mode){
 }
 
 document.getElementById('reload').onclick = load;
+document.getElementById('dprev').onclick = ()=>{ dayOffset--; load(); };
+document.getElementById('dnext').onclick = ()=>{ if(dayOffset < 0){ dayOffset++; load(); } };
 loadProjects();
 load();
 </script>
@@ -1673,4 +2326,8 @@ load();
 </html>"""
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    # threaded=True: Werkzeug's dev server is single-threaded by default, so a
+    # 10–45 s /api/log (did-fast over ssh + Excel) would block /api/timeline
+    # for every other client — the native app's refresh-on-appear would hang
+    # behind a swipe. did-fast's own writes stay serialized server-side.
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)

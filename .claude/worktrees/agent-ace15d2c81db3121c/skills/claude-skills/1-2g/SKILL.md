@@ -94,10 +94,20 @@ For each task needing changes, prepare:
 - New content with `(N)` and `[N]` appended if missing
 - New labels array with domain label added if missing
 
-Present a summary table to the user:
+### Step 4: Apply changes
+
+Apply immediately, no confirmation (JM, 2026-10-19: "if all changes are
+implemented, call this done"; he does not want to hand-edit a clean list).
+Use Todoist MCP `update-tasks` to update each task's content and labels.
+Batch where possible. The edits are small and reversible; the report below
+is the review surface.
+
+### Step 5: Report
+
+Show the table of what changed so the guesses can be vetted after the fact:
 
 ```
-## Tasks to update (N total)
+## Tasks updated (N total)
 
 | # | Task | Changes |
 |---|------|---------|
@@ -105,28 +115,26 @@ Present a summary table to the user:
 | 2 | Review PR #456 | + (20) [15] |
 | 3 | Call dentist | + @hcb |
 ...
-```
 
-### Step 4: Confirm
-
-Ask: **Apply changes? (y/n)**
-
-Only proceed if confirmed.
-
-### Step 5: Apply changes
-
-Use Todoist MCP `update-tasks` to update each task's content and labels. Batch where possible.
-
-### Step 6: Report
-
-```
 1-2g → updated N tasks (M time estimates, K point values, J labels added)
 ```
 
-### Step 7: Mark done
+Zero tasks needing changes is also a clean finish: report `1-2g → clean, 0 tasks updated` and continue.
 
-Execute `/did 1 -2g` — this is a 1n+ task. Follow the full `/did` flow (Step 1n) to write points to the 1n+ sheet and append to 0分.
+### Step 6: Mark done + release the claim
+
+Once every change in the list is applied (or the list was empty), the card is
+done. Run the fast /did path, then release the dtd claim the `/1-2g` prompt
+took so its 😈 spinner stops:
+
+```bash
+python3 ~/i446-monorepo/tools/did/run.py "1 -2g"
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
+```
+
+Only skip this if an `update-tasks` call reported failures you could not
+fix; then say which tasks are still wrong and leave the card open.
 
 ## Response Style
 
-Show the summary table, ask for confirmation, then apply. Keep output clean and scannable.
+Apply, show the summary table, mark done. Keep output clean and scannable.

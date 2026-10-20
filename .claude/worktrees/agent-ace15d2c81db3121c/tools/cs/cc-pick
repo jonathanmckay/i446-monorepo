@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""cc-pick: phone-sized session picker for the Termius startup command.
+
+A full-height fzf over Claude Code sessions, then launch through claude-tracked (`cc`) so the DB
+row, tab colour and drop-to-shell-on-exit behave as usual. Rows, top to bottom:
+
+   +  new session                          bare `cc`
+   3  😈 title            (remote panes)   the cmux panes on REMOTE_HOSTS, numbered as cmux shows
+                                           them (3+); picking one copies its transcript here and
+                                           FORKS it (two clients on one session id corrupt the
+                                           transcript), titled "<title> ⑂"
+   ·  😈 title            (local, live)    a session some other client here is running: forked
+      2d 😈 title         (local, idle)    resumed in place (same session id)
+
+Termius startup command on Ix:   tmux new -A -s cc cc-pick
+Esc / ctrl-c with nothing picked drops to a login shell; `cc-pick` again to retry.
+
+Flags: --list   print this host's rows as TSV (label, id, live, path) and exit; what a remote
+                host is asked for over ssh, and what the tests read.
+Env:   CC_PICK_HOSTS  comma-separated hosts to list panes from (default: straylight, unless this
+                      is straylight).
+"""
+import importlib.machinery, importlib.util, os, re, shutil, socket, subprocess, sys
+from pathlib import Path
+
+CMUX_BIN = '/Applications/cmux.app/Contents/Resources/bin'   # not on PATH over ssh; cs needs `cmux rpc` for pane numbers
+if os.path.isdir(CMUX_BIN) and CMUX_BIN not in os.environ.get('PATH', ''):
+    os.environ['PATH'] = CMUX_BIN + os.pathsep + os.environ.get('PATH', '')
+CS = Path.home() / 'i446-monorepo' / 'tools' / 'cs' / 'cs.py'
+CC = Path.home() / 'vault' / 'i447' / 'i446' / 'claude-tracked'
+PROJECTS = Path.home() / '.claude' / 'projects'
+NEW = '__new__'
+RECENT = 10          # idle local sessions a host lists (--list); the phone shows MAX_ROWS of the merged set
+MAX_ROWS = 4         # sessions on the phone picker besides "+ new" (JM 2026-10-18: "4 max")
+SSH_TIMEOUT = 4
+SESSION_SHORT = Path.home() / 'i446-monorepo' / 'tools' / 'cs' / 'session_short.py'
+
+
+def load_session_short():
+    try:
+        loader = importlib.machinery.SourceFileLoader('session_short', str(SESSION_SHORT))
+        spec = importlib.util.spec_from_loader('session_short', loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+_SS = None
+
+
+def display_title(sid, title):
+    """The phone-width label: the Haiku topic label cached by session_short
+    (precomputed by the session-title hook; never computed here, a pick must
+    not wait on an API call), else the raw title cut to the same width."""
+    global _SS
+    if _SS is None:
+        _SS = load_session_short() or False
+    cap = _SS.CAP if _SS else 28
+    if _SS:
+        try:
+            short = _SS.cached_short(sid, title)
+            if short:
+                return short
+        except Exception:
+            pass
+    return title[:cap]
+
+
+def cap_rows(remote, local, limit=MAX_ROWS):
+    """Merge remote panes (first) and local rows, keeping the first `limit`.
+    Both lists arrive in priority order (panes, other live, then idle by age)."""
+    return (list(remote) + list(local))[:limit]
+
+
+def load_cs():
+    loader = importlib.machinery.SourceFileLoader('cs', str(CS))
+    spec = importlib.util.spec_from_loader('cs', loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def remote_hosts():
+    env = os.environ.get('CC_PICK_HOSTS')
+    if env is not None:
+        return [h for h in env.split(',') if h]
+    return [] if 'straylight' in socket.gethostname().lower() else ['straylight']
+
+
+def live_ids():
+    """Session ids some claude process on this host is running (argv --resume/--session-id)."""
+    ps = subprocess.run(['ps', '-axo', 'command='], capture_output=True, text=True).stdout
+    return set(re.findall(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', ps))
+
+
+def local_rows(cs):
+    """[(label, id, live, path, title)]: numbered cmux panes first, then other live, then idle."""
+    idx = cs.load_index()
+    nums = cs.cmux_numbers()
+    live = live_ids() | set(nums)
+    out = []
+    for path, r in sorted(idx.items(), key=lambda kv: (kv[1]['id'] not in nums, nums.get(kv[1]['id'], 0),
+                                                       -kv[1]['mtime'])):
+        sid, title = r['id'], cs.title_of(r)
+        shown = display_title(sid, title)
+        if sid in nums:
+            label = f'{nums[sid]:>2}     {cs.mark_of(r)} {shown}'
+        elif sid in live:
+            label = f' ·     {cs.mark_of(r)} {shown}'
+        else:
+            label = f'   {cs.age(r["mtime"]):>4} {cs.mark_of(r)} {shown}'
+        out.append((label, sid, sid in live, path, title))
+    n_live = sum(1 for row in out if row[2])
+    return out[:n_live + RECENT]
+
+
+def remote_rows(host):
+    """A remote host's cmux panes (live rows of its --list), labelled with the host; [] if unreachable."""
+    try:
+        r = subprocess.run(['ssh', '-o', f'ConnectTimeout={SSH_TIMEOUT}', '-o', 'BatchMode=yes', host,
+                            'python3 ~/i446-monorepo/tools/cs/cc-pick --list'],
+                           capture_output=True, text=True, timeout=SSH_TIMEOUT + 6)
+    except Exception:
+        return []
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.split('\t')
+        if len(parts) < 5 or parts[2] != 'live':
+            continue
+        label, sid, _, path, title = parts[:5]
+        # 40 = number(2)+pad(5)+mark(2)+space+28-char label; wider padding pushed
+        # the host tag off a portrait phone screen (~48 cols).
+        out.append((f'{label[:40]:<40} {host[:3]}', sid, True, path, title, host))
+    return out
+
+
+def fetch(host, rpath):
+    """Copy a remote transcript into the same project folder here; returns the local path."""
+    rel = Path(rpath).relative_to(Path(rpath).parents[1])      # <project>/<id>.jsonl
+    local = PROJECTS / rel
+    local.parent.mkdir(parents=True, exist_ok=True)
+    data = subprocess.run(['ssh', '-o', f'ConnectTimeout={SSH_TIMEOUT}', host, f'cat {rpath}'],
+                          capture_output=True, check=True).stdout
+    local.write_bytes(data)
+    return local
+
+
+def launch_args(sid, live, title):
+    """claude-tracked arguments for a pick: fork a live session, resume an idle one, bare for new."""
+    if sid == NEW:
+        return []
+    args = ['--resume', sid]
+    if live:
+        args += ['--fork-session', '-n', f'{title[:50]} ⑂']
+    return args
+
+
+def main(argv):
+    cs = load_cs()
+    mine = local_rows(cs)
+    if '--list' in argv:
+        for label, sid, live, path, title in mine:
+            print('\t'.join([label, sid, 'live' if live else 'idle', str(path), title]))
+        return
+    if not shutil.which('fzf'):
+        sys.exit('cc-pick: fzf not installed')
+    remote = []
+    for host in remote_hosts():
+        remote += remote_rows(host)
+    local = [(label, sid, live, str(path), title, None) for label, sid, live, path, title in mine]
+    table = [(' +     new session', NEW, False, '', '', None)] + cap_rows(remote, local)
+    lines = '\n'.join(f'{row[0]}\t{i}' for i, row in enumerate(table))
+    r = subprocess.run(['fzf', '--no-sort', '--layout=reverse', '--height=100%', '--delimiter=\t',
+                        '--with-nth=1', '--prompt=session> ', '--header=panes/live → fork · idle → resume'],
+                       input=lines, capture_output=True, text=True)
+    if r.returncode or not r.stdout.strip():
+        os.execvp('zsh', ['zsh', '-il'])
+    label, sid, live, path, title, host = table[int(r.stdout.rstrip('\n').split('\t')[-1])]
+    if host:
+        print(f'↓ copying "{title}" from {host}')
+        fetch(host, path)
+    os.execv(sys.executable, [sys.executable, str(CC)] + launch_args(sid, live, title))
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

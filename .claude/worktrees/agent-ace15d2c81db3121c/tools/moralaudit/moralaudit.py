@@ -286,6 +286,7 @@ def run_form(target: _dt.date) -> dict | None:
         else:
             e.app.layout.focus_next()
 
+    @kb.add("escape", eager=True)   # Esc = save and back to dtd (2026-10-16)
     @kb.add("c-s")
     def _(e):
         _submit(e.app)
@@ -329,6 +330,12 @@ def main() -> int:
 
     if args.print_html:
         print(build_html(answers, target))
+        return 0
+
+    if not any((v or "").strip() for v in answers.values()):
+        # Esc on an untouched form (opened by accident from dtd) must not
+        # write an empty dated note or open Obsidian (2026-10-16).
+        print("moralaudit → nothing filled, nothing written.")
         return 0
 
     try:

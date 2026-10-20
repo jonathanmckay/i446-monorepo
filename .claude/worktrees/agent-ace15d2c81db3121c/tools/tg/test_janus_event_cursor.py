@@ -376,7 +376,7 @@ def test_tab_and_shift_tab_are_bound_and_gated_on_empty_input():
 def test_down_up_arrows_cycle_the_same_as_tab_shift_tab():
     """Arrow-key aliases (user request 2026-07-17: "can I use arrow keys to
     navigate?") — Down mirrors Tab (forward), Up mirrors Shift-Tab (backward),
-    same wrap-around semantics, not a separate cursor concept."""
+    same clamped (non-wrapping) semantics, not a separate cursor concept."""
     mod = _load_tui()
     today = _midnight()
     evs = [_gcal_event(str(i), today.replace(hour=9, minute=i * 10),
@@ -427,7 +427,8 @@ def test_tab_arms_first_item_when_everything_is_in_the_future():
     assert mod.STATE.event_sel == mod._event_key(ev1)
 
 
-def test_tab_cycles_forward_and_wraps():
+def test_tab_stops_at_the_last_row_instead_of_wrapping():
+    """User request 2026-10-13: selection no longer wraps around."""
     mod = _load_tui()
     today = _midnight()
     evs = [_gcal_event(str(i), today.replace(hour=9, minute=i * 10),
@@ -435,10 +436,10 @@ def test_tab_cycles_forward_and_wraps():
     mod.STATE.visible_events = evs
     mod.STATE.event_sel = mod._event_key(evs[2])  # last one
     _binding(mod, "tab").handler(_FakeEvent())
-    assert mod.STATE.event_sel == mod._event_key(evs[0]), "must wrap to the first"
+    assert mod.STATE.event_sel == mod._event_key(evs[2]), "must stay on the last"
 
 
-def test_shift_tab_cycles_backward_and_wraps():
+def test_shift_tab_stops_at_the_first_row_instead_of_wrapping():
     mod = _load_tui()
     today = _midnight()
     evs = [_gcal_event(str(i), today.replace(hour=9, minute=i * 10),
@@ -446,7 +447,7 @@ def test_shift_tab_cycles_backward_and_wraps():
     mod.STATE.visible_events = evs
     mod.STATE.event_sel = mod._event_key(evs[0])
     _binding(mod, "s-tab").handler(_FakeEvent())
-    assert mod.STATE.event_sel == mod._event_key(evs[2]), "must wrap to the last"
+    assert mod.STATE.event_sel == mod._event_key(evs[0]), "must stay on the first"
 
 
 def test_selection_surviving_list_change_reseeds_near_now_on_next_tab():

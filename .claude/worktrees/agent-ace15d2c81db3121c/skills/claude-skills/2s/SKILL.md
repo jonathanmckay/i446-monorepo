@@ -55,9 +55,10 @@ calendar month** (it's a month-end review). Year defaults to the current year.
 - **Current-year only.** `1分+1s` holds the current tracking year (col A has no
   year). A January run (previous month = December) is a year-boundary edge
   case — confirm the source row is really that month before trusting it.
-- **Scope.** Quantitative row only. The qualitative sheet (`18-24 2s qual`) and
-  quarterly `16-23 3s` stay manual, as does the 2s Meta reflection in
-  `≥1 ₦ Neon 长期霓虹系统 (Rituals).md`.
+- **Scope.** Quantitative row only. The qualitative sheet (`18-24 2s qual`)
+  stays manual, as does the 2s Meta reflection in
+  `≥1 ₦ Neon 长期霓虹系统 (Rituals).md`. The quarterly tab (`16-26 3s` in
+  `scorecard.xlsx`) is filled by `/3s`.
 - **Predecessor retired.** `copy2s.py` (2026-07-03, formerly in this folder)
   targeted the STALE OneDrive `scorecard.xlsx` (`18-25 2s` tab) and lacked the
   `BC→Y` paste — do not resurrect it.

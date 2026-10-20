@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
@@ -142,7 +143,8 @@ def append_names(new_names: list[str], *, today: str | None = None,
         # crediting Neon points. A day only truly ends when `today` moves
         # strictly past what's stored.
         if today > data.get("date", ""):
-            data = {"date": today, "names": [], "points": {}, "ids": {}}
+            data = {"date": today, "names": [], "points": {}, "ids": {},
+                    "done_at": {}, "undone": {}}
 
         # Ensure points/timestamps/ids dicts exist (backwards compat)
         if "points" not in data:
@@ -164,6 +166,8 @@ def append_names(new_names: list[str], *, today: str | None = None,
             existing_keys.add(k)
             data["names"].append(k)  # store lowercased/normalized form
             data["timestamps"][k] = now_hhmm  # record completion time
+            # Cross-host last-writer-wins vs undo (see _merge_remote).
+            data.setdefault("done_at", {})[_dup_key(k)] = time.time()
 
         # Merge points
         if points:
@@ -223,7 +227,16 @@ def remove_names(names: list[str], *, path: Path | None = None) -> dict:
             if isinstance(data.get(bucket), dict):
                 data[bucket] = {k: v for k, v in data[bucket].items()
                                 if _dup_key(k) not in remove_keys}
+        # Tombstone the undo and mirror it (2026-10-08). Without this the
+        # other host's mirror still listed the name and absorb_remote put it
+        # right back: an undo on one machine silently reverted itself.
+        und = data.setdefault("undone", {})
+        now = time.time()
+        for k in remove_keys:
+            und[k] = now
         _atomic_write(path, data)
+        if path == COMPLETED:
+            _mirror_to_vault(data)
         return data
     finally:
         try:
@@ -292,10 +305,47 @@ def _mirror_to_vault(data: dict) -> None:
         pass
 
 
+def _merge_remote(data: dict, remote: dict) -> int:
+    """Fold one remote host's record into `data` in place, last-writer-wins
+    per task between completion (done_at) and undo (undone) times. Legacy
+    entries without a done_at count as done at time 0, so any undo beats
+    them. Returns the net change in completed names (+absorbed, -undone)."""
+    l_done = data.setdefault("done_at", {})
+    l_und = data.setdefault("undone", {})
+    for k, t in (remote.get("undone") or {}).items():
+        if isinstance(t, (int, float)) and t > l_und.get(k, 0):
+            l_und[k] = t
+    r_done = remote.get("done_at") or {}
+    for k, t in r_done.items():
+        if isinstance(t, (int, float)) and t > l_done.get(k, 0):
+            l_done[k] = t
+    before = len(data["names"])
+    have = {_dup_key(n) for n in data["names"]}
+    for n in remote.get("names", []):
+        k = _dup_key(n)
+        if not k or k in have or l_done.get(k, 0) <= l_und.get(k, -1):
+            continue
+        have.add(k)
+        data["names"].append(_normalize(n))
+        for bucket in ("points", "timestamps", "ids"):
+            src = remote.get(bucket) or {}
+            for rk, rv in src.items():
+                if _dup_key(rk) == k and rv:
+                    data.setdefault(bucket, {})[rk] = rv
+    dead = {k for k in have if l_und.get(k, -1) >= l_done.get(k, 0)}
+    if dead:
+        data["names"] = [n for n in data["names"] if _dup_key(n) not in dead]
+        for bucket in ("points", "timestamps", "ids"):
+            if isinstance(data.get(bucket), dict):
+                data[bucket] = {k: v for k, v in data[bucket].items()
+                                if _dup_key(k) not in dead}
+    return len(data["names"]) - before
+
+
 def absorb_remote(today: str | None = None) -> int:
     """Merge OTHER hosts' synced completed-today-*.json into the local file.
 
-    Returns how many names were newly absorbed. Date-gated: a remote file
+    Returns the net change in completed names. Date-gated: a remote file
     dated strictly OLDER than this machine's `today` is ignored — but a
     remote date that is equal-or-newer still merges (see append_names'
     forward-only gate comment). Two travel machines routinely disagree on
@@ -303,30 +353,42 @@ def absorb_remote(today: str | None = None) -> int:
     local time); a plain equality check silently dropped every legitimate
     cross-machine completion for that whole window. Called by dtd's watcher
     when a remote mirror's mtime advances (a completion on another machine
-    just synced in).
+    just synced in). Undos travel too (2026-10-08): see _merge_remote.
     """
     today = today or daytime.today_iso()
     own = _mirror_path().name
-    absorbed = 0
+    remotes = []
     for p in sorted(MIRROR_DIR.glob("completed-today-*.json")):
-        if p.name == own:
+        if p.name == own or ".sync-conflict-" in p.name:
             continue
         try:
             with open(p, encoding="utf-8") as f:
                 remote = json.load(f)
         except Exception:
             continue
-        if not isinstance(remote, dict) or today > remote.get("date", ""):
-            continue
-        names = [n for n in remote.get("names", []) if n]
-        if not names:
-            continue
-        before = len(_load(COMPLETED).get("names", []))
-        merged = append_names(names, today=today,
-                              points=remote.get("points") or None,
-                              ids=remote.get("ids") or None)
-        absorbed += max(0, len(merged.get("names", [])) - before)
-    return absorbed
+        if isinstance(remote, dict) and today <= remote.get("date", ""):
+            remotes.append(remote)
+    if not remotes:
+        return 0
+    COMPLETED.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(COMPLETED, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        data = _load(COMPLETED)
+        if today > data.get("date", ""):
+            data = {"date": today, "names": [], "points": {}, "ids": {},
+                    "done_at": {}, "undone": {}}
+        snapshot = json.dumps(data, sort_keys=True)
+        net = sum(_merge_remote(data, r) for r in remotes)
+        if json.dumps(data, sort_keys=True) != snapshot:
+            _atomic_write(COMPLETED, data)
+            _mirror_to_vault(data)
+        return net
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def main(argv: list[str]) -> int:

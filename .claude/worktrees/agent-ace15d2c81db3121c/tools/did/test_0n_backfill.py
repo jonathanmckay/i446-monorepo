@@ -33,9 +33,34 @@ TODAY = date(2026, 9, 21)
     ("09.18", date(2026, 9, 18)), ("9/18", date(2026, 9, 18)), ("9.18", date(2026, 9, 18)),
     ("2026-09-18", date(2026, 9, 18)), ("yesterday", date(2026, 9, 20)),
     ("12/31", date(2025, 12, 31)),  # M/D after today → last year
+    ("09.21", date(2026, 9, 21)),   # today's own M/D → today (in-place credit)
+    ("09.22", date(2026, 9, 22)),   # tomorrow's own M/D → tomorrow, not last year
+    ("9/22", date(2026, 9, 22)),
+    ("tomorrow", date(2026, 9, 22)),
+    ("09.23", date(2025, 9, 23)),   # day after tomorrow → last year, as before
 ])
 def test_parse_target_date(zb, raw, expect):
     assert zb.parse_target_date(raw, TODAY) == expect
+
+
+def test_parse_target_date_tomorrow_across_year(zb):
+    nye = date(2026, 12, 31)
+    assert zb.parse_target_date("1/1", nye) == date(2027, 1, 1)
+    assert zb.parse_target_date("tomorrow", nye) == date(2027, 1, 1)
+
+
+# ── 戌/亥 advance window (2026-10-17): tomorrow allowed only 18:00-22:00 ─────
+
+@pytest.mark.parametrize("hour,open_", [
+    (17, False),  # 酉
+    (18, True), (19, True),   # 戌
+    (20, True), (21, True),   # 亥
+    (22, False),  # 子
+    (4, False), (12, False),
+])
+def test_advance_window_open(zb, hour, open_):
+    from datetime import datetime
+    assert zb.advance_window_open(datetime(2026, 10, 17, hour, 30)) is open_
 
 
 def test_col_letter(zb):
@@ -99,3 +124,19 @@ def test_script_never_touches_n_color_or_sigma(zb):
     assert "cell 4 of row fRow" not in s           # 0分!D (Σ) not read/written
     assert s.count("\"PRE\" &") == 11 and s.count("\"POST\" &") == 11
     assert "set value of cell" not in zb.build_script(19, 9, 18, 1, do_write=False)
+
+
+# ── already-credited guard (2026-09-28) ─────────────────────────────────────
+
+@pytest.mark.parametrize("cell,expect", [
+    ("", False), ("   ", False), ("0", False), ("0.0", False),
+    ("1", True), ("1.0", True), ("25", True), ("x", True),
+])
+def test_already_credited(zb, cell, expect):
+    assert zb.already_credited(cell) is expect
+
+
+def test_script_writes_over_blank_or_zero_only(zb):
+    s = zb.build_script(7, 9, 25, 1, do_write=True)
+    assert '(pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0"' in s
+    assert "SKIPPED" in s

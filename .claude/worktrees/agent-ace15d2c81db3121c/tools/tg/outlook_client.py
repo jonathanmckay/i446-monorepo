@@ -7,6 +7,7 @@ title, calendar. Uses a file cache to avoid hammering the Agency server.
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -50,6 +51,22 @@ try:
 except ImportError:
     mcp = None
 
+# Hosts that must NEVER fetch from Agency themselves and only read the cache
+# Straylight pushes (tools/tg/outlook-cache-daemon.py). Ix was meant to be
+# cache-only via JANUS_OUTLOOK_CACHE_ONLY=1 in the `janus` ssh entry, but
+# the com.jm.janus-mobile launchd agent never carried that env var, so every
+# phone page load spawned an Agency calendar server that opened a Chrome
+# sign-in tab and waited 15 min (2026-10-18: enough tabs to OOM ix). Decide
+# by hostname so no launcher can forget the flag again.
+CACHE_ONLY_HOSTS = {"ix", "ix.local"}
+
+
+def cache_only() -> bool:
+    if os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
+        return True
+    import socket
+    return socket.gethostname().lower() in CACHE_ONLY_HOSTS
+
 
 def list_events(day_start: dt.datetime, day_end: dt.datetime,
                 force: bool = False) -> list[dict]:
@@ -58,12 +75,21 @@ def list_events(day_start: dt.datetime, day_end: dt.datetime,
     Returns list of dicts with keys: start_dt, end_dt, title, calendar, all_day,
     transparency (always "opaque" for Outlook events).
     """
-    if mcp is None:
-        raise RuntimeError("agency_mcp unavailable")
-
     today_str = day_start.strftime("%Y-%m-%d")
     cache_file = CACHE_DIR / f"outlook-{today_str}.json"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Cache-only hosts (2026-10-04): Ix has no Agency CLI / work auth, so
+    # Janus running there reads the cache Straylight pushes every 5 min
+    # (tools/tg/outlook-cache-daemon.py) instead of attempting a fetch that can
+    # only time out. JANUS_OUTLOOK_CACHE_ONLY=1 is set by the `janus` ssh
+    # entry on Ix.
+    if mcp is None or cache_only():
+        if cache_file.exists():
+            return _parse_cache(cache_file)
+        if mcp is None:
+            raise RuntimeError("agency_mcp unavailable")
+        return []
 
     # Check cache (5 min TTL)
     if not force and cache_file.exists():

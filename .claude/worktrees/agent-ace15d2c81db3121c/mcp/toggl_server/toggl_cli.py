@@ -125,6 +125,38 @@ def cmd_start(args):
     proj_name = PROJECT_NAMES.get(project_id, project) if project_id else ""
     proj_str = f" → {proj_name}" if proj_name else ""
     print(f"Started: {desc}{proj_str} [id:{entry['id']}]")
+    _maybe_agent_triage(desc)
+
+
+# Starting an ibx timer kicks off the agent pre-filter for that inbox
+# (tools/ibx/agent_triage.py), detached so the start stays instant.
+_AGENT_TRIAGE = {"ibx i9": "i9", "ibx m5x2": "m5x2"}
+
+
+def _maybe_agent_triage(desc):
+    import re
+    import subprocess
+    from pathlib import Path
+    key = re.sub(r"\s*-\s*", " ", desc).strip().lower()  # "ibx - i9" → "ibx i9"
+    source = _AGENT_TRIAGE.get(key)
+    if not source:
+        return
+    import socket
+    script = Path.home() / "i446-monorepo/tools/ibx/agent_triage.py"
+    log = Path.home() / ".config/ibx/agent_triage.log"
+    cmd = ["/usr/bin/python3", str(script), source]
+    # Agency (Outlook) and the logged-in claude CLI live on Straylight only;
+    # a start from dtd/janus on Ix hands the run over ssh.
+    if not socket.gethostname().lower().startswith("straylight"):
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "straylight",
+               f"mkdir -p ~/.config/ibx; /usr/bin/python3 ~/i446-monorepo/tools/ibx/agent_triage.py {source}"
+               " >> ~/.config/ibx/agent_triage.log 2>&1"]
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(cmd, stdout=open(log, "a"), stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, cwd="/tmp", start_new_session=True)
+    except Exception:
+        pass
 
 
 def cmd_stop(_args):

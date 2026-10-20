@@ -24,7 +24,7 @@ weekly Todoist habit.
 - `YYYY-MM-DD` — treat that date as "today" for backfilling an older week
   (passed straight through to `week_calc.py`).
 
-## The `i9` sheet (`Neon分v12.2.xlsx`)
+## The `i9+m5x2` sheet (`Neon分v12.2.xlsx`)
 
 Pre-populated for the whole year, one row per fiscal week, **never
 appended to** — row 3 = fiscal week 1 (`1.1`), incrementing one row per
@@ -33,11 +33,12 @@ week. Columns (confirmed against live data 2026-09-15):
 | Col | Meaning | Source |
 |-----|---------|--------|
 | A | M.W fiscal week label (e.g. `9.2`) | already populated — verify, don't write |
-| B | Rating vs. expectations: `MM` (missed) / `MA` (met ambition) / `EE` (exceeded) | Question 1 |
-| C | i9 points earned that week | computed from `0分` col R |
+| B | Rating vs. expectations: `MM` (missed) / `MA` (met ambition) / `EE` (exceeded) / `OL` (out: sick or leave, week not rated) | Question 1 |
+| C | i9 points that week (`='1分+1s'!G<row-1>`, formula, don't overwrite) | sheet |
 | D | What got done last week | Question 2 |
 | E | What exceeding expectations looks like this week | Question 3 |
-| F | i9 minutes tracked that week (Toggl) | computed — **new column, added by this skill** (previously unused; set a `min` label in row 2 the first time it's written) |
+| F | i9 minutes tracked that week (Toggl) | computed |
+| G–K | m5x2 columns (rating, review, goals, 分, min) — owned by `/1m5x2` (tab merged 2026-09-27) | leave alone |
 
 Rows 1–2 hold sparse/inconsistent header remnants (only B1=`i9`, B2=`OL` are
 non-blank) — don't try to fully reconstruct a header row, just add the `F`
@@ -96,7 +97,7 @@ Find `START_ROW`/`END_ROW` by scanning col B for `week_start`..`week_end`'s
 ```applescript
 tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
-    set s to sheet "i9" of wb
+    set s to sheet "i9+m5x2" of wb
     return string value of cell 1 of row ROW_PLACEHOLDER of s
 end tell
 ```
@@ -106,13 +107,24 @@ label to Step 1's `label`. **If they don't match, stop** — the fiscal
 anchor may have drifted or the sheet was edited; report both values to the
 user rather than writing to the wrong row.
 
+**Suggest answers from 1g (before asking).** First read the review week's block in the monthly narrative doc `~/vault/g245/5e2/YYYY.MM 2g+1g-narrative.md` (the month the week's Sunday falls in; the week heading looks like `- **Oct 4 – Oct 10** —`). Its `i9` bullets are JM's own weekly goals, and ✅/❌ marks on them are his verdicts; they outrank the 1g tab. Then also read, via `ix-osa.sh`:
+- the `1g` tab's i9 goals (rows 5–11: col D goal, E 分, F focus bonus, G % done). The 1g tab is overwritten weekly by `/1g`, so it only reflects the review week when you run this before the next `/1g`; if `1g!A1` is a placeholder or the goals are clearly stale, say so instead of using them;
+- the previous week's row in `i9+m5x2`, col E (what you said exceeding/next-week would look like);
+- the review week's `/1s` doc (`~/vault/g245/reviews/YYYY-M.W-1s.md`, "Goals Detail"), if it exists.
+
+Then, with each question, offer a drafted answer the user can accept with "ok" or edit:
+1. **Rating**: compare the week's actual minutes/points and the goals' % done against last week's stated goal; suggest MM/MA/EE with a one-line reason.
+2. **Review (col D)**: one sentence naming which 1g goals got done or moved, plus the biggest Toggl blocks.
+3. **Next week (col E)**: carry forward unfinished 1g goals, phrased as concrete outcomes.
+
 ### Step 5: Ask the 3 questions
 
 Ask directly in the conversation (this is a 3-field survey, not worth a
 dedicated TUI):
 
 1. **Rating vs. expectations** — offer `MM` / `MA` / `EE` (missed / met
-   ambition / exceeded); a single-select question fits well here.
+   ambition / exceeded), plus `OL` for a week that was out (sick, leave;
+   JM used it 2026-10-02 for week 9.4); a single-select question fits well here.
 2. **What did I get done last week?** — free text.
 3. **What does exceeding expectations this week look like?** — free text.
 
@@ -124,9 +136,8 @@ risk as every other Neon write):
 ```applescript
 tell application "Microsoft Excel"
     set wb to workbook "Neon分v12.2.xlsx"
-    set s to sheet "i9" of wb
+    set s to sheet "i9+m5x2" of wb
     set value of cell 2 of row ROW_PLACEHOLDER of s to "RATING_PLACEHOLDER"
-    set value of cell 3 of row ROW_PLACEHOLDER of s to POINTS_PLACEHOLDER
     set value of cell 4 of row ROW_PLACEHOLDER of s to "GOT_DONE_PLACEHOLDER"
     set value of cell 5 of row ROW_PLACEHOLDER of s to "EXCEEDING_PLACEHOLDER"
     set value of cell 6 of row ROW_PLACEHOLDER of s to MINUTES_PLACEHOLDER
@@ -137,7 +148,7 @@ tell application "Microsoft Excel"
 end tell
 ```
 
-Escape quotes/newlines in the free-text answers for AppleScript. `POINTS_PLACEHOLDER`/`MINUTES_PLACEHOLDER` are plain numbers, unquoted.
+Escape quotes/newlines in the free-text answers for AppleScript. `MINUTES_PLACEHOLDER` is a plain number, unquoted. Never write column C: it is a formula into `1分+1s` (fixed 2026-10-05 after earlier runs overwrote rows 39–40 with hand sums, and rows 17–47 had drifted to `G<row-3>`, two weeks stale). Report the `0分` col R sum alongside the sheet's C value if they differ.
 
 ### Step 7: Complete the `1 i9` habit
 
@@ -146,6 +157,13 @@ the `1n+` sheet:
 
 ```
 /did 1 i9
+```
+
+Then release the dtd claim the `/1i9` prompt took, so its 😈 spinner stops
+(no-op if nothing is claimed):
+
+```bash
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
 ```
 
 This closes the recurring `1 i9 (10) [40]` Todoist task (labels
@@ -163,7 +181,7 @@ Minutes: {weekly_minutes}m ({hours}h {mins}m)
 Points: {weekly_points}分
 Rating: {rating}
 
-Written to i9!row {row} (cols B-F). 1 i9 habit marked done.
+Written to i9!row {row} (cols B, D, E, F; C is a formula). 1 i9 habit marked done.
 ```
 
 ## Notes

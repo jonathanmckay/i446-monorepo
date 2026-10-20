@@ -33,6 +33,11 @@ def jm(tmp_path, monkeypatch):
     # as "no match", same as an empty queue); tests that need a real match
     # write their own file at this path.
     monkeypatch.setattr(mod, "TASK_QUEUE", tmp_path / "task-queue.json")
+    # Never touch the live Neon workbook: build_timeline reads 0分 D plus
+    # the G:O block cells (2026-10-04), each a real ssh round trip from a
+    # dev box. Tests that need values patch excel.read themselves.
+    from neon import excel
+    monkeypatch.setattr(excel, "read", lambda *a, **k: {"ok": False})
     return mod
 
 
@@ -834,3 +839,164 @@ def test_fetch_today_keeps_evening_entry_and_running_timer(jm, monkeypatch):
     expected = {d for d, h, m in (("late", 17, 56), ("live", 18, 29))
                 if dt.datetime.combine(today, dt.time(h, m), jm.TZ) < now}
     assert kept == expected
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-04 batch: tags, free-text project, family teal, hiit 2x, undimmed
+# done rows, per-block Σ分 + -1₦ on dividers
+# ---------------------------------------------------------------------------
+
+def test_family_project_is_teal_like_desktop(jm):
+    assert jm.COLORS["家"] == "#00b8d4"
+
+
+def test_parse_tags_splits_strips_hash_and_dedupes(jm):
+    assert jm._parse_tags("xk87, #-1  其他人 xk87") == ["xk87", "-1", "其他人"]
+    assert jm._parse_tags(["#-2", " out "]) == ["-2", "out"]
+    assert jm._parse_tags("") == []
+
+
+def test_resolve_project_free_text(jm, monkeypatch):
+    monkeypatch.setattr(jm.toggl_api, "get_projects",
+                        lambda: [{"id": 999, "name": "NewThing", "active": True}])
+    assert jm._resolve_project("@xk87") == (jm.PROJECT_MAP["xk87"], "xk87")
+    assert jm._resolve_project("HCBP") == (jm.PROJECT_MAP["hcbp"], "hcbp")
+    assert jm._resolve_project("newthing") == (999, "NewThing")
+    assert jm._resolve_project("typo") == (None, "")
+
+
+def test_edit_entry_sets_tags_and_free_text_project(jm, monkeypatch):
+    e = _raw_entry(jm, 3, 0, 3, 30, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    calls = []
+    monkeypatch.setattr(jm.toggl_api, "update_entry", lambda eid, **f: calls.append(f))
+    r = jm.edit_entry("1", "work", "", "", "Xk87", tags="#-1, xk20")
+    assert r["ok"], r
+    assert calls[0]["tags"] == ["-1", "xk20"]
+    assert calls[0]["project_id"] == jm.PROJECT_MAP["xk87"]
+
+
+def test_edit_entry_without_tags_key_leaves_tags_alone(jm, monkeypatch):
+    e = _raw_entry(jm, 3, 0, 3, 30, eid=1, tags=["keep"])
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    calls = []
+    monkeypatch.setattr(jm.toggl_api, "update_entry", lambda eid, **f: calls.append(f))
+    assert jm.edit_entry("1", "work", "", "", "")["ok"]
+    assert "tags" not in calls[0]
+
+
+def test_edit_entry_rejects_unknown_project(jm, monkeypatch):
+    e = _raw_entry(jm, 3, 0, 3, 30, eid=1)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [e])
+    monkeypatch.setattr(jm.toggl_api, "get_projects", lambda: [])
+    monkeypatch.setattr(jm.toggl_api, "update_entry",
+                        lambda *a, **k: pytest.fail("must not write"))
+    r = jm.edit_entry("1", "work", "", "", "nope")
+    assert not r["ok"] and "unknown project" in r["error"]
+
+
+def test_fill_gap_passes_tags_to_timer_and_entry(jm, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(jm.toggl_api, "start_timer",
+                        lambda d, project_id=None, tags=None, start_time=None:
+                        seen.setdefault("start", (d, project_id, tags)) or {"id": 1})
+    monkeypatch.setattr(jm.toggl_api, "create_entry",
+                        lambda d, s, e, dur, project_id=None, tags=None:
+                        seen.setdefault("create", (d, project_id, tags)) or {"id": 2})
+    assert jm.fill_gap("run @hcbp", "now", "", tags="out, #-1")["ok"]
+    assert seen["start"] == ("run", jm.PROJECT_MAP["hcbp"], ["out", "-1"])
+    assert jm.fill_gap("lunch", "01:00", "01:30", tags=["家"])["ok"]
+    assert seen["create"] == ("lunch", None, ["家"])
+
+
+def test_hiit_and_hit_rows_show_2x_points(jm, monkeypatch):
+    assert jm._habit_rate_points("hiit", 27) == 54
+    assert jm._habit_rate_points("HIT", 27) == 54
+    assert jm._habit_rate_points("work", 27) is None
+
+
+def test_logged_rows_are_not_dimmed(jm):
+    assert ".logged { opacity" not in jm.PAGE
+
+
+def test_block_ritual_scores_skip_future_blocks(jm, monkeypatch, tmp_path):
+    bo = tmp_path / "build-order.md"
+    bo.write_text("## -1₲\n- 卯 ☀️ 📧 ✅ 🎯 ⏱️ 😈\n- 辰 ☀️ 🎯\n- 巳 ☀️ 📧\n## other\n- 午 ☀️\n")
+    monkeypatch.setattr(jm, "BUILD_ORDER", bo)
+    monkeypatch.setattr(jm, "_ritual_pts", lambda: dict(jm._RITUAL_PTS_FALLBACK))
+    now = dt.datetime.combine(dt.date.today(), dt.time(7, 30), jm.TZ)
+    # 卯 all five = 13, 辰 = 4, 巳 (08:00) hasn't started, 午 is outside -1₲
+    assert jm._block_ritual_scores(now) == {"卯": 13, "辰": 4}
+
+
+def test_block_points_read_g_to_o_and_clamp_to_total(jm, monkeypatch):
+    from neon import excel
+    vals = {"G": "75.4", "H": "300", "I": "", "J": "0"}
+    monkeypatch.setattr(excel, "read",
+                        lambda sheet, col, date=None, row=None:
+                        {"ok": True, "value": vals.get(col, "")})
+    assert jm._block_points(dt.date.today(), 200) == {"卯": 75, "辰": 200}
+    assert jm._block_points(dt.date.today(), None) == {}
+
+
+def test_dividers_carry_block_points_and_ritual_score(jm, monkeypatch):
+    now = dt.datetime.now(jm.TZ)
+    if now.hour < 6:
+        pytest.skip("needs the 卯 and 辰 dividers to have been emitted")
+    from neon import excel
+    monkeypatch.setattr(excel, "read",
+                        lambda sheet, col, date=None, row=None:
+                        {"ok": True, "value": {"D": "400", "G": "75"}.get(col, "")})
+    monkeypatch.setattr(jm, "_block_ritual_scores", lambda now: {"卯": 13})
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [])
+    monkeypatch.setattr(jm, "_fetch_events_today", lambda entries: [])
+    tl = jm.build_timeline()
+    divs = {r["block"]: r for r in tl["rows"] if r["type"] == "divider"}
+    assert divs["卯"]["pts"] == 75 and divs["卯"]["n1"] == 13
+    assert divs["辰"]["pts"] is None and divs["辰"]["n1"] is None
+
+
+def test_past_day_view_runs_to_midnight(jm, monkeypatch):
+    """build_timeline(past day) is the view-only back/forward navigation
+    (2026-10-18): is_today False, gaps and dividers run to the day's END
+    (not to now), no untracked banner."""
+    yesterday = dt.datetime.now(jm.TZ).date() - dt.timedelta(days=1)
+    mk = lambda h, m: dt.datetime.combine(yesterday, dt.time(h, m), jm.TZ)
+    e = {"id": "1", "desc": "work", "project": "i9",
+         "color": jm.COLORS.get("i9", jm.DEFAULT_COLOR),
+         "start": mk(7, 0), "end": mk(7, 30), "running": False}
+    monkeypatch.setattr(jm, "_fetch_today", lambda day=None: [e])
+    monkeypatch.setattr(jm, "_fetch_events_today", lambda entries, day=None: [])
+    tl = jm.build_timeline(yesterday)
+    assert tl["is_today"] is False
+    assert tl["date"] == yesterday.isoformat()
+    assert (tl["untracked_since"], tl["untracked_min"]) == (None, None)
+    gaps = [r for r in tl["rows"] if r["type"] == "gap"]
+    assert gaps[-1]["end"] == "00:00", "last gap must run to the day's midnight"
+    divs = [r["label"] for r in tl["rows"] if r["type"] == "divider"]
+    assert divs[-1] == "子 22:00", "every block divider of a finished day shows"
+
+
+def test_today_view_is_today_flag(jm, monkeypatch):
+    e = _entry(jm, 7, 0, 7, 30)
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
+    tl = jm.build_timeline()
+    assert tl["is_today"] is True
+
+
+def test_lite_timeline_skips_calendar_and_neon(jm, monkeypatch):
+    """lite=True (first-paint TTFT, 2026-10-18) must never touch the calendar
+    subprocesses or the Neon reads — Toggl entries + gaps only."""
+    e = _entry(jm, 7, 0, 7, 30)
+    monkeypatch.setattr(jm, "_fetch_today", lambda day=None: [e])
+    def boom(*a, **k):
+        raise AssertionError("lite build must not fetch calendar events")
+    monkeypatch.setattr(jm, "_fetch_events_today", boom)
+    from neon import excel
+    def boom_read(*a, **k):
+        raise AssertionError("lite build must not read Neon")
+    monkeypatch.setattr(excel, "read", boom_read)
+    tl = jm.build_timeline(lite=True)
+    assert tl["lite"] is True and tl["points"] is None
+    assert any(r["type"] == "entry" for r in tl["rows"])
+    assert all(r.get("pts") is None for r in tl["rows"] if r["type"] == "divider")

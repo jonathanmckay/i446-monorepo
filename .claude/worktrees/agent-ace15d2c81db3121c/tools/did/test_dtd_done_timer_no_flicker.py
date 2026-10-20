@@ -37,14 +37,14 @@ def _done_body() -> str:
 
 def test_timer_clear_is_no_longer_unconditional():
     body = _done_body()
-    assert ': > "\\$TIMER"' not in body.split(
-        '_timer_id=\\$(cut -f3 "\\$TIMER"'
-    )[0], "the OLD unconditional clear (before the id guard) must be gone"
+    # 2026-10-03: the guard now reads the timer file with a builtin (was `cut -f3`)
+    guard_anchor = '_tline=""; [[ -r "\\$TIMER" ]]' if '_tline=""; [[ -r "\\$TIMER" ]]' in body else '_timer_id=\\$(cut -f3 "\\$TIMER"'
+    assert ': > "\\$TIMER"' not in body.split(guard_anchor)[0], "the OLD unconditional clear (before the id guard) must be gone"
 
 
 def test_timer_clear_is_gated_on_matching_the_running_entry():
     body = _done_body()
-    assert '_timer_id=\\$(cut -f3 "\\$TIMER"' in body
+    assert ('_timer_id="\\${_tf[3]}"' in body) or ('_timer_id=\\$(cut -f3 "\\$TIMER"' in body)
     assert '"\\$_timer_id" == "\\$1"' in body, \
         "must compare the timer file's task-id field against the completed task's id"
     assert '"\\$_timer_desc" == "\\$clean_lower"' in body, \
@@ -55,7 +55,7 @@ def test_timer_clear_is_gated_on_matching_the_running_entry():
 
 def _timer_guard_snippet() -> str:
     start_anchor = ('printf \'%s\\tdone\\t%s\\t%s\\n\' '
-                     '"\\$(date +%Y-%m-%dT%H:%M:%S)" "\\$1" "\\$clean" >> "\\$PUSHED.log"')
+                     '"\\$_now" "\\$1" "\\$clean" >> "\\$PUSHED.log"')   # 2026-10-03: strftime builtin, was $(date ...)
     end_anchor = 'echo "\N{HOURGLASS WITH FLOWING SAND} completing: \\$clean_for_filter" > "\\$HDR"'
     body = _done_body()
     start = body.index(start_anchor) + len(start_anchor)

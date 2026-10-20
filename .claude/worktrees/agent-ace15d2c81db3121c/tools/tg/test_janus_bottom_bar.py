@@ -62,3 +62,29 @@ def test_idle_bottom_bar_shows_no_timer(monkeypatch):
     m.STATE.current = None
     line = _flat(m.render_current_bottom())
     assert "(no timer)" in line and "14:30:00" in line
+
+
+def test_past_day_view_badges_the_pinned_bar(monkeypatch):
+    """Bug 2026-10-12: "I can't see time from 卯 in today's janus". After
+    Ctrl+← to fill in yesterday, the whole-day view is tall enough that the
+    header's ◀ badge scrolls off the top, and the pinned bar (always visible)
+    gave no hint, so yesterday read as today. The bar must name the viewed day."""
+    m = _load_tui()
+    now = dtm.datetime(2026, 10, 12, 6, 15, 0, tzinfo=m.TZ)
+
+    class _DT(dtm.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(m.dt, "datetime", _DT)
+    monkeypatch.setattr(m, "_live_width", lambda: 60)
+    for cur in ({"description": "to mom's by 8", "start": "2026-10-12T13:10:00+00:00",
+                 "project_id": None}, None):
+        m.STATE.current = cur
+        m.STATE.day_offset = -1
+        line = _flat(m.render_current_bottom())
+        assert "◀ Sun 10/11" in line and "06:15:00" in line, line
+        assert m.dwidth(line.rstrip("\n")) <= 60, line
+        m.STATE.day_offset = 0
+        assert "◀" not in _flat(m.render_current_bottom())

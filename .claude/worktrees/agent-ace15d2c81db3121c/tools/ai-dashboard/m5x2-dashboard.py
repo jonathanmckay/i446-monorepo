@@ -943,6 +943,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <h1>m5x2 AI Dashboard</h1>
+        <p style="margin:-4px 0 18px;font-size:13px;"><a href="http://ix:5558" style="color:inherit;opacity:.75;">personal</a> &middot; <a href="http://ix:5558/jmreads" style="color:inherit;opacity:.75;">jmreads</a> &middot; <a href="http://ix:5555" style="color:inherit;opacity:.75;">jm-ai-dash</a></p>
         <p class="subtitle">Claude Code Usage &mdash; McKay Capital</p>
 
         {% set stale = freshness | selectattr('level', 'in', ['warn','stale','missing']) | list %}

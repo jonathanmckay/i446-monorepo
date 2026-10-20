@@ -1,8 +1,9 @@
 """Passive media-use audit for /0t.
 
 Compares what the passive trackers saw (ActivityWatch on Straylight; Apple
-Screen Time's cross-device store on Ix, once its remote-user FDA + sharing
-are on) against what Toggl says was media time (hcmc/hcmc2), for one local day.
+Screen Time's cross-device store on Ix if it is ever readable, silently
+skipped otherwise) against what Toggl says was media time (hcmc/hcmc2), for
+one local day.
 The interesting output is the gap: passive media minutes with no corresponding
 Toggl entry — the honesty signal the points system runs on.
 
@@ -85,6 +86,13 @@ MEDIA_BUNDLES = {
 
 # Toggl media projects (hcmc, hcmc2)
 MEDIA_PROJECT_IDS = {109932707, 108359992}
+# Media value tags. Negative tags (-1/-2/-3) earn 媒分; positive tags (1/2/3)
+# mark junk consumption (youtube/starcraft → hcmc2 #2). Every site the
+# passive trackers watch is junk: it should be logged as hcmc #1, never #-1.
+JUNK_TAGS = {"1", "2", "3"}
+# Labels that are NOT junk get their own category, reported separately and
+# left out of the junk highlight. Everything unlisted is "junk".
+LABEL_CATEGORY = {"Economist": "economist"}
 
 
 
@@ -257,11 +265,16 @@ def media_minutes_from_screentime(day: date) -> dict | None:
     """Per-label media minutes from the Screen Time cross-device store ON IX.
 
     Straylight is Intune-managed (TCC/Screen Time policy-locked), so the sync
-    target is Ix — personal, un-enrolled, already /0t's ssh workhorse. Requires
-    on Ix: Remote Login's "allow full disk access for remote users" + Screen
-    Time App & Website Activity + Share Across Devices (and on the iPhone).
-    Returns None when unreadable/absent. Schema per DFIR documentation of
-    RMAdminStore (USAGE tables) — treat failures as absence.
+    target is Ix — personal, un-enrolled, already /0t's ssh workhorse.
+
+    DEAD END (verified 2026-10-19): on macOS 26.5 the com.apple.ScreenTimeAgent
+    folder under DARWIN_USER_DIR is a SIP data vault. With Remote Login's
+    "allow full disk access for remote users" ON (Safari/Mail/Messages read
+    fine over ssh) it still returns EPERM, and sudo would not help either.
+    Only SIP-off or Apple-entitled processes can open it. Left in place so it
+    works if that ever changes; until then this source is always None and
+    phone/iPad media time is not audited.
+    Schema per DFIR documentation of RMAdminStore (USAGE tables).
     """
     apple = 978307200  # 2001-01-01 epoch offset
     lo = int(datetime.combine(day, datetime.min.time(), tzinfo=_local_tz()).timestamp()) - apple
@@ -306,6 +319,54 @@ def toggl_media_minutes(entries: list, day: date,
     return total
 
 
+def toggl_junk_minutes(entries: list, day: date, entry_local_dt) -> int:
+    """Minutes of Toggl hcmc/hcmc2 entries tagged with a positive (junk) value
+    tag that STARTED on the local day."""
+    total = 0
+    for e in entries:
+        if e.get("project_id") not in MEDIA_PROJECT_IDS:
+            continue
+        if not JUNK_TAGS & set(e.get("tags") or []):
+            continue
+        ldt = entry_local_dt(e)
+        if ldt is None or ldt.date() != day:
+            continue
+        dur = e.get("duration", 0)
+        if dur > 0:
+            total += dur // 60
+    return total
+
+
+def categorize(passive: dict) -> dict[str, dict]:
+    """Split passive per-label minutes into categories (junk unless listed in
+    LABEL_CATEGORY)."""
+    out: dict[str, dict] = {}
+    for label, mins in passive.items():
+        out.setdefault(LABEL_CATEGORY.get(label, "junk"), {})[label] = mins
+    return out
+
+
+def junk_sites_report(passive: dict, junk_logged: int) -> dict:
+    """Highlight for the /0t report: any passive minutes on the junk sites
+    belong in an hcmc #1 entry, not a credited #-1 one. Non-junk categories
+    (e.g. economist) are excluded; see LABEL_CATEGORY."""
+    passive = categorize(passive).get("junk", {})
+    passive_total = round(sum(passive.values()))
+    unlogged = max(0, passive_total - junk_logged)
+    sites = ", ".join(f"{k} {round(v)}m" for k, v in
+                      sorted(passive.items(), key=lambda kv: -kv[1]) if round(v) > 0)
+    out = {
+        "passive_min": passive_total,
+        "logged_as_junk_min": junk_logged,
+        "unlogged_min": unlogged,
+        "highlight": passive_total >= 1,
+    }
+    if out["highlight"]:
+        out["message"] = (f"{passive_total} min on {sites}: log as hcmc #1, not #-1 "
+                          f"({junk_logged} min logged with a junk tag; {unlogged} min unaccounted)")
+    return out
+
+
 def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
     """The /0t step: passive vs Toggl media minutes for one local day."""
     notes = []
@@ -315,9 +376,9 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
     aww = media_minutes_from_aw_web(day)
     if aww is None:
         notes.append("aw-watcher-web bucket missing (Chrome extension not installed/reporting)")
+    # Unreadable Screen Time is silent by design (2026-10-19): JM never uses
+    # the Ix GUI, so its store says nothing about his phone/iPad time anyway.
     st = media_minutes_from_screentime(day)
-    if st is None:
-        notes.append("Screen Time store on Ix unreadable (needs Ix remote-user FDA + Share Across Devices)")
 
     # Merge sources per label, taking the max per source-label (they overlap
     # only if the same app is measured twice, e.g. desktop YouTube in both
@@ -336,6 +397,10 @@ def media_audit(day: date, toggl_entries: list, entry_local_dt) -> dict:
         "toggl_media_min": toggl_total,
         "gap_min": gap,
         "flagged": gap > MEDIA_GAP_THRESHOLD_MIN,
+        "junk_sites": junk_sites_report(
+            passive, toggl_junk_minutes(toggl_entries, day, entry_local_dt)),
+        "categories": {cat: round(sum(v.values()), 1)
+                       for cat, v in categorize(passive).items()},
     }
     if notes:
         result["notes"] = notes

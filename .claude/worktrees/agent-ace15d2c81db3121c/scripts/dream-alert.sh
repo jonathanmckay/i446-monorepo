@@ -9,7 +9,7 @@
 #
 # Side effects:
 #   - appends JSON line to ~/vault/z_ibx/alerts.jsonl (durable)
-#   - writes ~/vault/i447/i446/dream-runs/<latest>/FAILED marker (so the
+#   - writes ~/vault/i447/i446/.dream-runs/<latest>/FAILED marker (so the
 #     personal dashboard can show a red banner instead of a stale READY)
 #   - fires osascript notification (best-effort; silent in headless cron)
 #
@@ -43,7 +43,7 @@ print(line)
 ' "$NOW" "$HOST" "$REASON" "$DETAIL" >> "$ALERTS"
 
 # 2. FAILED marker in the current run dir, if we can find one.
-DREAM_RUNS="$HOME/vault/i447/i446/dream-runs"
+DREAM_RUNS="$HOME/vault/i447/i446/.dream-runs"
 LATEST_RUN=$(ls -dt "$DREAM_RUNS"/2*-v* 2>/dev/null | head -1 || true)
 if [[ -n "$LATEST_RUN" && -d "$LATEST_RUN" ]]; then
   cat > "$LATEST_RUN/FAILED" <<EOF

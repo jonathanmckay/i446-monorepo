@@ -17,7 +17,7 @@ html/url->Chrome).
 import subprocess, sys, os
 
 VAULT = os.path.expanduser("~/vault")
-JUNK = ("/.stversions/", "/ai-transcripts/", "/dream-runs/", "/.trash/",
+JUNK = ("/.stversions/", "/.ai-transcripts/", "/.dream-runs/", "/.trash/",
         "/z_old/", "/readwise/", "/.git/", "/node_modules/")
 
 

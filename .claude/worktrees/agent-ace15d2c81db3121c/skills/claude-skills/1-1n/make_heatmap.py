@@ -134,19 +134,33 @@ def add_goals(grid, start, end):
 # ---------- Todoist completed -> ✓ ----------
 def add_todoist(grid, start, end):
     token = '7eb82f47aba8b334769351368e4e3e3284f980e5'
-    since = start.isoformat()+'T00:00:00Z'
-    until = (end+dt.timedelta(days=1)).isoformat()+'T00:00:00Z'
-    url = (f'https://api.todoist.com/api/v1/tasks/completed'
-           f'?since={since}&until={until}&limit=200')
-    items = []
-    while url:
-        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            d = json.loads(resp.read().decode())
-        items.extend(d.get('items', []))
-        nxt = d.get('next_cursor')
+    # One query PER DAY (2026-10-05): the endpoint returns at most 200 items
+    # for the whole since/until window and no next_cursor, so a busy week came
+    # back as only its newest ~3 days and the early days showed no ✓ at all.
+    # Day windows are padded by a day each side (UTC vs PT) and de-duplicated
+    # by id; the PT-day filter below keeps only the requested range.
+    items, seen = [], set()
+    day = start - dt.timedelta(days=1)
+    while day <= end + dt.timedelta(days=1):
+        since = day.isoformat()+'T00:00:00Z'
+        until = (day+dt.timedelta(days=1)).isoformat()+'T00:00:00Z'
         url = (f'https://api.todoist.com/api/v1/tasks/completed'
-               f'?since={since}&until={until}&limit=200&cursor={nxt}') if nxt else None
+               f'?since={since}&until={until}&limit=200')
+        while url:
+            req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                d = json.loads(resp.read().decode())
+            for it in d.get('items', []):
+                key = (it.get('id') or it.get('task_id'), it.get('completed_at'))
+                if key not in seen:
+                    seen.add(key)
+                    items.append(it)
+            nxt = d.get('next_cursor')
+            url = (f'https://api.todoist.com/api/v1/tasks/completed'
+                   f'?since={since}&until={until}&limit=200&cursor={nxt}') if nxt else None
+        if len(d.get('items', [])) >= 200:
+            sys.stderr.write(f'warning: {day} hit the 200-item cap; ✓ may undercount\n')
+        day += dt.timedelta(days=1)
     for it in items:
         ca = it.get('completed_at')
         if not ca: continue

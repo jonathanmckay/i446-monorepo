@@ -8,6 +8,17 @@
 # (too noisy for cron) — run manually after restarts/deploys:
 #   python3 "$(dirname "$0")/test_smoke.py"
 
+# One run at a time (2026-10-11): at */2 on Straylight a run outlasted the
+# interval, so copies stacked up and kept the machine loaded. mkdir is atomic;
+# a lock whose pid is gone is stale and gets taken over.
+LOCK="${TMPDIR:-/tmp}/periodic-sync.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  if kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then exit 0; fi
+  rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || exit 0
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+
 REPO_DIR="$HOME/m5x2-ai-stats"
 USER_ID="${M5X2_USER_ID:-jm}"
 STATS_FILE="$HOME/.claude/stats-cache.json"

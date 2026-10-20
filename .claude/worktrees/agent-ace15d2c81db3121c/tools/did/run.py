@@ -38,13 +38,15 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 
 from neon import excel  # noqa: E402
+from neon import weeks  # noqa: E402
+from neon import rates  # noqa: E402
 import registry  # noqa: E402
 import todoist  # noqa: E402
 
@@ -249,15 +251,17 @@ def _minutes_from_time_range(tr: tuple[str, str]) -> int:
     return (eh * 60 + em) - (sh * 60 + sm)
 
 
-def _auto_detect_minutes(toggl_desc: str, project_code: str) -> int:
-    """Sum today's Toggl entries matching desc OR project. Default 1."""
+def _auto_detect_minutes(toggl_desc: str, project_code: str, default: int = 1) -> int:
+    """Sum today's Toggl entries matching desc OR project. `default` (1)
+    when nothing matches or Toggl fails; pass default=0 to tell "no match"
+    apart from a real 1-minute entry."""
     try:
         r = subprocess.run(
             ["python3", str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"), "today"],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode != 0:
-            return 1
+            return default
         # Parse "today" output — best-effort grep for matching descriptions
         total = 0
         for line in r.stdout.splitlines():
@@ -269,9 +273,9 @@ def _auto_detect_minutes(toggl_desc: str, project_code: str) -> int:
                         total += int(m.group(1)) * 60 + int(m.group(2))
                     elif m.group(3):
                         total += int(m.group(3))
-        return max(total, 1)
+        return max(total, 1) if total else default
     except Exception:
-        return 1
+        return default
 
 
 def _append_completed(name: str, task_id: str | None = None) -> None:
@@ -331,12 +335,29 @@ def _word_overlap(query: str, content: str) -> float:
     return len(qt & ct) / len(qt)
 
 
-def _find_and_close_todoist(label: str, query: str, aliases: list) -> tuple[str | None, str | None]:
+# Mirrors did-fast.py's ADVANCE_ALLOWED: daily habits that may be completed
+# one day early (their card may be due tomorrow when closed).
+ADVANCE_ALLOWED_0N = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
+
+
+class AlreadyDoneThisPeriod(Exception):
+    """The matched recurring card's due date is past the period being credited:
+    it was already closed for that period and rolled forward."""
+
+
+def _find_and_close_todoist(label: str, query: str, aliases: list,
+                            not_due_after: Optional[date] = None) -> tuple[str | None, str | None]:
     """Find best-matching open task by word overlap. Close it.
 
     Return (task content, task id) — both None if no match/close. The id is
     needed by callers to record completed-today's id map (see _append_completed),
     which is how dtd suppresses a just-closed card before the next cache refresh.
+
+    not_due_after: raise AlreadyDoneThisPeriod instead of closing when the
+    match is due after this date. Bug 2026-09-21: three /1-2g runs each ended
+    in `/did 1 -2g`, and each one closed the weekly card again — it rolled
+    9/28 → 10/5 → 10/12 and vanished from the 10/5 list, with +20 credited
+    three times. did-fast's future-due guard never ran on this path.
     """
     candidates = todoist.find_tasks(labels=[label], limit=100)
     best = None
@@ -348,6 +369,9 @@ def _find_and_close_todoist(label: str, query: str, aliases: list) -> tuple[str 
             if score > best_score:
                 best, best_score = t, score
     if best and best_score >= 0.6:
+        due = ((best.get("due") or {}).get("date") or "")[:10]
+        if not_due_after and due and due > not_due_after.isoformat():
+            raise AlreadyDoneThisPeriod(f"{best.get('content')} (next due {due})")
         try:
             todoist.close_task(best["id"])
             _drop_from_queue(best["id"])
@@ -361,21 +385,24 @@ IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "Neon分v12.2.xlsx"
 
 
-def _calc_mw(target_date: str) -> tuple[float, int]:
-    """target_date 'M/D' → (M.W, week_row in 1n+)."""
+def _target_date_obj(target_date: str) -> date:
+    """'M/D' → date; a target over 180 days ahead means last year."""
     n = datetime.now()
     m, d = (int(x) for x in target_date.split("/"))
-    year = n.year
-    target = datetime(year, m, d)
-    # If target is in the future relative to current month/day, use prev year
+    target = datetime(n.year, m, d)
     if target > n + timedelta(days=180):
-        target = datetime(year - 1, m, d)
-    # weekday(): Mon=0..Sun=6
-    sunday = target - timedelta(days=(target.weekday() + 1) % 7)
-    M = sunday.month
-    W = (sunday.day - 1) // 7 + 1
-    mw = float(f"{M}.{W}")
-    week_str = f"{M}.{W}"
+        target = datetime(n.year - 1, m, d)
+    return target.date()
+
+
+def _calc_mw(target_date: str) -> tuple[float, int]:
+    """target_date 'M/D' → (M.W, week_row in 1n+)."""
+    target = _target_date_obj(target_date)
+    # 2026-10-01 fix: 1n+ col B is a 4-4-5 fiscal-week ladder, not calendar
+    # week-of-month (see lib/neon/weeks.py). The old "(sunday.day-1)//7+1"
+    # put every write from 2026-08-30 on one row above its real week.
+    week_str = weeks.fiscal_week_label(target)
+    mw = float(week_str)
     # Single server-side scan (2026-08-09 fix): this used to call
     # excel.read("1n+", "B", row=r) once PER row in a client-side loop over
     # rows 4-59 -- up to 56 sequential network round trips, each individually
@@ -540,8 +567,22 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
         except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
             print(f"  · night hcmc toggl: error ({e})", file=sys.stderr)
 
-    # Close Todoist
-    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "0neon", name, d.get("aliases", []))
+    # Close Todoist -- but never a card that already rolled past the credited
+    # day: it was closed for that day already, and closing again advances an
+    # "every day" recurrence one more day, so the habit drops off dtd the next
+    # morning (bug 2026-10-06: 0g reached due 10/07 on 10/06, unmarked). Same
+    # guard as run_1n's not_due_after and did-fast's future-due skip, including
+    # did-fast's one-day ADVANCE_ALLOWED exception.
+    credit_day = _target_date_obj(target_date)
+    if name.lower() in ADVANCE_ALLOWED_0N:
+        credit_day += timedelta(days=1)
+    try:
+        closed, closed_id = _find_and_close_todoist(
+            d.get("todoist_label") or "0neon", name, d.get("aliases", []),
+            not_due_after=credit_day)
+    except AlreadyDoneThisPeriod as e:
+        print(f"  = {name} card already closed for today: {e}; left alone")
+        closed, closed_id = None, None
 
     # Toggl entry if time range
     if time_range:
@@ -597,6 +638,18 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         print(f"  ✗ M.W lookup failed: {e}", file=sys.stderr)
         return 1
 
+    # Close BEFORE crediting: a card already rolled past this Sun-Sat week
+    # means the habit is done for the week, so nothing may be written.
+    # Closing early within the week (Thursday's card on Monday) stays allowed.
+    week_sat = weeks.week_sunday(_target_date_obj(target_date)) + timedelta(days=6)
+    try:
+        closed, closed_id = _find_and_close_todoist(
+            d.get("todoist_label") or "1neon", name, d.get("aliases", []),
+            not_due_after=week_sat)
+    except AlreadyDoneThisPeriod as e:
+        print(f"  = {name} already done this week: {e}; no credit, card left alone")
+        return 0
+
     toggl = d.get("toggl") or {}
     # Compute minutes — explicit > time range > Toggl auto-detect > 1 (same
     # priority as run_0n). Bug 2026-08-11: this previously ignored time_range
@@ -610,6 +663,9 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         minutes = _minutes_from_time_range(time_range)
     else:
         minutes = _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", "")) or 1
+    minutes_known = (explicit_minutes is not None or bool(time_range)
+                     or _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", ""),
+                                             default=0) > 0)
 
     inc = d.get("cumulative_increment")
     if inc:
@@ -628,19 +684,28 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         else:
             points = inc
     else:
-        excel.write("1n+", col, row=week_row, value=str(minutes))
         row5 = excel.read("1n+", col, row=5)
-        try:
-            points = int(float(row5.get("value", 0) or 0))
-        except (TypeError, ValueError):
-            points = 0
+        row5_val = row5.get("value", 0)
+        if rates.parse_rate(row5_val) is not None:
+            # Row 5 is a per-minute RATE ("1/m"), not points (bug 2026-10-03):
+            # points = rate applied to the minutes, so the minutes must be
+            # real. With none typed and no Toggl match, defer to the /did
+            # agent (exit 2) so it asks, instead of silently assuming 1.
+            if not minutes_known:
+                print(f"  → {name}: how many minutes? (row 5 is a rate, {row5_val}); "
+                      f"deferring to /did agent", file=sys.stderr)
+                return 2
+            points = rates.rate_points(row5_val, minutes)
+        else:
+            try:
+                points = int(float(row5_val or 0))
+            except (TypeError, ValueError):
+                points = 0
+        excel.write("1n+", col, row=week_row, value=str(minutes))
 
     # Append the points to today's 0分 domain column
     if fen_col and points:
         excel.append("0分", fen_col, date=target_date, value=f"+{points}", src=f"1n {name}")
-
-    # Close 1neon Todoist
-    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
 
     # Toggl entry if time range (same as run_0n)
     if time_range and toggl.get("desc"):

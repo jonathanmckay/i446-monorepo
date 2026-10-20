@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -34,6 +35,22 @@ RATE = float(os.environ.get("TOGGL_THROTTLE_RATE", "1.0"))        # tokens per s
 BURST = float(os.environ.get("TOGGL_THROTTLE_BURST", "3.0"))      # bucket capacity
 MAX_WAIT = float(os.environ.get("TOGGL_THROTTLE_MAX_WAIT", "8.0"))  # never block longer
 COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_COOLDOWN", "60.0"))  # after a 402/429
+# Toggl's free-tier HOURLY cap says exactly how long it lasts ("Your quota will
+# reset in 653 seconds"). Honouring that beats the 60s default, which had every
+# poller re-trip the cap once a minute for the rest of the hour (2026-10-16).
+MAX_COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_MAX_COOLDOWN", "3600.0"))
+RESET_MARGIN = 5.0  # s past the server's reset estimate before the first retry
+_RESET_RE = re.compile(r"reset in (\d+) seconds", re.IGNORECASE)
+
+
+def parse_reset_seconds(body: str | bytes | None) -> float | None:
+    """Seconds until the quota resets, from a 402 body; None when absent."""
+    if not body:
+        return None
+    if isinstance(body, bytes):
+        body = body.decode("utf-8", "replace")
+    m = _RESET_RE.search(body)
+    return float(m.group(1)) if m else None
 
 
 def _load(fh) -> dict:
@@ -126,6 +143,27 @@ def cooling_down() -> bool:
         return time.time() < float(d.get("cooldown_until", 0.0))
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return False
+
+
+def cooldown_remaining() -> float:
+    """Seconds left on the shared post-402 cooldown (0.0 when clear)."""
+    if fcntl is None:
+        return 0.0
+    try:
+        d = json.loads(STATE.read_text())
+        return max(0.0, float(d.get("cooldown_until", 0.0)) - time.time())
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return 0.0
+
+
+def note_quota_reset(estimate: float | None) -> None:
+    """Back off for the server's own reset estimate (the hourly-cap 402 body,
+    see parse_reset_seconds), padded by RESET_MARGIN, never below the default
+    COOLDOWN and never above MAX_COOLDOWN. None = no estimate: the default."""
+    if estimate is None:
+        note_rate_limit()
+    else:
+        note_rate_limit(min(MAX_COOLDOWN, max(COOLDOWN, estimate + RESET_MARGIN)))
 
 
 def note_rate_limit(seconds: float | None = None) -> None:

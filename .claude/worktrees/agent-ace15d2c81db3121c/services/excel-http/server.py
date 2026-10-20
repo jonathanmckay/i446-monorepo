@@ -8,12 +8,14 @@ warms up after a few hits).
 
 Endpoints (POST JSON bodies):
 
-  POST /append   {sheet, col, date, value, src?}  # value like "+10" or "+'1n+'!S20"
+  POST /append   {sheet, col, date, value, src?, idem?}  # value like "+10" or "+'1n+'!S20"
   POST /write    {sheet, col, date|row, value, src?}  # set cell to value (literal or =formula)
   POST /read     {sheet, col, date|row}           # → {value, formula}
   POST /lookup   {sheet, date}                    # → {row}
   POST /batch    {sheet, date|row, appends:[{col,value,src?}], src?}  # N appends, one row lookup
   POST /ack      {sheet, col, date|row, note}     # bless the cell's CURRENT formula as the new ledger baseline
+  POST /reconcile {sheet, date|row, cols:[...]}   # journal outside (Excel) edits as source 3p-app
+  POST /observe  {sheet, ts, cells:[...]}          # manual edits from the Neon audit macro (no Excel call)
   GET  /health                                    # → {ok: true, version}
 
 Sheet date-column resolution is hardcoded to match neon-cols.json:
@@ -35,7 +37,9 @@ poison history. /ack (with a mandatory note) blesses a deliberate manual edit.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -45,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.0"
+VERSION = "1.8.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -64,8 +68,26 @@ DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
 
 LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
 LEDGER_LOCK = threading.Lock()
+# Neon-off-Excel step 1 (2026-10-19): every journaled entry is ALSO recorded
+# in the semantic SQLite ledger (lib/neon/ledger.py, ~/.local/share/neon).
+# Guarded import: a broken ledger module must never take the daemon down,
+# but the failure is loud (stderr + /health "ledger" field) so a silently
+# disabled double-write can't go unnoticed.
+_REPO_LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib")
+sys.path.insert(0, os.path.normpath(_REPO_LIB))
+try:
+    from neon import ledger as neon_ledger  # noqa: E402
+    LEDGER_DB_STATE: dict = {"ok": True, "db": str(neon_ledger.DB_PATH), "errors": 0}
+except Exception as _e:  # pragma: no cover - import environment
+    neon_ledger = None
+    LEDGER_DB_STATE = {"ok": False, "error": f"{type(_e).__name__}: {_e}", "errors": 0}
+    sys.stderr.write(f"semantic ledger import failed: {_e}\n")
 # (sheet, col, anchor) → last after_formula the ledger recorded for that cell.
 CHAIN_INDEX: dict[tuple[str, str, str], str] = {}
+# idem key → after-formula of the append that first carried it. A caller that
+# can be killed after its write lands (did-fast's 60s watchdog) and is then
+# retried by dtd sends the same key again; see idem_dup().
+IDEM_INDEX: dict[str, str] = {}
 
 
 # ── Ledger ────────────────────────────────────────────────────────────────────
@@ -109,11 +131,14 @@ def seed_chain_index() -> None:
     now = datetime.datetime.now()
     prev = (now.replace(day=1) - datetime.timedelta(days=1))
     CHAIN_INDEX.clear()
+    IDEM_INDEX.clear()
     for p in (ledger_path(prev), ledger_path(now)):
         for e in iter_ledger(p):
             after = e.get("after")
             if after is not None:
                 CHAIN_INDEX[entry_key(e)] = after
+                if e.get("idem"):
+                    IDEM_INDEX[e["idem"]] = after
 
 
 def check_chain(key: tuple[str, str, str], before: str) -> tuple[str, str | None]:
@@ -141,16 +166,96 @@ def journal(entry: dict) -> None:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         if entry.get("after") is not None:
             CHAIN_INDEX[entry_key(entry)] = entry["after"]
+            if entry.get("idem"):
+                IDEM_INDEX[entry["idem"]] = entry["after"]
     except Exception as e:
         sys.stderr.write(f"ledger journal failed: {e}\n")
+    double_write(entry)
+
+
+def double_write(entry: dict) -> None:
+    """Mirror a journaled entry into the semantic SQLite ledger. Runs after
+    the Excel write and the JSONL append have both landed, so it can only
+    ever log — a DB hiccup must not turn an already-applied write into a
+    500 (the caller would retry and double-credit)."""
+    if neon_ledger is None:
+        return
+    try:
+        neon_ledger.record(entry)
+    except Exception as e:
+        LEDGER_DB_STATE["errors"] = LEDGER_DB_STATE.get("errors", 0) + 1
+        LEDGER_DB_STATE["last_error"] = f"{type(e).__name__}: {e}"
+        sys.stderr.write(f"semantic ledger write failed: {e}\n")
+
+
+QUIET_LOCK = "/tmp/neon-osa-quiet.lock"  # shared with scripts/neon-osa-quiet.sh
+_EVENTS = 'tell application "Microsoft Excel" to set enable events to {}'
+
+
+def _is_write(script: str) -> bool:
+    return "set value" in script or "set formula" in script
+
+
+@contextlib.contextmanager
+def quiet_excel():
+    """Excel events off for a pipeline write, so the Neon audit macro (VBA
+    SheetChange) only logs edits made in Excel itself. Holds the same lock as
+    scripts/neon-osa-quiet.sh so no other writer can re-enable events
+    mid-write, and re-enables from Python even if osascript is killed."""
+    with open(QUIET_LOCK, "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["osascript", "-e", _EVENTS.format("false")],
+                           capture_output=True, timeout=TIMEOUT)
+            yield
+        finally:
+            subprocess.run(["osascript", "-e", _EVENTS.format("true")],
+                           capture_output=True, timeout=TIMEOUT)
+            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 def osascript(script: str) -> tuple[int, str, str]:
-    r = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True, text=True, timeout=TIMEOUT,
-    )
+    ctx = quiet_excel() if _is_write(script) else contextlib.nullcontext()
+    with ctx:
+        r = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=TIMEOUT,
+        )
     return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+# Neon audit macro liveness, reported on /health. last_ping comes from the
+# watchdog's `run VB macro "NeonAuditPing"` round trip.
+MACRO_STATE: dict[str, str | None] = {"last_ping": None, "last_observe": None}
+MACRO_INSTALLED = os.path.expanduser("~/.config/neon-audit/installed")
+
+
+def ping_macro() -> None:
+    """Re-arm the audit macro (a VBA reset leaves it dead) and have it ping
+    back through /observe, proving the whole Excel → AppleScriptTask → curl
+    path works. Gated on MACRO_INSTALLED: calling a macro Excel doesn't have
+    can raise a modal error dialog, which would wedge every write."""
+    if not os.path.exists(MACRO_INSTALLED):
+        return
+    subprocess.run(["osascript", "-e",
+                    'tell application "Microsoft Excel" to run VB macro "NeonAuditPing"'],
+                   capture_output=True, timeout=TIMEOUT)
+
+
+def ensure_events_on() -> None:
+    """Watchdog: a writer killed mid-write (or a crash) can leave Excel events
+    off for the whole app, silently disabling the audit macro. Re-enable under
+    the writer lock so it can't fire in the middle of someone's quiet write."""
+    try:
+        with open(QUIET_LOCK, "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                subprocess.run(["osascript", "-e", _EVENTS.format("true")],
+                               capture_output=True, timeout=TIMEOUT)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+    except Exception as e:
+        sys.stderr.write(f"ensure_events_on: {e}\n")
 
 
 def save_workbook() -> tuple[int, str, str]:
@@ -169,6 +274,11 @@ def save_loop() -> None:
         time.sleep(SAVE_INTERVAL)
         with EXCEL_LOCK:
             rc, _, err = save_workbook()
+            ensure_events_on()
+            try:
+                ping_macro()
+            except Exception as e:
+                sys.stderr.write(f"ping_macro: {e}\n")
         if rc != 0:
             sys.stderr.write(f"save_loop: save failed: {err}\n")
 
@@ -301,19 +411,37 @@ def cell_addr(req: dict) -> tuple[str, int] | None:
 
 
 def _journal_and_respond(kind: str, req: dict, row: int,
-                         before: str, value: str, formula: str) -> dict:
+                         before: str, value: str, formula: str,
+                         before_value: str | None = None) -> dict:
     """Common post-write path: chain-check the observed before-formula,
     journal the entry, and build the response."""
     sheet, col = req["sheet"], req["col"]
     date = req.get("date")
     key = chain_key(sheet, col, date, row)
     state, expected = check_chain(key, before)
+    if state != "ok":
+        # The cell may have last been written under its other key (ritual
+        # -1n writes are row-addressed, did-fast date-addressed): judge it
+        # against the newest entry across both keys.
+        last = latest_entry(sheet, col, date, row)
+        if last is not None:
+            if last.get("after") == before:
+                state, expected = "ok", None
+            else:
+                state, expected = "broken", last.get("after")
     entry = {
         "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "kind": kind, "sheet": sheet, "col": col, "row": row, "date": date,
         "value": str(req.get("value", "")), "before": before, "after": formula,
         "after_value": value, "src": req.get("src"), "chain": state,
     }
+    if before_value is not None:
+        # With the previous entry's after_value, a broken chain's
+        # before_value - expected value is the outside (Excel) edit in points.
+        entry["before_value"] = before_value
+    for k in ("source", "via", "idem"):  # source/via: JM Dash dimension (lib/jmsource)
+        if req.get(k):
+            entry[k] = req[k]
     if state == "broken":
         entry["chain_expected"] = expected
     journal(entry)
@@ -344,7 +472,9 @@ def do_batch(req: dict) -> dict:
     for item in appends:
         sub = {"sheet": sheet, "col": item.get("col"), "row": row,
                "date": req.get("date"), "value": item.get("value"),
-               "src": item.get("src") or req.get("src")}
+               "idem": item.get("idem"),
+               "src": item.get("src") or req.get("src"),
+               "source": req.get("source"), "via": req.get("via")}
         if not sub["col"]:
             results.append({"ok": False, "error": "missing_col"})
             continue
@@ -355,6 +485,91 @@ def do_batch(req: dict) -> dict:
     if broken:
         out["chain_broken_cols"] = broken
     return out
+
+
+def _as_setter(value) -> str:
+    """AppleScript RHS + setter for a /batch_write value: JSON numbers land as
+    numbers (0n habit marks: 1, minutes, HHMM), "=..." as formulas, anything
+    else as a quoted string."""
+    if isinstance(value, bool):
+        return f'set value of theCell to {str(value).lower()}'
+    if isinstance(value, (int, float)):
+        return f'set value of theCell to {value}'
+    sval = str(value)
+    if sval.startswith("="):
+        return f'set formula of theCell to "{safe_str(sval)}"'
+    return f'set value of theCell to "{safe_str(sval)}"'
+
+
+def do_batch_write(req: dict) -> dict:
+    """N value/formula writes to one sheet/date in ONE osascript call:
+    {sheet, date|row, writes: [{col, value, mode?: "set"|"add", src?}], src?}.
+    `mode: "add"` adds to a numeric cell (0n cumulative habits: 问学, xk20…),
+    first write on a blank/0 cell behaves like "set". Each cell is journaled
+    (and double-written to the semantic ledger) individually, with its
+    pre-image, and echoed back so the caller can verify what landed.
+    Exists so did-fast's habit completions (previously a raw ix-osa
+    AppleScript, unjournaled: Neon-off-Excel step 2, 2026-10-19) stay one
+    round-trip while gaining the ledger."""
+    sheet = req.get("sheet")
+    writes = req.get("writes")
+    if not sheet or not isinstance(writes, list) or not writes:
+        return {"ok": False, "error": "missing_sheet_or_writes"}
+    if req.get("row"):
+        row = int(req["row"])
+    else:
+        row = lookup_row_cached(sheet, req.get("date", ""))
+        if row is None:
+            return {"ok": False, "error": "date_not_found_or_missing_target"}
+    items = []
+    for w in writes:
+        col = w.get("col")
+        if not col or not re.fullmatch(r"[A-Za-z]{1,3}", str(col)):
+            return {"ok": False, "error": f"bad_col:{col!r}"}
+        items.append((str(col).upper(), w.get("value", ""), (w.get("mode") or "set"), w))
+    blocks = []
+    for col, value, mode, _ in items:
+        setter = _as_setter(value)
+        if mode == "add" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            setter = (f'if oldValue = "" or oldValue = "0" then\n'
+                      f'        set value of theCell to {value}\n'
+                      f'    else\n'
+                      f'        set value of theCell to (oldValue as number) + {value}\n'
+                      f'    end if')
+        blocks.append(f'''
+    set theCell to cell ("{col}{row}") of theSheet
+    set oldFormula to formula of theCell
+    set oldValue to (value of theCell) as string
+    {setter}
+    set out to out & oldFormula & (character id 9) & oldValue & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell) & (character id 30)''')
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
+    set out to ""{"".join(blocks)}
+    return out
+end tell
+'''
+    rc, out, err = osascript(script)
+    if rc != 0:
+        return {"ok": False, "error": err}
+    cells = [c for c in out.split("\x1e") if c != ""]
+    if len(cells) != len(items):
+        return {"ok": False, "error": f"echo_mismatch:{len(cells)}/{len(items)}", "raw": out[:200]}
+    results = []
+    for (col, value, mode, w), cell in zip(items, cells):
+        before, before_value, new_value, formula = (cell.split("\t", 3) + ["", "", ""])[:4]
+        sub = {"sheet": sheet, "col": col, "row": row, "date": req.get("date"),
+               "value": value, "src": w.get("src") or req.get("src"),
+               "source": req.get("source"), "via": req.get("via")}
+        r = _journal_and_respond("write", sub, row, before, new_value, formula, before_value)
+        r["before_value"] = before_value
+        r["mode"] = mode
+        results.append(r)
+    resp = {"ok": all(r.get("ok") for r in results), "row": row, "results": results}
+    broken = [r["col"] for r in results if r.get("chain") == "broken"]
+    if broken:
+        resp["chain_broken_cols"] = broken
+    return resp
 
 
 def do_ack(req: dict) -> dict:
@@ -391,12 +606,51 @@ end tell
             "formula": formula, "superseded": entry["before"]}
 
 
+def idem_dup(idem: str | None, formula: str, value: str) -> bool:
+    """True when an append carrying `idem` already landed and is still in the
+    cell, i.e. this request is a replay, not a new credit.
+
+    Regression 2026-10-12: a dtd ⌥↵ on "validate no yt [25]" ran did-fast
+    while Excel was slow; the +25 landed at 56s, the 60s watchdog then killed
+    did-fast (exit 124), and dtd's retry queue re-drove the "failed"
+    completion twice: +25 three times in 0分!U. "Still in the cell" = the
+    current formula extends the formula that append produced, without the
+    negation undo-fast appends when it can't strip the tail. So ctrl-z
+    (strip or negate) followed by a re-complete credits again."""
+    prev = IDEM_INDEX.get(idem) if idem else None
+    if prev is None or not formula.startswith(prev):
+        return False
+    neg = "-" + value.lstrip("+")
+    return neg not in formula[len(prev):]
+
+
+def _read_cell(sheet: str, col: str, row: int) -> tuple[str, str] | None:
+    """(value, formula) of one cell, or None if Excel didn't answer."""
+    rc, out, _ = osascript(f'''
+tell application "Microsoft Excel"
+    set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
+    return ((value of theCell) as string) & (character id 9) & (formula of theCell)
+end tell
+''')
+    if rc != 0:
+        return None
+    value, formula = (out.split("\t", 1) + [""])[:2]
+    return value, formula
+
+
 def do_append(req: dict) -> dict:
     addr = cell_addr(req)
     if not addr:
         return {"ok": False, "error": "date_not_found_or_missing_target"}
     col, row = addr
     sheet = req["sheet"]
+    idem = req.get("idem")
+    if idem and idem in IDEM_INDEX:
+        cur = _read_cell(sheet, col, row)
+        if cur and idem_dup(idem, cur[1], str(req.get("value", ""))):
+            sys.stderr.write(f"idem dup skipped: {idem}\n")
+            return {"ok": True, "row": row, "col": col, "value": cur[0],
+                    "formula": cur[1], "chain": "ok", "dup": True}
     val = str(req.get("value", ""))
     val_esc = safe_str(val)
     # "-" is a formula term like "+" (e.g. the 0t sleep dock appends "-7.5");
@@ -427,19 +681,20 @@ tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     set theCell to cell ("{col}{row}") of theSheet
     set oldFormula to formula of theCell
+    set oldValue to (value of theCell) as string
     if oldFormula = "" or oldFormula = "0" then
         {empty_set}
     else
         {nonempty_set}
     end if
-    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
+    return oldFormula & (character id 9) & oldValue & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    before, value, formula = (out.split("\t", 2) + ["", ""])[:3]
-    return _journal_and_respond("append", req, row, before, value, formula)
+    before, before_value, value, formula = (out.split("\t", 3) + ["", "", ""])[:4]
+    return _journal_and_respond("append", req, row, before, value, formula, before_value)
 
 
 def do_write(req: dict) -> dict:
@@ -456,15 +711,176 @@ def do_write(req: dict) -> dict:
 tell application "Microsoft Excel"
     set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
     set oldFormula to formula of theCell
+    set oldValue to (value of theCell) as string
     set {setter} of theCell to "{val_esc}"
-    return oldFormula & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
+    return oldFormula & (character id 9) & oldValue & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    before, value, formula = (out.split("\t", 2) + ["", ""])[:3]
-    return _journal_and_respond("write", req, row, before, value, formula)
+    before, before_value, value, formula = (out.split("\t", 3) + ["", "", ""])[:4]
+    return _journal_and_respond("write", req, row, before, value, formula, before_value)
+
+
+def latest_entry(sheet: str, col: str, date: str | None, row: int) -> dict | None:
+    """Newest ledger entry (prev + current month) for this cell under either
+    its date key or its row key, or None if the ledger has never seen it."""
+    keys = {chain_key(sheet, col, None, row)}
+    if date:
+        keys.add(chain_key(sheet, col, date, row))
+    now = datetime.datetime.now()
+    prev = now.replace(day=1) - datetime.timedelta(days=1)
+    found = None
+    for p in (ledger_path(prev), ledger_path(now)):
+        for e in iter_ledger(p):
+            if entry_key(e) in keys and e.get("after") is not None:
+                found = e  # file order is time order
+    return found
+
+
+def do_reconcile(req: dict) -> dict:
+    """Journal outside edits the pipeline never wrote over: {sheet, date, cols}.
+
+    Reads each cell once. A cell whose formula differs from the ledger's last
+    after-formula gets a `reconcile` entry attributed to source 3p-app / via
+    excel. A cell the ledger has never seen gets a sourceless `baseline` entry
+    instead (its origin is unknown: row-template formulas look the same as
+    edits), so run it early each morning too, before the day's edits. That records the
+    Excel edit with before_value/after_value so JM Dash can count its points,
+    and advances the chain so the next pipeline write isn't flagged broken for
+    an edit that's already accounted for. Run nightly (scripts/neon-reconcile.sh)."""
+    cols = req.get("cols") or []
+    sheet = req.get("sheet")
+    if not sheet or not cols:
+        return {"ok": False, "error": "missing_sheet_or_cols"}
+    addr = cell_addr({"sheet": sheet, "col": cols[0], "date": req.get("date"), "row": req.get("row")})
+    if not addr:
+        return {"ok": False, "error": "date_not_found_or_missing_target"}
+    row = addr[1]
+    reads = "\n".join(
+        f'    set c to cell ("{safe_str(c)}{row}") of theSheet\n'
+        f'    set out to out & ((value of c) as string) & (character id 9) & (formula of c) & (character id 30)'
+        for c in cols)
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
+    set out to ""
+{reads}
+    return out
+end tell
+'''
+    rc, out, err = osascript(script)
+    if rc != 0:
+        return {"ok": False, "error": err}
+    cells = out.split("\x1e")
+    changes = []
+    for col, cell in zip(cols, cells):
+        value, formula = (cell.split("\t", 1) + [""])[:2]
+        # A cell is chained under its date key (date-addressed writes) or its
+        # row key (row-addressed writes, e.g. ritual -1n); compare against the
+        # newest of the two and journal under that same addressing so the
+        # next write on either path chains cleanly.
+        last = latest_entry(sheet, col, req.get("date"), row)
+        if last is not None and last.get("after") == formula:
+            continue
+        entry = {
+            "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "sheet": sheet, "col": col, "row": row,
+            "date": last.get("date") if last is not None else req.get("date"),
+            "value": None,
+            "before": last.get("after") if last is not None else None,
+            "before_value": last.get("after_value") if last is not None else None,
+            "after": formula, "after_value": value,
+        }
+        if last is None:
+            # Unknown history (row template formulas, pre-ledger values):
+            # record a sourceless starting point, never an Excel edit.
+            entry.update(kind="baseline", src=req.get("src") or "baseline")
+        else:
+            entry.update(kind="reconcile", src=req.get("src") or "reconcile",
+                         source="3p-app", via="excel")
+        journal(entry)
+        changes.append({"col": col, "kind": entry["kind"],
+                        "before_value": entry["before_value"], "after_value": value})
+    return {"ok": True, "row": row, "changes": changes}
+
+
+def do_observe(req: dict) -> dict:
+    """Manual Excel edits reported by the Neon audit macro (VBA SheetChange →
+    AppleScriptTask → curl): {sheet, ts, structural?, cells: [{row, col,
+    date, formula, value, before_formula?, before_value?}]}.
+
+    Never touches Excel (the macro's Excel is waiting on nothing, but keep it
+    that way) and runs outside EXCEL_LOCK. Pipeline writes run with events
+    off, so everything arriving here was done in Excel: source 3p-app, via
+    excel. An observe that arrives after a newer ledger entry for the same
+    cell (a pipeline write raced it) is journaled with `observed_after`
+    instead of `after`, so it can't roll the chain back."""
+    if req.get("ping"):
+        MACRO_STATE["last_ping"] = datetime.datetime.now().isoformat(timespec="seconds")
+        return {"ok": True, "ping": True}
+    sheet = req.get("sheet")
+    if not sheet:
+        return {"ok": False, "error": "missing_sheet"}
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    client_ts = req.get("ts") or now
+    MACRO_STATE["last_observe"] = now
+    if req.get("structural"):
+        _ROW_CACHE.clear()  # inserted/deleted rows shift every row lookup
+        journal({"ts": now, "client_ts": client_ts, "kind": "structural",
+                 "sheet": sheet, "rows": req.get("rows"), "after": None,
+                 "source": "3p-app", "via": "excel"})
+        return {"ok": True, "structural": True}
+    cells = req.get("cells") or []
+    latest = latest_entries(sheet, cells)
+    n = 0
+    for c in cells:
+        col, row = c.get("col"), c.get("row")
+        if not col or not row:
+            continue
+        formula = c.get("formula", "")
+        last = latest.get((col, int(row)))
+        before = c.get("before_formula", last.get("after") if last else None)
+        if before == formula:
+            continue  # re-entered the same thing; nothing changed
+        entry = {
+            "ts": now, "client_ts": client_ts, "kind": "excel-edit",
+            "sheet": sheet, "col": col, "row": int(row),
+            "date": (last.get("date") if last else None) or c.get("date"),
+            "value": None, "before": before,
+            "before_value": c.get("before_value", last.get("after_value") if last else None),
+            "after_value": c.get("value"),
+            "src": "excel", "source": "3p-app", "via": "excel",
+        }
+        if last is not None and (last.get("ts") or "") > client_ts:
+            entry["after"], entry["observed_after"] = None, formula
+        else:
+            entry["after"] = formula
+        journal(entry)
+        n += 1
+    return {"ok": True, "journaled": n, "truncated": bool(req.get("truncated"))}
+
+
+def latest_entries(sheet: str, cells: list) -> dict:
+    """{(col, row): newest ledger entry} for many cells in one ledger pass,
+    matching each cell under its row key or (if the macro sent one) date key."""
+    want = {}
+    for c in cells:
+        if c.get("col") and c.get("row"):
+            r = int(c["row"])
+            want[chain_key(sheet, c["col"], None, r)] = (c["col"], r)
+            if c.get("date"):
+                want[chain_key(sheet, c["col"], c["date"], r)] = (c["col"], r)
+    now = datetime.datetime.now()
+    prev = now.replace(day=1) - datetime.timedelta(days=1)
+    found = {}
+    for p in (ledger_path(prev), ledger_path(now)):
+        for e in iter_ledger(p):
+            cell = want.get(entry_key(e))
+            if cell and e.get("after") is not None:
+                found[cell] = e
+    return found
 
 
 def do_read(req: dict) -> dict:
@@ -501,8 +917,12 @@ ROUTES = {
     "/read":   do_read,
     "/lookup": do_lookup,
     "/batch":  do_batch,
+    "/batch_write": do_batch_write,
     "/ack":    do_ack,
+    "/reconcile": do_reconcile,
+    "/observe": do_observe,
 }
+NO_EXCEL = {"/observe"}  # handlers that never touch Excel: skip EXCEL_LOCK
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -529,7 +949,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
-            return self._send(200, {"ok": True, "version": VERSION})
+            return self._send(200, {"ok": True, "version": VERSION, "macro": MACRO_STATE,
+                                    "ledger": LEDGER_DB_STATE})
         return self._send(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self):  # noqa: N802
@@ -545,8 +966,11 @@ class Handler(BaseHTTPRequestHandler):
             # Threads must not send concurrent AppleEvents to Excel — serialize
             # the actual Excel-touching call; the HTTP layer above stays
             # threaded so a stalled connection can't block other requests.
-            with EXCEL_LOCK:
+            if self.path in NO_EXCEL:
                 result = handler(body)
+            else:
+                with EXCEL_LOCK:
+                    result = handler(body)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})
         except Exception as e:

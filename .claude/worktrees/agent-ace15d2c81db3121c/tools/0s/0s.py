@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
-from review_form_writer import BackgroundWriter  # noqa: E402
+from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
@@ -126,10 +126,16 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
         '  set ws to worksheet "%s" of wb' % SHEET,
         '  set todayRow to 0',
         '  set tomRow to 0',
-        '  repeat with r from 3 to 600',
-        '    set bv to (string value of range ("B" & r) of ws)',
-        '    if bv = "%s" then set todayRow to r' % target_s,
-        '    if bv = "%s" then set tomRow to r' % next_s,
+        # ONE range read, then an in-memory scan (2026-10-17): the per-row
+        # `string value of range ("B" & r)` loop was 1,200 Apple events and
+        # measured 154 s on ix against 4.6 s for the single read, so every
+        # 0s write blew the 60 s budget ("it didn't write to neon").
+        '  set bvals to string value of range "B3:B600" of ws',
+        '  repeat with i from 1 to count of bvals',
+        '    set bv to item i of bvals',
+        '    if class of bv is list then set bv to item 1 of bv',
+        '    if bv = "%s" then set todayRow to i + 2' % target_s,
+        '    if bv = "%s" then set tomRow to i + 2' % next_s,
         '  end repeat',
         '  if todayRow = 0 then return "ERROR: date %s not found in 0s897 col B"' % target_s,
         '  set wrote to 0',
@@ -161,7 +167,7 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
 
 def write_answers(answers: dict, target: _dt.date) -> str:
     script = build_applescript(answers, target)
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True, text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):
         raise RuntimeError(out or proc.stderr.strip() or "ix-osa failed")
@@ -244,6 +250,7 @@ def run_form(target: _dt.date) -> dict | None:
         else:
             e.app.layout.focus_next()             # single-line: next field
 
+    @kb.add("escape", eager=True)   # Esc = save and back to dtd (2026-10-16)
     @kb.add("c-s")
     def _(e):
         _submit(e.app)
@@ -292,6 +299,11 @@ def main() -> int:
         return 0
 
     filled = sum(1 for k, _l, col, *_ in FIELDS if col and (answers.get(k) or "").strip())
+    if not filled and not answers.get("points_checked", "").strip():
+        # Esc on an untouched form (opened by accident from dtd): no ssh
+        # round trip, no "writing 0 fields" (2026-10-16).
+        print("0s → nothing filled, nothing written.")
+        return 0
     # The Excel write runs over ssh to Ix and can take many seconds; after the
     # full-screen form restores the shell, silence here reads as a frozen
     # terminal (user report 2026-07-25). Say what's happening, immediately.
@@ -327,9 +339,8 @@ def main() -> int:
             # that internal ceiling still cut 0l off before it finished, so
             # stdout came back empty. Override it to match this call's budget.
             env = dict(os.environ, DIDFAST_WATCHDOG_SECS="110")
-            proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), "0l"],
-                                   capture_output=True, text=True, timeout=120,
-                                   env=env)
+            proc = run_bounded(["/usr/bin/python3", str(DID_FAST), "0l"],
+                               timeout=120, env=env)
             # did-fast always exits 0 and reports per-write ok/error in its
             # JSON stdout — a clean subprocess return does NOT mean the 0n
             # write actually succeeded, so it must be checked explicitly

@@ -39,7 +39,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
-from review_form_writer import BackgroundWriter  # noqa: E402
+from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "xk887.xlsx"
@@ -218,12 +218,15 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
         L += [
             '  set ws to worksheet "%s" of wb' % sheet,
             '  set lastRow_%s to 1' % v,
-            '  repeat with r from 2 to 1000',
-            '    set av to ""',
-            '    try',
-            '      set av to (string value of range ("A" & r) of ws)',
-            '    end try',
-            '    if av is not "" then set lastRow_%s to r' % v,
+            # ONE range read, then an in-memory scan (2026-10-17): the per-row
+            # `string value of range ("A" & r)` loop was 1,000 Apple events per
+            # sheet; the same loop in 0s measured 154 s on ix against 4.6 s for
+            # the single read, which is why these writes blew their 60 s budget.
+            '  set avals_%s to string value of range "A2:A1000" of ws' % v,
+            '  repeat with i from 1 to count of avals_%s' % v,
+            '    set av to item i of avals_%s' % v,
+            '    if class of av is list then set av to item 1 of av',
+            '    if av is not "" then set lastRow_%s to i + 1' % v,
             '  end repeat',
             '  set tailLabel_%s to ""' % v,
             '  try',
@@ -273,8 +276,7 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
 
 def write_answers(answers: dict, sunday: _dt.date, sheets=None) -> str:
     script = build_applescript(answers, sunday, sheets=sheets)
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                          text=True, timeout=60)
+    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):
         raise RuntimeError(out or proc.stderr.strip() or "ix-osa failed")
@@ -320,6 +322,71 @@ def queue_write(answers: dict, sunday: _dt.date, cfg: dict) -> None:
     _writer.recovery_dir = RECOVERY_DIR
     _writer.queue(write_answers, answers, sunday, sheets=[cfg],
                   tag=cfg["sheet"], recovery_payload=answers)
+
+
+# ---------------------------------------------------------------------------
+# Finishing the survey closes the week's family cards (user request
+# 2026-09-29): "if I finish the /xk887 survey, call dtd to finish 1 xk88 and
+# 1 xk87 if they are on the list". "On the list" = the card is in dtd's own
+# task cache (1neon tier) and due today or earlier — a card already advanced
+# to next week (or the separate "1 xk87 wknd") is left alone. Each close is
+# the same run.py path dtd's done action uses, queued onto the same
+# background writer as the Neon writes so it can't interleave with them.
+# ---------------------------------------------------------------------------
+
+TASK_QUEUE = Path.home() / ".local/state/jm/task-queue.json"
+RUN_PY = Path.home() / "i446-monorepo/tools/did/run.py"
+DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+FINISH_CARDS = ("1 xk88", "1 xk87")
+_ANNOT_RE = re.compile(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]")
+
+
+def _card_name(content: str) -> str:
+    return _ANNOT_RE.sub("", content or "").strip().lower()
+
+
+def open_finish_cards(queue: dict, today: _dt.date) -> list[str]:
+    """The FINISH_CARDS that are open in the 1neon tier of dtd's task cache
+    and due on or before `today` (a missing due counts as due). Exact card
+    name after stripping (N)/[N]/{N}, so "1 xk87 wknd" never matches
+    "1 xk87". Returned in FINISH_CARDS order, deduplicated."""
+    found = set()
+    for t in queue.get("1neon", []) or []:
+        name = _card_name(t.get("content", ""))
+        if name not in FINISH_CARDS:
+            continue
+        due = (t.get("due") or "")[:10]
+        if due:
+            try:
+                if _dt.date.fromisoformat(due) > today:
+                    continue
+            except ValueError:
+                pass
+        found.add(name)
+    return [c for c in FINISH_CARDS if c in found]
+
+
+def queue_finish_marks(today: _dt.date | None = None) -> list[str]:
+    """Queue one run.py close per open card (see open_finish_cards) plus a
+    dtd cache refresh, on the shared writer. Returns the cards queued. A
+    missing/unreadable cache means nothing to close, never an error."""
+    try:
+        queue = json.loads(TASK_QUEUE.read_text())
+    except (OSError, ValueError):
+        return []
+    cards = open_finish_cards(queue, today or _dt.date.today())
+    for card in cards:
+        def _mark(card=card):
+            r = run_bounded(["/usr/bin/python3", str(RUN_PY), card], timeout=120)
+            tail = (r.stdout or r.stderr or "").strip().splitlines()
+            return "%s: %s" % (card, tail[-1] if tail else "exit %d" % r.returncode)
+        _writer.queue(_mark, tag="did-" + card)
+    if cards:
+        def _refresh():
+            run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
+            return "dtd cache refreshed"
+        _writer.queue(_refresh, tag="dtd-refresh")
+    return cards
 
 
 def drain_writes() -> bool:
@@ -446,6 +513,14 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
         if page_no > 1:
             e.app.exit(result="back")
 
+    # Esc = save this page and leave the survey (2026-10-16: opened inline
+    # from dtd's Enter, Esc must land back on the dtd list). Pages already
+    # queued stay queued; the week's cards are closed only when every page
+    # was submitted.
+    @kb.add("escape", eager=True)
+    def _(e):
+        e.app.exit(result="finish")
+
     @kb.add("c-q")
     @kb.add("c-c")
     def _(e):
@@ -466,7 +541,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     return action, {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
 
 
-def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
+def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False) -> int:
     """One page per sheet/person; each page is QUEUED to Excel the moment it
     is submitted and the NEXT page renders immediately — the write itself
     runs in the background (see queue_write/drain_writes) so a crash or
@@ -501,8 +576,16 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date) -> int:
         if cfg["sheet"] not in queued:
             queued.append(cfg["sheet"])
         i += 1
+        if action == "finish":
+            break
+    # Every page submitted = survey finished → close the week's family cards
+    # (queued behind the Neon writes; see queue_finish_marks). An Esc before
+    # the last page saves what was filled but leaves the cards open.
+    marked = [] if (no_mark or i < total) else queue_finish_marks()
     all_ok = drain_writes()
-    print("xk887 → week %s done (%s)" % (week_row_label(sunday), ", ".join(queued)))
+    print("xk887 → week %s done (%s)%s" % (
+        week_row_label(sunday), ", ".join(queued),
+        "; closed " + ", ".join(marked) if marked else ""))
     return 0 if all_ok else 1
 
 
@@ -513,6 +596,8 @@ def main() -> int:
                          "(default: last completed week)")
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
+    ap.add_argument("--no-mark", action="store_true",
+                    help="do not close the open '1 xk88' / '1 xk87' cards on finish (reruns)")
     args = ap.parse_args()
 
     sunday, saturday = week_range(args.date)
@@ -537,7 +622,7 @@ def main() -> int:
         return 0
 
     # Interactive: one page per person, written as each page is submitted.
-    return run_paginated(sunday, saturday)
+    return run_paginated(sunday, saturday, no_mark=args.no_mark)
 
 
 if __name__ == "__main__":

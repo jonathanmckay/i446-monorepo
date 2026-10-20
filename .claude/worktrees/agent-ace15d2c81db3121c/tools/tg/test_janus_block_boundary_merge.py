@@ -107,7 +107,8 @@ def test_question_mark_entries_are_never_merged():
     """User report 2026-09-19: Toggl had two "?" entries (16:53-17:26, 33m
     and 17:26-18:11, 44m) but janus showed one 78m "?" row. Each "?" is a
     distinct unknown to identify, so same-desc merging must skip it; the
-    /tg auto-filler "generic placeholder" keeps merging."""
+    "generic placeholder" no longer merges either (user request 2026-10-12:
+    back-to-back placeholders are on-the-go markers, each filled in later)."""
     mod = _load_tui()
     today = _midnight()
     h = lambda hh, mm: today.replace(hour=hh, minute=mm)  # noqa: E731
@@ -131,4 +132,5 @@ def test_question_mark_entries_are_never_merged():
     # one was 44:48 → 44m)
     assert "33m" in you and "45m" in you and "78m" not in you, f"two ? rows expected:\n{you}"
     xu = text.split("戌", 1)[1].split("亥")[0]
-    assert "25m" in xu and xu.count("generic placeholder") == 1, f"auto-filler still merges:\n{xu}"
+    assert "10m" in xu and "15m" in xu and "25m" not in xu \
+        and xu.count("generic placeholder") == 2, f"placeholders must stay separate:\n{xu}"

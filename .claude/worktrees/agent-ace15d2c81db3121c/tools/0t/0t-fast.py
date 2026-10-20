@@ -270,6 +270,31 @@ DOCK_COL_0FEN = "W"         # hcb column in 0分
 DOCK_SRC = "0t sleep-dock"  # ledger src label; with the date, the idempotency key
 
 
+# A yesterday entry belongs to the night if it is still going at NIGHT_HOUR,
+# not only if it STARTS after it: a 19:45 bedtime (睡觉 19:45-23:59) was
+# dropped entirely by the old start>=20:00 rule, under-counting sleep by 4h
+# and docking 30分 for a "midnight" bedtime (2026-10-11). Naps end earlier.
+NIGHT_HOUR = 20
+EARLY_FALL_HOUR = 18
+
+
+def _entry_end(e: dict, ldt: datetime, now_local: datetime) -> datetime:
+    dur = e.get("duration", 0)
+    return ldt + timedelta(seconds=dur) if dur > 0 else now_local
+
+
+def _in_night(start: datetime, end: datetime, yesterday: date, today: date,
+              evening_hour: int = NIGHT_HOUR) -> bool:
+    """Start-of-night membership: yesterday entries running at/after
+    evening_hour, or today entries starting before 14:00."""
+    if start.date() == today:
+        return start.hour < 14
+    if start.date() == yesterday:
+        evening = datetime.combine(yesterday, dtime(hour=evening_hour), tzinfo=start.tzinfo)
+        return end >= evening
+    return False
+
+
 def compute_sleep_dock(yesterday: date, sleep_date: date) -> dict | None:
     """Bedtime and dock for the night bridging yesterday → sleep_date.
 
@@ -279,22 +304,21 @@ def compute_sleep_dock(yesterday: date, sleep_date: date) -> dict | None:
     before the night's first 睡觉 start are considered. Returns None when the
     night has no usable entries at all.
     """
-    def in_window(ldt: datetime) -> bool:
-        return ((ldt.date() == yesterday and ldt.hour >= 20)
-                or (ldt.date() == sleep_date and ldt.hour < 14))
-
     falls: list[tuple[datetime, datetime]] = []
     sleeps: list[datetime] = []
     for e in gather_entries_local(yesterday, sleep_date):
         ldt = entry_local_dt(e)
-        if ldt is None or not in_window(ldt):
+        if ldt is None:
             continue
         dur = e.get("duration", 0)
         end = ldt + timedelta(seconds=dur) if dur > 0 else ldt
         if e.get("project_id") == SLEEP_PROJECT_ID:
-            sleeps.append(ldt)
+            if _in_night(ldt, end, yesterday, sleep_date):
+                sleeps.append(ldt)
         elif (e.get("description") or "").strip().lower() == DOCK_DESC:
-            falls.append((ldt, end))
+            # Any evening attempt; the contiguity walk below decides if it counts.
+            if _in_night(ldt, end, yesterday, sleep_date, evening_hour=EARLY_FALL_HOUR):
+                falls.append((ldt, end))
 
     if sleeps:
         bedtime = min(sleeps)
@@ -376,9 +400,7 @@ def compute_sleep(yesterday: date, today: date) -> int:
         ldt = entry_local_dt(e)
         if ldt is None:
             continue
-        in_window = ((ldt.date() == yesterday and ldt.hour >= 20)
-                     or (ldt.date() == today and ldt.hour < 14))
-        if not in_window:
+        if not _in_night(ldt, _entry_end(e, ldt, now_local), yesterday, today):
             continue
         dur = e.get("duration", 0)
         if dur > 0:
@@ -560,6 +582,18 @@ def main():
         output["dtd_cache"] = "refreshed"
     except Exception as e:
         output["dtd_cache"] = f"ERROR: {e}"
+
+    # 5c. Release the dtd claim /0t took via the claim hook (agent_claims
+    # SKILL_CLAIMS): the card is closed, so the 😈 spinner should stop now,
+    # not at session end. Only when 0t actually got marked done; no session
+    # (Ix cron) = no claim to release.
+    if "error" not in did_result and os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        try:
+            r = subprocess.run(["python3", str(DID_FAST.parent / "agent_claims.py"), "release"],
+                               capture_output=True, text=True, timeout=15)
+            output["claim"] = (r.stdout or r.stderr).strip() or "released"
+        except Exception as e:
+            output["claim"] = f"ERROR: {e}"
 
     # 6. Refresh dashboard points cache
     try:
