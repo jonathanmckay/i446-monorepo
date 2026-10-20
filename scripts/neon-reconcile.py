@@ -12,7 +12,8 @@ constant it must derive from. Cron on ix: 03:50 and 23:55 (config/ix.crontab).
 
 Sheets / ranges:
   0分  D..Z   (Σ, E/F, blocks, points)       for yesterday + today
-  0n   D..AS  (habit cells) + row 2 (weights) for yesterday + today (+ row 2 once)
+  0n   D..BK  (habits, media AU..AX, Σ cells) for yesterday + today, + row 2 (weights)
+  1n+  C..AL row 5 (expected points referenced by 0分 credits)
   hcbi E..BD  (daily dozen, bands, 0s, caf…)  for yesterday + today
 """
 import datetime
@@ -42,7 +43,8 @@ def span(a: str, b: str) -> list:
     return [col_letter(i) for i in range(col_num(a), col_num(b) + 1)]
 
 
-RANGES = {"0分": span("D", "Z"), "0n": span("D", "AS"), "hcbi": span("E", "BD")}
+RANGES = {"0分": span("D", "Z"), "0n": span("D", "BK"), "hcbi": span("E", "BD")}
+WEEK_ROW5 = span("C", "AL")   # 1n+ row 5: expected points the 0分 credits reference
 
 
 def post(body: dict) -> dict:
@@ -65,6 +67,7 @@ def main() -> int:
     # 0n row 2 = the habit weights the rule engine applies; a changed weight is
     # itself a ledger event this way (row-addressed, no date).
     jobs.append({"sheet": "0n", "row": 2, "cols": RANGES["0n"], "snapshot": True, "src": "snapshot 0n weights"})
+    jobs.append({"sheet": "1n+", "row": 5, "cols": WEEK_ROW5, "snapshot": True, "src": "snapshot 1n+ row5"})
     for body in jobs:
         out = post(body)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")

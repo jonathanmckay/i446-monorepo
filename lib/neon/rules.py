@@ -69,6 +69,29 @@ BLOCK_COLS = {"G": "卯", "H": "辰", "I": "巳", "J": "午", "K": "未",
 # ── formula tail parsing ─────────────────────────────────────────────────────
 
 _NUM = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+_ARITH = re.compile(r"^[+-]?[\d.]+(?:[*/][\d.]+)+$")      # 7*45, 3*0.5/2 — literal products only
+_WEEK_REF = re.compile(r"^[+-]?'1n\+'!([A-Z]{1,3})(\d+)$")
+
+
+def _eval_arith(term: str) -> Optional[float]:
+    """Value of a literal product/quotient term ("7*45" → 315). Only digits,
+    '.', '*', '/' are allowed; anything else is not a literal."""
+    if not _ARITH.match(term):
+        return None
+    sign = -1.0 if term.startswith("-") else 1.0
+    body = term.lstrip("+-")
+    try:
+        val = None
+        for i, part in enumerate(re.split(r"([*/])", body)):
+            if i == 0:
+                val = float(part)
+            elif part in "*/":
+                op = part
+            else:
+                val = val * float(part) if op == "*" else val / float(part)
+        return sign * val
+    except (ValueError, ZeroDivisionError, TypeError):
+        return None
 
 
 def split_terms(formula: str) -> list:
@@ -110,12 +133,15 @@ def classify_terms(formula: str) -> dict:
         if _NUM.match(body):
             out["literals"] += sign * float(body)
             out["n_literals"] += 1
+        elif _eval_arith(t) is not None:
+            out["literals"] += _eval_arith(t)              # "7*45" hand-typed products
+            out["n_literals"] += 1
+        elif "(" in body:
+            out["funcs"].append(t)          # IF(...) bonus etc. — before the ref tests
         elif "'0n'!" in body:
             out["flow_refs"].append(t)
         elif "'1n+'!" in body:
             out["week_refs"].append(t)
-        elif "(" in body:
-            out["funcs"].append(t)
         else:
             out["other_refs"].append(t)
     return out
@@ -173,6 +199,17 @@ def _num_or_none(cell: Optional[dict]) -> Optional[float]:
 
 # ── derivation ───────────────────────────────────────────────────────────────
 
+def week_ref_values(conn) -> dict:
+    """Newest ledger value of each 1n+ row-5 cell (the expected-points row the
+    0分 credits reference as +'1n+'!C5): {col: float}. Fed by the nightly
+    snapshot of 1n+ row 5; absent cells stay unknown."""
+    rows = conn.execute(
+        """SELECT e.col, e.after_value FROM events e
+             JOIN (SELECT col, MAX(id) mid FROM events WHERE sheet='1n+' AND row=5 GROUP BY col) m
+               ON m.mid = e.id WHERE e.after_value IS NOT NULL""").fetchall()
+    return {col: float(v) for col, v in rows}
+
+
 def derive_day(date_iso: str, conn=None) -> dict:
     """{"date", "cols": {col: {derived, observed, delta, status, components, unknown}},
     "blocks": {...}, "weights_source": ...}. status ∈ ok | mismatch | partial
@@ -183,6 +220,7 @@ def derive_day(date_iso: str, conn=None) -> dict:
         fen = ledger.state(date_iso, "0分", c)
         on = ledger.state(date_iso, "0n", c)
         weights = load_weights(c)
+        week5 = week_ref_values(c)
         p_events = c.execute(
             """SELECT kind, ts, after_formula, value FROM events
                 WHERE date=? AND sheet='0分' AND col='P' AND kind IN ('set','credit')
@@ -208,7 +246,16 @@ def derive_day(date_iso: str, conn=None) -> dict:
         formula = (cell or {}).get("formula") or ""
         terms = classify_terms(formula)
         comp: dict = {"literals": terms["literals"]}
-        unknown: list = list(terms["week_refs"])  # '1n+'!X5 refs: value unknown
+        unknown: list = []
+        week_pts = 0.0
+        for ref in terms["week_refs"]:            # +'1n+'!C5 → row-5 expected points
+            m = _WEEK_REF.match(ref)
+            if m and m.group(2) == "5" and m.group(1) in week5:
+                week_pts += (-1.0 if ref.startswith("-") else 1.0) * week5[m.group(1)]
+            else:
+                unknown.append(ref)
+        if terms["week_refs"]:
+            comp["week_refs"] = week_pts
         derived: Optional[float] = None
         if col in OBSERVE_ONLY:
             status = "observe-only"
@@ -268,7 +315,7 @@ def derive_day(date_iso: str, conn=None) -> dict:
                 comp["bonus"] = bonus
                 fl += bonus
             unknown += unk
-            derived = fl + terms["literals"]
+            derived = fl + terms["literals"] + week_pts
             status = None
         if status is None:
             if observed is None:
@@ -305,7 +352,7 @@ def derive_day(date_iso: str, conn=None) -> dict:
                       "observed": _num_or_none(fen.get(col))}
               for col, glyph in BLOCK_COLS.items()}
     return {"date": date_iso, "cols": result, "blocks": blocks,
-            "weights_source": "ledger snapshot" if any(True for _ in ()) else "config+ledger"}
+            "weights_known": len(weights)}
 
 
 def event_blocks(date_iso: str, conn=None) -> dict:
@@ -315,8 +362,9 @@ def event_blocks(date_iso: str, conn=None) -> dict:
     c = conn or ledger.connect()
     try:
         rows = c.execute(
-            """SELECT block, COALESCE(SUM(CASE WHEN kind IN ('credit','credit_ref') THEN points END),0)
-                 FROM events WHERE date=? AND sheet='0分' AND block IS NOT NULL
+            """SELECT block, SUM(points) FROM events
+                WHERE date=? AND sheet='0分' AND block IS NOT NULL
+                  AND kind IN ('credit','credit_ref') AND points IS NOT NULL
                 GROUP BY block""", (date_iso,)).fetchall()
         return {b: round(v, 3) for b, v in rows}
     finally:
