@@ -60,3 +60,18 @@ def test_d_task_writes_dtd_running_hint_and_stop_clears_it(tmp_path):
     assert not mod.DTD_RUNNING_HINT.exists()
     src = (HERE / "janus.py").read_text()
     assert "write_dtd_running_hint(task)" in src[src.index("def create_todo_task"):]
+
+
+def test_d_task_records_started_today_so_dtd_shows_abacus(tmp_path, monkeypatch):
+    # Bug 2026-10-19: janus /d started the timer and wrote the running hint,
+    # but never wrote dtd-started, which is what dtd's 🧮 abacus reads. Once
+    # the timer moved on, the task lost its abacus.
+    mod = _load()
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    mod.record_dtd_started("6hX")
+    line = (tmp_path / "jm" / "dtd-started").read_text().strip().split("\t")
+    assert line[0] == mod.dt.date.today().isoformat() and line[1] == "6hX" and line[2].isdigit()
+    src = (HERE / "janus.py").read_text()
+    body = src[src.index("def create_todo_task"):]
+    body = body[:body.index("\ndef ", 1)]
+    assert "record_dtd_started(task.get" in body, "create_todo_task must record the started entry"
