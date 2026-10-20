@@ -409,15 +409,12 @@ def load_points_data():
 # row 369 (and row 1 for xk88). We hardcode (col, row) per card since
 # headers span two rows.
 CACHE_CARDS = [
-    # Combined hcbp+hcbc score, Q2+Q3 (hcbi!X375 = Q2 sum, hcbi!X378 = Q3
-    # sum, each itself a SUM of the two per-domain cells) — replaced the
-    # separate hcbp/hcbc cards 2026-08-10 per JM; extended from Q3-only to
-    # Q2+Q3 2026-09-06 per JM so the card reflects the running total across
-    # both quarters, not just the current one. Q4 (hcbi!X381) added
-    # 2026-10-06 per JM, label now Q2-Q4.
-    {"label": "hcbp+hcbc", "col": "X", "row": 378, "sheet": "hcbi", "period": "Q2-Q4",
-     "color": "#f81d78", "extra": [{"col": "X", "row": 375, "sheet": "hcbi"},
-                                   {"col": "X", "row": 381, "sheet": "hcbi"}]},
+    # Overall hcb standing: the sheet's own combined cell hcbi!X388 — the
+    # SAME cell the janus CLI chip reads (HCBI_HCB_TOTAL_CELL), so the two
+    # can never disagree (2026-10-20 per JM; the card used to sum X375+X378+
+    # X381 itself and showed -557 while the CLI showed -1416). JM edits the
+    # X388 formula when the window moves; the period label is the year.
+    {"label": "hcb", "col": "X", "row": 388, "sheet": "hcbi", "period": "2026", "color": "#f81d78"},
     {"label": "xk88",   "col": "AN", "row": 375, "period": "2026", "color": "#e65100"},
     {"label": "ص",      "col": "AP", "row": 375, "period": "2026", "color": "#9c27b0"},
     {"label": "o314",   "col": "AQ", "row": 375, "period": "2026", "color": "#7c4dff"},
