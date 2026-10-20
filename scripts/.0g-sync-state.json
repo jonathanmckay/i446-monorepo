@@ -1,10 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "transit = 冥想 「15」": {
-      "todoist_id": "6hpJPPJw8GcX5Q32",
-      "minutes": 15
-    }
-  },
-  "last_sync": "2026-10-19T20:00:01.425114-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-19T22:00:05.132625-07:00"
 }
