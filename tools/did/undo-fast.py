@@ -18,7 +18,7 @@ Formula appends are reversed by stripping the exact trailing "+N" term when
 it is still the tail of the formula, else appending the negation ("-N") —
 numerically correct even when later writes interleaved. Cell-value writes
 (0n, non-variable 1n+) are restored from pre-images captured by did-fast's
-write scripts.
+write scripts, through the excel-http daemon (journaled) since 2026-10-19.
 
 Usage:
     did-fast.py output | undo-fast.py --journal-done <journal>
@@ -55,6 +55,7 @@ TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 # ssh+osascript fallback built in)
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 from neon import excel
+from neon import cols as neon_cols
 import neon_blocks as nb
 
 BUILD_ORDER = Path.home() / "vault/g245/5e-1/build-order.md"
@@ -102,61 +103,55 @@ def _as_str(s: str) -> str:
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
-def _as_value(prev: str) -> str:
-    """Pre-image text → AppleScript value literal (number, string, or empty)."""
-    prev = prev.strip()
+def _restore_value(prev: str):
+    """Pre-image text → the value to write back through the daemon: a NUMBER
+    for numeric text ("830.0" → 830.0, "1" → 1 — 0n!AF is compared numerically,
+    quoting it would write text), "" for blank/missing, a formula string when
+    it starts with "=", else the string itself."""
+    prev = (prev or "").strip()
     if prev == "" or prev == "missing value":
-        return '""'
+        return ""
     if _NUM_RE.match(prev):
-        return prev
-    return _as_str(prev)
+        f = float(prev)
+        return int(f) if f.is_integer() else f
+    return prev
 
 
-def build_0n_restore_script(restores: list[tuple[int, str]], target_md: str) -> str:
-    """Restore 0n cells to their pre-write values. restores = [(col_num, prev_text)]."""
-    parts = target_md.split("/")
-    month, day = parts[0], parts[1]
-    set_lines = [
-        f"    set value of cell {col} of row todayRow of ws to {_as_value(prev)}"
-        for col, prev in restores
-    ]
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "0n" of workbook "{WORKBOOK}"
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of ws
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = {month} and d = {day} then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: date {target_md} not found"
-{chr(10).join(set_lines)}
-    return "OK:row=" & todayRow
-end tell'''
+def restore_0n_cells(restores: list[tuple[int, str]], target_md: str,
+                     errors: list[str], src: str) -> None:
+    """Restore 0n cells to their pre-write values via the daemon
+    (/batch_write, journaled; numbers stay numbers). restores = [(col_num, prev_text)].
+    Replaced the raw build_0n_restore_script AppleScript 2026-10-19."""
+    if not restores:
+        return
+    writes = [{"col": neon_cols.col_letter(int(col)), "value": _restore_value(prev)}
+              for col, prev in restores]
+    try:
+        r = excel.batch_write("0n", writes, date=target_md, src=src)
+    except Exception as e:
+        errors.append(f"0n: restore failed: {e}")
+        return
+    if not r.get("ok"):
+        bad = [x for x in r.get("results", []) if not x.get("ok")]
+        errors.append("0n: restore failed: " + (r.get("error") or
+                      "; ".join(f"{x.get('col')}: {x.get('error')}" for x in bad) or "?"))
 
 
-def _strip_or_negate_lines(cell_expr: str, term: str, suffix: str) -> str:
-    """AppleScript that removes a '+N' (or '+'1n+'!X12') term from a formula:
-    strips it if it is the exact tail, else appends the negation."""
-    neg = "-" + term[1:]
-    tlen = len(term)
-    return f'''    set theCell{suffix} to {cell_expr}
-    set f{suffix} to ""
-    try
-        set f{suffix} to (formula of theCell{suffix}) as text
-    end try
-    if f{suffix} ends with {_as_str(term)} and (length of f{suffix}) > {tlen} then
-        set formula of theCell{suffix} to text 1 thru ((length of f{suffix}) - {tlen}) of f{suffix}
-    else if f{suffix} is not "" then
-        set formula of theCell{suffix} to f{suffix} & {_as_str(neg)}
-    end if'''
+def restore_1n_cells(restores: list[tuple[str, str, str]], errors: list[str], src: str) -> None:
+    """Restore 1n+ week cells from their pre-image via the daemon, grouped by
+    row. restores = [(row, col_letter, prev)] where prev is a formula ("=…"),
+    a numeric text, or "" (blank). Replaced build_1n_undo_script's restore half."""
+    by_row: dict[int, list[dict]] = {}
+    for row, col, prev in restores:
+        by_row.setdefault(int(row), []).append({"col": col, "value": _restore_value(prev)})
+    for row, writes in by_row.items():
+        try:
+            r = excel.batch_write("1n+", writes, row=row, src=src)
+        except Exception as e:
+            errors.append(f"1n+ r{row}: restore failed: {e}")
+            continue
+        if not r.get("ok"):
+            errors.append(f"1n+ r{row}: restore failed: {r.get('error') or '?'}")
 
 
 def _strip_or_negate(formula: str, term: str) -> str | None:
@@ -166,6 +161,12 @@ def _strip_or_negate(formula: str, term: str) -> str | None:
     (nothing to reverse)."""
     neg = "-" + term[1:]
     f = formula or ""
+    if f == "=" + term[1:]:
+        # The daemon's empty-cell append writes "=45" (not the old raw
+        # builders' "=0+45"): the term IS the whole formula, so undo clears
+        # the cell instead of leaving "=45-45" (which 1n-backfill's
+        # is_marked would still read as marked).
+        return ""
     if f.endswith(term) and len(f) > len(term):
         return f[: -len(term)]
     if f != "":
@@ -173,13 +174,14 @@ def _strip_or_negate(formula: str, term: str) -> str | None:
     return None
 
 
-def strip_fen_terms(strips: list[tuple[str, str]], target_md: str,
-                    sheet: str, errors: list[str], src: str) -> None:
-    """Strip/negate formula terms on a date-keyed sheet (0分 or hcbi) via the
-    excel-http client: read the current formula, strip/negate in Python,
-    write back (journaled). strips = [(col_letter, term)] where term is the
-    exact appended text."""
-    row = None
+def strip_fen_terms(strips: list[tuple[str, str]], target_md: str | None,
+                    sheet: str, errors: list[str], src: str,
+                    row: int | None = None) -> None:
+    """Strip/negate formula terms via the excel-http client: read the current
+    formula, strip/negate in Python, write back (journaled). strips =
+    [(col_letter, term)] where term is the exact appended text. Date-keyed
+    sheets (0分, hcbi) pass target_md; row-keyed cells (1n+ week rows) pass
+    row. Not atomic (read then write) — acceptable for a manual undo."""
     for col, term in strips:
         try:
             r = (excel.read(sheet, col, row=row) if row
@@ -203,37 +205,9 @@ def strip_fen_terms(strips: list[tuple[str, str]], target_md: str,
             errors.append(f"{sheet} {col}: write failed: {w.get('error') or '?'}")
 
 
-def build_1n_undo_script(restores: list[tuple[str, str, str]],
-                         strips: list[tuple[str, str, str]]) -> str:
-    """Undo 1n+ writes. restores = [(row, col_letter, prev_formula)] (pre-image
-    restore for non-variable writes); strips = [(row, col_letter, term)]
-    (strip/negate for variable appends)."""
-    lines = []
-    for i, (row, col, prev) in enumerate(restores):
-        prev = prev.strip()
-        if prev == "" or prev == "missing value":
-            lines.append(f'    set value of range ("{col}{row}") of ws1n to ""')
-        else:
-            lines.append(f'    set formula of range ("{col}{row}") of ws1n to {_as_str(prev)}')
-    for i, (row, col, term) in enumerate(strips):
-        lines.append(_strip_or_negate_lines(f'range ("{col}{row}") of ws1n', term, f"s{i}"))
-    return f'''tell application "Microsoft Excel"
-    set ws1n to sheet "1n+" of workbook "{WORKBOOK}"
-{chr(10).join(lines)}
-    return "OK:1n+"
-end tell'''
-
-
 # ---------------------------------------------------------------------------
 # Reversal core
 # ---------------------------------------------------------------------------
-
-def _run_excel(script: str, label: str, errors: list[str]) -> None:
-    res = ix_run(script, timeout=30.0)
-    out = (res.stdout or "").strip()
-    if res.returncode != 0 or out.startswith("ERROR"):
-        errors.append(f"{label}: {out or (res.stderr or '').strip() or 'failed'}")
-
 
 def _reverse_todoist_entry(td: dict, today_iso: str, errors: list[str]) -> None:
     tid = td.get("id")
@@ -414,16 +388,18 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
             except Exception as ex:
                 errors.append(f"posthoc delete {ph['id']}: {ex}")
 
-    if on_restores:
-        _run_excel(build_0n_restore_script(on_restores, target_md), "0n", errors)
     undo_names = [e.get("name") for e in results if e.get("name")]
     undo_src = "undo " + (", ".join(undo_names) if undo_names else "?")
+    if on_restores:
+        restore_0n_cells(on_restores, target_md, errors, undo_src)
     if fen_strips:
         strip_fen_terms(fen_strips, target_md, "0分", errors, undo_src)
     if hcbi_strips:
         strip_fen_terms(hcbi_strips, target_md, "hcbi", errors, undo_src)
-    if n1_restores or n1_strips:
-        _run_excel(build_1n_undo_script(n1_restores, n1_strips), "1n+", errors)
+    if n1_restores:
+        restore_1n_cells(n1_restores, errors, undo_src)
+    for row, col, term in n1_strips:
+        strip_fen_terms([(col, term)], None, "1n+", errors, undo_src, row=int(row))
 
     # Restart a Toggl timer that the done action stopped (best-effort)
     ts = out.get("toggl_stopped")

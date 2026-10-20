@@ -12,6 +12,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).parent
 
 
@@ -172,6 +174,11 @@ def test_reverse_done_collects_ops(monkeypatch):
     monkeypatch.setattr(
         uf.excel, "write",
         lambda sheet, col, **kw: (excel_writes.append((sheet, col, kw)), {"ok": True})[1])
+    batch_writes = []
+    monkeypatch.setattr(
+        uf.excel, "batch_write",
+        lambda sheet, writes, **kw: (batch_writes.append((sheet, writes, kw)),
+                                     {"ok": True, "row": kw.get("row", 7)})[1])
 
     out = {
         "results": [
@@ -212,9 +219,10 @@ def test_reverse_done_collects_ops(monkeypatch):
     assert ("POST", "/tasks/t2", {"due_date": "2026-06-04"}) in api_calls
     assert ("DELETE", "/tasks/p1", None) in api_calls
 
-    joined = "\n".join(scripts)
-    # 0n pre-image restore
-    assert 'sheet "0n"' in joined and "cell 8 of row todayRow" in joined
+    assert scripts == [], "no raw AppleScript left on the undo path (2026-10-19)"
+    # 0n pre-image restore → daemon /batch_write (col 8 = H, blank pre-image)
+    assert ("0n", [{"col": "H", "value": ""}], {"date": "6/4", "src": batch_writes[0][2]["src"]}) \
+        in batch_writes
     # 0分 strips (via excel client): +40 (U), +20 (X), +15 (W), +10 (Q),
     # +'1n+'!D12 (T) — read formula "=1+2" never tails a term → negation
     fen = {(s, c): kw["value"] for s, c, kw in excel_writes}
@@ -223,8 +231,10 @@ def test_reverse_done_collects_ops(monkeypatch):
         assert fen[("0分", col)] == "=1+2-" + term[1:], f"missing strip term {term}"
     # Every strip write must carry an "undo ..." ledger label
     assert all(kw.get("src", "").startswith("undo ") for _, _, kw in excel_writes)
-    # 1n+ pre-image restore (empty → clear cell)
-    assert 'range ("D12") of ws1n to ""' in joined
+    # 1n+ pre-image restore (empty → clear cell), row-addressed
+    assert ("1n+", [{"col": "D", "value": ""}], {"row": 12, "src": batch_writes[1][2]["src"]}) \
+        in batch_writes
+    assert all(kw["src"].startswith("undo ") for _, _, kw in batch_writes)
 
 
 # ---------------------------------------------------------------------------
@@ -474,11 +484,60 @@ def test_dtd_delete_script_journals_after_successful_delete():
 # Strip-or-negate — AppleScript shape (1n+) and Python port (0分/hcbi)
 # ---------------------------------------------------------------------------
 
-def test_strip_or_negate_negation_term():
-    src = uf._strip_or_negate_lines('range ("U" & todayRow) of ws', "+15", "0")
-    assert '"+15"' in src and '"-15"' in src
-    src2 = uf._strip_or_negate_lines('range ("T" & todayRow) of ws', "+'1n+'!D12", "1")
-    assert "\"+'1n+'!D12\"" in src2 and "\"-'1n+'!D12\"" in src2
+def test_strip_or_negate_daemon_empty_cell_append_clears():
+    """The daemon's empty-cell append writes "=45" (raw builders wrote
+    "=0+45"); stripping the only term must CLEAR the cell, not leave
+    "=45-45", which 1n-backfill's is_marked still reads as marked."""
+    assert uf._strip_or_negate("=45", "+45") == ""
+    assert uf._strip_or_negate("='1n+'!D12", "+'1n+'!D12") == ""
+    assert uf._strip_or_negate("=0+45", "+45") == "=0"          # raw-builder shape still strips
+
+
+@pytest.mark.parametrize("prev,expected", [
+    ("", ""), ("missing value", ""), ("  ", ""),
+    ("1", 1), ("1.0", 1), ("830.0", 830), ("45.5", 45.5), ("-7.5", -7.5),
+    ("=1+1", "=1+1"), ("abc", "abc"),
+])
+def test_restore_value_numbers_stay_numbers(prev, expected):
+    """0n!AF (HHMM) and habit marks are compared numerically; a quoted
+    "830" would write TEXT. Pre-image text → number / blank / formula / str."""
+    assert uf._restore_value(prev) == expected
+    assert type(uf._restore_value(prev)) is type(expected)
+
+
+def test_restore_0n_cells_goes_through_daemon(monkeypatch):
+    calls = []
+    monkeypatch.setattr(uf.excel, "batch_write",
+                        lambda sheet, writes, **kw: (calls.append((sheet, writes, kw)),
+                                                     {"ok": True, "row": 293})[1])
+    errors = []
+    uf.restore_0n_cells([(31, "1.0"), (32, ""), (36, "30")], "10/19", errors, "undo hiit")
+    assert errors == []
+    assert calls == [("0n", [{"col": "AE", "value": 1}, {"col": "AF", "value": ""},
+                             {"col": "AJ", "value": 30}], {"date": "10/19", "src": "undo hiit"})]
+
+
+def test_restore_1n_cells_groups_by_row_and_restores_formula_or_number(monkeypatch):
+    calls = []
+    monkeypatch.setattr(uf.excel, "batch_write",
+                        lambda sheet, writes, **kw: (calls.append((sheet, writes, kw)),
+                                                     {"ok": True, "row": kw.get("row")})[1])
+    errors = []
+    uf.restore_1n_cells([("20", "D", "=0+30"), ("20", "K", "1"), ("21", "D", "")], errors, "undo x")
+    assert errors == []
+    assert calls == [("1n+", [{"col": "D", "value": "=0+30"}, {"col": "K", "value": 1}],
+                      {"row": 20, "src": "undo x"}),
+                     ("1n+", [{"col": "D", "value": ""}], {"row": 21, "src": "undo x"})]
+
+
+def test_restore_reports_daemon_failure(monkeypatch):
+    monkeypatch.setattr(uf.excel, "batch_write",
+                        lambda *a, **k: {"ok": False, "results": [{"ok": False, "col": "AE",
+                                                                   "error": "add_mode_needs_daemon"}],
+                                         "fallback": True})
+    errors = []
+    uf.restore_0n_cells([(31, "1")], "10/19", errors, "undo")
+    assert errors and "AE" in errors[0]
 
 
 def test_strip_or_negate_python_port():

@@ -67,7 +67,9 @@ def test_mark_night_hcmc_targets_entry_day_row():
         captured["script"] = script
         return _FakeRes()
 
-    with patch.object(zerot_fast, "ix_run", side_effect=_fake_ix_run):
+    # Daemon unreachable → the raw ix-osa script is the fallback under test here.
+    with patch.object(zerot_fast, "ix_run", side_effect=_fake_ix_run), \
+         patch.object(zerot_fast.neon_excel, "read", return_value={"ok": False, "fallback": True}):
         out = zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
 
     script = captured["script"]
@@ -442,3 +444,50 @@ def test_mark_done_calls_did_fast_when_0t_not_yet_completed():
         result = zerot_fast.mark_done()
     run.assert_called_once()
     assert result == {"results": []}
+
+
+def test_mark_night_hcmc_daemon_path_keeps_manual_value_and_writes_number():
+    """Primary path (2026-10-19): read via the daemon; a manual value wins,
+    an empty cell gets the detected minutes as a NUMBER via /batch_write."""
+    writes = []
+    with patch.object(zerot_fast.neon_excel, "read",
+                      return_value={"ok": True, "row": 180, "col": "P", "value": "20.0", "formula": "20"}), \
+         patch.object(zerot_fast, "ix_run") as ix_run:
+        out = zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
+    assert out == {"write": "SKIPPED: manual value 20.0 kept, row=180"}
+    assert ix_run.call_count == 0
+
+    def fake_bw(sheet, items, **kw):
+        writes.append((sheet, items, kw))
+        return {"ok": True, "row": 180, "results": [{"ok": True, "col": "P", "value": "35"}]}
+    with patch.object(zerot_fast.neon_excel, "read",
+                      return_value={"ok": True, "row": 180, "col": "P", "value": "", "formula": ""}), \
+         patch.object(zerot_fast.neon_excel, "batch_write", side_effect=fake_bw), \
+         patch.object(zerot_fast, "ix_run") as ix_run:
+        out = zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
+    assert out == {"write": "OK: night hcmc=35 row=180"}
+    assert writes == [("0n", [{"col": "P", "value": 35}], {"row": 180, "src": "0t night hcmc 2026-05-06"})]
+    assert ix_run.call_count == 0
+
+
+def test_write_sleep_daemon_first_then_raw_fallback():
+    calls = []
+
+    def fake_bw(sheet, items, **kw):
+        calls.append((sheet, items, kw))
+        return {"ok": True, "row": 293, "results": [{"ok": True, "col": "D", "value": "493.0"}]}
+    with patch.object(zerot_fast.neon_excel, "batch_write", side_effect=fake_bw), \
+         patch.object(zerot_fast, "ix_run") as ix_run:
+        assert zerot_fast.write_sleep(493, date(2026, 10, 19)) == "OK: sleep=493.0 row=293"
+    assert calls == [("0n", [{"col": "D", "value": 493}], {"date": "10/19", "src": "0t sleep"})]
+    assert ix_run.call_count == 0
+
+    class _Res:
+        returncode = 0
+        stdout = "OK: sleep=493 row=293"
+        stderr = ""
+    with patch.object(zerot_fast.neon_excel, "batch_write",
+                      return_value={"ok": False, "error": "daemon_unreachable", "fallback": True}), \
+         patch.object(zerot_fast, "ix_run", return_value=_Res()) as ix_run:
+        assert zerot_fast.write_sleep(493, date(2026, 10, 19)) == "OK: sleep=493 row=293"
+    assert ix_run.call_count == 1, "unattended Ix cron path keeps the raw script as fallback"

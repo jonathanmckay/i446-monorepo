@@ -224,6 +224,21 @@ def mark_night_hcmc(minutes: int, target_date: date) -> dict:
         col = cols.maybe_col("0n", "night hcmc") or "P"
     except Exception:
         col = "P"
+    md = f"{target_date.month}/{target_date.day}"
+    # Daemon path (journaled + semantic ledger, Neon-off-Excel step 2b):
+    # read, keep a manual value, else write the detected minutes as a NUMBER.
+    try:
+        rd = neon_excel.read("0n", col, date=md)
+        if rd.get("ok") and not rd.get("fallback"):
+            prev = str(rd.get("value") or "").strip()
+            if prev not in ("", "0", "0.0"):
+                return {"write": f"SKIPPED: manual value {prev} kept, row={rd.get('row')}"}
+            wr = neon_excel.batch_write("0n", [{"col": col, "value": int(minutes)}],
+                                        row=rd.get("row"), src=f"0t night hcmc {target_date.isoformat()}")
+            if wr.get("ok") and not wr.get("fallback"):
+                return {"write": f"OK: night hcmc={minutes} row={wr.get('row')}"}
+    except Exception as e:  # noqa: BLE001 — fall through to the raw script
+        print(f"night hcmc daemon path failed ({e}); using ix-osa", file=sys.stderr)
     script = f'''tell application "Microsoft Excel"
     set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set targetRow to 0
@@ -412,9 +427,21 @@ def compute_sleep(yesterday: date, today: date) -> int:
 
 
 def write_sleep(sleep_minutes: int, today: date) -> str:
-    """Write sleep minutes to 0₦ column D for today."""
+    """Write sleep minutes to 0₦ column D for today. Daemon first (journaled +
+    semantic ledger, number stays a number); the raw ix-osa script below is
+    the daemon-down fallback (this runs unattended from Ix cron at 14:00, so
+    the fallback stays — there is no dtd retry behind it)."""
     month = today.month
     day = today.day
+    try:
+        wr = neon_excel.batch_write("0n", [{"col": "D", "value": int(sleep_minutes)}],
+                                    date=f"{month}/{day}", src="0t sleep")
+        if wr.get("ok") and not wr.get("fallback"):
+            r0 = (wr.get("results") or [{}])[0]
+            return f"OK: sleep={r0.get('value', sleep_minutes)} row={wr.get('row')}"
+        print(f"sleep daemon write unavailable ({wr.get('error')}); using ix-osa", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"sleep daemon write failed ({e}); using ix-osa", file=sys.stderr)
     script = f'''tell application "Microsoft Excel"
     set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
     set todayRow to 0
