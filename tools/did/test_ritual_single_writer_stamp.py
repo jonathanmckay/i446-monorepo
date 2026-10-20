@@ -88,7 +88,7 @@ def test_run_ritual_routes_stamps_through_ix():
     )
 
 
-def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text():
+def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text(monkeypatch):
     """Direct reproduction of the 2026-08-16 bug: 巳's 🎯 then ✅ completed
     8s apart from Straylight. By the time ✅'s run_ritual call started, its
     OWN pre-ssh local read of build-order.md hadn't yet synced 🎯's stamp
@@ -109,7 +109,7 @@ def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text():
 
     def fake_run(cmd, **kw):
         return _P(f"CH\n{ix_post_stamp_text}")
-    df.subprocess.run = fake_run
+    monkeypatch.setattr(df.subprocess, "run", fake_run)  # global module: never assign bare
 
     # The stale local copy alone (pre-fix behavior) would stamp ✅ onto a
     # text that's missing 🎯, undercounting 巳 by 3.
@@ -126,7 +126,7 @@ def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text():
     assert fixed_total == 13, "the fix must score off Ix's authoritative text, not the stale local copy"
 
 
-def test_stamp_on_ix_remote_script_uses_a_lock():
+def test_stamp_on_ix_remote_script_uses_a_lock(monkeypatch):
     """Regression (2026-07-29): "did all the -1n for 申 and 午 but it's still
     wrong". Even with a single writer (Ix), rituals are routinely completed
     within seconds of each other (dtd batch-completions) -- 4 of 申's 5
@@ -142,7 +142,7 @@ def test_stamp_on_ix_remote_script_uses_a_lock():
     def fake_run(cmd, **kw):
         calls.append((cmd, kw.get("input", "")))
         return _P("CH\n")
-    df.subprocess.run = fake_run
+    monkeypatch.setattr(df.subprocess, "run", fake_run)  # global module: never assign bare
     df._stamp_on_ix("申", "☀️")
     _, payload = calls[0]
     assert "fcntl" in payload and "flock" in payload, (
