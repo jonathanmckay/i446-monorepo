@@ -6441,11 +6441,8 @@ def _on_enter(event):
                 else:
                     for eid in ids:
                         await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
-                if reopen:
-                    # update_entry doesn't know a PUT just changed which
-                    # entry is live — drop the shared current-cache so the
-                    # fetch_current below (and every other poller) sees it.
-                    toggl_api._invalidate_current_cache()
+                # (reopen: update_entry write-throughs the reopened entry as
+                # the running one from the PUT response, 2026-10-20.)
                 # Value-tag 媒分 credit — completed entry credits at once
                 # (minutes known); a running one queues until it stops
                 # (fetch_today resolves). Journaled so re-edits can't
@@ -7048,7 +7045,7 @@ def _(event):
 
     async def _refresh():
         STATE.toggl_blocked_until = {"user": 0.0, "ws": 0.0}  # manual refresh clears any back-off
-        await asyncio.to_thread(fetch_current)
+        await asyncio.to_thread(fetch_current, False)  # ^R: a deliberate live read
         await asyncio.to_thread(fetch_today, True)
         await asyncio.to_thread(fetch_gcal, True)
         flash("refreshed")
@@ -7524,7 +7521,7 @@ async def main():
         pass
 
     # Fast fetches only (sub-second) — enough content for an instant first paint.
-    fetch_current()
+    fetch_current(cached=False)  # startup: one live read, then the shared cache
     fetch_today(True)  # forced: the startup load must not be throttled/coalesced
     fetch_short_names()  # dtd's abbreviated labels (local file read)
 

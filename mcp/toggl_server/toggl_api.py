@@ -23,6 +23,7 @@ REPORTS_PAGE_SIZE = 1000
 # workspace-bucket call) is cached here and refetched only when an unknown
 # id shows up (a tag created since).
 TAGS_CACHE = Path.home() / ".cache" / "toggl-tags.json"
+TAGS_REFETCH_MIN_S = 600.0
 
 # janus polls the running timer only every 30s; signalling it after a
 # timer-state change makes it refresh immediately. This lives in toggl_api
@@ -322,16 +323,21 @@ def _tag_names(tag_ids):
     still unknown after that (fetch failed) fall back to their str()."""
     ids = {int(t) for t in tag_ids if t is not None}
     try:
-        cache = {int(k): v for k, v in json.loads(TAGS_CACHE.read_text()).items()}
-    except (OSError, ValueError, TypeError):
-        cache = {}
-    if ids - set(cache):
+        raw = json.loads(TAGS_CACHE.read_text())
+        cache = {int(k): v for k, v in raw.get("tags", {}).items()}
+        fetched_at = float(raw.get("fetched_at", 0.0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        cache, fetched_at = {}, 0.0
+    # An id that stays unknown (a tag deleted after use) must not trigger a
+    # refetch on every call: at most one per TAGS_REFETCH_MIN_S.
+    if ids - set(cache) and time.time() - fetched_at >= TAGS_REFETCH_MIN_S:
         try:
             fresh = _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/tags") or []
             cache = {int(t["id"]): t["name"] for t in fresh if "id" in t}
             TAGS_CACHE.parent.mkdir(parents=True, exist_ok=True)
             tmp = TAGS_CACHE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({str(k): v for k, v in cache.items()}))
+            tmp.write_text(json.dumps({"fetched_at": time.time(),
+                                       "tags": {str(k): v for k, v in cache.items()}}))
             tmp.replace(TAGS_CACHE)
         except (RuntimeError, OSError, KeyError, TypeError, ValueError):
             pass
@@ -396,24 +402,35 @@ def get_entries(start_date=None, end_date=None, include_running=True):
     current cache when that observation is recent (no network: a cold cache
     on a machine without janus simply yields no running row). Pass
     include_running=False when only completed time matters."""
-    today = datetime.now(_local_tz()).date()
+    tz = _local_tz()
+    today = datetime.now(tz).date()
     start = _date_part(start_date, today)
     end_excl = _date_part(end_date, start + timedelta(days=1))
     end = max(start, end_excl - timedelta(days=1))
-    entries = _reports_search(start, end)
+    # Reports filters on WORKSPACE-local dates; the active zone can differ
+    # (/travel). Query a day wider each side (no extra requests, just rows)
+    # and keep exactly the entries whose start falls on [start, end] in the
+    # active zone, so callers get the same answer wherever JM is.
+    rows = _reports_search(start - timedelta(days=1), end + timedelta(days=1))
+    entries = [e for e in rows if start <= (_start_day(e, tz) or start - timedelta(days=1)) <= end]
     if include_running:
         found, cur = _read_current_cache(CURRENT_CACHE_MAX_MERGE_AGE)
         if found and isinstance(cur, dict) and cur.get("id") is not None:
             if all(e["id"] != cur.get("id") for e in entries):
-                try:
-                    cur_day = datetime.fromisoformat(
-                        str(cur.get("start")).replace("Z", "+00:00")).astimezone(_local_tz()).date()
-                except (ValueError, TypeError):
-                    cur_day = None
+                cur_day = _start_day(cur, tz)
                 if cur_day is not None and start <= cur_day <= end:
                     entries.append(dict(cur))
     entries.sort(key=lambda e: e.get("start") or "")
     return entries
+
+
+def _start_day(entry, tz):
+    """The local (active-zone) date an entry started on, or None."""
+    try:
+        return datetime.fromisoformat(
+            str(entry.get("start")).replace("Z", "+00:00")).astimezone(tz).date()
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def get_projects():
@@ -455,13 +472,14 @@ def update_entry(entry_id, **fields):
     body = {"workspace_id": TOGGL_WORKSPACE_ID}
     body.update(fields)
     entry = _request("PUT", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}", body)
-    if was_running:
-        if fields.get("stop"):
-            _write_current_cache(None)  # the running entry was closed
-            if isinstance(entry, dict):
-                _credit_value_tags(entry)
-        elif isinstance(entry, dict) and (entry.get("duration") or 0) < 0:
-            _write_current_cache(entry)  # still running, fields changed
+    if was_running and fields.get("stop"):
+        _write_current_cache(None)  # the running entry was closed
+        if isinstance(entry, dict):
+            _credit_value_tags(entry)
+    elif isinstance(entry, dict) and (entry.get("duration") or 0) < 0:
+        # Still running with fields changed, OR a closed entry REOPENED
+        # (janus: stop=None, duration=-epoch): either way this is what runs now.
+        _write_current_cache(entry)
     return entry
 
 

@@ -14,12 +14,12 @@ def _load():
     sys.modules["janus_rl"] = mod
     spec.loader.exec_module(mod)
     mod.STATE.day_offset = 0
-    mod.STATE.toggl_blocked_until = 0.0
+    mod.STATE.toggl_blocked_until = {"user": 0.0, "ws": 0.0}
     mod.STATE.last_toggl_fetch = 0.0
     # These tests exercise the IN-PROCESS cooldown; isolate them from the shared
     # cross-process cooldown file (covered by test_throttle.py), whose real state
     # would otherwise leak a live cooldown into _toggl_blocked().
-    mod.toggl_throttle.cooling_down = lambda: False
+    mod.toggl_throttle.cooling_down = lambda *a, **k: False
     return mod
 
 
@@ -39,7 +39,7 @@ def test_402_starts_cooldown_then_skips_toggl(monkeypatch):
     monkeypatch.setattr(m.toggl_api, "get_entries",
                         lambda **k: (_ for _ in ()).throw(Exception("HTTP 402 rate limit")))
     m.fetch_today(force=True)  # hits 402
-    assert m.STATE.toggl_blocked_until > m.time.monotonic(), "402 must start a cooldown"
+    assert max(m.STATE.toggl_blocked_until.values()) > m.time.monotonic(), "402 must start a cooldown"
 
     # During the cooldown, even a forced fetch is skipped — no API call made.
     calls = []
@@ -50,7 +50,7 @@ def test_402_starts_cooldown_then_skips_toggl(monkeypatch):
 
 def test_fetch_current_skips_during_cooldown(monkeypatch):
     m = _load()
-    m.STATE.toggl_blocked_until = m.time.monotonic() + 60
+    m.STATE.toggl_blocked_until = {"user": m.time.monotonic() + 60, "ws": m.time.monotonic() + 60}
     calls = []
     monkeypatch.setattr(m.toggl_api, "get_current", lambda: calls.append(1))
     monkeypatch.setattr(m.toggl_api, "get_current_cached", lambda: calls.append(1))
@@ -61,7 +61,7 @@ def test_fetch_current_skips_during_cooldown(monkeypatch):
 
 def test_cooldown_expiry_allows_fetch_again(monkeypatch):
     m = _load()
-    m.STATE.toggl_blocked_until = m.time.monotonic() - 1  # already expired
+    m.STATE.toggl_blocked_until = {"user": m.time.monotonic() - 1, "ws": m.time.monotonic() - 1}  # already expired
     calls = []
     monkeypatch.setattr(m.toggl_api, "get_entries", lambda **k: calls.append(1) or [])
     m.fetch_today(force=True)
@@ -77,8 +77,8 @@ def test_shared_cooldown_silences_pollers(monkeypatch):
     """A 402 tripped by any process (shared cooldown) must silence janus's
     pollers even when this process has no in-process back-off."""
     m = _load()
-    m.STATE.toggl_blocked_until = 0.0          # no in-process cooldown
-    m.toggl_throttle.cooling_down = lambda: True  # but the SHARED file says 402
+    m.STATE.toggl_blocked_until = {"user": 0.0, "ws": 0.0}          # no in-process cooldown
+    m.toggl_throttle.cooling_down = lambda *a, **k: True  # but the SHARED file says 402
     calls = []
     monkeypatch.setattr(m.toggl_api, "get_entries", lambda **k: calls.append(1) or [])
     m.fetch_today(force=True)
@@ -91,7 +91,7 @@ def test_sigusr1_refresh_debounces_burst(monkeypatch):
     Toggl GETs), instead of one refresh per /tg."""
     import asyncio
     m = _load()
-    m.toggl_throttle.cooling_down = lambda: False
+    m.toggl_throttle.cooling_down = lambda *a, **k: False
 
     class _App:
         def invalidate(self):
@@ -160,7 +160,7 @@ def test_day_nav_402_falls_back_to_cached_day_not_mismatched_stale_data(monkeypa
                         lambda **k: (_ for _ in ()).throw(Exception("HTTP 402 rate limit")))
     m.STATE.day_offset = -1
     m.STATE.last_toggl_fetch = 0.0
-    m.STATE.toggl_blocked_until = 0.0  # this test's own cooldown, not the 402 in progress
+    m.STATE.toggl_blocked_until = {"user": 0.0, "ws": 0.0}  # this test's own cooldown, not the 402 in progress
     m.view_now = lambda: real_dt.datetime.now(tz) - real_dt.timedelta(days=1)
     m.fetch_today(force=True)
 

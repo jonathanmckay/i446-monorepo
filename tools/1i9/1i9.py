@@ -15,15 +15,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import datetime as _dt
 import importlib.util
 import json
 import re
 import sys
-import urllib.request
 from pathlib import Path
-from urllib.parse import quote
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402

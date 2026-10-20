@@ -784,7 +784,7 @@ def test_daemon_no_longer_sets_0n_value_tag_minutes():
 def test_compute_toggl_point_tag_minutes_sums_only_configured_tags(monkeypatch):
     mod = _load_daemon()
     target_date = dt.date(2026, 8, 13)
-    monkeypatch.setattr(mod, "_toggl_get", lambda path: [
+    monkeypatch.setattr(mod, "_toggl_entries", lambda start, end: [
         {"duration": 600, "tags": ["xk88"], "project_id": 1},   # 10m, counts
         {"duration": 1200, "tags": ["xk88"], "project_id": 2},  # 20m, counts
         {"duration": 300, "tags": ["-1"], "project_id": 3},     # not a point tag

@@ -19,3 +19,16 @@ def _clean_toggl_throttle():
     _THROTTLE_STATE.unlink(missing_ok=True)
     yield
     _THROTTLE_STATE.unlink(missing_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_toggl_caches(monkeypatch, tmp_path):
+    """Mutations write-through the shared running-timer cache (2026-10-20), so
+    a test's fake start_timer({"id": 1}) would otherwise plant a phantom
+    running entry in the developer's live ~/.cache/toggl-current.json (it
+    did, once). Point every cache file at tmp unless the test overrides it."""
+    from toggl_server import toggl_api
+    monkeypatch.setattr(toggl_api, "CURRENT_CACHE", tmp_path / "toggl-current.json")
+    monkeypatch.setattr(toggl_api, "TAGS_CACHE", tmp_path / "toggl-tags.json")
+    monkeypatch.setattr(toggl_api, "JANUS_PID", tmp_path / "janus.pid")
+    yield
