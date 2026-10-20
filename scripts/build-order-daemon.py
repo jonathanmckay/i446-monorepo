@@ -2021,9 +2021,9 @@ def _load_toggl_key() -> str:
 
 def _toggl_entries(start: str, end: str) -> list:
     """Time entries starting on local days [start, end) via the shared client
-    (Reports-backed get_entries: workspace quota, 600/hr). Replaces a raw
-    GET /me/time_entries, which is charged to the 30/hr user bucket on every
-    plan and had no throttle or cooldown handling (2026-10-20)."""
+    (get_entries: local-midnight bounds, shared throttle, per-bucket 402
+    cooldown, request log). Replaces a raw GET that had none of that
+    (2026-10-20)."""
     key = _load_toggl_key()
     if not key:
         raise RuntimeError("No TOGGL_API_KEY found")

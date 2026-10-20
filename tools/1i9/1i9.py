@@ -66,9 +66,9 @@ def _toggl_key() -> str:
 
 def i9_minutes(start: _dt.date, end: _dt.date) -> int:
     """Minutes on the i9 Toggl project for Sun-Sat, local-tz boundaries."""
-    # Shared client, Reports-backed (workspace quota) instead of a raw
-    # GET /me/time_entries (30/hr user bucket on every plan, 2026-10-20).
-    # get_entries filters on local DATES; keep the Sun-Sat local-day check.
+    # Shared client (throttle, per-bucket cooldown, request log) instead of a
+    # raw GET (2026-10-20). get_entries sends local-midnight bounds; the
+    # Sun-Sat local-day check below stays as belt and braces.
     import os
     os.environ.setdefault("TOGGL_API_KEY", _toggl_key())
     root = str(Path.home() / "i446-monorepo")

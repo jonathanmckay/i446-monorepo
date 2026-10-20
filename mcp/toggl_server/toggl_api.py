@@ -13,16 +13,11 @@ from . import throttle
 from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
 BASE_URL = "https://api.track.toggl.com/api/v9"
-# Reports API v3: workspace-scoped, so it is charged to the plan's hourly
-# quota (600/hr on Premium) instead of the fixed 30/hr that every /me/* read
-# shares on every plan (Toggl docs, 2026-10-20). All entry READS go through
-# it; see get_entries. It never returns the running entry (verified live).
-REPORTS_URL = "https://api.track.toggl.com/reports/api/v3"
-REPORTS_PAGE_SIZE = 1000
-# Reports rows carry tag_ids, not names; the workspace tag list (one
-# workspace-bucket call) is cached here and refetched only when an unknown
-# id shows up (a tag created since).
-TAGS_CACHE = Path.home() / ".cache" / "toggl-tags.json"
+# One line per HTTP call (ts, pid, program, method, path, status, quota
+# remaining / resets-in). The only way to answer "who spent the hourly
+# quota" — nothing else records it (2026-10-20: a bucket went 582 -> 0 in
+# 25 minutes with no caller identifiable).
+REQUEST_LOG = Path.home() / ".cache" / "toggl-requests.log"
 TAGS_REFETCH_MIN_S = 600.0
 
 # janus polls the running timer only every 30s; signalling it after a
@@ -31,10 +26,13 @@ TAGS_REFETCH_MIN_S = 600.0
 # /d357, not just the toggl_cli path that previously had its own nudge.
 JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
-# Shared running-timer cache. /me/time_entries/current is the ONE read that
-# has no workspace-scoped equivalent (every /workspaces/... variant is a 405),
-# so it is charged to the 30/hr user bucket on every plan. Several processes
-# poll it (janus every 30s, every open dtd picker via dtd-ticker, …), so:
+# Shared running-timer cache. Toggl's hourly quota is per BUCKET: every
+# /me/* read (current, time_entries) is charged to one bucket, every
+# /workspaces/* write to another (measured 2026-10-20: /me/current had 184
+# left while /workspaces had 0 and vice-versa earlier). Reads therefore live
+# on /me on purpose, so read load can never block a write; but the read
+# bucket is finite (~600/hr) and several processes poll the running timer
+# (janus every 30s, every open dtd picker via dtd-ticker, …), so:
 #  - every live get_current() write-throughs here and pollers read this file
 #    within CURRENT_CACHE_TTL instead of each hitting the API (N pollers ->
 #    ~one network read per window: 12/hr at the 5-minute TTL);
@@ -113,6 +111,17 @@ def _auth_header():
 # freeze the UI (dtd's execute-silent action scripts) lower these via env so a
 # 429 fails fast instead of sleeping up to ~60s mid-keystroke.
 _MAX_429_RETRIES = int(os.environ.get("TOGGL_MAX_429_RETRIES", "3"))
+# Test suites must never spend the hourly quota (2026-10-20: tools/tg tests
+# were found making ~20 live /projects calls per run, and one tried to
+# CREATE an entry). Under pytest, a call that reaches the REAL urlopen is a
+# test bug; tests that mean to hit Toggl set TOGGL_ALLOW_NETWORK=1.
+_REAL_URLOPEN = urllib.request.urlopen
+
+
+def _guard_network():
+    if (os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("TOGGL_ALLOW_NETWORK")
+            and urllib.request.urlopen is _REAL_URLOPEN):
+        raise RuntimeError("Toggl API call blocked under pytest (set TOGGL_ALLOW_NETWORK=1 to allow)")
 _MAX_429_DELAY = float(os.environ.get("TOGGL_MAX_429_DELAY", "30"))
 
 
@@ -133,6 +142,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
     bucket = throttle.bucket_for(path)
     left = throttle.quota_remaining(bucket)
     if left > 0:
+        _log_request(method, path, "skip-402", None)
         raise RuntimeError(
             f"Toggl API {method} {path} -> 402 (hourly quota for the {bucket} bucket is "
             f"exhausted; resets in {int(left)}s; request not sent)")
@@ -141,6 +151,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
     # to the UI and the next poll re-trips it — the same pattern ibx/slack.py
     # and ibx/sync_external_replies.py already use for their APIs.
     for attempt in range(_MAX_429_RETRIES):
+        _guard_network()
         throttle.acquire()  # client-side pacing, shared across all processes
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", _auth_header())
@@ -151,6 +162,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
                     raw = resp.read()
                     result = json.loads(raw) if raw else None
                     headers = getattr(resp, "headers", None)
+                    _log_request(method, path, resp.status, headers)
                     _note_quota_headers(headers, bucket)
                     if method != "GET":  # a mutation succeeded → wake janus now
                         _notify_tui()
@@ -158,6 +170,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
                 return (None, None) if want_headers else None
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else ""
+            _log_request(method, path, e.code, e.headers)
             if e.code == 402:
                 # Hourly quota: the body says how long ("reset in N seconds"),
                 # the header too. Arm THIS bucket only.
@@ -173,6 +186,20 @@ def _request(method, path, body=None, base=None, want_headers=False):
                     time.sleep(min(delay, _MAX_429_DELAY))
                     continue
             raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")
+
+
+def _log_request(method, path, status, headers):
+    try:
+        prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "?"
+        rem = _header_float(headers, "X-Toggl-Quota-Remaining")
+        rst = _header_float(headers, "X-Toggl-Quota-Resets-In")
+        REQUEST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(REQUEST_LOG, "a") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{os.getpid()}\t{prog}\t{method}\t"
+                     f"{path.split('?')[0]}\t{status}\t{'' if rem is None else int(rem)}\t"
+                     f"{'' if rst is None else int(rst)}\n")
+    except Exception:  # noqa: BLE001 — logging never breaks a call
+        pass
 
 
 def _header_float(headers, name):
@@ -317,120 +344,33 @@ def _local_tz():
         return datetime.now().astimezone().tzinfo
 
 
-def _tag_names(tag_ids):
-    """tag id -> name for the given ids, via the disk-cached workspace tag
-    list; refetched (one workspace-bucket call) when an id is unknown. Ids
-    still unknown after that (fetch failed) fall back to their str()."""
-    ids = {int(t) for t in tag_ids if t is not None}
-    try:
-        raw = json.loads(TAGS_CACHE.read_text())
-        cache = {int(k): v for k, v in raw.get("tags", {}).items()}
-        fetched_at = float(raw.get("fetched_at", 0.0))
-    except (OSError, ValueError, TypeError, AttributeError):
-        cache, fetched_at = {}, 0.0
-    # An id that stays unknown (a tag deleted after use) must not trigger a
-    # refetch on every call: at most one per TAGS_REFETCH_MIN_S.
-    if ids - set(cache) and time.time() - fetched_at >= TAGS_REFETCH_MIN_S:
-        try:
-            fresh = _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/tags") or []
-            cache = {int(t["id"]): t["name"] for t in fresh if "id" in t}
-            TAGS_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            tmp = TAGS_CACHE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({"fetched_at": time.time(),
-                                       "tags": {str(k): v for k, v in cache.items()}}))
-            tmp.replace(TAGS_CACHE)
-        except (RuntimeError, OSError, KeyError, TypeError, ValueError):
-            pass
-    return {i: cache.get(i, str(i)) for i in ids}
-
-
-def _reports_search(start, end):
-    """Every completed entry whose start falls on [start, end] (inclusive,
-    workspace-local dates) from Reports v3, flattened to v9-shaped dicts.
-    Paginates via X-Next-Row-Number."""
-    out = []
-    first_row = 1
-    for _ in range(200):  # hard stop; a day has far fewer than 200k rows
-        body = {"start_date": start.isoformat(), "end_date": end.isoformat(),
-                "page_size": REPORTS_PAGE_SIZE, "first_row_number": first_row}
-        groups, headers = _request("POST", f"/workspace/{TOGGL_WORKSPACE_ID}/search/time_entries",
-                                   body, base=REPORTS_URL, want_headers=True)
-        if not groups:
-            break
-        for g in groups:
-            for te in g.get("time_entries") or []:
-                secs = te.get("seconds")
-                out.append({
-                    "id": te.get("id"),
-                    "workspace_id": TOGGL_WORKSPACE_ID,
-                    "user_id": g.get("user_id"),
-                    "project_id": g.get("project_id"),
-                    "task_id": g.get("task_id"),
-                    "billable": g.get("billable"),
-                    "description": g.get("description") or "",
-                    "start": te.get("start"),
-                    "stop": te.get("stop"),
-                    "duration": int(secs) if secs is not None else 0,
-                    "tag_ids": list(g.get("tag_ids") or []),
-                    "at": te.get("at"),
-                })
-        nxt = _header_float(headers, "X-Next-Row-Number")
-        if nxt is None or int(nxt) <= first_row:
-            break
-        first_row = int(nxt)
-    all_ids = {t for e in out for t in e["tag_ids"]}
-    names = _tag_names(all_ids) if all_ids else {}
-    for e in out:
-        e["tags"] = [names.get(int(t), str(t)) for t in e["tag_ids"]]
-    return out
-
-
 def get_entries(start_date=None, end_date=None, include_running=True):
-    """Time entries starting on the local days [start_date, end_date), v9
-    shaped (id, description, start, stop, duration -- negative while running
-    --, project_id, tags as NAMES, ...). Same signature and shape as the old
-    GET /me/time_entries wrapper so every caller moved at once, but sourced
-    from the Reports API (workspace bucket, 600/hr) instead of /me (30/hr).
+    """Time entries starting on the local days [start_date, end_date) (end
+    exclusive), v9 shaped: id, description, start, stop, duration (negative
+    while running), project_id, tags as NAMES, ...
 
-    Differences from v9 to know about: v9 filtered on UTC instants and
-    end-exclusive; Reports filters on workspace-local DATES, inclusive, so
-    end_date here is mapped to end_date - 1 day. Every existing caller widens
-    its window by a day each side and clips locally, so this is a superset
-    for them. RFC3339 bounds are reduced to their local date.
+    Read bucket on purpose (2026-10-20): GET /me/time_entries is charged to
+    Toggl's /me hourly quota, which is separate from the /workspaces quota
+    the writes use, so no amount of read load can block starting or adding
+    an entry. (A Reports-API version was tried the same morning: it put the
+    reads on the WRITE bucket and the morning's reads blocked every write.)
 
-    Reports never returns the RUNNING entry; it is merged in from the shared
-    current cache when that observation is recent (no network: a cold cache
-    on a machine without janus simply yields no running row). Pass
-    include_running=False when only completed time matters."""
+    Bounds: bare dates are sent as local-midnight RFC3339 instants, so the
+    window is exact in the active zone (v9 reads bare dates as UTC midnights,
+    which chopped the last ~7h of a PT day); RFC3339 strings pass through.
+    The running entry is included when it started inside the window;
+    include_running=False drops it (completed time only)."""
     tz = _local_tz()
     today = datetime.now(tz).date()
     start = _date_part(start_date, today)
     end_excl = _date_part(end_date, start + timedelta(days=1))
-    end = max(start, end_excl - timedelta(days=1))
-    # Reports filters on WORKSPACE-local dates; the active zone can differ
-    # (/travel). Query a day wider each side (no extra requests, just rows)
-    # and keep exactly the entries whose start falls on [start, end] in the
-    # active zone, so callers get the same answer wherever JM is.
-    rows = _reports_search(start - timedelta(days=1), end + timedelta(days=1))
-    entries = [e for e in rows if start <= (_start_day(e, tz) or start - timedelta(days=1)) <= end]
-    if include_running:
-        found, cur = _read_current_cache(CURRENT_CACHE_MAX_MERGE_AGE)
-        if found and isinstance(cur, dict) and cur.get("id") is not None:
-            if all(e["id"] != cur.get("id") for e in entries):
-                cur_day = _start_day(cur, tz)
-                if cur_day is not None and start <= cur_day <= end:
-                    entries.append(dict(cur))
-    entries.sort(key=lambda e: e.get("start") or "")
+    s_iso = datetime.combine(start, datetime.min.time(), tzinfo=tz).isoformat()
+    e_iso = datetime.combine(end_excl, datetime.min.time(), tzinfo=tz).isoformat()
+    from urllib.parse import quote
+    entries = _request("GET", f"/me/time_entries?start_date={quote(s_iso)}&end_date={quote(e_iso)}") or []
+    if not include_running:
+        entries = [e for e in entries if (e.get("duration") or 0) >= 0 and e.get("stop")]
     return entries
-
-
-def _start_day(entry, tz):
-    """The local (active-zone) date an entry started on, or None."""
-    try:
-        return datetime.fromisoformat(
-            str(entry.get("start")).replace("Z", "+00:00")).astimezone(tz).date()
-    except (ValueError, TypeError, AttributeError):
-        return None
 
 
 def get_projects():
@@ -490,12 +430,14 @@ def delete_entry(entry_id):
         raise RuntimeError(f"Toggl API DELETE {path} -> 402 (hourly quota exhausted; "
                            f"resets in {int(left)}s; request not sent)")
     was_running = _cached_is(entry_id)
+    _guard_network()
     throttle.acquire()  # same client-side pacing as _request()
     req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")
     req.add_header("Authorization", _auth_header())
     try:
         with urllib.request.urlopen(req) as resp:
             ok = resp.status in (200, 204)
+            _log_request("DELETE", path, resp.status, getattr(resp, "headers", None))
             if ok:
                 if was_running:  # deleting the running entry → idle
                     _write_current_cache(None)

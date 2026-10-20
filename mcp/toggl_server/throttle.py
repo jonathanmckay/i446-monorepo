@@ -5,14 +5,14 @@ Toggl enforces two different limits (engineering.toggl.com/docs/track, 2026-10):
 1. A ~1 req/sec leaky bucket per API token -> HTTP 429. Short; the shared
    `cooldown_until` (COOLDOWN, 60s) covers it.
 2. An HOURLY sliding-window quota per BUCKET -> HTTP 402 with "Your quota will
-   reset in N seconds". User-scoped requests (`/api/v9/me/*`) get 30/hr on
-   EVERY plan (Toggl offers no higher quota for them, whatever the 402 body's
-   "upgrade" text says). Workspace-scoped requests (`/workspaces/{id}/*`, the
-   Reports API) get the plan's quota: 600/hr on Premium. A 402 on one bucket
-   says nothing about the other, so the quota cooldown is tracked PER BUCKET
-   (`quota_until_user`, `quota_until_ws`) -- before 2026-10-20 one exhausted
-   /me/current bucket parked every write too, with 580 workspace requests
-   still available.
+   reset in N seconds" (and X-Toggl-Quota-Remaining / -Resets-In headers on
+   every response). Measured 2026-10-20: /api/v9/me/* reads (current,
+   time_entries) are charged to one bucket and /workspaces/* writes (plus the
+   Reports API) to another, each ~600/hr on Premium, with independent
+   windows. A 402 on one bucket says nothing about the other, so the quota
+   cooldown is tracked PER BUCKET (`quota_until_user`, `quota_until_ws`):
+   before this, one exhausted read bucket parked every write too. Reads are
+   kept on /me ON PURPOSE so read load can never block adding an entry.
 
 The tricky part: `tg-fast` spawns a fresh PROCESS per /tg command, so an
 in-process limiter can't coordinate across invocations. This paces EVERY
@@ -55,8 +55,8 @@ MAX_COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_MAX_COOLDOWN", "3600.0"))
 RESET_MARGIN = 5.0  # s past the server's reset estimate before the first retry
 _RESET_RE = re.compile(r"reset in (\d+) seconds", re.IGNORECASE)
 
-# Toggl's hourly quota buckets. "user" = /api/v9/me/* (30/hr on every plan);
-# "ws" = everything workspace-scoped, including the Reports API.
+# Toggl's hourly quota buckets. "user" = /api/v9/me/* (all our reads);
+# "ws" = everything workspace-scoped (all our writes), incl. the Reports API.
 BUCKETS = ("user", "ws")
 
 

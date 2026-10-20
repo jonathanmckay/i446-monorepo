@@ -80,9 +80,9 @@ TOGGL_API_KEY = _load_toggl_key()
 
 
 def _toggl_api():
-    """The shared Toggl client. Entry reads use its Reports-backed get_entries
-    (workspace quota, 600/hr) instead of a raw GET /me/time_entries (30/hr
-    user bucket on every plan, 2026-10-20); throttle/cooldowns are shared."""
+    """The shared Toggl client. Entry reads use its get_entries (shared
+    throttle, per-bucket 402 cooldown, request log) instead of a raw GET
+    (2026-10-20)."""
     os.environ.setdefault("TOGGL_API_KEY", TOGGL_API_KEY)
     root = str(Path.home() / "i446-monorepo")
     if root not in sys.path:
@@ -150,8 +150,8 @@ def entry_local_dt(e: dict) -> datetime | None:
 def gather_entries_local(*days: date) -> list[dict]:
     """Fetch entries across one or more local day-buckets and dedupe by id.
 
-    get_entries buckets by local start date (Reports-backed, 2026-10-20); the
-    overnight window still spans yesterday's and today's buckets.
+    get_entries sends local-midnight bounds (2026-10-20); the overnight window
+    still spans yesterday's and today's buckets.
     """
     seen: dict = {}
     for d in days:
