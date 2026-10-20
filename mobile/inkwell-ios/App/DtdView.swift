@@ -17,6 +17,7 @@ struct DtdView: View {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        actionIcon: "plus", onAction: { addText = ""; showAdd = true },
                        onRetry: { store.reload() })
+            if store.agentCount > 0 { agentBanner }
             taskList
         }
         .background(Theme.bg)
@@ -28,6 +29,17 @@ struct DtdView: View {
             Button("add") { store.add(addText) }
             Button("cancel", role: .cancel) {}
         }
+    }
+
+    /// Web's "◐ 😈 ×N": how many cards a Claude session is working right now.
+    private var agentBanner: some View {
+        HStack(spacing: 6) {
+            Spinner().foregroundStyle(Theme.dim)
+            Text("😈" + (store.agentCount > 1 ? " ×\(store.agentCount)" : "") + " agent working")
+                .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            Spacer()
+        }
+        .padding(.horizontal, 14).padding(.bottom, 4)
     }
 
     private var taskList: some View {
@@ -129,14 +141,31 @@ private struct DelayDialog: ViewModifier {
 struct TaskRow: View {
     let task: DtdTask
     var body: some View {
+        // Agent-claimed rows go grey with 😈 (web: .row.agent); the task whose
+        // timer is live gets ▶ and a brighter bar (2026-10-20 phone request).
+        let color: Color = task.agent ? Theme.dim : Color(hex: task.color)
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2).fill(Color(hex: task.color)).frame(width: 4, height: 22)
-            Text((task.recurring ? "↻ " : "") + task.title)
-                .font(Theme.mono).foregroundStyle(Color(hex: task.color)).lineLimit(2)
+            RoundedRectangle(cornerRadius: 2).fill(Color(hex: task.color))
+                .frame(width: task.running ? 6 : 4, height: 22)
+            Text(task.prefix + task.title)
+                .font(Theme.mono).foregroundStyle(color).lineLimit(2)
             Spacer(minLength: 8)
+            if task.running { Spinner().foregroundStyle(Theme.accent) }
             Text(task.meta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// The web's ◐ rotating glyph (1 rev/s), used beside a running row and in
+/// the header when any 😈 agent is mid-turn.
+struct Spinner: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 12)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            Text("◐").font(Theme.mono)
+                .rotationEffect(.degrees((t.truncatingRemainder(dividingBy: 1)) * 360))
+        }
     }
 }
 

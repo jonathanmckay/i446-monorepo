@@ -475,6 +475,13 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     except Exception:
         agent_ids = set()
 
+    # Running timer (2026-10-20, phone: "status icon when I'm working on
+    # something"): the task whose Toggl timer is live, read the way terminal
+    # dtd does -- lib/running_timer's shared observation first, else the
+    # dtd-running-hint file (janus /d, dtd Enter) when under 4h old. Matched
+    # by task id, falling back to the annotation-stripped name.
+    running_id, running_clean = _running_task()
+
     def is_woke(t):
         if t.get("id") is not None and str(t["id"]) in woken:
             return True
@@ -528,8 +535,40 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "variablePrompt": variable_prompt(raw),
             "variableRate": variable_rate(raw),
             "agent": tid is not None and str(tid) in agent_ids,
+            "running": bool(tid is not None and running_id and str(tid) == running_id)
+                       or bool(running_clean and strip_ann(raw).lower() == running_clean),
         })
     return out
+
+
+RUNNING_HINT = STATE_DIR / "dtd-running-hint"
+
+
+def _running_task(now: float | None = None) -> tuple[str, str]:
+    """(task_id, clean_name) of the task whose timer is live, or ("", "").
+    Same precedence as dtd.sh's list generator: the shared Toggl observation
+    (lib/running_timer.observed) wins when it is newer than the hint; the
+    hint alone is trusted for 4h. An observation that says nothing is running
+    (empty desc) is believed, which is what clears a stale ▶."""
+    import time as _t
+    now = _t.time() if now is None else now
+    hint_id, hint_clean, hint_ts = "", "", 0
+    try:
+        parts = RUNNING_HINT.read_text().strip().split("\t")
+        ts = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        if ts and now - ts < 4 * 3600:
+            hint_id, hint_clean, hint_ts = (parts[2].strip() if len(parts) > 2 else ""), parts[0].strip().lower(), ts
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
+        import running_timer
+        obs = running_timer.observed(now=now)
+    except Exception:
+        obs = None
+    if obs and obs.get("ts", 0) > hint_ts:
+        return (obs.get("task_id") or ""), (obs.get("desc") or "").strip().lower()
+    return hint_id, hint_clean
 
 # ---------------------------------------------------------------------------
 # Complete via did-fast (real /did: closes Todoist + writes Neon)
