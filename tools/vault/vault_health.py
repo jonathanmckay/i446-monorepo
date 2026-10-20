@@ -512,6 +512,53 @@ def check_alerts(now: dt.datetime) -> Finding:
                    detail, review=True)
 
 
+NEON_DIFF_DIR = VAULT / "g245" / "neon-ledger" / "rules-diff"
+
+
+def check_neon_rules(now: dt.datetime) -> Finding:
+    """Neon off Excel step 3: is the nightly rule-engine parallel run alive,
+    and which 0分 columns does the ledger still derive differently from Excel?
+    JM asked for this to live here (2026-10-19) because he will not remember
+    to check the diff himself; the Saturday 1 i446 card carries it."""
+    files = sorted(NEON_DIFF_DIR.glob("20??-??-??.json")) if NEON_DIFF_DIR.exists() else []
+    if not files:
+        return Finding("neon-rules", "fail", "no rules-diff output yet (bin/run_neon_rules_diff.sh on Ix, cron 04:05)",
+                       review=True)
+    newest = dt.date.fromisoformat(files[-1].stem)
+    age = (now.date() - newest).days
+    detail, status, review = [], "ok", False
+    if age > 2:
+        status, review = "fail", True
+        detail.append(f"newest diff is for {newest} ({age} days old) — the Ix 04:05 job is not running")
+    mism: dict[str, int] = {}
+    unknown: dict[str, int] = {}
+    clean = 0
+    for f in files[-7:]:
+        try:
+            d = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        s = d.get("summary", {})
+        for c in s.get("mismatch", []):
+            mism[c] = mism.get(c, 0) + 1
+        for u in s.get("unknown_inputs", []):
+            unknown[u] = unknown.get(u, 0) + 1
+        if not s.get("mismatch") and not s.get("partial"):
+            clean += 1
+    n = len(files[-7:])
+    if mism:
+        status = "fail" if status == "fail" else "warn"
+        review = True
+        top = ", ".join(f"{c}×{k}" for c, k in sorted(mism.items(), key=lambda kv: -kv[1]))
+        detail.append(f"columns the ledger derives differently from Excel (days in last {n}): {top}")
+        detail.append("decide per column: rulebook gap in lib/neon/rules.py, or an Excel-side edit the ledger never saw")
+    if unknown:
+        topu = ", ".join(f"{u}×{k}" for u, k in sorted(unknown.items(), key=lambda kv: -kv[1])[:8])
+        detail.append(f"inputs the ledger has never observed (partial derivations): {topu}")
+    summary = f"parallel run: {clean}/{n} day(s) fully clean, newest {newest}" + (f"; {len(mism)} column(s) mismatching" if mism else "")
+    return Finding("neon-rules", status, summary, detail, review=review)
+
+
 # ---------------------------------------------------------------------------
 # Report + task
 # ---------------------------------------------------------------------------
@@ -519,7 +566,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, check_skill_claims, lambda: check_alerts(now)):
+               check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now)):
         try:
             out.append(fn())
         except Exception as e:  # noqa: BLE001 — one broken check must not hide the others
@@ -535,7 +582,7 @@ def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, Syncthing, git autopush, "
-             "skills backup, perm sync, OneDrive Neon, Time Machine, alerts. Review items are in the 😈 Todoist task.", "",
+             "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed |", "|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.
