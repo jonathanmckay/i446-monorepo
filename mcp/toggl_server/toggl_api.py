@@ -144,10 +144,9 @@ def _request(method, path, body=None, base=None, want_headers=False):
     if left > 0 and method == "GET":
         # Only READS are refused locally: a poll into an exhausted bucket is
         # a guaranteed 402 and there are many of them. A WRITE always goes
-        # out -- Toggl's bucket accounting proved too opaque to predict
-        # (2026-10-20: a POST showed 599 left while GETs were at 0, then a
-        # POST 402'd 20 minutes later), and refusing a start/create on a
-        # local guess is an outage; a wasted 402 is one request.
+        # out and Toggl decides: refusing a start/create on a local guess is
+        # an outage (2026-10-20, half an hour of "can't add entries"); a
+        # wasted 402 is one request.
         _log_request(method, path, "skip-402", None)
         raise RuntimeError(
             f"Toggl API {method} {path} -> 402 (hourly quota for the {bucket} bucket is "
@@ -195,6 +194,8 @@ def _request(method, path, body=None, base=None, want_headers=False):
 
 
 def _log_request(method, path, status, headers):
+    if urllib.request.urlopen is not _REAL_URLOPEN:
+        return  # a mocked response is not traffic (2026-10-20: a test's fake "599 left" misled the diagnosis)
     try:
         prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "?"
         rem = _header_float(headers, "X-Toggl-Quota-Remaining")
