@@ -19,7 +19,9 @@ let tasksJson = """
   {"id": "6hcW1", "raw": "1 cal (15) [15]", "title": "1 cal", "est": 15, "points": 15,
    "color": "#7dd3fc", "domain": "hcb", "recurring": true, "variablePrompt": false},
   {"id": "6hcW2", "raw": "xk20 (30)", "title": "xk20", "est": 30, "points": null,
-   "color": "#f9a8d4", "domain": "xk87", "recurring": false, "variablePrompt": true}
+   "color": "#f9a8d4", "domain": "xk87", "recurring": false, "variablePrompt": true},
+  {"id": "6hcW3", "raw": "ship inkwell (60) [40]", "title": "ship inkwell", "est": 60, "points": 40,
+   "color": "#60a5fa", "domain": "i9", "recurring": false, "variablePrompt": false, "agent": true, "running": true}
 ], "summary": {"points": 497, "done": 12}}
 """
 
@@ -27,7 +29,11 @@ let tasksJson = """
 do {
     let j = JSON.parse(tasksJson)!
     let tasks = Parsers.tasks(j)
-    eq(tasks.count, 2, "task count")
+    eq(tasks.count, 3, "task count")
+    check(!tasks[0].agent && !tasks[0].running, "flags default false when absent")
+    check(tasks[2].agent && tasks[2].running, "agent + running parsed")
+    eq(tasks[2].prefix, "▶ 😈 ", "prefix order: running, agent")
+    eq(tasks[0].prefix, "↻ ", "recurring prefix")
     eq(tasks[0].points, 15, "points")
     check(tasks[1].points == nil, "null points → nil")
     check(tasks[1].variablePrompt, "variablePrompt")

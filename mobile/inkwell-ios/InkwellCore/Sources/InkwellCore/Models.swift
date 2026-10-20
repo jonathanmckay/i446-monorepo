@@ -11,11 +11,19 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public let domain: String
     public let recurring: Bool
     public let variablePrompt: Bool   // ask for a value before completing (variable habits)
+    public let agent: Bool            // a Claude session is mid-turn on it (/claim) → 😈, grey
+    public let running: Bool          // its Toggl timer is the live one (dtd Enter / janus /d) → ▶
 
     public init(id: String, raw: String, title: String, est: Int?, points: Int?, color: String,
-                domain: String, recurring: Bool, variablePrompt: Bool) {
+                domain: String, recurring: Bool, variablePrompt: Bool, agent: Bool = false, running: Bool = false) {
         self.id = id; self.raw = raw; self.title = title; self.est = est; self.points = points
         self.color = color; self.domain = domain; self.recurring = recurring; self.variablePrompt = variablePrompt
+        self.agent = agent; self.running = running
+    }
+
+    /// Row prefix, same order as the web page: ▶ running · 😈 agent · ↻ recurring.
+    public var prefix: String {
+        (running ? "▶ " : "") + (agent ? "😈 " : "") + (recurring ? "↻ " : "")
     }
 
     /// Right-justified "(time) [value]" like the terminal and the web.

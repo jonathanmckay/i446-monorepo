@@ -17,6 +17,7 @@ struct DtdView: View {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        actionIcon: "plus", onAction: { addText = ""; showAdd = true },
                        onRetry: { store.reload() })
+            if store.agentCount > 0 { agentBanner }
             taskList
         }
         .background(Theme.bg)
@@ -30,13 +31,24 @@ struct DtdView: View {
         }
     }
 
+    /// Web's "◐ 😈 ×N": how many cards a Claude session is working right now.
+    private var agentBanner: some View {
+        HStack(spacing: 6) {
+            Spinner().foregroundStyle(Theme.dim)
+            Text("😈" + (store.agentCount > 1 ? " ×\(store.agentCount)" : "") + " agent working")
+                .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            Spacer()
+        }
+        .padding(.horizontal, 14).padding(.bottom, 4)
+    }
+
     private var taskList: some View {
         List {
             ForEach(store.tasks) { t in
                 TaskRow(task: t)
                     .listRowBackground(Theme.bg)
                     .listRowSeparatorTint(Color(white: 0.15))
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) { doneButton(t) }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) { trailingButtons(t) }
                     .disabled(store.inFlight.contains(t.id))
             }
@@ -51,9 +63,10 @@ struct DtdView: View {
         .refreshable { await store.load(refresh: true) }
     }
 
-    /// Leading edge = Android's right-swipe = done. No full-swipe commit:
-    /// SwiftUI's threshold isn't tunable and /api/done runs the real /did —
-    /// reveal, then tap (one extra tap, zero accidental completions).
+    /// Leading edge = Android's right-swipe = done. A full swipe commits
+    /// (user request 2026-10-20: "can't swipe all the way to complete");
+    /// /api/done is idempotent by id since 2026-10-19, so a double fire or a
+    /// retry can never double-credit. A variable habit still asks its value.
     private func doneButton(_ t: DtdTask) -> some View {
         Button {
             if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
@@ -128,14 +141,31 @@ private struct DelayDialog: ViewModifier {
 struct TaskRow: View {
     let task: DtdTask
     var body: some View {
+        // Agent-claimed rows go grey with 😈 (web: .row.agent); the task whose
+        // timer is live gets ▶ and a brighter bar (2026-10-20 phone request).
+        let color: Color = task.agent ? Theme.dim : Color(hex: task.color)
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2).fill(Color(hex: task.color)).frame(width: 4, height: 22)
-            Text((task.recurring ? "↻ " : "") + task.title)
-                .font(Theme.mono).foregroundStyle(Color(hex: task.color)).lineLimit(2)
+            RoundedRectangle(cornerRadius: 2).fill(Color(hex: task.color))
+                .frame(width: task.running ? 6 : 4, height: 22)
+            Text(task.prefix + task.title)
+                .font(Theme.mono).foregroundStyle(color).lineLimit(2)
             Spacer(minLength: 8)
+            if task.running { Spinner().foregroundStyle(Theme.accent) }
             Text(task.meta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// The web's ◐ rotating glyph (1 rev/s), used beside a running row and in
+/// the header when any 😈 agent is mid-turn.
+struct Spinner: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 12)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            Text("◐").font(Theme.mono)
+                .rotationEffect(.degrees((t.truncatingRemainder(dividingBy: 1)) * 360))
+        }
     }
 }
 
