@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -68,6 +68,20 @@ DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
 
 LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
 LEDGER_LOCK = threading.Lock()
+# Neon-off-Excel step 1 (2026-10-19): every journaled entry is ALSO recorded
+# in the semantic SQLite ledger (lib/neon/ledger.py, ~/.local/share/neon).
+# Guarded import: a broken ledger module must never take the daemon down,
+# but the failure is loud (stderr + /health "ledger" field) so a silently
+# disabled double-write can't go unnoticed.
+_REPO_LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib")
+sys.path.insert(0, os.path.normpath(_REPO_LIB))
+try:
+    from neon import ledger as neon_ledger  # noqa: E402
+    LEDGER_DB_STATE: dict = {"ok": True, "db": str(neon_ledger.DB_PATH), "errors": 0}
+except Exception as _e:  # pragma: no cover - import environment
+    neon_ledger = None
+    LEDGER_DB_STATE = {"ok": False, "error": f"{type(_e).__name__}: {_e}", "errors": 0}
+    sys.stderr.write(f"semantic ledger import failed: {_e}\n")
 # (sheet, col, anchor) → last after_formula the ledger recorded for that cell.
 CHAIN_INDEX: dict[tuple[str, str, str], str] = {}
 # idem key → after-formula of the append that first carried it. A caller that
@@ -156,6 +170,22 @@ def journal(entry: dict) -> None:
                 IDEM_INDEX[entry["idem"]] = entry["after"]
     except Exception as e:
         sys.stderr.write(f"ledger journal failed: {e}\n")
+    double_write(entry)
+
+
+def double_write(entry: dict) -> None:
+    """Mirror a journaled entry into the semantic SQLite ledger. Runs after
+    the Excel write and the JSONL append have both landed, so it can only
+    ever log — a DB hiccup must not turn an already-applied write into a
+    500 (the caller would retry and double-credit)."""
+    if neon_ledger is None:
+        return
+    try:
+        neon_ledger.record(entry)
+    except Exception as e:
+        LEDGER_DB_STATE["errors"] = LEDGER_DB_STATE.get("errors", 0) + 1
+        LEDGER_DB_STATE["last_error"] = f"{type(e).__name__}: {e}"
+        sys.stderr.write(f"semantic ledger write failed: {e}\n")
 
 
 QUIET_LOCK = "/tmp/neon-osa-quiet.lock"  # shared with scripts/neon-osa-quiet.sh
@@ -833,7 +863,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
-            return self._send(200, {"ok": True, "version": VERSION, "macro": MACRO_STATE})
+            return self._send(200, {"ok": True, "version": VERSION, "macro": MACRO_STATE,
+                                    "ledger": LEDGER_DB_STATE})
         return self._send(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self):  # noqa: N802

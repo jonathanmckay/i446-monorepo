@@ -45,6 +45,15 @@ def domain_col(sheet: str, domain: str) -> str:
     raise KeyError(f"no column for domain {domain!r} on sheet {sheet!r}")
 
 
+def header_for(sheet: str, col: str) -> str:
+    """Reverse lookup: the row-1 header that lives in `col` on `sheet`.
+    KeyError if the column is unmapped."""
+    for header, c in _cfg()["sheets"][sheet]["headers"].items():
+        if c == col:
+            return header
+    raise KeyError(f"no header for column {col!r} on sheet {sheet!r}")
+
+
 def date_col(sheet: str) -> str:
     return _cfg()["sheets"][sheet]["date_col"]
 
