@@ -17,7 +17,7 @@ Scope notes (deliberate):
 import re
 from pathlib import Path
 
-MONO = Path.home() / "i446-monorepo"
+MONO = Path(__file__).resolve().parents[2]
 FILES = {
     "-2n": MONO / "tools" / "ibx" / "-2n.py",
     "build-order-daemon": MONO / "scripts" / "build-order-daemon.py",
@@ -34,6 +34,11 @@ EXCEL_TELL = 'tell application "Microsoft Excel"'
 # writer like this can be pointed at 0分, so it counts as a raw 0分 write path.
 GENERIC_SHEET_RE = re.compile(r'sheet\s+"\{sheet\}"')
 CLIENT_CALL_RE = re.compile(r"excel\.(batch_append|append|write)\(")
+# Cosmetic formatting (cell fill colour) is not a value write: the excel-http
+# daemon has no formatting endpoint, so build-order-daemon's _fill_cell keeps
+# a local osascript for it (2026-10). A tell block whose every `set` is an
+# interior/colour property is exempt; any `set formula/value of` still fails.
+FORMAT_ONLY_SET_RE = re.compile(r"set\s+(color|pattern)\s+of\s+interior")
 
 
 def _blocks(src):
@@ -56,6 +61,14 @@ def _mentions_0fen(text):
     return "0分" in text or "NEON_SHEET" in text
 
 
+def _format_only(text):
+    """True when the block's AppleScript `set ... of` statements are all
+    interior-formatting (fill colour), i.e. no value can reach the sheet."""
+    sets = re.findall(r"(?m)^\s*set\s+\w+\s+of\s+[^\n]*", text)
+    data_sets = [s for s in sets if not FORMAT_ONLY_SET_RE.search(s)]
+    return bool(sets) and not data_sets
+
+
 def test_no_raw_0fen_applescript_writes():
     offenders = []
     for fname, path in FILES.items():
@@ -66,7 +79,7 @@ def test_no_raw_0fen_applescript_writes():
             has_tell = EXCEL_TELL in text
             if has_write and _mentions_0fen(text):
                 offenders.append(f"{where}: AppleScript set formula/value near 0分")
-            elif has_tell and _mentions_0fen(text):
+            elif has_tell and _mentions_0fen(text) and not _format_only(text):
                 offenders.append(f"{where}: Excel AppleScript block references 0分")
             elif has_tell and has_write and GENERIC_SHEET_RE.search(text):
                 offenders.append(f"{where}: generic sheet-parameterized AppleScript writer")
