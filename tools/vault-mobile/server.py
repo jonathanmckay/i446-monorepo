@@ -212,6 +212,8 @@ def drop():
     created = _parse_created(j.get("created_at"))
     title = (j.get("title") or "").strip()
     target = (j.get("target") or "").strip()
+    if target and (j.get("mode") or "") == "put":
+        return _put(target, cid, body, str(j.get("base_sha") or ""), created)
     if target:
         return _append(target, cid, body, created)
     cap_dir = VAULT / CAPTURE_DIR
@@ -291,6 +293,54 @@ def _append(target: str, cid: str, body: str, created: datetime):
     manifests.invalidate() if hasattr(manifests, "invalidate") else None
     log.info("append %s -> %s (%d bytes)", g.device, target, len(block))
     return jsonify({"ok": True, "path": target, "existing": False, "appended": True}), 201
+
+
+def _put(target: str, cid: str, body: str, base_sha: str, created: datetime):
+    """Replace an allow-listed file with the phone's full text (2026-10-20:
+    new-notes "editable like regular notes"). The phone sends the sha it
+    started from; if the file moved on since (desktop edit, /notes sort),
+    the server's version is kept as a conflict copy in z_ibx/archive before
+    the phone's text wins -- nothing is ever lost. Idempotent on id."""
+    if target not in APPEND_TARGETS:
+        return jsonify({"error": f"edit not allowed: {target}"}), 400
+    seen = _append_ledger()
+    if cid in seen:
+        return jsonify({"ok": True, "path": target, "existing": True, "put": True})
+    import hashlib
+    path = VAULT / target
+    conflict = None
+    try:
+        cur = path.read_bytes() if path.exists() else b""
+    except OSError as e:
+        return jsonify({"error": f"read failed: {e}"}), 500
+    cur_sha = hashlib.sha256(cur).hexdigest()
+    new_bytes = body.encode("utf-8")
+    if new_bytes == cur:
+        seen.add(cid); _save_ledger(seen)
+        return jsonify({"ok": True, "path": target, "existing": False, "put": True, "unchanged": True})
+    if base_sha and cur and base_sha != cur_sha:
+        arc = VAULT / "z_ibx" / "archive" / created.strftime("%Y-%m")
+        arc.mkdir(parents=True, exist_ok=True)
+        conflict = arc / f"{path.stem}.conflict-{created.strftime('%Y%m%d-%H%M%S')}-{g.device}{path.suffix}"
+        conflict.write_bytes(cur)
+    tmp = path.with_name("." + path.name + ".tmp")
+    tmp.write_bytes(new_bytes)
+    os.replace(tmp, path)
+    seen.add(cid); _save_ledger(seen)
+    log.info("put %s -> %s (%d bytes%s)", g.device, target, len(new_bytes), ", conflict kept" if conflict else "")
+    out = {"ok": True, "path": target, "existing": False, "put": True,
+           "sha": hashlib.sha256(new_bytes).hexdigest()}
+    if conflict:
+        out["conflict"] = str(conflict.relative_to(VAULT))
+    return jsonify(out), 201
+
+
+def _save_ledger(seen: set) -> None:
+    try:
+        APPEND_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        APPEND_LEDGER.write_text(json.dumps(sorted(seen)))
+    except OSError:
+        pass
 
 
 @app.route("/captures")

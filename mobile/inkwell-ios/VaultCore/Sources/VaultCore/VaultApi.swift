@@ -127,6 +127,8 @@ public final class VaultApi {
     public func drop(_ c: Capture) async -> DropResult {
         var payload: [String: Any] = ["id": c.id, "created_at": c.createdAtString, "title": c.title, "body": c.body]
         if let t = c.target, !t.isEmpty { payload["target"] = t }
+        if let m = c.mode { payload["mode"] = m }
+        if let b = c.baseSha { payload["base_sha"] = b }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let req = request("/drop", method: "POST", body: data) else { return .error("bad request") }
         do {
