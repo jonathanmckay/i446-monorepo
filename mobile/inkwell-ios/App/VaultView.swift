@@ -22,8 +22,7 @@ struct VaultView: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                           actionIcon: "square.and.pencil", onAction: { showCapture = true })
+                HeaderView(title: store.title, status: store.status, onLongPress: onSettings)
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -34,11 +33,22 @@ struct VaultView: View {
             .navigationDestination(for: String.self) { p in NoteView(store: store, path: p) }
             .navigationDestination(for: DirEntry.self) { d in FolderView(store: store, dir: d.path) }
         }
+        .safeAreaInset(edge: .bottom, alignment: .trailing) {
+            // Capture at the bottom right (2026-10-20).
+            Button { showCapture = true } label: {
+                Image(systemName: "square.and.pencil").font(.title2.bold())
+                    .frame(width: 52, height: 52)
+                    .background(Theme.accent).foregroundStyle(.black).clipShape(Circle())
+            }
+            .buttonStyle(.plain).padding(.trailing, 18).padding(.bottom, 10)
+        }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
         .task { store.syncIfStale(); openInboxOnce() }
         .onChange(of: store.fileCount) { _, _ in openInboxOnce() }
     }
 
+    /// Land on new-notes the moment it is readable; before the first sync
+    /// there is nothing to show, so onChange(fileCount) retries after it.
     private func openInboxOnce() {
         guard !openedInbox, path.isEmpty, store.read(VaultView.landing) != nil else { return }
         openedInbox = true

@@ -21,7 +21,7 @@ final class DtdStore: ObservableObject {
 
     init() {
         // Paint the last known list immediately; the fetch in .task refreshes it.
-        if let (j, at) = PayloadCache.load("dtd") {
+        if let (j, at) = PayloadCache.load("dtd"), PayloadCache.isToday(at) {
             tasks = Parsers.tasks(j); summary = Parsers.summary(j); cachedAt = at
         }
     }

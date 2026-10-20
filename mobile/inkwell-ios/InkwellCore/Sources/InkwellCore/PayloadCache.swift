@@ -14,6 +14,10 @@ public enum PayloadCache {
         let at = Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "cache." + key + ".at"))
         return (j, at)
     }
+    public static func todayISO(_ d: Date = Date()) -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: d)
+    }
+    public static func isToday(_ d: Date) -> Bool { Calendar.current.isDateInToday(d) }
     public static func clock(_ d: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: d)
     }

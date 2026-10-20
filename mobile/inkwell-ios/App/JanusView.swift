@@ -20,9 +20,7 @@ struct JanusView: View {
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                       actionIcon: "plus", onAction: { fillTarget = FillTarget(gap: nil) },
                        onRetry: { store.reload() })
-            commandBar
             CurrentTimerCard(row: store.running, busy: store.busy,
                              onDone: { r in store.onRight(r) }, onEdit: { r in editTarget = r })
             List {
@@ -65,6 +63,13 @@ struct JanusView: View {
             .refreshable { await store.load() }
         }
         .background(Theme.bg)
+        .safeAreaInset(edge: .bottom) {
+            // Command bar + "start now" at the bottom right (2026-10-20).
+            EntryBar(placeholder: "coffee 1400-1415 @epcn · same as the CLI", text: $cmd,
+                     focus: $cmdFocused, disabled: store.busy,
+                     onSubmit: { store.run($0) },
+                     onPlus: { fillTarget = FillTarget(gap: nil) })
+        }
         .task {
             if !store.loadedOnce { await store.load() }
             // "open with the text box" (2026-10-19): the command bar takes focus on launch.
@@ -80,36 +85,6 @@ struct JanusView: View {
                       onSave: { d, s, e, p in store.edit(r, desc: d, start: s, end: e, project: p) },
                       onSplit: { mode in store.split(r, mode: mode) })
         }
-    }
-}
-
-extension JanusView {
-    /// Same command bar as the web page: whatever the CLI accepts.
-    var commandBar: some View {
-        HStack(spacing: 8) {
-            TextField("coffee 1400-1415 @epcn · same as the CLI", text: $cmd)
-                .font(Theme.mono).foregroundStyle(Theme.fg)
-                .focused($cmdFocused)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .submitLabel(.go)
-                #endif
-                .onSubmit { submit() }
-            Button(action: submit) { Image(systemName: "return").font(.title3) }
-                .buttonStyle(.plain).foregroundStyle(cmd.isEmpty ? Theme.dim : Theme.accent)
-                .disabled(cmd.isEmpty || store.busy)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(white: 0.1)).clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 14).padding(.bottom, 6)
-    }
-
-    private func submit() {
-        let t = cmd.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty else { return }
-        cmd = ""
-        store.run(t)
     }
 }
 
