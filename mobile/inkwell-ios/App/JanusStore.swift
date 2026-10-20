@@ -22,8 +22,11 @@ final class JanusStore: ObservableObject {
     private let toast = Toaster.shared
 
     init() {
+        // Only today's cached timeline is worth painting (2026-10-20 "should be
+        // today": yesterday's rows showed until the fetch landed).
         if let (j, at) = PayloadCache.load("janus") {
-            let t = Parsers.timeline(j); timeline = t; rows = t.rows; cachedAt = at
+            let t = Parsers.timeline(j)
+            if t.date == PayloadCache.todayISO() { timeline = t; rows = t.rows; cachedAt = at }
         }
     }
 

@@ -9,21 +9,20 @@ struct VaultView: View {
     @ObservedObject var store: VaultTabStore
     var onSettings: () -> Void
 
-    enum Mode: String, CaseIterable { case recent, browse, search }
-    @State private var mode: Mode = .recent
+    /// new-notes IS the root screen (2026-10-20: "open to new-notes by
+    /// default, not behind a button"); recent / browse / search are the
+    /// other segments.
+    enum Mode: String, CaseIterable { case inbox = "new-notes", recent, browse, search }
+    @State private var mode: Mode = .inbox
     @State private var query = ""
     @State private var showCapture = false
     @State private var path = NavigationPath()
-    @State private var openedInbox = false
-    /// Where the app lands (2026-10-19): the notes inbox, the one file worth
-    /// reading on a phone first. Falls back to the list until it has synced.
     static let landing = "z_ibx/new-notes.md"
 
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                           actionIcon: "square.and.pencil", onAction: { showCapture = true })
+                HeaderView(title: store.title, status: store.status, onLongPress: onSettings)
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -34,19 +33,39 @@ struct VaultView: View {
             .navigationDestination(for: String.self) { p in NoteView(store: store, path: p) }
             .navigationDestination(for: DirEntry.self) { d in FolderView(store: store, dir: d.path) }
         }
+        .safeAreaInset(edge: .bottom, alignment: .trailing) {
+            // Capture at the bottom right (2026-10-20).
+            Button { showCapture = true } label: {
+                Image(systemName: "square.and.pencil").font(.title2.bold())
+                    .frame(width: 52, height: 52)
+                    .background(Theme.accent).foregroundStyle(.black).clipShape(Circle())
+            }
+            .buttonStyle(.plain).padding(.trailing, 18).padding(.bottom, 10)
+        }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
-        .task { store.syncIfStale(); openInboxOnce() }
-        .onChange(of: store.fileCount) { _, _ in openInboxOnce() }
-    }
-
-    private func openInboxOnce() {
-        guard !openedInbox, path.isEmpty, store.read(VaultView.landing) != nil else { return }
-        openedInbox = true
-        path.append(VaultView.landing)
+        .task { store.syncIfStale() }
     }
 
     @ViewBuilder private var content: some View {
         switch mode {
+        case .inbox:
+            if store.read(VaultView.landing) != nil {
+                NoteView(store: store, path: VaultView.landing)
+            } else {
+                VStack(spacing: 10) {
+                    Text(store.syncing ? "syncing the vault…" : "new-notes is not on the phone yet")
+                        .font(Theme.mono).foregroundStyle(Theme.dim)
+                    if !store.syncing {
+                        Button("sync now") { store.runSync(force: true) }
+                            .font(Theme.mono).buttonStyle(.bordered).tint(Theme.accent)
+                        if store.fileCount == 0 {
+                            Text("needs the vault base + token · long-press the header")
+                                .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.bg)
+            }
         case .recent:
             let items = store.recent()
             entryList(items, empty: store.fileCount == 0 ? "nothing synced yet · pull to sync" : "empty")

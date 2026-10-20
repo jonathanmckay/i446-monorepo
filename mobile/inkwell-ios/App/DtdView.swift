@@ -9,26 +9,26 @@ struct DtdView: View {
     @State private var valueText = ""
     @State private var delayTarget: DtdTask? = nil
     @State private var delayOptions = DelayOptions.empty
-    @State private var showAdd = false
     @State private var addText = ""
+    @FocusState private var addFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                       actionIcon: "plus", onAction: { addText = ""; showAdd = true },
                        onRetry: { store.reload() })
             if store.agentCount > 0 { agentBanner }
             taskList
         }
         .background(Theme.bg)
+        .safeAreaInset(edge: .bottom) {
+            // New task at the bottom right (2026-10-20); + with an empty field
+            // just focuses it.
+            EntryBar(placeholder: "task (N) [pts] @code", text: $addText, focus: $addFocused,
+                     onSubmit: { store.add($0) }, onPlus: { addFocused = true })
+        }
         .task { if !store.loadedOnce { await store.load(refresh: false) } }
         .modifier(ValuePrompt(task: $valuePrompt, text: $valueText, store: store))
         .modifier(DelayDialog(task: $delayTarget, options: delayOptions, store: store))
-        .alert("add task", isPresented: $showAdd) {
-            TextField("task (N) [pts] @code", text: $addText)
-            Button("add") { store.add(addText) }
-            Button("cancel", role: .cancel) {}
-        }
     }
 
     /// Web's "◐ 😈 ×N": how many cards a Claude session is working right now.
