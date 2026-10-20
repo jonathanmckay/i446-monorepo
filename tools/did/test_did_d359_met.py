@@ -115,7 +115,7 @@ def test_output_includes_d359_met_entries():
     assert 'output = {"results": list(ritual_entries) + d359_met_entries' in src
 
 
-def test_run_d359_met_calls_s897_update_with_met():
+def test_run_d359_met_calls_s897_update_with_met(monkeypatch):
     m = _load()
     calls = []
 
@@ -128,7 +128,7 @@ def test_run_d359_met_calls_s897_update_with_met():
         calls.append(cmd)
         return FakeProc()
 
-    m.subprocess.run = fake_run
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
     entry = m.run_d359_met("😈 Reach out to Scott Van Vliet", "scott-van-vliet")
     assert entry["step"] == "d359_met"
     assert entry["d359"]["ok"] is True
@@ -137,7 +137,11 @@ def test_run_d359_met_calls_s897_update_with_met():
     assert calls[0][2] == "scott van vliet met"
 
 
-def test_run_d359_met_reports_failure():
+def test_run_d359_met_reports_failure(monkeypatch):
+    # monkeypatch, never a bare `m.subprocess.run = ...`: m.subprocess IS
+    # the global subprocess module, so an unrestored FakeProc leaked into
+    # every later subprocess-driven test in the session (121 failures all
+    # reading 'no d359 match for: scott van vliet', 2026-10-19).
     m = _load()
 
     class FakeProc:
@@ -145,7 +149,7 @@ def test_run_d359_met_reports_failure():
         stdout = ""
         stderr = "no d359 match for: scott van vliet"
 
-    m.subprocess.run = lambda cmd, **kwargs: FakeProc()
+    monkeypatch.setattr(m.subprocess, "run", lambda cmd, **kwargs: FakeProc())
     entry = m.run_d359_met("x", "scott-van-vliet")
     assert entry["d359"]["ok"] is False
     assert "no d359 match" in entry["d359"]["output"]

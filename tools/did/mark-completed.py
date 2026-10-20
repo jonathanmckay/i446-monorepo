@@ -283,7 +283,11 @@ def is_duplicate_today(name: str, *, today: str | None = None, path: Path | None
     return None
 
 
-MIRROR_DIR = Path.home() / "vault" / "z_ibx"
+# JM_COMPLETED_MIRROR_DIR: test isolation hook (tools/did/conftest.py). A test
+# that monkeypatches COMPLETED to a fake file but leaves the mirror dir real
+# pushes its fake ids into the synced vault, and Ix absorbs them into the live
+# completed-today.json (2026-10-19: "-1g": "r2" from test_did_refresh_keep_old).
+MIRROR_DIR = Path(os.environ.get("JM_COMPLETED_MIRROR_DIR") or (Path.home() / "vault" / "z_ibx"))
 
 
 def _host_slug() -> str:

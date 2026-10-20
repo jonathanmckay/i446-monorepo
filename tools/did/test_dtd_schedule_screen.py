@@ -77,7 +77,9 @@ def test_enter_esc_ctrlc_ctrld_bindings():
         # closing the ctrl-o pane can skip the reload/clear-query tail
         assert f'--bind "{k}:transform($DTD_BACK {{q}})"' == _bind(k)
     assert "export DTD_RELOAD DTD_HDRGEN" in SRC
-    assert "ctrl-d:execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})" in _bind("ctrl-d")
+    # 2026-10-15 (1db7210b): batch keys wrap the action in select+...+
+    # deselect-all so the cursor row joins the marked rows in {+2}.
+    assert "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all" in _bind("ctrl-d")
     assert "ctrl-d: 📅schedule" in SRC and "esc: back" in SRC
 
 
@@ -493,4 +495,7 @@ def test_form_wrapper_starts_timer_runs_form_and_holds_on_failure():
 
 def test_form_wrapper_is_cleaned_up_and_hinted():
     assert '"$DTD_FORM"' in SRC.split("rm -f")[-1] or '"$DTD_FORM"' in SRC[SRC.rindex("rm -f"):]
-    assert "-1g: form" in SRC
+    # The hint lists every form-backed card in one group:
+    # "enter: start (0l 1s ... -1g ...: form)".
+    m = re.search(r"enter: start \(([^)]*): form\)", SRC)
+    assert m and "-1g" in m.group(1).split(), "-1g must be hinted as a form card"

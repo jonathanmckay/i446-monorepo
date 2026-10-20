@@ -31,11 +31,17 @@ def test_no_filter_param_on_tasks_endpoint():
         )
 
 
+# dtd.sh stopped running query filters on 2026-06-26 (3d421361): the split
+# dialog fetches the exact task by the id dtd passes instead of re-searching
+# "today | overdue". It stays in SOURCES for the negative check above.
+QUERY_SOURCES = [s for s in SOURCES if s.name != "dtd.sh"]
+
+
 def test_filter_queries_use_filter_endpoint():
     """Each source that filters by query must use /tasks/filter?query=."""
-    for src in SOURCES:
+    for src in QUERY_SOURCES:
         text = src.read_text()
-        # Every file in SOURCES does query-filtered fetches somewhere.
+        # Every file in QUERY_SOURCES does query-filtered fetches somewhere.
         assert "tasks/filter?query=" in text, (
             f"{src.name} should run query filters through /tasks/filter?query=..."
         )

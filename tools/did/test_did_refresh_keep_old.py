@@ -69,34 +69,45 @@ def _fake_urlopen_with_individual(payload_by_kind, individual_by_id):
 def df(tmp_path, monkeypatch):
     mod = _load()
     monkeypatch.setattr(mod, "TASK_QUEUE_PATH", tmp_path / "task-queue.json")
+    # Never let the real completed-today.json (or its vault mirror, see
+    # conftest.py) leak into carry-forward decisions.
+    monkeypatch.setattr(mod.mc, "COMPLETED", tmp_path / "completed-today.json")
     return mod
 
 
-def _old_cache(df, today):
+def _old_cache(df, today, updated=None):
     rit = {"id": "r2", "content": "😈 -1g (15) [15]", "labels": ["-1neon"],
            "priority": "p1", "due": today, "due_string": "", "recurring": False}
     hab = {"id": "h1", "content": "0t (3) [10]", "labels": ["0neon", "n156"],
            "priority": "p1", "due": today, "due_string": "", "recurring": True}
     plain = {"id": "p1", "content": "plain task [5]", "labels": ["i9"],
              "priority": "p3", "due": today, "due_string": "", "recurring": False}
-    df.TASK_QUEUE_PATH.write_text(json.dumps({
-        "0neon": [hab], "1neon": [], "夜neon": [], "关键路径": [],
-        "today": [plain, rit]}, ensure_ascii=False))
+    cache = {"0neon": [hab], "1neon": [], "夜neon": [], "关键路径": [],
+             "today": [plain, rit]}
+    if updated is not None:
+        cache["updated"] = updated
+    df.TASK_QUEUE_PATH.write_text(json.dumps(cache, ensure_ascii=False))
     return rit, hab, plain
 
 
 def test_empty_label_fetches_keep_old_buckets_and_rituals(df, monkeypatch):
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
-    rit, hab, plain = _old_cache(df, today)
+    # Since 2026-07-30 ("dupe -1n tasks in dtd") the -1neon carry-forward is
+    # gated: the old cache must come from the SAME 2h block (ritual cards are
+    # retired at every boundary) and each candidate is re-GET-verified as
+    # still open and still labelled -1neon. Model both.
+    rit, hab, plain = _old_cache(df, today,
+                                 updated=df._daytime.local_now().isoformat())
     # Rate-limited world: every label fetch returns empty; the lagging filter
     # returns only the plain task (no ritual cards).
-    monkeypatch.setattr(df.urllib.request, "urlopen", _fake_urlopen({
-        "label": {"results": []},
-        "filter": {"results": [{"id": "p1", "content": "plain task [5]",
-                                "labels": ["i9"], "priority": "p3",
-                                "due": {"date": today}}]},
-    }))
+    monkeypatch.setattr(df.urllib.request, "urlopen", _fake_urlopen_with_individual(
+        {"label": {"results": []},
+         "filter": {"results": [{"id": "p1", "content": "plain task [5]",
+                                 "labels": ["i9"], "priority": "p3",
+                                 "due": {"date": today}}]}},
+        {"r2": {"checked": False, "labels": ["-1neon"]}},
+    ))
     cache = df._refresh_task_queue_inner()
     assert cache["0neon"] == [hab], "empty 0neon fetch must keep the old bucket"
     ritual_ids = {t["id"] for t in cache["today"] if "-1neon" in t["labels"]}

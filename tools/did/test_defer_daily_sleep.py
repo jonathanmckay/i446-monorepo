@@ -77,9 +77,14 @@ def test_dtd_list_builder_hides_deferred_ids_unconditionally():
     assert "habits-deferred-" in src
     assert "not in _deferred_ids" in src
     block = src[src.index("_deferred_ids = set()"):src.index("oneneon =")]
-    # Unconditional id hide, then the recurring/due drift-guard condition.
+    # Unconditional id hide, then the due-date guard. The old
+    # `t.get('recurring', True) or ...` escape hatch was dropped on
+    # 2026-08-02 (a1cdf14d): a recurring habit whose recurrence already
+    # rolled past today must hide too (see
+    # test_dtd_0neon_completed_recurring_hidden.py).
     assert "t.get('id') not in _deferred_ids" in block
-    assert "t.get('recurring', True) or t['due'] <= today" in block
+    assert "and t['due'] <= today" in block
+    assert "t.get('recurring', True) or" not in block
     # Marker path must come from the current date, not the session-start arg.
     assert "_dt.date.today()" in block
 

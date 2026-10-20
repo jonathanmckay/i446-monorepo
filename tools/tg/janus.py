@@ -5395,6 +5395,53 @@ def clear_dtd_running_hint() -> None:
         pass
 
 
+def dtd_task_for_desc(desc: str) -> dict | None:
+    """The dtd/Todoist task whose content matches this timer description, read
+    from the task-queue cache with the same normalised match fetch_short_names
+    uses (annotations stripped, case/dash-folded). None when nothing matches."""
+    target = _norm_key(desc or "")
+    if not target:
+        return None
+    try:
+        data = json.loads(TASK_QUEUE.read_text())
+    except Exception:  # noqa: BLE001 -- no cache is just "no match"
+        return None
+    found = None
+
+    def walk(o):
+        nonlocal found
+        if found is not None:
+            return
+        if isinstance(o, dict):
+            if o.get("id") and o.get("content") and _norm_key(o["content"]) == target:
+                found = o
+                return
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(data)
+    return found
+
+
+def mark_dtd_started(desc: str) -> None:
+    """A timer just started on `desc`. When it names a dtd task, tell dtd it is
+    running (the shared hint) AND log it as started today, so the card leads
+    with the spinner now and keeps 🧮 once the timer moves on (bug 2026-10-19:
+    "abacus emoji is not on tasks that I start"). Only dtd's own Enter/ctrl-s
+    and janus's /d wrote that log before, so an ordinary janus switch -- how
+    most work actually starts -- left the card bare. Unknown description: drop
+    the stale hint, exactly as before."""
+    task = dtd_task_for_desc(desc)
+    if not task:
+        clear_dtd_running_hint()
+        return
+    write_dtd_running_hint(task)
+    record_dtd_started(str(task.get("id", "")))
+
+
 def record_dtd_started(task_id: str) -> None:
     """Log a started-today entry where dtd reads it (dtd-started: date, id,
     epoch). dtd draws the 🧮 abacus from that file; its start.sh writes it on
@@ -6667,7 +6714,9 @@ def _on_enter(event):
             desc = " ".join(w for w in bare.split()
                             if not w.startswith("@") and not re.fullmatch(r"[+\[(]\d+[\])]?", w))
             if desc:
-                clear_dtd_running_hint()  # the timer moves off any /d task
+                # dtd: spinner on this card now, 🧮 once the timer moves on
+                # (clears the old hint when the name matches no dtd task).
+                mark_dtd_started(desc)
                 _optimistic_start(desc, raw=bare)
         event.app.invalidate()
     event.app.create_background_task(_run_and_refresh())

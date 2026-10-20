@@ -1,2 +1,0 @@
-# AppFolio Leasing Report Sync
-

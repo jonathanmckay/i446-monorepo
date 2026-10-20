@@ -39,7 +39,9 @@ def test_block_delay_passes_ids():
     # ctrl-v (fzf-native picker since 2026-07-27) arms the whole {+2} id batch
     # into $DTD_BLOCKPICK; blockapply reads those ids back for the writer —
     # never names.
-    assert 'ctrl-v:execute-silent($DTD_BLOCKARM {+2})' in DTD
+    # 2026-10-15 (1db7210b): batch keys wrap the action in select+...+
+    # deselect-all so the cursor row joins the marked rows in {+2}.
+    assert 'ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all' in DTD
     assert r"""printf '%s\n' "\$@" > "\$BLOCKPICK""" in DTD
     assert r'python3 - "\$SNOOZE" "\$glyph" "\${ids[@]}"' in DTD
 

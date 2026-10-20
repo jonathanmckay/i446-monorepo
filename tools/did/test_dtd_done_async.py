@@ -55,16 +55,22 @@ def _hide_body() -> str:
 
 # ── Structural ────────────────────────────────────────────────────────────
 
-def test_no_prompt_branch_backgrounds_done_sh():
-    """The execute-silent (no-prompt) branch must background the full
-    done.sh invocation -- this is the actual fix; without the trailing '&'
-    fzf stays blocked for done.sh's whole synchronous tail again."""
+def test_no_prompt_branch_runs_done_sh_synchronously_after_hide():
+    """The execute-silent (no-prompt) branch runs the fast hide, then done.sh
+    chained by ';' -- NOT backgrounded. The 2026-08-01 split backgrounded
+    done.sh with a trailing '&'; 2026-08-03 reverted that after a confirmed
+    total loss (task 6hCHH5g2FG7rw7X2: done.sh's $PUSHED.log line landed but
+    its FIFO push never reached the worker) -- a '&'-detached child of an
+    execute-silent action is torn down with the action. done-hide.sh alone
+    gives the instant-hide UI win; since 2026-10-02 the action is also
+    prefixed by fzf's own 'exclude+' via a %s slot."""
     body = _router_body()
-    m = re.search(r'printf \'execute-silent\(([^\']*)\)\'', body)
+    m = re.search(r'printf \'(?:%s)?execute-silent\(([^\']*)\)\'', body)
     assert m, "no-prompt branch must still emit an execute-silent(...) action"
     action = m.group(1)
-    assert action.rstrip().endswith("&"), \
-        f"done.sh must be backgrounded in the no-prompt path, got: {action!r}"
+    assert "&" not in action.replace("2>&1", ""), \
+        f"done.sh must NOT be backgrounded inside execute-silent, got: {action!r}"
+    assert ";" in action, f"hide and done.sh must be chained by ';', got: {action!r}"
 
 
 def test_no_prompt_branch_runs_the_fast_hide_first():
