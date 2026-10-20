@@ -151,7 +151,9 @@ def test_edited_estimate_invalidates_cached_short(tmp_path, monkeypatch):
     unavailable the stale short must be POPPED (full content, with the new
     estimates, becomes the display) rather than served."""
     import importlib.util, sys
-    spec = importlib.util.spec_from_file_location("shorten_edit", "shorten.py")
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "shorten_edit", Path(__file__).resolve().parent / "shorten.py")
     m = importlib.util.module_from_spec(spec)
     sys.modules["shorten_edit"] = m
     spec.loader.exec_module(m)

@@ -30,20 +30,20 @@ _RUN_SPEC.loader.exec_module(run)  # type: ignore[union-attr]
 # ── _parse_input ────────────────────────────────────────────────────────────
 
 def test_parse_input_bracket_n_is_explicit_minutes():
-    q, target, tr, mins = run._parse_input("冥想 [52]")
+    q, target, tr, mins, _defer = run._parse_input("冥想 [52]")
     assert q == "冥想"
     assert mins == 52
     assert tr is None
 
 
 def test_parse_input_bare_digit_still_works():
-    q, target, tr, mins = run._parse_input("o314 66")
+    q, target, tr, mins, _defer = run._parse_input("o314 66")
     assert q == "o314"
     assert mins == 66
 
 
 def test_parse_input_bracket_n_with_date_suffix():
-    q, target, tr, mins = run._parse_input("冥想 [52] 4/27")
+    q, target, tr, mins, _defer = run._parse_input("冥想 [52] 4/27")
     assert q == "冥想"
     assert target == "4/27"
     assert mins == 52
@@ -52,7 +52,7 @@ def test_parse_input_bracket_n_with_date_suffix():
 def test_parse_input_no_minutes_when_only_bracket_alone():
     # `[52]` alone (no habit name) is not a valid /did invocation; require
     # len(parts) > 1 to extract minutes — guards against single-token misuse.
-    q, target, tr, mins = run._parse_input("[52]")
+    q, target, tr, mins, _defer = run._parse_input("[52]")
     assert mins is None
 
 

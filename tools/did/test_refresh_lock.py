@@ -7,6 +7,7 @@ next ~3-min cycle. An EXPLICIT refresh must wait for the lock, not skip.
 """
 import importlib.util
 import inspect
+import re
 import sys
 from pathlib import Path
 
@@ -18,10 +19,18 @@ _spec.loader.exec_module(df)
 
 
 def test_refresh_lock_flag_conditional_on_block():
-    """The lock is non-blocking only when block=False."""
+    """block=False takes one LOCK_NB and skips; block=True WAITS -- as a
+    bounded LOCK_NB poll (DIDFAST_LOCK_WAIT_SECS, default 20s) rather than
+    the original unbounded LOCK_EX, after 6+ did-fast processes were found
+    jammed behind one stalled holder."""
     src = inspect.getsource(df.refresh_task_queue)
     assert "def refresh_task_queue(block" in src, "must take a block param"
-    assert "LOCK_EX if block else" in src, "block=True → plain LOCK_EX (wait), else LOCK_NB"
+    assert "if block:" in src and "else:" in src, "two lock strategies keyed on block"
+    assert "LOCK_EX | fcntl.LOCK_NB" in src, "lock attempts must be non-blocking"
+    assert "DIDFAST_LOCK_WAIT_SECS" in src and "deadline" in src, \
+        "block=True must poll with a deadline, never an unbounded LOCK_EX"
+    assert re.search(r"fcntl\.flock\([^)]*LOCK_EX\)", src) is None, \
+        "no unbounded LOCK_EX anywhere in refresh_task_queue"
 
 
 def test_cli_refresh_cache_uses_block():
