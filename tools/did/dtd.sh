@@ -1629,6 +1629,7 @@ elif [[ -n "\$id" ]]; then
     "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;
     "1 hcme")                         _form="$HOME/i446-monorepo/tools/1hcme/1hcme.py" ;;
     "1 i9")                           _form="$HOME/i446-monorepo/tools/1i9/1i9.py" ;;
+    "1 f693")                         _form="$HOME/i446-monorepo/tools/f693/1f693.py" ;;
     -1g)                              _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --detach" ;;
     0g)                               _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --daily --detach" ;;
   esac

@@ -20,8 +20,8 @@ IFS= read -r -d '' -t 1 j 2>/dev/null
 # The skills in agent_claims.SKILL_CLAIMS claim their own card the same way;
 # this alternation must list exactly those keys (test_agent_claims enforces it).
 # A bare `[N]` while holding a claim sets the claimed task's value (not points).
-if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|0g|notes|早餐|1s|1g|1s897|1hcmc|1hcb|1i9|1m5x2|xk887|1-1n|1-2g|f695|2n|3s|moralaudit|2026-4g-checkin|1-i446|1hcme)([[:space:]]|")'\
-      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|0g|notes|早餐|1s|1g|1s897|1hcmc|1hcb|1i9|1m5x2|xk887|1-1n|1-2g|f695|2n|3s|moralaudit|2026-4g-checkin|1-i446|1hcme)[[:space:]]*<' \
+if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/(d|claim|0t|0g|notes|早餐|1s|1g|1s897|1hcmc|1hcb|1i9|1m5x2|xk887|1-1n|1-2g|f695|2n|3s|moralaudit|2026-4g-checkin|1-i446|1hcme|1f693)([[:space:]]|")'\
+      || "$j" =~ 'command-name>[[:space:]]*/(d|claim|0t|0g|notes|早餐|1s|1g|1s897|1hcmc|1hcb|1i9|1m5x2|xk887|1-1n|1-2g|f695|2n|3s|moralaudit|2026-4g-checkin|1-i446|1hcme|1f693)[[:space:]]*<' \
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi
