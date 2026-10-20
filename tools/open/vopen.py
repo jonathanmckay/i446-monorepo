@@ -17,8 +17,14 @@ html/url->Chrome).
 import subprocess, sys, os
 
 VAULT = os.path.expanduser("~/vault")
+# Backups and archives rank LAST (2026-10-20: "typed new-notes, got a
+# backup"): in-vault archive folders, Syncthing versions (name~YYYYMMDD),
+# sync conflicts and .bak copies. The out-of-vault backup trees
+# (~/vault-*-archive.noindex, OneDrive/vault-backups.noindex) are renamed
+# .noindex so Spotlight never returns them at all.
 JUNK = ("/.stversions/", "/.ai-transcripts/", "/.dream-runs/", "/.trash/",
-        "/z_old/", "/readwise/", "/.git/", "/node_modules/")
+        "/z_old/", "/z_arcv/", "/readwise/", "/.git/", "/node_modules/",
+        "/archive/", ".sync-conflict-", ".bak", "~20")
 
 
 def md(expr):
