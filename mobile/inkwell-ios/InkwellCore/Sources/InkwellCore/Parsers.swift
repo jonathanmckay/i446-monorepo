@@ -14,7 +14,9 @@ public enum Parsers {
                 color: t.string("color", "#e6e6e0"),
                 domain: t.string("domain"),
                 recurring: t.bool("recurring"),
-                variablePrompt: t.bool("variablePrompt"))
+                variablePrompt: t.bool("variablePrompt"),
+                agent: t.bool("agent"),
+                running: t.bool("running"))
         }
     }
 

@@ -27,6 +27,7 @@ final class DtdStore: ObservableObject {
     }
 
     var title: String { "\(summary.points)分 · dtd · \(summary.done) done · \(tasks.count) left" }
+    var agentCount: Int { tasks.filter { $0.agent }.count }
     var status: String {
         if let e = lastError { return "⚠ " + e }
         if !loadedOnce, let at = cachedAt { return "cached \(PayloadCache.clock(at)) · refreshing…" }
