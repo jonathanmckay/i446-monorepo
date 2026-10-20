@@ -458,9 +458,9 @@ def load_cache_data():
 
 def _toggl_api():
     """The shared Toggl client (mcp/toggl_server/toggl_api.py). Entry reads go
-    through its Reports-backed get_entries (workspace quota, 600/hr) instead of
-    a raw GET /me/time_entries (30/hr on every plan, 2026-10-20), and share
-    the cross-process throttle/cooldown with every other caller."""
+    through its get_entries so they share the cross-process throttle, the
+    per-bucket 402 cooldown and the request log with every other caller
+    (2026-10-20), instead of a raw urllib GET that ignored all of that."""
     root = str(Path.home() / "i446-monorepo")
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -570,8 +570,9 @@ def _fetch_toggl_entries(days, end=None):
     today; empty list on any failure). Shared by load_toggl_range
     (day-bucketed) and the per-block chart builder (2-hour-bucketed) so both
     consume the same API call shape without duplicating the request/auth
-    boilerplate. Reports-backed since 2026-10-20 (see _toggl_api); the daily
-    Toggl cache still covers the older day/week/month views."""
+    boilerplate. Via the shared client since 2026-10-20 (see _toggl_api); the
+    v9 endpoint only reaches back ~90 days, so the daily Toggl cache still
+    covers the older day/week/month views."""
     api_key = os.environ.get("TOGGL_API_KEY", "")
     if not api_key:
         return []

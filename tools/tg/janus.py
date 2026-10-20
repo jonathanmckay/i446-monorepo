@@ -1939,12 +1939,19 @@ def _blocks_plausible(bp: dict[str, int]) -> bool:
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
-_FLASH_FAIL = re.compile(r"\b(failed|error|refus|not a|invalid|couldn|can't|cannot)", re.I)
+# `\berror` could not match RuntimeError/ValueError (no word boundary inside
+# the word), so an exception flash was never classified as a failure: not
+# logged as an error outcome, not styled, not held on screen (bug 2026-10-20).
+_FLASH_FAIL = re.compile(r"\b(failed|refus|not a|invalid|couldn|can't|cannot)|error|err:", re.I)
+# A failure the user cannot read is a failure they cannot report. Errors stay
+# up long enough to screenshot instead of expiring in the default 4s.
+ERROR_FLASH_SECS = 30.0
 
 
 def flash(msg: str, secs: float = 4.0, style: str = ""):
     if _FLASH_FAIL.search(msg or ""):
         JE.emit("outcome", "error", (), msg)
+        secs = max(secs, ERROR_FLASH_SECS)
     elif "cancel" in (msg or "").lower():
         JE.emit("outcome", "cancel", (), msg)
     STATE.flash = msg
@@ -4761,13 +4768,19 @@ def render_current_bottom() -> list[tuple[str, str]]:
     ]
 
 
+HINT_LINE = " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
+
+
 def render_footer() -> list[tuple[str, str]]:
     # One line: the flash when active (auto-expires), otherwise the key hints.
     # Collapsing to a single line keeps the input box pinned tight to the bottom.
+    # A long error is truncated here BY DESIGN (2026-10-20): the full text goes
+    # to the event log (JE "outcome error"), which is the thing to read when an
+    # error needs diagnosing -- the footer never grows to accommodate it.
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
-    return [("class:hint", " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit\n")]
+    return [("class:hint", HINT_LINE + "\n")]
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:

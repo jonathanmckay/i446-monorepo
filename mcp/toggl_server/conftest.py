@@ -29,6 +29,5 @@ def _isolate_toggl_caches(monkeypatch, tmp_path):
     did, once). Point every cache file at tmp unless the test overrides it."""
     from toggl_server import toggl_api
     monkeypatch.setattr(toggl_api, "CURRENT_CACHE", tmp_path / "toggl-current.json")
-    monkeypatch.setattr(toggl_api, "TAGS_CACHE", tmp_path / "toggl-tags.json")
     monkeypatch.setattr(toggl_api, "JANUS_PID", tmp_path / "janus.pid")
     yield

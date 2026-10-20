@@ -277,9 +277,9 @@ def _toggl_minutes_by_day(dates: list[_dt.date]) -> dict[_dt.date, int]:
     try:
         cj = json.loads((Path.home() / ".claude.json").read_text())
         key = cj["mcpServers"]["toggl_server"]["env"]["TOGGL_API_KEY"]
-        # Shared client, Reports-backed (workspace quota, local DATES) instead
-        # of a raw GET /me/time_entries (30/hr user bucket, 2026-10-20). The
-        # per-day loop below already buckets by local start date.
+        # Shared client (throttle, per-bucket cooldown, request log) instead
+        # of a raw GET (2026-10-20). get_entries sends local-midnight bounds;
+        # the per-day loop below buckets by local start date.
         import os
         os.environ.setdefault("TOGGL_API_KEY", key)
         root = str(Path.home() / "i446-monorepo")
