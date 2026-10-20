@@ -147,13 +147,30 @@ def test_dtd_cleaners_strip_rate_annotation():
     """dtd's shell cleaners must eat ' [1/m]' like numeric [N]: it must never
     reach the Toggl timer description or the completion FIFO name."""
     src = (_HERE / "dtd.sh").read_text()
-    heredoc = r"s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g"
-    plain = r"s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g"
-    # 2026-07-31: enter.sh dropped its own `clean=` computation -- it forwards
-    # the raw resolved task straight to $START (which cleans it itself), one
-    # fewer heredoc cleaner than before ("always opt+enter to mark done").
-    assert src.count(heredoc) == 8, "all heredoc cleaners must strip [1/m]"
-    assert src.count(plain) == 3, "all plain cleaners must strip [1/m]"
+    # Every cleaner family that strips " [N]" must strip " [x/m]" on the same
+    # line (sed, zsh) or the next pipeline line (jq). The families: sed in
+    # heredocs, sed in plain shell, zsh extendedglob parameter expansion
+    # (done.sh, 2026-10-03), jq gsub in the done router / resolvers
+    # (2026-10-02, two escaping styles). Counting pairs instead of a fixed
+    # total keeps the guard alive as cleaners migrate between families.
+    families = {
+        "sed heredoc": (r"s/ *\\[[0-9]*\\]//g",
+                        r"s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g"),
+        "sed plain": (r"s/ *\[[0-9]*\]//g",
+                      r"s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g"),
+        "zsh glob": (r"\\[[0-9]#\\]", r"\\[[0-9.+]#\\/m\\]"),
+        "jq bracket-class": (r'gsub(" *[[][0-9]*[]]"; "")',
+                             r'gsub(" *[[][0-9.+]*/m[]]"; "")'),
+        "jq escaped": (r'gsub(" *\\\\[[0-9]*\\\\]"; "")',
+                       r'gsub(" *\\\\[[0-9.+]*/m\\\\]"; "")'),
+    }
+    total = 0
+    for fam, (n_strip, rate_strip) in families.items():
+        n, r = src.count(n_strip), src.count(rate_strip)
+        assert n > 0, f"{fam}: [N] cleaner family vanished -- update the test"
+        assert n == r, f"{fam}: {n} [N] cleaners but {r} strip [x/m]"
+        total += n
+    assert total >= 11, f"expected at least the 11 known cleaners, found {total}"
     assert r"| *\[[0-9.+]*/m\]" in src, "list strip_ann must strip [1/m]"
 
 
