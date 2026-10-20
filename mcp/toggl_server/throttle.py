@@ -12,7 +12,8 @@ Toggl enforces two different limits (engineering.toggl.com/docs/track, 2026-10):
    windows. A 402 on one bucket says nothing about the other, so the quota
    cooldown is tracked PER BUCKET (`quota_until_user`, `quota_until_ws`):
    before this, one exhausted read bucket parked every write too. Reads are
-   kept on /me ON PURPOSE so read load can never block adding an entry.
+   kept on /me ON PURPOSE so read load can never block adding an entry, and
+   writes are a bucket of their own (see bucket_for).
 
 The tricky part: `tg-fast` spawns a fresh PROCESS per /tg command, so an
 in-process limiter can't coordinate across invocations. This paces EVERY
@@ -55,13 +56,21 @@ MAX_COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_MAX_COOLDOWN", "3600.0"))
 RESET_MARGIN = 5.0  # s past the server's reset estimate before the first retry
 _RESET_RE = re.compile(r"reset in (\d+) seconds", re.IGNORECASE)
 
-# Toggl's hourly quota buckets. "user" = /api/v9/me/* (all our reads);
-# "ws" = everything workspace-scoped (all our writes), incl. the Reports API.
-BUCKETS = ("user", "ws")
+# Toggl's hourly quota buckets, as measured 2026-10-20 (headers on live
+# calls, not the docs): "user" = /api/v9/me/* reads (240/hr, window at :00);
+# "ws" = workspace-scoped READS (GET /workspaces/{id}, /projects, /tags, the
+# Reports API; 600/hr sliding); "write" = POST/PUT/PATCH/DELETE on
+# /workspaces/* (its own 600/hr: a POST returned 599 remaining at 09:39
+# while workspace GETs were still at 0 until 10:06). Classifying writes with
+# the workspace reads made the fail-fast refuse every start/create for half
+# an hour ("now I can't add new time entries").
+BUCKETS = ("user", "ws", "write")
 
 
-def bucket_for(path: str) -> str:
-    """Which hourly-quota bucket an API path is charged to."""
+def bucket_for(path: str, method: str = "GET") -> str:
+    """Which hourly-quota bucket an API call is charged to."""
+    if (method or "GET").upper() != "GET":
+        return "write"
     return "user" if (path or "").startswith("/me") else "ws"
 
 

@@ -58,8 +58,25 @@ def iso(monkeypatch, tmp_path):
 def test_bucket_for_paths():
     assert throttle.bucket_for("/me/time_entries/current") == "user"
     assert throttle.bucket_for("/me/time_entries?start_date=x") == "user"
-    assert throttle.bucket_for("/workspaces/1/time_entries") == "ws"
+    assert throttle.bucket_for("/workspaces/1/projects") == "ws"
     assert throttle.bucket_for("/workspace/1/search/time_entries") == "ws"
+    assert throttle.bucket_for("/workspaces/1/time_entries", "POST") == "write"
+    assert throttle.bucket_for("/workspaces/1/time_entries/5/stop", "PATCH") == "write"
+    assert throttle.bucket_for("/workspaces/1/time_entries/5", "DELETE") == "write"
+
+
+def test_workspace_read_402_never_blocks_a_write(iso, monkeypatch):
+    """The 09:30 outage: workspace GETs (projects/tags/Reports) at 0 must not
+    make the fail-fast refuse a POST, which has its own counter."""
+    def fake(req, *a, **k):
+        if req.get_method() == "GET":
+            raise _http_error(402, BODY_402)
+        return _Resp(b'{"id": 3, "duration": -1}', {"X-Toggl-Quota-Remaining": "599"})
+    monkeypatch.setattr(toggl_api.urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError, match="402"):
+        toggl_api.get_projects()
+    assert throttle.cooling_down("ws") and not throttle.cooling_down("write")
+    assert toggl_api.start_timer("teams")["id"] == 3
 
 
 def test_user_402_does_not_block_workspace_requests(iso, monkeypatch):
@@ -74,9 +91,9 @@ def test_user_402_does_not_block_workspace_requests(iso, monkeypatch):
     monkeypatch.setattr(toggl_api.urllib.request, "urlopen", fake)
     with pytest.raises(RuntimeError, match="402"):
         toggl_api.get_current()
-    assert throttle.cooling_down("user") and not throttle.cooling_down("ws")
+    assert throttle.cooling_down("user") and not throttle.cooling_down("write")
     assert throttle.cooling_down(), "no-arg view stays conservative (any bucket)"
-    # Writes keep flowing on the workspace bucket …
+    # Writes keep flowing on their own bucket …
     assert toggl_api.stop_timer(1)["id"] == 1
     # … and the exhausted bucket is not even sent to.
     n = len(urls)
@@ -132,5 +149,5 @@ def test_read_402_never_blocks_a_write(iso, monkeypatch):
     monkeypatch.setattr(toggl_api.urllib.request, "urlopen", fake)
     with pytest.raises(RuntimeError, match="402"):
         toggl_api.get_entries("2026-10-20", "2026-10-21")
-    assert throttle.cooling_down("user") and not throttle.cooling_down("ws")
+    assert throttle.cooling_down("user") and not throttle.cooling_down("write")
     assert toggl_api.start_timer("teams")["id"] == 9

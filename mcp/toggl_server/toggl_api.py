@@ -139,7 +139,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
     want_headers=True returns (result, headers) for paginated endpoints."""
     url = f"{base or BASE_URL}{path}"
     data = json.dumps(body).encode() if body else None
-    bucket = throttle.bucket_for(path)
+    bucket = throttle.bucket_for(path, method)
     left = throttle.quota_remaining(bucket)
     if left > 0:
         _log_request(method, path, "skip-402", None)
@@ -425,7 +425,7 @@ def update_entry(entry_id, **fields):
 
 def delete_entry(entry_id):
     path = f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
-    left = throttle.quota_remaining(throttle.bucket_for(path))
+    left = throttle.quota_remaining(throttle.bucket_for(path, "DELETE"))
     if left > 0:
         raise RuntimeError(f"Toggl API DELETE {path} -> 402 (hourly quota exhausted; "
                            f"resets in {int(left)}s; request not sent)")
@@ -447,7 +447,7 @@ def delete_entry(entry_id):
         body = e.read().decode() if e.fp else ""
         if e.code == 402:
             throttle.note_quota_reset(throttle.parse_reset_seconds(body),
-                                      bucket=throttle.bucket_for(path))
+                                      bucket=throttle.bucket_for(path, "DELETE"))
         elif e.code == 429:
             throttle.note_rate_limit()
         raise RuntimeError(f"Toggl API DELETE -> {e.code}: {body}")
