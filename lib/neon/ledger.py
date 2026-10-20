@@ -88,7 +88,7 @@ _LITERAL_RE = re.compile(r"^\s*[+-]?\s*\d+(?:\.\d+)?\s*$")
 _MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*$")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LOCK_SRC = "block-turnover lock"
-_OBSERVE_KINDS = {"reconcile", "baseline", "excel-edit"}
+_OBSERVE_KINDS = {"reconcile", "baseline", "excel-edit", "snapshot"}
 _SKIP_KINDS = {"ack", "structural"}
 
 
@@ -360,6 +360,96 @@ def day(date_iso: str, sheet: str = "0分", conn: Optional[sqlite3.Connection] =
             (date_iso, sheet)).fetchall()
         return [{"col": r[0], "field": r[1], "credits": r[2], "ref_points": r[3],
                  "last_set": r[4], "observed": r[5], "n_events": r[6]} for r in rows]
+    finally:
+        if own:
+            c.close()
+
+
+def _cell_value(kind: str, after_value, raw_value, after_formula) -> tuple:
+    """(value, text) a cell is taken to hold after an event. after_value is the
+    daemon's read-back; it is "" for three different things (a cleared cell,
+    an empty-block lock = 0, and a read-back glitch where the write landed but
+    the echo was empty), so: set/credit with no read-back fall back to the
+    request value; a lock whose after-formula is "" is a 0 block."""
+    if after_value is not None:
+        return after_value, None
+    if kind == "lock":
+        return (0.0, None) if not (after_formula or "").strip() else (None, after_formula)
+    if kind in ("set", "credit"):
+        v = num(raw_value) if raw_value is not None and not str(raw_value).startswith(("=", "+", "-")) else None
+        if v is not None:
+            return v, None
+    return None, raw_value if raw_value not in (None, "") else ""
+
+
+def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None) -> dict:
+    """What the ledger last saw in each cell of `sheet` on `date_iso`:
+    {col: {"value": float|None, "text": str|None, "kind": str, "ts": str,
+    "field": str|None, "formula": str|None}}. The newest event per column
+    wins. A column with no event is ABSENT — callers must treat absence as
+    UNKNOWN, not blank (cells marked before the double-write began have no
+    event). Row-addressed events that landed before their row's date was
+    learned (date NULL) are included via row_dates."""
+    own = conn is None
+    c = conn or connect()
+    try:
+        rows = c.execute(
+            """SELECT e.col, e.field, e.kind, e.ts, e.after_value, e.value, e.after_formula
+                 FROM events e
+                 JOIN (SELECT e2.col, MAX(e2.id) AS mid FROM events e2
+                        LEFT JOIN row_dates rd ON rd.sheet = e2.sheet AND rd.row = e2.row
+                        WHERE e2.sheet=? AND COALESCE(e2.date, rd.date) = ?
+                          AND e2.kind IN ('set','observe','text','lock','credit','credit_ref')
+                        GROUP BY e2.col) m ON m.mid = e.id
+                ORDER BY e.col""", (sheet, date_iso)).fetchall()
+        out = {}
+        for col, field, kind, ts, av, raw, formula in rows:
+            value, text = _cell_value(kind, av, raw, formula)
+            out[col] = {"value": value, "text": text, "kind": kind, "ts": ts,
+                        "field": field, "formula": formula}
+        return out
+    finally:
+        if own:
+            c.close()
+
+
+def repair_dates(conn: Optional[sqlite3.Connection] = None) -> int:
+    """Fill `date` (and block) on row-addressed events recorded before their
+    row's date was learned (e.g. the 06:00 block lock that beat the day's
+    first dated write by seconds). Returns rows repaired."""
+    own = conn is None
+    c = conn or connect()
+    try:
+        rows = c.execute(
+            """SELECT e.id, e.ts, rd.date FROM events e
+                 JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
+                WHERE e.date IS NULL AND e.sheet IN ('0分', '0n', 'hcbi')""").fetchall()
+        for rid, ts, d in rows:
+            t = parse_ts(ts)
+            c.execute("UPDATE events SET date=?, block=? WHERE id=?",
+                      (d, block_for(t, d) if t else None, rid))
+        c.commit()
+        return len(rows)
+    finally:
+        if own:
+            c.close()
+
+
+def credits(date_iso: str, sheet: str = "0分", conn: Optional[sqlite3.Connection] = None) -> dict:
+    """Σ literal credits and Σ resolved reference credits per column for one
+    day: {col: {"credit": float, "credit_ref": float, "ref_unknown": int}}
+    where ref_unknown counts credit_ref events whose points could not be
+    resolved (fallback entries with no cell values)."""
+    own = conn is None
+    c = conn or connect()
+    try:
+        rows = c.execute(
+            """SELECT col,
+                      COALESCE(SUM(CASE WHEN kind='credit' THEN points END), 0),
+                      COALESCE(SUM(CASE WHEN kind='credit_ref' THEN points END), 0),
+                      SUM(CASE WHEN kind='credit_ref' AND points IS NULL THEN 1 ELSE 0 END)
+                 FROM events WHERE date=? AND sheet=? GROUP BY col""", (date_iso, sheet)).fetchall()
+        return {r[0]: {"credit": r[1], "credit_ref": r[2], "ref_unknown": r[3]} for r in rows}
     finally:
         if own:
             c.close()

@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -810,6 +810,22 @@ end tell
         # next write on either path chains cleanly.
         last = latest_entry(sheet, col, req.get("date"), row)
         if last is not None and last.get("after") == formula:
+            # Same formula. With "snapshot": true, still journal a VALUE change
+            # (kind snapshot): a formula cell like ='0n'!BK292 moves whenever a
+            # habit is marked, and nothing else ever records that value (the
+            # rule-engine parallel run needs it, 2026-10-19). Never kind
+            # reconcile: JM Dash scores reconcile deltas as Excel-edit points.
+            if not req.get("snapshot") or (last.get("after_value") or "") == (value or ""):
+                continue
+            journal({
+                "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "kind": "snapshot", "sheet": sheet, "col": col, "row": row,
+                "date": last.get("date") or req.get("date"), "value": None,
+                "before": formula, "before_value": last.get("after_value"),
+                "after": formula, "after_value": value, "src": req.get("src") or "snapshot",
+            })
+            changes.append({"col": col, "kind": "snapshot",
+                            "before_value": last.get("after_value"), "after_value": value})
             continue
         entry = {
             "ts": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),

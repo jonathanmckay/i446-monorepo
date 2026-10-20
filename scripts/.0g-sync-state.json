@@ -1,14 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "have a good suzzallo session": {
-      "todoist_id": "6hpJPP7H2f275hC2",
-      "minutes": 40
-    },
     "transit = 冥想 「15」": {
       "todoist_id": "6hpJPPJw8GcX5Q32",
       "minutes": 15
     }
   },
-  "last_sync": "2026-10-19T18:00:02.537716-07:00"
+  "last_sync": "2026-10-19T20:00:01.425114-07:00"
 }

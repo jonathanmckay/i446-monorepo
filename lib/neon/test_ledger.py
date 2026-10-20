@@ -206,3 +206,31 @@ def test_header_for_reverse_lookup():
     assert cols.header_for("0n", "AF") == "N color"
     with pytest.raises(KeyError):
         cols.header_for("0分", "ZZZ")
+
+
+# ── state() / credits(): the rule engine's inputs ────────────────────────────
+
+def test_state_returns_newest_value_per_column_and_omits_unseen(db):
+    ledger.record(_e(ts="2026-10-19T08:00:00", sheet="0n", col="AE", value=1, kind="write",
+                     after_value="1.0", before_value=""), db)
+    ledger.record(_e(ts="2026-10-19T09:00:00", sheet="0n", col="AE", value="", kind="write",
+                     after_value="", before_value="1.0"), db)          # ctrl-z blanked it
+    ledger.record(_e(ts="2026-10-19T09:30:00", sheet="0n", col="AP", value=27, kind="write",
+                     after_value="27.0", before_value="26.0"), db)
+    st = ledger.state("2026-10-19", "0n", db)
+    assert set(st) == {"AE", "AP"}                                      # AF etc. absent = unknown
+    assert st["AP"]["value"] == 27.0 and st["AP"]["field"] == "ص"
+    assert st["AE"]["value"] is None and st["AE"]["text"] == ""        # blank after undo
+
+
+def test_credits_sums_literal_and_reference_credits(db):
+    ledger.record(_e(ts="2026-10-19T08:00:00", col="R", value="+15"), db)
+    ledger.record(_e(ts="2026-10-19T09:00:00", col="R", value="+10"), db)
+    ledger.record(_e(ts="2026-10-19T10:00:00", col="T", value="+'1n+'!C5", before_value="10",
+                     after_value="25"), db)
+    e = _e(ts="2026-10-19T11:00:00", col="T", value="+'1n+'!D5", fallback=True)
+    del e["before_value"]; del e["after_value"]
+    ledger.record(e, db)
+    cr = ledger.credits("2026-10-19", "0分", db)
+    assert cr["R"] == {"credit": 25.0, "credit_ref": 0, "ref_unknown": 0}
+    assert cr["T"] == {"credit": 0, "credit_ref": 15.0, "ref_unknown": 1}

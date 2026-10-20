@@ -1,0 +1,144 @@
+{
+  "_meta": {
+    "generated": "2026-10-19",
+    "source": "daemon /read of live 0n row 2 + 0分/0n/hcbi row formulas (Neon分v12.2.xlsx)",
+    "note": "Snapshot of the Excel rulebook the ledger must reproduce. Refresh weights with scripts/regen-neon-rules.py; formulas are documented here, implemented in lib/neon/rules.py."
+  },
+  "0n_weights": {
+    "睡觉": 30,
+    "cpap": 20,
+    "wake up": 6,
+    "i444": 5,
+    "i447": 5,
+    "charge": 3,
+    "tmrw": 5,
+    "2nd hci": 7,
+    "1st hci": 26,
+    "ibx s897": 5,
+    "新闻": 2,
+    "词汇": 7,
+    "night hcmc": 10,
+    "0t": 10,
+    "₦156": 4,
+    "0l": 20,
+    "0g": 8,
+    "stats i9": 10,
+    "notes": 8,
+    "ibx i9": 20,
+    "push": 20,
+    "teams": 7,
+    "slack github": 5,
+    "slack m5x2": 3,
+    "ibx m5x2": 15,
+    "m5x2 stats": 15,
+    "早餐": 5,
+    "hiit": 7,
+    "问学": 60,
+    "xk20": null,
+    "xk22": null,
+    "xk26": null,
+    "qft": 30,
+    "xk88": 30,
+    "NVC + e": 1,
+    "ص": 60,
+    "o314": 15,
+    "冥想": 10,
+    "其他人": 5
+  },
+  "0n_ranges": {
+    "comment": "0分 col <- SUMPRODUCT(NOT(ISBLANK(range)), row2 weights). NOT(ISBLANK) counts an explicit 0.",
+    "T": {
+      "0n_cols": [
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "Q",
+        "R",
+        "S",
+        "T"
+      ],
+      "via": "0n!BF"
+    },
+    "R": {
+      "0n_cols": [
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z"
+      ],
+      "via": "0n!BK=SUM(BI:BJ), BI"
+    },
+    "S": {
+      "0n_cols": [
+        "AA",
+        "AB",
+        "AC"
+      ],
+      "via": "0n!BH"
+    },
+    "U": {
+      "0n_cols": [
+        "N",
+        "O",
+        "P"
+      ],
+      "via": "0n!BG = SUMPRODUCT(N:P) + BB",
+      "extra": "BB = -AU + AV*0.01 + AW*0.5 + AX; AX = N + O + literals"
+    },
+    "V": {
+      "formula": "0n!BA = AP*0.5 + SUM(AQ:AS)"
+    },
+    "X": {
+      "formula": "0n!AZ = SUM(AJ:AO)"
+    },
+    "Q": {
+      "bonus": {
+        "if_0n_col_marked": "T",
+        "points": 9
+      }
+    }
+  },
+  "0fen": {
+    "D": "SUM(P:Y)",
+    "E": "0n!AF",
+    "F": "0n!AG",
+    "blocks": "G..O live residuals of D, frozen to literals by build-order-daemon at each block's fire hour (ledger kind lock)",
+    "P": "literal set from build-order emoji (ledger kind set; last value wins)",
+    "W": "hcbi!AA + hcbi!Y + credits",
+    "Y": "credits only",
+    "Z": "n156 (unused)",
+    "AC": "1₲ (unused)"
+  },
+  "hcbi": {
+    "Y": "0n!AE*2 + literals  (hiit x2)",
+    "U": "SUM(AL,AO,AR,AU,AX,BD,BA)  (kcal per band)",
+    "AA": "SUM(E:O)/21*75 + IF(AL, -(MAX((U-1800)/10, -40)), 0) + T + S + (P-100)*0.5 + AI + W",
+    "W_caf_default": -50,
+    "daily_dozen_cols": [
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K",
+      "L",
+      "M",
+      "N",
+      "O"
+    ]
+  },
+  "row_offsets": {
+    "0n_minus_0fen": 3,
+    "hcbi_minus_0fen": 4
+  }
+}
