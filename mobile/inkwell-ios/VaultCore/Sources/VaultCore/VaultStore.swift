@@ -30,6 +30,9 @@ public final class VaultStore {
         );
         CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
         """)
+        // 2026-10-20: append-in-place captures carry a target path. Older DBs
+        // lack the column; ALTER fails harmlessly once it exists.
+        try? db.exec("ALTER TABLE outbox ADD COLUMN target TEXT")
     }
 
     public static func defaultPath() -> String {
@@ -168,16 +171,16 @@ public final class VaultStore {
 
     public func enqueue(_ c: Capture) throws {
         try queue.sync {
-            try db.run("INSERT INTO outbox(id,created_at,title,body,attempts,last_error,sent_path) VALUES(?,?,?,?,?,?,?)",
-                       [c.id, c.createdAt.timeIntervalSince1970, c.title, c.body, c.attempts, c.lastError, c.sentPath])
+            try db.run("INSERT INTO outbox(id,created_at,title,body,attempts,last_error,sent_path,target) VALUES(?,?,?,?,?,?,?,?)",
+                       [c.id, c.createdAt.timeIntervalSince1970, c.title, c.body, c.attempts, c.lastError, c.sentPath, c.target])
         }
     }
 
     public func pending() -> [Capture] {
         queue.sync {
-            (try? db.query("SELECT id,created_at,title,body,attempts,last_error FROM outbox WHERE sent_path IS NULL ORDER BY created_at") {
+            (try? db.query("SELECT id,created_at,title,body,attempts,last_error,target FROM outbox WHERE sent_path IS NULL ORDER BY created_at") {
                 Capture(id: $0.string(0)!, createdAt: Date(timeIntervalSince1970: $0.double(1)), title: $0.string(2) ?? "", body: $0.string(3) ?? "",
-                        attempts: $0.int(4), lastError: $0.string(5), sentPath: nil)
+                        attempts: $0.int(4), lastError: $0.string(5), sentPath: nil, target: $0.string(6))
             }) ?? []
         }
     }
@@ -195,9 +198,9 @@ public final class VaultStore {
     /// Everything captured on this phone, newest first, sent or not.
     public func captures(limit: Int = 100) -> [Capture] {
         queue.sync {
-            (try? db.query("SELECT id,created_at,title,body,attempts,last_error,sent_path FROM outbox ORDER BY created_at DESC LIMIT ?", [limit]) {
+            (try? db.query("SELECT id,created_at,title,body,attempts,last_error,sent_path,target FROM outbox ORDER BY created_at DESC LIMIT ?", [limit]) {
                 Capture(id: $0.string(0)!, createdAt: Date(timeIntervalSince1970: $0.double(1)), title: $0.string(2) ?? "", body: $0.string(3) ?? "",
-                        attempts: $0.int(4), lastError: $0.string(5), sentPath: $0.string(6))
+                        attempts: $0.int(4), lastError: $0.string(5), sentPath: $0.string(6), target: $0.string(7))
             }) ?? []
         }
     }

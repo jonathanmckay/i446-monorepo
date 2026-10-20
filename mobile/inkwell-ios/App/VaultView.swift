@@ -17,6 +17,8 @@ struct VaultView: View {
     @State private var query = ""
     @State private var showCapture = false
     @State private var path = NavigationPath()
+    @State private var draft = ""
+    @FocusState private var draftFocused: Bool
     static let landing = "z_ibx/new-notes.md"
 
     var body: some View {
@@ -33,14 +35,16 @@ struct VaultView: View {
             .navigationDestination(for: String.self) { p in NoteView(store: store, path: p) }
             .navigationDestination(for: DirEntry.self) { d in FolderView(store: store, dir: d.path) }
         }
-        .safeAreaInset(edge: .bottom, alignment: .trailing) {
-            // Capture at the bottom right (2026-10-20).
-            Button { showCapture = true } label: {
-                Image(systemName: "square.and.pencil").font(.title2.bold())
-                    .frame(width: 52, height: 52)
-                    .background(Theme.accent).foregroundStyle(.black).clipShape(Circle())
-            }
-            .buttonStyle(.plain).padding(.trailing, 18).padding(.bottom, 10)
+        .safeAreaInset(edge: .bottom) {
+            // Append to new-notes from the bottom right (2026-10-20: "editable,
+            // just keep appending"). Queued offline, shown at once, synced to
+            // z_ibx/new-notes.md on Ix. + on an empty field = a separate capture.
+            EntryBar(placeholder: "append to new-notes…", text: $draft, focus: $draftFocused,
+                     multiline: true,
+                     onSubmit: { t in
+                         if store.capture(t, target: VaultView.landing) { Platform.haptic(.success) } else { Platform.haptic(.failure) }
+                     },
+                     onPlus: { showCapture = true })
         }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
         .task { store.fetchLanding(VaultView.landing); store.syncIfStale() }

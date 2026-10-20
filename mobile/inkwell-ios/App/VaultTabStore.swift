@@ -79,7 +79,7 @@ final class VaultTabStore: ObservableObject {
     }
 
     /// Foreground hook: cheap when nothing changed (one 304).
-    func syncIfStale(maxAge: TimeInterval = 60) {
+    func syncIfStale(maxAge: TimeInterval = 900) {
         guard ProcessInfo.processInfo.systemUptime - lastSyncMonotonic > maxAge else { return }
         runSync(force: false)
     }
@@ -89,7 +89,10 @@ final class VaultTabStore: ObservableObject {
         syncing = true
         progress = nil
         sync.progress = { [weak self] d, t in Task { @MainActor in self?.progress = (d, t) } }
-        Task {
+        // Background priority (2026-10-20: "indexing in the background"): the
+        // manifest is one 304 when nothing changed, only changed files are
+        // fetched (sha diff in VaultStore.plan), FTS is per-file on upsert.
+        Task(priority: .background) {
             let r = await sync.run(force: force)
             lastReport = r
             lastSyncMonotonic = ProcessInfo.processInfo.systemUptime
@@ -103,17 +106,33 @@ final class VaultTabStore: ObservableObject {
     /// Capture: lands in the local outbox first (instant, offline), then a
     /// sync tries to push it. Nothing here can lose the text.
     @discardableResult
-    func capture(_ text: String, title: String = "") -> Bool {
+    func capture(_ text: String, title: String = "", target: String? = nil) -> Bool {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return false }
         do {
-            try store.enqueue(Capture(title: title, body: body))
+            try store.enqueue(Capture(title: title, body: body, target: target))
         } catch {
             return false
+        }
+        if let t = target {
+            // Optimistic local append so the note shows the line at once; the
+            // server's copy replaces it on the next fetch (same date-line rule).
+            let cur = store.read(t) ?? ""
+            let day = VaultTabStore.dayStamp()
+            var block = cur.isEmpty || cur.hasSuffix("\n\n") ? "" : (cur.hasSuffix("\n") ? "\n" : "\n\n")
+            if !cur.split(separator: "\n").contains(where: { $0.trimmingCharacters(in: .whitespaces) == day }) { block += day + "\n" }
+            block += body + "\n"
+            let e = ManifestEntry(p: t, m: Int(Date().timeIntervalSince1970), s: (cur + block).utf8.count, h: "local-" + UUID().uuidString)
+            try? store.upsert(e, body: cur + block, sha: e.h)
+            landingVersion += 1
         }
         refreshCounts()
         runSync(force: false)
         return true
+    }
+
+    static func dayStamp(_ d: Date = Date()) -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyy.MM.dd"; return f.string(from: d)
     }
 
     // Reads (synchronous, local).
