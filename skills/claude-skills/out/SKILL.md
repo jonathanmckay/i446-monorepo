@@ -25,7 +25,7 @@ out → 10 (hcbi AI, row 113)
 
 ## Steps
 
-1. **Write to hcbi AI column** via `~/.claude/skills/_lib/ix-osa.sh`
+1. **Write to hcbi AI column** through the excel-http daemon (`neon.excel.batch_write`)
    (executes the AppleScript on Ix). Do NOT call local `osascript`.
 
    - Workbook: `Neon分v12.2.xlsx`
@@ -36,40 +36,27 @@ out → 10 (hcbi AI, row 113)
 
 2. **Report** the result.
 
-## AppleScript template
+## Write (excel-http daemon)
+
+Through the daemon on Ix (journaled; Neon-off-Excel step 2c, 2026-10-19). The
+client falls back to ssh+osascript by itself if the daemon is down. Substitute
+`SCORE` with the argument.
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'AS'
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set ws to sheet "hcbi" of wb
-    -- ensure header
-    set value of range "AI1" of ws to "AI"
-    -- find today's row
-    set today to "M/D"
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of range ("B" & i) of ws) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow > 0 then
-        set value of range ("AI" & todayRow) of ws to SCORE
-        return "OK: wrote SCORE to AI" & todayRow
-    else
-        return "ERROR: date not found"
-    end if
-end tell
-AS
+python3 - <<'PY'
+import sys
+sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+from neon import excel
+import daytime
+t = daytime.today()
+r = excel.batch_write("hcbi", [{"col": "AI", "value": SCORE}], date=f"{t.month}/{t.day}", src="out score")
+print("OK: wrote SCORE to AI%s" % r.get("row") if r.get("ok") else "ERROR: %s" % (r.get("error") or r))
+PY
 ```
-
-Substitute `M/D` with today's date and `SCORE` with the argument
-before piping the heredoc.
 
 ## Notes
 
-- All writes go through `ssh ix` via the `_lib/ix-osa.sh` helper. If
+- All writes go through the excel-http daemon on Ix (journaled). If
   Ix is unreachable the helper exits 3 with a clear error — do NOT
   fall back to local `osascript`. Local writes cause OneDrive merge
   conflicts against the canonical workbook on Ix.

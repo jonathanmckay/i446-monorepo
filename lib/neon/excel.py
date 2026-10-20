@@ -167,7 +167,8 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
 
 
 def batch_write(sheet: str, writes: list, *, date: str | None = None,
-                row: int | None = None, src: str | None = None) -> dict[str, Any]:
+                row: int | None = None, src: str | None = None,
+                fallback: bool = True) -> dict[str, Any]:
     """N value/formula writes to one sheet/date in a single daemon round-trip
     (POST /batch_write). `writes` = [{"col": "AE", "value": 1, "mode": "set"|"add"}, …];
     numbers stay numbers, "=…" is a formula, "add" accumulates onto a numeric
@@ -189,6 +190,10 @@ def batch_write(sheet: str, writes: list, *, date: str | None = None,
     out = _curl("/batch_write", body)
     if out:
         return out
+    if not fallback:
+        # Callers that keep their own raw-script fallback (review-sheet
+        # writers) must not get a second, per-cell ssh write on top of it.
+        return {"ok": False, "error": "daemon_unreachable", "fallback": True}
     results = []
     for w in writes:
         mode = w.get("mode") or "set"
@@ -229,7 +234,8 @@ def lookup_row(sheet: str, date_str: str) -> int | None:
 
 # ── ssh+osascript fallback ────────────────────────────────────────────────────
 
-_DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
+_DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B",
+             "0s897": "B", "1分+1s": "A", "i9+m5x2": "A"}   # mirror of the daemon's DATE_COL
 
 
 def _journal_fallback(op: str, sheet: str, col: str, row: int | None,

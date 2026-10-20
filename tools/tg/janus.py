@@ -5396,34 +5396,16 @@ def clear_dtd_running_hint() -> None:
 
 
 def dtd_task_for_desc(desc: str) -> dict | None:
-    """The dtd/Todoist task whose content matches this timer description, read
-    from the task-queue cache with the same normalised match fetch_short_names
-    uses (annotations stripped, case/dash-folded). None when nothing matches."""
-    target = _norm_key(desc or "")
-    if not target:
-        return None
+    """The dtd/Todoist task whose content matches this timer description.
+
+    Thin wrapper on lib/running_timer.task_for_desc: dtd's list resolves the
+    running timer with that SAME function, so the two ends cannot drift apart
+    on what a timer name means (2026-10-19)."""
     try:
-        data = json.loads(TASK_QUEUE.read_text())
-    except Exception:  # noqa: BLE001 -- no cache is just "no match"
+        import running_timer as _rt
+        return _rt.task_for_desc(desc, queue_path=TASK_QUEUE)
+    except Exception:  # noqa: BLE001 -- no resolver is just "no match"
         return None
-    found = None
-
-    def walk(o):
-        nonlocal found
-        if found is not None:
-            return
-        if isinstance(o, dict):
-            if o.get("id") and o.get("content") and _norm_key(o["content"]) == target:
-                found = o
-                return
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-
-    walk(data)
-    return found
 
 
 def mark_dtd_started(desc: str) -> None:

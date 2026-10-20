@@ -35,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
@@ -165,7 +166,61 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
     return "\n".join(L)
 
 
+def daemon_writes(answers: dict) -> tuple[list, list]:
+    """(today_items, tomorrow_items) for excel.batch_write: numbers stay
+    numbers, prose goes as mode "text" (never a formula, newlines kept)."""
+    today, tomorrow = [], []
+    for key, _label, col, tgt, kind in FIELDS:
+        val = (answers.get(key) or "").strip()
+        if not val or not col:
+            continue
+        if kind == "num":
+            if not _is_num(val):
+                continue
+            item = {"col": col, "value": float(val)}
+        else:
+            item = {"col": col, "value": val, "mode": "text"}
+        (tomorrow if tgt == "tomorrow" else today).append(item)
+    return today, tomorrow
+
+
+def write_answers_daemon(answers: dict, target: _dt.date) -> str | None:
+    """Through the excel-http daemon (Neon-off-Excel step 2c, 2026-10-19):
+    one /batch_write per row, M/D/YY so 0s897!B's two Januaries can't
+    collide. None → caller falls back to the raw ix-osa script. A missing
+    next-day row (year end) is not fatal, matching the old `tomRow > 0` guard."""
+    today, tomorrow = daemon_writes(answers)
+    src = "0s %s" % target.isoformat()
+    wrote, rows = 0, {}
+    if today:
+        r = neon_excel.batch_write(SHEET, today, date=_mdy(target), src=src, fallback=False)
+        if not r.get("ok"):
+            if r.get("fallback"):
+                return None
+            raise RuntimeError("0s897 write failed: %s" % (r.get("error") or r))
+        wrote += len(r.get("results") or []); rows["todayRow"] = r.get("row")
+    if tomorrow:
+        r = neon_excel.batch_write(SHEET, tomorrow, date=_mdy(target + _dt.timedelta(days=1)),
+                                   src=src, fallback=False)
+        if r.get("ok"):
+            wrote += len(r.get("results") or []); rows["tomRow"] = r.get("row")
+        elif r.get("fallback"):
+            return None
+        elif "date_not_found" not in str(r.get("error", "")):
+            raise RuntimeError("0s897 next-day write failed: %s" % (r.get("error") or r))
+    return "OK: todayRow=%s tomRow=%s wrote=%d" % (rows.get("todayRow", 0), rows.get("tomRow", 0), wrote)
+
+
 def write_answers(answers: dict, target: _dt.date) -> str:
+    try:
+        out = write_answers_daemon(answers, target)
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001 — transport trouble → raw fallback
+        print("0s daemon path failed (%s); using ix-osa" % e, file=sys.stderr)
+        out = None
+    if out is not None:
+        return out
     script = build_applescript(answers, target)
     proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()

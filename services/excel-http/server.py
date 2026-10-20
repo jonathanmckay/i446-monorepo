@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -64,7 +64,14 @@ WORKBOOK = "Neon分v12.2.xlsx"
 # someone checks".
 SAVE_INTERVAL = 120  # seconds
 
-DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B"}
+DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B",
+            # 2026-10-19 (step 2c): review sheets. 0s897!B holds real dates
+            # spanning 2026-01-01..2027-01-11 (callers pass M/D/YY); the two
+            # weekly sheets hold unique float week labels in col A ("10.3").
+            "0s897": "B", "1分+1s": "A", "i9+m5x2": "A"}
+# Sheets addressed by a week label rather than a date: journal row-anchored
+# (chain_key r<row>) with the label kept as `week`, never as `date`.
+LABEL_SHEETS = {"1n+", "1分+1s", "i9+m5x2"}
 
 LEDGER_DIR = os.path.expanduser("~/vault/g245/neon-ledger")
 LEDGER_LOCK = threading.Lock()
@@ -283,8 +290,45 @@ def save_loop() -> None:
             sys.stderr.write(f"save_loop: save failed: {err}\n")
 
 
+_DATE_FORMS = (
+    re.compile(r"^(\d{1,2})/(\d{1,2})$"),                       # M/D
+    re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})$"),         # M/D/YY, M/D/YYYY
+    re.compile(r"^(\d{4})-(\d{2})-(\d{2})$"),                   # YYYY-MM-DD
+)
+
+
+def date_target(date_str) -> tuple[str, int | None]:
+    """("M/D", year|None) for a date-shaped target; anything else (a week
+    label like "10.3") comes back unchanged with year None. A year makes a
+    real-date cell match only in that year (0s897!B spans two Januaries)."""
+    s = str(date_str).strip()
+    m = _DATE_FORMS[0].match(s)
+    if m:
+        return f"{int(m.group(1))}/{int(m.group(2))}", None
+    m = _DATE_FORMS[1].match(s)
+    if m:
+        y = int(m.group(3))
+        return f"{int(m.group(1))}/{int(m.group(2))}", (2000 + y if y < 100 else y)
+    m = _DATE_FORMS[2].match(s)
+    if m:
+        return f"{int(m.group(2))}/{int(m.group(3))}", int(m.group(1))
+    return s, None
+
+
+def _date_match_as(md: str, year: int | None, text_target: str) -> str:
+    """AppleScript predicate body: `cv` already bound; sets `hit` to true/false."""
+    year_test = f" and ((year of cv) as integer) = {year}" if year else ""
+    return (f'if ((class of cv) as text) is "date" then\n'
+            f'            set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)\n'
+            f'            set hit to (md = "{safe_str(md)}"{year_test})\n'
+            f'        else\n'
+            f'            set hit to ((cv as text) = "{safe_str(text_target)}")\n'
+            f'        end if')
+
+
 def lookup_row(sheet: str, date_str: str) -> int | None:
-    """Find the row in `sheet` whose date column matches `date_str` (M/D).
+    """Find the row in `sheet` whose date column matches `date_str` (M/D,
+    M/D/YY, YYYY-MM-DD, or a week label).
 
     The date column may hold EITHER an `M/D` text string (0分, hcbi, 1n+) OR a
     real Excel date value (0n col C), which AppleScript's `string value` renders
@@ -294,7 +338,7 @@ def lookup_row(sheet: str, date_str: str) -> int | None:
     dc = DATE_COL.get(sheet)
     if not dc:
         return None
-    target = safe_str(date_str)
+    md, year = date_target(date_str)
     # Bulk-fetch the whole date column in ONE Apple Event, then match locally
     # in the AppleScript interpreter (no further IPC to Excel per row).
     # The old version did `value of cell` in a `repeat ... to 800` loop — up
@@ -309,12 +353,8 @@ tell application "Microsoft Excel"
     repeat with i from 1 to count of colVals
         set cv to item 1 of item i of colVals
         if cv is not missing value then
-            if ((class of cv) as text) is "date" then
-                set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
-                if md = "{target}" then return (i + 1)
-            else
-                if (cv as text) = "{target}" then return (i + 1)
-            end if
+        {_date_match_as(md, year, str(date_str).strip())}
+            if hit then return (i + 1)
         end if
     end repeat
     return 0
@@ -348,26 +388,15 @@ def _row_still_matches(sheet: str, row: int, date_str: str) -> bool:
     dc = DATE_COL.get(sheet)
     if not dc:
         return False
-    target = safe_str(date_str)
+    md, year = date_target(date_str)
     script = f'''
 tell application "Microsoft Excel"
     set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
     set cv to value of cell ("{dc}" & {row}) of theSheet
     if cv is missing value then return "0"
-    if ((class of cv) as text) is "date" then
-        set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
-        if md = "{target}" then
-            return "1"
-        else
-            return "0"
-        end if
-    else
-        if (cv as text) = "{target}" then
-            return "1"
-        else
-            return "0"
-        end if
-    end if
+        {_date_match_as(md, year, str(date_str).strip())}
+    if hit then return "1"
+    return "0"
 end tell
 '''
     rc, out, _ = osascript(script)
@@ -391,7 +420,16 @@ def lookup_row_cached(sheet: str, date_str: str) -> int | None:
 
 def safe_str(s: str) -> str:
     """Escape backslashes and double quotes for embedding inside an AS string literal."""
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def as_literal(s) -> str:
+    """Prose-safe AppleScript string literal body: CRLF/CR normalised to LF,
+    each line escaped, lines joined with `" & linefeed & "` (Excel for Mac
+    cells use LF; raw newlines inside a literal also work, this is just
+    explicit). Used for review-sheet text (0s897, 1分+1s, i9+m5x2)."""
+    text = str(s).replace("\r\n", "\n").replace("\r", "")
+    return '" & linefeed & "'.join(safe_str(line) for line in text.split("\n"))
 
 
 def cell_addr(req: dict) -> tuple[str, int] | None:
@@ -498,7 +536,13 @@ def _as_setter(value) -> str:
     sval = str(value)
     if sval.startswith("="):
         return f'set formula of theCell to "{safe_str(sval)}"'
-    return f'set value of theCell to "{safe_str(sval)}"'
+    return f'set value of theCell to "{as_literal(sval)}"'
+
+
+def _as_text_setter(value) -> str:
+    """mode "text": always a value, never a formula (prose may start with
+    "=" or "-"); never routed through the append branch."""
+    return f'set value of theCell to "{as_literal(value)}"'
 
 
 def do_batch_write(req: dict) -> dict:
@@ -538,6 +582,8 @@ def do_batch_write(req: dict) -> dict:
                       f'    else\n'
                       f'        set value of theCell to (oldValue as number) + {value}\n'
                       f'    end if')
+        elif mode == "text":
+            setter = _as_text_setter(value)
         elif mode == "append":
             # Formula append with /append's exact normalization (shared
             # fragment): 1n+ cumulative/variable minutes, hcbi "+N".
@@ -572,10 +618,10 @@ end tell
         sub = {"sheet": sheet, "col": col, "row": row, "date": req.get("date"),
                "value": value, "src": w.get("src") or req.get("src"),
                "source": req.get("source"), "via": req.get("via")}
-        if sheet == "1n+":
+        if sheet in LABEL_SHEETS:
             # The "date" that resolved the row is a week label ("10.3"), not
-            # an M/D: journal 1n+ cells row-anchored like every existing 1n+
-            # entry (chain_key r<row>) and keep the label as `week`.
+            # an M/D: journal row-anchored like every existing 1n+ entry
+            # (chain_key r<row>) and keep the label as `week`.
             sub["date"], sub["week"] = None, req.get("date")
         r = _journal_and_respond("append" if mode == "append" else "write",
                                  sub, row, before, new_value, formula, before_value)
@@ -935,13 +981,15 @@ def do_read(req: dict) -> dict:
     script = f'''
 tell application "Microsoft Excel"
     set theCell to cell ("{col}{row}") of sheet "{sheet}" of workbook "{WORKBOOK}"
-    return ((value of theCell) as string) & "|" & (formula of theCell)
+    return ((value of theCell) as string) & (character id 31) & (formula of theCell)
 end tell
 '''
     rc, out, err = osascript(script)
     if rc != 0:
         return {"ok": False, "error": err}
-    value, formula = (out.split("|", 1) + [""])[:2]
+    # US (0x1f) separator (2026-10-19): a "|" inside prose used to truncate
+    # the value and leak the rest into `formula`.
+    value, formula = (out.split("\x1f", 1) + [""])[:2]
     return {"ok": True, "row": row, "col": col, "value": value, "formula": formula}
 
 

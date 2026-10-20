@@ -1874,6 +1874,24 @@ try:
     if _hs > running_started and time.time() - _hs < 4 * 3600:
         running_clean, running_started, running_id = _hint[0].strip().lower(), _hs, _hint[2].strip()
 except Exception: pass
+# Shared running timer (2026-10-19). Everything above is THIS pane's own
+# state: the timer file is per-instance, so a pane that did not itself start
+# the current task kept showing its own stale row while janus had it right.
+# lib/running_timer.py reads the one observation of Toggl that every writer
+# here already shares (~/.cache/toggl-current.json), so janus, the ticker and
+# every dtd pane answer from the same place instead of janus pushing state
+# into dtd's files. A reading taken AFTER our own start wins -- including one
+# that says nothing is running, which is what clears a stale row. A cold or
+# stale cache returns None and changes nothing.
+try:
+    _rt_sys = __import__('sys')
+    _rt_sys.path.insert(0, __import__('os').path.expanduser('~/i446-monorepo/lib'))
+    _obs = __import__('running_timer').observed()
+    if _obs and _obs['ts'] > running_started:
+        running_clean = _obs['desc'].strip().lower()
+        running_started = _obs['started']
+        running_id = _obs['task_id']
+except Exception: pass
 # Started-today set (2026-10-13: Enter means working on it, so the task gets
 # 🧮 and goes to the top; when the timer moves on and it isn't done, it stays
 # at the top). start.sh appends date/id/epoch to dtd-started on every Enter
