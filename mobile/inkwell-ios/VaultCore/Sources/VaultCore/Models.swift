@@ -39,11 +39,12 @@ public struct Capture: Equatable {
     public var attempts: Int
     public var lastError: String?
     public var sentPath: String?   // set once the server ACKs
+    public var target: String?     // append in place to this vault file (allow-listed server-side) instead of a new capture file
 
     public init(id: String = UUID().uuidString.lowercased(), createdAt: Date = Date(), title: String = "", body: String,
-                attempts: Int = 0, lastError: String? = nil, sentPath: String? = nil) {
+                attempts: Int = 0, lastError: String? = nil, sentPath: String? = nil, target: String? = nil) {
         self.id = id; self.createdAt = createdAt; self.title = title; self.body = body
-        self.attempts = attempts; self.lastError = lastError; self.sentPath = sentPath
+        self.attempts = attempts; self.lastError = lastError; self.sentPath = sentPath; self.target = target
     }
 
     /// ISO-8601 local wall time, no zone: the server files captures by the

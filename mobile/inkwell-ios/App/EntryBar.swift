@@ -9,20 +9,22 @@ struct EntryBar: View {
     @Binding var text: String
     var focus: FocusState<Bool>.Binding
     var disabled: Bool = false
+    var multiline: Bool = false        // notes: return inserts a newline, + sends
     var onSubmit: (String) -> Void
     var onPlus: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField(placeholder, text: $text)
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(placeholder, text: $text, axis: multiline ? .vertical : .horizontal)
+                .lineLimit(multiline ? 1...6 : 1...1)
                 .font(Theme.mono).foregroundStyle(Theme.fg)
                 .focused(focus)
-                .autocorrectionDisabled()
+                .autocorrectionDisabled(!multiline)
                 #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .submitLabel(.go)
+                .textInputAutocapitalization(multiline ? .sentences : .never)
+                .submitLabel(multiline ? .return : .go)
                 #endif
-                .onSubmit { submit() }
+                .onSubmit { if !multiline { submit() } }
                 .padding(.horizontal, 12).padding(.vertical, 9)
                 .background(Color(white: 0.1)).clipShape(RoundedRectangle(cornerRadius: 10))
             Button {

@@ -52,6 +52,12 @@ TOKENS_FILE = Path(os.environ.get("VAULT_MOBILE_TOKENS", Path.home() / ".config"
 CACHE_FILE = Path(os.environ.get("VAULT_MOBILE_CACHE", Path.home() / ".cache" / "vault-mobile" / "hash-cache.json"))
 PORT = int(os.environ.get("VAULT_MOBILE_PORT", "5571"))
 CAPTURE_DIR = "z_ibx/phone"
+# Append-in-place targets (2026-10-20: "new-notes editable, just keep
+# appending"). The ONLY vault files the phone may modify; everything else
+# still lands as a new capture file. Idempotent on capture id via a ledger.
+APPEND_TARGETS = {"z_ibx/new-notes.md"}
+APPEND_LEDGER = Path(os.environ.get("VAULT_MOBILE_APPENDS",
+                                    Path.home() / ".config" / "vault-mobile" / "appends.json"))
 MAX_BODY = 256 * 1024  # a capture is text; anything bigger is a bug or abuse
 DROP_RATE_PER_MIN = 60
 
@@ -205,6 +211,9 @@ def drop():
         return jsonify({"error": "need id (hex/uuid) and non-empty body"}), 400
     created = _parse_created(j.get("created_at"))
     title = (j.get("title") or "").strip()
+    target = (j.get("target") or "").strip()
+    if target:
+        return _append(target, cid, body, created)
     cap_dir = VAULT / CAPTURE_DIR
     cap_dir.mkdir(parents=True, exist_ok=True)
 
@@ -241,6 +250,47 @@ def drop():
     os.replace(tmp, path)
     log.info("drop %s -> %s (%d bytes)", g.device, name, len(text))
     return jsonify({"ok": True, "path": f"{CAPTURE_DIR}/{name}", "existing": False}), 201
+
+
+def _append_ledger() -> set:
+    try:
+        return set(json.loads(APPEND_LEDGER.read_text()))
+    except (OSError, ValueError):
+        return set()
+
+
+def _append(target: str, cid: str, body: str, created: datetime):
+    """Append one block to an allow-listed vault file. A date line
+    (YYYY.MM.DD, the /notes skill's block-date header) is written first when
+    the file has none for that day. Atomic replace; idempotent on id."""
+    if target not in APPEND_TARGETS:
+        return jsonify({"error": f"append not allowed: {target}"}), 400
+    seen = _append_ledger()
+    if cid in seen:
+        return jsonify({"ok": True, "path": target, "existing": True, "appended": True})
+    path = VAULT / target
+    try:
+        cur = path.read_text(encoding="utf-8") if path.exists() else ""
+    except OSError as e:
+        return jsonify({"error": f"read failed: {e}"}), 500
+    day = created.strftime("%Y.%m.%d")
+    has_day = any(ln.strip() == day for ln in cur.splitlines())
+    block = ("" if cur.endswith("\n\n") or not cur else ("\n" if cur.endswith("\n") else "\n\n"))
+    if not has_day:
+        block += day + "\n"
+    block += body.strip() + "\n"
+    tmp = path.with_name("." + path.name + ".tmp")
+    tmp.write_text(cur + block, encoding="utf-8")
+    os.replace(tmp, path)
+    seen.add(cid)
+    try:
+        APPEND_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        APPEND_LEDGER.write_text(json.dumps(sorted(seen)))
+    except OSError:
+        pass
+    manifests.invalidate() if hasattr(manifests, "invalidate") else None
+    log.info("append %s -> %s (%d bytes)", g.device, target, len(block))
+    return jsonify({"ok": True, "path": target, "existing": False, "appended": True}), 201
 
 
 @app.route("/captures")

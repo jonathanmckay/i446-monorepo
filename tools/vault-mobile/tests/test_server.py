@@ -52,6 +52,7 @@ def vault(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULT_MOBILE_VAULT", str(v))
     monkeypatch.setenv("VAULT_MOBILE_TOKENS", str(tmp_path / "tokens.json"))
     monkeypatch.setenv("VAULT_MOBILE_CACHE", str(tmp_path / "cache.json"))
+    monkeypatch.setenv("VAULT_MOBILE_APPENDS", str(tmp_path / "appends.json"))
     for m in ("server", "manifest"):
         sys.modules.pop(m, None)
     import server  # noqa
@@ -152,3 +153,26 @@ def test_subset_too_large(vault, client):
     r = client.get("/manifest", query_string={"force": "1"})
     assert r.status_code == 507
     assert r.get_json()["error"] == "subset_too_large"
+
+
+def test_drop_with_target_appends_to_new_notes(client, vault):
+    """2026-10-20: the phone appends to new-notes in place (allow-listed),
+    with a YYYY.MM.DD date line once per day, idempotent on id."""
+    v, _ = vault
+    p = v / "z_ibx/new-notes.md"
+    p.write_text("inbox header\n\nold block\n")
+    a = {"id": "aaaa1111-0000-0000-0000-000000000001", "created_at": "2026-10-20T09:10:11",
+         "body": "call LR about w225", "target": "z_ibx/new-notes.md"}
+    r = client.post("/drop", json=a)
+    assert r.status_code == 201, r.data
+    assert r.get_json() == {"ok": True, "path": "z_ibx/new-notes.md", "existing": False, "appended": True}
+    assert p.read_text() == "inbox header\n\nold block\n\n2026.10.20\ncall LR about w225\n"
+    # same day → no second date line; same id → no duplicate
+    b = dict(a, id="aaaa1111-0000-0000-0000-000000000002", body="second thought")
+    assert client.post("/drop", json=b).status_code == 201
+    assert client.post("/drop", json=a).status_code == 200
+    assert p.read_text() == "inbox header\n\nold block\n\n2026.10.20\ncall LR about w225\n\nsecond thought\n"
+    assert not list((v / "z_ibx/phone").glob("*.md")) if (v / "z_ibx/phone").exists() else True
+    # anything else stays read-only
+    r = client.post("/drop", json=dict(a, id="aaaa1111-0000-0000-0000-000000000003", target="g245/a.md"))
+    assert r.status_code == 400 and (v / "g245/a.md").read_text() == "alpha"
