@@ -1,0 +1,61 @@
+"""Regression (2026-06-11): cmux respawn-pane types the launch command into
+the pane; the queued tty text reached janus's always-focused input buffer and
+the enter handler started a Toggl timer named
+'python3 ~/i446-monorepo/tools/tg/janus.py'. The enter handler must ignore
+submissions during the boot grace window."""
+import importlib.util
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).parent
+
+
+def _load_tui():
+    spec = importlib.util.spec_from_file_location("janus_boot", HERE / "janus.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["janus_boot"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_boot_grace_active_right_after_start():
+    mod = _load_tui()
+    mod.STATE.boot_time = time.monotonic()
+    assert mod._boot_grace_active() is True
+
+
+def test_boot_grace_expires():
+    mod = _load_tui()
+    mod.STATE.boot_time = time.monotonic() - 10
+    assert mod._boot_grace_active() is False
+
+
+def test_enter_handler_checks_boot_grace():
+    """Structural: the enter handler's TYPED-COMMAND path must consult
+    _boot_grace_active BEFORE running tg-fast (which starts timers) — that's
+    the path vulnerable to text queued by the spawning terminal landing in
+    the input buffer at startup.
+
+    The handler's OTHER run_tg_fast call (the event-cursor "convert to
+    timer" branch, added 2026-07-15) fires only on an EMPTY input buffer
+    with an armed STATE.event_sel — event_sel starts None at boot and can
+    only become non-None via an explicit Tab keypress matching a real
+    visible_events entry (itself empty at boot), so it can never fire from
+    boot-queued text and doesn't need the same gate. Scope this check to the
+    typed-command branch specifically (everything from the boot-grace check
+    onward), not the whole handler."""
+    src = (HERE / "janus.py").read_text()
+    handler = src.split('@kb.add("enter")', 1)[1].split("@kb.add", 1)[0]
+    assert "_boot_grace_active()" in handler, "enter handler lost the boot-grace gate"
+    typed_command_branch = handler[handler.index("_boot_grace_active()"):]
+    assert "run_tg_fast" in typed_command_branch, \
+        "boot-grace check must come before the typed-command timer start"
+
+
+def test_main_rearms_boot_time():
+    """Structural: main() must reset boot_time when the app takes the tty —
+    module import can happen seconds earlier."""
+    src = (HERE / "janus.py").read_text()
+    main_src = src.split("async def main()", 1)[1]
+    assert "STATE.boot_time = time.monotonic()" in main_src

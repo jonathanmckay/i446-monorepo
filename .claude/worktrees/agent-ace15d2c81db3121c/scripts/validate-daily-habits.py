@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""validate-daily-habits.py — ensure every canonical daily habit has an open
+recurring Todoist task for the new day, recreating any that are missing.
+
+Recurring Todoist tasks occasionally fail to regenerate for a new day (a sync
+hiccup, an accidental delete, a completion that didn't roll forward). When that
+happens the habit silently vanishes from the day's queue and the only way to
+notice is cross-checking the Neon sheet. This validates the canonical set
+(config/daily-todoist-manifest.json) against live Todoist and, with --fix,
+recreates the missing ones from their stored spec.
+
+It also detects CONTENT drift: a habit's live recurring card keeps whatever
+(N)/[N] tokens it had when it was first created, even after the manifest's
+`content` is edited (recurring tasks are never retroactively rewritten). This
+is invisible to the missing-habit check above because `bare()` strips those
+tokens before matching. Found 2026-09-06: "ibx m5x2"'s manifest content was
+updated to `(4) [15]` at some point, but the live card — created 2026-07-14 —
+still read `(5) [8]`, and dtd (which reads the live card, correctly) had no
+way to know it was stale. Mirrors the drift WARNING the weekly (1n+) checker
+already does for its `[N]`; same philosophy: report, never auto-correct (the
+manifest and the live card could each be the "right" one, so which to trust is
+a human call — see `compute_drifted`).
+
+Usage:
+    validate-daily-habits.py            # report missing as JSON
+    validate-daily-habits.py --fix      # recreate missing, then report
+    validate-daily-habits.py --pretty   # human-readable summary
+
+Output (JSON): {"checked": N, "present": [...], "missing": [...],
+                "recreated": [...], "drifted": [...], "errors": [...]}
+The morning wakeup flow reads this to show a "missing habits" card.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+MANIFEST = Path(__file__).resolve().parent.parent / "config" / "daily-todoist-manifest.json"
+DEFAULT_CACHE = Path.home() / ".cache/jm/daily-habits-check.json"
+API = "https://api.todoist.com/api/v1"
+AUTO_MARK = "😈"  # prefixes every task created by automation (see stale-contacts.py)
+
+
+def bare(content: str) -> str:
+    """Normalize a task content to its bare habit name: strip the 😈 auto-marker
+    and (N)/[N]/{N} estimate tokens, collapse whitespace, lowercased. Mirrors the
+    manifest builder so manifest `match` strings line up with live task contents
+    — including habits we auto-recreated with the 😈 prefix (so we don't re-flag
+    and duplicate them)."""
+    s = content.lstrip(AUTO_MARK).strip()
+    s = re.sub(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]", "", s)
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def compute_missing(manifest: dict, present_contents: list[str]) -> list[str]:
+    """Pure: return manifest habit keys that have no matching open task.
+
+    A habit matches if its bare `match` name equals a present task's bare name,
+    or (for multi-word names) is contained in one — covers '早餐' vs '早餐 (15) [5]'
+    and 'ibx s897' vs 'ibx s897 [6] (15)' without false-matching short tokens."""
+    present = {bare(c) for c in present_contents}
+    missing = []
+    for key, h in manifest["habits"].items():
+        name = bare(h["match"])
+        hit = name in present or any(
+            name == p or (len(name) > 3 and (name in p or p in name)) for p in present
+        )
+        if not hit:
+            missing.append(key)
+    return missing
+
+
+def _tokens(content: str) -> dict:
+    """Extract each (N)/[N]/{N} estimate token's numeric value, keyed by its
+    opening bracket. `None` for a bracket type absent from `content`."""
+    out: dict = {"[": None, "(": None, "{": None}
+    for m in re.finditer(r"[\[\(\{](-?\d+(?:\.\d+)?)[\]\)\}]", content):
+        try:
+            val = float(m.group(1))
+            out[content[m.start()]] = int(val) if val.is_integer() else val
+        except ValueError:
+            pass
+    return out
+
+
+def compute_drifted(manifest: dict, present_contents: list[str]) -> list[dict]:
+    """Pure: for each manifest habit that HAS a live card (missing habits are
+    compute_missing's job, not this), compare the (N)/[N]/{N} token values the
+    manifest declares against what the live card actually holds. A habit
+    whose live card predates a manifest content edit keeps its old tokens
+    forever (Todoist never rewrites existing recurring tasks), so this is the
+    only thing that can catch that drift. Returns one entry per mismatched
+    token: {habit, token, expected, actual, live_content}."""
+    drifted = []
+    for key, h in manifest["habits"].items():
+        name = bare(h["match"])
+        match = next(
+            (p for p in present_contents
+             if bare(p) == name or (len(name) > 3 and (name in bare(p) or bare(p) in name))),
+            None)
+        if match is None:
+            continue
+        want, got = _tokens(h["content"]), _tokens(match)
+        for tok in ("[", "(", "{"):
+            if want[tok] is not None and got[tok] is not None and want[tok] != got[tok]:
+                drifted.append({"habit": key, "token": tok, "expected": want[tok],
+                                 "actual": got[tok], "live_content": match})
+    return drifted
+
+
+def na_today(when=None) -> set[str]:
+    """Bare habit names the user deleted from dtd today (= N/A for today).
+    dtd's ctrl-x writes them to ~/.cache/jm/habits-na-YYYY-MM-DD.json alongside
+    the explicit-0 Neon write; --fix must not resurrect these the same day —
+    the recurring card comes back on the next day's validation, whose date
+    lands on a fresh NA file."""
+    from datetime import date as _date
+    p = Path.home() / ".cache/jm" / f"habits-na-{(when or _date.today()).isoformat()}.json"
+    try:
+        return {bare(n) for n in json.loads(p.read_text())}
+    except Exception:
+        return set()
+
+
+def recreate_payload(habit: dict) -> dict:
+    """Pure: build the Todoist create-task body from a manifest entry.
+
+    The content is created CLEAN — no 😈 auto-marker. The marker broke the
+    habit on completion (2026-07-26: "😈 1st hci" doesn't match the 0n header
+    "1st hci", so did-fast fell through to the generic Todoist step and the
+    habit's own column never got written). Provenance lives in the task
+    description instead; bare() still strips 😈 for matching legacy cards."""
+    from datetime import date as _date
+    body = {
+        "content": habit["content"],
+        "description": f"auto-recreated by validate-daily-habits {_date.today().isoformat()}",
+        "due_string": habit.get("due_string", "every day"),
+        "labels": habit.get("labels", []),
+        "priority": habit.get("priority", 1),
+    }
+    if habit.get("project_id"):
+        body["project_id"] = habit["project_id"]
+    return body
+
+
+# ------- I/O (not exercised by unit tests) -------
+
+def _token() -> str:
+    import os
+    tok = os.environ.get("TODOIST_API_KEY")
+    if tok:
+        return tok
+    cfg = json.loads((Path.home() / ".claude.json").read_text())
+    auth = cfg["mcpServers"]["todoist"]["headers"]["Authorization"]
+    return auth.split(None, 1)[1].strip()
+
+
+def _fetch_open(token: str) -> list[str]:
+    contents = []
+    for label in ("0neon", "夜neon"):
+        q = urllib.parse.quote(f"@{label}")
+        url = f"{API}/tasks/filter?query={q}&limit=200"
+        while url:
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+            d = json.load(urllib.request.urlopen(req))
+            contents += [t["content"] for t in d.get("results", [])]
+            c = d.get("next_cursor")
+            url = f"{API}/tasks/filter?query={q}&limit=200&cursor={urllib.parse.quote(c)}" if c else None
+    return contents
+
+
+def _create(token: str, body: dict) -> None:
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        f"{API}/tasks", data=data, method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fix", action="store_true", help="recreate missing tasks")
+    ap.add_argument("--pretty", action="store_true", help="human-readable output")
+    ap.add_argument("--cache", nargs="?", const=str(DEFAULT_CACHE), default=None,
+                    help="also write the result JSON to this path (default: %(default)s)")
+    args = ap.parse_args()
+
+    manifest = json.loads(MANIFEST.read_text())
+    token = _token()
+    present_contents = _fetch_open(token)
+    missing = compute_missing(manifest, present_contents)
+    skipped_na = [k for k in missing
+                  if bare(manifest["habits"][k]["match"]) in na_today()]
+    missing = [k for k in missing if k not in skipped_na]
+    drifted = compute_drifted(manifest, present_contents)
+
+    recreated, errors = [], []
+    if args.fix:
+        for key in missing:
+            try:
+                _create(token, recreate_payload(manifest["habits"][key]))
+                recreated.append(key)
+            except Exception as e:  # noqa: BLE001
+                errors.append({"habit": key, "error": str(e)[:120]})
+
+    from datetime import date as _date
+    result = {
+        "date": _date.today().isoformat(),
+        "checked": len(manifest["habits"]),
+        "present": len(manifest["habits"]) - len(missing),
+        "missing": missing,
+        "missing_names": [manifest["habits"][k]["match"] for k in missing],
+        "recreated": recreated,
+        "recreated_names": [manifest["habits"][k]["match"] for k in recreated],
+        "skipped_na": skipped_na,
+        "drifted": drifted,
+        "errors": errors,
+    }
+    if args.cache:
+        cpath = Path(args.cache)
+        cpath.parent.mkdir(parents=True, exist_ok=True)
+        cpath.write_text(json.dumps(result, ensure_ascii=False))
+    if args.pretty:
+        if not missing:
+            print(f"✅ all {result['checked']} daily habits present in Todoist")
+        else:
+            verb = "recreated" if args.fix else "MISSING"
+            print(f"⚠ {len(missing)} daily habits {verb}: " +
+                  ", ".join(manifest["habits"][k]["match"] for k in missing))
+            for e in errors:
+                print(f"   ✗ {e['habit']}: {e['error']}")
+        if drifted:
+            closing = {"[": "]", "(": ")", "{": "}"}
+            print(f"⚠ {len(drifted)} daily habit card(s) drifted from the manifest (never auto-fixed):")
+            for d in drifted:
+                c = closing[d["token"]]
+                print(f"   {manifest['habits'][d['habit']]['match']}: "
+                      f"{d['token']}{d['actual']}{c} in Todoist vs "
+                      f"{d['token']}{d['expected']}{c} in the manifest "
+                      f"(live: {d['live_content']!r})")
+    else:
+        print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Comms Launcher</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 14px;
+        width: 290px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #22c55e;
+        color: #052e16;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        line-height: 1.4;
+        min-height: 34px;
+        white-space: pre-wrap;
+      }
+
+      .ok { color: #86efac; }
+      .err { color: #fca5a5; }
+    </style>
+  </head>
+  <body>
+    <h1>Open All Comms Channels</h1>
+    <button id="launch">Launch</button>
+    <div id="status">Ready.</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,139 @@
+---
+name: "-1g"
+description: "Set goals for the current 2-hour block. Writes to build order and syncs to Todoist with #-1g. Usage: /-1g [next] <goals>"
+user-invocable: true
+---
+
+# Set 2-Hour Block Goals (/-1g)
+
+Set goals for the current (or next) 2-hour time block. Goals go into the `-1₲` section of the build order file and into Todoist with the `#-1g` label.
+
+## Arguments
+
+```
+/-1g [next] <goals as bullet points or free text>
+```
+
+- If `next` appears as the first word, target the NEXT time block instead of the current one.
+- Goals can be provided as bullet lines, comma-separated, or free text (one goal per line/item).
+
+## Time Block Mapping
+
+Auto-detect from wall clock time (America/Los_Angeles):
+
+| Block | Local Time | 地支 |
+|-------|-----------|------|
+| 0 | 04:00-05:59 | 卯 |
+| 1 | 06:00-07:59 | 辰 |
+| 2 | 08:00-09:59 | 巳 |
+| 3 | 10:00-11:59 | 午 |
+| 4 | 12:00-13:59 | 未 |
+| 5 | 14:00-15:59 | 申 |
+| 6 | 16:00-17:59 | 酉 |
+| 7 | 18:00-19:59 | 戌 |
+| 8 | 20:00-21:59 | 亥 |
+
+Times outside 04:00-21:59 default to 卯 (block 0).
+
+## Files
+
+- **Build order**: `~/vault/g245/5e-1/build-order.md`
+- **Section**: `## -1₲` — goals go under the matching 地支 time heading
+- **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
+- **Todoist labels**: `#-1g` on every task, plus an auto-inferred domain label
+
+## Domain Auto-Categorization
+
+If a goal has an explicit `@code` annotation (e.g. `@i9`, `@m5x2`), use that as the domain label and strip it from the content. Otherwise, infer the domain from keywords in the goal text:
+
+| Keywords | Domain |
+|----------|--------|
+| xbox, platform, copilot, github, teams, metrics, standup, sprint, retro, SLT, 1:1 (work context), PR, deploy, pipeline, experimentation, forza, halo, activation | `i9` |
+| property, tenant, lease, rent, AppFolio, occupancy, maintenance, P&L, bookkeeping, eviction, unit, renewal, vacancy | `m5x2` |
+| school, math, kids, Theo, Ren, Aurora, homework, reading, lego, PTC | `xk87` |
+| exercise, gym, HIIT, bball, basketball, run, walk, yoga, stretch, legs | `hcbp` |
+| eat, food, meal, calories, nutrition, breakfast, lunch, dinner, snack | `hcb` |
+| meditat, journal, prayer, reflect, o314, 冥想 | `hcm` |
+| news, 新闻, YouTube, podcast, read (media), article, book review | `hcmc` |
+| invest, stocks, portfolio, taxes, budget, finance | `qz12` |
+| goal, review, plan, weekly, 1s, 0g, dream | `g245` |
+| social, friends, dinner out, call (non-work) | `s897` |
+| admin, tooling, setup, infra, fix computer, claude, system | `i447` |
+
+If no keywords match, default to the block's typical domain (from the block→domain mapping in -2n.py: 巳/午/未/申 → `i9`, 酉 → `m5x2`, 戌 → `xk87`, 亥 → `hcm`).
+
+## Steps
+
+### Step 1: Determine time block
+
+Get current local time (America/Los_Angeles). Compute which block using `(hour - 4) // 2`, clamped to 0-8. If `next` argument is present, add 1 (clamped to 8).
+
+### Step 2: Parse goals
+
+Extract goal items from the user's input. Each line starting with `-` or `*` or a numbered list is one goal. If no list markers, split by newlines. Strip checkbox syntax if present (e.g., `- [ ] foo` becomes `foo`). Preserve `{N}` bonus point annotations.
+
+**`{N}` = block goal · `[N]`-only = plain todo.** Split the items by which bracket they carry:
+- **`{N}` (or no bracket)** → a **block goal**: it goes under the block's 地支 heading in the build order and into Todoist with `#-1g` (Steps 3–4); its `{N}` credits the 0g column on completion. If it has no `{N}`, auto-estimate one (below).
+- **`[N]` only, no `{N}`** → the user is just **adding a plain todo**, not a block goal. Do NOT stamp it into the build order (Step 3) and do NOT give it `#-1g`. Create it exactly like `/todo`: Inbox (no project), an inferred `@domain` label, the `[N]` kept in the content, due today. It is not a goal for the block.
+
+**Auto-estimate bonus points:** If a **block goal** does NOT already contain `{N}`, estimate and append one. Use `{5}` to `{20}` based on the goal's ambition and difficulty:
+- Quick/routine tasks (send a message, check something, review): `{5}`
+- Medium tasks (write something, prep, research): `{8}` to `{12}`
+- Ambitious/hard tasks (deep work, build, create, ship): `{15}` to `{20}`
+
+Always add the estimate **to block goals**. Never leave a block goal without `{N}`. (A `[N]`-only plain todo keeps its `[N]` as-is and is never given `{N}`.)
+
+### Step 3: Update build order markdown
+
+**Single-writer routing (2026-08-11):** `did-fast.py --ritual -1g` (Step 5.5) always stamps 🎯 onto **ix's** copy of build-order.md via ssh, treating ix as authoritative — this step's edit must land there too, or a Syncthing propagation race can silently lose the goal text. If this step edits the LOCAL copy on a non-ix machine (e.g. Straylight) and Step 5.5 fires before Syncthing has caught up, the ritual's remote read/stamp uses a stale (goal-blank) version of ix's file, and that then syncs back and clobbers the goal just written (confirmed live 2026-08-11: a goal set on Straylight was silently wiped seconds later by the ritual close, on both the `/-1g` skill's own goal and a preceding one). On any machine that is not ix, make this edit via `ssh ix` against ix's copy of the file directly (same "Straylight→Ix" pattern as Excel writes); on ix itself, edit the local copy as normal. Let Syncthing propagate the change back afterward — do not also write the local copy.
+
+Read the build order file (on ix, or via the ssh routing above). Find the `## -1₲` heading (match any line starting with `## -1₲`, ignoring trailing characters). If no match is found, error with "ERROR: ## -1₲ section not found in build order". Under the target 地支 heading (e.g., `- 辰`), replace any existing indented items with the new **block goals** (the `{N}` items only) as `    - [ ] <goal>` lines (4-space indent). `[N]`-only plain todos are NOT written here.
+
+Also add `🎯` to the block's header line (e.g., `- 巳` becomes `- 巳 🎯`) if it is not already present. Append it after any existing emojis/text on that line. **Only add 🎯 if at least one goal has non-empty text.** Do not mark a block as goals-set if all goals are blank.
+
+Keep all other time blocks untouched.
+
+### Step 4: Create Todoist tasks (with dedup)
+
+First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists (substring match).
+
+For each **new block goal** (`{N}` item, no existing match), create a Todoist task using the Todoist MCP `add-tasks` tool:
+- **Content**: the goal text **including its `{N}` marker verbatim** (e.g. `tasks down to 70 {20}`, not `tasks down to 70`). Stripping the `{N}` causes /did to log 0 pts on completion.
+- **Project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`) — use project name "0g"
+- **Labels**: `["#-1g", "<domain>"]` (e.g. `["#-1g", "i9"]`)
+- **Priority**: `p1`
+- **Due**: `today`
+- **Duration**: from `(N)` annotation if present (e.g., `(30)` → `"30m"`). If no `(N)`, omit.
+
+For each **`[N]`-only plain todo**, create an ordinary Todoist task instead: **no project** (Inbox), labels `["<domain>"]` (the inferred domain only — **no `#-1g`**), the `[N]` kept in the content, priority `p4`, due `today`. These are just added to the todo list, not tracked as block goals.
+
+### Step 5: Refresh the dtd task cache
+
+After creating the Todoist task(s), refresh the dtd/did task cache so the new goal shows up in dtd (it sorts into the high `#-1g` goals tier). Run it **foreground** (NOT backgrounded with `&`): a backgrounded job is torn down when the shell/tool call returns before the ~2s refresh finishes, so the goal never reaches the cache and dtd never updates (regression 2026-06-30):
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache >/dev/null 2>&1
+```
+
+This updates `~/.local/state/jm/task-queue.json`; an open dtd auto-reloads off that cache (its watcher copies the change into the snapshot and POSTs a reload to fzf), so the goal appears without a manual ctrl-r. The did-refresh-cache daemon also picks up `#-1g` within ~3min as a fallback. Skip this step only when no task was created (all goals were dedup'd away).
+
+### Step 5.5: Close the `-1g` ritual card (current block only)
+
+Setting goals **is** the `-1g` block ritual, so close its `😈 -1g` `-1neon` card. Run **only when setting goals for the CURRENT block** (i.e. the `next` argument was NOT used) — `--ritual` always acts on the current 地支 block, so calling it for a `next`-block plan would close/stamp the wrong block:
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py --ritual -1g >/dev/null 2>&1
+```
+
+This closes the open `😈 -1g` card and stamps `🎯` on the current block header (idempotent — the Step 3 stamp is not duplicated). It does NOT write `0分!P`; the daemon credits the ritual's points at the block turnover. If the card is already closed, it's a harmless no-op. **Skip entirely when the `next` argument was used.**
+
+### Step 6: Confirm
+
+Output one line:
+```
+-1g → <地支 block name> (<HH:MM>-<HH:MM>): N goals set
+```
+
+## Response Style
+
+Minimal. Execute and confirm in one line. Do NOT ask for confirmation. Do NOT explain what you're doing.

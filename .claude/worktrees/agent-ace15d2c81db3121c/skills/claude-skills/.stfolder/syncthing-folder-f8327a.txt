@@ -1,0 +1,5 @@
+# This directory is a Syncthing folder marker.
+# Do not delete.
+
+folderID: claude-skills
+created: 2026-04-30T06:30:39-07:00

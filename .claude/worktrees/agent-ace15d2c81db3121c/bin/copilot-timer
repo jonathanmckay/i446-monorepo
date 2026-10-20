@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# copilot-timer — a minimal stopwatch for use alongside copilot CLI
+# Run in a split pane. Press Enter to start/reset, q to quit.
+
+set -euo pipefail
+
+BOLD='\033[1m'
+DIM='\033[2m'
+CYAN='\033[36m'
+RESET='\033[0m'
+
+start_epoch=0
+running=false
+
+format_elapsed() {
+  local total=$1
+  local mins=$((total / 60))
+  local secs=$((total % 60))
+  printf "%02d:%02d" "$mins" "$secs"
+}
+
+render() {
+  local now elapsed formatted
+  # Move cursor to top-left, clear screen
+  printf '\033[H\033[2J'
+  echo -e "${DIM}─── copilot-timer ───${RESET}"
+  echo ""
+  if $running; then
+    now=$(date +%s)
+    elapsed=$((now - start_epoch))
+    formatted=$(format_elapsed "$elapsed")
+    echo -e "  ${BOLD}${CYAN}⏱  ${formatted}${RESET}"
+  else
+    echo -e "  ${DIM}⏱  --:--${RESET}"
+  fi
+  echo ""
+  if $running; then
+    echo -e "  ${DIM}Enter${RESET} reset  ${DIM}q${RESET} quit"
+  else
+    echo -e "  ${DIM}Enter${RESET} start  ${DIM}q${RESET} quit"
+  fi
+}
+
+cleanup() {
+  printf '\033[?25h'
+  clear
+}
+
+stty_orig=$(stty -g)
+trap "stty $stty_orig; cleanup" EXIT
+
+# Hide cursor for clean display
+printf '\033[?25l'
+
+while true; do
+  render
+
+  # read -rsn1: Enter yields empty $key with exit 0; timeout yields exit >0
+  key=""
+  if read -rsn1 -t 0.5 key 2>/dev/null; then
+    case "$key" in
+      q|Q) break ;;
+      "")
+        # Enter pressed — start or reset
+        start_epoch=$(date +%s)
+        running=true
+        ;;
+    esac
+  fi
+
+  sleep 0.3
+done

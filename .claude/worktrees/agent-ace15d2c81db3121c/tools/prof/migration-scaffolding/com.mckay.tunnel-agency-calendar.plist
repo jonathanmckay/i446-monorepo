@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- IX — forward localhost:7001 → straylight:7001 so prof_snapshot on ix
+     can reach the calendar MCP. KeepAlive bounces on disconnect. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.mckay.tunnel-agency-calendar</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <string>-o</string><string>ExitOnForwardFailure=yes</string>
+        <string>-o</string><string>ServerAliveInterval=30</string>
+        <string>-o</string><string>ServerAliveCountMax=3</string>
+        <string>-L</string><string>7001:localhost:7001</string>
+        <string>straylight-refit</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>/Users/mckay/.config/prof/tunnel.log</string>
+    <key>StandardErrorPath</key><string>/Users/mckay/.config/prof/tunnel.log</string>
+</dict>
+</plist>

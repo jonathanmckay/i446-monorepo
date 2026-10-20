@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/mckay</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>TODOIST_API_KEY</key>
+		<string>7eb82f47aba8b334769351368e4e3e3284f980e5</string>
+	</dict>
+	<key>Label</key>
+	<string>com.jm.neon-task-checksum</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/mckay/i446-monorepo/scripts/neon-task-checksum.py</string>
+		<string>--fix</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/tmp/neon-task-checksum.log</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/neon-task-checksum.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>4</integer>
+			<key>Minute</key>
+			<integer>15</integer>
+		</dict>
+	</array>
+</dict>
+</plist>

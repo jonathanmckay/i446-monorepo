@@ -1,0 +1,27 @@
+# AppFolio Leasing Report Sync
+# Python 3.9+
+
+# Database
+sqlalchemy>=2.0.0
+
+# Google Sheets API
+gspread>=5.12.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+
+# Data processing
+pandas>=2.0.0
+
+# HTTP requests (for Skywalk API)
+requests>=2.31.0
+
+# Scheduling
+schedule>=1.2.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# CLI
+click>=8.1.0
+rich>=13.0.0
+

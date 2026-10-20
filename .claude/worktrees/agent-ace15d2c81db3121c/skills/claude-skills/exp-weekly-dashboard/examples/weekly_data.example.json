@@ -1,0 +1,85 @@
+{
+  "week_label": "May 25 – May 31, 2026",
+  "week_start": "2026-05-25",
+  "week_end": "2026-05-31",
+  "generated_for_date": "2026-06-01",
+  "features": {
+    "feature-aaaa-1111": {
+      "displayName": "Example Feature A — Homepage Hero Prompt",
+      "description": "Enables a dynamic hero prompt on the home page surface to drive content engagement.",
+      "experimentationGroup": "xbox~example~user"
+    },
+    "feature-bbbb-2222": {
+      "displayName": "Example Feature B — Game Tile Context Menus",
+      "description": "Adds right-click / long-press context menu actions on game tiles for quick triage.",
+      "experimentationGroup": "xbox~example"
+    },
+    "feature-cccc-3333": {
+      "displayName": "Example Feature C — Plan Picker SKU Order",
+      "description": "Reorders the plan picker so Ultimate appears before Core to test acquisition impact.",
+      "experimentationGroup": "xbox~example~user"
+    }
+  },
+  "experiments": {
+    "exp-aaaa-1111": {
+      "featureId": "feature-aaaa-1111",
+      "displayName": "Global Audience",
+      "audience": "Global Audience · Console"
+    },
+    "exp-bbbb-2222": {
+      "featureId": "feature-bbbb-2222",
+      "displayName": "Env: Prod",
+      "audience": "example prod ring"
+    },
+    "exp-cccc-3333": {
+      "featureId": "feature-cccc-3333",
+      "displayName": "US Web",
+      "audience": "Web · US only"
+    }
+  },
+  "buckets": {
+    "started": [
+      {
+        "stepId": "step-newstart-aaaa",
+        "experimentId": "exp-aaaa-1111",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-28T21:08:40Z",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50/50"
+      }
+    ],
+    "stopped": [
+      {
+        "stepId": "step-promoted-aaaa",
+        "experimentId": "exp-aaaa-1111",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-28T21:06:27Z",
+        "stoppedAt": "2026-05-28T21:08:40Z",
+        "analysisType": "AB",
+        "splits": "10/10",
+        "nextStepName": "Step 2 (50/50 AB)"
+      },
+      {
+        "stepId": "step-rolledout-bbbb",
+        "experimentId": "exp-bbbb-2222",
+        "stepName": "Switch to 50%",
+        "startedAt": "2026-05-28T22:06:22Z",
+        "stoppedAt": "2026-05-28T22:07:14Z",
+        "analysisType": "AB",
+        "splits": "50/50",
+        "nextStepName": "Switch to 100% (DC)"
+      }
+    ],
+    "active": [
+      {
+        "stepId": "step-active-cccc",
+        "experimentId": "exp-cccc-3333",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-19T20:34:39Z",
+        "analysisType": "AB",
+        "splits": "50/50"
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+[user]
+	email = jonathan.b.mckay@gmail.com
+	name = Jonathan McKay
+[core]
+	editor = nano
+[pull]
+	rebase = false
+[init]
+	defaultBranch = main
+[push]
+	autoSetupRemote = true

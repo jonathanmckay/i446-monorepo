@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Regression: dtd operations act on the task ID, not the (possibly duplicated)
+name.
+
+Bug (2026-07-12): a deferred "give kids allowance" kept coming back — two open
+tasks shared that exact name (a recurring parent + a stale copy), and every dtd
+action resolved the task by *content*, so it either bailed ("multiple matches")
+or hit the wrong instance. Every dtd action script already receives the task id
+as `$1` (fzf field {2}); the fix threads that id through to each tool:
+
+  defer  → defer-fast  --id "$1"
+  points → points-fast --id "$1"
+  edit   → edit-fast   --id "$1"
+  delete → tid="$1"     (no content re-search)
+  done   → FIFO carries "id<TAB>content" → did-fast --task-id "$1"
+
+These pin the wiring (dtd.sh source) plus the tool-level id resolution.
+"""
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+_HERE = Path(__file__).resolve().parent
+DTD = (_HERE / "dtd.sh").read_text()
+DIDFAST = (_HERE / "did-fast.py").read_text()
+
+
+# ── dtd.sh wiring: every action passes the id ────────────────────────────────
+
+def test_defer_passes_id():
+    # Since 2026-07-23 the defer script loops over a {+2} batch; each worker
+    # still resolves by id (\$tid, one loop element), never by name.
+    assert r'"\$DEFER_FAST" --id "\$tid"' in DTD
+
+
+def test_block_delay_passes_ids():
+    # ctrl-v (fzf-native picker since 2026-07-27) arms the whole {+2} id batch
+    # into $DTD_BLOCKPICK; blockapply reads those ids back for the writer —
+    # never names.
+    assert 'ctrl-v:execute-silent($DTD_BLOCKARM {+2})' in DTD
+    assert r"""printf '%s\n' "\$@" > "\$BLOCKPICK""" in DTD
+    assert r'python3 - "\$SNOOZE" "\$glyph" "\${ids[@]}"' in DTD
+
+
+def test_edit_passes_id():
+    assert r'"\$EDIT_FAST" --id "\$1"' in DTD
+
+
+def test_delete_uses_id_not_name_match():
+    # The delete script overrides any name-derived tid with the fzf id.
+    assert r'tid="\$1"' in DTD
+
+
+def test_delete_hides_by_id_not_name():
+    # Regression 2026-08-17: the actual Todoist DELETE was already
+    # id-scoped (test above), but the client-side hide list it fed was
+    # name-based ($REMOVED) — so deleting one of two identically-named
+    # open tasks suppressed BOTH rows from the dtd view (until the next
+    # full cache refresh), even though only one was actually deleted.
+    # Must hide by id ($REMOVED.ids), the same mechanism enter.sh/done.sh/
+    # defer already use for this exact reason.
+    assert r'echo "\$tid" >> "\$REMOVED.ids"' in DTD
+    assert r'echo "\${fullname:-\$clean}" >> "\$REMOVED"' not in DTD
+
+
+def test_delete_journal_record_carries_task_id():
+    # ctrl-z undo strips the id from $REMOVED.ids via
+    # clean_filter_files(..., task_id=record.get("task_id")); the delete
+    # journal record must populate task_id for that path to work.
+    assert "'task_id': tid" in DTD
+
+
+def test_fifo_carries_id_tab_content():
+    # enter.sh / done.sh send "id<TAB>content" so the worker can pass --task-id.
+    # Heredoc source keeps `\$` escaping and plain quotes.
+    assert r"'%s\t%s\n'" in DTD           # tab-separated FIFO format
+    assert r'"\$1" "\$clean"' in DTD       # id first, then content
+
+
+def test_worker_passes_task_id_to_did_fast():
+    assert r'"$DID_FAST" --task-id "$task_id"' in DTD
+
+
+def test_worker_restores_optimistic_hide_on_ambiguous_completion():
+    # Regression 2026-08-18: enter.sh/done.sh hide $task_id from the list the
+    # instant Enter is pressed (before did-fast runs). If did-fast then
+    # returns with no results entry carrying todoist.closed:true (e.g. it
+    # fell through to needs_agent, which dtd's synchronous worker can't
+    # service), NOTHING was actually completed — but the optimistic hide was
+    # never rolled back, so the task vanished from dtd for the rest of the
+    # day even though Todoist still showed it open ("ibx i9" — user report:
+    # "I don't see 1 ibx for @i9 today"). Delete/defer already roll back
+    # their own optimistic hides on failure; the ambiguous-completion branch
+    # must do the same.
+    assert 'removed_ids_path="/tmp/dtd-$DTD_ID.removed.ids"' in DTD
+    assert 'grep -v -x -F -- "$task_id" "$removed_ids_path"' in DTD
+    assert '(restored to list)' in DTD
+
+
+# ── did-fast: completion honours the id ──────────────────────────────────────
+
+def test_did_fast_match_has_preferred_id():
+    assert "def match_todoist_task(query: str, tasks: list[dict]," in DIDFAST
+    assert "preferred_id: str | None = None" in DIDFAST
+    # Early exact-id return before name scoring.
+    assert 'if str(task.get("id")) == str(preferred_id):' in DIDFAST
+
+
+def test_did_fast_main_parses_task_id_and_guards_single_item():
+    assert '"--task-id" in argv' in DIDFAST
+    # Only applied to a single-item completion (a batch has no single target).
+    assert "task_id_override if len(items) == 1 else None" in DIDFAST
+
+
+def test_route_items_threads_preferred_id():
+    assert "preferred_id: str | None = None" in DIDFAST
+    assert "preferred_id=preferred_id" in DIDFAST
+
+
+# ── points-fast: id resolution is exact ──────────────────────────────────────
+
+def _load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, _HERE / filename)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def pf():
+    return _load("points_fast", "points-fast.py")
+
+
+def test_resolve_by_id_picks_exact_row_among_duplicates(pf):
+    cache = {"today": [
+        {"id": "AAA", "content": "give kids allowance (5) [10]"},
+        {"id": "BBB", "content": "give kids allowance (5) [10]"},
+    ]}
+    # Same name twice — by-id must return the exact requested row, where the
+    # name-based resolver could only ever return the first.
+    assert pf.resolve_by_id(cache, "BBB")["id"] == "BBB"
+    assert pf.resolve_by_id(cache, "AAA")["id"] == "AAA"
+    assert pf.resolve_by_id(cache, "missing") is None
+
+
+def test_points_fast_id_flag_in_main_source(pf):
+    import inspect
+    src = inspect.getsource(pf.main)
+    assert '"--id"' in src
+    assert "resolve_by_id(cache, task_id)" in src
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))

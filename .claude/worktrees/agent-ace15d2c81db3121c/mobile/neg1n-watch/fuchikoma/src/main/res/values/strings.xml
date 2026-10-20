@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Fuchikoma</string>
+    <string name="tab_dtd">dtd</string>
+    <string name="tab_janus">janus</string>
+    <string name="empty_dtd">🎉 nothing left for today</string>
+    <string name="empty_janus">no timeline yet</string>
+    <string name="add_task">Add task</string>
+    <string name="settings">Endpoints</string>
+</resources>

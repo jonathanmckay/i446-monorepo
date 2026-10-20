@@ -1,0 +1,369 @@
+"""User request 2026-08-08: "can we make the current time entry row
+selectable (the one above text input), so that if I hit enter, it means
+stop, if I hit opt+enter it means run /done" — followed by "let's make it so
+that swiping right on the current time entry is the same as opt enter (i.e.
+runs /done) on the task".
+
+The pinned bottom-bar mirror of the running timer (render_current_bottom,
+just above the input box) was previously pure static text — not in
+STATE.visible_events at all, no click handler. It's now a selectable
+{"kind": "current"} row, given the same entry_ids/start_dt/project_id shape
+as a real {"kind": "entry"} row so it can share that path's machinery:
+
+  - plain Enter on the selected "current" row: arms an edit, same as the
+    main pane's own running-entry row (2026-08-09: "hitting enter to edit
+    it is more natural than enter to stop"). Plain stop is ^S — already a
+    global, unconditional stop, so no new binding was needed.
+  - opt+enter (escape, enter) on the selected "current" row, OR a swipe-right
+    gesture directly on the row (MOUSE_DOWN then MOUSE_UP >= SWIPE_RIGHT_COLS
+    columns to the right): /done — stop the timer AND grant its points /
+    close the matching Todoist task, via the same did-fast
+    HHMM-nowHHMM-range trick _finalize_recording_cmd already uses for a
+    still-running entry (did-fast's MECE trim stops it as a side effect).
+    This stays distinct from a plain "entry" row's ⌥↵, which still refuses
+    on a running entry.
+"""
+import asyncio
+import datetime as dtm
+import importlib.util
+import sys
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+HERE = Path(__file__).parent
+TZ = ZoneInfo("America/Los_Angeles")
+
+
+def _load_tui():
+    spec = importlib.util.spec_from_file_location("janus_currentrow", HERE / "janus.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["janus_currentrow"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _FakeApp:
+    def create_background_task(self, coro):
+        # Mirrors test_janus_ctrl_x_toggl_delete.py's harness: the handler's
+        # own synchronous work (STATE mutation, flash) runs for real; the
+        # async body (the actual subprocess/network call) is never awaited.
+        coro.close()
+
+    def invalidate(self):
+        pass
+
+
+class _FakeEvent:
+    app = _FakeApp()
+
+
+class _FakePos:
+    def __init__(self, x):
+        self.x = x
+
+
+class _FakeMouseEvent:
+    def __init__(self, mod, event_type, x):
+        self.event_type = event_type
+        self.position = _FakePos(x)
+
+
+def _binding(mod, keys):
+    hits = [b for b in mod.kb.bindings if b.keys == keys]
+    assert hits, f"no binding for {keys!r}"
+    return hits[0]
+
+
+def _freeze_now(mod, when, monkeypatch):
+    class _DT(dtm.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when
+    monkeypatch.setattr(mod.dt, "datetime", _DT)
+
+
+def _setup(mod, current=None, recording=None):
+    mod.STATE.current = current
+    mod.STATE.recording = recording
+    mod.STATE.visible_events = []
+    mod.STATE.event_sel = None
+    mod.STATE.current_swipe_start = None
+    mod.STATE.queued_cmds = set()
+    mod.STATE.work_q = None
+    mod.STATE.done_target = None
+    # Default: points always resolvable, so existing tests keep exercising
+    # the direct did-fast dispatch path. Tests for the "can't resolve
+    # points, ask instead" prompt (2026-08-09) override this explicitly.
+    mod._resolvable_points = lambda desc: 45
+
+
+def _current_item(mod, desc="writing code", entry_id=1,
+                  start_dt=None, project_id=None):
+    # Matches render_all()'s real shape for the "current" row (2026-08-09) —
+    # entry_ids/start_dt/project_id let it share the "entry" kind's
+    # edit-arm path verbatim.
+    item = {"kind": "current", "raw_desc": desc, "entry_ids": [entry_id],
+            "start_dt": start_dt or dtm.datetime(2026, 8, 8, 14, 0, 0, tzinfo=TZ),
+            "project_id": project_id, "running": True}
+    mod.STATE.visible_events = [item]
+    mod.STATE.event_sel = mod._sel_key(item)
+    return item
+
+
+# ─── selection plumbing ──────────────────────────────────────────────────
+
+def test_render_all_appends_current_row_only_when_a_timer_is_running():
+    mod = _load_tui()
+    _setup(mod, current={"description": "x", "start": "2026-08-08T14:00:00+00:00",
+                          "project_id": None})
+    mod.render_all()
+    kinds = [it.get("kind") for it in mod.STATE.visible_events]
+    assert kinds.count("current") == 1
+
+    _setup(mod, current=None)
+    mod.render_all()
+    assert "current" not in [it.get("kind") for it in mod.STATE.visible_events]
+
+
+def test_current_row_sel_key_tracks_the_running_entrys_identity():
+    """Regression (2026-09-07): "selected a time entry to edit but it
+    didn't import the times of that entry (imported the generic
+    placeholder that started at 1901)". A bare {"kind": "current"} used to
+    hash to a content-independent singleton ("current",) -- ANY running
+    entry satisfied a stale selection, so selecting the current row, then
+    having the timer switch to a different entry before acting (e.g. a
+    habit completion auto-starting a "generic placeholder" filler), silently
+    retargeted the pending edit onto the NEW entry. The key must now depend
+    on the entry's own start_dt + entry_ids, exactly like a plain "entry"
+    row, so a stale selection stops matching once the underlying entry
+    changes."""
+    mod = _load_tui()
+    a = dtm.datetime(2026, 9, 7, 19, 1, 0, tzinfo=TZ)
+    b = dtm.datetime(2026, 9, 7, 14, 0, 0, tzinfo=TZ)
+    key_a = mod._sel_key({"kind": "current", "start_dt": a, "entry_ids": [1]})
+    key_b = mod._sel_key({"kind": "current", "start_dt": b, "entry_ids": [2]})
+    assert key_a != key_b, "different running entries must not share a selection key"
+    # Re-computing the SAME entry's key must be stable (idempotent lookup).
+    assert mod._sel_key({"kind": "current", "start_dt": b, "entry_ids": [2]}) == key_b
+
+
+def test_selecting_current_then_timer_switches_no_longer_matches_stale_selection():
+    """End-to-end shape of the bug report: select the row while entry A (id
+    1) is running: STATE.event_sel is keyed to A. The timer then switches
+    to entry B (id 2, a "generic placeholder" filler) — render_all's next
+    pass replaces STATE.visible_events' "current" item with B's data. The
+    stale selection must no longer resolve to anything (or, if the exact
+    same slot is re-selected some other way, must resolve to B, never to
+    a stale mix of A's identity with B's content)."""
+    mod = _load_tui()
+    a_start = dtm.datetime(2026, 9, 7, 14, 0, 0, tzinfo=TZ)
+    item_a = {"kind": "current", "raw_desc": "writing code", "entry_ids": [1],
+              "start_dt": a_start, "project_id": None, "running": True}
+    mod.STATE.visible_events = [item_a]
+    mod.STATE.event_sel = mod._sel_key(item_a)
+
+    # Timer switches: a NEW render_all pass rebuilds visible_events for the
+    # now-different running entry (id 2, "generic placeholder").
+    b_start = dtm.datetime(2026, 9, 7, 19, 1, 0, tzinfo=TZ)
+    item_b = {"kind": "current", "raw_desc": "generic placeholder", "entry_ids": [2],
+              "start_dt": b_start, "project_id": None, "running": True}
+    mod.STATE.visible_events = [item_b]
+
+    resolved = next((it for it in mod.STATE.visible_events
+                     if mod._sel_key(it) == mod.STATE.event_sel), None)
+    assert resolved is None, (
+        "a selection armed on entry A must not resolve to entry B just "
+        "because B is now the 'current' row")
+
+
+def test_bottom_bar_click_handler_and_selected_highlight(monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, current={"description": "x", "start": "2026-08-08T14:00:00+00:00",
+                          "project_id": None})
+    frags = mod.render_current_bottom()
+    assert all(len(f) == 3 and f[2] is not None for f in frags), (
+        "both fragments must carry a click handler")
+
+    # The key must now match the RUNNING ENTRY's own identity (start_dt +
+    # entry_ids), not a bare content-independent singleton (2026-09-07) --
+    # reconstruct exactly what render_current_bottom derives from `cur`.
+    start_dt = dtm.datetime.fromisoformat("2026-08-08T14:00:00+00:00").astimezone(TZ)
+    mod.STATE.event_sel = mod._sel_key({"kind": "current", "start_dt": start_dt, "entry_ids": []})
+    sel_frags = mod.render_current_bottom()
+    assert "bg:#3a3a3a" in sel_frags[0][0]
+
+
+# ─── plain Enter = edit ──────────────────────────────────────────────────
+
+def test_enter_on_current_row_arms_edit_not_stop():
+    """2026-08-09: "hitting enter to edit it is more natural than enter to
+    stop" — the pinned current-timer row now shares the main pane's
+    edit-on-Enter behavior verbatim; plain stop moved to ^S (already a
+    global unconditional stop, so no new binding was needed)."""
+    mod = _load_tui()
+    _setup(mod, current={"description": "x", "start": "2026-08-08T14:00:00+00:00",
+                          "project_id": None})
+    item = _current_item(mod, desc="x", entry_id=42,
+                         start_dt=dtm.datetime(2026, 8, 8, 14, 0, 0, tzinfo=TZ))
+    mod.input_buffer.text = ""
+    _binding(mod, ("c-m",)).handler(_FakeEvent())
+    assert mod.STATE.event_sel is None
+    assert mod.STATE.edit_target == {"ids": [42], "date": dtm.date(2026, 8, 8), "contiguous": True}
+    assert mod.input_buffer.text == mod._entry_edit_prefill(item)
+    assert mod.STATE.queued_cmds == set(), "must not run anything yet — edit is armed, not applied"
+
+
+def test_enter_on_main_pane_running_entry_still_arms_edit():
+    """The main pane's OWN selectable running-entry row (kind == "entry",
+    running == True) keeps its pre-existing edit-on-Enter behavior — Enter
+    is now unified across "entry" and "current" (2026-08-09). ⌥↵ is also
+    unified as of 2026-09-14 (see test_alt_enter_on_running_entry_row_also_
+    runs_done below): a plain "entry" row used to refuse on a running entry
+    while only the pinned "current" row's ⌥↵ ran /done, but Toggl only ever
+    has one running timer, so both rows now trigger the same one-shot
+    stop+grant."""
+    mod = _load_tui()
+    today = dtm.datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    item = {"kind": "entry", "start_dt": today.replace(hour=9), "entry_ids": [1],
+            "raw_desc": "writing code", "project_id": None, "dur_min": 30,
+            "running": True}
+    _setup(mod)
+    mod.STATE.entries = [{"id": 1, "start_dt": today.replace(hour=9), "desc": "writing code",
+                           "project_id": None, "running": True, "tags": []}]
+    mod.STATE.visible_events = [item]
+    mod.STATE.event_sel = mod._sel_key(item)
+    mod.input_buffer.text = ""
+    _binding(mod, ("c-m",)).handler(_FakeEvent())
+    assert mod.STATE.edit_target is not None, "running entry row must still arm an edit"
+    assert mod.input_buffer.text, "edit text must be prefilled"
+
+
+# ─── opt+enter = /done ───────────────────────────────────────────────────
+
+def test_alt_enter_on_current_row_builds_and_queues_did_command(monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None})
+    _current_item(mod, desc="writing code")
+    _binding(mod, ("escape", "c-m")).handler(_FakeEvent())
+    # start 14:00 UTC -> 07:00 Pacific (PDT); now 14:30 Pacific.
+    expected_cmd = "writing code 0700-1430"
+    assert expected_cmd in mod.STATE.queued_cmds
+    assert expected_cmd in mod.STATE.flash
+    assert mod.STATE.event_sel is None
+
+
+def test_alt_enter_on_current_row_refuses_a_just_started_timer(monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 0, 30, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    # now is 14:00:30 Pacific (PDT, UTC-7) = 21:00:30 UTC; start 30s earlier.
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T21:00:00+00:00", "project_id": None})
+    _current_item(mod, desc="writing code")
+    _binding(mod, ("escape", "c-m")).handler(_FakeEvent())
+    assert mod.STATE.queued_cmds == set(), "under a minute in — nothing should queue"
+    assert "give it a minute" in mod.STATE.flash
+
+
+def test_alt_enter_on_current_row_defers_to_recording_finalize_when_it_matches(monkeypatch):
+    """If a d357 recording is live for the SAME entry, /done must route
+    through the existing finalize-notes-then-grant flow instead of a second,
+    plainer did-fast call for the same minutes (double-grant risk)."""
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None},
+           recording={"desc": "writing code", "start_dt": now})
+    _current_item(mod, desc="writing code")
+    _binding(mod, ("escape", "c-m")).handler(_FakeEvent())
+    assert "finalize:writing code" in mod.STATE.queued_cmds
+    assert "writing code 0700-1430" not in mod.STATE.queued_cmds, (
+        "must not ALSO queue the plain did-fast command for the same entry"
+    )
+
+
+def test_alt_enter_on_running_entry_row_also_runs_done(monkeypatch):
+    """User report 2026-09-14: "if I hit ctrl enter on a running entry, it
+    says I need to stop rather than stopping it and recording for me" — the
+    main pane's OWN running-entry row (kind == "entry", selected directly in
+    the block card rather than via the pinned "current" row) used to flash
+    "timer still running — stop it (^S) before granting points" and refuse.
+    Toggl only ever runs one timer at a time, so this IS the same live entry
+    the pinned row's ⌥↵ already handles — it now delegates to that same
+    one-shot stop+grant instead of refusing."""
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None})
+    today = dtm.datetime(2026, 8, 8, tzinfo=TZ)
+    item = {"kind": "entry", "start_dt": today.replace(hour=7), "entry_ids": [1],
+            "raw_desc": "writing code", "project_id": None, "dur_min": 30,
+            "running": True}
+    mod.STATE.visible_events = [item]
+    mod.STATE.event_sel = mod._sel_key(item)
+    _binding(mod, ("escape", "c-m")).handler(_FakeEvent())
+    # start 14:00 UTC -> 07:00 Pacific (PDT); now 14:30 Pacific — same
+    # one-shot did-fast command the pinned "current" row's ⌥↵ builds.
+    expected_cmd = "writing code 0700-1430"
+    assert expected_cmd in mod.STATE.queued_cmds
+    assert "stop it" not in mod.STATE.flash, \
+        f"must not refuse and tell the user to stop it manually: {mod.STATE.flash!r}"
+
+
+# ─── swipe right = /done ─────────────────────────────────────────────────
+
+def test_swipe_right_past_threshold_runs_done(monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    mod.get_app = lambda: _FakeApp()
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None})
+    key = mod._sel_key({"kind": "current"})
+    click = mod._current_row_click(key)
+    click(_FakeMouseEvent(mod, mod.MouseEventType.MOUSE_DOWN, 5))
+    click(_FakeMouseEvent(mod, mod.MouseEventType.MOUSE_UP, 5 + mod.SWIPE_RIGHT_COLS))
+    assert "writing code 0700-1430" in mod.STATE.queued_cmds
+    assert mod.STATE.current_swipe_start is None, "gesture state must reset after firing"
+
+
+def test_short_drag_or_plain_click_just_selects_no_done(monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    mod.get_app = lambda: _FakeApp()
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None})
+    key = mod._sel_key({"kind": "current"})
+    click = mod._current_row_click(key)
+    click(_FakeMouseEvent(mod, mod.MouseEventType.MOUSE_DOWN, 5))
+    click(_FakeMouseEvent(mod, mod.MouseEventType.MOUSE_UP, 5 + mod.SWIPE_RIGHT_COLS - 1))
+    assert mod.STATE.queued_cmds == set(), "short of the threshold must not fire /done"
+    assert mod.STATE.event_sel == key, "falls back to ordinary click-to-select"
+
+
+def test_swipe_state_does_not_leak_across_gestures(monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 8, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    mod.get_app = lambda: _FakeApp()
+    _setup(mod, current={"description": "writing code",
+                          "start": "2026-08-08T14:00:00+00:00", "project_id": None})
+    key = mod._sel_key({"kind": "current"})
+    click = mod._current_row_click(key)
+    # A release with no matching prior MOUSE_DOWN (e.g. a drag that started
+    # elsewhere and released here) must never fire /done off a stale start.
+    click(_FakeMouseEvent(mod, mod.MouseEventType.MOUSE_UP, 100))
+    assert mod.STATE.queued_cmds == set()
+
+
+if __name__ == "__main__":
+    import pytest
+    sys.exit(pytest.main([__file__, "-v"]))

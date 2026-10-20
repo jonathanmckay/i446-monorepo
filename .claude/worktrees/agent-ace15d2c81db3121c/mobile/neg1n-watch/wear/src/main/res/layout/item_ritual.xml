@@ -1,0 +1,27 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:background="#1a1a1a"
+    android:padding="16dp"
+    android:layout_marginTop="4dp"
+    android:layout_marginBottom="4dp">
+
+    <View
+        android:id="@+id/colorDot"
+        android:layout_width="12dp"
+        android:layout_height="12dp"
+        android:background="#5F5F5F"
+        android:layout_marginEnd="12dp" />
+
+    <TextView
+        android:id="@+id/ritualLabel"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp"
+        android:text="ritual" />
+
+</LinearLayout>

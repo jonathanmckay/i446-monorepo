@@ -1,0 +1,14 @@
+<resources>
+    <!-- Terminal-dark chrome, matching the mobile web pages and the neg1n
+         launcher background. Row colors come from the server per domain. -->
+    <color name="bg">#0f0f0e</color>
+    <color name="bg_raised">#1a1a19</color>
+    <color name="fg">#e6e6e0</color>
+    <color name="fg_dim">#8a8a82</color>
+    <color name="accent">#c3fc0d</color>
+    <color name="danger">#b3261e</color>
+    <color name="swipe_done">#2e7d32</color>
+    <color name="swipe_actions">#37474f</color>
+    <color name="swipe_edit">#8e6fce</color>
+    <color name="ic_launcher_background">#1a1a19</color>
+</resources>

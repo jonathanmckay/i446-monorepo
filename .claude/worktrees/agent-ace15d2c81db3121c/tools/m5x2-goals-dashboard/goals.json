@@ -1,0 +1,62 @@
+{
+  "quarter": "Q2 2026",
+  "sections": [
+    {
+      "name": "R202 TRS",
+      "goals": [
+        {"p": "P1", "dri": "Stef",    "goal": "Limit move-outs to 94 (3.06%/mo)",                 "q1_actual": "53",         "link": null},
+        {"p": "P2", "dri": "Viviana", "goal": "Resolve 11 DQ cases at tc68 (DQ to 6.1% GPR)",     "q1_actual": "16%",        "link": null},
+        {"p": "P3", "dri": "Victor",  "goal": "Tenant comms response time 12h",                   "q1_actual": "-",          "link": null},
+        {"p": "P3", "dri": "Stef",    "goal": "Categorize 90% Zoho lease violations (min 50)",    "q1_actual": "-",          "link": null}
+      ]
+    },
+    {
+      "name": "R202 Leasing",
+      "goals": [
+        {"p": "P1", "dri": "AP", "goal": "Tour to App conversion rate",          "q1_actual": "32%", "link": null},
+        {"p": "P2", "dri": "AP", "goal": "Eng to Tour conversion rate",          "q1_actual": "55%", "link": null},
+        {"p": "P2", "dri": "AP", "goal": "Sign 110 new leases (~8.5/week)",      "q1_actual": "86",  "link": null}
+      ]
+    },
+    {
+      "name": "R203 R&M",
+      "goals": [
+        {"p": "P1", "dri": "LR", "goal": "R&M avg 11% of GPR",                              "q1_actual": "8.07%", "link": null},
+        {"p": "P1", "dri": "JV", "goal": "KPI reporting 90% weekly reports sent",           "q1_actual": "69%",   "link": null},
+        {"p": "P2", "dri": "JV", "goal": "Resident satisfaction 4.4/5",                     "q1_actual": "4.2",   "link": null},
+        {"p": "P2", "dri": "JV", "goal": "Vendor cost avg 30% of total R&M",                "q1_actual": "45.6%", "link": null},
+        {"p": "P2", "dri": "LR", "goal": "Pest control budget and summary (by May 15)",    "q1_actual": "-",     "link": null}
+      ]
+    },
+    {
+      "name": "R203 Turns",
+      "goals": [
+        {"p": "P1", "dri": "LR",    "goal": "Avg cost per turn $1,200 (CapEx recategorization)", "q1_actual": "$687",  "link": null},
+        {"p": "P1", "dri": "Chris", "goal": "First-pass completion rate 95%",                    "q1_actual": "94.4%", "link": null},
+        {"p": "P1", "dri": "Ivan",  "goal": "Turn cost recapture 90%",                           "q1_actual": "36.2%", "link": null},
+        {"p": "P2", "dri": "Chris", "goal": "KPI reporting 80%",                                 "q1_actual": "26%",   "link": null},
+        {"p": "P2", "dri": "Chris", "goal": "Turn start lead time 7 days",                       "q1_actual": "7d",    "link": null},
+        {"p": "P2", "dri": "Chris", "goal": "Turn duration 6 days",                              "q1_actual": "7d",    "link": null}
+      ]
+    },
+    {
+      "name": "R203 Grounds",
+      "goals": [
+        {"p": "P1", "dri": "LR", "goal": "Standardize Grounds Maintenance SOP",       "q1_actual": "Not shipped", "link": null},
+        {"p": "P1", "dri": "JV", "goal": "KN47/RL16 weekly tasks 66/72 completed",    "q1_actual": "-",           "link": null},
+        {"p": "P1", "dri": "JV", "goal": "Lawn care routes in Meld 10/13 weeks",      "q1_actual": "-",           "link": null},
+        {"p": "P2", "dri": "JV", "goal": "Hire 2nd Spokane lawn care tech",           "q1_actual": "-",           "link": null},
+        {"p": "P2", "dri": "LR", "goal": "Grounds analytics via dashboard 8/13 weeks", "q1_actual": "-",          "link": null}
+      ]
+    },
+    {
+      "name": "R203 Projects",
+      "goals": [
+        {"p": "P1", "dri": "LU", "goal": "Hire CapEx Projects Technician",                       "q1_actual": "-", "link": null},
+        {"p": "P1", "dri": "LU", "goal": "W225 CoO phases complete (6/6)",                       "q1_actual": "0", "link": null},
+        {"p": "P2", "dri": "LU", "goal": "KN47 + RL16 refi-ready (15/15 projects)",              "q1_actual": "-", "link": null},
+        {"p": "P2", "dri": "LR", "goal": "Bank draws SOP + submitted by 18th monthly",           "q1_actual": "0", "link": null}
+      ]
+    }
+  ]
+}

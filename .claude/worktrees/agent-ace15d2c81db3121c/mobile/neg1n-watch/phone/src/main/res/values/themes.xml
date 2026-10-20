@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Neg1n" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+</resources>

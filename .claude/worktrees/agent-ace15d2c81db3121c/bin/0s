@@ -1,0 +1,5 @@
+#!/bin/zsh
+# 0s — launch the daily 0s review form directly in this terminal.
+# Bypasses the /0s Claude skill (same TUI, none of the model latency).
+# Usage: 0s [YYYY-MM-DD]   (default: reviews yesterday; ^S saves, ^Q cancels)
+exec python3 ~/i446-monorepo/tools/0s/0s.py "$@"

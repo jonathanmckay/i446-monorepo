@@ -1,0 +1,102 @@
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+env/
+.venv/
+.pytest_cache/
+
+# Skill runtime state (machine-local, regenerable)
+skills/claude-skills/tg/cache.json
+skills/claude-skills/tg/status.py
+skills/claude-skills/next/cache.json
+tools/personal-dashboard/.points-cache.json
+
+# Credentials & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials*.json
+token.pickle
+*-credentials.json
+*-secrets.json
+config.local.json
+
+# API Keys (patterns)
+*api-key*
+*api_key*
+*apikey*
+
+# Databases
+*.db
+*.sqlite
+*.db-journal
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Embedded repos (has its own git)
+quickbooks-online-mcp-server/
+tools/personal-dashboard/.env
+tools/personal-dashboard/ga4-tokens.json
+tools/personal-dashboard/ga4-oauth.keys.json
+
+# d357 recording state moved to ~/.local/state/jm/ (machine-local)
+skills/claude-skills/d357/state.json
+
+# Syncthing conflict copies — never commit, reconcile manually on disk.
+# git-autopush.sh does a blind `git add -A` every 10 minutes, so without
+# this these get swept into history the moment Syncthing drops one.
+*.sync-conflict-*
+
+# Stray artifact from a shell-scripting bug (unexpanded $1/$REMOVED),
+# found 2026-08-09. Harmless to ignore if something regenerates it.
+$REMOVED.ids
+
+# Claude Code skill-sync scratch (~/.claude/skills -> skills/claude-skills). Per-machine,
+# managed by Claude Code, not source. Vendored copies tripped GitGuardian (qpdf --password doc example).
+skills/claude-skills/synced/
+skills/claude-skills/.trash/

@@ -1,0 +1,845 @@
+#!/usr/bin/env python3
+"""
+End-to-end /did runner for registry-resolved habits (0n and 1n+ paths).
+
+For one-off Todoist tasks (Step 5) and variable tasks (Step 6) — i.e. anything
+route.py classifies as `step=unknown` — this script exits with code 2 and the
+SKILL.md agent path takes over.
+
+Usage:
+    python3 run.py "stats i9"              # auto-detect Toggl minutes
+    python3 run.py "stats i9 12"           # explicit minutes
+    python3 run.py "早餐 0827-0843"         # time range → minutes + Toggl entry
+    python3 run.py "1 s897"                # 1n+ path
+    python3 run.py "0l 4/27"               # past-date posthoc
+
+Steps performed for `step=0n`:
+  1. Compute minutes (explicit / time-range / Toggl auto-detect / default 1)
+  2. excel.append on 0n at neon_col, today's row, value `+<min>` (or formula for 0l/cumulative)
+  3. Close matching Todoist task (label `0neon`, content word-overlap)
+  4. Step C d359 bump (if any d359/<slug> labels)
+  5. (if hasTimeRange) Toggl create entry
+  6. Append name to completed-today.json
+  7. Print one-line confirmation
+
+For `step=1n+`:
+  1. Compute M.W from target_date (Sunday-anchored)
+  2. Read points from 1n+ row 3 of neon_col (or use cumulative_increment)
+  3. Write points to 1n+!{neon_col}{week_row}
+  4. Append `+'1n+'!{neon_col}{week_row}` to 0分 at fen_col, today's row
+  5. Close 1neon-labeled Todoist task
+  6. Append to completed-today.json
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+
+from neon import excel  # noqa: E402
+import registry  # noqa: E402
+import todoist  # noqa: E402
+
+VAULT = Path.home() / "vault"
+import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
+COMPLETED_TODAY = _sp.COMPLETED_TODAY
+TASK_QUEUE = _sp.TASK_QUEUE
+
+# Shared completed-today writer (locked + atomic + id-tracking), same module
+# did-fast.py uses. run.py used to have its own unlocked, id-blind
+# _append_completed() that raced against this one on the same file and never
+# recorded Todoist ids — habits closed via run.py (0l, xk20/22/26, 冥想, o314,
+# hiit, ...) could vanish from completed-today.json on a concurrent write and,
+# lacking an id, could never be defended by dtd's id-based completed-ids guard
+# either. Regression 2026-08-02: "a ton of 0neon tasks I already marked done
+# today are back" — those habits all route through run.py's fast path.
+_MC_PATH = Path(__file__).parent / "mark-completed.py"
+_MC_SPEC = importlib.util.spec_from_file_location("mark_completed", _MC_PATH)
+mc = importlib.util.module_from_spec(_MC_SPEC)
+_MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
+
+# Variable-rate cumulative 1n+ habits: points = base + rate×minutes, NOT the
+# registry's flat cumulative_increment. Must mirror did-fast.py's
+# VARIABLE_1N_BASES/VARIABLE_1N_RATES (2026-07-25 restructure) — run.py's
+# cumulative branch was never updated when that restructure landed, so it
+# kept writing the pre-restructure flat increment (e.g. 一起饭 → always +30
+# instead of 15 + minutes). Habits not in either dict fall back to the
+# registry's flat cumulative_increment.
+_VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
+_VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+
+TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
+PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")
+BRACKET_N_RE = re.compile(r"\[(\d+)\]")
+
+# Defer flags: --tmrw, --tomorrow, --Mon, --Tue, ..., --Sun, --<month> <day>,
+# --<M/D>, --<YYYY-MM-DD>
+_DAYS_OF_WEEK = {"mon", "tue", "wed", "thu", "fri", "sat", "sun",
+                 "monday", "tuesday", "wednesday", "thursday", "friday",
+                 "saturday", "sunday"}
+_MONTHS = {"jan", "feb", "mar", "apr", "may", "jun",
+           "jul", "aug", "sep", "oct", "nov", "dec",
+           "january", "february", "march", "april", "june",
+           "july", "august", "september", "october", "november", "december"}
+DEFER_FAST = str(Path.home() / "i446-monorepo/tools/did/defer-fast.py")
+
+
+def _today_md() -> str:
+    n = datetime.now()
+    return f"{n.month}/{n.day}"
+
+
+def _route(query: str, target_date: str) -> dict:
+    """Call route.py and return its JSON output."""
+    r = subprocess.run(
+        ["python3", str(Path.home() / "i446-monorepo/tools/did/route.py"),
+         query, "--target-date", target_date],
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(r.stdout)
+
+
+def _parse_defer(parts: list[str]) -> tuple[list[str], Optional[str]]:
+    """Extract trailing defer flag (--tmrw, --tomorrow, --Mon, --Jun 15, etc.).
+
+    Returns (remaining_parts, defer_iso_date_or_None).
+    """
+    if not parts:
+        return parts, None
+
+    # Scan from the end for a token starting with '--'
+    defer_tokens: list[str] = []
+    i = len(parts) - 1
+    while i >= 0 and parts[i].startswith("--"):
+        defer_tokens.insert(0, parts[i])
+        i -= 1
+    if not defer_tokens:
+        return parts, None
+
+    # Also grab a bare trailing number after --<month> (e.g. "--Jun 15")
+    raw_defer = " ".join(t.lstrip("-") for t in defer_tokens)
+
+    # Check if the next token after the -- block is a bare day number
+    # that belongs to the month (e.g. "新闻 --Jun 15" splits as
+    # parts=["新闻", "--Jun", "15"] but 15 doesn't start with --)
+    remaining = parts[:i + 1]
+    # Actually, "15" wouldn't start with --, so let's re-scan:
+    # Look at the last non--- tokens to see if the pattern is --<month> <day>
+    if len(defer_tokens) == 1:
+        word = defer_tokens[0].lstrip("-").lower()
+        if word in _MONTHS and remaining and re.fullmatch(r"\d{1,2}", remaining[-1]):
+            raw_defer = f"{defer_tokens[0].lstrip('-')} {remaining[-1]}"
+            remaining = remaining[:-1]
+
+    defer_str = raw_defer.lower().strip()
+
+    now = datetime.now()
+
+    # --tmrw / --tomorrow
+    if defer_str in ("tmrw", "tomorrow"):
+        d = now + timedelta(days=1)
+        return remaining, d.strftime("%Y-%m-%d")
+
+    # --Mon, --Tuesday, etc.
+    if defer_str in _DAYS_OF_WEEK:
+        target_day = {
+            "mon": 0, "monday": 0, "tue": 1, "tuesday": 1,
+            "wed": 2, "wednesday": 2, "thu": 3, "thursday": 3,
+            "fri": 4, "friday": 4, "sat": 5, "saturday": 5,
+            "sun": 6, "sunday": 6,
+        }[defer_str]
+        days_ahead = (target_day - now.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        d = now + timedelta(days=days_ahead)
+        return remaining, d.strftime("%Y-%m-%d")
+
+    # --YYYY-MM-DD
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", defer_str):
+        return remaining, defer_str
+
+    # --M/D
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", defer_str)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        d = datetime(now.year, month, day)
+        if d.date() <= now.date():
+            d = datetime(now.year + 1, month, day)
+        return remaining, d.strftime("%Y-%m-%d")
+
+    # --Jun 15 / --January 3
+    m = re.fullmatch(r"([a-z]+)\s+(\d{1,2})", defer_str)
+    if m:
+        from calendar import month_abbr, month_name
+        month_word = m.group(1).capitalize()
+        day = int(m.group(2))
+        month_num = None
+        for i_m, name in enumerate(month_abbr):
+            if name and name.lower() == month_word.lower():
+                month_num = i_m
+                break
+        if month_num is None:
+            for i_m, name in enumerate(month_name):
+                if name and name.lower() == month_word.lower():
+                    month_num = i_m
+                    break
+        if month_num:
+            d = datetime(now.year, month_num, day)
+            if d.date() <= now.date():
+                d = datetime(now.year + 1, month_num, day)
+            return remaining, d.strftime("%Y-%m-%d")
+
+    # Unrecognized -- flag: put it back, not a defer
+    return parts, None
+
+
+def _parse_input(raw: str) -> tuple[str, str, Optional[tuple], Optional[int], Optional[str]]:
+    """Returns (query_for_routing, target_date, time_range_or_None, explicit_minutes_or_None, defer_date_or_None)."""
+    parts = raw.strip().split()
+    target = _today_md()
+    defer_date = None
+
+    # Defer flag? (must check BEFORE past-date, since --tmrw is trailing too)
+    parts, defer_date = _parse_defer(parts)
+
+    # past-date suffix?
+    if parts and re.fullmatch(r"\d{1,2}/\d{1,2}", parts[-1]):
+        target = parts[-1]
+        parts = parts[:-1]
+    if parts and parts[-1] == "yesterday":
+        n = datetime.now() - timedelta(days=1)
+        target = f"{n.month}/{n.day}"
+        parts = parts[:-1]
+    # time range?
+    time_range = None
+    for i, p in enumerate(parts):
+        m = TIME_RANGE_RE.fullmatch(p)
+        if m:
+            time_range = (m.group(1), m.group(2))
+            parts = parts[:i] + parts[i+1:]
+            break
+    # trailing pure-digit token = explicit minutes (e.g. "o314 66")
+    explicit_minutes = None
+    if parts and re.fullmatch(r"\d+", parts[-1]) and len(parts) > 1:
+        explicit_minutes = int(parts[-1])
+        parts = parts[:-1]
+    # trailing [N] also counts as explicit minutes (e.g. "冥想 [52]") — strip
+    # the bracketed token from the routing query so registry lookup still
+    # matches on the bare habit name.
+    if explicit_minutes is None and parts:
+        m = BRACKET_N_RE.fullmatch(parts[-1])
+        if m and len(parts) > 1:
+            explicit_minutes = int(m.group(1))
+            parts = parts[:-1]
+    return " ".join(parts), target, time_range, explicit_minutes, defer_date
+
+
+def _minutes_from_time_range(tr: tuple[str, str]) -> int:
+    s, e = tr
+    sh, sm = int(s[:2]), int(s[2:])
+    eh, em = int(e[:2]), int(e[2:])
+    return (eh * 60 + em) - (sh * 60 + sm)
+
+
+def _auto_detect_minutes(toggl_desc: str, project_code: str) -> int:
+    """Sum today's Toggl entries matching desc OR project. Default 1."""
+    try:
+        r = subprocess.run(
+            ["python3", str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"), "today"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return 1
+        # Parse "today" output — best-effort grep for matching descriptions
+        total = 0
+        for line in r.stdout.splitlines():
+            # heuristic: lines mentioning the desc + a duration like "12m" or "1h 12m"
+            if toggl_desc.lower() in line.lower() or f"@{project_code}" in line:
+                m = re.search(r"(\d+)h\s*(\d+)m|(\d+)m\b", line)
+                if m:
+                    if m.group(1) and m.group(2):
+                        total += int(m.group(1)) * 60 + int(m.group(2))
+                    elif m.group(3):
+                        total += int(m.group(3))
+        return max(total, 1)
+    except Exception:
+        return 1
+
+
+def _append_completed(name: str, task_id: str | None = None) -> None:
+    """Record a completion via the shared, locked, atomic mark-completed.py
+    writer (see the mc import above) — not a local reimplementation."""
+    mc.append_names([name], ids={name: task_id} if task_id else None)
+
+
+def _drop_from_queue(task_id: str) -> None:
+    """Remove a closed task from task-queue.json so /next hides it immediately.
+
+    Walks the four bucket sections (关键路径, 夜neon, 0neon, 1neon) since the cache
+    groups tasks by label, not as a flat list.
+    """
+    if not TASK_QUEUE.exists():
+        return
+    try:
+        q = json.loads(TASK_QUEUE.read_text())
+        changed = False
+        for k, v in list(q.items()):
+            if isinstance(v, list):
+                before = len(v)
+                q[k] = [t for t in v if t.get("id") != task_id]
+                if len(q[k]) != before:
+                    changed = True
+        if changed:
+            q["updated"] = datetime.now().isoformat(timespec="seconds")
+            # Atomic write (tmp + rename) -- see refresh-cache.py's identical
+            # fix (2026-08-07): a plain write_text() truncates this file
+            # before writing, and dtd's 2s-poll auto-reload watcher can read
+            # that truncated state mid-write, crashing its list-generator's
+            # unguarded json.load() and blanking the list for up to 2s.
+            tmp_path = TASK_QUEUE.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(q, ensure_ascii=False, indent=2))
+            tmp_path.rename(TASK_QUEUE)
+    except Exception:
+        pass
+
+
+def _fire_refresh() -> None:
+    """Fire-and-forget Todoist→cache refresh after a write."""
+    try:
+        subprocess.Popen(
+            ["python3", str(Path.home() / "i446-monorepo/tools/did/refresh-cache.py")],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
+
+
+def _word_overlap(query: str, content: str) -> float:
+    qt = set(re.findall(r"\w+", query.lower()))
+    ct = set(re.findall(r"\w+", content.lower()))
+    if not qt:
+        return 0.0
+    return len(qt & ct) / len(qt)
+
+
+def _find_and_close_todoist(label: str, query: str, aliases: list) -> tuple[str | None, str | None]:
+    """Find best-matching open task by word overlap. Close it.
+
+    Return (task content, task id) — both None if no match/close. The id is
+    needed by callers to record completed-today's id map (see _append_completed),
+    which is how dtd suppresses a just-closed card before the next cache refresh.
+    """
+    candidates = todoist.find_tasks(labels=[label], limit=100)
+    best = None
+    best_score = 0.0
+    queries = [query] + aliases
+    for t in candidates:
+        for q in queries:
+            score = _word_overlap(q, t.get("content", ""))
+            if score > best_score:
+                best, best_score = t, score
+    if best and best_score >= 0.6:
+        try:
+            todoist.close_task(best["id"])
+            _drop_from_queue(best["id"])
+            return best.get("content"), best.get("id")
+        except Exception as e:
+            print(f"  ✗ Todoist close failed: {e}", file=sys.stderr)
+    return None, None
+
+
+IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
+WORKBOOK = "Neon分v12.2.xlsx"
+
+
+def _calc_mw(target_date: str) -> tuple[float, int]:
+    """target_date 'M/D' → (M.W, week_row in 1n+)."""
+    n = datetime.now()
+    m, d = (int(x) for x in target_date.split("/"))
+    year = n.year
+    target = datetime(year, m, d)
+    # If target is in the future relative to current month/day, use prev year
+    if target > n + timedelta(days=180):
+        target = datetime(year - 1, m, d)
+    # weekday(): Mon=0..Sun=6
+    sunday = target - timedelta(days=(target.weekday() + 1) % 7)
+    M = sunday.month
+    W = (sunday.day - 1) // 7 + 1
+    mw = float(f"{M}.{W}")
+    week_str = f"{M}.{W}"
+    # Single server-side scan (2026-08-09 fix): this used to call
+    # excel.read("1n+", "B", row=r) once PER row in a client-side loop over
+    # rows 4-59 -- up to 56 sequential network round trips, each individually
+    # timeout-bounded (20s daemon + 45s ssh fallback) but additive, so a
+    # daemon outage turned "find one row" into a many-minute wait. This runs
+    # right after the 1s survey's own Neon write, in the /did mark-done
+    # chain, which is what made /1s look hung after finishing the form (bug
+    # report: "when I save or finish all the questions... it just hangs").
+    # Doing the row scan IN the AppleScript (like 0t-fast.py's fallback
+    # template already does for its date scan) makes this exactly one call.
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "1n+" of workbook "{WORKBOOK}"
+    set foundRow to 0
+    repeat with r from 4 to 59
+        set cellVal to string value of range ("B" & r) of theSheet
+        if cellVal = "{week_str}" then
+            set foundRow to r
+            exit repeat
+        end if
+    end repeat
+    return foundRow as string
+end tell
+'''
+    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
+                          text=True, timeout=60)
+    out = proc.stdout.strip()
+    if proc.returncode == 0 and out.isdigit() and int(out) > 0:
+        return mw, int(out)
+    raise RuntimeError(f"M.W={week_str} not found in 1n+ col B")
+
+
+def apply_long_bonus(long_habit_id: str, pts: int, target_date: str) -> str | None:
+    """Cumulatively add `pts` to the long-session 1n+ habit for the week
+    containing `target_date`, and append a literal `+pts` to that habit's
+    domain column in 0分.
+
+    Used by the 0n -> 1n+ "long session" auto-bonus for 冥想 / o314. Returns
+    a one-line confirmation string for the runner to print, or None on error.
+    """
+    long_habit = registry.get_habit(long_habit_id)
+    if long_habit is None:
+        print(f"  ✗ long-bonus habit not in registry: {long_habit_id!r}", file=sys.stderr)
+        return None
+    sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+    from neon import cols  # local import: cols is already used in route.py
+
+    try:
+        bonus_col = cols.col("1n+", long_habit.neon_header)
+    except KeyError:
+        print(f"  ✗ no 1n+ column for {long_habit.neon_header!r}", file=sys.stderr)
+        return None
+
+    domain = registry.get_domain(long_habit.domain)
+    if domain is None:
+        print(f"  ✗ no domain entry for {long_habit.domain!r}", file=sys.stderr)
+        return None
+    try:
+        fen_col = cols.col("0分", domain.fen_header)
+    except KeyError:
+        fen_col = None
+
+    try:
+        _, week_row = _calc_mw(target_date)
+    except Exception as e:
+        print(f"  ✗ M.W lookup failed for long bonus: {e}", file=sys.stderr)
+        return None
+
+    cur = excel.read("1n+", bonus_col, row=week_row)
+    old = 0
+    try:
+        old = int(float(cur.get("value", 0) or 0))
+    except (TypeError, ValueError):
+        old = 0
+    excel.write("1n+", bonus_col, row=week_row, value=str(old + pts))
+
+    if fen_col:
+        excel.append("0分", fen_col, date=target_date, value=f"+{pts}", src=f"1n {long_habit.name}")
+
+    return (f"  ⤷ {long_habit.name} +{pts} → 1n+!{bonus_col}{week_row}"
+            + (f", 0分!{fen_col} +{pts}" if fen_col else ""))
+
+
+def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minutes: Optional[int] = None) -> int:
+    name = d["habit_name"]
+    sheet = d["neon_sheet"]
+    col = d["neon_col"]
+    is_past = target_date != _today_md()
+    # "night hcmc" is inherently a past-evening habit -- the user is asleep
+    # when it happens, so every legitimate completion is technically "for
+    # yesterday" even though it's recorded as today (mirrors the same
+    # exemption in did-fast.py, 2026-08-19).
+    if name.lower() in ("night hcmc", "evening hcmc"):
+        is_past = False
+
+    # Past-date 0n → Step 6b posthoc (skip Neon write, just create+close posthoc Todoist)
+    if is_past:
+        content = f"{name} @posthoc @{datetime.now().year}-{target_date.replace('/', '-')}"
+        try:
+            t = todoist.create_task(content, labels=["posthoc", "0neon", d["domain"]],
+                                    due_string=target_date)
+            todoist.close_task(t["id"])
+            print(f"  ✓ {name} (posthoc {target_date}) — Todoist created + closed")
+            _append_completed(name, t["id"])
+            return 0
+        except Exception as e:
+            print(f"  ✗ posthoc Todoist failed: {e}", file=sys.stderr)
+            return 1
+
+    # Compute minutes — explicit > time range > Toggl auto-detect > 1
+    if explicit_minutes is not None:
+        minutes = explicit_minutes
+    elif time_range:
+        minutes = _minutes_from_time_range(time_range)
+    else:
+        toggl = d.get("toggl") or {}
+        minutes = _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", ""))
+
+    # Write to 0n
+    cumulative = d.get("cumulative", False)
+    if cumulative:
+        # Add to existing value: read, then write sum
+        cur = excel.read(sheet, col, date=target_date)
+        old = 0
+        try:
+            old = int(float(cur.get("value", 0) or 0))
+        except (TypeError, ValueError):
+            old = 0
+        result = excel.write(sheet, col, date=target_date, value=str(old + minutes))
+    elif minutes == 1:
+        # Boolean habit (default value 1): idempotent set, not append.
+        # Writing "1" twice yields "1", not "1+1".
+        result = excel.write(sheet, col, date=target_date, value="1")
+    else:
+        # Actual minutes (from Toggl auto-detect or explicit): append
+        result = excel.append(sheet, col, date=target_date, value=f"+{minutes}")
+    if not result.get("ok"):
+        print(f"  ✗ Excel write failed: {result}", file=sys.stderr)
+        return 1
+    verify = result.get("value")
+
+    # "night hcmc" side effect: carve a real Toggl entry for the pre-sleep
+    # audiobook listening out of the 睡觉/"generic placeholder" block it's
+    # buried inside (2026-08-19). Best-effort -- never fails the habit
+    # completion. The habit is always recorded the MORNING AFTER the
+    # listening as "today" (JM: "I record it as today since this is the
+    # only time I could record it"), so the evening to search is always one
+    # calendar day before target_date, never target_date's own evening.
+    if name.lower() in ("night hcmc", "evening hcmc") and minutes:
+        try:
+            import night_hcmc_toggl as _nh
+            td_parts = target_date.split("/")
+            td = (datetime(datetime.now().year, int(td_parts[0]), int(td_parts[1])).date()
+                  - timedelta(days=1))
+            nh_result = _nh.apply_placement(minutes, td)
+            if nh_result.get("ok"):
+                seg_desc = ", ".join(f"{s['description']} {s['start'][11:16]}-{s['stop'][11:16]}"
+                                     for s in nh_result["created"])
+                print(f"  ✓ night hcmc toggl: {seg_desc}")
+            else:
+                print(f"  · night hcmc toggl: not placed ({nh_result.get('reason')})")
+        except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
+            print(f"  · night hcmc toggl: error ({e})", file=sys.stderr)
+
+    # Close Todoist
+    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "0neon", name, d.get("aliases", []))
+
+    # Toggl entry if time range
+    if time_range:
+        s, e = time_range
+        try:
+            subprocess.run(
+                ["python3", str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"),
+                 "create", d["toggl"]["desc"], s, e, d["toggl"]["project"]],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:
+            pass
+
+    _append_completed(name, closed_id)
+    _fire_refresh()
+    msg = f"  ✓ {name} → {minutes} (today) verify={verify}"
+    if closed:
+        msg += f" + todoist closed"
+    print(msg)
+
+    # Long-session auto-bonus (冥想 → 长冥想, o314 → long-o314).
+    bonus = d.get("bonus")
+    if bonus and not is_past:
+        threshold = bonus.get("threshold_minutes", 30)
+        multiplier = bonus.get("multiplier", 0.5)
+        if minutes >= threshold:
+            pts = int(minutes * multiplier)
+            if pts > 0:
+                bonus_msg = apply_long_bonus(bonus["long_habit_id"], pts, target_date)
+                if bonus_msg:
+                    print(bonus_msg)
+    return 0
+
+
+def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optional[int] = None) -> int:
+    """2026-07-27 redesign: the 1n+ week cell records the MINUTES the habit
+    took (explicit > typed HHMM-HHMM range > today's matching Toggl entries
+    > 1); the habit's POINTS (row-5 expected points, or the cumulative
+    increment) are appended to today's 0分 domain column as a literal.
+    Previously the cell got the points and 0分 got a reference to the cell —
+    so a minutes-cell would have double-counted, and habits missing from the
+    fen map (bug 2026-07-27: "1 m5x2") never credited today at all."""
+    name = d["habit_name"]
+    col = d["neon_col"]
+    # Per-habit 0分 override (registry neon_fen_header) beats the domain
+    # default — e.g. relax {60} lives in the hcb domain but credits 个
+    # (JM 2026-08-09: "relax should be pointed at the 个 column, not hcb").
+    fen_col = d.get("neon_fen_col") or d["fen_col"]
+
+    try:
+        mw, week_row = _calc_mw(target_date)
+    except Exception as e:
+        print(f"  ✗ M.W lookup failed: {e}", file=sys.stderr)
+        return 1
+
+    toggl = d.get("toggl") or {}
+    # Compute minutes — explicit > time range > Toggl auto-detect > 1 (same
+    # priority as run_0n). Bug 2026-08-11: this previously ignored time_range
+    # entirely (the caller didn't even pass it in), so a typed HHMM-HHMM
+    # range on a 1n+ habit (e.g. "一起饭 0830-0846") silently fell through to
+    # auto-detect/1 — the week cell recorded "1m" instead of the real
+    # duration, and no Toggl entry was created for the session.
+    if explicit_minutes is not None:
+        minutes = explicit_minutes
+    elif time_range:
+        minutes = _minutes_from_time_range(time_range)
+    else:
+        minutes = _auto_detect_minutes(toggl.get("desc", name), toggl.get("project", "")) or 1
+
+    inc = d.get("cumulative_increment")
+    if inc:
+        # Cumulative habits: minutes accumulate in the cell, the fixed
+        # increment is the per-occurrence points.
+        cur = excel.read("1n+", col, row=week_row)
+        try:
+            old = int(float(cur.get("value", 0) or 0))
+        except (TypeError, ValueError):
+            old = 0
+        excel.write("1n+", col, row=week_row, value=str(old + minutes))
+        if name in _VARIABLE_1N_BASES or name in _VARIABLE_1N_RATES:
+            base = _VARIABLE_1N_BASES.get(name, 0)
+            rate = _VARIABLE_1N_RATES.get(name, 1.0)
+            points = base + int(round(rate * minutes))
+        else:
+            points = inc
+    else:
+        excel.write("1n+", col, row=week_row, value=str(minutes))
+        row5 = excel.read("1n+", col, row=5)
+        try:
+            points = int(float(row5.get("value", 0) or 0))
+        except (TypeError, ValueError):
+            points = 0
+
+    # Append the points to today's 0分 domain column
+    if fen_col and points:
+        excel.append("0分", fen_col, date=target_date, value=f"+{points}", src=f"1n {name}")
+
+    # Close 1neon Todoist
+    closed, closed_id = _find_and_close_todoist(d.get("todoist_label") or "1neon", name, d.get("aliases", []))
+
+    # Toggl entry if time range (same as run_0n)
+    if time_range and toggl.get("desc"):
+        s, e = time_range
+        try:
+            subprocess.run(
+                ["python3", str(Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"),
+                 "create", toggl["desc"], s, e, toggl.get("project", "")],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:
+            pass
+
+    _append_completed(name, closed_id)
+    _fire_refresh()
+    print(f"  ✓ {name} → 1n+!{col}{week_row} = {minutes}m, 0分!{fen_col} +{points}"
+          + (" + todoist closed" if closed else ""))
+    return 0
+
+
+_USER_ANNOT_RE = re.compile(r"\[(\d+)\]|\{(\d+)\}")
+
+
+def _extract_annots(s: str) -> tuple[Optional[int], Optional[int]]:
+    """Return ([N], {N}) integer annotations from `s`, or (None, None)."""
+    sq, cu = None, None
+    for m in _USER_ANNOT_RE.finditer(s):
+        if m.group(1):
+            sq = int(m.group(1))
+        elif m.group(2):
+            cu = int(m.group(2))
+    return sq, cu
+
+
+def _build_order_annots(content: str) -> tuple[Optional[int], Optional[int]]:
+    """Find the matching line in build order, extract its [N]/{N}."""
+    from neon.blocks import BUILD_ORDER, _bare
+    if not BUILD_ORDER.exists():
+        return None, None
+    target_bare = _bare(content.strip())
+    for line in BUILD_ORDER.read_text().splitlines():
+        if "- [" not in line:
+            continue
+        body = line.split("- [", 1)[1].split("]", 1)[-1].strip() if "]" in line else ""
+        if body == content.strip() or _bare(body) == target_bare:
+            return _extract_annots(line)
+    return None, None
+
+
+def _domain_from_labels(labels: list) -> Optional[str]:
+    """First label that matches a known domain code in the registry."""
+    for lbl in labels:
+        if registry.get_domain(lbl):
+            return lbl
+    return None
+
+
+def run_one_off(query: str, target_date: str, raw_input: str) -> int:
+    """Step 5: word-overlap match against ALL open Todoist tasks (any label).
+
+    Resolves points via priority chain: user-typed → build-order → Todoist content → 0.
+    Routes points to 0分 column based on matched task's domain label.
+    Closes Todoist + flips build-order checkbox if 关键径路-labeled.
+    """
+    # Fetch all open tasks (paginated, no label filter)
+    candidates = todoist.find_tasks(limit=500)
+    best, best_score = None, 0.0
+    for t in candidates:
+        score = _word_overlap(query, t.get("content", ""))
+        if score > best_score:
+            best, best_score = t, score
+    if not best or best_score < 0.6:
+        return 2  # no match — fall through to agent for Step 6
+
+    content = best.get("content", "")
+    labels = best.get("labels", [])
+
+    # Points priority: user → build order → Todoist content → 0
+    user_sq, user_cu = _extract_annots(raw_input)
+    bo_sq, bo_cu = (None, None)
+    if "关键径路" in labels or "#0g" in labels or "#-1g" in labels:
+        bo_sq, bo_cu = _build_order_annots(content)
+    td_sq, td_cu = _extract_annots(content)
+
+    points_sq = user_sq if user_sq is not None else (bo_sq if bo_sq is not None else td_sq)
+    points_cu = user_cu if user_cu is not None else (bo_cu if bo_cu is not None else td_cu)
+
+    domain = _domain_from_labels(labels)
+    fen_writes = []
+    if points_sq:
+        if not domain:
+            print(f"  ✗ matched task has no domain label; can't route [{points_sq}]: {content!r}",
+                  file=sys.stderr)
+            return 1
+        fen_col = registry.resolve_fen_col(domain)
+        excel.append("0分", fen_col, date=target_date, value=f"+{points_sq}", src=f"did {content[:60]}")
+        fen_writes.append(f"+{points_sq} → {fen_col}({domain})")
+    if points_cu:
+        from neon import cols
+        ac_col = cols.col("0分", "0g")
+        excel.append("0分", ac_col, date=target_date, value=f"+{points_cu}", src=f"did {content[:60]}")
+        fen_writes.append(f"+{points_cu} → {ac_col}(0g)")
+
+    # Close Todoist
+    try:
+        todoist.close_task(best["id"])
+        _drop_from_queue(best["id"])
+    except Exception as e:
+        print(f"  ✗ Todoist close failed: {e}", file=sys.stderr)
+        return 1
+
+    # Build-order checkbox flip
+    flipped = False
+    if "关键径路" in labels or "#0g" in labels or "#-1g" in labels:
+        from neon.blocks import flip_checkbox
+        flipped = flip_checkbox(content)
+
+    _append_completed(content[:50], best["id"])
+    _fire_refresh()
+    msg = f"  ✓ {content!r} (overlap={best_score:.2f})"
+    if fen_writes:
+        msg += " " + ", ".join(fen_writes)
+    if flipped:
+        msg += " + build-order ✓"
+    print(msg)
+    return 0
+
+
+def run_defer(query: str, defer_date: str, claimed_points: int) -> int:
+    """Defer path: reschedule task via defer-fast.py, don't write to Neon."""
+    r = subprocess.run(
+        ["python3", DEFER_FAST, query, defer_date, str(claimed_points)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        # Print stderr for diagnostics, stdout for structured errors
+        if r.stdout.strip():
+            try:
+                err = json.loads(r.stdout)
+                if err.get("error") == "multiple matches":
+                    print(f"  ✗ defer: multiple Todoist matches for {query!r}:", file=sys.stderr)
+                    for m in err.get("matches", []):
+                        print(f"    - {m['content']}", file=sys.stderr)
+                else:
+                    print(f"  ✗ defer failed: {err.get('error', r.stdout)}", file=sys.stderr)
+            except json.JSONDecodeError:
+                print(f"  ✗ defer failed: {r.stdout}", file=sys.stderr)
+        if r.stderr.strip():
+            print(r.stderr, file=sys.stderr)
+        return 1
+    try:
+        result = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print(f"  ✗ defer: unexpected output: {r.stdout}", file=sys.stderr)
+        return 1
+    task_name = result.get("task", query)
+    recurring = result.get("recurring", False)
+    claimed = result.get("claimed_points", claimed_points)
+    remaining = result.get("remaining_points", 0)
+    if recurring:
+        print(f"  ✓ deferred (recurring): {task_name} → closed + [{claimed}] today / [{remaining}] on {defer_date}")
+    else:
+        print(f"  ✓ deferred: {task_name} → {defer_date}")
+    _fire_refresh()
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("usage: run.py <input>", file=sys.stderr)
+        return 64
+    raw = " ".join(sys.argv[1:])
+    items = re.split(r"\s*[,;]\s*", raw)
+    rc = 0
+    for item in items:
+        if not item.strip():
+            continue
+        query, target, time_range, explicit_minutes, defer_date = _parse_input(item)
+        # Defer path: skip normal write, reschedule via defer-fast.py
+        if defer_date is not None:
+            claimed = explicit_minutes or 5
+            rc |= run_defer(query, defer_date, claimed)
+            continue
+        d = _route(query, target)
+        d["query_after_strip"] = d.get("query_after_strip", query)
+        step = d.get("step")
+        if step == "0n":
+            rc |= run_0n(d, item, target, time_range, explicit_minutes)
+        elif step == "1n+":
+            rc |= run_1n(d, target, time_range, explicit_minutes)
+        else:
+            # Step 5: try one-off Todoist match before deferring to agent
+            sub_rc = run_one_off(d.get("query_after_strip") or query, target, item)
+            if sub_rc == 2:
+                print(f"  → step={step} for {item!r}: no Todoist match; deferring to /did agent (Step 6)",
+                      file=sys.stderr)
+            rc |= sub_rc
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

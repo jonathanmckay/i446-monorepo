@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Xbox ExP — Weekly Experiment Activity</title>
+<script>
+(() => {
+  const p = new URLSearchParams(location.search).get("clawpilotTheme");
+  document.documentElement.setAttribute("data-theme",
+    p || (matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light"));
+})();
+</script>
+<style>
+:root {
+  color-scheme:light;
+  --cp-bg:#f7f4ef; --cp-surface:#fff; --cp-surface-soft:#f5f5f5;
+  --cp-border:#dedede; --cp-border-strong:#919191;
+  --cp-text:#242424; --cp-text-muted:#5c5c5c; --cp-text-soft:#6f6f6f;
+  --cp-accent:#b11f4b; --cp-accent-soft:rgba(177,31,75,.08);
+  --cp-success:#16a34a; --cp-success-soft:rgba(22,163,74,.10);
+  --cp-danger:#dc2626;  --cp-danger-soft:rgba(220,38,38,.10);
+  --cp-info:#0078d4;    --cp-info-soft:rgba(0,120,212,.10);
+  --cp-warn:#d97706;    --cp-warn-soft:rgba(217,119,6,.12);
+  --cp-link:#0078d4;
+  --cp-shadow:0 0 2px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.14);
+}
+html[data-theme="dark"] {
+  color-scheme:dark;
+  --cp-bg:#3d3b3a; --cp-surface:#292929; --cp-surface-soft:#2e2e2e;
+  --cp-border:#474747; --cp-border-strong:#5f5f5f;
+  --cp-text:#dedede; --cp-text-muted:#919191; --cp-text-soft:#b0b0b0;
+  --cp-accent:#fd8ea1; --cp-accent-soft:rgba(253,142,161,.14);
+  --cp-success:#4ade80; --cp-success-soft:rgba(74,222,128,.14);
+  --cp-danger:#f87171;  --cp-danger-soft:rgba(248,113,113,.14);
+  --cp-info:#4da6ff;    --cp-info-soft:rgba(77,166,255,.14);
+  --cp-warn:#fbbf24;    --cp-warn-soft:rgba(251,191,36,.14);
+  --cp-link:#4da6ff;
+  --cp-shadow:0 18px 48px rgba(0,0,0,.32);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--cp-bg);color:var(--cp-text);font-family:"Segoe UI",Aptos,Calibri,-apple-system,sans-serif;max-width:1080px;margin:0 auto;padding:40px 28px;line-height:1.5}
+h1{font-size:24px;font-weight:700;letter-spacing:-.3px}
+.meta{color:var(--cp-text-muted);font-size:13px;margin-top:6px}
+.section{margin-bottom:40px}
+.section-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--cp-border)}
+.section-title{font-size:18px;font-weight:600}
+.section-count{font-size:12px;color:var(--cp-text-muted);font-weight:500}
+.card{background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:12px;padding:18px 20px;box-shadow:var(--cp-shadow);margin-bottom:10px;display:grid;grid-template-columns:1fr auto;gap:6px 16px;align-items:start}
+.card-title-wrap{grid-column:1}
+.card-title{font-size:15px;font-weight:600;line-height:1.3;margin-bottom:2px}
+.card-title a{color:var(--cp-text);text-decoration:none}
+.card-title a:hover{color:var(--cp-link)}
+.card-subtitle{font-size:12px;color:var(--cp-text-muted);font-weight:500}
+.card-subtitle .dot{margin:0 6px;color:var(--cp-border-strong)}
+.card-status{grid-column:2;grid-row:1;font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px;white-space:nowrap;text-transform:uppercase;letter-spacing:.4px}
+.status-new{background:var(--cp-success-soft);color:var(--cp-success)}
+.status-active{background:var(--cp-info-soft);color:var(--cp-info)}
+.status-promoted{background:var(--cp-success-soft);color:var(--cp-success)}
+.status-rolledout{background:var(--cp-accent-soft);color:var(--cp-accent)}
+.status-killed{background:var(--cp-danger-soft);color:var(--cp-danger)}
+.status-warn{background:var(--cp-warn-soft);color:var(--cp-warn)}
+.card-desc{grid-column:1 / -1;font-size:13px;color:var(--cp-text-soft);margin:6px 0 4px;line-height:1.4}
+.card-meta{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.chip{font-size:11px;background:var(--cp-surface-soft);border:1px solid var(--cp-border);border-radius:6px;padding:2px 8px;color:var(--cp-text-muted);display:inline-flex;align-items:center;gap:4px}
+.chip strong{color:var(--cp-text);font-weight:600}
+.chip-arrow{background:transparent;border:none;color:var(--cp-text-muted);padding:2px 4px}
+.card-actions{grid-column:1 / -1;display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px dashed var(--cp-border)}
+.btn-link{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:6px 12px;border-radius:6px;text-decoration:none;border:1px solid transparent;transition:all .15s ease}
+.btn-link .ico{font-size:11px;opacity:.9}
+.btn-primary{background:var(--cp-info);color:#fff}
+.btn-primary:hover{filter:brightness(1.08)}
+html[data-theme="dark"] .btn-primary{color:#0b1320}
+.btn-secondary{background:transparent;color:var(--cp-link);border-color:var(--cp-border-strong)}
+.btn-secondary:hover{background:var(--cp-info-soft);border-color:var(--cp-link)}
+.empty{padding:18px;color:var(--cp-text-muted);background:var(--cp-surface-soft);border-radius:8px;border:1px dashed var(--cp-border);font-size:13px;text-align:center}
+@media(max-width:700px){body{padding:24px 14px}}
+</style>
+</head>
+<body>
+
+<div style="margin-bottom:28px">
+  <h1>Xbox Experimentation — Weekly</h1>
+  <div class="meta">Week of May 25 – May 31, 2026 &middot; generated 2026-06-01</div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <div class="section-title">Started last week</div>
+    <div class="section-count">1 A/B step</div>
+  </div>
+  <div class="card">
+    <div class="card-title-wrap">
+      <div class="card-title">Example Feature A — Homepage Hero Prompt</div>
+      <div class="card-subtitle">Global Audience <span class="dot">·</span> Step 2</div>
+    </div>
+    <div class="card-status status-new">New · May 28</div>
+    <div class="card-desc">Enables a dynamic hero prompt on the home page surface to drive content engagement.</div>
+    <div class="card-meta">
+      <span class="chip"><strong>50/50</strong> split</span><span class="chip">🎯 Global Audience · Console</span><span class="chip">📦 xbox~example~user</span>
+    </div>
+    <div class="card-actions">
+      <a class="btn-link btn-primary" target="_blank" href="https://exp.microsoft.com/feature/feature-aaaa-1111">🧩 EXP <span class="ico">↗</span></a>
+      <a class="btn-link btn-secondary" target="_blank" href="https://exp.microsoft.com/scorecard?stepId=step-newstart-aaaa">📊 Scorecard <span class="ico">↗</span></a>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <div class="section-title">Stopped last week</div>
+    <div class="section-count">2 A/B steps</div>
+  </div>
+  <div class="card">
+    <div class="card-title-wrap">
+      <div class="card-title">Example Feature A — Homepage Hero Prompt</div>
+      <div class="card-subtitle">Global Audience <span class="dot">·</span> Step 1</div>
+    </div>
+    <div class="card-status status-promoted">Promoted</div>
+    <div class="card-desc">Enables a dynamic hero prompt on the home page surface to drive content engagement.</div>
+    <div class="card-meta">
+      <span class="chip"><strong>10/10</strong> split</span><span class="chip">⏱ Ran 2m</span><span class="chip">🎯 Global Audience · Console</span><span class="chip">📦 xbox~example~user</span><span class="chip chip-arrow">→ Step 2 (50/50 AB)</span>
+    </div>
+    <div class="card-actions">
+      <a class="btn-link btn-primary" target="_blank" href="https://exp.microsoft.com/feature/feature-aaaa-1111">🧩 EXP <span class="ico">↗</span></a>
+      <a class="btn-link btn-secondary" target="_blank" href="https://exp.microsoft.com/scorecard?stepId=step-promoted-aaaa">📊 Scorecard <span class="ico">↗</span></a>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title-wrap">
+      <div class="card-title">Example Feature B — Game Tile Context Menus</div>
+      <div class="card-subtitle">Env: Prod <span class="dot">·</span> Switch to 50%</div>
+    </div>
+    <div class="card-status status-rolledout">Rolled out</div>
+    <div class="card-desc">Adds right-click / long-press context menu actions on game tiles for quick triage.</div>
+    <div class="card-meta">
+      <span class="chip"><strong>50/50</strong> split</span><span class="chip">⏱ Ran 52s</span><span class="chip">🎯 example prod ring</span><span class="chip">📦 xbox~example</span><span class="chip chip-arrow">→ Switch to 100% (DC)</span>
+    </div>
+    <div class="card-actions">
+      <a class="btn-link btn-primary" target="_blank" href="https://exp.microsoft.com/feature/feature-bbbb-2222">🧩 EXP <span class="ico">↗</span></a>
+      <a class="btn-link btn-secondary" target="_blank" href="https://exp.microsoft.com/scorecard?stepId=step-rolledout-bbbb">📊 Scorecard <span class="ico">↗</span></a>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <div class="section-title">Currently active</div>
+    <div class="section-count">1 A/B step running</div>
+  </div>
+  <div class="card">
+    <div class="card-title-wrap">
+      <div class="card-title">Example Feature C — Plan Picker SKU Order</div>
+      <div class="card-subtitle">US Web <span class="dot">·</span> Step 1</div>
+    </div>
+    <div class="card-status status-active">Day 13</div>
+    <div class="card-desc">Reorders the plan picker so Ultimate appears before Core to test acquisition impact.</div>
+    <div class="card-meta">
+      <span class="chip"><strong>50/50</strong> split</span><span class="chip">🎯 Web · US only</span><span class="chip">📦 xbox~example~user</span>
+    </div>
+    <div class="card-actions">
+      <a class="btn-link btn-primary" target="_blank" href="https://exp.microsoft.com/feature/feature-cccc-3333">🧩 EXP <span class="ico">↗</span></a>
+      <a class="btn-link btn-secondary" target="_blank" href="https://exp.microsoft.com/scorecard?stepId=step-active-cccc">📊 Scorecard <span class="ico">↗</span></a>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:48px;padding:14px;background:var(--cp-surface-soft);border-radius:10px;border:1px dashed var(--cp-border);font-size:12px;color:var(--cp-text-muted);line-height:1.5">
+<strong>Scope.</strong> A/B steps only (analysisType == AB). Feature switches and 100% data-collection rollouts are excluded. "Started" = startedAt in 2026-05-25…2026-05-31. "Stopped" = stoppedAt in same window (steps that also started this week appear only in "Stopped"). "Currently active" = AB step started before this week with no stoppedAt. Data pulled live from ExP via MCP; bucket pages capped at 10 — full counts may be larger.
+</div>
+
+</body>
+</html>

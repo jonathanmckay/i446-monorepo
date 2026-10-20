@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__todoist__find-tasks",
+      "mcp__todoist__complete-tasks",
+      "mcp__todoist__add-tasks",
+      "mcp__todoist__search",
+      "mcp__toggl_server__toggl_date",
+      "mcp__todoist__update-tasks",
+      "mcp__workspace-mcp__get_drive_file_download_url",
+      "WebFetch(domain:tomersimon.substack.com)",
+      "mcp__workspace-mcp__read_sheet_values",
+      "mcp__workspace-mcp__get_spreadsheet_info",
+      "mcp__todoist__find-activity",
+      "mcp__todoist__fetch-object",
+      "mcp__workspace-mcp__search_drive_files",
+      "mcp__workspace-mcp__find_and_replace_doc",
+      "mcp__workspace-mcp__get_doc_content"
+    ]
+  }
+}

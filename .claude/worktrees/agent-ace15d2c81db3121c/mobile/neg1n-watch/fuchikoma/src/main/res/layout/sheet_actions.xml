@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Left-swipe sheet for a dtd task. The web reveals a 3-button tray under
+     the row; ItemTouchHelper is commit-only, so the same three actions live
+     in a bottom sheet instead (row snaps back). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/bg_raised"
+    android:padding="16dp">
+    <TextView
+        android:id="@+id/sheetTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:textColor="@color/fg"
+        android:textSize="15sp"
+        android:paddingBottom="12dp" />
+    <LinearLayout
+        android:id="@+id/buttons"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <Button android:id="@+id/actStart" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:text="▶ start" />
+        <Button android:id="@+id/actDay" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:text="🗓 +1d" />
+        <Button android:id="@+id/actBlock" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:text="⏰ delay" />
+    </LinearLayout>
+    <!-- ⏰ picker fills in here (remaining blocks today + 10/30/60m), fetched
+         fresh from /api/delay-options on each open like the web. -->
+    <LinearLayout
+        android:id="@+id/delayOptions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone" />
+</LinearLayout>

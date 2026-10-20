@@ -1,0 +1,215 @@
+---
+name: "notes"
+description: "Sort raw meeting notes from z_ibx/new-notes.md into their correct vault locations (d359 people docs, d358 meeting notes, o314 journal entries). Clears the inbox, then marks the notes habit done."
+user-invocable: true
+---
+
+# Clean Notes
+
+Sort the raw scratch-pad notes in `~/vault/z_ibx/new-notes.md` into their correct vault locations, then clear the inbox.
+
+## When invoked with `/notes`
+
+### Step 1: Read the inbox
+
+Read `~/vault/z_ibx/new-notes.md`. If the file is empty (only the "DO NOT delete" header line), tell the user there's nothing to sort and skip straight to Step 9 (mark notes habit done) — an empty inbox still completes the habit for today.
+
+### Step 2: Read the sort instructions
+
+Read `~/vault/z_meta/new-notes-meta.md` for the full routing rules. Key summary:
+
+- **`Name d359`** blocks → `h335/d359/Name d359.md` (1:1 people notes)
+- **`Meeting Name d358`** blocks → `h335/d358/YYYY/Meeting Name d358.md` (general meeting notes)
+- **`o314`** blocks → `hcmp/o314/YYYY/kebab-slug.md` (journal entries)
+- **`iw01` blocks** → explicit destination. The user marks a block with `iw01` to say "I've chosen where this goes; don't auto-route." Two recognized syntaxes:
+  - `iw01 -> <description>` on a line by itself (e.g. `iw01 -> put in eternal day`) — the description is matched fuzzily against vault filenames/folders.
+  - `## <Heading> iw01 -> <description>` — the heading before `iw01` is preserved as part of the appended content; everything from `iw01` onward is the routing instruction.
+  - Either way: the routing tag is `iw01`, anything after `iw01 ->` is destination metadata, and the rest of the block is the body.
+- **Unlabeled blocks** → attach to the nearest labeled block using context clues
+- **Date headers** like `YYYY.MM.DD` at the start of a block set the date for all following blocks until the next date header
+
+### Step 3: Parse blocks
+
+Split the content into discrete blocks. A new block starts when you see:
+- A line matching `Name d359` or `Name d358` (the tag is at the end of the line)
+- A standalone line `o314` (journal entry marker)
+- A line containing `iw01 -> <description>` (explicit-destination marker; the description after `->` is matched against vault filenames/folders)
+- A date header followed by a name + tag on the next non-blank line
+
+Each block has:
+- **name**: the person or meeting name (for d358/d359), or a descriptive slug derived from the content (for o314), or the verbatim path string (for iw01)
+- **type**: d359, d358, o314, or iw01
+- **date**: from the nearest preceding date header (format: YYYY.MM.DD or YYYY-MM-DD). For o314 blocks with no date header, use today's date.
+- **content**: the raw note text (everything between this header and the next block)
+
+### Step 4: Route each block
+
+Read the frontmatter templates from `h335/d358-d359-meta.md`.
+
+**For d359 blocks:**
+
+> ⚠️ **Avoid duplicates.** People live in TWO d359 trees with TWO naming styles: `~/vault/d359/` (kebab-case, e.g. `jesse-janasov-d359.md`) and `~/vault/h335/d359/` (Title Case, e.g. `Kelly Martine d359.md`). A narrow `find` in one folder, or a glob on the full name, will miss an existing file and create a dupe (e.g. note says "Jessie Janasov" but the file is `jesse-janasov-d359.md`). Always search BOTH folders, match on the most distinctive token (usually the **last name**), and ignore case/separators/spelling variants before concluding the person is new.
+
+1. **Search both trees for an existing file.** Glob on the last-name token, case-insensitively, across both folders:
+   ```bash
+   last=janasov   # most distinctive token from the block name; lowercase
+   find ~/vault/d359 ~/vault/h335/d359 -maxdepth 1 -iname "*${last}*d359*"
+   ```
+   If that returns nothing, retry with the first name. Only treat the person as new when **both** queries come up empty in **both** folders. If a name has an obvious spelling variant (Jessie/Jesse, Catherine/Kathy), search the variant too.
+2. **If a file exists (in EITHER folder)**: Read it, then prepend a new dated section **in that file's existing style** — reuse its date-header format (`## YYYY.MM.DD` vs `## YYYY-MM-DD`, whichever the file already uses) and its name spelling. Insert below the About/profile section if present, else below the frontmatter, above existing entries. Update `updated:` (and `last_contact:` if the field is present). **Never create a second file for a person who already has one.**
+3. **If no file exists in either folder**: Create `h335/d359/<Name> d359.md` with:
+   - Frontmatter: title, date, type: meeting-note, tags: [d359], context (detect from content — xk87 for school/kids, i9 for MSFT/GitHub, m5x2 for real estate, default i9), source: manual, status: active, updated
+   - A `## YYYY-MM-DD` section with the raw content
+4. **Update d359 index only if one exists** (`h335/d359/d359.md`): Insert a row at the top of the table; if the person already has a row, remove the old one (so they appear once, at top, with the new date). If no index file exists, skip this step — do not create one.
+
+**For d358 blocks:**
+1. Search for an existing file: `find ~/vault/h335/d358/YYYY -maxdepth 1 -iname "*<meeting name>*d358*"`
+2. **If file exists**: Read it, then prepend a new `## YYYY-MM-DD` section below frontmatter, above existing entries. Update `updated:` field.
+3. **If no file exists**: Create `h335/d358/YYYY/<Meeting Name> d358.md` with:
+   - Frontmatter: title, date, type: meeting-note, tags: [d358, h335, <context>], source: manual, status: active, updated
+   - A `## YYYY-MM-DD` section with the raw content
+4. **Update d358 index** (`h335/d358/d358.md`): Insert a row at the top of the Recent Meetings table. Remove duplicate if updating existing meeting.
+
+**For o314 blocks:**
+1. Derive a kebab-case slug from the content (2–5 words capturing the main theme, e.g. `ai-cli-vs-agent-mode`, `on-legacy-and-identity`)
+2. Create `hcmp/o314/YYYY/kebab-slug.md` with:
+   ```yaml
+   ---
+   title: "Descriptive title (same theme as slug, title-cased)"
+   date: YYYY-MM-DD
+   type: journal
+   tags: [o314]
+   source: manual
+   ---
+   ```
+   Followed by the raw content as-is (no body header needed — the file is the entry).
+3. **Update the year index** (`hcmp/o314/YYYY/YYYY.md`):
+   - Increment the month count in the entry list (e.g., `- March (7)` → `- March (8)`)
+   - Increment the total entry count in the `**N entries**` line at the top
+   - If the year folder or year index doesn't exist, create them following the format in `hcmp/o314/2026/2026.md`
+4. **Update the main o314 index** (`hcmp/o314/o314.md`): Increment the total entry count in the `**N entries**` line.
+
+**For iw01 blocks** (explicit-destination — user named the target in the title):
+
+1. **Parse the title.** Split on `iw01`. Whatever sits *before* `iw01` (e.g. `## Growth Org Thoughts`) is content-prefix to keep. Whatever sits *after* `iw01 ->` (e.g. `put in xbox`) is the destination description — never written to disk.
+2. **Resolve the destination** from the description. Treat it as a fuzzy lookup against vault filenames/folders, in this order:
+   - Search `~/vault/` for an exact filename match (e.g. "eternal day" → `g245/Eternal Day.md`) — case-insensitive, ignores `.md`.
+   - If multiple files match, prefer ones in the user's most-edited domain folders (g245/, h335/, m5x2/, hcmp/, s897/, xk87/) over archive-y locations (`hcmp/o314/YYYY/` per-entry files, `z_*` inbox).
+   - Look for a folder of that name and use its folder note (`<folder>/<folder>.md`).
+   - If still ambiguous, ask the user before writing.
+3. **Append the block content verbatim** to the bottom of the resolved file — including the content-prefix from step 1 (e.g. the `## Growth Org Thoughts` heading) followed by the body. No date header, no rewriting, no auto-bullet. The user already chose the destination; if structure is wanted, they'll have included it.
+4. **Update `updated:` frontmatter** to today's date if the file has YAML frontmatter with that field.
+5. **No index update** — this path is for arbitrary docs that may or may not have an index.
+
+### Step 5: Clear the inbox
+
+Overwrite `~/vault/z_ibx/new-notes.md` with only the header line:
+```
+note: DO NOT delete this doc when you clean and categorize everything below this heading.
+
+```
+
+### Step 6: Report
+
+Tell the user what was sorted:
+```
+Sorted N blocks from new-notes:
+
+o314 (journal):
+- ai-cli-vs-agent-mode → created (2026-03-30)
+
+d359 (people):
+- 彭老师 → updated (2026-03-26)
+- Johanna → created (2026-03-26)
+
+d358 (meetings):
+- Experimentation weekly → created (2026-03-26)
+
+Inbox cleared.
+```
+
+### Step 7: Extract action items
+
+After sorting, scan the content that was just routed for action items. This step surfaces implicit and explicit tasks so nothing falls through the cracks.
+
+**7a. Identify action items from the sorted note content.**
+
+Look for lines or phrases matching these patterns:
+- Explicit markers: "Action:", "TODO:", "Follow up on...", "Next step:"
+- Commitments: "I need to...", "I should...", "I'll send...", "I'll check...", "I'll schedule...", "Will do..."
+- Collaborative: "Let's...", "We should...", "We need to..."
+- Requests: "Ask [person] about...", "Check with...", "Get [thing] from...", "Ping [person]..."
+- Deadlines or urgency cues: "by Friday", "before the meeting", "ASAP", "this week"
+
+If no action items are found across all sorted blocks, skip silently to Step 8.
+
+**7b. For each extracted action item, infer:**
+
+1. **Task content** — clean, concise phrasing. Strip filler words; keep it actionable. Example: "I should probably check with Andy about the deploy timeline" → "Check with Andy about deploy timeline"
+2. **Project label** — derive from the block's context tag (the same context detected in Step 4):
+   - i9 (Microsoft/GitHub), m5x2 (real estate), xk87 (school/kids), hcm (mindfulness), hcb (health), etc.
+   - If the block has a d359 person file with a `context:` frontmatter field, use that context as the project label
+   - If ambiguous, default to the block's context tag; if still unclear, omit the label
+3. **Due date** — default to tomorrow. Override if urgency is implied:
+   - "ASAP" / "today" → today
+   - "by Friday" → that Friday
+   - "this week" → Friday of current week
+   - "next week" → Monday of next week
+
+**7c. Present the action items to the user:**
+
+```
+Action items extracted:
+
+1. Check with Andy about deploy timeline [@i9, due tomorrow]
+2. Send lease renewal to tenant [@m5x2, due tomorrow]
+3. Schedule dentist appointment [@hcb, due Friday]
+
+Create these tasks? (y/n/edit)
+```
+
+- **y** — create all tasks via the Todoist MCP `add-tasks` tool using the inferred content, project label, and due date
+- **n** — skip task creation entirely
+- **edit** — let the user modify the list (add, remove, change labels/dates), then confirm and create
+
+**7d. Create confirmed tasks.**
+
+Use the Todoist MCP `add-tasks` tool. For each task:
+- `content`: the cleaned task text with `(N) [N]` included
+- `dueString`: the inferred due date in natural language (e.g., "tomorrow", "Friday")
+- `duration`: from `(N)` time estimate (e.g., `(30)` → `"30m"`). Always set when `(N)` is present.
+- Assign to the appropriate Todoist project using the label/domain code
+
+### Step 8: Archive stale z_ibx files
+
+Move any non-essential files in `~/vault/z_ibx/` that are older than 14 days to `~/vault/z_ibx/archive/YYYY-MM/`. Preserve these active state files (never archive them):
+- `new-notes.md`
+- `completed-today.json`
+- `task-queue.json`
+- `mtg-briefs.json`
+- `mtg-postbriefs.json`
+- `.syncthing-test`
+- Directories (`outlook-backfill/`, `overnight/`, `archive/`)
+
+```bash
+mkdir -p ~/vault/z_ibx/archive/$(date +%Y-%m)
+find ~/vault/z_ibx -maxdepth 1 -type f -mtime +14 \
+  ! -name "new-notes.md" ! -name "completed-today.json" \
+  ! -name "task-queue.json" ! -name "mtg-briefs.json" \
+  ! -name "mtg-postbriefs.json" ! -name ".syncthing-test" \
+  -exec mv {} ~/vault/z_ibx/archive/$(date +%Y-%m)/ \;
+```
+
+Report archived files if any: `Archived N stale files from z_ibx.`
+
+### Step 9: Mark notes habit done
+
+After action item handling (or skipping), execute the `/did` skill for habit `notes` — follow the full `/did` flow exactly as if the user had typed `/did notes`. This writes 1 to the `notes` column in today's 0₦ row and closes any matching 0neon Todoist task.
+
+## Rules
+
+- **Raw notes only** — never summarize, rewrite, or edit the note content. Copy as-is.
+- **Profile section stays pinned** — when prepending to d359 files, insert below the About section, never above it.
+- **Reverse chronological** — newest entries go at the top (below profile/frontmatter).
+- **Detect context from content** — school/kid mentions → xk87, Microsoft/GitHub → i9, real estate/property → m5x2.
+- **If a block is ambiguous** (no clear d358/d359/o314 tag), ask the user before routing it.

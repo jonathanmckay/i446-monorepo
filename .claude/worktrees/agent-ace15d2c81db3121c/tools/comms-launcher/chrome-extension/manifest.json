@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Comms Launcher",
+  "version": "1.0.0",
+  "description": "Launch Gmail, Outlook, Teams, Messages, and WhatsApp across Chrome profiles.",
+  "permissions": ["nativeMessaging"],
+  "action": {
+    "default_title": "Launch Comms",
+    "default_popup": "popup.html"
+  }
+}
