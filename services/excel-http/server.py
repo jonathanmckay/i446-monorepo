@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -487,6 +487,91 @@ def do_batch(req: dict) -> dict:
     return out
 
 
+def _as_setter(value) -> str:
+    """AppleScript RHS + setter for a /batch_write value: JSON numbers land as
+    numbers (0n habit marks: 1, minutes, HHMM), "=..." as formulas, anything
+    else as a quoted string."""
+    if isinstance(value, bool):
+        return f'set value of theCell to {str(value).lower()}'
+    if isinstance(value, (int, float)):
+        return f'set value of theCell to {value}'
+    sval = str(value)
+    if sval.startswith("="):
+        return f'set formula of theCell to "{safe_str(sval)}"'
+    return f'set value of theCell to "{safe_str(sval)}"'
+
+
+def do_batch_write(req: dict) -> dict:
+    """N value/formula writes to one sheet/date in ONE osascript call:
+    {sheet, date|row, writes: [{col, value, mode?: "set"|"add", src?}], src?}.
+    `mode: "add"` adds to a numeric cell (0n cumulative habits: 问学, xk20…),
+    first write on a blank/0 cell behaves like "set". Each cell is journaled
+    (and double-written to the semantic ledger) individually, with its
+    pre-image, and echoed back so the caller can verify what landed.
+    Exists so did-fast's habit completions (previously a raw ix-osa
+    AppleScript, unjournaled: Neon-off-Excel step 2, 2026-10-19) stay one
+    round-trip while gaining the ledger."""
+    sheet = req.get("sheet")
+    writes = req.get("writes")
+    if not sheet or not isinstance(writes, list) or not writes:
+        return {"ok": False, "error": "missing_sheet_or_writes"}
+    if req.get("row"):
+        row = int(req["row"])
+    else:
+        row = lookup_row_cached(sheet, req.get("date", ""))
+        if row is None:
+            return {"ok": False, "error": "date_not_found_or_missing_target"}
+    items = []
+    for w in writes:
+        col = w.get("col")
+        if not col or not re.fullmatch(r"[A-Za-z]{1,3}", str(col)):
+            return {"ok": False, "error": f"bad_col:{col!r}"}
+        items.append((str(col).upper(), w.get("value", ""), (w.get("mode") or "set"), w))
+    blocks = []
+    for col, value, mode, _ in items:
+        setter = _as_setter(value)
+        if mode == "add" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            setter = (f'if oldValue = "" or oldValue = "0" then\n'
+                      f'        set value of theCell to {value}\n'
+                      f'    else\n'
+                      f'        set value of theCell to (oldValue as number) + {value}\n'
+                      f'    end if')
+        blocks.append(f'''
+    set theCell to cell ("{col}{row}") of theSheet
+    set oldFormula to formula of theCell
+    set oldValue to (value of theCell) as string
+    {setter}
+    set out to out & oldFormula & (character id 9) & oldValue & (character id 9) & ((value of theCell) as string) & (character id 9) & (formula of theCell) & (character id 30)''')
+    script = f'''
+tell application "Microsoft Excel"
+    set theSheet to sheet "{sheet}" of workbook "{WORKBOOK}"
+    set out to ""{"".join(blocks)}
+    return out
+end tell
+'''
+    rc, out, err = osascript(script)
+    if rc != 0:
+        return {"ok": False, "error": err}
+    cells = [c for c in out.split("\x1e") if c != ""]
+    if len(cells) != len(items):
+        return {"ok": False, "error": f"echo_mismatch:{len(cells)}/{len(items)}", "raw": out[:200]}
+    results = []
+    for (col, value, mode, w), cell in zip(items, cells):
+        before, before_value, new_value, formula = (cell.split("\t", 3) + ["", "", ""])[:4]
+        sub = {"sheet": sheet, "col": col, "row": row, "date": req.get("date"),
+               "value": value, "src": w.get("src") or req.get("src"),
+               "source": req.get("source"), "via": req.get("via")}
+        r = _journal_and_respond("write", sub, row, before, new_value, formula, before_value)
+        r["before_value"] = before_value
+        r["mode"] = mode
+        results.append(r)
+    resp = {"ok": all(r.get("ok") for r in results), "row": row, "results": results}
+    broken = [r["col"] for r in results if r.get("chain") == "broken"]
+    if broken:
+        resp["chain_broken_cols"] = broken
+    return resp
+
+
 def do_ack(req: dict) -> dict:
     """Bless the cell's current formula as the new chain baseline. `note` is
     mandatory — an ack without a reason is how real corruption gets laundered."""
@@ -832,6 +917,7 @@ ROUTES = {
     "/read":   do_read,
     "/lookup": do_lookup,
     "/batch":  do_batch,
+    "/batch_write": do_batch_write,
     "/ack":    do_ack,
     "/reconcile": do_reconcile,
     "/observe": do_observe,

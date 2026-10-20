@@ -45,6 +45,17 @@ def domain_col(sheet: str, domain: str) -> str:
     raise KeyError(f"no column for domain {domain!r} on sheet {sheet!r}")
 
 
+def col_letter(n: int) -> str:
+    """1-based column number → Excel letters (1→A, 27→AA, 32→AF)."""
+    if n < 1:
+        raise ValueError(f"column number must be >= 1, got {n}")
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
 def header_for(sheet: str, col: str) -> str:
     """Reverse lookup: the row-1 header that lives in `col` on `sheet`.
     KeyError if the column is unmapped."""

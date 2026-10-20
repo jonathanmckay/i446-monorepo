@@ -153,6 +153,30 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
     return {"ok": all(r.get("ok") for r in results), "results": results, "fallback": True}
 
 
+def batch_write(sheet: str, writes: list, *, date: str | None = None,
+                row: int | None = None, src: str | None = None) -> dict[str, Any]:
+    """N value/formula writes to one sheet/date in a single daemon round-trip
+    (POST /batch_write). `writes` = [{"col": "AE", "value": 1, "mode": "set"|"add"}, …];
+    numbers stay numbers, "=…" is a formula, "add" accumulates onto a numeric
+    cell. Each cell comes back with before_value / value / formula / chain.
+
+    No ssh fallback: the one caller (did-fast 0n habits) keeps its raw
+    AppleScript path for the daemon-down case, so a daemon outage is reported
+    as {"ok": False, "fallback": True} rather than silently half-journaled."""
+    body: dict[str, Any] = {"sheet": sheet, "writes": list(writes)}
+    if date is not None:
+        body["date"] = date
+    if row is not None:
+        body["row"] = row
+    if src:
+        body["src"] = src
+    body.update(_surface())
+    out = _curl("/batch_write", body)
+    if out:
+        return out
+    return {"ok": False, "error": "daemon_unreachable", "fallback": True}
+
+
 def read(sheet: str, col: str, *, date: str | None = None,
          row: int | None = None) -> dict[str, Any]:
     body = {"sheet": sheet, "col": col}
