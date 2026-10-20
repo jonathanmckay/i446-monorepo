@@ -36,7 +36,7 @@ struct DtdView: View {
                 TaskRow(task: t)
                     .listRowBackground(Theme.bg)
                     .listRowSeparatorTint(Color(white: 0.15))
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) { doneButton(t) }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) { trailingButtons(t) }
                     .disabled(store.inFlight.contains(t.id))
             }
@@ -51,9 +51,10 @@ struct DtdView: View {
         .refreshable { await store.load(refresh: true) }
     }
 
-    /// Leading edge = Android's right-swipe = done. No full-swipe commit:
-    /// SwiftUI's threshold isn't tunable and /api/done runs the real /did —
-    /// reveal, then tap (one extra tap, zero accidental completions).
+    /// Leading edge = Android's right-swipe = done. A full swipe commits
+    /// (user request 2026-10-20: "can't swipe all the way to complete");
+    /// /api/done is idempotent by id since 2026-10-19, so a double fire or a
+    /// retry can never double-credit. A variable habit still asks its value.
     private func doneButton(_ t: DtdTask) -> some View {
         Button {
             if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }

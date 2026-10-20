@@ -40,9 +40,9 @@ InkwellCore/              Swift package: Models, Parsers, Bodies, Api, Config
 
 ## Gestures
 
-**dtd** — swipe right reveals **done** (tap it; a variable habit asks for its
-value first). No full-swipe commit on purpose: SwiftUI's threshold is not
-tunable and `/api/done` runs the real `/did`. Swipe left: ▶ start · 🗓 +1d ·
+**dtd** — swipe right all the way completes (a variable habit asks for its
+value first; `/api/done` is idempotent by id so a repeat can't double-credit).
+Swipe left: ▶ start · 🗓 +1d ·
 ⏰ delay (remaining 地支 blocks today + 10/30/60m). Header **+** adds a task.
 Pull to refresh. A failed completion/delay puts the row back with a persistent
 retry toast; `/api/done` is idempotent by id, so a retry can never double-credit.
