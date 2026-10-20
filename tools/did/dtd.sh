@@ -1398,7 +1398,7 @@ chmod +x "$DTD_DEFER"
 # painted 2026-07-26 ×2; the printf/read menu was invisible and its blind
 # keystrokes skipped tasks 2026-07-27). So the picker now IS the outer fzf:
 # ctrl-v "arms" picker mode ($DTD_BLOCKPICK holds the pending ids) and the
-# list generator swaps the task rows for block rows (⏰ 申 shen 14:00–16:00,
+# list generator swaps the task rows for block rows (⏰ 申 shen 14:00–15:59,
 # searchable by pinyin/汉字). Enter (or ⌃⏎) on a block row applies the snooze
 # via $DTD_BLOCKAPPLY and restores the normal list. Nothing ever draws outside
 # fzf, so there is nothing cmux can fail to paint.
@@ -2180,7 +2180,9 @@ if _armed:
                      ('未','wei',12),('申','shen',14),('酉','you',16),
                      ('戌','xu',18),('亥','hai',20)):
         if h > _nw2.hour:
-            print(f'{ORANGE}⏰ {g}  {py:<5} {h:02d}:00–{h+2:02d}:00{_R}\tBLOCK:{g}')
+            # End-inclusive label (14:00–15:59, not 14:00–16:00) so typing a
+            # start time matches exactly one row (JM, 2026-10-20).
+            print(f'{ORANGE}⏰ {g}  {py:<5} {h:02d}:00–{h+1:02d}:59{_R}\tBLOCK:{g}')
     if _mode != 'days':
         for _t, _g in _day_rows:
             print(f'{_t}\tBLOCK:{_g}')
